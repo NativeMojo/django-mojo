@@ -436,6 +436,45 @@ def test_shims_matrix(opts):
                      f"the check_node shim grades like the rest: {statuses}")
 
 
+@th.django_unit_test()
+def test_update_sh_exec_bit_is_audited(opts):
+    """`aws/update.sh` is exec'd directly by the fleet deploy plane, so a shim
+    committed 0644 refuses the deploy on every node at once. post_deploy.sh is
+    exempt — update.sh runs it as `sudo bash <path>`."""
+    from mojo.deploy import check_node as cn
+
+    def runner(update_mode, post_mode="755"):
+        rules = list(_shim_runner({
+            "aws/update.sh": "shim", "aws/post_deploy.sh": "shim",
+            "aws/certbot_sync.py": "absent", "aws/check_node.py": "absent",
+        }).rules)
+        rules.append((f"stat -Lc '%U %G %a' {PROJ}/aws/update.sh",
+                      (0, f"root root {update_mode}", "")))
+        rules.append((f"stat -Lc '%U %G %a' {PROJ}/aws/post_deploy.sh",
+                      (0, f"root root {post_mode}", "")))
+        return FakeRunner(rules)
+
+    for require, expected in ((False, cn.WARN), (True, cn.FAIL)):
+        report = cn.Report()
+        cn.check_shims(report, runner("644"), PROJ, require)
+        statuses = _statuses(report, "shims")
+        th.assert_eq(statuses.get("aws/update.sh is not executable"), expected,
+                     f"a non-executable update.sh must grade {expected} under "
+                     f"require_shims={require}: {statuses}")
+        finding = _find(report, "shims", "aws/update.sh is not executable")
+        th.assert_in("update-index --chmod=+x", finding["fix"],
+                     f"the audit must name the committed-mode cure: {finding}")
+
+    report = cn.Report()
+    cn.check_shims(report, runner("755", post_mode="644"), PROJ, True)
+    statuses = _statuses(report, "shims")
+    th.assert_eq(statuses.get("aws/update.sh is executable"), cn.PASS,
+                 f"an executable update.sh must PASS: {statuses}")
+    th.assert_true(not any("post_deploy.sh is not executable" in name
+                           for name in statuses),
+                   f"post_deploy.sh is sudo bash'd and must stay exempt: {statuses}")
+
+
 # ---------------------------------------------------------------------------
 # collision reporting
 # ---------------------------------------------------------------------------

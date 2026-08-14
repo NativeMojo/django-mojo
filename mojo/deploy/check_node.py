@@ -1451,6 +1451,33 @@ def check_config_plane(report, run, proj, app_user, web_user):
 # shims
 # ---------------------------------------------------------------------------
 
+def _check_update_executable(report, run, path, grade):
+    """`aws/update.sh` is exec'd directly by the fleet deploy plane, so its
+    mode is a deploy contract, not a detail. A shim committed without the
+    execute bit fails on EVERY node at once, identically, and the mode has to
+    be committed — a local chmod is lost on the next clean checkout.
+
+    `aws/post_deploy.sh` is deliberately exempt: update.sh invokes it as
+    `sudo bash <path>`, which does not need the bit."""
+    st = stat_of(run, path)
+    try:
+        bits = int(st[2], 8) if st else None
+    except ValueError:
+        bits = None
+    if bits is None:
+        report.info("shims", "aws/update.sh mode unknown",
+                    "could not stat the shim as this user")
+    elif bits & 0o111:
+        report.passed("shims", "aws/update.sh is executable", f"mode {st[2]}")
+    else:
+        grade("shims", "aws/update.sh is not executable",
+              f"{path} has mode {st[2]} — the deploy plane exec()s this path "
+              "directly, so every node in the fleet refuses the deploy at the "
+              "same moment",
+              "git update-index --chmod=+x aws/update.sh && commit the mode "
+              "(a local chmod does not survive a clean checkout)")
+
+
 def check_shims(report, run, proj, require_shims):
     """The shim contract: each project aws/ entry point is a thin shim
     delegating to mojo.deploy. Present-with-reference is adoption; present
@@ -1466,6 +1493,8 @@ def check_shims(report, run, proj, require_shims):
                         "as `python3 -m mojo.deploy.<module>` directly, or "
                         "the project has not adopted it")
             continue
+        if rel == "aws/update.sh":
+            _check_update_executable(report, run, path, grade)
         rc, _, _ = run(f"grep -qF -- mojo.deploy {q(path)}")
         if rc == 0:
             report.passed("shims", rel,

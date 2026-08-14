@@ -615,4 +615,4 @@ for _ in $(seq 1 15); do
     fi
     sleep 2
 done
-die "app did not answer ${PROBE_URL} within 30s of restart"
+die "app did not answer ${PROBE_URL} within 30s of restart — on an edge-converged node the port-80 catch-all returns 444; export a vhost-true PROBE_URL from the shim"

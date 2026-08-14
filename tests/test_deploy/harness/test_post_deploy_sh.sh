@@ -487,6 +487,20 @@ assert_no_file "$TMP/nginx_etc/nginx.conf" "nginx.conf never installed after a f
 assert_file "$TMP/cron_etc/1mojocron" "no cron sweep ran after a failed render"
 assert_not_in_log "CMD systemctl restart mojo-asgi" "no restart after a failed render"
 
+echo "post_deploy.sh: a probe that never answers names the edge catch-all cause"
+setup_env
+# Stub sleep away: the real probe loop is 15 x 2s, and none of that wait is
+# what this asserts.
+printf '#!/bin/bash\nexit 0\n' > "$STUB/sleep"; chmod +x "$STUB/sleep"
+echo "1" > "$CTL/curl.exit"
+run_post_deploy > "$OUT" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then ok "an unanswered probe fails the deploy"; else fail "an unanswered probe exited 0"; fi
+assert_has "$OUT" "did not answer" "the probe failure names the URL it tried"
+assert_has "$OUT" "returns 444" \
+    "the probe failure explains the edge-converged port-80 catch-all"
+assert_has "$OUT" "PROBE_URL from the shim" "the probe failure carries the cure"
+
 echo "post_deploy.sh: a failed step aborts before the restart (die-loudly)"
 setup_env
 echo "1" > "$CTL/pip.exit"

@@ -120,6 +120,7 @@ events { worker_connections 5024; }
 http {
     default_type        application/octet-stream;
     types_hash_max_size 4096;
+    include /etc/nginx/conf.d/00_django_mojo_runtime[.]conf;
     include /opt/api/var/edge/current/http.d/*.conf;
     include /opt/api/var/edge/current/conf.d/*.conf;
 }
@@ -130,6 +131,14 @@ Notes that bite:
 - **`default_type` and `types_hash_max_size` live HERE, not in the rendered
   base.** Both at the same http level twice is a duplicate-directive
   `[emerg]`. The rendered base deliberately does not emit them.
+- **The runtime include is glob-bracketed on purpose.**
+  `00_django_mojo_runtime[.]conf` is a one-file glob, so it matches when the
+  root deploy render has installed the fragment and matches *nothing* — rather
+  than `[emerg]`-ing on a missing file — before the first converged deploy.
+  Without this line `post_deploy.sh` FATALs at
+  `nginx runtime activation failed (... exactly once; got 0)`: the fragment is
+  installed and correct, the active graph simply never reads it. That error now
+  names the fragment path and this include.
 - **Day-0 is safe**: before the first converge, `current/` does not exist
   and both globs match nothing — nginx still starts. If the load balancer
   needs an answer before the first converge, add a minimal probe server to
@@ -180,7 +189,12 @@ app writes:
   `current/http.d/*.conf` then `current/conf.d/*.conf` (the ~12-line form
   above). Without them the node converges silently and serves nothing — the
   failure mode described under "Notes that bite". **Keep both globs exactly
-  this shape — non-recursive.** `staging/` lives inside the directory
+  this shape — non-recursive.**
+- **The framework runtime include.** The same http block must carry
+  `include /etc/nginx/conf.d/00_django_mojo_runtime[.]conf;`. This one is not
+  silent: without it every `post_deploy.sh` run FATALs at nginx runtime
+  activation, because the persistent spill fragment the root deploy render
+  installs is never read by the active config. `staging/` lives inside the directory
   `current` points at; a broadened glob (`current/*/*.conf`) would make the
   root nginx serve a full duplicate of every vhost on the staged ports, and
   nothing would flag it — a different addr:port raises no

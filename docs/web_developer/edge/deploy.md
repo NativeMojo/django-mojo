@@ -16,7 +16,8 @@ shared secret. Behavior:
 | Push | Response |
 |---|---|
 | To the deploy branch (`EDGE_DEPLOY_BRANCH`, default `main`) | `202` — `{"status": true, "queued": true, "sha": "<head sha>"}` |
-| To the deploy branch while a deploy is in flight | `202` — `{"status":true,"queued":false,"sha":"<head sha>"}`; the new commit is **recorded** and deployed when the in-flight deploy reaches its terminal (never a second concurrent deploy) |
+| To the deploy branch while a deploy is in flight | `202` — `{"status":true,"queued":false,"sha":"<head sha>"}`; the new commit is **recorded** and deployed when the in-flight deploy reaches its terminal (never a second deploy *while one is live*) |
+| To the deploy branch after the previous deploy **failed** | `202` — `queued` is **`true`**: a failed deploy is over, so the next push starts immediately rather than waiting out the previous attempt's coordination TTL |
 | To any other branch, a `ping`, any non-push event, or a branch deletion | `200` — `{"status":true,"ignored":true,"reason":"..."}` |
 | While the runner roster, Redis coordination, or queue publication is unavailable | `503` — no blind deploy starts; the durable attempt is retained as `failed` with a classified reason |
 

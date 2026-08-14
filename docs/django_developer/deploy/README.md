@@ -413,6 +413,33 @@ Three properties are load-bearing:
 - **Bootstrap ordering.** Provisioning installs django-mojo before the first
   shim run — the FATAL above is the guard, not a path to work around.
 
+### `aws/update.sh` must be committed executable
+
+The fleet deploy plane `exec()`s the configured `EDGE_DEPLOY_SCRIPT` path
+directly, so `aws/update.sh` needs the execute bit **in git**, not just on the
+node — a local `chmod` is lost on the next clean checkout, and the shim then
+refuses the deploy on every node in the fleet at the same moment:
+
+```bash
+git update-index --chmod=+x aws/update.sh && commit the mode
+```
+
+`deploy_node` probes this before it starts anything and files a level-7
+incident naming the path and this cure; `check_node`'s **shims** section audits
+it (WARN, FAIL under `--require-shims`). `aws/post_deploy.sh` is exempt —
+`update.sh` invokes it as `sudo bash <path>`, which needs no execute bit.
+
+### Shims can be one framework generation behind
+
+`update.sh` `pip install`s the new framework *inside* the run, replacing both
+packaged scripts with new inodes. The executing bash keeps its fd on the old
+copy, so **the in-flight deploy completes on the code it started with** and
+only the NEXT run resolves the new body through `locate`. That is deliberate
+(mid-run self-replacement would be far worse), but it means a fix to
+`update.sh` or `post_deploy.sh` reaches a node on the deploy *after* the one
+that installs it. When triaging a node script, check which framework version
+was installed **before** the run, not after.
+
 ## Project inputs (exported in the shim)
 
 | Variable | Consumed by | Default | Meaning |
@@ -425,6 +452,53 @@ Three properties are load-bearing:
 | `ASGI_WORKERS` | `post_deploy.sh` → `@WORKERS@` | `4` | uvicorn worker count in `mojo-asgi.service` |
 | `NGINX_ETC` / `SYSTEMD_ETC` / `CRON_ETC` | `post_deploy.sh` | `/etc/nginx` / `/etc/systemd/system` / `/etc/cron.d` | Test seams — prod defaults, overridden only by harnesses |
 | `CERTBOT_SYNC_LOCK` | `certbot_sync` | `/var/run/certbot_sync.lock` | Lock path override, exists for harnesses |
+
+### `PROBE_URL` / `SANITY_URL` on an edge-converged node
+
+Both default to `http://127.0.0.1/api/version`, and on a node the edge plane
+has converged **that default cannot answer**. The generated vhosts claim
+`server_name`, and the port-80 catch-all returns `444` (connection closed, no
+response) to anything that does not match one. `curl -f` sees a hang-up, not a
+success:
+
+```
+FATAL: app did not answer http://127.0.0.1/api/version within 30s of restart
+```
+
+Export a **vhost-true** URL from the shim — one whose `Host` matches a real
+server block, or a port that proxies straight to the asgi socket:
+
+```bash
+export PROBE_URL="http://127.0.0.1:8080/api/version"
+export SANITY_URL="http://127.0.0.1:8080/api/version"
+```
+
+The consequence is not a cosmetic warning. `post_deploy.sh` dies, so
+`update.sh` treats the deploy as failed and **rolls the node back** to the
+previous commit — on a canary, that fails the whole fleet deploy for a release
+that was fine. Set both: `SANITY_URL` is passed to every `sanity_check`,
+including the one inside the rollback.
+
+### The asgi socket contradiction
+
+There is a live tension between two documented positions and it is worth
+naming rather than rediscovering: the `mojo-asgi` unit can be configured to
+listen on a **unix socket** (nginx proxies to it), while `PROBE_URL` /
+`SANITY_URL` are **HTTP URLs** curl must be able to fetch. On a socket-only
+node there is no TCP port for the default probe to hit at all, and no amount of
+`PROBE_URL` tuning invents one. Two supported cures, pick one per project:
+
+1. **Give the probe a vhost.** Keep the socket, and point `PROBE_URL` at a
+   `server_name`-matching URL served by nginx that proxies to that socket. The
+   probe then tests the real serving path, which is the stronger check.
+2. **Give the app a loopback port.** Configure `mojo-asgi` to bind
+   `127.0.0.1:<port>` alongside (or instead of) the socket, and point
+   `PROBE_URL` / `SANITY_URL` at it. This bypasses nginx, so a working probe no
+   longer proves the vhost is right.
+
+Neither is defaulted, because the right answer depends on whether the project
+wants the probe to cover nginx. What is *not* supported is leaving the default
+in place on a converged node.
 
 ---
 
@@ -533,7 +607,10 @@ The **shims** section is new: each of `aws/update.sh`, `aws/post_deploy.sh`,
 `aws/certbot_sync.py`, `aws/check_node.py` under `${PROJ_PATH}` grades PASS
 when it references `mojo.deploy`, WARN when it exists without the reference
 (a fork cut off from framework fixes — FAIL under `--require-shims`), INFO
-when absent. Undeclared template-name collisions grade the same way. Locally
+when absent. `aws/update.sh` additionally has its **mode** audited: the deploy
+plane exec()s that path, so a shim without the execute bit grades the same
+WARN/FAIL and carries the `git update-index --chmod=+x` fix (see above).
+Undeclared template-name collisions grade the same way. Locally
 (not over `--ssh`) it also renders the installed package's templates in
 memory and diffs them against `var/deploy/` — a difference is INFO:
 "framework templates moved since the last deploy — run post_deploy". The

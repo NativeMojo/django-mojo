@@ -237,6 +237,26 @@ def _verify_active(config, root):
                 % (directive, path, count))
 
 
+def _activation_hint(error, path):
+    """Name the installed-but-unread fragment when nginx never saw it.
+
+    `_verify_active`'s zero-count case is a specific, common, and thoroughly
+    unhelpful failure: the fragment was written, `nginx -T` succeeded, and the
+    directives are simply absent — because the operator's nginx.conf has no
+    include for the directory the fragment lives in. The bare message
+    ("must contain ... exactly once; got 0") sends people looking for a
+    corrupt fragment instead.
+
+    Derived from the activation error BEFORE rollback: a post-rollback re-stat
+    would be describing a file that has already been removed.
+    """
+    if "exactly once; got 0" not in str(error):
+        return ""
+    return (" — the fragment IS installed at %s but the active config never "
+            "reads it: nginx.conf's http block is missing "
+            "`include %s/*.conf;`" % (path, os.path.dirname(path)))
+
+
 def _install_fragment(path, text):
     parent = os.path.dirname(path)
     _mkdir_exact(parent, 0, 0, 0o755)
@@ -307,6 +327,7 @@ def converge(web_user, nginx_etc="/etc/nginx", root=RUNTIME_ROOT,
             raise NginxRuntimeError("nginx worker identity changed during convergence")
         _verify_active(active, root)
     except Exception as activation_error:
+        hint = _activation_hint(activation_error, path)
         if prior is None:
             os.unlink(path)
         else:
@@ -315,8 +336,10 @@ def converge(web_user, nginx_etc="/etc/nginx", root=RUNTIME_ROOT,
             nginx_dump(nginx_binary)
         except NginxRuntimeError as rollback_error:
             raise NginxRuntimeError(
-                "nginx runtime activation failed (%s) and rollback is invalid (%s)"
-                % (activation_error, rollback_error))
+                "nginx runtime activation failed (%s%s) and rollback is invalid (%s)"
+                % (activation_error, hint, rollback_error))
+        if hint:
+            raise NginxRuntimeError("%s%s" % (activation_error, hint))
         raise activation_error
 
 

@@ -128,6 +128,54 @@ def test_converge_verifies_active_graph_and_rolls_fragment_back(opts):
 
 
 @th.django_unit_test()
+def test_inactive_fragment_failure_names_the_missing_include(opts):
+    """The bare zero-count message sends an operator hunting for a corrupt
+    fragment. The fragment is fine — nginx.conf simply has no include for
+    conf.d, so the active graph never reads it. The diagnosis must say so, and
+    must be derived before the rollback removes the file it names."""
+    from mojo.deploy import nginx_runtime as runtime
+
+    root = tempfile.mkdtemp(prefix="nginx-runtime-include-")
+    try:
+        nginx_etc = os.path.join(root, "etc", "nginx")
+        fragment = runtime.fragment_path(nginx_etc)
+        os.makedirs(os.path.dirname(fragment))
+        def install(path, text):
+            # The real installer fchowns to root; this harness is not root.
+            mode = "wb" if isinstance(text, bytes) else "w"
+            with open(path, mode) as handle:
+                handle.write(text)
+
+        fake_user = SimpleNamespace(pw_uid=123, pw_gid=456)
+        with mock.patch.object(runtime.os, "geteuid", return_value=0), \
+                mock.patch.object(runtime, "nginx_dump",
+                                  side_effect=("user www;\n", "user www;\n",
+                                               "user www;\n")), \
+                mock.patch.object(runtime, "_resolve_user", return_value=fake_user), \
+                mock.patch.object(runtime, "_mkdir_exact"), \
+                mock.patch.object(runtime, "_converge_selinux"), \
+                mock.patch.object(runtime, "_probe_as_worker"), \
+                mock.patch.object(runtime, "_install_fragment", side_effect=install):
+            try:
+                runtime.converge("www", nginx_etc=nginx_etc,
+                                 root="/var/lib/django-mojo/nginx")
+            except runtime.NginxRuntimeError as err:
+                message = str(err)
+            else:
+                assert False, "an unread fragment must still abort convergence"
+        th.assert_in("exactly once; got 0", message,
+                     f"the original activation failure must survive: {message}")
+        th.assert_in(fragment, message,
+                     f"the diagnosis must name the installed fragment: {message}")
+        th.assert_in("include %s/*.conf;" % os.path.dirname(fragment), message,
+                     f"the diagnosis must name the missing include: {message}")
+        th.assert_true(not os.path.exists(fragment),
+                       "a failed activation must still roll the fragment back")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test()
 def test_only_canonical_root_deploy_render_activates_runtime(opts):
     from mojo.deploy import __main__ as deploy_main
 

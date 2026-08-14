@@ -14,7 +14,7 @@ REST surface for API consumers:
 ```
 GitHub push ──► POST /api/github/deploy/webhook        (HMAC-verified)
                   record DEPLOY_TARGET (last writer wins)
-                  arm DEPLOY_STATUS=migrating (SET NX) ──► publish deploy_orchestrate
+                  arm DEPLOY_STATUS=migrating (CAS: absent or failed) ──► publish deploy_orchestrate
 
 orchestrator (whichever job runner takes it):
   load the UUID attempt and its frozen edge-channel runner roster
@@ -32,6 +32,9 @@ orchestrator (whichever job runner takes it):
 
 Single-runner fleets degrade cleanly: no canary is possible, the one node
 updates itself with `--migrate`, and the status tail is cleaned by its TTL.
+Multi-runner fleets are the normal case, and there the orchestrator is a
+*different* node from the canary — which is what makes the node-failure
+reporting below observable at all: the reporting node lives to report.
 
 ## Why there is no load-balancer walk
 
@@ -58,7 +61,13 @@ durable `edge.PlatformDeployment` journal:
 | Key | Holds | Semantics |
 |---|---|---|
 | `edge:deploy:target` | deployment UUID + commit SHA + who asked | **Last writer wins.** A push mid-deploy overwrites it; the orchestrator's chain check deploys it next. |
-| `edge:deploy:status` | `migrating` / `deploying` / `failed`, stamped with UUID + SHA | Armed with `SET NX`. Terminal writes and deletion are **compare-and-set on UUID and SHA** (Lua), so an older attempt cannot settle a newer same-SHA retry. |
+| `edge:deploy:status` | `migrating` / `deploying` / `failed`, stamped with UUID + SHA | Armed with a **Lua compare-and-set: nothing armed, or the armed lease is terminal `failed`.** Terminal writes and deletion are **compare-and-set on UUID and SHA** (Lua), so an older attempt cannot settle a newer same-SHA retry. |
+
+The invariant is **never a second concurrent deploy while one is live** — not
+"never a second deploy for the whole TTL". A `migrating` or `deploying` lease
+is never stealable, so a same-second webhook race still starts exactly one
+deploy. A terminal `failed` lease describes a deploy that is *over*, and the
+next push re-arms straight over it.
 
 The TTL is load-bearing: a canary that dies hard would otherwise leave
 `migrating` set forever and wedge every future deploy. The orchestrator clears
@@ -66,6 +75,82 @@ the status at its terminal; the TTL is the backstop, and the only cleaner on a
 single-runner fleet. Redis is not durable. `PlatformDeployment` retains request
 identity, its frozen roster, transitions, and the latest bounded proof per
 runner; incidents remain the alerting trail.
+
+The TTL is no longer the *only* thing between a wedge and the next deploy. The
+five-minute reconciler (`cronjobs.reconcile_platform_deployments`) does two
+things before it closes anything:
+
+- **`deploy.resume_stranded_target()`** republishes one `deploy_orchestrate`
+  for a target whose deploy never started — something armed the lease and then
+  died before publishing, or the orchestrate job expired undelivered. Guards:
+  no live lease, the target names a valid SHA and UUID, that row still says
+  exactly `requested` with a matching SHA, and `arm_status` lands (the atomic
+  claim — two reconcilers race and one wins). At most one publish per sweep.
+- **`platform_deploy.reconcile_stale()`** no longer skips every row that owns
+  the live lease. A lease that is `migrating`/`deploying` is still hands-off,
+  but a **terminal `failed`** lease closes its row `failed`
+  (`reason: node_reported_failed`) and releases the lease — that is the case
+  where the orchestrator which would have closed it is exactly what died. The
+  `requested` row named by the live target is exempt from the `unknown`
+  stale-closure, because resume owns it.
+
+## When a node cannot run the update script
+
+`deploy_node`'s job is to shell the update script, and the script reports its
+own terminal status because it stops the engine that ran it. But there are
+outcomes the script never gets to report, and **every one of them now reports
+itself** through the same path — incident (level 7, `edge_deploy`), durable
+per-runner evidence, and the deploy lease:
+
+| `phase` | What happened |
+|---|---|
+| `unconfigured` | `EDGE_DEPLOY_SCRIPT` is not set on this node — the deploy is refused. |
+| `preflight_failed` | The configured script has an explicit path and no execute bit. |
+| `exec_failed` | Exec raised (`OSError`) — wrong mode, missing interpreter, gone. |
+| `script_timeout` | The script exceeded `SCRIPT_TIMEOUT` (900s) and was killed. |
+| `update_script` | The script ran and exited non-zero. |
+
+Two rules govern what a node's failure is allowed to touch:
+
+- **The lease is written only when this node was migrating** (the canary, or a
+  single-runner fleet). When the CAS lands, the durable row is closed `failed`
+  too — the same close the script-reported path performs. A **fleet** node's
+  failure never touches the deploy status: the canary already proved the
+  release, and one node falling behind is an incident about that node, not a
+  failed deploy.
+- **Evidence carries a bounded stderr tail; incidents never do.** The last ten
+  lines, sanitized **one line at a time**, so a credential-shaped line
+  collapses to `[redacted]` without taking the surrounding diagnosis with it.
+  (POSIX `TimeoutExpired` carries bytes even under `text=True`; the tail
+  decodes explicitly, and `platform_deploy._safe` routes bytes through the
+  redactor rather than stringifying them past it.)
+
+### `aws/update.sh` must ship committed 100755
+
+The deploy plane `exec()`s the configured path directly. A shim committed
+`0644` refuses the deploy on **every node in the fleet at the same moment** —
+the failure looks fleet-wide because it is. `deploy_node` probes the execute
+bit before it starts (explicit paths only: a bare `sudo` is skipped, because
+`os.access` does no PATH resolution and probing it would refuse every deploy on
+the documented argv), and `check_node`'s **shims** section audits the mode:
+
+```
+git update-index --chmod=+x aws/update.sh && commit the mode
+```
+
+A local `chmod` does not survive a clean checkout, which is why the mode has to
+be in the index. `aws/post_deploy.sh` is exempt — `update.sh` invokes it as
+`sudo bash <path>`.
+
+### A superseded orchestrator stands down
+
+While polling for its canary, the orchestrator re-reads the lease. If the lease
+is gone or belongs to another deployment, this deploy has been superseded: it
+transitions `superseded` and returns immediately — **no** canary-failure
+incident (the canary was never going to report to it) and **no** chained
+orchestrate on top of the deploy that took the lease. The chain re-arm at the
+terminal carries the same guard: if the new target is already armed, it is left
+to its own orchestrator.
 
 Deploy jobs are published `max_retries=0` with an expiry: a node updating
 itself kills its own job engine mid-job by design, and a redelivered deploy
