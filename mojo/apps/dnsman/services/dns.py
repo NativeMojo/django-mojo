@@ -40,6 +40,11 @@ from mojo.apps.dnsman.services.providers.route53_provider import Route53Provider
 # Apex NS/SOA are refused regardless of this list — see `_validate`.
 DEFAULT_ALLOWED_RECORD_TYPES = ["A", "AAAA", "CNAME", "TXT", "MX", "SRV", "CAA", "NS"]
 
+# `upsert_record`'s change id when an ambiguous provider error was settled by
+# inventory reconciliation — the write converged, but there is no pollable
+# change batch behind it.
+RECONCILED_CHANGE_ID = "reconciled"
+
 
 # ---------------------------------------------------------------------------
 # adapter resolution — the fail-closed credential gate
@@ -186,7 +191,7 @@ def upsert_record(domain, rtype, name, record_values, ttl=300, reservation=None)
                     raise provider_error
                 if not reconciled:
                     raise provider_error
-                change_id = "reconciled"
+                change_id = RECONCILED_CHANGE_ID
             else:
                 raise provider_error
     return objict(change_id=change_id, provider=adapter.name, type=rtype, name=fqdn)
@@ -237,9 +242,13 @@ def wait_for_propagation(domain, rtype, name, record_values, timeout=None, chang
     Route53 gates on its ChangeInfo reaching INSYNC and then queries the zone's
     authoritative nameservers; GoDaddy has no change API, so it is the
     authoritative probe only. `change_id` is optional — pass the one returned by
-    `upsert_record` to get the INSYNC gate when the adapter was not reused.
+    `upsert_record` to get the INSYNC gate when the adapter was not reused. A
+    `RECONCILED_CHANGE_ID` sentinel is dropped here: that write converged
+    through inventory reconciliation and has no change batch to poll.
     """
     rtype, fqdn = _validate(domain, rtype, name)
+    if change_id == RECONCILED_CHANGE_ID:
+        change_id = None
     adapter = get_adapter(domain)
     return adapter.wait_for_propagation(
         rtype, fqdn, base.as_value_list(record_values),

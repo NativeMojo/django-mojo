@@ -131,7 +131,11 @@ class Route53Provider(DnsProvider):
         deadline = time.monotonic() + max(float(timeout or 0), 0)
 
         change_id = change_id or self._change_ids.get((rtype, name))
-        if change_id and not self._wait_for_insync(change_id, deadline):
+        if not change_id:
+            logger.warning(
+                f"dnsman: route53 propagation wait for {rtype} '{name}' has no "
+                f"change id — the INSYNC gate is skipped")
+        elif not self._wait_for_insync(change_id, deadline):
             logger.warning(
                 f"dnsman: route53 change {change_id} for {rtype} '{name}' never went INSYNC")
             return False, []

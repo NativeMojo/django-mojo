@@ -716,6 +716,26 @@ def test_route53_propagation_fails_when_the_change_never_syncs(opts):
 
 
 @th.django_unit_test()
+def test_route53_reconciled_change_id_is_not_polled(opts):
+    """A reconciled upsert converged through inventory reconciliation — there is
+    no change batch behind it, so the wait must go straight to the probe instead
+    of handing the sentinel to GetChange."""
+    from mojo.apps.dnsman.services import dns
+
+    with patch(f"{R53}.get_change") as change, \
+            patch(f"{PROBE}.wait_for_txt", return_value=(True, ["digest-one"])) as wait:
+        ok, seen = dns.wait_for_propagation(
+            opts.r53_domain, "TXT", "_acme-challenge", ["digest-one"],
+            timeout=30, change_id=dns.RECONCILED_CHANGE_ID)
+
+    assert ok is True, "Expected the probe result for a reconciled change id"
+    assert change.call_count == 0, (
+        "'reconciled' is not a pollable change id — GetChange must never see it")
+    assert wait.call_count == 1, (
+        f"Expected the authoritative probe to still run, got {wait.call_count}")
+
+
+@th.django_unit_test()
 def test_godaddy_propagation_is_the_probe_only(opts):
     """GoDaddy has no ChangeInfo API, so the authoritative probe is the only gate."""
     from mojo.apps.dnsman.services import dns
