@@ -19,6 +19,8 @@ Seams follow 15_deploy_orchestrate: real Redis, real job rows drained on a
 private channel, `deploy._run` and `mojo.apps.jobs` mocked, publishes captured
 with a predicate so parallel modules' traffic flows through untouched.
 """
+import os
+import tempfile
 from unittest import mock
 import uuid
 
@@ -119,6 +121,35 @@ def _publish_node(deployment, framework, migrate=True):
         payload=dict(sha=deployment.sha, framework=framework,
                      migrate=bool(migrate), deployment=str(deployment.pk)),
         channel=CHANNEL)
+
+
+def _script(directory, name, body, mode=0o755):
+    path = os.path.join(directory, name)
+    with open(path, "w") as handle:
+        handle.write(body)
+    os.chmod(path, mode)
+    return path
+
+
+# A fork taken before the deployment UUID existed: it parses argv, so it will
+# happily accept --sha and --framework and then reject or ignore --deployment.
+# That is the failure this contract guard exists for — the deploy dies later as
+# "the canary never reported", with nothing naming the cause.
+FORK_MISSING_DEPLOYMENT = """#!/bin/bash
+# aws/update.sh (forked copy)
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --sha)       SHA="$2"; shift 2 ;;
+        --framework) FRAMEWORK="$2"; shift 2 ;;
+        --migrate)   MIGRATE=1; shift ;;
+        *)           echo "usage" >&2; exit 2 ;;
+    esac
+done
+"""
+
+FORK_WITH_EVERY_FLAG = FORK_MISSING_DEPLOYMENT.replace(
+    "        --migrate)",
+    "        --deployment) DEPLOYMENT=\"$2\"; shift 2 ;;\n        --migrate)")
 
 
 def _converged(framework, minutes_ago, sha=SHA_B, status=None):
@@ -337,3 +368,184 @@ def test_pin_resolved_once_and_carried(opts):
         deploy.clear_status(node_row.pk)
     finally:
         _set_pin(None)
+
+
+@th.django_unit_test(
+    "REGRESSION: a stale fork of the update script is refused BEFORE it is run")
+def test_stale_fork_refused_before_run(opts):
+    """The shipped `update.sh` moves with every `pip install`, but a project
+    that FORKED it does not — and a fork frozen before `--deployment` existed
+    fails in the worst possible way: the framework execs it, it refuses the
+    argv (or silently drops the flag), and the deploy dies minutes later as
+    "the canary did not report" with nothing anywhere naming the real cause.
+    `deploy_node` now READS the script first and refuses by name."""
+    import mojo.apps.incident.reporter as reporter_module
+    from mojo.apps.edge.services import deploy
+    from mojo.apps.jobs.models import Job
+
+    with tempfile.TemporaryDirectory() as tmp:
+        script = _script(tmp, "update.sh", FORK_MISSING_DEPLOYMENT)
+        deployment = _arm(SHA_A, [opts.me])
+        job_id = _publish_node(deployment, PIN_VERSION, migrate=True)
+        ran = []
+        incidents = mock.Mock(return_value=mock.Mock(pk=1998))
+        with th.capture_publishes(_deploy_publish), \
+             mock.patch.object(deploy, "deploy_script_argv", return_value=[script]), \
+             mock.patch.object(deploy, "_run",
+                               side_effect=lambda argv: ran.append(list(argv))), \
+             mock.patch.object(reporter_module, "report_event", incidents):
+            _drain(opts)
+
+        th.assert_eq(ran, [],
+                     f"a stale fork must never be executed, got {ran!r}")
+        th.assert_eq(Job.objects.get(id=job_id).status, "failed",
+                     "the refused deploy must fail the node job, not pass quietly")
+        th.assert_true(incidents.called,
+                       "the refusal must be an incident, not a silent skip")
+        th.assert_eq(incidents.call_args.kwargs.get("title"),
+                     "Edge deploy node script contract mismatch",
+                     f"the contract refusal keeps its own title, got {incidents.call_args!r}")
+        th.assert_eq(incidents.call_args.kwargs.get("level"), 7,
+                     f"a refused deploy is a level-7 incident, got {incidents.call_args!r}")
+        message = incidents.call_args.args[0]
+        th.assert_in("EDGE_DEPLOY_SCRIPT", message,
+                     f"the incident must name the setting that points at the fork, got {message!r}")
+        th.assert_in("stale fork", message,
+                     f"the incident must say WHAT is wrong, got {message!r}")
+        deploy.clear_status(deployment.pk)
+
+
+@th.django_unit_test("the contract ladder reads a script and refuses only what is provably behind")
+def test_script_contract_ladder(opts):
+    from mojo.apps.edge.services import deploy
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cases = {
+            # An explicit declaration is the top rung and settles it outright.
+            "declared.sh": (
+                "#!/bin/bash\n# mojo-deploy-contract: 1\necho hi\n",
+                ("declared", 1, "")),
+            "declared_old.sh": (
+                "#!/bin/bash\n# mojo-deploy-contract: 0\necho hi\n",
+                ("declared", 0, "")),
+            # A shim delegates to the packaged body, so it CANNOT drift: the
+            # contract is whatever the installed framework ships.
+            "shim_locate.sh": (
+                '#!/bin/bash\ntarget="$(python3 -m mojo.deploy locate update.sh)"\n'
+                'exec bash "$target" "$@"\n',
+                ("shim", 1, "")),
+            "shim_import.py": (
+                "#!/usr/bin/env python3\nfrom mojo.deploy.certbot_sync import main\n",
+                ("shim", 1, "")),
+            # A wrapper that forwards argv wholesale never inspects the flags,
+            # so a --sha in its own usage comment proves nothing about it.
+            "forwarder.sh": (
+                '#!/bin/bash\n# usage: update.sh --sha <hex> --framework <v>\n'
+                'exec /opt/api/aws/real_update.sh "$@"\n',
+                ("unknown", None, "forwarder")),
+            "fork_current.sh": (FORK_WITH_EVERY_FLAG, ("inferred", 1, "")),
+            "fork_stale.sh": (FORK_MISSING_DEPLOYMENT, ("stale", 0, "--deployment")),
+            "wrapper.sh": (
+                "#!/bin/bash\nsudo systemctl restart api\n",
+                ("unknown", None, "not_argv_literal")),
+        }
+        for name, (body, expected) in cases.items():
+            path = _script(tmp, name, body)
+            result = deploy.script_contract([path])
+            th.assert_eq(result, expected,
+                         f"{name} must read as {expected!r}, got {result!r}")
+
+        refused = ("declared_old.sh", "fork_stale.sh")
+        for name, (body, expected) in cases.items():
+            allowed = deploy.contract_ok(expected[0], expected[1])
+            th.assert_eq(allowed, name not in refused,
+                         f"{name} ({expected[0]}) must "
+                         f"{'proceed' if name not in refused else 'be refused'}")
+
+        missing = deploy.script_contract([os.path.join(tmp, "gone.sh")])
+        th.assert_eq(missing, ("unknown", None, "unresolved_path"),
+                     f"a path that is not a file must proceed, got {missing!r}")
+        th.assert_true(deploy.contract_ok(*missing[:2]),
+                       "an unresolvable path must never be the reason a deploy is refused")
+
+        # A sudo-shaped argv resolves the LAST element that is a real file.
+        sudo_argv = ["sudo", "-n", os.path.join(tmp, "declared.sh")]
+        th.assert_eq(deploy.script_contract(sudo_argv), ("declared", 1, ""),
+                     "the documented sudo argv must still resolve its script")
+
+        unreadable = _script(tmp, "locked.sh", "#!/bin/bash\n# mojo-deploy-contract: 1\n")
+        os.chmod(unreadable, 0o000)
+        if not os.access(unreadable, os.R_OK):  # a root-run suite can read it anyway
+            result = deploy.script_contract([unreadable])
+            th.assert_eq(result, ("unknown", None, "unreadable"),
+                         f"an unreadable script must proceed, not refuse, got {result!r}")
+            th.assert_true(deploy.contract_ok(*result[:2]),
+                           "a script this guard cannot read must never fail a deploy")
+        os.chmod(unreadable, 0o644)
+
+
+@th.django_unit_test("a contract refusal reports on every surface, exactly like every other refusal")
+def test_contract_refusal_is_fully_reported(opts):
+    import mojo.apps.incident.reporter as reporter_module
+    from mojo.apps.edge.services import deploy
+
+    with tempfile.TemporaryDirectory() as tmp:
+        script = _script(tmp, "update.sh", FORK_MISSING_DEPLOYMENT)
+        deployment = _arm(SHA_A, [opts.me])
+        _publish_node(deployment, PIN_VERSION, migrate=True)
+        incidents = mock.Mock(return_value=mock.Mock(pk=1998))
+        with th.capture_publishes(_deploy_publish) as calls, \
+             mock.patch.object(deploy, "deploy_script_argv", return_value=[script]), \
+             mock.patch.object(deploy, "_run", side_effect=AssertionError("script ran")), \
+             mock.patch.object(reporter_module, "report_event", incidents):
+            _drain(opts)
+
+        message = incidents.call_args.args[0]
+        th.assert_in("v0", message,
+                     f"the incident must carry the contract the script speaks, got {message!r}")
+        th.assert_in(f"v{deploy.DEPLOY_CONTRACT}", message,
+                     f"the incident must carry the contract required, got {message!r}")
+        th.assert_eq(calls, [],
+                     f"a refused node must publish nothing, got {calls!r}")
+
+        deployment.refresh_from_db()
+        entries = [item for item in (deployment.node_evidence or [])
+                   if (item.get("detail") or {}).get("phase") == "contract_mismatch"]
+        th.assert_eq(len(entries), 1,
+                     f"the refusal must land as durable evidence, got {deployment.node_evidence!r}")
+        detail = entries[0].get("detail") or {}
+        th.assert_eq(detail.get("contract"), 0,
+                     f"evidence must record the contract the script speaks, got {detail!r}")
+        th.assert_eq(detail.get("required"), deploy.DEPLOY_CONTRACT,
+                     f"evidence must record the contract required, got {detail!r}")
+        th.assert_eq(detail.get("missing"), "--deployment",
+                     f"evidence must name the flag the fork lacks, got {detail!r}")
+        th.assert_eq(deployment.status, "failed",
+                     f"a migrating node's refusal must close the attempt, got {deployment.status}")
+        status = deploy.get_status()
+        th.assert_eq((status or {}).get("state"), deploy.STATUS_FAILED,
+                     f"the migrating node must release the lease as failed, got {status!r}")
+        th.assert_eq((status or {}).get("detail"), "contract_mismatch",
+                     f"the lease must carry the fixed contract phase, got {status!r}")
+        deploy.clear_status(deployment.pk)
+
+
+@th.django_unit_test("the packaged update.sh declares exactly the contract this framework requires")
+def test_packaged_script_declares_current_contract(opts):
+    """The marker in the shipped script and `DEPLOY_CONTRACT` are two halves of
+    one number. If they ever drift, the framework refuses its OWN script."""
+    import mojo
+
+    from mojo.apps.edge.services import deploy
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(mojo.__file__)))
+    path = os.path.join(root, "mojo", "deploy", "scripts", "update.sh")
+    th.assert_true(os.path.isfile(path), f"the packaged update.sh must ship: {path}")
+    verdict, contract, reason = deploy.script_contract([path])
+    th.assert_eq(verdict, "declared",
+                 f"the packaged script must DECLARE its contract, got {verdict!r}/{reason!r}")
+    th.assert_eq(contract, deploy.DEPLOY_CONTRACT,
+                 f"update.sh declares contract {contract}, the framework requires "
+                 f"{deploy.DEPLOY_CONTRACT} — bump the marker and the constant together")
+    th.assert_true(deploy.contract_ok(verdict, contract),
+                   "the framework must never refuse the script it ships")

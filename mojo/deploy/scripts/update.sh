@@ -1,4 +1,10 @@
 #!/bin/bash
+# mojo-deploy-contract: 1
+# ^ the argv contract this script speaks. It must equal
+#   mojo.apps.edge.services.deploy.DEPLOY_CONTRACT: the deploy plane READS this
+#   line before it execs the script and refuses one that declares an older
+#   contract. Bump both together, or not at all.
+#
 # Node-side fleet update — the framework half of the django-mojo edge deploy
 # plane, shipped inside the django-mojo package (mojo/deploy/scripts/) and
 # executed through each project's aws/update.sh shim. The authoritative
@@ -21,6 +27,10 @@
 #   update.sh --manual
 #       The hands-on path for one box: origin/main, latest framework, no
 #       migration, NO status writes. For "ssh in and fix this node".
+#   update.sh --contract
+#       Print the argv contract version above and exit 0, touching nothing.
+#       For an operator or a checker asking "what does this box's script
+#       speak"; the deploy plane never uses it (it reads the marker instead).
 #   update.sh
 #       A usage error on purpose — a bare muscle-memory run mid-deploy must
 #       not race the fleet with untracked state.
@@ -41,24 +51,42 @@
 #     jobman's own echo after killing it would SIGPIPE the stop script
 #     between "stop engine" and "stop scheduler".
 
-PROJ_PATH="${PROJ_PATH:-/opt/api}"
-cd "$PROJ_PATH" || { echo "FATAL: cannot cd to $PROJ_PATH" >&2; exit 1; }
-
-SANITY_URL="${SANITY_URL:-http://127.0.0.1/api/version}"
-
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S'): $*" | tee -a var/update.log; }
-
 usage() {
     cat >&2 <<'EOF'
 usage:
   aws/update.sh --sha <7-40 hex> --framework <version> --deployment <uuid> [--migrate]   (deploy)
   aws/update.sh --manual                                             (hands-on)
+  aws/update.sh --contract                                           (print argv contract)
 
 A bare invocation is refused: deploys are driven by the fleet orchestrator
 (push to the deploy branch, or POST /api/edge/deploy). For a one-box manual
 update use --manual.
 EOF
 }
+
+# ── contract probe ───────────────────────────────────────────────────────────
+# Answered BEFORE the cd, and before anything else: "which contract does this
+# box's script speak" has to be answerable on a box whose PROJ_PATH does not
+# exist yet, and answering it must touch nothing — no cd, no lock, no git, no
+# status write. Combined with any other flag it is a usage error, so it can
+# never become a half-run deploy. The integer below and the
+# `mojo-deploy-contract` marker at the top of this file are one number; the
+# harness asserts they agree.
+
+for arg in "$@"; do
+    if [ "$arg" = "--contract" ]; then
+        [ "$#" -eq 1 ] || { usage; exit 2; }
+        echo "1"
+        exit 0
+    fi
+done
+
+PROJ_PATH="${PROJ_PATH:-/opt/api}"
+cd "$PROJ_PATH" || { echo "FATAL: cannot cd to $PROJ_PATH" >&2; exit 1; }
+
+SANITY_URL="${SANITY_URL:-http://127.0.0.1/api/version}"
+
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S'): $*" | tee -a var/update.log; }
 
 # ── argument parsing ─────────────────────────────────────────────────────────
 

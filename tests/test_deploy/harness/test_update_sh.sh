@@ -299,6 +299,24 @@ assert_not_in_log "deploy_status" "--manual writes no status"
 assert_eq "$(grep "^CMD" "$CALLLOG" | tail -1 | grep -c "jobman stop")" 1 \
     "--manual still stops jobman last"
 
+echo "update.sh: --contract prints the declared contract and touches nothing"
+setup_env
+contract_out="$(run_update --contract 2>/dev/null)"
+assert_eq "$?" 0 "--contract exits 0"
+marker="$(grep -m1 '^# mojo-deploy-contract:' "$PROJ/aws/update.sh" | awk '{print $3}')"
+assert_eq "$contract_out" "$marker" \
+    "--contract prints the same integer the marker declares (got '$contract_out', marker '$marker')"
+assert_eq "$(wc -l < "$CALLLOG" | tr -d ' ')" 0 "no command ran for --contract"
+[ -f "$PROJ/var/update.lock" ] && fail "--contract took the update lock" || ok "--contract never touched the lock"
+# The whole point of answering before the cd: a checker must be able to ask a
+# box what its script speaks even when the deployed tree is not there.
+( cd "$TMP" && PROJ_PATH="$TMP/does-not-exist" PATH="$STUB:$PATH" \
+    bash "$PROJ/aws/update.sh" --contract >/dev/null 2>&1 )
+assert_eq "$?" 0 "--contract answers with a nonexistent PROJ_PATH"
+run_update --contract --sha "$SHA_NEW" >/dev/null 2>&1
+assert_eq "$?" 2 "--contract combined with a deploy flag is a usage error"
+assert_eq "$(wc -l < "$CALLLOG" | tr -d ' ')" 0 "a refused --contract combination still ran nothing"
+
 echo "update.sh: deploy_status exit 3 (superseded) is tolerated"
 setup_env
 echo "3" > "$CTL/deploy_status.exit"

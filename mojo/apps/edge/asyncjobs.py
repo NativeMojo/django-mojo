@@ -476,6 +476,28 @@ def deploy_node(job):
                 f"executable on {runner}: {argv_base[0]} — the update script "
                 "must ship committed 100755 (git update-index --chmod=+x)"))
         raise RuntimeError("EDGE_DEPLOY_SCRIPT is not executable")
+    # A stale FORK of the update script is the failure this catches. A shim
+    # moves with every pip install; a fork does not, and one frozen before
+    # `--deployment` existed refuses the argv (or silently drops the flag) and
+    # the deploy dies minutes later as "the canary never reported", with
+    # nothing naming the cause. Reading the script is cheap and says so now.
+    # It refuses ONLY what is provably behind — see deploy.script_contract.
+    verdict, contract, reason = deploy.script_contract(argv_base)
+    if not deploy.contract_ok(verdict, contract):
+        _node_deploy_failed(
+            deployment_id, sha, job, migrate, phase="contract_mismatch",
+            message=(
+                f"deploy {deployment_id} ({sha}): node update script speaks "
+                f"deploy contract v{contract}; this framework requires "
+                f"v{deploy.DEPLOY_CONTRACT} — the script named by "
+                "EDGE_DEPLOY_SCRIPT is a stale fork (see django-mojo "
+                "docs/django_developer/edge/deploy.md)"),
+            detail={"phase": "contract_mismatch", "contract": contract,
+                    "required": deploy.DEPLOY_CONTRACT, "missing": reason},
+            title="Edge deploy node script contract mismatch")
+        raise RuntimeError(
+            f"node update script speaks deploy contract v{contract}, "
+            f"requires v{deploy.DEPLOY_CONTRACT}")
     # Defense-in-depth before anything enters a subprocess argv. There is no
     # shell, but argv hygiene is cheap and the values crossed a webhook.
     if not deploy.is_valid_sha(sha):
