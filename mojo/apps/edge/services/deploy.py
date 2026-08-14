@@ -69,6 +69,14 @@ _FAILURE_PHASES = {
     "rollback impossible: no previous state": "rollback_impossible",
 }
 
+# Phases the NODE decides, not the script: deploy_node reports these when the
+# update script never got far enough to report anything itself. Kept separate
+# from _FAILURE_PHASES because they have no script-owned label to map from —
+# deploy_node passes the classification straight through.
+_NODE_FAILURE_PHASES = {
+    "exec_failed", "script_timeout", "preflight_failed", "unconfigured",
+}
+
 DEPLOY_CHANNEL = "default"
 DEPLOY_ORCHESTRATE_JOB = "mojo.apps.edge.asyncjobs.deploy_orchestrate"
 DEPLOY_NODE_JOB = "mojo.apps.edge.asyncjobs.deploy_node"
@@ -151,7 +159,9 @@ def is_valid_version(value):
 def failure_phase(value):
     """Map script-owned labels to a fixed non-secret failure classification."""
     value = str(value or "")
-    if value in set(_FAILURE_PHASES.values()) | {"git_reset", "update_failed"}:
+    allowed = (set(_FAILURE_PHASES.values()) | _NODE_FAILURE_PHASES
+               | {"git_reset", "update_failed"})
+    if value in allowed:
         return value
     if value.startswith("git reset to "):
         return "git_reset"

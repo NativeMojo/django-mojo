@@ -17,6 +17,7 @@ The properties under test are mostly ORDERINGS and ABSENCES: the fleet is
 never told before the canary proves the release, self is told last, a moved
 target is chained rather than lost, and a ghost cannot stomp a later deploy.
 """
+import subprocess
 from unittest import mock
 import uuid
 
@@ -427,7 +428,9 @@ def test_node_failure_no_rollback(opts):
                            return_value=["/bin/echo"]), \
          mock.patch.object(deploy, "_run",
                            return_value=FakeProc(
-                               23, stderr="password=sentinel-secret pip exploded")), \
+                               23,
+                               stderr="password=sentinel-secret pip exploded\n"
+                                      "collecting wheels for numpy\n")), \
          mock.patch.object(reporter_module, "report_event", incidents):
         _drain(opts)
 
@@ -439,14 +442,289 @@ def test_node_failure_no_rollback(opts):
                  "the incident must retain fixed phase and exit metadata")
     th.assert_true("sentinel-secret" not in incident_message,
                    "raw process output must never enter an incident")
+    th.assert_true("numpy" not in incident_message,
+                   "the stderr tail is evidence only — it must never enter an incident")
     deployment.refresh_from_db()
     th.assert_true("sentinel-secret" not in str(deployment.node_evidence),
                    "raw process output must never enter durable evidence")
+    tail = [(item.get("detail") or {}).get("stderr_tail")
+            for item in (deployment.node_evidence or [])]
+    tail = [entry for entry in tail if entry]
+    th.assert_eq(tail, [["[redacted]", "collecting wheels for numpy"]],
+                 f"the tail must redact per line and keep the benign one "
+                 f"verbatim, got {tail!r}")
     th.assert_eq(calls, [],
                  "one node's failure after release must not publish anything — no rollback")
     status = deploy.get_status()
     th.assert_true(status and status["sha"] == SHA_A,
                    f"a fleet-node failure must not touch the deploy status, got {status!r}")
+    deploy.clear_status(deployment.pk)
+
+
+@th.django_unit_test("deploy_node: a script that cannot be executed is reported, not swallowed")
+def test_node_exec_failure_is_reported(opts):
+    """Regression: the update script exists but the engine user cannot exec it
+    (a shim committed 0644). `_run` raises before any process starts, so the
+    old code let the exception escape with no incident, no evidence, and a
+    lease left `migrating` until its TTL — an invisible deploy."""
+    import errno
+
+    import mojo.apps.incident.reporter as reporter_module
+    from mojo.apps import jobs
+    from mojo.apps.edge.services import deploy
+    from mojo.apps.jobs.models import Job
+
+    deployment = _arm(SHA_A, [opts.me])
+    job_id = jobs.publish(
+        func=deploy.DEPLOY_NODE_JOB,
+        payload=dict(sha=SHA_A, framework=FRAMEWORK, migrate=True,
+                     deployment=str(deployment.pk)),
+        channel=CHANNEL)
+    incidents = mock.Mock(return_value=mock.Mock(pk=1997))
+    with th.capture_publishes(_deploy_publish), \
+         mock.patch.object(deploy, "deploy_script_argv", return_value=["/bin/echo"]), \
+         mock.patch.object(deploy, "_run", side_effect=PermissionError(
+             errno.EACCES, "password=exec-sentinel denied")), \
+         mock.patch.object(reporter_module, "report_event", incidents):
+        _drain(opts)
+
+    row = Job.objects.get(id=job_id)
+    th.assert_eq(row.status, "failed",
+                 f"an unexecutable script must fail the node job, got {row.status}")
+    th.assert_true(incidents.called,
+                   "a script that cannot be executed must file an incident")
+    th.assert_eq(incidents.call_args.kwargs.get("level"), 7,
+                 f"an exec failure is a level-7 incident, got {incidents.call_args!r}")
+    message = incidents.call_args.args[0]
+    th.assert_in("EACCES", message,
+                 f"the incident must name the errno so an operator can act, got {message!r}")
+    th.assert_in("/bin/echo", message,
+                 f"the incident must name the script that could not run, got {message!r}")
+    th.assert_true("exec-sentinel" not in message,
+                   "raw OSError text must never enter an incident")
+
+    deployment.refresh_from_db()
+    phases = [(item.get("detail") or {}).get("phase")
+              for item in (deployment.node_evidence or [])]
+    th.assert_in("exec_failed", phases,
+                 f"the failure must land as durable node evidence, got {phases!r}")
+    th.assert_true("exec-sentinel" not in str(deployment.node_evidence),
+                   "raw OSError text must never enter durable evidence")
+    th.assert_eq(deployment.status, "failed",
+                 f"a migrating node's exec failure must close the attempt, "
+                 f"got {deployment.status}")
+    status = deploy.get_status()
+    th.assert_true(status and status.get("state") == deploy.STATUS_FAILED,
+                   f"the migrating node must release the lease as failed, got {status!r}")
+    th.assert_eq((status or {}).get("detail"), "exec_failed",
+                 f"the lease must carry the fixed exec phase, got {status!r}")
+    deploy.clear_status(deployment.pk)
+
+
+@th.django_unit_test("deploy_node: a timed-out script reports a redacted stderr tail")
+def test_node_timeout_is_reported(opts):
+    """Regression: `_run` kills the script at SCRIPT_TIMEOUT and raises. The old
+    code swallowed that the same way as an exec failure. The tail matters
+    because a timeout leaves nothing else to look at — and on POSIX
+    TimeoutExpired carries BYTES despite text=True, so it must be decoded
+    before it is split and sanitized."""
+    import mojo.apps.incident.reporter as reporter_module
+    from mojo.apps import jobs
+    from mojo.apps.edge.services import deploy
+    from mojo.apps.jobs.models import Job
+
+    deployment = _arm(SHA_A, [opts.me])
+    job_id = jobs.publish(
+        func=deploy.DEPLOY_NODE_JOB,
+        payload=dict(sha=SHA_A, framework=FRAMEWORK, migrate=True,
+                     deployment=str(deployment.pk)),
+        channel=CHANNEL)
+    timeout = subprocess.TimeoutExpired(
+        cmd=["/bin/echo"], timeout=900, output=b"",
+        stderr=b"password=timeout-sentinel\ncollecting wheels for numpy\n")
+    incidents = mock.Mock(return_value=mock.Mock(pk=1997))
+    with th.capture_publishes(_deploy_publish), \
+         mock.patch.object(deploy, "deploy_script_argv", return_value=["/bin/echo"]), \
+         mock.patch.object(deploy, "_run", side_effect=timeout), \
+         mock.patch.object(reporter_module, "report_event", incidents):
+        _drain(opts)
+
+    row = Job.objects.get(id=job_id)
+    th.assert_eq(row.status, "failed",
+                 f"a timed-out script must fail the node job, got {row.status}")
+    th.assert_true(incidents.called, "a script timeout must file an incident")
+    message = incidents.call_args.args[0]
+    th.assert_true("timeout-sentinel" not in message,
+                   "raw process output must never enter an incident")
+
+    deployment.refresh_from_db()
+    entries = [item for item in (deployment.node_evidence or [])
+               if (item.get("detail") or {}).get("phase") == "script_timeout"]
+    th.assert_eq(len(entries), 1,
+                 f"the timeout must land as durable node evidence, "
+                 f"got {deployment.node_evidence!r}")
+    tail = (entries[0].get("detail") or {}).get("stderr_tail") or []
+    th.assert_true("timeout-sentinel" not in str(tail),
+                   f"a credential-shaped stderr line must be redacted, got {tail!r}")
+    th.assert_in("[redacted]", tail,
+                 f"the credential line must survive as a redaction marker, got {tail!r}")
+    th.assert_in("collecting wheels for numpy", tail,
+                 f"a benign stderr line must survive decoded and verbatim, got {tail!r}")
+    status = deploy.get_status()
+    th.assert_eq((status or {}).get("detail"), "script_timeout",
+                 f"the lease must carry the fixed timeout phase, got {status!r}")
+    deploy.clear_status(deployment.pk)
+
+
+@th.django_unit_test("deploy_node: a FLEET node's reported failure never touches the lease")
+def test_node_fleet_failure_leaves_lease_alone(opts):
+    """The invariant the new reporting had to preserve: the canary already
+    proved this release, so one fleet node failing is an incident about that
+    node — not a failed deploy. Only a migrating node may write the lease."""
+    import mojo.apps.incident.reporter as reporter_module
+    from mojo.apps import jobs
+    from mojo.apps.edge.services import deploy
+
+    deployment = _arm(SHA_A, [opts.me])
+    jobs.publish(
+        func=deploy.DEPLOY_NODE_JOB,
+        payload=dict(sha=SHA_A, framework=FRAMEWORK, migrate=False,
+                     deployment=str(deployment.pk)),
+        channel=CHANNEL)
+    timeout = subprocess.TimeoutExpired(cmd=["/bin/echo"], timeout=900)
+    incidents = mock.Mock(return_value=mock.Mock(pk=1997))
+    with th.capture_publishes(_deploy_publish) as calls, \
+         mock.patch.object(deploy, "deploy_script_argv", return_value=["/bin/echo"]), \
+         mock.patch.object(deploy, "_run", side_effect=timeout), \
+         mock.patch.object(reporter_module, "report_event", incidents):
+        _drain(opts)
+
+    th.assert_true(incidents.called,
+                   "a fleet node's timeout must still be visible as an incident")
+    th.assert_eq(calls, [],
+                 f"a fleet node's failure must publish nothing — no rollback, got {calls!r}")
+    status = deploy.get_status()
+    th.assert_true(status and status.get("state") == deploy.STATUS_MIGRATING,
+                   f"a non-migrating node must not touch the deploy status, got {status!r}")
+    deployment.refresh_from_db()
+    th.assert_true(deployment.status != "failed",
+                   f"one fleet node must not close the whole attempt, "
+                   f"got {deployment.status}")
+    deploy.clear_status(deployment.pk)
+
+
+@th.django_unit_test("deploy_node: a non-executable script is refused before it is run")
+def test_node_preflight_executability(opts):
+    """A shim committed 0644 is the shape of this failure. An explicit path is
+    probed up front and named; a BARE command name (the documented
+    ["sudo", "-n", ...] argv) must skip the probe entirely — os.access does no
+    PATH resolution, so probing it would refuse every configured deploy."""
+    import os
+    import tempfile
+
+    import mojo.apps.incident.reporter as reporter_module
+    from mojo.apps import jobs
+    from mojo.apps.edge.services import deploy
+    from mojo.apps.jobs.models import Job
+
+    handle, script = tempfile.mkstemp(prefix="deploy-shim-", suffix=".sh")
+    os.close(handle)
+    os.chmod(script, 0o644)
+    try:
+        deployment = _arm(SHA_A, [opts.me])
+        job_id = jobs.publish(
+            func=deploy.DEPLOY_NODE_JOB,
+            payload=dict(sha=SHA_A, framework=FRAMEWORK, migrate=True,
+                         deployment=str(deployment.pk)),
+            channel=CHANNEL)
+        ran = []
+        incidents = mock.Mock(return_value=mock.Mock(pk=1997))
+        with th.capture_publishes(_deploy_publish), \
+             mock.patch.object(deploy, "deploy_script_argv", return_value=[script]), \
+             mock.patch.object(deploy, "_run",
+                               side_effect=lambda argv: ran.append(list(argv))), \
+             mock.patch.object(reporter_module, "report_event", incidents):
+            _drain(opts)
+
+        th.assert_eq(ran, [],
+                     f"a non-executable script must never be run, got {ran!r}")
+        th.assert_eq(Job.objects.get(id=job_id).status, "failed",
+                     "the refused deploy must fail the node job")
+        message = incidents.call_args.args[0]
+        th.assert_in("not executable", message,
+                     f"the incident must name the refusal, got {message!r}")
+        th.assert_in(script, message,
+                     f"the incident must name the script, got {message!r}")
+        th.assert_in("--chmod=+x", message,
+                     f"the incident must carry the cure, got {message!r}")
+        deployment.refresh_from_db()
+        phases = [(item.get("detail") or {}).get("phase")
+                  for item in (deployment.node_evidence or [])]
+        th.assert_in("preflight_failed", phases,
+                     f"the refusal must land as durable evidence, got {phases!r}")
+        deploy.clear_status(deployment.pk)
+
+        # A bare command name carries no path separator: skip the probe.
+        sudo_deployment = _arm(SHA_B, [opts.me])
+        jobs.publish(
+            func=deploy.DEPLOY_NODE_JOB,
+            payload=dict(sha=SHA_B, framework=FRAMEWORK, migrate=False,
+                         deployment=str(sudo_deployment.pk)),
+            channel=CHANNEL)
+        with th.capture_publishes(_deploy_publish), \
+             mock.patch.object(deploy, "deploy_script_argv",
+                               return_value=["sudo", "-n", script]), \
+             mock.patch.object(deploy, "_run",
+                               side_effect=lambda argv: ran.append(list(argv)) or FakeProc(0)):
+            _drain(opts)
+        th.assert_eq(len(ran), 1,
+                     f"a sudo-shaped argv must pass preflight and reach the "
+                     f"script, got {ran!r}")
+        th.assert_eq(ran[0][:3], ["sudo", "-n", script],
+                     f"the configured argv base must travel unchanged, got {ran!r}")
+        deploy.clear_status(sudo_deployment.pk)
+    finally:
+        os.unlink(script)
+
+
+@th.django_unit_test("deploy_node: an unconfigured node reports through the same helper")
+def test_node_unconfigured_reports_failure(opts):
+    """The refusal predates this item; what it never did was leave a trace
+    anywhere except the incident — no evidence, and a migrating node's lease
+    held `migrating` until its TTL."""
+    import mojo.apps.incident.reporter as reporter_module
+    from mojo.apps import jobs
+    from mojo.apps.edge.services import deploy
+
+    deployment = _arm(SHA_A, [opts.me])
+    jobs.publish(
+        func=deploy.DEPLOY_NODE_JOB,
+        payload=dict(sha=SHA_A, framework=FRAMEWORK, migrate=True,
+                     deployment=str(deployment.pk)),
+        channel=CHANNEL)
+    incidents = mock.Mock(return_value=mock.Mock(pk=1997))
+    with th.capture_publishes(_deploy_publish), \
+         mock.patch.object(deploy, "deploy_script_argv", return_value=None), \
+         mock.patch.object(reporter_module, "report_event", incidents):
+        _drain(opts)
+
+    message = incidents.call_args.args[0]
+    th.assert_in("EDGE_DEPLOY_SCRIPT", message,
+                 f"the incident must still name the missing setting, got {message!r}")
+    th.assert_eq(incidents.call_args.kwargs.get("title"),
+                 "Edge deploy node unconfigured",
+                 f"the unconfigured incident keeps its own title, got {incidents.call_args!r}")
+    deployment.refresh_from_db()
+    phases = [(item.get("detail") or {}).get("phase")
+              for item in (deployment.node_evidence or [])]
+    th.assert_in("unconfigured", phases,
+                 f"the refusal must land as durable evidence, got {phases!r}")
+    th.assert_eq(deployment.status, "failed",
+                 f"a migrating node's refusal must close the attempt, "
+                 f"got {deployment.status}")
+    status = deploy.get_status()
+    th.assert_eq((status or {}).get("detail"), "unconfigured",
+                 f"the lease must be released as failed, got {status!r}")
     deploy.clear_status(deployment.pk)
 
 

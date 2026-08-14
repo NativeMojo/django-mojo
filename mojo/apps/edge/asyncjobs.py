@@ -328,19 +328,77 @@ def _deploy_terminal(sha, me, framework, released, deployment_id):
     return f"failed:{sha}"
 
 
+def _stderr_tail(raw, limit=10):
+    """The last few stderr lines, decoded and sanitized ONE LINE AT A TIME.
+
+    Per-line so one credential-shaped line collapses to `[redacted]` without
+    taking the diagnosis with it — whole-blob redaction throws away the very
+    lines an operator needs. Decoding is explicit because POSIX
+    `TimeoutExpired` carries bytes despite `text=True`.
+
+    This is evidence-only. It never enters an incident message.
+    """
+    from mojo.apps.account.services.setup_safety import sanitize
+
+    if isinstance(raw, (bytes, bytearray)):
+        raw = bytes(raw).decode("utf-8", "replace")
+    lines = [line for line in str(raw or "").splitlines() if line.strip()]
+    return [sanitize(line, max_bytes=1024) for line in lines[-limit:]]
+
+
+def _node_deploy_failed(deployment_id, sha, job, migrate, phase, message,
+                        detail=None, title="Edge deploy node failed"):
+    """Report ONE node's deploy failure on every surface that has to see it.
+
+    Called for every outcome the update script could not report itself:
+    unconfigured, an unexecutable script, a timeout, a nonzero exit. Assumes
+    nothing about how far the deploy got — in particular it does not require
+    that `deploy._run` was ever reached.
+
+    Order matters: incident and durable evidence first, and the deploy LEASE
+    only when this node was migrating. A fleet node's failure must never touch
+    the deploy status — the release is already proven and one node falling
+    behind is not a fleet failure. When the migrating node's CAS lands, the
+    durable row is closed too, exactly as the sanctioned script-reported path
+    does (`management/commands/deploy_status.py`).
+    """
+    from mojo.apps.edge.services import deploy
+    from mojo.apps.edge.services import platform_deploy
+    from mojo.apps.incident import reporter
+
+    event = reporter.report_event(
+        message, title=title, category="edge_deploy", level=7)
+    platform_deploy.add_link(deployment_id, "incident_events", event.pk)
+    platform_deploy.evidence(
+        deployment_id, job.runner_id or deploy.local_runner_id(),
+        "failed", detail=detail or {"phase": phase})
+    if not migrate:
+        return
+    if deploy.set_status(
+            deploy.STATUS_FAILED, sha, detail=phase,
+            deployment_id=deployment_id):
+        platform_deploy.transition(
+            deployment_id, "failed", {"phase": phase, "source": "node_report"})
+
+
 def deploy_node(job):
     """Run the update script on THIS node (D4).
 
     On a full successful run this function never returns — the script's tail
     stops the engine executing it. Every observable outcome is therefore
-    either the script's own deploy_status report, or the failure path below,
-    which IS reachable: the script dies before its engine-stopping tail
-    whenever install, migrate or sanity fails, and that is exactly when an
-    incident must be filed.
+    either the script's own deploy_status report, or one of the failure paths
+    below, which ARE reachable: the script dies before its engine-stopping
+    tail whenever install, migrate or sanity fails, and it may never start at
+    all (unset setting, non-executable shim, timeout). Each of those is
+    exactly when an incident must be filed, so all four route through
+    `_node_deploy_failed`. Nothing may escape this function unreported.
     """
+    import errno as _errno
+    import os
+    import subprocess
+
     from mojo.apps.edge.services import deploy
     from mojo.apps.edge.services import platform_deploy
-    from mojo.apps.incident import reporter
 
     payload = job.payload or {}
     sha = payload.get("sha") or ""
@@ -354,15 +412,30 @@ def deploy_node(job):
     if record is None or record.sha != sha:
         raise RuntimeError("refusing platform deploy with mismatched deployment UUID")
 
+    runner = job.runner_id or deploy.local_runner_id()
     argv_base = deploy.deploy_script_argv()
     if not argv_base:
-        event = reporter.report_event(
-            f"deploy {deployment_id} ({sha}): EDGE_DEPLOY_SCRIPT is not configured on this node "
-            "— refusing to deploy",
-            title="Edge deploy node unconfigured",
-            category="edge_deploy", level=7)
-        platform_deploy.add_link(deployment_id, "incident_events", event.pk)
+        _node_deploy_failed(
+            deployment_id, sha, job, migrate, phase="unconfigured",
+            message=(
+                f"deploy {deployment_id} ({sha}): EDGE_DEPLOY_SCRIPT is not configured on this node "
+                "— refusing to deploy"),
+            title="Edge deploy node unconfigured")
         raise RuntimeError("EDGE_DEPLOY_SCRIPT is not configured")
+    # An explicitly-pathed script that is not executable fails identically on
+    # every node in the fleet, so catch it here rather than letting each node
+    # discover it as an OSError from exec. Bare command names are SKIPPED:
+    # os.access does no PATH resolution, so probing "sudo" would refuse every
+    # deploy on the documented ["sudo", "-n", "..."] configuration. The OSError
+    # catch below is the backstop for those.
+    if os.sep in argv_base[0] and not os.access(argv_base[0], os.X_OK):
+        _node_deploy_failed(
+            deployment_id, sha, job, migrate, phase="preflight_failed",
+            message=(
+                f"deploy {deployment_id} ({sha}): EDGE_DEPLOY_SCRIPT is not "
+                f"executable on {runner}: {argv_base[0]} — the update script "
+                "must ship committed 100755 (git update-index --chmod=+x)"))
+        raise RuntimeError("EDGE_DEPLOY_SCRIPT is not executable")
     # Defense-in-depth before anything enters a subprocess argv. There is no
     # shell, but argv hygiene is cheap and the values crossed a webhook.
     if not deploy.is_valid_sha(sha):
@@ -378,19 +451,43 @@ def deploy_node(job):
     logit.info(
         f"edge deploy {deployment_id} ({sha}): running update script "
         f"(migrate={migrate})")
-    result = deploy._run(argv)
+    try:
+        result = deploy._run(argv)
+    except OSError as err:
+        # The script never started: wrong mode, wrong interpreter, gone
+        # between the preflight and here. errno names are framework-owned
+        # vocabulary; the OSError's own message is not and never travels.
+        code = _errno.errorcode.get(err.errno, "unknown")
+        _node_deploy_failed(
+            deployment_id, sha, job, migrate, phase="exec_failed",
+            message=(
+                f"deploy {deployment_id} ({sha}): update script could not be "
+                f"executed ({code}): {argv_base[0]} on {runner}"))
+        raise RuntimeError(f"update script could not be executed: {code}") from None
+    except subprocess.TimeoutExpired as err:
+        # A killed script leaves nothing but its output, so the bounded
+        # redacted tail is the whole diagnosis — evidence only, never the
+        # incident.
+        _node_deploy_failed(
+            deployment_id, sha, job, migrate, phase="script_timeout",
+            message=(
+                f"deploy {deployment_id} ({sha}): update script timed out on "
+                f"{runner} after {deploy.SCRIPT_TIMEOUT}s "
+                "(phase=script_timeout)"),
+            detail={"phase": "script_timeout",
+                    "stderr_tail": _stderr_tail(err.stderr)})
+        raise RuntimeError("update script timed out") from None
     if result.returncode != 0:
-        # stdout/stderr may contain echoed credentials. They remain process-
-        # local only and never enter incidents, Redis, or durable evidence.
-        event = reporter.report_event(
-            f"deploy {deployment_id} ({sha}): update script failed on "
-            f"{job.runner_id or 'this node'} "
-            f"(phase=update_script, exit={result.returncode})",
-            title="Edge deploy node failed",
-            category="edge_deploy", level=7)
-        platform_deploy.add_link(deployment_id, "incident_events", event.pk)
-        platform_deploy.evidence(
-            deployment_id, job.runner_id or deploy.local_runner_id(),
-            "failed", detail={"exit": result.returncode})
+        # stdout/stderr may contain echoed credentials. Only the bounded,
+        # per-line sanitized tail becomes durable evidence; nothing raw
+        # reaches an incident or Redis.
+        _node_deploy_failed(
+            deployment_id, sha, job, migrate, phase="update_script",
+            message=(
+                f"deploy {deployment_id} ({sha}): update script failed on "
+                f"{job.runner_id or 'this node'} "
+                f"(phase=update_script, exit={result.returncode})"),
+            detail={"phase": "update_script", "exit": result.returncode,
+                    "stderr_tail": _stderr_tail(result.stderr)})
         raise RuntimeError(f"update script exited {result.returncode}")
     return f"completed:{sha}"

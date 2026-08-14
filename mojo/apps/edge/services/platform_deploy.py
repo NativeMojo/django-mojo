@@ -29,10 +29,16 @@ def _safe(value, depth=0):
         return "[truncated]"
     if value is None or isinstance(value, (bool, int, float)):
         return value
-    if isinstance(value, str):
+    if isinstance(value, (str, bytes, bytearray)):
         # Redact credential-shaped content independent of the surrounding key.
         # Runner/provider values are evidence, not trusted display strings.
+        # bytes route through the SAME path rather than falling through to
+        # _text's str() — subprocess failures carry bytes even under text=True
+        # (POSIX TimeoutExpired), and b"password=..." stringified is a
+        # credential that never met the redactor.
         from mojo.apps.account.services.setup_safety import sanitize
+        if isinstance(value, (bytes, bytearray)):
+            value = bytes(value).decode("utf-8", "replace")
         return _text(sanitize(value, max_bytes=1024))
     if isinstance(value, (list, tuple)):
         return [_safe(item, depth + 1) for item in value[:32]]
