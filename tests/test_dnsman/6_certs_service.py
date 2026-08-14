@@ -93,10 +93,11 @@ class FakeDns(object):
             raise RuntimeError(self.clear_error)
         return objict(change_id="C-clear", provider=domain.provider)
 
-    def wait_for_propagation(self, domain, rtype, name, record_values, timeout=None):
+    def wait_for_propagation(self, domain, rtype, name, record_values, timeout=None,
+                             change_id=None):
         self.waits.append(objict(
             domain=domain.name, rtype=rtype, name=name,
-            record_values=list(record_values)))
+            record_values=list(record_values), change_id=change_id))
         if self.propagated:
             return True, list(record_values)
         return False, list(self.seen or [])
@@ -751,6 +752,33 @@ def test_certs_propagation_timeout_fails_cleanly(opts):
         f"the planted record should be the one retired, got {env.dns.clears[0].name}")
     assert not client.finalized, (
         "the CSR must never be submitted when the challenge never propagated")
+
+
+@th.django_unit_test("dnsman certs: the upsert's change id reaches the propagation wait")
+def test_certs_propagation_wait_carries_the_change_id(opts):
+    """Regression (maestro #1987): every dns call resolves a FRESH adapter, so the
+    Route53 INSYNC gate only runs when the change id returned by ``upsert_record``
+    is passed back into ``wait_for_propagation`` explicitly. Dropping it skips the
+    gate silently and races Route53's anycast propagation — LE sees NXDOMAIN."""
+    from mojo.apps.dnsman.services import certs
+
+    domain = _reset_domain("changeid-certs.test")
+    names = [domain.name]
+    cert = _pending_certificate(domain, names)
+    chain, _leaf = _make_chain(names)
+    client = FakeAcmeClient([domain.name], chain=chain)
+
+    with _issuance_env(client) as env:
+        result = certs.issue(cert)
+
+    assert result.ok, f"issuance should have succeeded, error was: {result.get('error')}"
+    assert len(env.dns.waits) == 1, (
+        f"expected exactly one propagation wait, got {len(env.dns.waits)}")
+    wait = env.dns.waits[0]
+    assert wait.change_id == "C-upsert", (
+        f"the change id returned by upsert_record must be passed to "
+        f"wait_for_propagation — a None here means the Route53 INSYNC gate "
+        f"is silently skipped; got {wait.change_id!r}")
 
 
 @th.django_unit_test("dnsman certs: failed delegated renewal preserves valid material with bounded retry")

@@ -404,6 +404,10 @@ def _issue_locked(certificate):
     # (record_name, digests) actually written, so cleanup removes exactly what
     # issuance planted and nothing else.
     planted = []
+    # Change ids from the challenge upserts, threaded into the propagation
+    # waits below: every dns call resolves a FRESH adapter, so the Route53
+    # INSYNC gate only runs when the caller passes the id back in.
+    challenge_changes = {}
     delegated_challenge_ref = None
     try:
         account, client = _get_account()
@@ -430,13 +434,15 @@ def _issue_locked(certificate):
                 # durable owner in finally's cleanup list before making the
                 # call so a lost response cannot strand an invisible write.
                 planted.append((reservation, record_name, list(digests)))
-                dns.upsert_record(
+                planted_change = dns.upsert_record(
                     domain, "TXT", record_name, list(digests), ttl=CHALLENGE_TTL,
                     reservation=reservation)
+                challenge_changes[record_name] = planted_change.get("change_id")
 
             for record_name, digests in challenges.items():
                 ok, seen = dns.wait_for_propagation(
-                    domain, "TXT", record_name, list(digests))
+                    domain, "TXT", record_name, list(digests),
+                    change_id=challenge_changes.get(record_name))
                 if not ok:
                     raise me.ValueException(
                         f"Timed out waiting for {record_name} to publish "
