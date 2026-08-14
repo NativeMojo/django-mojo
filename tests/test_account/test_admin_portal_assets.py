@@ -73,10 +73,15 @@ def test_datetime_contract(opts):
 @th.django_unit_test("nested overlays scrub route state and restore focus")
 def test_overlay_contract(opts):
     overlays = (ASSETS / "components/overlays.js").read_text()
+    styles = (ASSETS / "components/components.css").read_text()
     assert "const STACK = []" in overlays and "aria-hidden" in overlays
     assert "entry.previous" not in overlays  # closure-held opener is never serialized.
     assert "previous?.isConnected" in overlays and "closeAllOverlays" in overlays
     assert "requireReason" in overlays and "A reason is required." in overlays
+    assert ".inspector-scrim{z-index:110}" in styles, \
+        "the shared inspector layer lost its explicit stacking level"
+    assert ".modal-scrim{z-index:120}" in styles, \
+        "centered modals must stack above an already-open inspector drawer"
 
 
 @th.django_unit_test("feature lanes retain provider-safe hosting workflows")
