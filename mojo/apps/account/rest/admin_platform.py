@@ -87,6 +87,7 @@ def on_admin_platform_converge(request):
 @md.requires_global_perms("manage_advanced", "admin")
 def on_admin_advanced_settings(request):
     # Both writers re-read an active literal User superuser inside the service.
+    target = ""
     if "auth" in request.DATA:
         value = system_settings.set_auth_safe_fields(request.user, request.DATA["auth"])
         action = "auth_safe_fields"
@@ -103,8 +104,12 @@ def on_admin_advanced_settings(request):
         value = system_settings.set_value(
             request.user, FRAMEWORK_VERSION_KEY, request.DATA["framework_pin"])
         action = "framework_pin"
+        # The pin selects the code every node installs: "who set it to what"
+        # must survive in the audit trail, and a distinct target keeps repeat
+        # changes within the suppression window from collapsing into one event.
+        target = value
     else:
         raise me.ValueException(
             "auth, edge_topology, or framework_pin is required")
-    _admin_platform.audit_after_commit(request.user, action)
+    _admin_platform.audit_after_commit(request.user, action, target)
     return {"schema_version": 1, "saved": True, "value": value}

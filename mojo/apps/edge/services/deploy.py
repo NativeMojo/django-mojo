@@ -210,13 +210,17 @@ def framework_version_pin():
     Re-normalizing what the validator already normalized is defense in depth:
     a row written before the validator existed must not become a deploy argv.
     """
-    from mojo.apps.account.services import system_settings
+    from mojo.apps.account.models import Setting
     from mojo.apps.edge import settings_validators
 
-    raw = system_settings.get_value(settings_validators.FRAMEWORK_VERSION_KEY, "")
+    # Setting.get_from_db, not system_settings.get_value: get_value re-parses
+    # the stored string as JSON, so a number-shaped pin ("1.12", "2") would
+    # come back as a float/int the validator refuses — every deploy refusing
+    # while the portal reports the pin as saved.
+    raw, found = Setting.get_from_db(settings_validators.FRAMEWORK_VERSION_KEY)
     try:
         return settings_validators.framework_pin(
-            settings_validators.FRAMEWORK_VERSION_KEY, raw)
+            settings_validators.FRAMEWORK_VERSION_KEY, raw if found else "")
     except ValueError as err:
         raise FrameworkPinError(str(err)) from None
 

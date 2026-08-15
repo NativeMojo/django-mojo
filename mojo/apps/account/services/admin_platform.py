@@ -201,7 +201,9 @@ def _deployments():
     # The operator's framework hold, and what it currently resolves to. A junk
     # row would refuse the next DEPLOY loudly; it must not take the read-only
     # overview down with it, so this reads defensively and shows the raw mode.
-    pin = system_settings.get_value("EDGE_FRAMEWORK_VERSION", "")
+    from mojo.apps.account.models import Setting
+    from mojo.apps.edge.settings_validators import FRAMEWORK_VERSION_KEY
+    pin = Setting.get_from_db(FRAMEWORK_VERSION_KEY)[0]
     pin = pin.strip() if isinstance(pin, str) else ""
     if pin == deploy.FRAMEWORK_HOLD:
         mode, resolved = "hold", platform_deploy.last_converged_framework()

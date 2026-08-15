@@ -236,6 +236,30 @@ def test_pin_validation(opts):
 
 
 @th.django_unit_test(
+    "a number-shaped pin survives the storage round trip verbatim")
+def test_number_shaped_pin_round_trip(opts):
+    """`system_settings.get_value` re-parses stored strings as JSON, so a pin
+    like "1.12" used to come back as a float the validator refuses — every
+    deploy refused while the portal reported the pin as saved. The pin reader
+    takes the raw stored string precisely so that cannot happen."""
+    from mojo.apps.edge.services import deploy
+
+    for stored, expect in (("1.12", "1.12"), ("2", "2")):
+        _set_pin(stored)
+        try:
+            got = deploy.framework_version_pin()
+            th.assert_eq(got, expect,
+                         f"stored pin {stored!r} must read back verbatim, got {got!r}")
+            getter = _no_pypi()
+            with mock.patch.object(deploy.requests, "get", getter):
+                resolved = deploy.resolve_framework_version()
+            th.assert_eq(resolved, expect,
+                         f"a number-shaped pin must deploy verbatim, got {resolved!r}")
+        finally:
+            _set_pin(None)
+
+
+@th.django_unit_test(
     "a pre-validator junk hold refuses the deploy, naming the setting and never its value")
 def test_junk_pin_refuses_the_deploy(opts):
     """The row can predate the validator (or a future writer), so the read
