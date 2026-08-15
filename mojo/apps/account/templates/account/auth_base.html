@@ -225,7 +225,22 @@
                             "error");
                     });
             },
-            onAuthSuccess: function () {
+            onAuthSuccess: function (data) {
+                // Successful authentication can still require a permanent
+                // password before the server will issue a session. Delegate
+                // to the login page's in-memory tp: handler when present;
+                // never redirect a tokenless response as if login finished.
+                if (data && data.requires_password_change) {
+                    window._mat.hideOverlay();
+                    if (window._mat.onPasswordChangeRequired) {
+                        window._mat.onPasswordChangeRequired(data);
+                    } else {
+                        window._mat.showMessage(
+                            "A permanent password is required. Return to the sign-in page and try again.",
+                            "error");
+                    }
+                    return;
+                }
                 window._mat.showOverlay("Signed in!", "Taking you there now\u2026");
                 setTimeout(function () { window._mat.redirect(); }, 800);
             },
@@ -299,10 +314,10 @@
         var urlToken = params.get("token");
         if (urlToken && urlToken.indexOf("ml:") === 0) {
             MojoAuth.loginWithMagicToken(urlToken)
-                .then(function () {
+                .then(function (data) {
                     params.delete("token");
                     history.replaceState({}, "", params.toString() ? location.pathname + "?" + params.toString() : location.pathname);
-                    window._mat.onAuthSuccess();
+                    window._mat.onAuthSuccess(data);
                 })
                 .catch(function (err) {
                     params.delete("token");
