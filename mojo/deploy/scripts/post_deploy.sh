@@ -27,7 +27,8 @@
 #   APP_USER      owns the tree and runs the engines    (default ec2-user)
 #   WEB_USER      runs the asgi app behind nginx        (default www)
 #   ASGI_WORKERS  uvicorn worker count (@WORKERS@)      (default 4)
-#   NGINX_ETC / SYSTEMD_ETC / CRON_ETC                  test seams, prod defaults
+#   NGINX_ETC / SYSTEMD_ETC / CRON_ETC / LOGROTATE_ETC  test seams, prod defaults
+#   MOJOSEC_ETC / MOJOSEC_STABLE_HELPER                 test seams, prod defaults
 #
 # THIS SCRIPT FAILS LOUDLY ON PURPOSE. A deploy that half-worked and said
 # nothing is worse than one that stops. If you are tempted to add `|| true`

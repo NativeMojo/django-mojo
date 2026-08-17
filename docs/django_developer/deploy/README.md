@@ -473,7 +473,8 @@ was installed **before** the run, not after.
 | `APP_USER` | `post_deploy.sh` → `@APP_USER@` | `ec2-user` | Owns the tree, runs the job engines |
 | `WEB_USER` | `post_deploy.sh` → `@WEB_USER@` | `www` | Runs the asgi app behind nginx |
 | `ASGI_WORKERS` | `post_deploy.sh` → `@WORKERS@` | `4` | uvicorn worker count in `mojo-asgi.service` |
-| `NGINX_ETC` / `SYSTEMD_ETC` / `CRON_ETC` | `post_deploy.sh` | `/etc/nginx` / `/etc/systemd/system` / `/etc/cron.d` | Test seams — prod defaults, overridden only by harnesses |
+| `NGINX_ETC` / `SYSTEMD_ETC` / `CRON_ETC` / `LOGROTATE_ETC` | `post_deploy.sh` | `/etc/nginx` / `/etc/systemd/system` / `/etc/cron.d` / `/etc/logrotate.d` | Test seams — prod defaults, overridden only by harnesses |
+| `MOJOSEC_ETC` / `MOJOSEC_STABLE_HELPER` | `post_deploy.sh` | `/etc/mojosec` / `/usr/local/lib/mojosec/mojosec_changes.py` | Test seams for the enrollment probe and the root-owned trusted-change helper — prod defaults, overridden only by harnesses |
 | `CERTBOT_SYNC_LOCK` | `certbot_sync` | `/var/run/certbot_sync.lock` | Lock path override, exists for harnesses |
 
 ### `PROBE_URL` / `SANITY_URL` on an edge-converged node
