@@ -918,13 +918,24 @@ jobs:
 
 
 def summary_for(web_app):
-    """Frozen v1 contract for item 1818: group-scoped and secret-free."""
+    """Frozen v1 contract for item 1818: group-scoped and secret-free.
+
+    v1 is additive-only. Item 2099 added, without changing any existing
+    meaning: `address.domain`, top-level `current_release`, and
+    `latest_deployment` — the three facts a day-2 management view needs to
+    answer "is my app live and serving X?" in one call.
+    """
+    from mojo.apps.edge.models import WebAppDeployment
     from mojo.apps.edge.services import webapp_keys
 
     operation = WebAppOnboardingOperation.objects.filter(
         web_app=web_app, group=web_app.group).first()
     key_status = webapp_keys.status(web_app)
-    hostname = web_app.vhost.server_name if web_app.vhost_id else None
+    vhost = web_app.vhost if web_app.vhost_id else None
+    hostname = vhost.server_name if vhost else None
+    domain = vhost.domain if vhost else None
+    release = web_app.current_release
+    deployment = WebAppDeployment.objects.filter(webapp=web_app).first()
     return {
         "schema_version": 1,
         "webapp": {
@@ -935,7 +946,20 @@ def summary_for(web_app):
             "deployment_ref": web_app.deployment_ref,
             "build_output": web_app.build_output,
         },
-        "address": {"hostname": hostname, "https_origin": f"https://{hostname}" if hostname else None},
+        "address": {
+            "hostname": hostname,
+            "https_origin": f"https://{hostname}" if hostname else None,
+            "domain": ({"id": domain.pk, "name": domain.name,
+                        "provider": domain.provider} if domain else None),
+        },
+        "current_release": ({
+            "id": release.pk, "version": release.version,
+            "status": release.status, "created": release.created,
+        } if release else None),
+        "latest_deployment": ({
+            "id": deployment.pk, "status": deployment.status,
+            "created": deployment.created, "finished": deployment.finished,
+        } if deployment else None),
         "onboarding": {
             "status": operation.status if operation else "not_started",
             "cursor": operation.cursor if operation else None,

@@ -189,3 +189,42 @@ class WebApp(models.Model, MojoModel):
         """`storage_prefix` needs a pk, which does not exist until the insert."""
         self.prefix = self.storage_prefix()
         self.save()
+
+    def on_rest_delete(self, request):
+        """Tear down the deploy key and serving vhost in the SAME transaction
+        as the row delete.
+
+        The framework `on_rest_pre_delete` hook runs OUTSIDE the delete
+        transaction, so teardown there could commit while `self.delete()` later
+        raises — a live site whose address was torn down and whose CI key was
+        already killed. A bare cascade fails the other way: it orphans the
+        serving vhost (nginx keeps a rootless server block) and leaves the
+        `MOJO_DEPLOY_KEY` credential active long after the site it was scoped to
+        is gone. Doing both here, atomically, keeps delete all-or-nothing.
+        """
+        from django.db import transaction
+        from django.http import JsonResponse
+
+        try:
+            with transaction.atomic():
+                # api_key is nullable; a select_related join cannot be locked
+                # with SELECT FOR UPDATE, so resolve it through the FK after the
+                # row lock (same reasoning as webapp_keys._mint_locked).
+                locked = type(self).objects.select_for_update().get(pk=self.pk)
+                api_key = locked.api_key
+                if api_key is not None:
+                    api_key.is_active = False
+                    api_key.save(update_fields=["is_active", "modified"])
+                    locked.api_key = None
+                    locked.save(update_fields=["api_key", "modified"])
+                vhost = locked.vhost
+                if vhost is not None and vhost.kind == "site":
+                    locked.vhost = None
+                    locked.save(update_fields=["vhost", "modified"])
+                    # Vhost.delete() publishes fleet convergence on commit, so
+                    # nodes drop the server block without waiting for the sweep.
+                    vhost.delete()
+                locked.delete()
+            return JsonResponse({"status": "deleted"}, status=200)
+        except Exception as err:
+            return JsonResponse({"error": str(err)}, status=400)

@@ -220,7 +220,13 @@ def _restore_previous(deployment_id, detail):
 def orchestrate(deployment_id):
     """Converge the active edge-runner snapshot or restore prior state."""
     deployment = WebAppDeployment.objects.select_related(
-        "webapp__vhost", "release", "previous_release").get(pk=deployment_id)
+        "webapp__vhost", "release", "previous_release").filter(
+            pk=deployment_id).first()
+    if deployment is None:
+        # The WebApp and its deployments can be deleted (safe-delete) while a
+        # deploy job is still queued. A vanished row is a superseded no-op, not
+        # a crashing DoesNotExist — the vhost delete already dropped serving.
+        return "superseded:deleted"
     if deployment.status not in (STATUS_QUEUED, STATUS_DEPLOYING):
         return f"ignored:{deployment.status}"
     if deployment.webapp.current_release_id != deployment.release_id:
