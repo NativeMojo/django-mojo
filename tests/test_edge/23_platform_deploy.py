@@ -577,3 +577,13 @@ def test_stderr_tail_absent_from_rest_graph(opts):
     basic = row.to_dict(graph="basic")
     assert "node_evidence" not in basic, \
         "the basic graph never carried evidence and must not start"
+
+    # The graphs this model does NOT define are the framework's own defaults —
+    # "list" for collections, "default" for detail. An unmapped name falls
+    # through to whole-model serialization, so gating only the named graphs
+    # would leave the tail on the path a wired URL would actually use.
+    for graph in ("list", "default", "unmapped-name"):
+        rendered = row.to_dict(graph=graph)
+        assert "stderr_tail" not in str(rendered), \
+            f"graph={graph} falls back to whole-model output and must not " \
+            "carry the privileged stderr tail"
