@@ -116,7 +116,7 @@ def test_address_requires_one_concrete_label(opts):
         assert error is not None, f"address onboarding accepted label {label!r}"
 
 
-@th.django_unit_test("generated workflow is secret-free and quotes shell inputs")
+@th.django_unit_test("generated workflow references the public action and embeds no secret")
 def test_secret_free_workflow(opts):
     from mojo.apps.edge.services import webapp_onboarding
 
@@ -125,14 +125,21 @@ def test_secret_free_workflow(opts):
     web_app.deployment_ref = "release/2026-08"
     web_app.build_output = "packages/web/dist"
     web_app.save()
-    result = webapp_onboarding.workflow(web_app)
+    result = webapp_onboarding.workflow(web_app, "https://api.example.com/")
 
+    yaml = result["yaml"]
     assert result["schema_version"] == 1, "workflow contract is not versioned"
-    assert "MOJO_DEPLOY_KEY: ${{ secrets.MOJO_DEPLOY_KEY }}" in result["yaml"], \
+    assert "MOJO_DEPLOY_KEY: ${{ secrets.MOJO_DEPLOY_KEY }}" in yaml, \
         "workflow does not consume the named GitHub secret"
-    assert '"${BUILD_OUTPUT}"' in result["yaml"], \
-        "validated build output is not quoted at its shell boundary"
-    assert "Bearer " not in result["yaml"] and "preview-token" not in result["yaml"], \
+    assert ("uses: NativeMojo/django-mojo/examples/github/actions/deploy-webapp@main"
+            in yaml), "workflow does not reference the public composite action at @main"
+    assert "python -m mojo_webapp" not in yaml, \
+        "the generated workflow still names the nonexistent mojo_webapp module"
+    assert 'api-url: "https://api.example.com"' in yaml, \
+        "the platform origin was not passed through (trailing slash not trimmed?)"
+    assert 'artifact-dir: "packages/web/dist"' in yaml, \
+        "the validated build output is not passed as artifact-dir"
+    assert "Bearer " not in yaml and "preview-token" not in yaml, \
         "generated workflow embedded credential material"
 
 

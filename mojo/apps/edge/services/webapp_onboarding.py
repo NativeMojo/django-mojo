@@ -1125,11 +1125,21 @@ def _advance_verify(operation):
     return False
 
 
-def workflow(web_app):
-    """Return a secret-free workflow whose inputs never become shell syntax."""
+def workflow(web_app, api_origin=None):
+    """The single GitHub Actions workflow a user drops into their repo.
+
+    GitHub-centric by design: the user installs one secret (``MOJO_DEPLOY_KEY``)
+    and one file. The deploy step references django-mojo's public composite
+    action straight from ``@main`` — the repo is public, so there is no
+    version-tag machinery — and that action runs the release client on the
+    GitHub runner. Nothing (no Python, no django-mojo) is installed on the
+    user's machine. The old generator told users to run ``python -m
+    mojo_webapp``, a module that exists nowhere; this is the real contract.
+    """
     repository = validators.validate_github_repository(web_app.github_repository)
     ref_name = validators.validate_deployment_ref(web_app.deployment_ref)
     output = validators.validate_build_output(web_app.build_output)
+    origin = str(api_origin or "").strip().rstrip("/") or "https://YOUR-PLATFORM-ORIGIN"
     yaml = """name: Deploy WebApp
 on:
   push:
@@ -1140,9 +1150,6 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    env:
-      MOJO_WEBAPP_ID: \"__WEBAPP_ID__\"
-      BUILD_OUTPUT: \"__OUTPUT__\"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -1150,15 +1157,18 @@ jobs:
           node-version: \"22\"
       - run: npm ci
       - run: npm run build
-      - name: Register release
+      - name: Deploy to django-mojo
+        uses: NativeMojo/django-mojo/examples/github/actions/deploy-webapp@main
+        with:
+          api-url: \"__API_URL__\"
+          webapp-id: \"__WEBAPP_ID__\"
+          artifact-dir: \"__OUTPUT__\"
+          version: ${{ github.sha }}
         env:
           MOJO_DEPLOY_KEY: ${{ secrets.MOJO_DEPLOY_KEY }}
-        run: |
-          test -n \"${MOJO_DEPLOY_KEY}\"
-          test -d \"${BUILD_OUTPUT}\"
-          python -m mojo_webapp deploy --webapp \"${MOJO_WEBAPP_ID}\" --directory \"${BUILD_OUTPUT}\"
 """
     yaml = yaml.replace("__REF__", ref_name)
+    yaml = yaml.replace("__API_URL__", origin)
     yaml = yaml.replace("__WEBAPP_ID__", str(web_app.pk))
     yaml = yaml.replace("__OUTPUT__", output)
     return {"schema_version": SCHEMA_VERSION, "repository": repository,

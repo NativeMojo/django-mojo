@@ -154,7 +154,8 @@ def on_webapp_onboarding_workflow(request):
             request.user, web_app.group):
         raise me.PermissionDeniedException(
             "WebApp and DNS management are not granted in this group")
-    result = _webapp_onboarding.workflow(web_app)
+    result = _webapp_onboarding.workflow(
+        web_app, _webapp_onboarding.request_origin(request))
     action = str(request.DATA.get("action") or "").strip().lower()
     if action:
         operation_id = request.DATA.get("operation_id")
