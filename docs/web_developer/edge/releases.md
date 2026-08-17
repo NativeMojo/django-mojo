@@ -121,11 +121,21 @@ stays `pending` and is not promotable.
 | 404 on `webapp` | The key is not this site's key, or the site has no key linked. Both look identical on purpose. |
 | Deployment `rolled_back` | At least one active node failed; the prior release was restored. Surface the runner diagnostics and fail CI. |
 
-## Rollback through GitHub
+## Rollback
 
-Rerun the workflow for the older commit. Its identical version and manifest
-are reused, then normal verified completion deploys it through the same fleet
-coordinator. This keeps GitHub as the only human deployment control plane.
+Two ways, both human-driven.
+
+**From the admin portal**, `POST /api/edge/webapp/rollback` with `webapp` and an
+earlier `release` id repoints the site immediately. It is **human-only** — a CI
+key-backed session is refused (`403`) — so automation still cannot start a
+deployment out of band; deployment from CI happens only through verified release
+completion. A `release` from another site returns `404`, and a `pending`
+(unverified) release is refused. The response is the deployment status payload
+(`GET /api/edge/release/deployment/<id>` shape).
+
+**By rerunning the GitHub workflow** for the older commit: its identical version
+and manifest are reused, then normal verified completion deploys it through the
+same fleet coordinator.
 
 Nodes retain a bounded number of releases, and a target that has aged out is
 simply **re-fetched from S3** on the next converge. Recent releases stay a pure
@@ -133,8 +143,9 @@ symlink flip; an older one costs a download before it goes live. The one thing
 that ends rollback is the bucket: a lifecycle rule that expires old release
 objects expires the ability to deploy that commit again.
 
-Read history from `GET /api/edge/release?webapp=42`. Statuses are `pending`,
-`uploaded`, `live`, `superseded`.
+Read release history from `GET /api/edge/release?webapp=42` (statuses `pending`,
+`uploaded`, `live`, `superseded`) and deployment history from
+`GET /api/edge/deployment?webapp=42`.
 
 ## Key rotation
 
