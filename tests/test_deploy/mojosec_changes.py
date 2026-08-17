@@ -236,10 +236,77 @@ def test_change_scope_rejects_application_trees_and_outside_paths(opts):
     with th.assert_raises(ChangeError):
         validate_paths(["/tmp/undeclared"])
     for path in ("/etc/mojosec/config.json",
+                 "/etc/mojosec/audit-state.json",
                  "/var/lib/mojosec/events.db",
                  "/run/mojosec/control.sock"):
         with th.assert_raises(ChangeError):
             validate_paths([path])
+
+
+@th.django_unit_test()
+def test_control_state_declarations_are_dropped_not_fatal(opts):
+    """A caller-declared control-state path is ignored, never fatal (item 2014).
+
+    The 1.11.9/1.11.10 post-deploy bodies both declare
+    /etc/mojosec/audit-state.json, and the body driving an upgrade is the
+    previously installed generation's — so the validator, refreshed from the
+    newly installed wheel, is what has to tolerate it. validate_paths itself
+    stays strict; only the caller-declared `run` intake filters.
+    """
+    from mojo.deploy.mojosec_changes import (
+        ChangeError, ChangeJournal, split_control_state_paths, validate_paths,
+    )
+
+    shipped = [
+        "/etc/systemd/system/mojosec.service",
+        "/etc/nginx/conf.d/00_mojosec.conf",
+        "/etc/nginx/snippets/mojosec_receiver.conf",
+        "/etc/nginx/django.inc",
+        "/etc/logrotate.d/mojosec",
+        "/etc/audit/rules.d",
+        "/etc/audit/audit.rules",
+        "/etc/mojosec/audit-state.json",
+        "/etc/systemd/system/mojosec-audit-health.service",
+        "/etc/systemd/system/mojosec-audit-health.timer",
+        "/etc/sudoers.d/70-mojo-firewall-broker",
+        "/usr/local/sbin/mojo-firewall-broker",
+        "/usr/local/lib/mojosec/mojosec_audit.py",
+    ]
+    kept, dropped = split_control_state_paths(shipped)
+    th.assert_eq(dropped, ["/etc/mojosec/audit-state.json"],
+                 "only MojoSec control state may be dropped from a declaration")
+    th.assert_eq(kept, [path for path in shipped if path not in dropped],
+                 "every other declared destination must survive, in order")
+
+    for path in ("/etc/mojosec", "/var/lib/mojosec/events.db",
+                 "/run/mojosec/control.sock"):
+        th.assert_eq(split_control_state_paths([path]), ([], [path]),
+                     f"{path} is converge-owned control state and must be dropped")
+
+    th.assert_eq(split_control_state_paths(["/etc/mojosec-lookalike"]),
+                 (["/etc/mojosec-lookalike"], []),
+                 "the prefix test is a path boundary, not a name prefix")
+
+    kept_app, dropped_app = split_control_state_paths(["/opt/api/release.py"])
+    th.assert_eq((kept_app, dropped_app), (["/opt/api/release.py"], []),
+                 "application trees are not silently dropped — they stay fatal")
+    with th.assert_raises(ChangeError):
+        validate_paths(kept_app)
+
+    with tempfile.TemporaryDirectory() as root:
+        journal = ChangeJournal(
+            journal_path=os.path.join(root, "journal.json"),
+            lock_path=os.path.join(root, "journal.lock"),
+            manifest_path=os.path.join(root, "expected.json"),
+            allowed_roots=[root])
+        declared = [os.path.join(root, "mojosec.service"),
+                    "/etc/mojosec/audit-state.json"]
+        filtered, _ = split_control_state_paths(declared)
+        operation = journal.begin("op-2014", "mojosec-converge", filtered,
+                                  ttl_seconds=60)
+        th.assert_eq(operation["paths"], [os.path.join(root, "mojosec.service")],
+                     "a shipped-body declaration must open an operation, "
+                     "carrying no control-state path into the journal")
 
 
 @th.django_unit_test()

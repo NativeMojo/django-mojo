@@ -48,6 +48,9 @@ _GENERAL_ROOTS = (
     "/etc", "/usr/bin", "/usr/sbin", "/usr/local/bin", "/usr/local/sbin",
     "/usr/local/lib", "/boot", "/var/spool/cron", "/var/spool/at",
 )
+# Owned by the `mojo.deploy.mojosec converge` transaction, never by the outer
+# journal — see split_control_state_paths and validate_paths.
+_CONTROL_STATE_ROOTS = ("/etc/mojosec", "/var/lib/mojosec", "/run/mojosec")
 _HOME_ROOTS = (
     "/root/.ssh", "/root/.config/systemd/user", "/root/.local/bin",
     "/root/.aws/config", "/root/.aws/credentials", "/root/.bashrc",
@@ -125,6 +128,32 @@ def validate_paths(paths, allowed_roots=None, max_paths=MAX_PATHS):
         seen.add(path)
         result.append(path)
     return result
+
+
+def split_control_state_paths(paths):
+    """Partition caller-declared paths into (journalable, mojosec-control).
+
+    MojoSec control state is owned by the converge transaction and is excluded
+    from the integrity profile, so a declaration naming it explains nothing the
+    journal could annotate. The 1.11.9 and 1.11.10 post-deploy bodies both
+    declare /etc/mojosec/audit-state.json, and the body that drives an upgrade
+    is the previously installed generation's — so refusing it outright wedges
+    every enrolled node (item 2014). Drop it with a warning instead; it is
+    never journaled either way.
+
+    Only the caller-declared `run` intake uses this. validate_paths keeps
+    rejecting the same prefixes for pip-derived paths and in-process callers,
+    which ship in the same wheel and cannot skew.
+    """
+    keep, dropped = [], []
+    for path in paths:
+        if isinstance(path, str) and any(
+                path == root or path.startswith(root + "/")
+                for root in _CONTROL_STATE_ROOTS):
+            dropped.append(path)
+        else:
+            keep.append(path)
+    return keep, dropped
 
 
 def _system_install_scheme():
@@ -714,8 +743,12 @@ def main(argv=None):
                 return 0
             finally:
                 prepared.cleanup()
+        declared, control_state = split_control_state_paths(args.paths)
+        for path in control_state:
+            print("mojosec changes: ignoring declared MojoSec control-state "
+                  f"path (converge owns it): {path}", file=sys.stderr)
         journal.begin(
-            args.operation_id, args.kind, args.paths,
+            args.operation_id, args.kind, declared,
             deployment_id=args.deployment_id or None, ttl_seconds=args.ttl)
         try:
             done = subprocess.run(child, check=False)
