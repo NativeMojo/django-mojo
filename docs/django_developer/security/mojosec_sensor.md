@@ -186,6 +186,16 @@ secondary corruption ceiling; root-only journal and manifest state fail closed
 at 20 MiB. Approved roots remain mandatory for every path. A failed or aborted
 producer leaves its observed changes unexplained.
 
+MojoSec's own control state (`/etc/mojosec`, `/var/lib/mojosec`,
+`/run/mojosec`, the Audit rollback record included) is owned by the
+`mojo.deploy.mojosec converge` transaction, excluded from the integrity
+profile, and never journal scope — this manifest lives under `/etc/mojosec`, so
+journaling that tree would let a declaration pre-authorize edits to the
+sensor's own trust anchors. A *caller-declared* control-state path is dropped
+with a warning instead of failing the deploy, because the declaring script body
+is one generation older than the validator reading it (item 2014); paths a
+producer derives are still refused outright.
+
 The current root-owned 0600 envelope is
 `{"schema":"mojosec.expected_changes","version":2,"entries":[...]}`. Version
 2 adds bounded `operation_id`, `operation_kind`, `started_at`, and `completed_at`

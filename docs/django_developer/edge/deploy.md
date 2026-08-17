@@ -223,6 +223,13 @@ the body from the framework installed *before* the run — see
 - **A script declaring contract N must keep accepting the argv a framework at
   N−1 emits.** The orchestrator on the old release is the one that will invoke
   the newly installed script.
+- **Declared trusted-change scope is part of that contract too.** A script body
+  must declare only paths every adjacent-generation validator accepts, and the
+  validator must tolerate the declarations the adjacent shipped bodies actually
+  make. Item 2014 broke this in the second direction: the 1.11.9 and 1.11.10
+  bodies both declare a MojoSec control-state path, so the validator now drops
+  it with a warning rather than failing the deploy (see
+  `../deploy/README.md`).
 
 Breaking either direction requires a compatibility window (accept both shapes
 for one release) **or** a `DEPLOY_CONTRACT` bump plus a migration note telling

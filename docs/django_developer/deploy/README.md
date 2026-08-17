@@ -866,6 +866,25 @@ root-only. The v2
 manifest adds operation identity/kind/completion time. Events are durable
 immediately and wait no more than 120 seconds for a late matching annotation.
 
+**MojoSec control state is never journal scope, and never a deploy blocker.**
+`/etc/mojosec`, `/var/lib/mojosec` and `/run/mojosec` — including the Audit
+rollback record `/etc/mojosec/audit-state.json` — belong to the
+`mojo.deploy.mojosec converge` transaction, which snapshots and restores them
+itself. They are excluded from the integrity profile, so the journal has
+nothing there to annotate, and the manifest the sensor trusts *lives* under
+`/etc/mojosec`: a journal that could pre-authorize writes there could
+pre-authorize tampering with the sensor's own trust anchors. `validate_paths`
+therefore rejects those roots outright.
+
+A caller-declared path under them is a different problem from a producer
+deriving one. The 1.11.9 and 1.11.10 post-deploy bodies both declared
+`/etc/mojosec/audit-state.json`, and the body that drives an upgrade is the
+*previously installed* generation's — so refusing it wedged every enrolled node
+before the converge child could run (item 2014). The `run` intake now drops
+control-state paths with a visible warning: never journaled, never fatal.
+Producer-derived paths and in-process callers ship in the same wheel, cannot
+skew, and still fail closed.
+
 Roll out the producer-capable package before selecting the integrity profile:
 deploy the helper and exercise normal deploy, node setup, and certificate
 operations while the profile remains inactive. Only then select
