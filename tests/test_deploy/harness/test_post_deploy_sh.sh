@@ -69,12 +69,95 @@ assert_lacks() { # file pattern label
     if grep -q -- "$2" "$1" 2>/dev/null; then fail "$3 ('$2' present in $(basename "$1"))"; else ok "$3"; fi
 }
 
+# The stand-in for the root-owned stable helper at
+# /usr/local/lib/mojosec/mojosec_changes.py. It drives the REAL journal against
+# throwaway state, so the packaged script's own declaration is validated by the
+# real validator — which is the only way a self-conflicting declaration (item
+# 2014) is reachable from a test. It never needs $REPO or $TMP baked in: the
+# python3 stub execs it with PYTHONPATH=$REPO, and $TMP is its own directory.
+write_trusted_shim() {
+    cat > "$TMP/trusted_shim.py" <<'PYEOF'
+import os
+import subprocess
+import sys
+
+TMP = os.path.dirname(os.path.abspath(__file__))
+
+argv = sys.argv[1:]
+start = next((i for i, token in enumerate(argv) if token in ("run", "pip-run")), None)
+if start is None:
+    print("trusted shim: no subcommand in argv", file=sys.stderr)
+    raise SystemExit(2)
+command, rest = argv[start], argv[start + 1:]
+
+flags, paths, child = {}, [], []
+index = 0
+while index < len(rest):
+    token = rest[index]
+    if token == "--":
+        child = rest[index + 1:]
+        break
+    if token == "--path":
+        paths.append(rest[index + 1])
+        index += 2
+    elif token.startswith("--"):
+        flags[token] = rest[index + 1] if index + 1 < len(rest) else ""
+        index += 2
+    else:
+        index += 1
+
+if not child:
+    print("mojosec changes: trusted-change run requires one child argv", file=sys.stderr)
+    raise SystemExit(2)
+if command == "pip-run":
+    os.execvp(child[0], child)
+
+import mojo.deploy.mojosec_changes as m
+
+# Pre-fix the function does not exist, so the declaration reaches validate_paths
+# untouched and the run reproduces the production abort.
+if hasattr(m, "split_control_state_paths"):
+    paths, dropped = m.split_control_state_paths(paths)
+    for path in dropped:
+        print("mojosec changes: ignoring declared MojoSec control-state path "
+              f"(converge owns it): {path}", file=sys.stderr)
+
+operation = flags.get("--operation-id", "")
+journal = m.ChangeJournal(
+    journal_path=os.path.join(TMP, "journal", "journal.json"),
+    lock_path=os.path.join(TMP, "journal", "journal.lock"),
+    manifest_path=os.path.join(TMP, "journal", "expected.json"),
+    allowed_roots=tuple(m._GENERAL_ROOTS) + tuple(m._HOME_ROOTS) + (TMP,),
+)
+try:
+    journal.begin(operation, flags.get("--kind", "harness"), paths,
+                  deployment_id=flags.get("--deployment-id") or None)
+except (m.ChangeError, OSError, ValueError) as err:
+    print(f"mojosec changes: {err}", file=sys.stderr)
+    raise SystemExit(2)
+try:
+    done = subprocess.run(child)
+    if done.returncode != 0:
+        journal.abort(operation)
+        raise SystemExit(done.returncode)
+    journal.complete(operation)
+except (m.ChangeError, OSError, ValueError) as err:
+    journal.abort(operation)
+    print(f"mojosec changes: {err}", file=sys.stderr)
+    raise SystemExit(2)
+raise SystemExit(0)
+PYEOF
+}
+
 setup_env() {
-    rm -rf "$PROJ" "$STUB" "$CTL" "$TMP/nginx_etc" "$TMP/systemd_etc" "$TMP/cron_etc" "$TMP/logrotate_etc"
+    rm -rf "$PROJ" "$STUB" "$CTL" "$TMP/nginx_etc" "$TMP/systemd_etc" "$TMP/cron_etc" \
+           "$TMP/logrotate_etc" "$TMP/mojosec_etc" "$TMP/mojosec_lib" "$TMP/journal"
     mkdir -p "$PROJ/var/logs" "$PROJ/bin" "$PROJ/aws/nginx/systemd" "$PROJ/aws/nginx/sec.d" \
              "$PROJ/aws/nginx/conf.d" "$PROJ/aws/cron.d" \
-             "$STUB" "$CTL" "$TMP/nginx_etc" "$TMP/systemd_etc" "$TMP/cron_etc" "$TMP/logrotate_etc"
+             "$STUB" "$CTL" "$TMP/nginx_etc" "$TMP/systemd_etc" "$TMP/cron_etc" \
+             "$TMP/logrotate_etc" "$TMP/mojosec_etc" "$TMP/mojosec_lib" "$TMP/journal"
     : > "$CALLLOG"
+    write_trusted_shim
 
     # The shim contract executes the located packaged script; the harness
     # plays the shim.
@@ -185,6 +268,10 @@ case "\$*" in
         [ -f "\$STUBCTL/audit.restore.exit" ] && exit "\$(cat "\$STUBCTL/audit.restore.exit")"
         exit 0
         ;;
+    *"mojosec_changes.py run --operation-id"*|*"mojosec_changes.py pip-run --operation-id"*)
+        exec env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$REPO" "$REAL_PYTHON3" \
+            "$TMP/trusted_shim.py" "\$@"
+        ;;
     "-m mojo.deploy"*)
         if [ -f "\$STUBCTL/render.exit" ]; then exit "\$(cat "\$STUBCTL/render.exit")"; fi
         exec env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$REPO" "$REAL_PYTHON3" "\$@"
@@ -197,10 +284,15 @@ EOF
     chmod +x "$STUB/python3"
 }
 
+# MOJOSEC_ETC / MOJOSEC_STABLE_HELPER default into $TMP for EVERY run, so no
+# scenario depends on the host's real /etc/mojosec being absent (on an enrolled
+# Linux box it is not).
 run_post_deploy() { # args...
     ( cd "$TMP" && PROJ_PATH="$PROJ" NGINX_ETC="$TMP/nginx_etc" \
         SYSTEMD_ETC="$TMP/systemd_etc" CRON_ETC="$TMP/cron_etc" \
         LOGROTATE_ETC="$TMP/logrotate_etc" PATH="$STUB:$PATH" \
+        MOJOSEC_ETC="$TMP/mojosec_etc" \
+        MOJOSEC_STABLE_HELPER="$TMP/mojosec_lib/mojosec_changes.py" \
         MOJOSEC_PYTHON=python3 \
         bash "$PROJ/aws/post_deploy.sh" "$@" )
 }
@@ -209,7 +301,9 @@ run_post_deploy_env() { # VAR=val ... -- args...
     local envs=()
     while [ "$1" != "--" ]; do envs+=("$1"); shift; done
     shift
-    ( cd "$TMP" && env "${envs[@]}" PROJ_PATH="$PROJ" NGINX_ETC="$TMP/nginx_etc" \
+    ( cd "$TMP" && env MOJOSEC_ETC="$TMP/mojosec_etc" \
+        MOJOSEC_STABLE_HELPER="$TMP/mojosec_lib/mojosec_changes.py" \
+        "${envs[@]}" PROJ_PATH="$PROJ" NGINX_ETC="$TMP/nginx_etc" \
         SYSTEMD_ETC="$TMP/systemd_etc" CRON_ETC="$TMP/cron_etc" \
         LOGROTATE_ETC="$TMP/logrotate_etc" PATH="$STUB:$PATH" \
         MOJOSEC_PYTHON=python3 \
@@ -461,6 +555,49 @@ if cmp -s "$TMP/prior-django.inc" "$TMP/nginx_etc/django.inc"; then
     ok "failed downgrade cleanup restores exact prior django.inc"
 else
     fail "failed downgrade cleanup lost prior django.inc"
+fi
+
+echo "post_deploy.sh: an enrolled node deploys under an ACTIVE trusted-change journal (item 2014)"
+# The regression for the Mojoware EU outage: with trusted-change support live,
+# the MojoSec step declared /etc/mojosec/audit-state.json — control state the
+# validator rejects by design — so the deploy aborted BEFORE the converge child,
+# where item 2007's observe-and-degrade handler lives.
+setup_env
+echo '{}' > "$TMP/mojosec_etc/config.json"
+: > "$TMP/mojosec_lib/mojosec_changes.py"
+run_post_deploy --framework 9.9.9 --migrate > "$OUT" 2>&1
+assert_eq "$?" 0 "an enrolled node completes a pinned migrate deploy"
+assert_in_log "mojosec_changes.py run --operation-id" "the trusted-change journal really is active"
+assert_in_log "kind mojosec-converge" "the MojoSec step is journaled"
+assert_in_log "CMD python3 -E -P -m mojo.deploy.mojosec converge" \
+    "the converge child is reached — the wrapper cannot abort first (item 2007)"
+assert_order "kind mojosec-converge" "CMD python3 -E -P -m mojo.deploy.mojosec converge" \
+    "the journal opens before its converge child"
+assert_not_in_log "path /etc/mojosec" \
+    "the outer journal declares no MojoSec control state"
+assert_lacks "$OUT" "MojoSec control state is never trusted-change scope" \
+    "no self-conflicting declaration reaches the validator"
+assert_lacks "$OUT" "FATAL: MojoSec deployment failed" "the enrolled deploy does not abort"
+assert_in_log "CMD pip install django-mojo==9.9.9" "pip still runs through the pip-run passthrough"
+assert_in_log "migrate_locked" "the canary still migrates under the journal"
+assert_in_log "MOJOSEC_CWD /" "the converge child keeps its cwd invariant under the wrapper"
+
+echo "post_deploy.sh: an ACTIVE journal still fails loudly and rolls back a broken converge"
+setup_env
+echo '{}' > "$TMP/mojosec_etc/config.json"
+: > "$TMP/mojosec_lib/mojosec_changes.py"
+printf '# active old graph\n' > "$TMP/nginx_etc/django.inc"
+cp "$TMP/nginx_etc/django.inc" "$TMP/prior-django.inc"
+echo "1" > "$CTL/mojosec.converge.exit"
+run_post_deploy --framework 9.9.9 > "$OUT" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then ok "a genuinely failing converge still exits non-zero under the journal"; \
+else fail "the journal masked a failing converge"; fi
+assert_has "$OUT" "FATAL: MojoSec deployment failed" "the real failure is still named"
+if cmp -s "$TMP/prior-django.inc" "$TMP/nginx_etc/django.inc"; then
+    ok "journaled rollback restores the exact prior django.inc"
+else
+    fail "journaled rollback lost the prior django.inc"
 fi
 
 echo "post_deploy.sh: undeclared collision is inert; declared override applies"

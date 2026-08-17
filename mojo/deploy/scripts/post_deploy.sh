@@ -48,6 +48,7 @@ NGINX_ETC="${NGINX_ETC:-/etc/nginx}"
 SYSTEMD_ETC="${SYSTEMD_ETC:-/etc/systemd/system}"
 CRON_ETC="${CRON_ETC:-/etc/cron.d}"
 LOGROTATE_ETC="${LOGROTATE_ETC:-/etc/logrotate.d}"
+MOJOSEC_ETC="${MOJOSEC_ETC:-/etc/mojosec}"
 MOJOSEC_PYTHON="${MOJOSEC_PYTHON:-/usr/bin/python3}"
 cd "$PROJ_PATH"
 
@@ -79,7 +80,7 @@ install_file() {
 # later releases use the already-installed, root-owned copy before pip replaces
 # any package code. That stable process derives exact paths from wheel and
 # installed RECORDs, spans the mutating pip child, and aborts on child failure.
-MOJOSEC_STABLE_HELPER="/usr/local/lib/mojosec/mojosec_changes.py"
+MOJOSEC_STABLE_HELPER="${MOJOSEC_STABLE_HELPER:-/usr/local/lib/mojosec/mojosec_changes.py}"
 MOJOSEC_PY_FLAGS=(-E)
 if (cd / && "$MOJOSEC_PYTHON" -E -c \
         'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)'); then
@@ -94,7 +95,7 @@ stable_helper_is_safe() {
 MOJOSEC_STABLE_HELPER_AVAILABLE=0
 stable_helper_is_safe && MOJOSEC_STABLE_HELPER_AVAILABLE=1
 MOJOSEC_CHANGES_AVAILABLE=0
-[ -e /etc/mojosec/config.json ] && \
+[ -e "${MOJOSEC_ETC}/config.json" ] && \
     [ "$MOJOSEC_STABLE_HELPER_AVAILABLE" = "1" ] && \
     MOJOSEC_CHANGES_AVAILABLE=1
 
@@ -178,7 +179,7 @@ if [ -n "$MOJOSEC_CURRENT_HELPER" ] && [ -f "$MOJOSEC_CURRENT_HELPER" ] && \
     stable_helper_is_safe \
         || die "stable MojoSec trusted-change helper has unsafe ownership or mode"
     MOJOSEC_STABLE_HELPER_AVAILABLE=1
-    [ ! -e /etc/mojosec/config.json ] || MOJOSEC_CHANGES_AVAILABLE=1
+    [ ! -e "${MOJOSEC_ETC}/config.json" ] || MOJOSEC_CHANGES_AVAILABLE=1
 fi
 
 # ── migrations ───────────────────────────────────────────────────────────────
@@ -285,7 +286,7 @@ MOJOSEC_PRIOR_ENABLED=0
 MOJOSEC_LIFECYCLE_SNAPSHOTTED=0
 MOJOSEC_DOWNGRADE_HANDOFF=0
 MOJOSEC_AUDIT_HELPER="${MOJOSEC_AUDIT_HELPER:-/usr/local/lib/mojosec/mojosec_audit.py}"
-MOJOSEC_AUDIT_STATE="${MOJOSEC_AUDIT_STATE:-/etc/mojosec/audit-state.json}"
+MOJOSEC_AUDIT_STATE="${MOJOSEC_AUDIT_STATE:-${MOJOSEC_ETC}/audit-state.json}"
 MOJOSEC_AUDIT_PYTHON="${MOJOSEC_AUDIT_PYTHON:-/usr/bin/python3}"
 snapshot_mojosec_lifecycle() {
     [ "$MOJOSEC_LIFECYCLE_SNAPSHOTTED" = "0" ] || return 0
@@ -372,6 +373,11 @@ if [ "$MOJOSEC_MODULE_AVAILABLE" = "1" ]; then
     if [ "$MOJOSEC_PROVENANCE_AVAILABLE" = "1" ]; then
         MOJOSEC_CONVERGE_ARGS+=(--project-path "$PROJ_PATH")
     fi
+    # Declare only destinations this journal is permitted to journal. MojoSec
+    # control state (/etc/mojosec, /var/lib/mojosec, /run/mojosec — including
+    # the Audit rollback record audit-state.json) belongs to the converge child
+    # below, which transacts it itself, and validate_paths rejects it by design.
+    # Never add a path under those roots here (item 2014).
     if ! trusted_change mojosec-converge \
             "${SYSTEMD_ETC}/mojosec.service" \
             "${NGINX_ETC}/conf.d/00_mojosec.conf" \
@@ -379,7 +385,6 @@ if [ "$MOJOSEC_MODULE_AVAILABLE" = "1" ]; then
             "${NGINX_ETC}/django.inc" \
             "${LOGROTATE_ETC}/mojosec" \
             /etc/audit/rules.d /etc/audit/audit.rules \
-            /etc/mojosec/audit-state.json \
             /etc/systemd/system/mojosec-audit-health.service \
             /etc/systemd/system/mojosec-audit-health.timer \
             /etc/sudoers.d/70-mojo-firewall-broker \
@@ -414,7 +419,7 @@ else
         || { restore_mojosec_django; restore_mojosec_service_after_failure; \
              die "cannot quiesce MojoSec module-absent cleanup"; }
     if [ "$fallback_mode" = "enrolled" ]; then
-        [ ! -e /etc/mojosec/enrollment.json ] \
+        [ ! -e "${MOJOSEC_ETC}/enrollment.json" ] \
             || { restore_mojosec_django; restore_mojosec_service_after_failure; \
                  die "old package cannot resolve enrolled MojoSec lifecycle"; }
         fallback_mode=off
