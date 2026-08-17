@@ -72,6 +72,17 @@ contains its UUID, SHA, source, status, frozen runner roster, bounded
 transitions and latest-per-runner evidence, desired/current commits, and
 timing. It never contains a raw idempotency key or provider exception.
 
+**`node_evidence[].detail.stderr_tail` is permission-dependent.** When a node's
+update script fails, its evidence detail can carry the last ten lines of that
+script's stderr. Those lines are redacted, but not provably free of
+credentials, so the key is present **only** for callers holding
+`view_platform_security`, `manage_platform`, or `admin`. A caller with just
+`view_platform` receives the same evidence entry with everything else intact
+(`runner`, `state`, `phase`, `exit`) and no `stderr_tail` key at all — treat
+its absence as "not permitted or nothing captured", never as an error. The
+three deployment actions above always include it, since they already require
+`manage_platform` and fresh auth.
+
 Render `unhealthy`, `unauthorized`, `unavailable`, `timeout`, and
 `unconfigured` distinctly. Never infer health from absence or retain evidence
 past `stale_after`. Provider errors are intentionally not exposed.

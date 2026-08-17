@@ -125,6 +125,17 @@ Two rules govern what a node's failure is allowed to touch:
   (POSIX `TimeoutExpired` carries bytes even under `text=True`; the tail
   decodes explicitly, and `platform_deploy._safe` routes bytes through the
   redactor rather than stringifying them past it.)
+- **The tail is also withheld below the security tier.** Per-line redaction is
+  not airtight — a labelled secret needs a `:` or `=` to be spotted, short
+  unlabelled ones fall under the entropy threshold, and URL userinfo is only
+  stripped when the whole line parses as a URL — so `serialize()` drops
+  `detail.stderr_tail` unless the caller passes `include_stderr=True`. The
+  admin Platform page and Dashboard pass it only for
+  `view_platform_security` / `manage_platform` / `admin`; the three deploy
+  actions already require `manage_platform` plus fresh auth and always pass
+  it. The durable row keeps the tail either way, and the model's REST `admin`
+  graph serves a permanently stripped copy, because graph choice is
+  caller-controlled and carries no permission of its own.
 
 ### `aws/update.sh` must ship committed 100755
 
