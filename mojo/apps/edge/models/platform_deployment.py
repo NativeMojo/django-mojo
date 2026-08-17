@@ -87,11 +87,23 @@ class PlatformDeployment(models.Model, MojoModel):
                     "id", "created", "modified", "sha", "framework_version",
                     "status", "source", "actor", "request_key",
                     "source_delivery", "frozen_roster", "transitions",
-                    "node_evidence", "links", "detail", "started", "finished",
+                    "links", "detail", "started", "finished",
                 ],
+                # node_evidence is served through the stripped property: graph
+                # choice is caller-controlled (?graph=admin) and the framework
+                # has no per-graph permission, so this path can never carry the
+                # stderr tail. Privileged readers get it from the admin
+                # platform service, which has a request to check.
+                "extra": [("node_evidence_public", "node_evidence")],
                 "graphs": {"retry_of": "basic"},
             },
         }
 
     def __str__(self):
         return f"{self.id}:{self.sha} ({self.status})"
+
+    @property
+    def node_evidence_public(self):
+        """node_evidence without the privileged stderr tail."""
+        from mojo.apps.edge.services import platform_deploy
+        return platform_deploy.strip_stderr_tail(self.node_evidence)

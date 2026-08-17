@@ -324,3 +324,70 @@ def test_framework_pin_endpoint_authority(opts):
     finally:
         opts.client.logout()
         Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
+
+
+def _tail_deployment():
+    """One durable attempt whose evidence carries a deploy stderr tail."""
+    import uuid
+    from mojo.apps.edge.models import PlatformDeployment
+    PlatformDeployment.objects.all().delete()
+    return PlatformDeployment.objects.create(
+        sha="c" * 40, actor="test", source="test",
+        request_key=str(uuid.uuid4()), frozen_roster=["edge-a-engine"],
+        status="failed", transitions=[],
+        node_evidence=[{
+            "runner": "edge-a-engine", "state": "failed",
+            "detail": {"phase": "update_script", "exit": 23,
+                       "stderr_tail": ["psql: postgres://deploy:hunter2@db/app"]}}])
+
+
+def _viewer(*granted):
+    """A request whose user holds exactly the named global permissions."""
+    granted = set(granted)
+    user = mock.Mock(is_superuser=False)
+    user.has_permission.side_effect = lambda perms: bool(granted & set(perms))
+    return mock.Mock(user=user)
+
+
+@th.django_unit_test("read-only platform viewers never receive the deploy stderr tail")
+def test_stderr_tail_hidden_from_read_only_viewer(opts):
+    """The tail can survive redaction with a credential in it, so it belongs to
+    the security tier — while the rest of node_evidence stays visible to the
+    read-only role that is meant to see deploy state."""
+    from mojo.apps.account.services import admin_platform
+
+    _tail_deployment()
+    request = _viewer("view_platform")
+
+    overview = admin_platform.platform_overview(request)
+    section = overview["sections"]["deployments"]
+    # The section status tracks the deployment's own health (this fixture is a
+    # failed attempt); what matters here is that it rendered at all.
+    th.assert_true(section["status"] != "unauthorized",
+                   "a view_platform viewer must still get the deployments section")
+    assert "stderr_tail" not in str(section), \
+        "view_platform alone must not reveal the deploy stderr tail"
+    detail = section["data"]["items"][0]["node_evidence"][0]["detail"]
+    th.assert_eq(detail["phase"], "update_script",
+                 "the benign evidence detail must survive for read-only viewers")
+
+    dashboard = admin_platform.dashboard_overview(request)
+    assert "stderr_tail" not in str(dashboard["sources"]["last_deployment"]), \
+        "the dashboard's last_deployment must be gated the same way"
+
+
+@th.django_unit_test("security and deploy authority still read the stderr tail")
+def test_stderr_tail_visible_to_privileged_tiers(opts):
+    from mojo.apps.account.services import admin_platform
+
+    _tail_deployment()
+    for granted in (("view_platform", "view_platform_security"),
+                    ("view_platform", "manage_platform")):
+        request = _viewer(*granted)
+        overview = admin_platform.platform_overview(request)
+        section = overview["sections"]["deployments"]
+        assert "hunter2" in str(section), \
+            f"{granted} must still read the full diagnostic tail"
+        dashboard = admin_platform.dashboard_overview(request)
+        assert "hunter2" in str(dashboard["sources"]["last_deployment"]), \
+            f"{granted} must read the tail on the dashboard too"

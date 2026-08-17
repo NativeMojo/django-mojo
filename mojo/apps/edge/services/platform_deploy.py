@@ -233,7 +233,33 @@ def evidence(value, runner, state, proof=None, detail=None):
 _DESIRED_UNSET = object()
 
 
-def serialize(row, desired_commit=_DESIRED_UNSET):
+def strip_stderr_tail(entries):
+    """Copy evidence-shaped entries with any `detail.stderr_tail` removed.
+
+    The tail is the last lines of update-script stderr. It is redacted per
+    line, but the redactor has gaps a credential can survive, so only
+    view_platform_security / manage_platform / admin may read it.
+
+    Copies rather than pops in place: `serialize` is called on rows other code
+    paths go on to save, and mutating `row.node_evidence` here would persist
+    the stripped copy and destroy the durable evidence.
+    """
+    result = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            result.append(entry)
+            continue
+        detail = entry.get("detail")
+        if isinstance(detail, dict) and "stderr_tail" in detail:
+            entry = dict(entry)
+            detail = dict(detail)
+            detail.pop("stderr_tail", None)
+            entry["detail"] = detail
+        result.append(entry)
+    return result
+
+
+def serialize(row, desired_commit=_DESIRED_UNSET, include_stderr=False):
     duration = None
     if row.started:
         duration = ((row.finished or timezone.now()) - row.started).total_seconds()
@@ -257,8 +283,10 @@ def serialize(row, desired_commit=_DESIRED_UNSET):
         "source": row.source, "actor": row.actor,
         "retry_of": str(row.retry_of_id) if row.retry_of_id else None,
         "frozen_roster": list(row.frozen_roster or []),
-        "transitions": list(row.transitions or []),
-        "node_evidence": list(row.node_evidence or []),
+        "transitions": (list(row.transitions or []) if include_stderr
+                        else strip_stderr_tail(row.transitions)),
+        "node_evidence": (list(row.node_evidence or []) if include_stderr
+                          else strip_stderr_tail(row.node_evidence)),
         "links": dict(row.links or {}), "detail": dict(row.detail or {}),
         "started": row.started.isoformat() if row.started else None,
         "finished": row.finished.isoformat() if row.finished else None,

@@ -54,7 +54,7 @@ def on_admin_platform_retry(request):
     _admin_platform.audit_after_commit(request.user, "retry_same_sha", row.pk)
     from mojo.apps.edge.services import platform_deploy
     return {"schema_version": 1, "queued": started,
-            "deployment": platform_deploy.serialize(row)}
+            "deployment": platform_deploy.serialize(row, include_stderr=True)}
 
 
 @md.POST("account/admin/platform/deploy/verify")
@@ -66,7 +66,7 @@ def on_admin_platform_verify(request):
     row = _deployment(request.DATA.get("deployment"))
     result = platform_deploy.verify(row.pk)
     _admin_platform.audit_after_commit(request.user, "verify", row.pk)
-    return {"schema_version": 1, "deployment": platform_deploy.serialize(result)}
+    return {"schema_version": 1, "deployment": platform_deploy.serialize(result, include_stderr=True)}
 
 
 @md.POST("account/admin/platform/deploy/converge")
@@ -78,7 +78,7 @@ def on_admin_platform_converge(request):
     row = _deployment(request.DATA.get("deployment"))
     result = platform_deploy.converge(row.pk)
     _admin_platform.audit_after_commit(request.user, "converge", row.pk)
-    return {"schema_version": 1, "deployment": platform_deploy.serialize(result)}
+    return {"schema_version": 1, "deployment": platform_deploy.serialize(result, include_stderr=True)}
 
 
 @md.POST("account/admin/advanced/settings")

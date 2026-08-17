@@ -183,7 +183,7 @@ def _sanity():
                 row["ok"] for row in rows if row["name"] == "migrations"), False)}
 
 
-def _deployments():
+def _deployments(include_stderr=False):
     from mojo.apps.edge.models import PlatformDeployment
     from mojo.apps.edge.services import deploy, platform_deploy
     with _redis_client() as redis:
@@ -214,7 +214,8 @@ def _deployments():
     return {
         "_collector_status": status,
         "items": [platform_deploy.serialize(
-            row, desired_commit=(target or {}).get("sha")) for row in rows],
+            row, desired_commit=(target or {}).get("sha"),
+            include_stderr=include_stderr) for row in rows],
         "limit": 50,
         "desired_commit": (target or {}).get("sha"),
         "desired_deployment": (target or {}).get("deployment"),
@@ -424,7 +425,7 @@ def _platform_deployment_status(row):
     return "unknown"
 
 
-def _dashboard_deployment():
+def _dashboard_deployment(include_stderr=False):
     """Return one durable attempt without loading coordination or history."""
     from mojo.apps.edge.models import PlatformDeployment
     from mojo.apps.edge.services import platform_deploy
@@ -436,7 +437,8 @@ def _dashboard_deployment():
         target = deploy._loads(redis.get(deploy.TARGET_KEY))
     return {"_collector_status": _platform_deployment_status(row),
             "items": [platform_deploy.serialize(
-                row, desired_commit=(target or {}).get("sha"))]}
+                row, desired_commit=(target or {}).get("sha"),
+                include_stderr=include_stderr)]}
 
 
 def _hosting():
@@ -497,6 +499,10 @@ def _settings():
 
 
 def platform_overview(request):
+    # The deploy stderr tail rides inside node_evidence but belongs to the
+    # security tier. Decide once, on the request thread, and close it into the
+    # collector — _section_map submits zero-arg callables to a pool.
+    stderr = _permitted(request, "view_platform_security", "manage_platform", "admin")
     return {
         "schema_version": SCHEMA_VERSION,
         "sections": _section_map(request, {
@@ -506,7 +512,8 @@ def platform_overview(request):
             "sanity": (("view_platform", "manage_platform", "admin"), _sanity),
             "database": (("view_platform", "manage_platform", "admin"), _database),
             "redis": (("view_platform", "manage_platform", "admin"), _redis),
-            "deployments": (("view_platform", "manage_platform", "admin"), _deployments),
+            "deployments": (("view_platform", "manage_platform", "admin"),
+                            lambda: _deployments(include_stderr=stderr)),
             "certificates": (("view_platform", "manage_platform", "admin"), _certificates),
             "security": (("view_platform_security", "manage_platform", "admin"), _security),
             "webapps": (("view_platform", "manage_platform", "admin"), _webapps),
@@ -583,12 +590,14 @@ def dashboard_overview(request):
     This intentionally never calls System Setup readiness. Setup is a
     superuser-only Platform workflow, not an implicit Dashboard dependency.
     """
+    stderr = _permitted(request, "view_platform_security", "manage_platform", "admin")
     raw = _section_map(request, {
         "public_api": (("view_platform", "manage_platform", "admin"), _api),
         "fleet": (("view_platform", "manage_platform", "admin"), _fleet),
         "webapps": (("view_dns", "manage_dns", "security", "admin"), _dashboard_webapps),
         "security": (("view_platform_security", "manage_platform", "admin"), _security),
-        "last_deployment": (("view_platform", "manage_platform", "admin"), _dashboard_deployment),
+        "last_deployment": (("view_platform", "manage_platform", "admin"),
+                            lambda: _dashboard_deployment(include_stderr=stderr)),
     })
     raw["incidents"] = _attention(
         request, "incidents", ("view_security", "manage_security", "security", "admin"))

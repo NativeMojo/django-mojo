@@ -506,3 +506,74 @@ def test_verify_uuid_mismatch(opts):
         result = platform_deploy.verify(row.pk)
     assert result.status == "unknown"
     assert result.node_evidence[0]["state"] == "unavailable"
+
+
+def _tail_row():
+    """One attempt carrying a stderr tail in its evidence detail."""
+    from mojo.apps.edge.models import PlatformDeployment
+    _clean_deploy_state()
+    row = PlatformDeployment.objects.create(
+        sha=SHA, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=["edge-a-engine"], status="failed", transitions=[],
+        node_evidence=[{
+            "runner": "edge-a-engine", "state": "failed",
+            "detail": {"phase": "update_script", "exit": 23, "stderr_tail": [
+                "psql: postgres://deploy:hunter2@db.internal/app",
+                "ERROR: relation already exists"]}}])
+    return row
+
+
+@th.django_unit_test("serialize withholds the stderr tail and never eats the stored copy")
+def test_stderr_tail_withheld_by_default(opts):
+    """The tail is redacted per line, but the redactor has gaps a credential
+    survives, so it belongs to the security tier — while everything else in
+    node_evidence stays readable at view_platform."""
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import platform_deploy
+
+    row = _tail_row()
+    public = platform_deploy.serialize(row)
+    assert "stderr_tail" not in str(public), \
+        "the default serialization must not carry the stderr tail anywhere"
+    detail = public["node_evidence"][0]["detail"]
+    th.assert_eq(detail["phase"], "update_script",
+                 "the benign evidence detail must survive the strip")
+    th.assert_eq(detail["exit"], 23, "the exit code must survive the strip")
+    th.assert_eq(public["node_evidence"][0]["runner"], "edge-a-engine",
+                 "the runner identity must survive the strip")
+
+    stored = PlatformDeployment.objects.get(pk=row.pk)
+    assert "hunter2" in str(stored.node_evidence), \
+        "serializing must copy, never strip the durable row itself"
+
+
+@th.django_unit_test("the privileged serialization keeps the stderr tail verbatim")
+def test_stderr_tail_included_when_privileged(opts):
+    from mojo.apps.edge.services import platform_deploy
+
+    row = _tail_row()
+    privileged = platform_deploy.serialize(row, include_stderr=True)
+    tail = privileged["node_evidence"][0]["detail"]["stderr_tail"]
+    th.assert_eq(len(tail), 2,
+                 "deploy authority must still read the whole diagnostic tail")
+    assert "ERROR: relation already exists" in tail[1], \
+        "the privileged tail must be verbatim, not reshaped"
+
+
+@th.django_unit_test("the RestMeta admin graph can never carry the stderr tail")
+def test_stderr_tail_absent_from_rest_graph(opts):
+    """Graph choice is caller-controlled (?graph=admin) and the framework has
+    no per-graph permission, so this path gets the stripped rendering for
+    every caller; privileged readers use the admin service, which has a
+    request to check."""
+    from mojo.apps.edge.services import platform_deploy
+
+    row = _tail_row()
+    admin = row.to_dict(graph="admin")
+    assert "stderr_tail" not in str(admin), \
+        "the admin graph must never serialize the privileged stderr tail"
+    th.assert_eq(admin["node_evidence"][0]["detail"]["phase"], "update_script",
+                 "the admin graph keeps the benign evidence it always showed")
+    basic = row.to_dict(graph="basic")
+    assert "node_evidence" not in basic, \
+        "the basic graph never carried evidence and must not start"
