@@ -53,6 +53,20 @@ change, rename, move, or delete a catalog-owned global row. Existing
 group-scoped rows remain compatible; a move across the global boundary checks
 both original and target key/scope.
 
+Literal superusers also receive a dedicated **Mojo providers** setup panel.
+It publishes the five static GeoIP provider values through the canonical
+S3/config-sync override plane, stores `GEOIP_API_KEY_MOJO` as an encrypted
+global `Setting`, and creates or converts the active system `PhoneConfig` to
+the Mojo remote provider. The API-key inputs are configured-only: blank means
+preserve and Clear is explicit. Static GeoIP keys are protected from generic
+database writes because their import-time consumers ignore DB rows.
+
+The panel reports the published revision and the revision loaded by the node
+serving the request. A mismatch means the normal config-sync/restart cycle is
+pending; it is not a claim that every node has restarted. Publishing requires
+the S3 location, KMS key, application allowlist, and the independent node
+bootstrap delegation documented in [Node deployment tooling](../../deploy/README.md#admin-fleet-overrides).
+
 PostgreSQL permits duplicate `(key, NULL)` rows under the legacy constraint.
 The catalog reports `duplicate_override`, refuses Set, and offers one Clear
 operation. Clear locks and removes every global duplicate atomically. Set and

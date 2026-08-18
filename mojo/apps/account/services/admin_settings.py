@@ -29,6 +29,11 @@ MUTABLE_KEYS = frozenset({
     "ALLOW_EMAIL_CHANGE", "ALLOW_PHONE_CHANGE", "ALLOW_USERNAME_CHANGE",
     "ALLOW_SELF_DEACTIVATION", "WEBAPP_BASE_URL",
 })
+FLEET_PROVIDER_KEYS = frozenset({
+    "GEOIP_PRIMARY_PROVIDER", "GEOIP_FALLBACK_PROVIDER",
+    "GEOIP_ADDITIONAL_PROVIDERS", "GEOIP_MOJO_PROVIDER_URL",
+    "GEOIP_MOJO_SYNC_ENABLED",
+})
 NON_PUBLIC_HOST_SUFFIXES = frozenset({
     "alt", "arpa", "corp", "example", "home", "internal", "invalid", "lan", "local",
     "localdomain", "localhost", "onion", "test",
@@ -84,7 +89,7 @@ def _section_names(descriptor_rows):
 
 def is_catalog_protected(key):
     """Return whether alternate *global* writers must refuse this key."""
-    return key in MUTABLE_KEYS
+    return key in MUTABLE_KEYS or key in FLEET_PROVIDER_KEYS
 
 
 def _bounded(value):

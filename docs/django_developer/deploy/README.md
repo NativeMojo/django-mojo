@@ -122,10 +122,11 @@ project at once — those tests are the only thing that would notice.
 # `config_sync`
 
 ```
-s3://<AWS_CONFIG_BUCKET>/<AWS_CONFIG_PREFIX>/django.conf
-    |
-    v   python3 -m mojo.deploy.config_sync   (systemd oneshot at boot + timer)
-/opt/api/var/django.conf   0600, owned by the app user
+s3://<bucket>/<prefix>/django.conf            operator-owned base
+s3://<bucket>/<prefix>/django.override.json   optional typed Admin overrides
+                       \ /
+                        v  verify, validate, compose
+              /opt/api/var/django.conf   0600, atomic replacement
 ```
 
 A pull in one direction only. S3 is authoritative; no node ever writes back.
@@ -169,6 +170,8 @@ Read from `/opt/api/var/bootstrap.conf`, deliberately **not** from
 | `CONFIG_SYNC_OWNER` | no | `user:group` for the installed file. Unresolvable is a warning, not a refusal. |
 | `CONFIG_SYNC_SERVICE` | no | Unit to restart (default `mojo-asgi.service`) |
 | `CONFIG_SYNC_REQUIRE_SHA` | no | Refuse to install a published object with no `sha256` metadata |
+| `CONFIG_SYNC_OVERRIDE_ALLOWED_KEYS` | no | Comma-separated deployment delegation for typed Admin overrides. Empty or absent disables the override object. |
+| `CONFIG_SYNC_OVERRIDE_FILENAME` | no | Override object name under the same prefix (default `django.override.json`). |
 
 **`BOOTSTRAP_PATH` is hardcoded** at `/opt/api/var/bootstrap.conf`, unlike the
 service name. It cannot itself come from bootstrap config, and `--config` is
@@ -193,6 +196,38 @@ Once every publisher does that, set `CONFIG_SYNC_REQUIRE_SHA=true` to turn a
 missing digest into a refusal. It is **off by default** on purpose:
 strict-by-default would break existing publishers the moment a node picked up
 an unpinned django-mojo upgrade.
+
+### Admin fleet overrides
+
+The optional override object is deliberately not a second arbitrary
+`django.conf`. It is a bounded JSON document whose keys must have framework
+validators and must also appear in the node's
+`CONFIG_SYNC_OVERRIDE_ALLOWED_KEYS`. Config sync verifies its required
+`sha256` metadata, rejects an unknown key or invalid type, and composes it after
+the operator-owned base file. Any failure preserves the last working file.
+
+The Admin publisher uses `ADMIN_FLEET_CONFIG_BUCKET`,
+`ADMIN_FLEET_CONFIG_PREFIX`, `ADMIN_FLEET_CONFIG_FILENAME`, and
+`ADMIN_FLEET_CONFIG_KMS_KEY_ID`; bucket and prefix fall back to the matching
+`AWS_CONFIG_*` application settings, filename defaults to
+`django.override.json`, and the KMS key falls back to `KMS_KEY_ID`.
+`ADMIN_FLEET_CONFIG_ALLOWED_KEYS` limits the application side independently.
+The effective writable set is therefore the intersection of framework support,
+the Admin publisher allowlist, and the node bootstrap delegation.
+
+Grant the application role `s3:GetObject`, `s3:PutObject`, and `s3:HeadObject`
+only for the exact override object plus the minimum KMS encrypt permission.
+Keep base-object publication and bootstrap settings outside the Admin role.
+The initial delegation is:
+
+```ini
+CONFIG_SYNC_OVERRIDE_ALLOWED_KEYS=GEOIP_PRIMARY_PROVIDER,GEOIP_FALLBACK_PROVIDER,GEOIP_ADDITIONAL_PROVIDERS,GEOIP_MOJO_PROVIDER_URL,GEOIP_MOJO_SYNC_ENABLED
+```
+
+Adding a future Admin-managed fleet setting requires all three explicit steps:
+a typed validator/default in `mojo.deploy.config_override`, a curated Admin UI
+field, and both deployment allowlists. Secrets, imports/code expressions, and
+bootstrap keys are never valid override values.
 
 ## Restarts are jittered by hostname
 

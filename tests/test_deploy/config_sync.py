@@ -715,6 +715,43 @@ def test_sync_restarts_only_when_config_sync_restart_is_set(opts):
         shutil.rmtree(root, ignore_errors=True)
 
 
+@th.django_unit_test("config sync overlays a verified delegated fleet document")
+def test_sync_composes_verified_fleet_override(opts):
+    from mojo.deploy import config_override as override
+    from mojo.deploy import config_sync as cs
+
+    root = _tempdir()
+    try:
+        target = os.path.join(root, "django.conf")
+        base = b"BASE = True\n"
+        values = dict(override.DEFAULTS)
+        fleet = override.encode_document(
+            values, "b" * 32, "2026-08-18T00:00:00+00:00", values)
+        objects = {
+            "p/django.conf": base,
+            "p/django.override.json": fleet,
+        }
+        s3 = mock.Mock()
+        s3.head_object.side_effect = lambda Bucket, Key: {
+            "ETag": '"etag"', "Metadata": {"sha256": override.sha256(objects[Key])}}
+        s3.download_file.side_effect = lambda bucket, key, path: Path(path).write_bytes(objects[key])
+        config = {
+            "AWS_CONFIG_BUCKET": "b", "AWS_CONFIG_PREFIX": "p",
+            "CONFIG_SYNC_OVERRIDE_ALLOWED_KEYS": ",".join(values),
+        }
+
+        code = cs.sync(s3, config, target, "django.conf", False)
+
+        th.assert_eq(code, 0, "a verified delegated override must install")
+        installed = Path(target).read_text()
+        th.assert_true("GEOIP_PRIMARY_PROVIDER = 'mojo'" in installed,
+                       f"the override was not composed into django.conf: {installed!r}")
+        th.assert_true("MOJO_FLEET_CONFIG_REVISION = 'bbbb" in installed,
+                       "the installed file omitted its fleet revision")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------

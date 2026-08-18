@@ -171,6 +171,12 @@ Configure a deployment to send SMS via another django-mojo instance:
    ```
 
 **On the calling (downstream) mojo:**
+0. A literal superuser can configure the system default from **Admin →
+   Settings → Mojo providers**. It converts the effective system row to
+   `provider="mojo"`, encrypts the API key with `MojoSecrets`, and leaves an
+   existing key unchanged when the secret field is blank. Clearing a key is a
+   separate explicit action. Group-specific rows still take precedence.
+
 1. Create a `PhoneConfig` with `provider="mojo"`, point `mojo_remote_url` at the upstream, and store the api key:
 
    ```python

@@ -25,7 +25,11 @@ def _capabilities(user):
 @md.requires_global_perms(
     "manage_settings", "view_advanced_settings", "manage_advanced", "admin")
 def on_admin_settings(request):
-    return _admin_settings.catalog(capabilities=_capabilities(request.user))
+    report = _admin_settings.catalog(capabilities=_capabilities(request.user))
+    if request.user.is_superuser:
+        from mojo.apps.account.services import provider_setup
+        report["provider_setup"] = provider_setup.state()
+    return report
 
 
 @md.POST("account/admin/settings")
@@ -34,6 +38,12 @@ def on_admin_settings(request):
 @md.requires_global_perms("manage_settings", "admin")
 def on_admin_settings_mutate(request):
     action = request.DATA.get("action")
+    if action == "configure_providers":
+        if set(request.DATA.keys()) != {"action", "providers"}:
+            raise merrors.ValueException(
+                "Provider setup accepts only action and providers")
+        from mojo.apps.account.services import provider_setup
+        return provider_setup.apply(request.user, request.DATA.get("providers"))
     key = request.DATA.get("key")
     if not isinstance(key, str):
         raise merrors.ValueException("A catalog setting key is required")

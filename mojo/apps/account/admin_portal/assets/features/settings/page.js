@@ -140,6 +140,57 @@ function openTopologyEditor(row, mutateOwner) {
     message, h('div', {class: 'form-actions'}, save))});
 }
 
+function providerPanel(setup, configure) {
+  if (!setup) return null;
+  const revision = setup.pending_restart
+    ? `Published ${setup.published_revision?.slice(0, 8) || 'revision'}; waiting for config-sync restart.`
+    : setup.loaded_revision ? `Fleet loaded revision ${setup.loaded_revision.slice(0, 8)}.` : 'No fleet override is loaded yet.';
+  const open = () => {
+    const geo = setup.geoip || {}; const sms = setup.sms || {};
+    const primary = h('input', {value: geo.GEOIP_PRIMARY_PROVIDER || 'mojo', autocomplete: 'off'});
+    const fallback = h('input', {value: geo.GEOIP_FALLBACK_PROVIDER || 'ipinfo', autocomplete: 'off'});
+    const additional = h('input', {value: (geo.GEOIP_ADDITIONAL_PROVIDERS || []).join(', '), autocomplete: 'off', placeholder: 'maxmind, ip-api'});
+    const geoUrl = h('input', {type: 'url', value: geo.GEOIP_MOJO_PROVIDER_URL || 'https://api.mojoverify.com', autocomplete: 'url'});
+    const sync = h('input', {type: 'checkbox', checked: geo.GEOIP_MOJO_SYNC_ENABLED === true});
+    const geoKey = h('input', {type: 'password', value: '', autocomplete: 'new-password', placeholder: geo.GEOIP_API_KEY_MOJO_CONFIGURED ? 'Configured — leave blank to keep' : 'API key'});
+    const clearGeoKey = h('input', {type: 'checkbox'});
+    const smsUrl = h('input', {type: 'url', value: sms.remote_url || '', autocomplete: 'url', placeholder: 'https://sms.example.com'});
+    const smsKey = h('input', {type: 'password', value: '', autocomplete: 'new-password', placeholder: sms.api_key_configured ? 'Configured — leave blank to keep' : 'Remote API key'});
+    const clearSmsKey = h('input', {type: 'checkbox'}); const testMode = h('input', {type: 'checkbox', checked: sms.test_mode === true});
+    const message = h('div', {class: 'form-message', role: 'alert'}); const save = h('button', {class: 'button primary', type: 'button'}, 'Publish provider configuration');
+    let close;
+    save.addEventListener('click', async () => {
+      save.disabled = true; message.textContent = '';
+      const providers = {geoip: {
+        GEOIP_PRIMARY_PROVIDER: primary.value.trim(), GEOIP_FALLBACK_PROVIDER: fallback.value.trim(),
+        GEOIP_ADDITIONAL_PROVIDERS: additional.value.split(',').map((value) => value.trim()).filter(Boolean),
+        GEOIP_MOJO_PROVIDER_URL: geoUrl.value.trim(), GEOIP_MOJO_SYNC_ENABLED: sync.checked,
+        GEOIP_API_KEY_MOJO: geoKey.value || null, clear_api_key: clearGeoKey.checked,
+      }, sms: {remote_url: smsUrl.value.trim(), api_key: smsKey.value || null, clear_api_key: clearSmsKey.checked, test_mode: testMode.checked}};
+      try { await configure(providers); close(); } catch (error) { message.textContent = error.message; save.disabled = false; }
+    });
+    close = openModal({title: 'Mojo GeoIP and SMS', subtitle: 'Static GeoIP values publish fleet-wide; encrypted API keys stay in the database.', wide: true, content: h('div', {},
+      h('h3', {text: 'GeoIP'}), h('div', {class: 'field-grid'},
+        h('label', {class: 'field'}, h('span', {text: 'Primary provider'}), primary),
+        h('label', {class: 'field'}, h('span', {text: 'Fallback provider'}), fallback),
+        h('label', {class: 'field'}, h('span', {text: 'Additional providers'}), additional),
+        h('label', {class: 'field'}, h('span', {text: 'MojoVerify URL'}), geoUrl)),
+      h('label', {class: 'check-field'}, sync, h('span', {text: 'Enable Mojo GeoIP sync'})),
+      h('label', {class: 'field'}, h('span', {text: 'MojoVerify GeoIP API key'}), geoKey),
+      h('label', {class: 'check-field'}, clearGeoKey, h('span', {text: 'Clear the configured GeoIP API key'})),
+      h('h3', {text: 'Remote SMS'}), h('div', {class: 'field-grid'},
+        h('label', {class: 'field'}, h('span', {text: 'Remote django-mojo URL'}), smsUrl),
+        h('label', {class: 'field'}, h('span', {text: 'Remote API key'}), smsKey)),
+      h('label', {class: 'check-field'}, clearSmsKey, h('span', {text: 'Clear the configured SMS API key'})),
+      h('label', {class: 'check-field'}, testMode, h('span', {text: 'SMS test mode'})),
+      message, h('div', {class: 'form-actions'}, save))});
+  };
+  return h('section', {class: `settings-provider-panel ${setup.pending_restart ? 'is-pending' : ''}`},
+    h('div', {}, h('h2', {text: 'Mojo providers'}), h('p', {text: revision}),
+      !setup.available ? h('p', {class: 'settings-guidance', text: 'Fleet publishing is not configured. Set the Admin fleet bucket, prefix, delegated keys, and KMS key in deployment settings.'}) : null),
+    h('button', {class: 'button primary compact', type: 'button', disabled: !setup.available, onclick: open}, setup.published_revision ? 'Edit providers' : 'Configure providers'));
+}
+
 function card(row, actions) {
   const href = ownerHref(row); let action = null;
   if (row.duplicate_override && row.can_clear) action = h('button', {class: 'button danger compact', onclick: () => actions.clear(row, true)}, 'Clear conflicts');
@@ -174,6 +225,10 @@ export async function settingsPage(ctx, signal) {
         try { await apiOnce('/api/account/admin/advanced/settings', {method: 'POST', body: JSON.stringify(payload)}); statusText = 'Configuration saved.'; await load(); }
         finally { busy.close(); }
       };
+      const configureProviders = async (providers) => { const busy = openBusy({title: 'Publishing fleet configuration…', detail: 'Writing the encrypted S3 override and encrypted database credentials.'});
+        try { await apiOnce('/api/account/admin/settings', {method: 'POST', body: JSON.stringify({action: 'configure_providers', providers})}); statusText = 'Provider configuration published. Config-sync will roll the fleet restart.'; await load(); }
+        finally { busy.close(); }
+      };
       const clear = async (row, conflicts) => { const answer = await confirmAction({title: conflicts ? 'Clear conflicting overrides?' : 'Clear database override?', copy: conflicts ? `This removes every conflicting global ${row.key} row and reveals the deployment/default value.` : `This removes the global ${row.key} override and reveals the deployment/default value.`, confirmLabel: conflicts ? 'Clear conflicts' : 'Clear override', danger: true});
         if (answer.confirmed) await mutate({action: 'clear', key: row.key});
       };
@@ -187,6 +242,7 @@ export async function settingsPage(ctx, signal) {
       root.replaceChildren(pageHeader('Configuration', 'Settings', 'Understand effective configuration and change only the runtime values django-mojo supports.'),
         ...(report.setup_incomplete ? [h('div', {class: 'callout'}, icon('alert'), h('div', {}, h('strong', {text: 'Installation setup is incomplete'}), h('p', {text: 'Finish the required installation choices before tuning ongoing configuration.'})), h('a', {class: 'button compact', href: routeHref('setup')}, 'Continue Setup'))] : []),
         ...(statusText ? [h('div', {class: 'settings-success', role: 'status', text: statusText})] : []),
+        providerPanel(report.provider_setup, configureProviders),
         h('div', {class: 'settings-toolbar'}, h('label', {class: 'search'}, icon('search'), search), chips), grid);
     } catch (error) { if (error?.name !== 'AbortError' && error?.code !== 'fresh_auth_required') root.replaceChildren(errorState(error, load)); }
   }

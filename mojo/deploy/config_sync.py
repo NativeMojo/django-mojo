@@ -40,6 +40,13 @@ node django.conf is the thing we are fetching and does not exist yet.
                                          Off by default: turning it on by
                                          default would break every publisher
                                          that uses a plain `aws s3 cp`.
+    CONFIG_SYNC_OVERRIDE_ALLOWED_KEYS
+                              optional  — immutable deployment delegation for
+                                         typed Admin fleet overrides. Empty
+                                         disables the override object.
+    CONFIG_SYNC_OVERRIDE_FILENAME
+                              optional  — override object name under the same
+                                         prefix (default django.override.json)
 
 The path to bootstrap.conf is NOT itself configurable through bootstrap.conf —
 it cannot be. Use --config when it lives somewhere else.
@@ -162,7 +169,7 @@ def build_s3_client(config):
     return boto3.client("s3", region_name=region)
 
 
-def remote_digest(s3, bucket, key):
+def remote_digest(s3, bucket, key, missing_ok=False):
     """(etag, sha256-from-metadata) for the published object.
 
     A missing object is NOT normal here — a missing config means someone
@@ -177,7 +184,8 @@ def remote_digest(s3, bucket, key):
     except ClientError as err:
         code = err.response.get("Error", {}).get("Code", "")
         if code in ("404", "NoSuchKey", "NotFound"):
-            log.error("nothing published at s3://%s/%s", bucket, key)
+            if not missing_ok:
+                log.error("nothing published at s3://%s/%s", bucket, key)
             return None, None
         raise
     return head.get("ETag", "").strip('"'), head.get("Metadata", {}).get("sha256")
@@ -318,6 +326,7 @@ def sweep_stale_staging(directory):
 
 def sync(s3, config, target, remote_name, dry_run):
     from botocore.exceptions import ClientError
+    from mojo.deploy import config_override
 
     bucket = config["AWS_CONFIG_BUCKET"]
     # The published object's name is its own setting, NOT basename(target).
@@ -341,10 +350,24 @@ def sync(s3, config, target, remote_name, dry_run):
     else:
         sweep_stale_staging(target_dir)
 
+    allowed = config_override.normalize_allowed(
+        config.get("CONFIG_SYNC_OVERRIDE_ALLOWED_KEYS", ""))
+    override_key = None
+    override_etag = override_sha = None
+    if allowed:
+        override_name = config.get("CONFIG_SYNC_OVERRIDE_FILENAME") or "django.override.json"
+        override_key = "%s/%s" % (
+            config["AWS_CONFIG_PREFIX"].strip("/"), override_name)
+        override_etag, override_sha = remote_digest(
+            s3, bucket, override_key, missing_ok=True)
+        if override_etag is not None and not override_sha:
+            log.error("fleet override carries no sha256 metadata — refusing it")
+            return 1
+
     etag, published_sha = remote_digest(s3, bucket, key)
     local_sha = file_sha256(target)
 
-    if published_sha and published_sha == local_sha:
+    if published_sha and published_sha == local_sha and override_etag is None:
         log.debug("already holding the published config (%s)", published_sha[:12])
         return 0
 
@@ -380,6 +403,30 @@ def sync(s3, config, target, remote_name, dry_run):
             log.error("downloaded config does not match its published sha256 "
                       "— refusing to install")
             return 1
+        if override_etag is not None:
+            override_path = os.path.join(staging_dir, "override")
+            try:
+                s3.download_file(bucket, override_key, override_path)
+            except ClientError as err:
+                log.error("download of fleet override failed (%s) — keeping current config",
+                          err.response.get("Error", {}).get("Code", "?"))
+                return 1
+            with open(override_path, "rb") as handle:
+                override_payload = handle.read()
+            if config_override.sha256(override_payload) != override_sha:
+                log.error("fleet override does not match its published sha256 — refusing it")
+                return 1
+            try:
+                document = config_override.decode_document(override_payload, allowed)
+                with open(temp_path, "rb") as handle:
+                    base_payload = handle.read()
+                combined = config_override.compose(base_payload, document)
+            except ValueError as err:
+                log.error("fleet override is invalid (%s) — keeping current config", err)
+                return 1
+            with open(temp_path, "wb") as handle:
+                handle.write(combined)
+            downloaded_sha = config_override.sha256(combined)
         if downloaded_sha == local_sha:
             # Reachable when the publisher did not set the sha256 metadata, so
             # the cheap head_object comparison above could not short-circuit.

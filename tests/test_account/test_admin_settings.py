@@ -11,12 +11,17 @@ CATALOG_KEYS = (
     "ALLOW_EMAIL_CHANGE", "ALLOW_PHONE_CHANGE", "ALLOW_USERNAME_CHANGE",
     "ALLOW_SELF_DEACTIVATION", "WEBAPP_BASE_URL",
 )
+FLEET_PROVIDER_KEYS = (
+    "GEOIP_PRIMARY_PROVIDER", "GEOIP_FALLBACK_PROVIDER",
+    "GEOIP_ADDITIONAL_PROVIDERS", "GEOIP_MOJO_PROVIDER_URL",
+    "GEOIP_MOJO_SYNC_ENABLED", "GEOIP_API_KEY_MOJO",
+)
 
 
 @th.django_unit_setup()
 def setup_admin_settings(opts):
     from mojo.apps.account.models import Group, Setting, User
-    Setting.objects.filter(key__in=CATALOG_KEYS).delete()
+    Setting.objects.filter(key__in=(*CATALOG_KEYS, *FLEET_PROVIDER_KEYS)).delete()
     Group.objects.filter(name="admin-settings-group").delete()
     User.objects.filter(username__in=("settings-admin", "settings-denied")).delete()
     admin = User.objects.create_user(
@@ -112,6 +117,21 @@ def test_settings_global_protection(opts):
     global_row.group = group
     with th.assert_raises(me.PermissionDeniedException):
         global_row.save()
+    Setting.objects.filter(key=key).delete()
+
+
+@th.django_unit_test("static fleet provider keys cannot become ignored DB shadows")
+def test_static_provider_settings_are_protected(opts):
+    from mojo import errors as me
+    from mojo.apps.account.models import Setting
+
+    key = "GEOIP_PRIMARY_PROVIDER"
+    Setting.objects.filter(key=key).delete()
+    Setting.objects.bulk_create([Setting(key=key, value='"mojo"')])
+    row = Setting.objects.get(key=key, group=None)
+    row.value = '"ipinfo"'
+    with th.assert_raises(me.PermissionDeniedException):
+        row.save()
     Setting.objects.filter(key=key).delete()
 
 
@@ -289,7 +309,7 @@ def test_settings_feature_assets(opts):
     advanced = (ROOT / "mojo/apps/account/admin_portal/assets/features/advanced/page.js").read_text()
     assert "[dashboard, webapps, advanced, people, activity, platform, settings]" in registry, \
         "the sidebar feature order is not Dashboard/Web Apps/Domains/People/Activity/Platform/Settings"
-    for contract in ("Technical details", "Search settings", "openBusy", "apiOnce", "Clear database override", "settings-token-editor"):
+    for contract in ("Technical details", "Search settings", "openBusy", "apiOnce", "Clear database override", "settings-token-editor", "Mojo GeoIP and SMS", "configure_providers"):
         assert contract in page, f"Settings UX omitted {contract}"
     assert "Expected edge nodes (comma-separated)" not in advanced and "Typed settings" not in advanced, \
         "Advanced still owns the duplicated settings form"
@@ -301,3 +321,77 @@ def test_settings_request_redaction(opts):
     request = mock.Mock(path="/api/account/admin/settings", method="POST")
     assert request_helpers.sensitive_body_label(request) == "admin_settings", \
         "the Settings mutation body can enter generic request logs"
+
+
+@th.django_unit_test("provider setup publishes only typed delegated values with KMS")
+def test_provider_setup_publisher_contract(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import provider_setup
+
+    actor = User.objects.get(pk=opts.settings_admin)
+    actor.is_superuser = True
+    actor.save(update_fields=["is_superuser"])
+    s3 = mock.Mock()
+    static = {
+        "ADMIN_FLEET_CONFIG_BUCKET": "config-bucket",
+        "ADMIN_FLEET_CONFIG_PREFIX": "config/prod",
+        "ADMIN_FLEET_CONFIG_FILENAME": "django.override.json",
+        "ADMIN_FLEET_CONFIG_KMS_KEY_ID": "alias/config",
+        "ADMIN_FLEET_CONFIG_ALLOWED_KEYS": list(provider_setup.FLEET_KEYS),
+    }
+    payload = {"geoip": {
+        "GEOIP_PRIMARY_PROVIDER": "mojo",
+        "GEOIP_FALLBACK_PROVIDER": "ipinfo",
+        "GEOIP_ADDITIONAL_PROVIDERS": [],
+        "GEOIP_MOJO_PROVIDER_URL": "https://api.mojoverify.com",
+        "GEOIP_MOJO_SYNC_ENABLED": False,
+        "GEOIP_API_KEY_MOJO": None,
+    }, "sms": {"remote_url": "https://sms.example.com", "api_key": None}}
+
+    with mock.patch.object(provider_setup, "_s3_client", return_value=s3), \
+            mock.patch.object(provider_setup, "_save_database") as save_database, \
+            mock.patch.object(provider_setup, "_static", side_effect=lambda key, default=None: static.get(key, default)):
+        result = provider_setup.apply(actor, payload)
+
+    assert result["published"] is True and result["pending_restart"] is True, \
+        f"provider setup did not report a pending fleet publish: {result!r}"
+    kwargs = s3.put_object.call_args.kwargs
+    assert kwargs["Bucket"] == "config-bucket" and kwargs["Key"] == "config/prod/django.override.json", \
+        f"provider setup published to the wrong canonical object: {kwargs!r}"
+    assert kwargs["ServerSideEncryption"] == "aws:kms" and kwargs["SSEKMSKeyId"] == "alias/config", \
+        "provider setup did not require KMS server-side encryption"
+    body = kwargs["Body"].decode("utf-8")
+    assert "GEOIP_API_KEY_MOJO" not in body and "sms.example.com" not in body, \
+        "a database credential or SMS configuration leaked into the fleet object"
+    assert save_database.call_count == 1, "validated database settings were not saved"
+
+
+@th.django_unit_test("provider setup converts the effective system SMS row to Mojo")
+def test_provider_setup_selects_system_sms(opts):
+    from mojo.apps.account.services import provider_setup
+    from mojo.apps.phonehub.models import PhoneConfig
+
+    PhoneConfig.objects.filter(group=None, name__startswith="provider-setup-test").delete()
+    active = PhoneConfig.objects.create(
+        group=None, name="provider-setup-test-active", provider="twilio",
+        is_active=True)
+    inactive = PhoneConfig.objects.create(
+        group=None, name="provider-setup-test-inactive", provider="mojo",
+        is_active=False)
+    sms = {
+        "remote_url": "https://sms.example.com", "api_key": None,
+        "clear_api_key": False, "test_mode": True,
+    }
+
+    with mock.patch.object(provider_setup, "_write_secret"):
+        provider_setup._save_database(None, False, sms)
+
+    active.refresh_from_db()
+    inactive.refresh_from_db()
+    assert active.provider == "mojo" and active.name == "Mojo Remote SMS", \
+        f"the effective system row was not converted to Mojo: {active.provider!r}"
+    assert active.mojo_remote_url == "https://sms.example.com" and active.test_mode, \
+        "the system Mojo configuration did not receive the submitted values"
+    assert active.is_active and not inactive.is_active, \
+        "provider setup left an ambiguous active system default"
+    PhoneConfig.objects.filter(pk__in=(active.pk, inactive.pk)).delete()

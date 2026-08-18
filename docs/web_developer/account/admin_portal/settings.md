@@ -25,6 +25,11 @@ The fixed order is General, Sign-in & registration, Users, Email, Domains &
 DNS, Edge & Web Apps, and Security & operations; sections from absent optional
 applications are omitted.
 
+For a literal superuser, GET also includes `provider_setup`: availability,
+delegated keys, configured-only secret flags, the effective GeoIP/SMS values,
+and loaded/published revisions. Non-superusers receive no provider setup
+payload.
+
 Sources include `database_cache`, `database`, `deployment`, `default`,
 `computed`, merged `database+deployment+defaults`, `invalid`,
 `secret_override`, and `duplicate_override`. A legacy secret global row is
@@ -48,6 +53,37 @@ Catalog mutations accept only:
 ```json
 {"action":"clear","key":"WEBAPP_BASE_URL"}
 ```
+
+The same fresh-auth endpoint accepts the superuser-only provider action:
+
+```json
+{
+  "action": "configure_providers",
+  "providers": {
+    "geoip": {
+      "GEOIP_PRIMARY_PROVIDER": "mojo",
+      "GEOIP_FALLBACK_PROVIDER": "ipinfo",
+      "GEOIP_ADDITIONAL_PROVIDERS": [],
+      "GEOIP_MOJO_PROVIDER_URL": "https://api.mojoverify.com",
+      "GEOIP_MOJO_SYNC_ENABLED": false,
+      "GEOIP_API_KEY_MOJO": "optional-new-secret",
+      "clear_api_key": false
+    },
+    "sms": {
+      "remote_url": "https://sms.example.com",
+      "api_key": "optional-new-secret",
+      "clear_api_key": false,
+      "test_mode": false
+    }
+  }
+}
+```
+
+Blank/omitted secret values preserve the encrypted value; clearing requires
+the explicit boolean. The static fields publish one KMS-encrypted, integrity-
+marked S3 override and return its revision. The database secret and system
+`PhoneConfig` take effect without a restart; static GeoIP selection takes
+effect after config sync installs the composed file and restarts the service.
 
 Set returns the normalized value; Clear returns the number of removed global
 rows (including every duplicate):

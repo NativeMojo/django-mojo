@@ -615,6 +615,16 @@ endpoint consults `request.group`. Put the returned token in the downstream's
 | `GEOIP_API_KEY_MOJO` | — | ApiKey token sent as `Authorization: apikey <token>` |
 | `GEOIP_MOJO_SYNC_ENABLED` | `True` | Master kill switch for outbound abuse-signal push-back |
 
+For a new deployment the recommended downstream defaults are `mojo` primary,
+`ipinfo` fallback, no additional providers,
+`https://api.mojoverify.com`, and outbound sync disabled until the federation
+key is intentionally provisioned. A literal superuser can apply those values
+from **Admin → Settings → Mojo providers**. The five non-secret provider fields
+are published as typed S3/config-sync overrides and require the normal rolling
+restart; `GEOIP_API_KEY_MOJO` is an encrypted global DB setting read at request
+time. Do not create DB rows for the five static fields—their consumers use
+`get_static()` and the dedicated writer rejects such shadow rows.
+
 **Behavior:**
 
 - The upstream is trusted for all third-party detection: Tor, VPN, proxy, cloud, external blocklists. Local re-detection is skipped for `provider='mojo'` records (`skip_external=True`).
