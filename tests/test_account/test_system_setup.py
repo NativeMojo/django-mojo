@@ -736,9 +736,9 @@ def test_installation_identity_ignores_later_static_name(opts):
     actor = User.objects.get(pk=opts.system_setup_admin_id)
     Setting.objects.filter(key__in=(
         system_settings.INSTALLATION_UUID, system_settings.INSTALLATION_SLUG)).delete()
-    with mock.patch.object(system_settings.settings, "get_static", return_value="first-name"):
+    with mock.patch.object(system_settings, "_static_value", return_value="first-name"):
         frozen = system_settings.installation_identity(actor)
-    with mock.patch.object(system_settings.settings, "get_static", return_value="second-name"):
+    with mock.patch.object(system_settings, "_static_value", return_value="second-name"):
         reread = system_settings.installation_identity(actor)
     assert reread == frozen, \
         f"static monitoring-name change invalidated frozen identity: {frozen!r} -> {reread!r}"

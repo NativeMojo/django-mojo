@@ -235,19 +235,18 @@ def test_named_profile_is_expanded_once_into_effective_config(opts):
             with mock.patch.object(cli, "probe_rpm_capability"):
                 for argv in (["check"], ["--config", path, "check"]):
                     output = io.StringIO()
-                    with mock.patch.object(cli, "CANONICAL_CONFIG_PATH", path), \
-                            mock.patch.object(cli.sys, "stdout", output):
+                    with mock.patch.object(cli, "CANONICAL_CONFIG_PATH", path):
                         th.assert_eq(
-                            cli.main(argv), 0,
+                            cli.main(argv, stdout=output), 0,
                             "implicit and explicit canonical CLI checks must accept the artifact")
                     th.assert_eq(
                         json.loads(output.getvalue())["sensor_id"], config["sensor_id"],
                         "CLI check must report the prepared sensor identity")
 
             alias = os.path.join(root, ".", "config.json")
-            with mock.patch.object(cli, "CANONICAL_CONFIG_PATH", path), \
-                    mock.patch.object(cli.sys, "stderr", io.StringIO()):
-                th.assert_eq(cli.main(["--config", alias, "check"]), 2,
+            with mock.patch.object(cli, "CANONICAL_CONFIG_PATH", path):
+                th.assert_eq(cli.main(
+                    ["--config", alias, "check"], stderr=io.StringIO()), 2,
                              "a canonical-path alias must remain untrusted caller policy")
 
 

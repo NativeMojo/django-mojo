@@ -300,6 +300,11 @@ def _validate_identity_pair(current_uuid, current_slug):
     return {"uuid": identity, "slug": slug}
 
 
+def _static_value(key, default=None):
+    """Read static configuration through a module-local test seam."""
+    return settings.get_static(key, default)
+
+
 def _initialize_identity(actor):
     """Create the immutable identity under the shared protected-setting lock."""
     actor = require_system_admin(actor)
@@ -314,7 +319,7 @@ def _initialize_identity(actor):
             return existing
 
         identity = str(uuid.uuid4())
-        configured = str(settings.get_static("AWS_MONITORING_NAME", "")).strip().lower()
+        configured = str(_static_value("AWS_MONITORING_NAME", "")).strip().lower()
         slug = configured or f"mojo-{identity.replace('-', '')[:12]}"
         slug = _validate_slug(INSTALLATION_SLUG, slug)
         rows = []

@@ -453,14 +453,14 @@ def test_cli_uses_effective_loader_only_for_exact_canonical_path(opts):
     }
     output = io.StringIO()
     with mock.patch.object(cli, "load_effective_config", return_value=config) as effective, \
-            mock.patch.object(cli, "load_config", return_value=config) as desired, \
-            mock.patch.object(cli.sys, "stdout", output):
-        th.assert_eq(cli.main(["check"]), 0,
+            mock.patch.object(cli, "load_config", return_value=config) as desired:
+        th.assert_eq(cli.main(["check"], stdout=output), 0,
                      "the omitted service path must use the canonical effective artifact")
-        th.assert_eq(cli.main(["--config", cli.CANONICAL_CONFIG_PATH, "check"]), 0,
+        th.assert_eq(cli.main(
+            ["--config", cli.CANONICAL_CONFIG_PATH, "check"], stdout=output), 0,
                      "the explicit service path must use the canonical effective artifact")
         alias = "/etc/mojosec/./config.json"
-        th.assert_eq(cli.main(["--config", alias, "check"]), 0,
+        th.assert_eq(cli.main(["--config", alias, "check"], stdout=output), 0,
                      "an alternate spelling remains valid only as caller policy")
 
     th.assert_eq(effective.call_count, 2,
@@ -480,18 +480,16 @@ def test_cli_check_probes_enabled_rpm_binding_capability(opts):
         }},
     }
     with mock.patch.object(cli, "load_effective_config", return_value=config), \
-            mock.patch.object(cli, "probe_rpm_capability") as probe, \
-            mock.patch.object(cli.sys, "stdout", io.StringIO()):
-        th.assert_eq(cli.main(["check"]), 0,
+            mock.patch.object(cli, "probe_rpm_capability") as probe:
+        th.assert_eq(cli.main(["check"], stdout=io.StringIO()), 0,
                      "a healthy installed-file binding probe must pass readiness")
     probe.assert_called_once_with(config["collectors"]["rpm"])
 
     with mock.patch.object(cli, "load_effective_config", return_value=config), \
             mock.patch.object(
                 cli, "probe_rpm_capability",
-                side_effect=cli.RpmError("RPMDBI_INSTFILENAMES unavailable")), \
-            mock.patch.object(cli.sys, "stderr", io.StringIO()):
-        th.assert_eq(cli.main(["check"]), 2,
+                side_effect=cli.RpmError("RPMDBI_INSTFILENAMES unavailable")):
+        th.assert_eq(cli.main(["check"], stderr=io.StringIO()), 2,
                      "a missing or incompatible system RPM binding must fail check")
 
 

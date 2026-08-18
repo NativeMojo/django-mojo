@@ -29,11 +29,13 @@ def build_parser():
     return parser
 
 
-def _print_json(value):
-    sys.stdout.write(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
+def _print_json(value, output):
+    output.write(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
 
 
-def main(argv=None):
+def main(argv=None, *, stdout=None, stderr=None):
+    stdout = sys.stdout if stdout is None else stdout
+    stderr = sys.stderr if stderr is None else stderr
     args = build_parser().parse_args(argv)
     try:
         if args.config == CANONICAL_CONFIG_PATH:
@@ -45,10 +47,10 @@ def main(argv=None):
             if rpm.get("enabled") is True:
                 probe_rpm_capability(rpm)
             _print_json({"ok": True, "sensor_id": config["sensor_id"],
-                         "version": config["version"]})
+                         "version": config["version"]}, stdout)
             return 0
         if args.command == "status":
-            _print_json(read_status(config["status_path"]))
+            _print_json(read_status(config["status_path"]), stdout)
             return 0
 
         from .runtime import Runtime
@@ -76,13 +78,13 @@ def main(argv=None):
                     raise ValueError("baseline initialization refuses an incomplete tier")
                 runtime.initialize_integrity(scans, reason=args.reason)
                 preview["initialized"] = True
-            _print_json(preview)
+            _print_json(preview, stdout)
             runtime.store.close()
         elif args.command == "baseline-rollback":
             if not args.confirm_digest:
                 raise ValueError("baseline rollback requires an exact prior digest")
             identity = runtime.store.rollback_fim_profile(args.confirm_digest)
-            _print_json({"rolled_back": True, "profile": identity})
+            _print_json({"rolled_back": True, "profile": identity}, stdout)
             runtime.store.close()
         elif args.command == "once":
             runtime.run_once()
@@ -90,7 +92,7 @@ def main(argv=None):
             runtime.run()
         return 0
     except (ConfigError, OSError, RpmError, ValueError) as err:
-        sys.stderr.write(f"mojosec: {err}\n")
+        stderr.write(f"mojosec: {err}\n")
         return 2
 
 
