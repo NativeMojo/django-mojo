@@ -36,6 +36,9 @@ def _read_bounded(path, limit):
         final = os.fstat(descriptor)
         raw = b"".join(chunks)
         if (len(raw) > limit or final.st_size != len(raw)
+                or final.st_size != metadata.st_size
+                or final.st_mtime_ns != metadata.st_mtime_ns
+                or final.st_ctime_ns != metadata.st_ctime_ns
                 or final.st_dev != metadata.st_dev
                 or final.st_ino != metadata.st_ino):
             return None

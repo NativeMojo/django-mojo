@@ -291,6 +291,17 @@ def test_atomic_deploy_identity_manifest_and_legacy_fallback(opts):
         th.assert_eq(readiness._read_deploy_identity(var), (sha, deployment),
                      "a valid v2 manifest must be the live identity")
 
+        manifest = var / "deploy_identity.json"
+        metadata = manifest.stat()
+        before_growth = mock.Mock(
+            st_mode=metadata.st_mode, st_size=0, st_dev=metadata.st_dev,
+            st_ino=metadata.st_ino, st_mtime_ns=metadata.st_mtime_ns,
+            st_ctime_ns=metadata.st_ctime_ns)
+        with mock.patch.object(
+                readiness.os, "fstat", side_effect=[before_growth, metadata]):
+            th.assert_eq(readiness._read_deploy_identity(var), ("", ""),
+                         "growth during one descriptor read must fail closed")
+
         (var / "deploy_sha").write_text("b" * 40, encoding="utf-8")
         (var / "deployment_uuid").write_text(
             "87654321-4321-4321-8321-cba987654321", encoding="utf-8")
