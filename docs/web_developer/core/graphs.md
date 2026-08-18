@@ -25,17 +25,29 @@ Most models provide these standard graphs:
 
 The default graph used when no `graph` param is provided is `default` for single objects and `list` for lists.
 
-**A misspelled or unsupported `graph` value does not error.** If you request
-a graph name a resource doesn't define, the response falls back to `default`
-silently — `200 OK`, with `default`'s fields rather than the ones you
-expected. The response envelope's `graph` key still echoes back whatever name
-you requested, even when a fallback happened, so it is **not** a reliable way
-to detect the typo — compare the fields you got against the resource's
-documented `default` graph instead. This also means a resource that gates a
-sensitive field behind an opt-in graph (see e.g.
-[account/api_keys.md](../account/api_keys.md#security-notes)) will quietly
-omit that field on a typo'd graph name rather than telling you it doesn't
-exist.
+### Unknown graph names: fall back or refuse
+
+Whether an undefined `graph` value errors depends on the *kind* of name:
+
+- **Common names** — `default`, `basic`, `list`, `simple`, `detail`,
+  `detailed`, `full` — fall back to `default` silently (`200 OK`) when a
+  resource doesn't define them. The envelope's `graph` key echoes the name you
+  requested even after a fallback, so it is **not** a reliable typo detector —
+  compare the fields you got against the resource's documented `default`.
+- **Any other (special) name** — `admin`, `token`, and the like — is **refused
+  with `400`** when the resource doesn't define it, rather than silently
+  serving `default`. A special graph names a specific view; if the resource
+  doesn't have it, that's an error, not a fallback.
+
+### Graphs can require a permission
+
+A resource may require a permission for a specific graph (in addition to the
+permission to read the resource at all). Requesting such a graph without the
+permission returns **`403`** naming the graph and the permission required —
+it does **not** silently downgrade to a thinner graph. If you see a `403`
+mentioning a graph, request a graph you are allowed to use (often `default`),
+or obtain the named permission. This replaces the older pattern of a sensitive
+field silently vanishing on an ungated graph.
 
 ## Nested Objects
 

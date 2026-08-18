@@ -45,18 +45,40 @@ Use these names consistently across models:
 | `basic` | Minimal for use as a nested graph in other models |
 | `full` | All fields (use `exclude` to protect sensitive fields) |
 
-### Fallback for Unrecognized or Missing Graphs
+### Graph Resolution — Fallback, Refusal, and the Whole-Model Guard
 
-If `?graph=<name>` names a graph the model doesn't define, the serializer falls
-back to `default` — silently, with a `200` and no error. This applies whether
-the name is a typo or simply undefined; only a model's own `GRAPHS` dict
-decides what exists. The same fallback happens for **list** responses: `on_rest_list`
-requests graph `"list"`, and if the model defines no `"list"` graph, the
-serializer falls back to `"default"` — so a model without an explicit `list`
-graph exposes its full `default` field set (and any `extra` values on it) on
-every list response too. If a `default` graph carries something you don't want
-on lists, either define an explicit `list` graph or keep that field off
-`default` (see [Opt-In Sensitive Graphs](#opt-in-sensitive-graphs) below).
+Two layers resolve a requested graph, with different jobs.
+
+**At the REST boundary** (where the caller controls the name via `?graph=`), an
+undefined name is resolved three ways:
+
+| Requested | Defined on the model? | Result |
+|---|---|---|
+| any name | yes | serve it (subject to `GRAPH_PERMISSIONS`) |
+| a **common** name — `default`, `basic`, `list`, `simple`, `detail`, `detailed`, `full` | no | fall back to `default` (`200`) |
+| a **special** name — anything else (`admin`, `token`, `federation`, …) | no | **refused with `400`** |
+
+A common name describes *how much* of a record you want, so an undefined one is
+a harmless generic request and falls back. A special name is a deliberate
+request for a particular view; answering it with `default` would mislead the
+caller and hand a prober a `200` for every name they try, so it is refused. The
+common set is `COMMON_GRAPH_NAMES` in `mojo/models/rest.py`, overridable per
+deployment via the conf-file-only `REST_COMMON_GRAPH_NAMES` setting.
+
+The `on_rest_list` path requests graph `"list"`, so a model without an explicit
+`list` graph still serves its `default` field set (and any `extra` values on it)
+on lists — define an explicit `list` graph, or keep that field off `default`, if
+that matters.
+
+**In the serializer** (which has no request — services and `to_dict(graph=…)`
+call it directly), resolution is two-way: a defined graph is served, otherwise
+`default` is served. **If the requested graph AND `default` are both undefined
+on a model that declares `GRAPHS`, the serializer raises** rather than dumping
+every field — a model shipping a partial graph set with no `default` is a
+misconfiguration, and the meta-test in `tests/test_models/graph_permissions.py`
+keeps it from shipping. A model that declares **no** `GRAPHS` at all (or an empty
+map) keeps its deliberate whole-model serialization: that is an opt-out gated by
+`VIEW_PERMS`, not the partial-graph bug.
 
 ## Nested Graphs
 
@@ -95,6 +117,50 @@ Also use `NO_SHOW_FIELDS` in RestMeta to globally exclude fields from all graphs
 class RestMeta:
     NO_SHOW_FIELDS = ["mojo_secrets", "internal_notes"]
 ```
+
+`NO_SHOW_FIELDS` removes a field from **every** caller with no way to opt back
+in — a superuser cannot see it through the REST path either. When a field should
+be visible to *privileged* readers but not everyone, prefer a permission-gated
+graph (below) over `NO_SHOW_FIELDS`.
+
+## Per-Graph Permissions (`GRAPH_PERMISSIONS`)
+
+`GRAPHS` alone carries no permission — any caller who can read a record at all
+can request its richest graph. To require a permission for a specific graph,
+declare `RestMeta.GRAPH_PERMISSIONS`, a map of graph name → permissions:
+
+```python
+class RestMeta:
+    VIEW_PERMS = ["view_platform", "manage_platform", "admin"]
+    GRAPH_PERMISSIONS = {"admin": ["manage_platform", "admin"]}
+```
+
+- **Opt-in and additive.** A model that declares no `GRAPH_PERMISSIONS`, or has
+  no entry for the requested graph, behaves exactly as before. `VIEW_PERMS`
+  gates reading the model at all; the graph's permissions are then required *on
+  top*, with the same OR-semantics (`implied_perms`, bare-domain grants) as
+  every other gate.
+- **Enforced on the graph actually served.** A request for an undefined common
+  name that falls back to `default` is checked against `default`'s permissions,
+  not the requested name's.
+- **Denied → `403`** naming the graph and the permission required — never a
+  silent downgrade to a thinner graph, so an operator seeing missing fields can
+  tell "withheld" from "absent".
+- **Enforced at the REST boundary and the assistant model tools**, not in the
+  serializer (which has no request). Internal `to_dict(graph=…)` and service
+  callers are unaffected — a service that needs a privileged graph already has
+  its own authorization.
+- **Tenancy caveat.** A member-level grant satisfies a graph permission only on
+  a model whose tenancy is derivable (a `group` FK or `GROUP_FIELD`), where the
+  check binds to the row's own tenant. On a groupless model, or one gated only
+  by a membership view-hook, **only a global grant** satisfies the graph
+  permission — fail-closed by construction.
+
+Nested graphs are **not** permission-gated: a graph's field lists and its nested
+`graphs` are developer-authored config trusted like the fields themselves. Keep
+sensitive related data out of a nested graph (the convention is to snapshot the
+needed fields rather than nest — see `incident/models/event.py`), or gate the
+top-level graph that pulls it in.
 
 ### Opt-In Sensitive Graphs
 

@@ -560,30 +560,36 @@ def test_stderr_tail_included_when_privileged(opts):
         "the privileged tail must be verbatim, not reshaped"
 
 
-@th.django_unit_test("the RestMeta admin graph can never carry the stderr tail")
-def test_stderr_tail_absent_from_rest_graph(opts):
-    """Graph choice is caller-controlled (?graph=admin) and the framework has
-    no per-graph permission, so this path gets the stripped rendering for
-    every caller; privileged readers use the admin service, which has a
-    request to check."""
-    from mojo.apps.edge.services import platform_deploy
-
+@th.django_unit_test("the admin graph carries raw evidence; the boundary gates it")
+def test_admin_graph_evidence_gated_at_boundary(opts):
+    """Item 2102 inverted this. The serializer is request-free by design, so
+    to_dict(graph="admin") now returns the RAW node_evidence (stderr tail
+    included). Access is gated at the REST boundary and the assistant tools by
+    RestMeta.GRAPH_PERMISSIONS (see tests/test_models/graph_permissions.py) —
+    not by hiding the field from the serializer, which had no way to let a
+    privileged reader (superuser included) opt back in."""
     row = _tail_row()
+
     admin = row.to_dict(graph="admin")
-    assert "stderr_tail" not in str(admin), \
-        "the admin graph must never serialize the privileged stderr tail"
+    tail = admin["node_evidence"][0]["detail"]["stderr_tail"]
+    th.assert_eq(len(tail), 2,
+                 "the admin graph now serves the raw diagnostic tail")
+    assert "ERROR: relation already exists" in tail[1], \
+        "the admin tail must be verbatim, not reshaped"
     th.assert_eq(admin["node_evidence"][0]["detail"]["phase"], "update_script",
                  "the admin graph keeps the benign evidence it always showed")
+
+    # The evidence-free graphs never carry node_evidence.
     basic = row.to_dict(graph="basic")
     assert "node_evidence" not in basic, \
         "the basic graph never carried evidence and must not start"
+    default = row.to_dict(graph="default")
+    assert "node_evidence" not in default, \
+        "the default graph is evidence-free"
 
-    # The graphs this model does NOT define are the framework's own defaults —
-    # "list" for collections, "default" for detail. An unmapped name falls
-    # through to whole-model serialization, so gating only the named graphs
-    # would leave the tail on the path a wired URL would actually use.
-    for graph in ("list", "default", "unmapped-name"):
+    # An unmapped name resolves to the evidence-free default (the model now
+    # defines one), so no ungated serialization path carries the tail.
+    for graph in ("list", "unmapped-name"):
         rendered = row.to_dict(graph=graph)
         assert "stderr_tail" not in str(rendered), \
-            f"graph={graph} falls back to whole-model output and must not " \
-            "carry the privileged stderr tail"
+            f"graph={graph} must fall back to the evidence-free default"

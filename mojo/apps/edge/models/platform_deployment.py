@@ -75,14 +75,13 @@ class PlatformDeployment(models.Model, MojoModel):
             "transitions", "node_evidence", "links", "detail",
         ]
         SEARCH_FIELDS = ["sha", "actor", "request_key", "source_delivery"]
-        # Raw node_evidence carries the privileged deploy stderr tail. This is
-        # enforced on the graph path AND the unmapped-graph fallback, so it
-        # closes every graph name at once — including "list" and "default",
-        # which this model does not define and which would otherwise fall
-        # through to whole-model serialization. The `admin` graph still serves
-        # evidence through the stripped `extra` alias below; NO_SHOW_FIELDS
-        # filters declared fields, not extras.
-        NO_SHOW_FIELDS = ["node_evidence"]
+        # node_evidence (which carries the privileged deploy stderr tail) is
+        # served ONLY by the `admin` graph, which GRAPH_PERMISSIONS gates on
+        # manage_platform/admin (item 2102). `default`/`basic` are evidence
+        # -free, and an unmapped graph name resolves to `default`, so no
+        # ungated serialization path can hand out the tail. The privileged
+        # platform service (which has a request to check) is the other reader.
+        GRAPH_PERMISSIONS = {"admin": ["manage_platform", "admin"]}
         GRAPHS = {
             "basic": {
                 "fields": [
@@ -100,27 +99,21 @@ class PlatformDeployment(models.Model, MojoModel):
                 ],
             },
             "admin": {
+                # Gated by GRAPH_PERMISSIONS (manage_platform/admin), so this
+                # graph carries the RAW node_evidence, stderr tail included.
+                # The framework refuses the admin graph at the REST boundary and
+                # the assistant tools to a caller without the perm (item 2102),
+                # which is why the field no longer needs the stripped alias that
+                # denied it to superusers too.
                 "fields": [
                     "id", "created", "modified", "sha", "framework_version",
                     "status", "source", "actor", "request_key",
                     "source_delivery", "frozen_roster", "transitions",
-                    "links", "detail", "started", "finished",
+                    "node_evidence", "links", "detail", "started", "finished",
                 ],
-                # node_evidence is served through the stripped property: graph
-                # choice is caller-controlled and carries no permission of its
-                # own, so no REST graph may hand out the tail. Privileged
-                # readers get it from the admin platform service, which has a
-                # request to check.
-                "extra": [("node_evidence_public", "node_evidence")],
                 "graphs": {"retry_of": "basic"},
             },
         }
 
     def __str__(self):
         return f"{self.id}:{self.sha} ({self.status})"
-
-    @property
-    def node_evidence_public(self):
-        """node_evidence without the privileged stderr tail."""
-        from mojo.apps.edge.services import platform_deploy
-        return platform_deploy.strip_stderr_tail(self.node_evidence)

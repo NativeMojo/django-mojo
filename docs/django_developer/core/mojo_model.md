@@ -61,6 +61,7 @@ class Book(models.Model, MojoModel):
 | `SEARCH_FIELDS` | list | all CharField/TextField | Fields searched by `?search=` param |
 | `LIST_DEFAULT_FILTERS` | dict | `{}` | Baseline filters applied to **list** requests only, overridable per field by the caller (see [Default list filters](#default-list-filters)) |
 | `GRAPHS` | dict | `{}` | Serialization shapes (see [Graphs](graphs.md)) |
+| `GRAPH_PERMISSIONS` | dict | `{}` | Per-graph required permissions, additive to `VIEW_PERMS` (see [Per-graph permissions](graphs.md#per-graph-permissions-graph_permissions)) |
 | `NO_SAVE_FIELDS` | list | `["id","pk","created","uuid"]` | Fields ignored on save |
 | `NO_SHOW_FIELDS` | list | `[]` | Fields never included in responses |
 | `SENSITIVE_FIELDS` | list | `[]` | Columns that may never be filtered, searched, sorted or aggregated on (see [Sensitive fields](#sensitive-fields)) |
