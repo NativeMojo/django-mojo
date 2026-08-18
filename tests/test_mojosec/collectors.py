@@ -905,8 +905,11 @@ def test_rpm_parser_is_strict_and_system_site_roots_are_constrained(opts):
 @th.django_unit_test()
 def test_rpm_installed_file_ownership_is_structural_and_fail_closed(opts):
     from mojo.mojosec.collectors.rpm import (
-        RpmCollector, RpmError, _installed_owners,
+        RpmCollector, RpmError, _OWNER_HELPER_SCRIPT, _installed_owners,
     )
+
+    th.assert_true("mojo" not in _OWNER_HELPER_SCRIPT,
+                   "the isolated system-Python helper must be self-contained")
 
     root = "/usr/local/lib/python3.11/site-packages"
     path = root + "/example.py"
@@ -1050,8 +1053,51 @@ def test_rpm_helper_protocol_is_bounded_and_exact(opts):
 
     from mojo.mojosec.collectors import rpm as rpm_module
     from mojo.mojosec.collectors.rpm import (
-        RpmError, RpmOwnershipSession, _decode_helper_response,
+        RpmError, RpmOwnershipSession, _OWNER_HELPER_SCRIPT,
+        _decode_helper_response,
     )
+
+    isolated_driver = r'''import sys,types
+class Header(dict):
+    def sprintf(self,unused):
+        return self['nevra']
+class Transaction:
+    def openDB(self):
+        return int(sys.argv[3])
+    def dbCookie(self):
+        return None if sys.argv[2]=='<none>' else sys.argv[2]
+    def dbMatch(self,index,path):
+        return [Header(nevra='rpm-1-1.x86_64',filenames=['/usr/bin/rpm'],filestates=[0])]
+module=types.ModuleType('rpm')
+module.TransactionSet=lambda unused_root: Transaction()
+module.RPMDBI_INSTFILENAMES=1
+module.RPMFILE_STATE_NORMAL=0
+sys.modules['rpm']=module
+exec(sys.argv[1],{'__name__':'__main__'})
+'''
+
+    def isolated_helper(cookie="stable-cookie", open_rc=0):
+        return subprocess.run(
+            [sys.executable, "-I", "-u", "-c", isolated_driver,
+             _OWNER_HELPER_SCRIPT, cookie, str(open_rc)],
+            input=b'{"op":"finish"}\n', stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, timeout=5, check=False,
+            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C", "LANG": "C"})
+
+    isolated = isolated_helper()
+    th.assert_eq(isolated.returncode, 0,
+                 "the self-contained helper must run under isolated Python")
+    th.assert_eq(
+        isolated.stdout.splitlines(),
+        [b'{"op":"ready","ready":true}', b'{"op":"finish","stable":true}'],
+        "the isolated helper must prove readiness and one stable DB generation")
+    th.assert_eq(isolated.stderr, b"",
+                 "the isolated helper must not depend on ambient import diagnostics")
+    for failed in (isolated_helper(cookie="<none>"), isolated_helper(open_rc=1)):
+        th.assert_eq(failed.returncode, 3,
+                     "missing cookie or failed DB open must fail before readiness")
+        th.assert_true(b'"op":"ready"' not in failed.stdout,
+                       "an unproven database must never publish helper readiness")
 
     decoded = _decode_helper_response(
         b'{"op":"owner","owners":[]}\n', "owner", 1024)
@@ -1071,15 +1117,23 @@ def test_rpm_helper_protocol_is_bounded_and_exact(opts):
     with th.assert_raises(RpmError):
         _decode_helper_response(b"{" + b" " * 1024 + b"}\n", "owner", 1024)
 
-    def bare_session(payload, maximum=1024):
+    def bare_session(payload, maximum=1024, error_payload=b""):
         read_fd, write_fd = os.pipe()
+        error_read_fd, error_write_fd = os.pipe()
         if payload is not None:
             os.write(write_fd, payload)
+        if error_payload:
+            os.write(error_write_fd, error_payload)
         os.close(write_fd)
+        os.close(error_write_fd)
         session = RpmOwnershipSession.__new__(RpmOwnershipSession)
         session.maximum = maximum
         session.deadline = time.monotonic() + 5
-        session.process = types.SimpleNamespace(stdout=os.fdopen(read_fd, "rb", buffering=0))
+        session.stderr_size = 0
+        session.stderr_eof = False
+        session.process = types.SimpleNamespace(
+            stdout=os.fdopen(read_fd, "rb", buffering=0),
+            stderr=os.fdopen(error_read_fd, "rb", buffering=0))
         return session
 
     dead = bare_session(None)
@@ -1088,6 +1142,7 @@ def test_rpm_helper_protocol_is_bounded_and_exact(opts):
             dead._read("owner")
     finally:
         dead.process.stdout.close()
+        dead.process.stderr.close()
 
     timed = bare_session(b'{"op":"owner","owners":[]}\n')
     try:
@@ -1096,6 +1151,7 @@ def test_rpm_helper_protocol_is_bounded_and_exact(opts):
                 timed._read("owner")
     finally:
         timed.process.stdout.close()
+        timed.process.stderr.close()
 
     overflow = bare_session(b"x" * 1025 + b"\n", maximum=1024)
     try:
@@ -1103,6 +1159,16 @@ def test_rpm_helper_protocol_is_bounded_and_exact(opts):
             overflow._read("owner")
     finally:
         overflow.process.stdout.close()
+        overflow.process.stderr.close()
+
+    noisy = bare_session(
+        b'{"op":"owner","owners":[]}\n', error_payload=b"unexpected diagnostic")
+    try:
+        with th.assert_raises(RpmError):
+            noisy._read("owner")
+    finally:
+        noisy.process.stdout.close()
+        noisy.process.stderr.close()
 
     expired = RpmOwnershipSession.__new__(RpmOwnershipSession)
     expired.deadline = time.monotonic() - 1

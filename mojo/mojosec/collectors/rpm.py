@@ -23,23 +23,46 @@ _HELPER_READ_SECONDS = 5
 _HELPER_TEARDOWN_SECONDS = 2
 
 
-_OWNER_HELPER_SCRIPT = r'''import json,os,sys
+_OWNER_HELPER_SCRIPT = r'''import json,os,re,sys
 import rpm
-from mojo.mojosec.collectors.rpm import _installed_owners
+
+NEVRA=re.compile(r'^[A-Za-z0-9][A-Za-z0-9+_.:~-]{0,511}$')
 
 def emit(value):
     sys.stdout.write(json.dumps(value,separators=(',',':'))+'\n')
     sys.stdout.flush()
 
 def cookie(transaction):
-    value=repr(transaction.dbCookie())
-    if len(value.encode('utf-8'))>4096:
-        raise RuntimeError('RPM database cookie is unbounded')
+    value=transaction.dbCookie()
+    if (not isinstance(value,str) or not value or
+            len(value.encode('utf-8'))>4096):
+        raise RuntimeError('RPM database cookie is unavailable or unbounded')
     return value
+
+def installed_owners(headers,path,normal):
+    owners=[]
+    for header in headers:
+        filenames=header['filenames']
+        states=header['filestates']
+        if (not isinstance(filenames,(list,tuple)) or
+                not isinstance(states,(list,tuple)) or
+                len(filenames)!=len(states)):
+            raise RuntimeError('RPM ownership header metadata is malformed')
+        if not any(name==path and state==normal
+                   for name,state in zip(filenames,states)):
+            continue
+        owner=header.sprintf('%{NEVRA}')
+        if not isinstance(owner,str) or not NEVRA.fullmatch(owner):
+            raise RuntimeError('RPM ownership header NEVRA is invalid')
+        if owner not in owners:
+            owners.append(owner)
+        if len(owners)==2:
+            break
+    return owners
 
 def installed_probe(transaction,index,normal):
     path='/usr/bin/rpm'
-    owners=_installed_owners(transaction.dbMatch(index,path),path,normal)
+    owners=installed_owners(transaction.dbMatch(index,path),path,normal)
     if len(owners)!=1:
         raise RuntimeError('RPM installed-file index preflight failed')
 
@@ -48,7 +71,8 @@ try:
         raise RuntimeError('RPM installed-file binding is unavailable')
     normal=getattr(rpm,'RPMFILE_STATE_NORMAL',0)
     transaction=rpm.TransactionSet('/')
-    transaction.openDB()
+    if transaction.openDB()!=0:
+        raise RuntimeError('RPM database open failed')
     index=rpm.RPMDBI_INSTFILENAMES
     before=cookie(transaction)
     installed_probe(transaction,index,normal)
@@ -69,7 +93,7 @@ try:
                 len(path.encode('utf-8'))>4096):
             raise RuntimeError('RPM helper path is invalid')
         matches=transaction.dbMatch(index,path)
-        emit({'op':'owner','owners':_installed_owners(matches,path,normal)})
+        emit({'op':'owner','owners':installed_owners(matches,path,normal)})
     raise RuntimeError('RPM helper input closed before finish')
 except SystemExit:
     raise
@@ -162,13 +186,14 @@ class RpmOwnershipSession:
         self.deadline = (time.monotonic() + config["timeout_seconds"]
                          if deadline is None else deadline)
         self.maximum = min(config["max_output_bytes"], _MAX_HELPER_RESPONSE_BYTES)
-        self.stderr = tempfile.TemporaryFile()
+        self.stderr_size = 0
+        self.stderr_eof = False
         launcher = popen or subprocess.Popen
         env = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C", "LANG": "C"}
         try:
             self.process = launcher(
                 [config["interpreter"], "-I", "-u", "-c", _OWNER_HELPER_SCRIPT],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 env=env, close_fds=True)
             self._read("ready")
         except Exception:
@@ -183,13 +208,28 @@ class RpmOwnershipSession:
 
     def _read(self, expected_op):
         payload = b""
-        descriptor = self.process.stdout.fileno()
+        stdout_descriptor = self.process.stdout.fileno()
+        stderr_descriptor = self.process.stderr.fileno()
         while b"\n" not in payload:
+            descriptors = [stdout_descriptor]
+            if not self.stderr_eof:
+                descriptors.append(stderr_descriptor)
             ready, unused_write, unused_error = select.select(
-                [descriptor], [], [], self._remaining())
+                descriptors, [], [], self._remaining())
             if not ready:
                 raise RpmError("RPM ownership helper response timed out")
-            block = os.read(descriptor, min(4096, self.maximum + 1 - len(payload)))
+            if stderr_descriptor in ready:
+                error = os.read(stderr_descriptor, min(4096, self.maximum + 1))
+                if error:
+                    self.stderr_size += len(error)
+                    if self.stderr_size > self.maximum:
+                        raise RpmError("RPM ownership helper stderr exceeded its bound")
+                    raise RpmError("RPM ownership helper wrote unexpected stderr")
+                self.stderr_eof = True
+            if stdout_descriptor not in ready:
+                continue
+            block = os.read(
+                stdout_descriptor, min(4096, self.maximum + 1 - len(payload)))
             if not block:
                 raise RpmError("RPM ownership helper exited before responding")
             payload += block
@@ -221,7 +261,6 @@ class RpmOwnershipSession:
     def _teardown(self, require_clean):
         process = getattr(self, "process", None)
         if process is None:
-            self.stderr.close()
             return
         for handle in (process.stdin, process.stdout):
             if handle is not None:
@@ -241,13 +280,12 @@ class RpmOwnershipSession:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=_HELPER_TEARDOWN_SECONDS)
-        self.stderr.flush()
-        if self.stderr.tell() > self.maximum:
-            self.stderr.close()
+        error = b""
+        if process.stderr is not None:
+            error = process.stderr.read(self.maximum + 1)
+            process.stderr.close()
+        if len(error) > self.maximum:
             raise RpmError("RPM ownership helper stderr exceeded its bound")
-        self.stderr.seek(0)
-        error = self.stderr.read().decode("utf-8", "strict")
-        self.stderr.close()
         if require_clean and (process.returncode != 0 or error):
             raise RpmError("RPM ownership helper exited unsuccessfully or wrote stderr")
 
