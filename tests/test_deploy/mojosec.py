@@ -232,14 +232,17 @@ def test_named_profile_is_expanded_once_into_effective_config(opts):
             th.assert_eq(audited, config,
                          "deployment audit must validate without re-expanding the profile")
 
-            for argv in (["check"], ["--config", path, "check"]):
-                output = io.StringIO()
-                with mock.patch.object(cli, "CANONICAL_CONFIG_PATH", path), \
-                        mock.patch.object(cli.sys, "stdout", output):
-                    th.assert_eq(cli.main(argv), 0,
-                                 "implicit and explicit canonical CLI checks must accept the artifact")
-                th.assert_eq(json.loads(output.getvalue())["sensor_id"], config["sensor_id"],
-                             "CLI check must report the prepared sensor identity")
+            with mock.patch.object(cli, "probe_rpm_capability"):
+                for argv in (["check"], ["--config", path, "check"]):
+                    output = io.StringIO()
+                    with mock.patch.object(cli, "CANONICAL_CONFIG_PATH", path), \
+                            mock.patch.object(cli.sys, "stdout", output):
+                        th.assert_eq(
+                            cli.main(argv), 0,
+                            "implicit and explicit canonical CLI checks must accept the artifact")
+                    th.assert_eq(
+                        json.loads(output.getvalue())["sensor_id"], config["sensor_id"],
+                        "CLI check must report the prepared sensor identity")
 
             alias = os.path.join(root, ".", "config.json")
             with mock.patch.object(cli, "CANONICAL_CONFIG_PATH", path), \
