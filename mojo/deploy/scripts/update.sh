@@ -147,20 +147,44 @@ fi
 # design, never a script failure. Any other non-zero propagates to the caller.
 
 report_status() {
-    # report_status <deploying|failed> <sha> [detail]
-    local state="$1" sha="$2" detail="${3:-}" rc=0
+    # report_status <deploying|failed> <sha> [detail] [include-evidence]
+    local state="$1" sha="$2" detail="${3:-}" evidence="${4:-0}" rc=0
+    local args=()
     if [ "$state" = "deploying" ]; then
         MOJO_DEPLOY_IDENTITY_READY=2 python3 bin/manage.py deploy_status set \
             "$state" --sha "$sha" --deployment "$DEPLOYMENT" || rc=$?
     elif [ -n "$detail" ]; then
-        python3 bin/manage.py deploy_status set "$state" --sha "$sha" \
-            --deployment "$DEPLOYMENT" --detail "$detail" || rc=$?
+        args=(deploy_status set "$state" --sha "$sha" \
+              --deployment "$DEPLOYMENT" --detail "$detail")
+        [ "$evidence" != "1" ] || args+=(--evidence)
+        python3 bin/manage.py "${args[@]}" || rc=$?
     else
         python3 bin/manage.py deploy_status set "$state" --sha "$sha" --deployment "$DEPLOYMENT" || rc=$?
     fi
     if [ "$rc" = "3" ]; then
         log "deploy_status: deploy superseded — report ignored (tolerated)"
         return 0
+    fi
+    return "$rc"
+}
+
+# The migrating canary stops its own job engine after reporting terminal
+# state, so the parent process can never persist its captured subprocess
+# output. Keep one private 64 KiB tail for the management command to sanitize
+# into durable evidence before rollback starts.
+DEPLOY_FAILURE_OUTPUT="var/deploy_failure_output"
+rm -f -- "$DEPLOY_FAILURE_OUTPUT"
+cleanup_failure_output() { rm -f -- "$DEPLOY_FAILURE_OUTPUT"; }
+trap cleanup_failure_output EXIT
+
+run_with_evidence() {
+    local rc=0
+    rm -f -- "$DEPLOY_FAILURE_OUTPUT"
+    (umask 077; : > "$DEPLOY_FAILURE_OUTPUT") || return 1
+    "$@" 2>&1 | tee /dev/stderr | tail -c 65536 > "$DEPLOY_FAILURE_OUTPUT"
+    rc="${PIPESTATUS[0]}"
+    if [ "$rc" = "0" ]; then
+        rm -f -- "$DEPLOY_FAILURE_OUTPUT"
     fi
     return "$rc"
 }
@@ -255,13 +279,14 @@ if [ "$MODE" = "deploy" ]; then
     fi
 
     fail_deploy() {
-        # fail_deploy <step that failed>
-        local step="$1"
+        # fail_deploy <step that failed> [captured-output]
+        local step="$1" captured="${2:-0}"
         log "deploy of ${SHA} failed at: ${step}"
         if [ "$MIGRATE" = "1" ] || [ "$SAME_RELEASE" = "1" ]; then
             # Report FIRST — the rollback below may reinstall a framework
             # that has no deploy_status command.
-            report_status failed "$SHA" "$step" || true
+            report_status failed "$SHA" "$step" "$captured" || true
+            rm -f -- "$DEPLOY_FAILURE_OUTPUT"
             invalidate_identity || log "could not publish identity invalidation marker"
             rollback_ok=0
             if [ "$SAME_RELEASE" = "1" ]; then
@@ -269,12 +294,15 @@ if [ "$MODE" = "deploy" ]; then
             elif [ -n "$PREV_SHA" ] && [ -n "$PREV_FRAMEWORK" ]; then
                 log "rolling back to ${PREV_SHA} / django-mojo ${PREV_FRAMEWORK}"
                 if git reset --hard "$PREV_SHA" \
-                        && sudo bash ./aws/post_deploy.sh --framework "$PREV_FRAMEWORK" \
-                        && python3 bin/manage.py sanity_check --url "$SANITY_URL"; then
+                        && run_with_evidence sudo bash ./aws/post_deploy.sh \
+                            --framework "$PREV_FRAMEWORK" \
+                        && run_with_evidence python3 bin/manage.py sanity_check \
+                            --url "$SANITY_URL"; then
                     rollback_ok=1
                 else
                     log "ROLLBACK FAILED — this node is in an unknown state"
-                    report_status failed "$SHA" "rollback failed" || true
+                    report_status failed "$SHA" "rollback failed" 1 || true
+                    rm -f -- "$DEPLOY_FAILURE_OUTPUT"
                 fi
             else
                 log "no previous state recorded — cannot roll back"
@@ -302,17 +330,19 @@ if [ "$MODE" = "deploy" ]; then
         git reset --hard "$SHA"             || fail_deploy "git reset to ${SHA}"
         git clean -fd                       || fail_deploy "git clean"
         if [ "$MIGRATE" = "1" ]; then
-            sudo bash ./aws/post_deploy.sh --framework "$FRAMEWORK" --migrate \
-                                            || fail_deploy "post_deploy (migrate)"
+            run_with_evidence sudo bash ./aws/post_deploy.sh \
+                --framework "$FRAMEWORK" --migrate \
+                                            || fail_deploy "post_deploy (migrate)" 1
         else
-            sudo bash ./aws/post_deploy.sh --framework "$FRAMEWORK" \
-                                            || fail_deploy "post_deploy"
+            run_with_evidence sudo bash ./aws/post_deploy.sh \
+                --framework "$FRAMEWORK" \
+                                            || fail_deploy "post_deploy" 1
         fi
     fi
 
     if [ "$MIGRATE" = "1" ] || [ "$SAME_RELEASE" = "1" ]; then
-        python3 bin/manage.py sanity_check --url "$SANITY_URL" \
-                                        || fail_deploy "sanity_check"
+        run_with_evidence python3 bin/manage.py sanity_check --url "$SANITY_URL" \
+                                        || fail_deploy "sanity_check" 1
     fi
 
     LIVE_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"

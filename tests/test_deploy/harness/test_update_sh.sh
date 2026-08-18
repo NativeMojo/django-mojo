@@ -118,6 +118,7 @@ echo "CMD sudo $*" >> "$CALLLOG"
 [ -f "$STUBCTL/sudo.sleep" ] && sleep "$(cat "$STUBCTL/sudo.sleep")"
 if [ -f "$STUBCTL/sudo.fail_first" ] && [ ! -f "$STUBCTL/.sudo_failed_once" ]; then
     touch "$STUBCTL/.sudo_failed_once"
+    echo "FATAL: staged post_deploy sentinel" >&2
     exit 1
 fi
 if [ -f "$STUBCTL/sudo.fail_second" ]; then
@@ -299,6 +300,11 @@ run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
 assert_eq "$?" 1 "failed canary run exits 1"
 assert_order "deploy_status set failed" "CMD git reset --hard 1111111111" \
     "failed report precedes the rollback reset"
+assert_in_log "deploy_status set failed.*post_deploy (migrate).*--evidence" \
+    "failed canary report carries captured command evidence"
+[ ! -e "$PROJ/var/deploy_failure_output" ] && \
+    ok "captured deploy output is removed after reporting" || \
+    fail "captured deploy output survived the report and rollback"
 assert_in_log "CMD sudo bash ./aws/post_deploy.sh --framework 1.5.0$" \
     "rollback reinstalls the previous framework without --migrate"
 assert_in_log "sanity_check --url $DEFAULT_URL" \
