@@ -1,6 +1,7 @@
 """System Setup readiness for hosting, fleet proof, and WebApp keys."""
 
 import json
+import os
 import stat
 from pathlib import Path
 
@@ -15,15 +16,35 @@ LEGACY_IDENTITY_LIMIT = 128
 
 
 def _read_bounded(path, limit):
-    """Read one small regular file, refusing races and oversized content."""
+    """Read one small regular file through one no-follow descriptor."""
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    descriptor = None
     try:
-        metadata = path.lstat()
+        descriptor = os.open(os.fspath(path), flags)
+        metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > limit:
             return None
-        value = path.read_text(encoding="utf-8")
+        chunks = []
+        total = 0
+        while total <= limit:
+            block = os.read(descriptor, min(4096, limit + 1 - total))
+            if not block:
+                break
+            chunks.append(block)
+            total += len(block)
+        final = os.fstat(descriptor)
+        raw = b"".join(chunks)
+        if (len(raw) > limit or final.st_size != len(raw)
+                or final.st_dev != metadata.st_dev
+                or final.st_ino != metadata.st_ino):
+            return None
+        return raw.decode("utf-8", "strict")
     except (OSError, UnicodeError):
         return None
-    return value if len(value.encode("utf-8")) <= limit else None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _present(path):

@@ -324,6 +324,15 @@ def test_atomic_deploy_identity_manifest_and_legacy_fallback(opts):
         th.assert_eq(readiness._read_deploy_identity(var), ("", ""),
                      "legacy fallback must refuse unbounded files")
 
+        (var / "deploy_sha").unlink()
+        os.symlink(var / "deployment_uuid", var / "deploy_identity.json")
+        th.assert_eq(readiness._read_deploy_identity(var), ("", ""),
+                     "an authoritative manifest symlink must fail closed")
+        (var / "deploy_identity.json").unlink()
+        os.mkfifo(var / "deploy_identity.json")
+        th.assert_eq(readiness._read_deploy_identity(var), ("", ""),
+                     "an authoritative manifest FIFO must fail without blocking")
+
 
 @th.django_unit_test("node proof identity defaults to the normalized job hostname")
 def test_local_node_id_automatic_with_optional_override(opts):
