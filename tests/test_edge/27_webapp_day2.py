@@ -190,7 +190,8 @@ def test_safe_delete_tears_down_key_and_vhost(opts):
     from mojo.apps.edge.services import webapp_keys
 
     domain = make_domain(group=opts.group)
-    vhost = make_vhost(domain, make_certificate(domain), label="del")
+    vhost = make_vhost(
+        domain, make_certificate(domain), label="del", kind="site_api")
     site = make_webapp(opts.group, slug="day2delete", vhost=vhost)
     _, key, _, _ = webapp_keys.link(site)
     site.refresh_from_db()

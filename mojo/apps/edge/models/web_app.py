@@ -218,7 +218,7 @@ class WebApp(models.Model, MojoModel):
                     locked.api_key = None
                     locked.save(update_fields=["api_key", "modified"])
                 vhost = locked.vhost
-                if vhost is not None and vhost.kind == "site":
+                if vhost is not None and vhost.kind in ("site", "site_api"):
                     locked.vhost = None
                     locked.save(update_fields=["vhost", "modified"])
                     # Vhost.delete() publishes fleet convergence on commit, so

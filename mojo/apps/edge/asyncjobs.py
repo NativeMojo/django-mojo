@@ -83,12 +83,21 @@ def on_engine_start(engine):
     and never prevents startup — the ten-minute sweep is still behind it.
     """
     from mojo.apps.edge import cronjobs
-    from mojo.apps.edge.services import platform_deploy
+    from mojo.apps.edge.services import platform_deploy, webapp_auth_routes
 
     platform_deploy.finalize_post_restart()
 
     if not cronjobs.converge_enabled():
         return "disabled"
+    # This node installs the repaired desired state immediately below. Every
+    # other node also runs this startup hook after a platform deployment, and
+    # the periodic sweep remains the crash backstop. Suppress the model-layer
+    # broadcast here so startup retains its local, publish-nothing contract.
+    auth_result = webapp_auth_routes.reconcile_all(publisher=lambda pool: None)
+    logit.info(
+        "edge: hosted-auth startup reconciliation "
+        f"checked={auth_result['checked']} repaired={auth_result['repaired']} "
+        f"failed={len(auth_result['failed'])}")
     logit.info(f"edge: startup convergence on {engine.runner_id}")
     return _converge_pools(cronjobs.converge_pools(), "startup")
 

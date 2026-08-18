@@ -618,6 +618,8 @@ def _render_site_api(vhost, generation, server_name):
     pool over a row that merely logs more than intended.
     """
     routes = _sorted_routes(vhost)
+    from mojo.apps.edge.services import webapp_auth_routes
+    auth_contract = webapp_auth_routes.rendered_contract(vhost, routes)
     parts = [
         _open(server_name),
         "",
@@ -660,6 +662,15 @@ def _render_site_api(vhost, generation, server_name):
             "    }",
             "",
         ])
+    if auth_contract is not None:
+        for path in auth_contract["honeypots"]:
+            validators.validate_route_prefix(path)
+            parts.extend([
+                f"    location = {path} {{",
+                _proxy_location_body(auth_contract["upstream"]),
+                "    }",
+                "",
+            ])
     for route in routes:
         prefix = validators.validate_route_prefix(route.path_prefix)
         parts.extend([
@@ -1086,12 +1097,22 @@ def vhost_payload(vhost):
     upstream = None
     if vhost.upstream_id:
         upstream = _upstream_payload(vhost.upstream)
+    route_rows = _sorted_routes(vhost)
     routes = [
         dict(id=route.pk,
              path_prefix=route.path_prefix,
              upstream=_upstream_payload(route.upstream))
-        for route in _sorted_routes(vhost)
+        for route in route_rows
     ]
+    from mojo.apps.edge.services import webapp_auth_routes
+    auth_contract = webapp_auth_routes.rendered_contract(vhost, route_rows)
+    webapp_auth = None
+    if auth_contract is not None:
+        webapp_auth = {
+            "version": auth_contract["version"],
+            "upstream": _upstream_payload(auth_contract["upstream"]),
+            "honeypots": list(auth_contract["honeypots"]),
+        }
     return dict(
         id=vhost.pk,
         server_name=vhost.server_name,
@@ -1107,6 +1128,7 @@ def vhost_payload(vhost):
         certificate_serial=vhost.certificate.serial,
         upstream=upstream,
         routes=routes,
+        webapp_auth=webapp_auth,
     )
 
 

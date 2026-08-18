@@ -23,6 +23,12 @@ class Command(BaseCommand):
         parser.add_argument("--vhost", type=int, help="Existing Vhost id for --slug.")
         parser.add_argument("--bucket", help="Allowed release bucket for --slug.")
         parser.add_argument(
+            "--auth-upstream", type=int,
+            help="Django Upstream id for the WebApp's same-origin auth routes.")
+        parser.add_argument(
+            "--routes-only", action="store_true",
+            help="Reconcile auth routes on --webapp without changing its key.")
+        parser.add_argument(
             "--rotate", action="store_true",
             help="Explicitly revoke and replace an already-linked key.")
         parser.add_argument(
@@ -36,6 +42,13 @@ class Command(BaseCommand):
         from mojo.apps.edge.services import webapp_keys
 
         try:
+            if options["routes_only"] and options.get("slug") is not None:
+                raise CommandError("--routes-only requires --webapp")
+            if options["routes_only"] and (
+                    options["rotate"] or options["token_only"]):
+                raise CommandError(
+                    "--routes-only cannot be combined with --rotate or "
+                    "--token-only")
             if options.get("webapp") is not None:
                 forbidden = [
                     name for name in ("group", "vhost", "bucket")
@@ -44,7 +57,8 @@ class Command(BaseCommand):
                     raise CommandError(
                         "--webapp cannot be combined with "
                         + ", ".join(f"--{name}" for name in forbidden))
-                web_app = WebApp.objects.select_related("api_key", "group").filter(
+                web_app = WebApp.objects.select_related(
+                    "api_key", "group", "vhost").filter(
                     pk=options["webapp"]).first()
                 if web_app is None:
                     raise CommandError("WebApp not found")
@@ -64,7 +78,8 @@ class Command(BaseCommand):
                 if vhost is None:
                     raise CommandError("Vhost not found")
 
-                web_app = WebApp.objects.select_related("api_key", "group").filter(
+                web_app = WebApp.objects.select_related(
+                    "api_key", "group", "vhost").filter(
                     group=group, slug=options["slug"]).first()
                 created = web_app is None
                 if created:
@@ -82,6 +97,29 @@ class Command(BaseCommand):
                     raise CommandError(
                         "an existing WebApp has this group and slug but its "
                         "vhost or bucket differs")
+
+            if web_app.vhost_id is not None:
+                from mojo.apps.edge.services import webapp_auth_routes
+
+                vhost, auth_upstream, created_routes = \
+                    webapp_auth_routes.reconcile(
+                    web_app.vhost, upstream=options.get("auth_upstream"))
+            elif options.get("auth_upstream") is not None:
+                raise CommandError(
+                    "--auth-upstream requires a WebApp with a serving vhost")
+            elif options["routes_only"]:
+                raise CommandError(
+                    "--routes-only requires a WebApp with a serving vhost")
+
+            if options["routes_only"]:
+                self.stdout.write(json.dumps({
+                    "webapp": web_app.pk,
+                    "vhost": vhost.pk,
+                    "upstream": auth_upstream.pk,
+                    "created_routes": created_routes,
+                    "routes_only": True,
+                }, sort_keys=True))
+                return
 
             web_app, api_key, token, rotated = webapp_keys.link(
                 web_app, rotate=options["rotate"])

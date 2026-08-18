@@ -10,7 +10,7 @@ from testit import helpers as th
 from tests.test_edge._helpers import (
     declare_pools, declare_release_buckets, login, make_certificate,
     make_domain, make_group, make_group_member, make_user, make_vhost,
-    make_webapp, with_setting,
+    make_upstream, make_webapp, with_setting,
 )
 
 
@@ -38,6 +38,9 @@ def setup_webapp_onboarding(opts):
     opts.group = make_group("edge-onboard")
     opts.actor, opts.actor_email, opts.actor_password, _ = make_group_member(
         ["manage_webapp", "manage_dns"], group=opts.group)
+    opts.auth_upstream = make_upstream()
+    from mojo.apps.account.models.setting import Setting
+    Setting.set("EDGE_WEBAPP_AUTH_UPSTREAM", str(opts.auth_upstream.pk), group=None)
 
 
 @th.django_unit_test("onboarding state recursively redacts and bounds provider evidence")
@@ -843,6 +846,12 @@ def test_external_reuses_wildcard_cert(opts):
     request.assert_not_called()  # reused the existing wildcard, requested nothing
     op.web_app.refresh_from_db()
     assert op.web_app.vhost_id is not None, "no serving vhost was linked"
+    assert op.web_app.vhost.kind == "site_api", \
+        "onboarding did not create a hybrid WebApp vhost"
+    from mojo.apps.edge.services import webapp_auth_routes
+    routes = set(op.web_app.vhost.routes.values_list("path_prefix", flat=True))
+    assert routes == set(webapp_auth_routes.auth_route_prefixes()), \
+        f"onboarding omitted the hosted-auth route contract: {routes}"
 
 
 @th.django_unit_test("change-address swaps the vhost and retires the old one")

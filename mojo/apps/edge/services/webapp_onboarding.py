@@ -952,7 +952,7 @@ def _advance_address(operation):
     certificate = None
     if existing_vhost is not None:
         existing_certificate = existing_vhost.certificate
-        if (existing_vhost.kind == "site" and
+        if (existing_vhost.kind in ("site", "site_api") and
                 existing_certificate.status == CERT_ACTIVE and
                 validators.certificate_covers(existing_certificate, hostname) and
                 (existing_certificate.renew_after is None or
@@ -1014,19 +1014,22 @@ def _advance_address(operation):
     operation.certificate = certificate
     vhost = existing_vhost
     if vhost is not None:
-        if (vhost.kind != "site" or vhost.certificate_id != certificate.pk):
+        if (vhost.kind not in ("site", "site_api") or
+                vhost.certificate_id != certificate.pk):
             raise me.ValueException(
                 "The hostname is already owned by an incompatible vhost")
     else:
         vhost = Vhost.objects.create(
-            domain=domain, label=label, kind="site", certificate=certificate,
+            domain=domain, label=label, kind="site_api", certificate=certificate,
             pool=str(choice.get("pool") or "default"), spa=True)
+    from mojo.apps.edge.services import webapp_auth_routes
+    vhost, _, _ = webapp_auth_routes.reconcile(vhost)
     operation.vhost = vhost
     web_app = WebApp.objects.get(pk=operation.web_app_id)
     old_site_vhost = None
     if web_app.vhost_id not in (None, vhost.pk):
         previous = Vhost.objects.filter(pk=web_app.vhost_id).first()
-        if previous is None or previous.kind != "site":
+        if previous is None or previous.kind not in ("site", "site_api"):
             raise me.ValueException(
                 "The WebApp is already linked to an incompatible address")
         # Change-address: the old address kept serving until the new vhost and

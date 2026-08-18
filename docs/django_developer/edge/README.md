@@ -125,6 +125,36 @@ Constraints worth knowing about:
 Validation lives in `Model.save()`, not a REST hook, so a service-layer or
 shell write is exactly as safe as a REST one.
 
+### Hosted authentication is part of the WebApp vhost contract
+
+An Edge-hosted `WebApp` uses a `site_api` vhost. Bootstrap and URL-first
+onboarding call `services.webapp_auth_routes.reconcile()` rather than asking an
+operator to reproduce nginx snippets. The service installs the same-origin
+MojoAuth prefixes `/auth`, `/register`, `/passkey`, `/api/auth`,
+`/api/account`, `/api/login`, and `/api/refresh_token`. Application API calls
+remain on the application's configured API origin.
+
+The renderer also adds the bouncer's legacy decoys as **exact** locations:
+`= /login`, `= /signin`, and `= /signup`. Exact matching is required: a
+`/signin` prefix would capture legitimate WebApp routes such as
+`/signin/login` and `/signin/callback` instead of letting the SPA serve them.
+These renderer-owned locations participate in the desired-state generation
+hash.
+
+The auth upstream is selected in this order: an explicit `--auth-upstream`
+passed to `webapp_bootstrap`, the vhost's existing `/auth` route, the global
+`EDGE_WEBAPP_AUTH_UPSTREAM` setting (upstream id or unambiguous name), or the
+single enabled API-vhost upstream in the same pool. Ambiguity fails closed;
+the framework never guesses between API destinations. For an already-linked
+application, `webapp_bootstrap --webapp <id> --auth-upstream <id>
+--routes-only` reconciles only this route contract and never mints, rotates, or
+prints the GitHub deployment credential. This is an operator fallback: the
+Edge job-engine startup hook automatically runs the same idempotent
+reconciliation for all existing hosted WebApps before converging the node, so
+an ordinary django-mojo deployment upgrades legacy rows without a per-app
+step. One ambiguous legacy app is reported and skipped without blocking other
+apps; set `EDGE_WEBAPP_AUTH_UPSTREAM` when a pool has several API destinations.
+
 ### The house guard
 
 A vhost whose `domain.group_id` is null is platform property. `Vhost` scopes

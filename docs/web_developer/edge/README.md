@@ -114,6 +114,27 @@ resolved through the owning vhost's domain.
 - Deleting an upstream that routes still reference is refused; retire the
   routes first.
 
+### WebApp hosted-auth routes
+
+WebApps created by the onboarding wizard are `site_api` sites with their
+same-origin login surface installed automatically. `/auth`, `/register`,
+`/passkey`, `/api/auth`, `/api/account`, `/api/login`, and
+`/api/refresh_token` go to the declared Django auth upstream. Your ordinary
+application API client should continue to use its configured API origin.
+
+The legacy bouncer honeypots `/login`, `/signin`, and `/signup` are also sent
+to Django, but only on an **exact** path match. Nested application pages such
+as `/signin/login` and `/signin/callback` therefore remain WebApp/SPA routes.
+Do not add a `/signin` prefix route manually.
+
+For command-line bootstrap, pass the platform-declared upstream id with
+`webapp_bootstrap --auth-upstream <id>`. Existing hosted apps are repaired
+automatically when the Edge job engine starts after a django-mojo deployment.
+The operator fallback `webapp_bootstrap --webapp <id> --auth-upstream <id>
+--routes-only` performs that repair on one app without touching its deployment
+key. Existing hosted-auth routes are reconciled idempotently; a conflicting
+destination is refused instead of being silently repointed.
+
 ## Upstreams
 
 ```

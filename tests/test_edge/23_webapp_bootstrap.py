@@ -11,7 +11,8 @@ from testit import helpers as th
 
 from tests.test_edge._helpers import (
     RELEASE_BUCKET, cleanup, declare_pools, declare_release_buckets,
-    make_certificate, make_domain, make_group, make_vhost, make_webapp,
+    make_certificate, make_domain, make_group, make_route, make_upstream,
+    make_vhost, make_webapp,
 )
 
 
@@ -27,10 +28,19 @@ def setup_bootstrap(opts):
     opts.domain = make_domain(group=opts.group)
     opts.certificate = make_certificate(opts.domain)
     opts.vhost = make_vhost(opts.domain, opts.certificate, label="portal")
+    opts.auth_upstream = make_upstream()
     opts.json_domain = make_domain(group=opts.group)
     opts.json_certificate = make_certificate(opts.json_domain)
     opts.json_vhost = make_vhost(
         opts.json_domain, opts.json_certificate, label="")
+    opts.repair_domain = make_domain(group=opts.group)
+    opts.repair_certificate = make_certificate(opts.repair_domain)
+    opts.repair_vhost = make_vhost(
+        opts.repair_domain, opts.repair_certificate, label="")
+    opts.legacy_domain = make_domain(group=opts.group)
+    opts.legacy_certificate = make_certificate(opts.legacy_domain)
+    opts.legacy_vhost = make_vhost(
+        opts.legacy_domain, opts.legacy_certificate, label="", kind="site_api")
     opts.foreign_domain = make_domain(group=opts.group)
     opts.foreign_certificate = make_certificate(opts.foreign_domain)
     opts.foreign_vhost = make_vhost(
@@ -51,7 +61,8 @@ def test_create_and_token_only_output(opts):
 
     stdout, stderr = run_command(
         slug="portal", group=opts.group.pk, vhost=opts.vhost.pk,
-        bucket=RELEASE_BUCKET, token_only=True)
+        bucket=RELEASE_BUCKET, auth_upstream=opts.auth_upstream.pk,
+        token_only=True)
     token = stdout.strip()
     web_app = WebApp.objects.select_related("api_key").get(
         group=opts.group, slug="portal")
@@ -65,6 +76,22 @@ def test_create_and_token_only_output(opts):
         "pipe mode did not send the WebApp id to stderr"
     assert token not in stderr, "the deployment token leaked into diagnostics"
 
+    web_app.vhost.refresh_from_db()
+    assert web_app.vhost.kind == "site_api", \
+        "WebApp bootstrap left the serving vhost unable to proxy hosted auth"
+    routes = {
+        route.path_prefix: route.upstream_id
+        for route in web_app.vhost.routes.all()
+    }
+    expected = {
+        "/auth", "/register", "/passkey", "/api/auth", "/api/account",
+        "/api/login", "/api/refresh_token",
+    }
+    assert set(routes) == expected, \
+        f"WebApp bootstrap did not install the hosted-auth route set: {routes}"
+    assert set(routes.values()) == {opts.auth_upstream.pk}, \
+        f"WebApp auth routes do not share the declared Django upstream: {routes}"
+
 
 @th.django_unit_test("existing WebApp can receive its first key by id")
 def test_existing_webapp_by_id(opts):
@@ -76,6 +103,53 @@ def test_existing_webapp_by_id(opts):
     assert web_app.api_key_id is not None, "existing WebApp was not linked"
     assert web_app.api_key.token_hash == hashlib.sha256(
         stdout.strip().encode()).hexdigest(), "returned token does not authenticate the key"
+
+
+@th.django_unit_test("routes-only repairs hosted auth without rotating the deploy key")
+def test_routes_only_preserves_key(opts):
+    from mojo.apps.edge.services import webapp_keys
+
+    web_app = make_webapp(
+        opts.group, slug="repair", vhost=opts.repair_vhost)
+    _, api_key, _, _ = webapp_keys.link(web_app)
+
+    stdout, stderr = run_command(
+        webapp=web_app.pk, auth_upstream=opts.auth_upstream.pk,
+        routes_only=True)
+    payload = json.loads(stdout)
+
+    web_app.refresh_from_db()
+    assert web_app.api_key_id == api_key.pk and web_app.api_key.is_active, \
+        "routes-only changed the existing GitHub deploy credential"
+    assert payload["routes_only"] is True and payload["upstream"] == \
+        opts.auth_upstream.pk, f"routes-only output is incomplete: {payload}"
+    assert set(payload["created_routes"]) == {
+        "/auth", "/register", "/passkey", "/api/auth", "/api/account",
+        "/api/login", "/api/refresh_token",
+    }, f"routes-only did not report the reconciled contract: {payload}"
+    assert stderr == "", f"routes-only wrote unexpected diagnostics: {stderr}"
+
+
+@th.django_unit_test("runner startup automatically heals existing WebApp auth routes")
+def test_startup_reconcile_heals_legacy_webapp(opts):
+    from mojo.apps.edge.services import webapp_auth_routes
+
+    web_app = make_webapp(
+        opts.group, slug="legacy", vhost=opts.legacy_vhost)
+    make_route(opts.legacy_vhost, "/auth", opts.auth_upstream)
+    from mojo.apps.edge.models import Vhost
+    Vhost.objects.filter(pk=opts.legacy_vhost.pk).update(kind="site")
+
+    result = webapp_auth_routes.reconcile_all()
+
+    web_app.vhost.refresh_from_db()
+    routes = set(web_app.vhost.routes.values_list("path_prefix", flat=True))
+    assert web_app.vhost.kind == "site_api", \
+        "startup repair left the legacy WebApp as a static-only site"
+    assert routes == set(webapp_auth_routes.auth_route_prefixes()), \
+        f"startup repair omitted hosted-auth routes: {routes}"
+    assert result["repaired"] >= 1 and result["failed"] == [], \
+        f"startup repair did not report a clean repair: {result}"
 
 
 @th.django_unit_test("bootstrap refuses implicit key rotation")
@@ -129,7 +203,8 @@ def test_cross_group_vhost_refused(opts):
     try:
         run_command(
             slug="crossed", group=other.pk, vhost=opts.foreign_vhost.pk,
-            bucket=RELEASE_BUCKET, token_only=True)
+            bucket=RELEASE_BUCKET, auth_upstream=opts.auth_upstream.pk,
+            token_only=True)
         error = None
     except CommandError as exc:
         error = exc
@@ -145,7 +220,7 @@ def test_cross_group_vhost_refused(opts):
 def test_json_output(opts):
     stdout, stderr = run_command(
         slug="jsonsite", group=opts.group.pk, vhost=opts.json_vhost.pk,
-        bucket=RELEASE_BUCKET)
+        bucket=RELEASE_BUCKET, auth_upstream=opts.auth_upstream.pk)
     payload = json.loads(stdout)
 
     assert payload["webapp"] and payload["token"], \

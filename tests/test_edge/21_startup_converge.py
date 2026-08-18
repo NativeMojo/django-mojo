@@ -43,6 +43,11 @@ def test_startup_converge_installs_pools(opts):
                 "mojo.apps.edge.services.platform_deploy.finalize_post_restart",
                 side_effect=lambda: order.append("deploy-finalized")), \
              mock.patch(
+                "mojo.apps.edge.services.webapp_auth_routes.reconcile_all",
+                side_effect=lambda **kwargs: (
+                    order.append("auth-reconciled"),
+                    {"checked": 2, "repaired": 1, "failed": []})[-1]), \
+             mock.patch(
                 "mojo.apps.edge.services.installer.install_pools",
                 side_effect=lambda pools: (
                     order.append("pools-installed"), installed.append(list(pools)),
@@ -56,8 +61,9 @@ def test_startup_converge_installs_pools(opts):
 
     assert installed == [["alpha", "beta"]], (
         f"startup convergence must atomically install the pool union, got {installed}")
-    assert order == ["deploy-finalized", "pools-installed"], (
-        f"terminal deploy cleanup must precede ordinary convergence: {order}")
+    assert order == ["deploy-finalized", "auth-reconciled", "pools-installed"], (
+        "terminal deploy cleanup and hosted auth repair must precede ordinary "
+        f"convergence: {order}")
     assert edge_broadcasts == [], (
         "startup convergence is the node reconciling ITSELF — it must not "
         f"broadcast to the fleet, got {edge_broadcasts}")
@@ -73,9 +79,13 @@ def test_startup_converge_honors_gate(opts):
 
     installed = []
     finalized = []
+    auth_repairs = []
     with mock.patch(
             "mojo.apps.edge.services.platform_deploy.finalize_post_restart",
             side_effect=lambda: finalized.append(True)), \
+         mock.patch(
+            "mojo.apps.edge.services.webapp_auth_routes.reconcile_all",
+            side_effect=lambda: auth_repairs.append(True)), \
          mock.patch("mojo.apps.edge.services.installer.install_pools",
                     side_effect=lambda pools: installed.append(list(pools))):
         result = with_setting(
@@ -86,6 +96,8 @@ def test_startup_converge_honors_gate(opts):
         f"the gated startup converge must say it was disabled, got {result!r}")
     assert installed == [], (
         f"a disabled startup converge must not install anything, got {installed}")
+    assert auth_repairs == [], \
+        "a hosting-disabled deployment changed hosted WebApp routing"
     assert finalized == [True], (
         "disabling hosting convergence must not disable terminal deploy cleanup")
 
@@ -102,7 +114,10 @@ def test_startup_converge_reports_combined_failure(opts):
         raise RuntimeError("secret install detail")
 
     try:
-        with mock.patch("mojo.apps.edge.services.installer.install_pools",
+        with mock.patch(
+                "mojo.apps.edge.services.webapp_auth_routes.reconcile_all",
+                return_value={"checked": 0, "repaired": 0, "failed": []}), \
+             mock.patch("mojo.apps.edge.services.installer.install_pools",
                         side_effect=install):
             result = asyncjobs.on_engine_start(_engine())
     finally:
