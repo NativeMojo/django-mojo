@@ -181,6 +181,7 @@ def on_admin_bootstrap(request):
         "admin_path": _ADMIN_ROOT_SLASH,
         "user": {
             "id": request.user.pk,
+            "username": request.user.username,
             "display_name": request.user.display_name,
             "email": request.user.email,
             "is_superuser": request.user.is_superuser,

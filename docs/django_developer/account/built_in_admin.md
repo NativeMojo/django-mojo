@@ -104,11 +104,13 @@ metadata. The relationship control URL-encodes searches, filters, graph names,
 and detail identifiers; debounces search, cancels stale requests, supports
 paging and keyboard listbox behavior, and posts only its selected id through a
 hidden input. The ordinary API wrapper still refreshes an expired JWT once and
-renews the source session. HTTP `440` now opens an explicit recent-auth prompt:
-Cancel preserves the still-valid session and page, while Continue returns
-through Bouncer with `force_reauth=1` and the exact Admin route/hash. That flag
-suppresses the ordinary silent-refresh path, which cannot make an old
-`auth_time` fresh. Route and Setup loads use reduced-motion-aware skeletons;
+renews the source session. HTTP `440` now opens an in-portal recent-auth modal
+for the signed-in username. A successful password or passkey check replaces
+the stored JWT and retries the blocked request exactly once; concurrent 440s
+share the same prompt. Cancel preserves the still-valid session and page. An
+incomplete password login (for example, one that still needs MFA or a forced
+password change) is not accepted as recent authentication and does not retry
+the request. Route and Setup loads use reduced-motion-aware skeletons;
 stateful Setup calls hold a tokenized, non-dismissible busy layer and release
 it on completion, rejection, abort, or the 440 prompt.
 

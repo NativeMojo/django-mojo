@@ -57,11 +57,23 @@ export function h(tag, attrs = {}, ...children) {
 
 function authHeader() { return window.MojoAuth?.getAuthHeader?.(); }
 
+let freshAuthAttempt = null;
+
 export class FreshAuthRequired extends Error {
   constructor(path) {
     super('Recent authentication is required to continue.');
     this.name = 'FreshAuthRequired'; this.code = 'fresh_auth_required'; this.path = path;
   }
+}
+
+function requestFreshAuth(error) {
+  if (freshAuthAttempt) return freshAuthAttempt;
+  freshAuthAttempt = new Promise((resolve, reject) => {
+    const detail = {error, resolve, reject, handled: false};
+    window.dispatchEvent(new CustomEvent('mojo-admin:fresh-auth', {detail}));
+    if (!detail.handled) reject(error);
+  }).finally(() => { freshAuthAttempt = null; });
+  return freshAuthAttempt;
 }
 
 async function renewSourceSession() {
@@ -73,7 +85,7 @@ async function renewSourceSession() {
   return response.ok;
 }
 
-async function requestPayload(path, options = {}, retry = true) {
+async function requestPayload(path, options = {}, retry = true, freshRetry = true) {
   const headers = new Headers(options.headers || {});
   const authorization = authHeader();
   if (authorization) headers.set('Authorization', authorization);
@@ -82,13 +94,14 @@ async function requestPayload(path, options = {}, retry = true) {
   if (response.status === 401 && retry && window.MojoAuth?.getRefreshToken?.()) {
     await window.MojoAuth.refreshToken();
     await renewSourceSession();
-    return requestPayload(path, options, false);
+    return requestPayload(path, options, false, freshRetry);
   }
   if (response.status === 440) {
     const error = new FreshAuthRequired(path);
     clearBusy();
-    window.dispatchEvent(new CustomEvent('mojo-admin:fresh-auth', {detail: {error}}));
-    throw error;
+    if (!freshRetry) throw error;
+    await requestFreshAuth(error);
+    return requestPayload(path, options, retry, false);
   }
   let payload = {};
   try { payload = await response.json(); } catch (_) { payload = {}; }

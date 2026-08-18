@@ -36,6 +36,12 @@ refreshed token keeps its original login time on purpose. Branch on
 There is no separate "step-up" endpoint — succeeding through any normal
 login/verify flow refreshes your recent-auth window.
 
+The built-in `/admin/` client implements this contract without navigating away:
+it opens a modal bound to the signed-in username, accepts a password or passkey,
+stores the fresh token pair, and retries the blocked request once. Cancel keeps
+the valid session and current page. A password response that still requires MFA
+or a forced password change is treated as incomplete and is not retried.
+
 ## Gated operations (when the feature is enabled)
 
 Change username, change email, change phone, revoke sessions (log out
