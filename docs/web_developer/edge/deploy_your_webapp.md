@@ -73,9 +73,10 @@ and the first is the one most people want:
   is today — you change nothing about who runs it. You'll just add a record or
   two that the wizard hands you, at your current provider, in Step 3. **No
   passwords are handed over and nothing is bought.**
-- **Let us manage the whole domain.** You move your domain's settings here so
-  there's nothing to copy and paste. This is a bigger change and is only worth
-  it if you'd like everything in one place.
+- **Use a domain you've already set up.** If this workspace already runs another
+  domain here, point the app at that one instead. The wizard lists the domains
+  you already control, you pick one and the front part of the address, and it
+  adds the record for you — nothing to copy and paste.
 - **Buy a new domain.** You don't have a name yet, so the wizard finds one and
   registers it for you. You'll see the exact name and price and type them to
   confirm before anything is purchased — nothing is bought without that.
@@ -210,7 +211,7 @@ because each app lives on its own sub-address (`shop.example.com`,
 
 - If you kept your DNS elsewhere, you add just **one** record for the new
   sub-address — the certificate side is already covered from the first time.
-- If you let us manage the whole domain, there's **nothing to add at all** —
+- If your domain is one we run here already, there's **nothing to add at all** —
   type the new address and go straight to naming and deploys.
 
 So the first app on a domain is the only one that asks for the full walk. Every

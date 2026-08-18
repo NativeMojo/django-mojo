@@ -106,28 +106,33 @@ def test_scoped_webapp_authority_bootstrap(opts):
 @th.django_unit_test("WebApp draft recovery freezes replay and uses selected-group DNS authority")
 def test_webapp_onboarding_browser_contract(opts):
     root = Path(__file__).resolve().parents[2]
-    source = (root / "mojo/apps/account/admin_portal/assets/features/webapps/page.js").read_text()
+    assets = root / "mojo/apps/account/admin_portal/assets/features/webapps"
+    wizard = (assets / "wizard.js").read_text()
+    page = (assets / "page.js").read_text()
 
-    assert "recoverPendingDraft(draft" in source and \
-        "/api/edge/webapp/onboarding/detail?operation=" in source, \
+    # Reload reconciles the saved operation before creating anything.
+    assert "resumeWizard" in wizard and \
+        "/api/edge/webapp/onboarding/detail?operation=" in wizard, \
         "reload does not reconcile a saved operation UUID before create"
-    assert "draft?.submitted && draft.payload" in source and \
-        "body: JSON.stringify(frozenPayload)" in source and \
-        "control.disabled = frozen" in source, \
+    # The submitted draft is frozen: one durable UUID + payload, replayed as-is.
+    assert "draft?.submitted && draft.operation_id" in wizard and \
+        "body: JSON.stringify(frozenPayload)" in wizard and \
+        "submitted: true, payload: frozenPayload" in wizard, \
         "an ambiguous create can mutate or rebuild its frozen replay payload"
-    assert "Start over" in source and "clearPendingDraft()" in source, \
+    assert "Start over" in wizard and "clearPendingDraft()" in wizard, \
         "the frozen draft has no explicit abandonment path"
-    assert "groupDnsAuthority" in source and "group?.can_manage_dns" in source, \
+    # Domain choices depend on the selected group's DNS authority, not a global.
+    assert "groupDnsAuthority" in wizard and "group?.can_manage_dns" in wizard, \
         "address choices still depend on global rather than selected-group DNS authority"
-    address = source[source.index("function addressChoice"):
-                     source.index("function githubChoice")]
-    page = source[source.index("export async function webappsPage"):]
-    assert "Use Buy new domain above" in address and \
-        "canOpenDomains ? h('a'" in address and \
-        "canManageDns ? h('a'" not in address, \
-        "scoped DNS authority still renders a dead Advanced Domains link"
-    assert "(ctx.webapp_groups || []).some" not in page and \
-        "canOpenDomains ? h('a'" in page, \
+    domain = wizard[wizard.index("function domainPhase"):wizard.index("function openConnectedPicker")]
+    assert "options.external_available" in domain and "canDns" in domain, \
+        "the keep-my-DNS path is not gated on availability and selected-group authority"
+    # The list header only launches the wizard; it does not surface a globally
+    # gated Domains destination to a scoped WebApp admin.
+    assert "startWizard(ctx, render)" in page and "hasPendingWizard()" in page, \
+        "the WebApps list cannot launch or resume onboarding"
+    assert "ctx.capabilities.manage_webapps ? h('button'" in page and \
+        "routeHref('domains')" not in page, \
         "the WebApps header exposes globally gated Domains to a scoped-only admin"
 
 
