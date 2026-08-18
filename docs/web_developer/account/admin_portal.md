@@ -47,13 +47,39 @@ keeps the quote token in the confirmation modal only and requires the operator
 to type the exact domain and price. Provider credentials are write-only and
 cleared from the form after verification.
 
-WebApp onboarding is a focused **WebApp → Domain & DNS → GitHub → Go live**
-wizard. The identity screen does not ask for repository details. Choosing a
-managed domain creates the required CNAME automatically, while the permanent
-Domains & DNS page handles adding, adopting, purchasing, and inspecting names.
-Users need both WebApp and DNS authority to own an existing WebApp group;
-adding a managed domain remains a DNS administrator action. HTTPS issuance and
-renewal are automatic and do not appear as onboarding decisions.
+WebApp onboarding is **URL-first**. The operator types the web address they
+want (`https://myapp.example.com`) and the wizard walks **address → domain
+choice → records (only if the domain lives elsewhere) → name → deploy setup →
+go live**. A stateless pre-check normalizes the address and steers gently — a
+path like `example.com/myapp` becomes `myapp.example.com`, a bare apex becomes
+`www`, and `http` becomes `https` — returning a `verdict` before any operation
+is created. At the domain step the operator either keeps DNS where it is (the
+common path: the wizard shows the exact records to publish and verifies them —
+no provider credentials handed over, nothing purchased), moves the domain under
+platform management, or buys a new one with typed domain/price confirmation. A
+domain whose DNS lives at an outside host works end to end through the
+delegated-ACME flow, with one apex-plus-wildcard certificate covering every app
+on it. The identity screen does not ask for repository details; those wait
+until deploy setup, which generates a single GitHub workflow referencing the
+public `NativeMojo/django-mojo/examples/github/actions/deploy-webapp@main`
+action and mints `MOJO_DEPLOY_KEY` once. Choosing a managed domain creates the
+required CNAME automatically, while the permanent Domains & DNS page handles
+adding, adopting, purchasing, and inspecting names. Users need both WebApp and
+DNS authority to own an existing WebApp group; adding a managed domain remains
+a DNS administrator action. HTTPS issuance and renewal are automatic and do not
+appear as onboarding decisions.
+
+After a site is live, each app has a single **management view** with
+**Overview** (address + domain, health, and current release, via
+`GET /api/edge/webapp/summary` and on-demand `GET /api/edge/webapp/health`),
+**Deploys** (deployment history from `GET /api/edge/webapp/deployment` with
+one-click `POST /api/edge/webapp/rollback`), **Deploy key** (rotate
+`MOJO_DEPLOY_KEY`), **Setup** (re-show the generated workflow and mint a fresh
+key), and a **Danger** area (change address, take offline via
+`POST /api/edge/webapp/detach_address`, and safe-delete the app). The
+user-facing tour is the [Put your web app online](../edge/deploy_your_webapp.md)
+walkthrough; the endpoint-by-endpoint reference is
+[edge/README § WebApp onboarding and day-2 API](../edge/README.md#webapp-onboarding-and-day-2-api).
 
 `GET /api/account/admin/bootstrap` includes additive `webapp_groups` and
 `can_create_webapp_group` fields. `webapp_groups` contains every effectively
@@ -406,8 +432,13 @@ This prevents non-admin users from escalating their own access.
 | WebApp key status | `GET /api/edge/webapp/key_status?webapp=<id>` | `view_dns`, `manage_dns`, or `security`, plus object access |
 | WebApp key create/rotate | `POST /api/edge/webapp/link_key` | `manage_webapp`, recent interactive auth, plus object access |
 | WebApp key revoke | `POST /api/edge/webapp/revoke_key` | `manage_webapp`, recent interactive auth, plus object access |
+| WebApp onboarding pre-check | `GET /api/edge/webapp/onboarding/precheck?url=<address>` | Same onboarding authority; interactive only, read-only (no fresh-auth) |
 | WebApp onboarding | `/api/edge/webapp/onboarding/{options,create,detail,choose,cancel,workflow}` | `security` or both `manage_webapp` and `manage_dns`, global or exact/inherited group; new group also needs global `manage_groups`/`groups`; actor/origin bound and interactive only |
 | WebApp summary v1 | `GET /api/edge/webapp/summary?webapp=<id>` | `view_dns`, `manage_dns`, or `security`, plus object access |
+| WebApp deployment history | `GET /api/edge/webapp/deployment?webapp=<id>` | `view_dns`, `manage_dns`, or `security` |
+| WebApp rollback | `POST /api/edge/webapp/rollback` | `manage_webapp` plus object access; human-only (CI keys denied), recent interactive auth |
+| WebApp take offline | `POST /api/edge/webapp/detach_address` | `manage_webapp` plus object access; human-only, recent interactive auth |
+| WebApp health | `GET /api/edge/webapp/health?webapp=<id>` | `view_dns`, `manage_dns`, or `security`, plus object access |
 | Domains and live DNS | `/api/dnsman/domain`, `/api/dnsman/dns*`, `/api/dnsman/registrar/*` | `view_dns` / `manage_dns`; adopt/discover are literal superuser only |
 | DNS provider credentials | `/api/dnsman/credential`, `/api/dnsman/credential/link` | `view_dns` / `manage_dns`; secrets are write-only |
 | Certificates | `/api/dnsman/certificate`, `/api/dnsman/certificate/request` | `view_dns` / `manage_dns`; portal never calls material |

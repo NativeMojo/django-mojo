@@ -5,6 +5,12 @@ the domain and issues the certificate.
 
 Backend reference: [django_developer/edge](../../django_developer/edge/README.md).
 
+> **New here? Start with the walkthrough.**
+> [Put your web app online](deploy_your_webapp.md) takes a person who knows only
+> the web address they want from that address to a live, HTTPS-secured app, and
+> then shows the day-2 management screen. This page is the endpoint reference
+> behind it.
+
 Deploying site builds from GitHub (register, verify, converge, roll back):
 [releases.md](releases.md).
 
@@ -220,6 +226,71 @@ Although each publication receipt names the affected pool and generation, a
 node handles it by atomically installing the union of all pools assigned to
 that node. Portals should treat the receipt as convergence-pending evidence,
 not as proof that one pool was independently swapped live.
+
+## WebApp onboarding and day-2 API
+
+The endpoints a browser console (the built-in Admin portal, or your own) calls
+to stand up a site through the **URL-first wizard** and manage it afterward. For
+the friendly, zero-knowledge walkthrough see
+[Put your web app online](deploy_your_webapp.md); for the CI deploy contract
+(register/verify/complete, rollback, key rotation) see [releases.md](releases.md);
+the backend model reference is
+[django_developer/edge/webapps.md](../../django_developer/edge/webapps.md).
+
+**"Human-only" means an interactive user session** — a real browser login. API
+keys, group tokens, and override-user key sessions are refused, so automation
+cannot drive onboarding or start a deployment out of band. Endpoints marked
+**fresh-auth** additionally require an interactive login completed within the
+last few minutes (600 seconds for onboarding and key mint/rotate; 300 for key
+revoke).
+
+Onboarding authority is `security`, or both `manage_webapp` and `manage_dns`,
+resolved globally or through the selected group (exact or inherited member
+grant); creating the owning group additionally needs global
+`manage_groups`/`groups`. Every onboarding call is actor- and origin-bound, and
+an operation's detail is readable only by the actor who created it.
+
+### Onboarding wizard
+
+| Method | Endpoint | Purpose | Access |
+|---|---|---|---|
+| GET | `/api/edge/webapp/onboarding/precheck?url=<address>` | URL-first pre-flight. Normalizes the typed address and returns a `verdict` before any operation is created: `ready`, `records_needed`, `apex`, `deep_label`, `path`, `taken`, `conflict`, `domain_unknown`, or `invalid`. | Human-only, read-only (no fresh-auth) |
+| GET | `/api/edge/webapp/onboarding/options?group=<id>` (or `group_intent=new`) | Selectable buckets, environments, and `github_connected` for a group. | Human-only |
+| POST | `/api/edge/webapp/onboarding/create` | Create the onboarding operation. | Human-only, fresh-auth |
+| GET | `/api/edge/webapp/onboarding/detail?operation=<uuid>` | Poll the versioned, secret-free operation state. | Human-only |
+| POST | `/api/edge/webapp/onboarding/choose` | Submit the choice for the current step (`address` / `github` / `verify`), matching the returned `revision`. | Human-only, fresh-auth. **No transport retry** |
+| POST | `/api/edge/webapp/onboarding/cancel` | Abandon the operation. | Human-only, fresh-auth |
+| POST | `/api/edge/webapp/onboarding/workflow` | Return the generated GitHub workflow YAML for one WebApp; optionally mint or rotate `MOJO_DEPLOY_KEY` once (with `action` + a fresh `operation_id`). | Human-only, fresh-auth |
+
+**Do not auto-retry `choose`.** It carries provider-affecting intent, and a
+provider can accept a mutation while losing the response. Reload `detail` and
+let the server reconcile durable intent against authoritative inventory rather
+than replaying the mutation. A domain-purchase choice additionally carries a
+one-use `confirm_token` consumed synchronously; it never appears in a later
+response.
+
+### Day-2 management
+
+| Method | Endpoint | Purpose | Access |
+|---|---|---|---|
+| GET | `/api/edge/webapp/summary?webapp=<id>` | Frozen v1 read model: address + domain, `current_release`, `latest_deployment`, and deploy-key readiness. Secret-free — never a token, certificate key, or internal state. | Human-only; `view_dns` / `manage_dns` / `security` + object access |
+| GET | `/api/edge/webapp/deployment?webapp=<id>` (and `/deployment/<pk>`) | Deployment (fleet-convergence) history, group-scoped. Read-only; a cross-tenant id is not readable. | `view_dns` / `manage_dns` / `security` |
+| POST | `/api/edge/webapp/rollback` | Repoint the app at an already-verified earlier release. Body `{webapp, release}`. A foreign release id 404s; a `pending` (unverified) release is refused. | Human-only (CI keys denied), fresh-auth; `manage_webapp` + explicit object check |
+| POST | `/api/edge/webapp/detach_address` | Take the app offline: unlink and delete its serving vhost, keep the app and its release history. | Human-only, fresh-auth; `manage_webapp` |
+| GET | `/api/edge/webapp/health?webapp=<id>` | On-demand public HTTPS reachability of the live address: `healthy` / `unhealthy` / `not_configured`. Never echoes a raw probe error. | `view_dns` / `manage_dns` / `security` |
+
+Deleting a WebApp (`DELETE /api/edge/webapp/<pk>`) tears down its serving vhost
+and deactivates/unlinks its `MOJO_DEPLOY_KEY` in the **same** transaction as the
+row delete; release bytes in S3 are intentionally left. See the
+[backend day-2 reference](../../django_developer/edge/webapps.md#day-2-management).
+
+### Deploy key
+
+| Method | Endpoint | Purpose | Access |
+|---|---|---|---|
+| POST | `/api/edge/webapp/link_key` | Mint or rotate the site's CI credential (explicit `action` `mint`/`rotate` + client `operation_id` UUID). The token is returned **once**; a replay returns the receipt with `token: null`. Rotation is a hard cutover — the old key dies immediately. | Human-only, fresh-auth (600s); `manage_webapp` + object access |
+| GET | `/api/edge/webapp/key_status?webapp=<id>` | Safe linked/active, timestamp, and last-use metadata. Never returns a token. | `view_dns` / `manage_dns` / `security` + object access |
+| POST | `/api/edge/webapp/revoke_key` | Deactivate and unlink the key. Stops future releases; changes nothing currently served. | Human-only, fresh-auth (300s); `manage_webapp` + object access |
 
 ## Built-in Admin workflow
 

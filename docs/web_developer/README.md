@@ -11,6 +11,7 @@ Companion track for framework developers: [docs/django_developer/README.md](../d
 | User registration & onboarding | [account/ § Common Flows](account/README.md#common-flows) — register → verify email → first login |
 | Securing the login page | [account/ § Securing the Login Flow](account/README.md#securing-the-login-flow) — bouncer gate, MFA, passkeys |
 | Frontend integration | [frontend_starter.md](frontend_starter.md) — JWT storage, reload checks, refresh flow |
+| Deploy a web app | [edge/deploy_your_webapp.md](edge/deploy_your_webapp.md) — from a web address you own to a live, HTTPS-secured site, then day-2 management |
 
 ## Core Concepts
 
