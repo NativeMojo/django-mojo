@@ -15,6 +15,7 @@ from .ses import EmailSender, EmailTemplate
 from .sns import SNSTopic, SNSSubscription
 from .ec2 import EC2Instance, EC2SecurityGroup
 from .cloudwatch import CloudWatchHelper
+from .elbv2 import LoadBalancerHelper
 
 __all__ = [
     # Base
@@ -47,4 +48,7 @@ __all__ = [
 
     # CloudWatch
     'CloudWatchHelper',
+
+    # ELBv2
+    'LoadBalancerHelper',
 ]

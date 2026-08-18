@@ -24,7 +24,11 @@ def on_admin_platform(request):
 @md.GET("account/admin/dashboard")
 @md.requires_global_perms("view_admin", "manage_users", "manage_settings", "admin")
 def on_admin_dashboard(request):
-    return _admin_platform.dashboard_overview(request)
+    # The page's refresh control. Bypasses the short provider cache and the
+    # PyPI version cache; every collector remains individually bounded, so a
+    # refresh cannot cost more than an ordinary read.
+    refresh = str(request.DATA.get("refresh") or "").lower() in ("1", "true", "yes")
+    return _admin_platform.dashboard_overview(request, refresh=refresh)
 
 
 @md.GET("account/admin/advanced")
