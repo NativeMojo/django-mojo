@@ -141,6 +141,11 @@ Two rules govern what a node's failure is allowed to touch:
   (POSIX `TimeoutExpired` carries bytes even under `text=True`; the tail
   decodes explicitly, and `platform_deploy._safe` routes bytes through the
   redactor rather than stringifying them past it.)
+  A migrating canary that reports its own failure uses the same contract:
+  `update.sh` temporarily captures the failing command's combined output,
+  `deploy_status` sanitizes the tail into durable evidence and files the
+  incident, then the temporary file is removed before rollback. Stopping the
+  calling job engine therefore cannot erase the diagnosis.
 - **The tail is also withheld below the security tier.** Per-line redaction is
   not airtight — a labelled secret needs a `:` or `=` to be spotted, short
   unlabelled ones fall under the entropy threshold, and URL userinfo is only

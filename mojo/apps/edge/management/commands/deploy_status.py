@@ -20,6 +20,7 @@ import json
 import os
 import sys
 
+from django.conf import settings as django_settings
 from django.core.management.base import BaseCommand, CommandError
 
 from mojo.apps.edge.services import deploy
@@ -47,6 +48,46 @@ class Command(BaseCommand):
         parser.add_argument(
             "--detail", default=None,
             help="Optional update.sh phase; arbitrary values become update_failed.")
+        parser.add_argument(
+            "--evidence", action="store_true", default=False,
+            help="Attach the sanitized tail captured by update.sh (failed only).")
+
+    def _failure_detail(self, phase, include_evidence):
+        detail = {"phase": phase}
+        if not include_evidence:
+            return detail
+        path = os.path.join(
+            django_settings.PROJECT_ROOT, "var", "deploy_failure_output")
+        try:
+            with open(path, "rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                size = stream.tell()
+                stream.seek(max(0, size - 65536), os.SEEK_SET)
+                output = stream.read(65536)
+        except OSError:
+            output = b""
+        tail = deploy.stderr_tail(output)
+        if tail:
+            detail["stderr_tail"] = tail
+        return detail
+
+    def _report_failure_incident(self, deployment_id, sha, runner_id, phase):
+        from mojo.apps.incident import reporter
+
+        try:
+            event = reporter.report_event(
+                f"deploy {deployment_id} ({sha}) failed on {runner_id} "
+                f"(phase={phase})",
+                title="Edge deploy node failed",
+                category="edge_deploy", level=7)
+            platform_deploy.add_link(
+                deployment_id, "incident_events", event.pk)
+        except Exception:
+            # The deployment callback and rollback must not be blocked by a
+            # secondary outage in the incident reporter.
+            from mojo.helpers import logit
+            logit.exception(
+                f"edge deploy {deployment_id}: failed to report incident")
 
     def handle(self, *args, **options):
         if options["action"] == "get":
@@ -88,6 +129,10 @@ class Command(BaseCommand):
             raise CommandError("deployment UUID does not belong to --sha")
 
         runner_id = deploy.local_runner_id()
+        failure_phase = deploy.failure_phase(options.get("detail"))
+        failure_detail = self._failure_detail(
+            failure_phase,
+            state == deploy.STATUS_FAILED and options.get("evidence"))
         identity_v2 = (
             os.environ.get("MOJO_DEPLOY_IDENTITY_READY")
             == str(deploy.DEPLOY_CONTRACT))
@@ -147,7 +192,7 @@ class Command(BaseCommand):
             # updater subsequently reports its generic callback failure.
             platform_deploy.evidence(
                 deployment_id, runner_id, state,
-                detail={"phase": deploy.failure_phase(options.get("detail"))})
+                detail=failure_detail)
 
         if deploy.set_status(
                 state, sha, detail=options.get("detail"),
@@ -155,8 +200,10 @@ class Command(BaseCommand):
             if state == deploy.STATUS_FAILED:
                 platform_deploy.transition(
                     deployment_id, "failed",
-                    {"phase": deploy.failure_phase(options.get("detail")),
+                    {"phase": failure_phase,
                      "source": "node_report"})
+                self._report_failure_incident(
+                    deployment_id, sha, runner_id, failure_phase)
             elif len(record.frozen_roster or []) <= 1 and identity_v2:
                 platform_deploy.transition(
                     deployment_id, "verified",

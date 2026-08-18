@@ -213,6 +213,66 @@ def test_deploy_status_command(opts):
     deploy.clear_status(other.pk)
 
 
+@th.django_unit_test(
+    "deploy_status failure creates an incident with sanitized command evidence")
+def test_deploy_status_failure_evidence(opts):
+    import os
+    import uuid
+
+    from django.conf import settings as django_settings
+    from django.core.management import call_command
+    import mojo.apps.incident.reporter as reporter_module
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import deploy
+
+    runner = deploy.local_runner_id()
+    row = PlatformDeployment.objects.create(
+        sha=SHA_C, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=[runner], transitions=[])
+    deploy.set_target(SHA_C, actor="test", deployment_id=row.pk)
+    deploy.arm_status(SHA_C, deployment_id=row.pk)
+
+    path = os.path.join(
+        django_settings.PROJECT_ROOT, "var", "deploy_failure_output")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as stream:
+        stream.write("password=deploy-sentinel\n")
+        stream.write("FATAL: migration command refused schema drift\n")
+
+    incident = mock.Mock(return_value=mock.Mock(pk=9127))
+    try:
+        with mock.patch.object(reporter_module, "report_event", incident):
+            call_command(
+                "deploy_status", "set", "failed", sha=SHA_C,
+                deployment=str(row.pk), detail="post_deploy (migrate)",
+                evidence=True)
+    finally:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+
+    row.refresh_from_db()
+    entry = row.node_evidence[-1]
+    detail = entry.get("detail") or {}
+    th.assert_eq(detail.get("phase"), "post_deploy_migrate",
+                 f"the fixed failure phase must survive, got {detail!r}")
+    th.assert_eq(
+        detail.get("stderr_tail"),
+        ["[redacted]", "FATAL: migration command refused schema drift"],
+        f"the durable tail must redact secrets line-by-line, got {detail!r}")
+    th.assert_true(incident.called,
+                   "a script-reported canary failure must create an incident")
+    message = incident.call_args.args[0]
+    th.assert_in("phase=post_deploy_migrate", message,
+                 f"the incident must name the safe phase, got {message!r}")
+    th.assert_true("deploy-sentinel" not in message,
+                   "raw command output must never enter the incident message")
+    th.assert_in("9127", (row.links or {}).get("incident_events", []),
+                 f"the deployment must link its incident, got {row.links!r}")
+    deploy.clear_status(row.pk)
+
+
 @th.django_unit_test("deploy_status persists proof before exposing canary success")
 def test_deploy_status_proof_precedes_success(opts):
     import os

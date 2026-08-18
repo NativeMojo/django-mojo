@@ -380,24 +380,6 @@ def _deploy_terminal(sha, me, framework, released, deployment_id):
     return f"failed:{sha}"
 
 
-def _stderr_tail(raw, limit=10):
-    """The last few stderr lines, decoded and sanitized ONE LINE AT A TIME.
-
-    Per-line so one credential-shaped line collapses to `[redacted]` without
-    taking the diagnosis with it — whole-blob redaction throws away the very
-    lines an operator needs. Decoding is explicit because POSIX
-    `TimeoutExpired` carries bytes despite `text=True`.
-
-    This is evidence-only. It never enters an incident message.
-    """
-    from mojo.apps.account.services.setup_safety import sanitize
-
-    if isinstance(raw, (bytes, bytearray)):
-        raw = bytes(raw).decode("utf-8", "replace")
-    lines = [line for line in str(raw or "").splitlines() if line.strip()]
-    return [sanitize(line, max_bytes=1024) for line in lines[-limit:]]
-
-
 def _node_deploy_failed(deployment_id, sha, job, migrate, phase, message,
                         detail=None, title="Edge deploy node failed"):
     """Report ONE node's deploy failure on every surface that has to see it.
@@ -549,7 +531,7 @@ def deploy_node(job):
                 f"{runner} after {deploy.SCRIPT_TIMEOUT}s "
                 "(phase=script_timeout)"),
             detail={"phase": "script_timeout",
-                    "stderr_tail": _stderr_tail(err.stderr)})
+                    "stderr_tail": deploy.stderr_tail(err.stderr)})
         raise RuntimeError("update script timed out") from None
     if result.returncode != 0:
         # stdout/stderr may contain echoed credentials. Only the bounded,
@@ -562,6 +544,6 @@ def deploy_node(job):
                 f"{job.runner_id or 'this node'} "
                 f"(phase=update_script, exit={result.returncode})"),
             detail={"phase": "update_script", "exit": result.returncode,
-                    "stderr_tail": _stderr_tail(result.stderr)})
+                    "stderr_tail": deploy.stderr_tail(result.stderr)})
         raise RuntimeError(f"update script exited {result.returncode}")
     return f"completed:{sha}"

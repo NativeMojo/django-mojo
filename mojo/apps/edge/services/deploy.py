@@ -126,6 +126,16 @@ VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._!+-]{0,63}$")
 # pip installs and migrations are the slow parts; 15 minutes is generous.
 SCRIPT_TIMEOUT = 900
 
+
+def stderr_tail(raw, limit=10):
+    """Return the bounded, per-line-redacted tail of deploy process output."""
+    from mojo.apps.account.services.setup_safety import sanitize
+
+    if isinstance(raw, (bytes, bytearray)):
+        raw = bytes(raw).decode("utf-8", "replace")
+    lines = [line for line in str(raw or "").splitlines() if line.strip()]
+    return [sanitize(line, max_bytes=1024) for line in lines[-limit:]]
+
 # ---- the node-script contract -----------------------------------------
 # The argv shape this framework speaks to the node update script. Bump BOTH
 # this and the marker line in mojo/deploy/scripts/update.sh together; a test
