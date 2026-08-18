@@ -66,7 +66,7 @@ def test_edge_log_emits_only_registered_response_identity(opts):
     knobs["mojosec_mode"] = "observe"
     text = render.render_http_base(knobs, security=[], vhosts=[guarded])
     for field in ("response_class", "resource_id", "edge_policy_version"):
-        th.assert_in(f'\\"{field}\\"', text,
+        th.assert_in(f'"{field}"', text,
                      f"the security stream must emit trusted bounded {field}")
     th.assert_in(f'vhost:{guarded.pk}', text,
                  "resource identity must be server-derived from the VHost primary key")
