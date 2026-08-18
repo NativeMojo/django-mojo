@@ -261,6 +261,8 @@ def test_payload_carries_knobs_and_routes(opts):
     assert row["serve_static"] is True, "serve_static is not in the payload"
     assert row["quiet_paths"] == ["/api/health"], \
         f"quiet_paths wrong in the payload: {row['quiet_paths']}"
+    assert row["mojosec_policy"] == {}, \
+        "the opt-in MojoSec policy must participate in desired-state hashing"
     prefixes = [r["path_prefix"] for r in row["routes"]]
     assert prefixes == ["/api", "/zapi"], \
         f"routes must be sorted by prefix, got {prefixes}"

@@ -485,6 +485,18 @@ def project(kind, attributes, count=1, last_seen=None):
             evidence["host"] = host
         if status is not None and 100 <= status <= 599:
             evidence["status"] = status
+        response_class = _token(attributes.get("response_class"))
+        if response_class in (
+                "impossible_path", "redirect", "reverse_proxy", "site_api",
+                "spa_fallback", "static_site"):
+            evidence["response_class"] = response_class
+        resource_id = _text(attributes.get("resource_id"), 96)
+        if re.fullmatch(r"vhost:(?:0|[1-9][0-9]{0,19})", resource_id):
+            evidence["resource_id"] = resource_id
+        policy_version = _integer(
+            attributes.get("edge_policy_version"), 1, 65535)
+        if policy_version is not None:
+            evidence["edge_policy_version"] = policy_version
         raw_path = attributes.get("request_uri")
         if raw_path in (None, ""):
             raw_path = attributes.get("path")

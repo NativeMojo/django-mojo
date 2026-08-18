@@ -90,6 +90,11 @@ class Vhost(models.Model, MojoModel):
         help_text="api/site_api only: serve the fleet's Django static root "
                   "at /static/ instead of proxying it.")
 
+    mojosec_policy = models.JSONField(
+        default=dict, blank=True,
+        help_text="Versioned opt-in impossible-path and trusted response "
+                  "classification policy. Empty keeps legacy behavior.")
+
     redirect_to = models.CharField(
         max_length=253, null=True, blank=True, default=None,
         help_text="redirect only: target HOST (FQDN, validated as a server "
@@ -156,7 +161,7 @@ class Vhost(models.Model, MojoModel):
                 "fields": [
                     "id", "created", "modified", "label", "kind",
                     "pool", "spa", "body_size_mb", "quiet_paths",
-                    "serve_static", "redirect_to", "is_enabled",
+                    "serve_static", "mojosec_policy", "redirect_to", "is_enabled",
                 ],
                 "extra": ["server_name"],
                 "graphs": {

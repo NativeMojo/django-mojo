@@ -54,7 +54,11 @@ def trusted_proxy_cidrs(value):
     return result
 
 
-def render_http_log(log_path=DEFAULT_LOG_PATH, proxy_cidrs=None):
+def _map_pattern(value):
+    return re.escape(str(value))
+
+
+def render_http_log(log_path=DEFAULT_LOG_PATH, proxy_cidrs=None, vhosts=None):
     """Render http-context JSON logging and an exact trusted-proxy boundary.
 
     The dedicated root-only stream retains a bounded request target and the two
@@ -73,7 +77,36 @@ def render_http_log(log_path=DEFAULT_LOG_PATH, proxy_cidrs=None):
             "real_ip_header X-Forwarded-For;",
             "real_ip_recursive on;",
         ])
+    rows = sorted(vhosts or [], key=lambda row: row["server_name"])
     lines.extend([
+        "map $server_name $mojosec_resource_id {",
+        "    default \"\";",
+    ])
+    for row in rows:
+        lines.append(
+            f"    \"{row['server_name']}\" \"{row['resource_id']}\";")
+    lines.extend([
+        "}",
+        "map $server_name $mojosec_policy_version {",
+        "    default \"\";",
+    ])
+    for row in rows:
+        lines.append(
+            f"    \"{row['server_name']}\" \"{int(row['policy_version'])}\";")
+    lines.extend([
+        "}",
+        "map \"$server_name:$uri\" $mojosec_response_class {",
+        "    default \"\";",
+    ])
+    for row in rows:
+        host = _map_pattern(row["server_name"])
+        for pattern in row.get("impossible_path_patterns", []):
+            lines.append(
+                f"    ~*^{host}:{pattern} \"impossible_path\";")
+        lines.append(
+            f"    ~*^{host}: \"{row['response_class']}\";")
+    lines.extend([
+        "}",
         "log_format mojosec_v1 escape=json",
         "    '{\"schema\":\"mojosec.nginx\",\"version\":1,'",
         "    '\"time\":\"$time_iso8601\",\"method\":\"$request_method\",'",
@@ -96,7 +129,10 @@ def render_http_log(log_path=DEFAULT_LOG_PATH, proxy_cidrs=None):
         "    '\"upstream_bytes_received\":\"$upstream_bytes_received\",'",
         "    '\"upstream_bytes_sent\":\"$upstream_bytes_sent\",'",
         "    '\"remote_addr\":\"$remote_addr\",'",
-        "    '\"peer_addr\":\"$realip_remote_addr\"}';",
+        "    '\"peer_addr\":\"$realip_remote_addr\",'",
+        "    '\"response_class\":\"$mojosec_response_class\",'",
+        "    '\"resource_id\":\"$mojosec_resource_id\",'",
+        "    '\"edge_policy_version\":\"$mojosec_policy_version\"}';",
         f"access_log {path} mojosec_v1;",
     ])
     return "\n".join(lines) + "\n"

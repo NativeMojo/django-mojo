@@ -317,6 +317,44 @@ def validate_pool(pool):
     return pool
 
 
+MOJOSEC_IMPOSSIBLE_PATH_FAMILIES = (
+    "admin_tools", "php_runtime", "secret_files", "wordpress",
+)
+MOJOSEC_RESPONSE_CLASSES = (
+    "reverse_proxy", "spa_fallback", "static_site", "site_api", "redirect",
+)
+
+
+def validate_mojosec_policy(value):
+    """Validate the complete bounded per-vhost edge evidence contract."""
+    if value in (None, {}):
+        return {}
+    if not isinstance(value, dict):
+        raise me.ValueException("mojosec_policy must be an object")
+    if set(value) != {"version", "impossible_path_families", "response_class"}:
+        raise me.ValueException(
+            "mojosec_policy requires version, impossible_path_families, "
+            "and response_class only")
+    version = value.get("version")
+    if (not isinstance(version, int) or isinstance(version, bool) or
+            not 1 <= version <= 65535):
+        raise me.ValueException("mojosec_policy version must be 1-65535")
+    families = value.get("impossible_path_families")
+    if (not isinstance(families, list) or len(families) > 4 or
+            any(family not in MOJOSEC_IMPOSSIBLE_PATH_FAMILIES
+                for family in families) or len(set(families)) != len(families)):
+        raise me.ValueException(
+            "mojosec_policy impossible_path_families contains an unknown or "
+            "duplicate family")
+    if value.get("response_class") not in MOJOSEC_RESPONSE_CLASSES:
+        raise me.ValueException("mojosec_policy response_class is not registered")
+    return {
+        "version": version,
+        "impossible_path_families": sorted(families),
+        "response_class": value["response_class"],
+    }
+
+
 # ----------------------------------------------------------------------
 # web apps and releases
 # ----------------------------------------------------------------------
@@ -654,9 +692,22 @@ def validate_vhost(vhost):
     validate_label(vhost.label or "")
     validate_pool(vhost.pool)
     validate_body_size_mb(vhost.body_size_mb)
+    vhost.mojosec_policy = validate_mojosec_policy(vhost.mojosec_policy)
 
     if vhost.kind not in (KIND_API, KIND_SITE, KIND_SITE_API, KIND_REDIRECT):
         raise me.ValueException(f"unknown vhost kind {vhost.kind!r}")
+
+    if vhost.mojosec_policy:
+        expected_class = {
+            KIND_API: "reverse_proxy",
+            KIND_SITE: "spa_fallback" if vhost.spa else "static_site",
+            KIND_SITE_API: "site_api",
+            KIND_REDIRECT: "redirect",
+        }[vhost.kind]
+        if vhost.mojosec_policy["response_class"] != expected_class:
+            raise me.ValueException(
+                f"mojosec_policy response_class for {vhost.kind} must be "
+                f"{expected_class}")
 
     # --- the kind matrix: which knobs each product shape may carry ---
 

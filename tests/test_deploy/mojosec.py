@@ -54,7 +54,10 @@ def test_nginx_security_log_is_rich_bounded_json(opts):
             '"upstream_header_time":"$upstream_header_time"',
             '"upstream_response_length":"$upstream_response_length"',
             '"upstream_bytes_received":"$upstream_bytes_received"',
-            '"upstream_bytes_sent":"$upstream_bytes_sent"'):
+            '"upstream_bytes_sent":"$upstream_bytes_sent"',
+            '"response_class":"$mojosec_response_class"',
+            '"resource_id":"$mojosec_resource_id"',
+            '"edge_policy_version":"$mojosec_policy_version"'):
         th.assert_in(required, text,
                      f"the protected security stream omitted approved rich field {required}")
     for forbidden in ("http_cookie", "http_authorization", "request_body"):

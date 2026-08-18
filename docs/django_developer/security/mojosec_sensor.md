@@ -220,6 +220,36 @@ new first-scan baseline.
 
 ### Structured nginx input
 
+#### Trusted per-VHost response evidence
+
+Edge VHosts may opt into a versioned, closed MojoSec policy. An empty policy is
+the default and preserves the existing renderer. The configured form is:
+
+```json
+{
+  "version": 1,
+  "impossible_path_families": ["wordpress", "secret_files"],
+  "response_class": "spa_fallback"
+}
+```
+
+The only impossible-path families are `admin_tools`, `php_runtime`,
+`secret_files`, and `wordpress`. The only response classes are
+`reverse_proxy`, `spa_fallback`, `static_site`, `site_api`, and `redirect`.
+Unknown keys, classes, families, duplicate families, and invalid versions stop
+the render. Configured impossible paths receive an edge-generated 404 before
+SPA fallback or an upstream can answer them. This is an opt-in serving policy,
+not a centrally initiated fetch or a detector inference.
+
+The nginx security stream adds three server-derived fields:
+`response_class`, `resource_id` (`vhost:<database id>`), and
+`edge_policy_version`. An impossible-path match has the registered class
+`impossible_path`. The detector accepts only these fixed classes and resource
+shape. Status and byte length never establish content identity. Existing
+trusted-proxy resolution remains unchanged, and the stream still excludes
+bodies, cookies, authorization, query-derived case samples, and arbitrary
+headers.
+
 Each configured nginx path is a newline-delimited JSON log, not the ordinary
 combined access log. A record needs a numeric `status` and a non-empty path.
 The detector recognizes these field names:

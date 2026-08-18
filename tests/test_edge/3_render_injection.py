@@ -400,7 +400,8 @@ def test_tls_floor_is_not_reachable(opts):
     # validators.validate_vhost — and none can reach the TLS block.
     assert writable == {"domain", "label", "kind", "upstream", "certificate",
                         "pool", "is_enabled", "spa", "body_size_mb",
-                        "quiet_paths", "serve_static", "redirect_to"}, (
+                        "quiet_paths", "serve_static", "mojosec_policy",
+                        "redirect_to"}, (
         "Vhost's writable field set changed — confirm no new field can reach "
         f"the TLS block or the rendered paths. Now: {sorted(writable)}")
 

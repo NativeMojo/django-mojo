@@ -57,6 +57,8 @@ FIELD_POLICIES = {
         ("upstream_connect_time", 256), ("upstream_header_time", 256),
         ("upstream_response_time", 256), ("upstream_response_length", 256),
         ("upstream_bytes_received", 256), ("upstream_bytes_sent", 256),
+        ("response_class", 32), ("resource_id", 96),
+        ("edge_policy_version", None),
         ("path", 1024), ("request_uri", 2048), ("referrer", 1536),
         ("user_agent", 1536),
     ),

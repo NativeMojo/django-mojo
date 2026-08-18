@@ -44,6 +44,11 @@ _TOKEN_CONTEXT = {"activate", "invite", "magic", "password", "recover", "reset",
 _REQUEST_ID = re.compile(r"^[a-f0-9]{32}$")
 _HTTP_PROTOCOL = re.compile(r"^HTTP/(?:0\.9|1\.0|1\.1|2(?:\.0)?|3(?:\.0)?)$")
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9._-]{1,96}$")
+_RESOURCE_ID = re.compile(r"^vhost:(?:0|[1-9][0-9]{0,19})$")
+_RESPONSE_CLASSES = {
+    "impossible_path", "redirect", "reverse_proxy", "site_api",
+    "spa_fallback", "static_site",
+}
 _UNIT_NAME = (
     r"[A-Za-z0-9@:.\\_-]{1,128}"
     r"\.(?:service|socket|target|device|mount|automount|swap|path|timer|slice|scope)"
@@ -440,6 +445,19 @@ def detect_nginx(record):
         "upstream_status": record.get("upstream_status"),
         "upstream_response_time": record.get("upstream_response_time"),
     }
+    response_class = _optional_token(record.get("response_class"), "response_class")
+    resource_id = _optional_token(record.get("resource_id"), "resource_id", _RESOURCE_ID)
+    policy_version = _canonical_int(
+        record.get("edge_policy_version"), 1, 65535, "edge_policy_version",
+        optional=True)
+    if response_class:
+        if response_class not in _RESPONSE_CLASSES:
+            raise DetectorError("nginx response_class is not registered")
+        evidence_values["response_class"] = response_class
+    if resource_id:
+        evidence_values["resource_id"] = resource_id
+    if policy_version is not None:
+        evidence_values["edge_policy_version"] = policy_version
     for field in ("remote_port", "peer_port", "server_port"):
         value = _canonical_int(record.get(field), 1, 65535, field, optional=True)
         if value is not None:

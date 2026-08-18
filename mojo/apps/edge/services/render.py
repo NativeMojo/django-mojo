@@ -368,6 +368,33 @@ def _blocklist_guards():
     ])
 
 
+_IMPOSSIBLE_PATHS = {
+    "admin_tools": r"/(?:phpmyadmin|server-status|solr|jenkins)(?:/|$)",
+    "php_runtime": r"/.*\\.(?:php[3-8]?|phtml)(?:/|$)",
+    "secret_files": r"/(?:\\.env(?:\\.|$)|\\.git(?:/|$))",
+    "wordpress": r"/(?:wp-admin|wp-login\\.php|wp-content|xmlrpc\\.php)(?:/|$)",
+}
+
+
+def _mojosec_policy(vhost):
+    return validators.validate_mojosec_policy(vhost.mojosec_policy)
+
+
+def _impossible_path_locations(vhost):
+    policy = _mojosec_policy(vhost)
+    if not policy:
+        return []
+    blocks = []
+    for family in policy["impossible_path_families"]:
+        pattern = _IMPOSSIBLE_PATHS[family]
+        blocks.extend([
+            f"    # MojoSec impossible-path family: {family}",
+            f"    if ($uri ~* \"^{pattern}\") {{ return 404; }}",
+            "",
+        ])
+    return blocks
+
+
 def _port80_block(server_name):
     """The per-name HTTP block: ACME webroot, then a 301 to https.
 
@@ -505,6 +532,7 @@ def _render_api(vhost, generation, server_name):
         _blocklist_guards(),
         "",
     ]
+    parts.extend(_impossible_path_locations(vhost))
     for path in sorted(vhost.quiet_paths or []):
         if path == MOJOSEC_RECEIVER_PATH:
             continue
@@ -570,6 +598,7 @@ def _render_site(vhost, generation, server_name):
         _blocklist_guards(),
         "",
     ]
+    parts.extend(_impossible_path_locations(vhost))
     parts.extend(_site_body(vhost, generation))
     parts.extend(["}", ""])
     return "\n".join(parts)
@@ -601,6 +630,7 @@ def _render_site_api(vhost, generation, server_name):
         _blocklist_guards(),
         "",
     ]
+    parts.extend(_impossible_path_locations(vhost))
     for path in sorted(vhost.quiet_paths or []):
         if path == MOJOSEC_RECEIVER_PATH:
             continue
@@ -649,7 +679,7 @@ def _render_redirect(vhost, generation, server_name):
     at substitution."""
     target = validators.validate_redirect_target(vhost.redirect_to)
     _safe_server_name(target)
-    return "\n".join([
+    parts = [
         _open(server_name),
         "",
         _tls_block(generation, vhost.certificate_id),
@@ -660,10 +690,14 @@ def _render_redirect(vhost, generation, server_name):
         "",
         _blocklist_guards(),
         "",
+    ]
+    parts.extend(_impossible_path_locations(vhost))
+    parts.extend([
         f"    return 301 https://{target}$request_uri;",
         "}",
         "",
     ])
+    return "\n".join(parts)
 
 
 _BUILDERS = {
@@ -791,7 +825,26 @@ def _blocklist_section(knobs, security):
     return parts
 
 
-def render_http_base(knobs=None, security=None):
+def _mojosec_vhost_evidence(vhosts):
+    rows = []
+    for vhost in vhosts or []:
+        policy = _mojosec_policy(vhost)
+        if not policy:
+            continue
+        rows.append({
+            "server_name": _safe_server_name(vhost.server_name),
+            "resource_id": f"vhost:{int(vhost.pk)}",
+            "policy_version": policy["version"],
+            "response_class": policy["response_class"],
+            "impossible_path_patterns": [
+                _IMPOSSIBLE_PATHS[family]
+                for family in policy["impossible_path_families"]
+            ],
+        })
+    return rows
+
+
+def render_http_base(knobs=None, security=None, vhosts=None):
     """`http.d/00_base.conf` — everything the server blocks lean on.
 
     Rendered per generation from `http_knobs()` and the blocklist rows, so
@@ -826,7 +879,8 @@ def render_http_base(knobs=None, security=None):
     ]
     if knobs["mojosec_mode"] == "observe":
         parts.extend(render_mojosec_http_log(
-            knobs["mojosec_log_path"], knobs["mojosec_trusted_proxy_cidrs"]
+            knobs["mojosec_log_path"], knobs["mojosec_trusted_proxy_cidrs"],
+            _mojosec_vhost_evidence(vhosts),
         ).rstrip().splitlines())
         parts.append("")
     parts.extend([
@@ -1047,6 +1101,7 @@ def vhost_payload(vhost):
         body_size_mb=vhost.body_size_mb,
         quiet_paths=sorted(vhost.quiet_paths or []),
         serve_static=vhost.serve_static,
+        mojosec_policy=vhost.mojosec_policy,
         redirect_to=vhost.redirect_to,
         certificate=vhost.certificate_id,
         certificate_serial=vhost.certificate.serial,
@@ -1113,7 +1168,7 @@ def render_generation(vhosts, generation):
     validate the new certificates rather than the currently-installed ones.
     """
     files = {
-        "http.d/00_base.conf": render_http_base(),
+        "http.d/00_base.conf": render_http_base(vhosts=vhosts),
         "http.d/10_upstreams.conf": render_upstreams(
             referenced_upstreams(vhosts)),
     }
