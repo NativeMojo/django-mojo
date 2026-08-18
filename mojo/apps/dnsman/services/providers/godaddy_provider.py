@@ -21,9 +21,12 @@ GoDaddy semantics this adapter has to encode explicitly:
     raises a clear "cannot delete the last record of this type" error rather
     than silently no-opping. `clear_record` is the escape hatch for callers that
     need the data gone and cannot act on that refusal — see its docstring.
-  - **There is no ChangeInfo API**, so propagation is the authoritative DNS
-    probe only.
+  - **There is no ChangeInfo API**, so propagation starts with an authoritative
+    DNS probe. ACME TXT replacements then wait one enforced minimum TTL so a
+    CA's secondary validator cannot retain the prior value.
 """
+
+import time
 
 from mojo import errors as me
 from mojo.helpers import logit
@@ -263,10 +266,20 @@ class GoDaddyProvider(DnsProvider):
                 "DNSMAN_DNS_PROPAGATION_TIMEOUT", DEFAULT_PROPAGATION_TIMEOUT)
 
         if rtype in TXT_TYPES:
-            # No ChangeInfo equivalent exists, so the authoritative probe is the
-            # ONLY gate GoDaddy offers.
-            return probe.wait_for_txt(
+            # No ChangeInfo equivalent exists, so first prove the replacement
+            # at the authoritative servers.
+            ok, seen = probe.wait_for_txt(
                 name, [unquote_txt(value) for value in values], timeout=timeout)
+            if ok and name.lower().split(".", 1)[0] == "_acme-challenge":
+                # GoDaddy refuses TXT TTLs below MIN_TTL.  A CA's secondary
+                # validator can therefore still hold the prior challenge value
+                # after the authoritative servers show this replacement.  Wait
+                # one complete provider TTL before telling ACME to validate.
+                logger.info(
+                    f"dnsman: GoDaddy ACME TXT '{name}' is authoritative; "
+                    f"waiting {MIN_TTL}s for recursive caches to expire")
+                time.sleep(MIN_TTL)
+            return ok, seen
 
         logger.warning(
             f"dnsman: GoDaddy has no change API — propagation of the {rtype} record "

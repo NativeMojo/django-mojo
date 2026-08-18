@@ -73,7 +73,7 @@ back-ends differ in ways that fail *silently*:
 | TXT values | must be quoted, chunked at 255 chars | stored raw |
 | Write semantics | true upsert | PUT **replaces every record** of that (type, name) |
 | Delete | supported | no true delete — rewrite the remainder; the last record of a type cannot be removed |
-| Propagation | `ChangeInfo` → `INSYNC`, then authoritative probe | authoritative probe only |
+| Propagation | `ChangeInfo` → `INSYNC`, then authoritative probe | authoritative probe; ACME TXT waits one 600s provider TTL for recursive caches |
 
 Getting TXT quoting wrong breaks SES verification *and* ACME validation with no
 error anywhere — hence the dedicated adapter test in both directions.
