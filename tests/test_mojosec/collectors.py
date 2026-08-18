@@ -986,6 +986,17 @@ def test_rpm_installed_file_ownership_is_structural_and_fail_closed(opts):
     th.assert_true(all(session.queries == [path] for session in created),
                    "one scan-local cache must issue at most one structural query per path")
 
+    limited_config = dict(config, max_owner_queries=1)
+    limited_shared = dict(shared)
+    limited_shared[root + "/second.py"] = {"kind": "file", "sha256": "d" * 64}
+    limited = RpmCollector(
+        limited_config, identity,
+        owner_session_factory=lambda unused_config, unused_deadline: Session([]))
+    with mock.patch.object(limited, "discover_site_roots", return_value=[root]), \
+            mock.patch.object(limited, "_verify_packages", return_value={}):
+        with th.assert_raises(RpmError):
+            limited.scan(shared_snapshot=limited_shared)
+
 
 @th.django_unit_test()
 def test_rpm_ownership_session_is_one_lifecycle_per_scan(opts):
@@ -1035,7 +1046,12 @@ def test_rpm_ownership_session_is_one_lifecycle_per_scan(opts):
 
 @th.django_unit_test()
 def test_rpm_helper_protocol_is_bounded_and_exact(opts):
-    from mojo.mojosec.collectors.rpm import RpmError, _decode_helper_response
+    import time
+
+    from mojo.mojosec.collectors import rpm as rpm_module
+    from mojo.mojosec.collectors.rpm import (
+        RpmError, RpmOwnershipSession, _decode_helper_response,
+    )
 
     decoded = _decode_helper_response(
         b'{"op":"owner","owners":[]}\n', "owner", 1024)
@@ -1054,6 +1070,44 @@ def test_rpm_helper_protocol_is_bounded_and_exact(opts):
             _decode_helper_response(payload, "owner", 1024)
     with th.assert_raises(RpmError):
         _decode_helper_response(b"{" + b" " * 1024 + b"}\n", "owner", 1024)
+
+    def bare_session(payload, maximum=1024):
+        read_fd, write_fd = os.pipe()
+        if payload is not None:
+            os.write(write_fd, payload)
+        os.close(write_fd)
+        session = RpmOwnershipSession.__new__(RpmOwnershipSession)
+        session.maximum = maximum
+        session.deadline = time.monotonic() + 5
+        session.process = types.SimpleNamespace(stdout=os.fdopen(read_fd, "rb", buffering=0))
+        return session
+
+    dead = bare_session(None)
+    try:
+        with th.assert_raises(RpmError):
+            dead._read("owner")
+    finally:
+        dead.process.stdout.close()
+
+    timed = bare_session(b'{"op":"owner","owners":[]}\n')
+    try:
+        with mock.patch.object(rpm_module.select, "select", return_value=([], [], [])):
+            with th.assert_raises(RpmError):
+                timed._read("owner")
+    finally:
+        timed.process.stdout.close()
+
+    overflow = bare_session(b"x" * 1025 + b"\n", maximum=1024)
+    try:
+        with th.assert_raises(RpmError):
+            overflow._read("owner")
+    finally:
+        overflow.process.stdout.close()
+
+    expired = RpmOwnershipSession.__new__(RpmOwnershipSession)
+    expired.deadline = time.monotonic() - 1
+    with th.assert_raises(RpmError):
+        expired._remaining()
 
 
 @th.django_unit_test()
