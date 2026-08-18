@@ -143,7 +143,8 @@ def _accumulate_usage(totals, response_usage):
         totals[key] = totals.get(key, 0) + (response_usage.get(key, 0) or 0)
 
 
-def _dumps_tool_result(obj, user=None, conversation=None, tool_name=None):
+def _dumps_tool_result(
+        obj, user=None, conversation=None, tool_name=None, _reporter=None):
     """Safely serialize a tool result to a JSON string.
 
     Falls back through ``_json_default`` for non-native types. If serialization
@@ -163,7 +164,7 @@ def _dumps_tool_result(obj, user=None, conversation=None, tool_name=None):
                 f"user={user_email} conv={conv_pk}. "
                 f"Error: {exc!r}\n{traceback.format_exc()[:2000]}"
             ),
-            user=user,
+            user=user, _reporter=_reporter,
         )
         logger.exception("Tool result serialization failed for %s", tool_name)
         return json.dumps({
@@ -794,7 +795,9 @@ def _extract_context_refs(tool_blocks, tool_results):
     return refs
 
 
-def _execute_tool(block, registry, user, conversation, tools, on_event, tool_calls_made, request_meta=None):
+def _execute_tool(
+        block, registry, user, conversation, tools, on_event, tool_calls_made,
+        request_meta=None, _reporter=None):
     """
     Execute a single tool call with permission gate, meta-tool handling,
     and event reporting.
@@ -814,7 +817,7 @@ def _execute_tool(block, registry, user, conversation, tools, on_event, tool_cal
             f"Unknown tool requested: {tool_name}",
             f"LLM requested tool '{tool_name}' which is not in the registry. "
             f"User: {user.email} (id={user.pk}), conv={conversation.pk}",
-            user=user,
+            user=user, _reporter=_reporter,
         )
     elif not user.has_permission(tool_entry["permission"]):
         perm = tool_entry["permission"]
@@ -828,7 +831,7 @@ def _execute_tool(block, registry, user, conversation, tools, on_event, tool_cal
             f"Permission denied: {tool_name}",
             f"User {user.email} (id={user.pk}) denied access to tool '{tool_name}' "
             f"(requires '{perm}'). conv={conversation.pk}",
-            user=user,
+            user=user, _reporter=_reporter,
         )
     else:
         try:
@@ -864,7 +867,7 @@ def _execute_tool(block, registry, user, conversation, tools, on_event, tool_cal
                     f"Assistant tool: {tool_name}",
                     f"User {user.email} (id={user.pk}) executed mutating tool "
                     f"'{tool_name}'. conv={conversation.pk}",
-                    user=user,
+                    user=user, _reporter=_reporter,
                 )
         except Exception as exc:
             logger.exception("Tool %s failed", tool_name)
@@ -882,7 +885,7 @@ def _execute_tool(block, registry, user, conversation, tools, on_event, tool_cal
                     f"input_keys={input_keys}. Error: {exc!r}\n"
                     f"{traceback.format_exc()[:2000]}"
                 ),
-                user=user,
+                user=user, _reporter=_reporter,
             )
 
     return {
@@ -890,6 +893,7 @@ def _execute_tool(block, registry, user, conversation, tools, on_event, tool_cal
         "tool_use_id": tool_id,
         "content": _dumps_tool_result(
             tool_result, user=user, conversation=conversation, tool_name=tool_name,
+            _reporter=_reporter,
         ),
     }
 

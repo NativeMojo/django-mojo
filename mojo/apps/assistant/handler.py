@@ -145,7 +145,7 @@ def handle_assistant_message(user, data):
     )
 
 
-def _handle_message(user, data, request_id=None):
+def _handle_message(user, data, request_id=None, _reporter=None):
     """Handle a new assistant message — validate, enqueue, ack."""
     from mojo.helpers.settings import settings
     from mojo.apps.assistant.models import Conversation, Message
@@ -162,8 +162,9 @@ def _handle_message(user, data, request_id=None):
     if not user.has_permission("view_admin"):
         logger.info("assistant: permission denied for user %s", user.pk)
         try:
-            from mojo.apps.incident import report_event
-            report_event(
+            if _reporter is None:
+                from mojo.apps.incident import report_event as _reporter
+            _reporter(
                 f"WS assistant access denied for user {user.email} (id={user.pk})",
                 title="WS assistant permission denied",
                 category="assistant:permission_denied",

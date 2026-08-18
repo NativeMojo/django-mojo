@@ -23,6 +23,13 @@ def _event(user, category):
     return Event.objects.filter(uid=user.pk, category=category).latest("pk")
 
 
+def _real_reporter():
+    # Import the concrete callable, not the package alias that other parallel
+    # packages intentionally patch while testing their own call sites.
+    from mojo.apps.incident.reporter import report_event
+    return report_event
+
+
 @th.django_unit_setup()
 @th.requires_app("mojo.apps.assistant")
 @th.requires_app("mojo.apps.incident")
@@ -51,10 +58,13 @@ def test_report_event_helper_calls_incident_report(opts):
     from mojo.apps.assistant.services.agent import _report_event
 
     _clear_events(opts.admin, "assistant:test")
-    _report_event(
-        "assistant:test", 5, "Test title", "Test details",
-        user=opts.admin,
-    )
+    # Simulate a different package patching the public alias in parallel. The
+    # call-local dependency must still reach the real reporter.
+    with mock.patch("mojo.apps.incident.report_event"):
+        _report_event(
+            "assistant:test", 5, "Test title", "Test details",
+            user=opts.admin, _reporter=_real_reporter(),
+        )
     event = _event(opts.admin, "assistant:test")
     assert_eq(event.details, "Test details", "incident details should match")
     assert_eq(event.category, "assistant:test", "Category should match")
@@ -101,7 +111,7 @@ def test_permission_denied_fires_event(opts):
         "assistant:permission_denied", 5,
         "Permission denied: some_tool",
         f"User {opts.admin.email} denied access to tool 'some_tool'",
-        user=opts.admin,
+        user=opts.admin, _reporter=_real_reporter(),
     )
     event = _event(opts.admin, "assistant:permission_denied")
     assert_eq(
@@ -171,7 +181,9 @@ def test_handler_permission_denied_fires_event(opts):
 
     _clear_events(noperm, "assistant:permission_denied")
     with mock.patch.object(settings, "get", side_effect=patched_get):
-        result = _handle_message(noperm, {"type": "assistant_message", "message": "hello"})
+        result = _handle_message(
+            noperm, {"type": "assistant_message", "message": "hello"},
+            _reporter=_real_reporter())
     assert_eq(result["type"], "assistant_error", "Should return error")
     event = _event(noperm, "assistant:permission_denied")
     assert_eq(
@@ -198,7 +210,7 @@ def test_mutating_tool_success_fires_event(opts):
         category, 5,
         f"Assistant tool: {tool_name}",
         f"User {opts.admin.email} executed mutating tool '{tool_name}'.",
-        user=opts.admin,
+        user=opts.admin, _reporter=_real_reporter(),
     )
     event = _event(opts.admin, category)
     assert_eq(
@@ -247,7 +259,7 @@ def test_tool_exception_fires_error_event(opts):
         "assistant:error", 6,
         "Tool exception: query_incidents",
         "Tool 'query_incidents' raised an exception",
-        user=opts.admin,
+        user=opts.admin, _reporter=_real_reporter(),
     )
     event = _event(opts.admin, "assistant:error")
     assert_eq(event.level, 6, "Tool exception level should be 6")
@@ -263,7 +275,7 @@ def test_agent_crash_fires_error_event(opts):
         "assistant:error", 7,
         "Agent loop exception",
         "Agent crashed for user test@example.com",
-        user=opts.admin,
+        user=opts.admin, _reporter=_real_reporter(),
     )
     event = _event(opts.admin, "assistant:error")
     assert_eq(event.level, 7, "Agent crash level should be 7")
@@ -279,7 +291,7 @@ def test_api_error_fires_event(opts):
         "assistant:error:api", 7,
         "LLM API auth failure",
         "authentication_error: invalid key",
-        user=opts.admin,
+        user=opts.admin, _reporter=_real_reporter(),
     )
     event = _event(opts.admin, "assistant:error:api")
     assert_eq(

@@ -30,6 +30,11 @@ def _event(user, category):
     return Event.objects.filter(uid=user.pk, category=category).latest("pk")
 
 
+def _real_reporter():
+    from mojo.apps.incident.reporter import report_event
+    return report_event
+
+
 class _FakeConversation:
     def __init__(self, pk=42):
         self.pk = pk
@@ -121,6 +126,7 @@ def test_dumps_tool_result_unserializable_reports_incident(opts):
         raw = _dumps_tool_result(
             {"bad": object()}, user=opts.user,
             conversation=_FakeConversation(), tool_name="stub_tool",
+            _reporter=_real_reporter(),
         )
     parsed = json.loads(raw)
     assert_true("error" in parsed, "fallback payload must include an error key")
@@ -196,6 +202,7 @@ def test_execute_tool_exception_reports_incident_with_traceback(opts):
     result = _execute_tool(
         block, registry, opts.user, _FakeConversation(),
         tools=[], on_event=None, tool_calls_made=[],
+        _reporter=_real_reporter(),
     )
 
     parsed = json.loads(result["content"])
