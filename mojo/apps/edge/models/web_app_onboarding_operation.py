@@ -118,6 +118,20 @@ class WebAppOnboardingOperation(models.Model, MojoModel):
                     "certificate": "basic", "vhost": "basic",
                 },
             },
+            # Detail fallback for a wired URL. Mirrors `basic`; `state` stays
+            # withheld via NO_SHOW_FIELDS.
+            "default": {
+                "fields": [
+                    "id", "operation_id", "status", "cursor", "revision",
+                    "created", "modified", "finished", "evidence", "activity",
+                    "registrar_provider", "dns_provider", "attempts",
+                    "next_attempt_at", "last_error",
+                ],
+                "graphs": {
+                    "web_app": "basic", "domain": "basic",
+                    "certificate": "basic", "vhost": "basic",
+                },
+            },
         }
 
     @property

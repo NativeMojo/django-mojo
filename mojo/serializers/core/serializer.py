@@ -49,6 +49,7 @@ except Exception:
     import logging
     logger = logging.getLogger("optimized_serializer")
 
+from mojo import errors as me
 from mojo.helpers.settings import settings
 from .cache import get_cache_backend, get_cache_key, get_model_cache_ttl
 
@@ -177,7 +178,11 @@ class OptimizedGraphSerializer:
         """
         Direct serialization using RestMeta.GRAPHS configuration.
         """
-        if not hasattr(obj, "RestMeta") or not hasattr(obj.RestMeta, "GRAPHS"):
+        # No RestMeta/GRAPHS at all — or an empty GRAPHS map — is a model that
+        # opts out of graph-based serialization: whole-object output is its
+        # deliberate, VIEW_PERMS-gated API. This branch stays forgiving.
+        if (not hasattr(obj, "RestMeta") or not hasattr(obj.RestMeta, "GRAPHS")
+                or not obj.RestMeta.GRAPHS):
             if self._debug_enabled:
                 logger.warning(f"RestMeta.GRAPHS not found for {obj.__class__.__name__}")
             return self._fallback_serialization(obj)
@@ -188,9 +193,17 @@ class OptimizedGraphSerializer:
                 graph_config = obj.RestMeta.GRAPHS.get("default")
 
             if graph_config is None:
-                if self._debug_enabled:
-                    logger.warning(f"No graph '{self.graph}' found for {obj.__class__.__name__}")
-                return self._fallback_serialization(obj)
+                # The requested graph AND `default` are both undefined on a
+                # model that DOES declare graphs. Falling through to a
+                # whole-model dump would silently serialize every field — the
+                # leak this guard exists to stop. A caller-facing boundary
+                # (REST / assistant tools) refuses an unknown *special* graph
+                # name before reaching here, so arriving here means the model
+                # ships a partial graph set with no `default`: a server
+                # misconfiguration. Fail loud rather than expose everything.
+                raise me.RestErrorException(
+                    f"{obj.__class__.__name__} has no '{self.graph}' graph and "
+                    "no 'default' graph to fall back to")
 
         # Serialize based on graph configuration
         data = {}

@@ -90,6 +90,15 @@ class PlatformDeployment(models.Model, MojoModel):
                     "status", "source", "actor", "started", "finished",
                 ],
             },
+            # Detail fallback for a wired URL. Evidence-free, like `basic` —
+            # node_evidence is served only by the permission-gated `admin`
+            # graph.
+            "default": {
+                "fields": [
+                    "id", "created", "modified", "sha", "framework_version",
+                    "status", "source", "actor", "started", "finished",
+                ],
+            },
             "admin": {
                 "fields": [
                     "id", "created", "modified", "sha", "framework_version",
