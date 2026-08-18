@@ -6,10 +6,15 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 from testit import helpers as th
+from tests.test_edge._helpers import (
+    declare_pools, make_certificate, make_domain, make_vhost,
+)
 
 
 PREFIX = f"mojosec_case_test_{uuid.uuid4().hex[:10]}"
 PASSWORD = "MojoSecCases##1"
+DOMAIN_NAME = f"{PREFIX.replace('_', '-')}.example.test"
+OTHER_DOMAIN_NAME = f"other-{PREFIX.replace('_', '-')}.example.test"
 
 
 def _event(kind, event_id, count=1, attributes=None, observed="2026-08-18T01:12:00Z"):
@@ -40,17 +45,29 @@ def _receipt(opts, event):
         replay_features={"feature_schema": "replay_features_v1", "event": event})
 
 
-def _targets(opts):
+def _targets(opts, vhost_ids=None):
     return [{
         "installation_key_id": opts.case_api_key.pk,
-        "vhost_ids": [opts.case_vhost_id],
+        "vhost_ids": list(vhost_ids or [opts.case_vhost_id]),
         "include_fim": True,
     }]
+
+
+def _settings(opts, vhost_ids=None, future_skew=300):
+    def get_static(name, default=None, **kwargs):
+        if name == "MOJOSEC_CASE_SHADOW_TARGETS":
+            return _targets(opts, vhost_ids=vhost_ids)
+        if name == "MOJOSEC_CASE_FUTURE_SKEW_SECONDS":
+            return future_skew
+        return default
+    return get_static
 
 
 @th.django_unit_setup()
 def setup_mojosec_cases(opts):
     from mojo.apps.account.models import ApiKey, Group, User
+    from mojo.apps.dnsman.models import Certificate, Domain
+    from mojo.apps.edge.models import Vhost
     from mojo.apps.incident.models import (
         MojoSecCase, MojoSecCaseTransition, MojoSecReceipt)
 
@@ -59,9 +76,14 @@ def setup_mojosec_cases(opts):
     MojoSecReceipt.objects.filter(sensor_id=PREFIX).delete()
     MojoSecCase.objects.filter(sensor_id=PREFIX).delete()
     ApiKey.objects.filter(name__startswith=PREFIX).delete()
-    Group.objects.filter(name=PREFIX).delete()
+    Vhost.objects.filter(domain__name__in=(DOMAIN_NAME, OTHER_DOMAIN_NAME)).delete()
+    Certificate.objects.filter(
+        domain__name__in=(DOMAIN_NAME, OTHER_DOMAIN_NAME)).delete()
+    Domain.objects.filter(name__in=(DOMAIN_NAME, OTHER_DOMAIN_NAME)).delete()
+    Group.objects.filter(name__startswith=PREFIX).delete()
     User.objects.filter(username__startswith=PREFIX).delete()
 
+    declare_pools()
     group = Group.objects.create(name=PREFIX, kind="organization")
     key, _ = ApiKey.create_for_group(
         group, f"{PREFIX}_key", permissions={"mojosec_ingest": True})
@@ -79,8 +101,26 @@ def setup_mojosec_cases(opts):
     nobody.requires_mfa = False
     nobody.save()
 
+    policy = {
+        "version": 5,
+        "impossible_path_families": [
+            "admin_tools", "php_runtime", "secret_files", "wordpress"],
+        "response_class": "spa_fallback",
+    }
+    domain = make_domain(name=DOMAIN_NAME, group=group)
+    certificate = make_certificate(domain)
+    vhost = make_vhost(
+        domain, certificate, kind="site", spa=True, mojosec_policy=policy)
+    other_group = Group.objects.create(
+        name=f"{PREFIX}_other", kind="organization")
+    other_domain = make_domain(name=OTHER_DOMAIN_NAME, group=other_group)
+    other_vhost = make_vhost(
+        other_domain, make_certificate(other_domain), kind="site", spa=True,
+        mojosec_policy=policy)
+
     opts.case_api_key = key
-    opts.case_vhost_id = 987654
+    opts.case_vhost_id = vhost.pk
+    opts.case_other_vhost_id = other_vhost.pk
     opts.case_viewer_email = viewer.email
     opts.case_nobody_email = nobody.email
 
@@ -97,19 +137,19 @@ def test_shadow_case_is_idempotent_and_301_twins_preserve_volume(opts):
         "request_uri": "/wp-login.php?token=receipt-only-secret",
         "response_class": "impossible_path",
         "resource_id": f"vhost:{opts.case_vhost_id}",
-        "edge_policy_version": 3,
+        "edge_policy_version": 5,
         "scheme": "https",
     }
     secure = _event("web.probe", "1" * 64, count=10000, attributes=base)
     redirect = copy.deepcopy(secure)
     redirect.update({"id": "2" * 64, "count": 1})
     redirect["attributes"].update({
-        "scheme": "http", "status": 301, "response_class": "redirect"})
+        "scheme": "http", "status": 301, "response_class": "spa_fallback"})
     first = _receipt(opts, secure)
     twin = _receipt(opts, redirect)
 
     with mock.patch.object(
-            mojosec_correlation.settings, "get_static", return_value=_targets(opts)), \
+            mojosec_correlation.settings, "get_static", side_effect=_settings(opts)), \
             mock.patch.object(mojosec_correlation, "_record_metric"):
         case, contributed = mojosec_correlation.contribute(first, secure)
         duplicate, duplicate_contributed = mojosec_correlation.contribute(first, secure)
@@ -147,7 +187,7 @@ def test_concurrent_delivery_and_fim_load_are_bounded(opts):
         "request_uri": "/.env.production?password=never-case-data",
         "response_class": "impossible_path",
         "resource_id": f"vhost:{opts.case_vhost_id}",
-        "edge_policy_version": 4, "scheme": "https",
+        "edge_policy_version": 5, "scheme": "https",
     }, observed="2026-08-18T02:12:00Z")
     receipt = _receipt(opts, web)
 
@@ -159,7 +199,7 @@ def test_concurrent_delivery_and_fim_load_are_bounded(opts):
             close_old_connections()
 
     with mock.patch.object(
-            mojosec_correlation.settings, "get_static", return_value=_targets(opts)), \
+            mojosec_correlation.settings, "get_static", side_effect=_settings(opts)), \
             mock.patch.object(mojosec_correlation, "_record_metric"):
         with ThreadPoolExecutor(max_workers=2) as pool:
             outcomes = list(pool.map(lambda unused: contribute_once(), range(2)))
@@ -218,7 +258,7 @@ def test_samples_overflow_and_late_windows_are_explicit(opts):
 
     cases = []
     with mock.patch.object(
-            mojosec_correlation.settings, "get_static", return_value=_targets(opts)), \
+            mojosec_correlation.settings, "get_static", side_effect=_settings(opts)), \
             mock.patch.object(mojosec_correlation, "_record_metric"):
         for index in range(9):
             event = _event("web.probe", f"{index + 10:064x}", attributes={
@@ -227,7 +267,7 @@ def test_samples_overflow_and_late_windows_are_explicit(opts):
                 "response_class": "impossible_path",
                 "resource_id": f"vhost:{opts.case_vhost_id}",
                 "edge_policy_version": 5, "scheme": "https",
-            }, observed="2026-08-18T04:05:00Z")
+            }, observed="2026-08-18T01:05:00Z")
             receipt = _receipt(opts, event)
             cases.append(mojosec_correlation.contribute(receipt, event)[0])
         late = _event("web.probe", "f" * 64, attributes={
@@ -236,7 +276,7 @@ def test_samples_overflow_and_late_windows_are_explicit(opts):
             "response_class": "impossible_path",
             "resource_id": f"vhost:{opts.case_vhost_id}",
             "edge_policy_version": 5, "scheme": "https",
-        }, observed="2026-08-18T03:59:59Z")
+        }, observed="2026-08-18T00:59:59Z")
         late_case = mojosec_correlation.contribute(_receipt(opts, late), late)[0]
 
     case = cases[0]
@@ -249,12 +289,12 @@ def test_samples_overflow_and_late_windows_are_explicit(opts):
                    "query strings must be absent from every bounded path shape")
     th.assert_true(late_case.pk != case.pk,
                    "late evidence must enter its deterministic observed-time window")
-    th.assert_eq((late_case.window_start.hour, case.window_start.hour), (3, 4),
+    th.assert_eq((late_case.window_start.hour, case.window_start.hour), (0, 1),
                  "hour rollover must remain explicit instead of mutating the active window")
 
 
 @th.django_unit_test()
-def test_unknown_response_identity_never_promotes_from_status_or_length(opts):
+def test_unbound_response_identity_is_rejected_from_shadow_contribution(opts):
     from mojo.apps.incident.services import mojosec_correlation
 
     event = _event("web.probe", "e" * 64, count=2500, attributes={
@@ -263,13 +303,96 @@ def test_unknown_response_identity_never_promotes_from_status_or_length(opts):
         "resource_id": f"vhost:{opts.case_vhost_id}", "scheme": "https",
     }, observed="2026-08-18T05:05:00Z")
     with mock.patch.object(
-            mojosec_correlation.settings, "get_static", return_value=_targets(opts)), \
+            mojosec_correlation.settings, "get_static", side_effect=_settings(opts)), \
             mock.patch.object(mojosec_correlation, "_record_metric"):
         case, contributed = mojosec_correlation.contribute(_receipt(opts, event), event)
-    th.assert_true(contributed, "unknown evidence should remain visible as a shadow case")
-    th.assert_eq((case.state, case.urgency, case.urgency_reason),
-                 ("observing", "info", "unknown_edge_evidence"),
-                 "status, length, and probe filename alone must never promote compromise")
+    th.assert_true(not contributed and case is None,
+                   "wire shape and status must not bypass authoritative VHost binding")
+
+
+@th.django_unit_test()
+def test_web_shadow_requires_authoritative_vhost_tenant_and_policy_binding(opts):
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+    from mojo.apps.incident.services import mojosec_correlation
+
+    def evidence(event_id, vhost_id, version=5, response_class="impossible_path"):
+        return _event("web.probe", event_id, attributes={
+            "source_ip": "198.51.100.144", "method": "GET", "status": 404,
+            "request_uri": "/wp-login.php", "response_class": response_class,
+            "resource_id": f"vhost:{vhost_id}", "edge_policy_version": version,
+            "scheme": "https",
+        })
+
+    rejected = []
+    checks = (
+        (evidence("a" * 64, 987654), [987654]),
+        (evidence("b" * 64, opts.case_other_vhost_id),
+         [opts.case_other_vhost_id]),
+        (evidence("c" * 64, opts.case_vhost_id, version=4),
+         [opts.case_vhost_id]),
+        (evidence("d" * 64, opts.case_vhost_id, response_class="reverse_proxy"),
+         [opts.case_vhost_id]),
+    )
+    for event, targets in checks:
+        receipt = _receipt(opts, event)
+        with mock.patch.object(
+                mojosec_correlation.settings, "get_static",
+                side_effect=_settings(opts, vhost_ids=targets)), \
+                mock.patch.object(mojosec_correlation, "_record_metric"):
+            rejected.append(mojosec_correlation.contribute(receipt, event))
+        receipt.refresh_from_db()
+        th.assert_true(receipt.case_contributed_at is None,
+                       "unbound wire evidence must leave the raw receipt untouched")
+
+    valid = evidence("6" * 64, opts.case_vhost_id)
+    valid_receipt = _receipt(opts, valid)
+    with mock.patch.object(
+            mojosec_correlation.settings, "get_static", side_effect=_settings(opts)), \
+            mock.patch.object(mojosec_correlation, "_record_metric"):
+        with CaptureQueriesContext(connection) as binding_queries:
+            binding = mojosec_correlation._shadow_binding(valid_receipt, valid)
+        case, contributed = mojosec_correlation.contribute(valid_receipt, valid)
+
+    th.assert_true(all(item == (None, False) for item in rejected),
+                   "nonexistent, cross-group, and stale policy evidence must fail closed")
+    th.assert_true(contributed and case.resource_id == f"vhost:{opts.case_vhost_id}",
+                   "matching tenant ownership and authoritative policy must contribute")
+    th.assert_true(binding is not None and len(binding_queries.captured_queries) <= 1,
+                   "bounded target authorization must resolve with one VHost lookup")
+    th.assert_eq((case.policy_version, case.urgency_reason),
+                 (5, "trusted_impossible_path"),
+                 "trusted classification must use the saved VHost policy")
+
+
+@th.django_unit_test()
+def test_future_evidence_uses_receipt_time_outside_static_skew(opts):
+    from mojo.apps.incident.services import mojosec_correlation
+    from mojo.helpers import dates
+
+    future = dates.utcnow() + dates.timedelta(days=1)
+    observed = future.isoformat().replace("+00:00", "Z")
+    event = _event("web.probe", "7" * 64, attributes={
+        "source_ip": "198.51.100.155", "method": "GET", "status": 404,
+        "request_uri": "/wp-login.php", "response_class": "impossible_path",
+        "resource_id": f"vhost:{opts.case_vhost_id}", "edge_policy_version": 5,
+        "scheme": "https",
+    }, observed=observed)
+    receipt = _receipt(opts, event)
+    with mock.patch.object(
+            mojosec_correlation.settings, "get_static", side_effect=_settings(opts)), \
+            mock.patch.object(mojosec_correlation, "_record_metric"):
+        case, contributed = mojosec_correlation.contribute(receipt, event)
+        within = receipt.created + dates.timedelta(seconds=299)
+        bounded_within = mojosec_correlation._bounded_observed(within, receipt.created)
+
+    th.assert_true(contributed, "future-skew handling must not alter ingestion authority")
+    th.assert_eq(case.last_seen, receipt.created,
+                 "far-future sensor time must not control case ordering or windows")
+    th.assert_eq(bounded_within, within,
+                 "timestamps within the configured skew remain sensor-observed time")
+    th.assert_eq(receipt.replay_features["event"]["last_seen"], observed,
+                 "receipt replay evidence must retain the raw sensor timestamp")
 
 
 @th.django_unit_test()
@@ -298,7 +421,10 @@ def test_case_serialization_has_constant_query_count(opts):
 
 @th.django_unit_test()
 def test_case_read_contract_requires_security_and_stays_bounded(opts):
+    from mojo.apps.incident.models import MojoSecCase
+    from mojo.apps.incident.services import mojosec_correlation
     from mojo.decorators.limits import clear_rate_limits
+    from mojo.helpers import dates
 
     opts.client.logout()
     anonymous = opts.client.get("/api/incident/mojosec/case")
@@ -321,8 +447,31 @@ def test_case_read_contract_requires_security_and_stays_bounded(opts):
                  f"a global security viewer must read cases: {listed.response}")
     th.assert_true(len(listed.response.data) <= 1,
                    "the read contract must enforce its requested bounded page")
+    page_too_deep = opts.client.get("/api/incident/mojosec/case?page=101")
+    th.assert_eq(page_too_deep.status_code, 400,
+                 "the list contract must reject offsets beyond page 100")
+    page_too_wide = opts.client.get("/api/incident/mojosec/case?page_size=101")
+    th.assert_eq(page_too_wide.status_code, 400,
+                 "the list contract must reject page sizes beyond 100")
     metrics = opts.client.get("/api/incident/mojosec/case-metrics?days=1")
     th.assert_eq(metrics.status_code, 200,
                  f"the bounded aggregate metrics contract must be readable: {metrics.response}")
     th.assert_true("samples" not in metrics.response.data,
                    "metrics must never expose evidence arrays")
+
+    originals = list(MojoSecCase.objects.filter(
+        sensor_id=PREFIX, resource_id=f"vhost:{opts.case_vhost_id}").values_list(
+            "pk", "last_seen"))
+    th.assert_true(bool(originals),
+                   "the metrics upper-bound proof requires a bound shadow case")
+    MojoSecCase.objects.filter(pk__in=[row[0] for row in originals]).update(
+        last_seen=dates.utcnow() + dates.timedelta(days=1))
+    with mock.patch.object(
+            mojosec_correlation.settings, "get_static", side_effect=_settings(opts)):
+        future_metrics = opts.client.get(
+            f"/api/incident/mojosec/case-metrics?days=1&resource_id="
+            f"vhost:{opts.case_vhost_id}")
+    th.assert_eq(future_metrics.response.data["cases"], 0,
+                 "metrics must exclude rows beyond the configured future bound")
+    for pk, last_seen in originals:
+        MojoSecCase.objects.filter(pk=pk).update(last_seen=last_seen)

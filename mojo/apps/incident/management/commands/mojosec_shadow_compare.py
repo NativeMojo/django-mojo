@@ -18,6 +18,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         from mojo.apps.incident.models import MojoSecCase, MojoSecReceipt
+        from mojo.apps.incident.services import mojosec_correlation
 
         hours = options["hours"]
         if not 1 <= hours <= 168:
@@ -26,11 +27,15 @@ class Command(BaseCommand):
             raise CommandError("--max-cases must be 1-100000")
         if not 1 <= options["min_compression"] <= 1000000000:
             raise CommandError("--min-compression must be 1-1000000000")
-        since = dates.utcnow() - dates.timedelta(hours=hours)
+        now = dates.utcnow()
+        since = now - dates.timedelta(hours=hours)
+        future_bound = now + dates.timedelta(
+            seconds=mojosec_correlation.future_skew_seconds())
         resource_id = f"vhost:{options['vhost']}"
         cases = MojoSecCase.objects.filter(
             installation_key_id=options["installation_key"],
-            resource_id=resource_id, last_seen__gte=since)
+            resource_id=resource_id, last_seen__gte=since,
+            last_seen__lte=future_bound)
         totals = cases.aggregate(
             cases=Count("id"), occurrences=Sum("occurrence_count"),
             receipts=Sum("receipt_count"), projected_events=Sum("projected_event_count"),

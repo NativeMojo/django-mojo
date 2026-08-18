@@ -16,6 +16,8 @@ from mojo.helpers.settings import settings
 logger = logit.get_logger(__name__, "incident.log")
 EVALUATOR_VERSION = 1
 MAX_SAMPLES = 8
+DEFAULT_FUTURE_SKEW_SECONDS = 300
+MAX_FUTURE_SKEW_SECONDS = 3600
 _TOKEN = re.compile(r"^[A-Za-z0-9._:-]{1,96}$")
 _WORDPRESS = re.compile(r"^/(?:wp-admin|wp-login\.php|wp-content|xmlrpc\.php)(?:/|$)")
 _PHP = re.compile(r"\.(?:php[3-8]?|phtml)(?:/|$)")
@@ -37,6 +39,25 @@ def _observed(value):
     if parsed.tzinfo is None:
         return None
     return parsed.astimezone(datetime.timezone.utc)
+
+
+def future_skew_seconds():
+    """Return the bounded static-only clock-skew allowance."""
+    value = settings.get_static(
+        "MOJOSEC_CASE_FUTURE_SKEW_SECONDS", DEFAULT_FUTURE_SKEW_SECONDS)
+    if (not isinstance(value, int) or isinstance(value, bool) or
+            not 0 <= value <= MAX_FUTURE_SKEW_SECONDS):
+        return 0
+    return value
+
+
+def _bounded_observed(observed, receipt_time):
+    if not isinstance(receipt_time, datetime.datetime) or receipt_time.tzinfo is None:
+        receipt_time = dates.utcnow()
+    receipt_time = receipt_time.astimezone(datetime.timezone.utc)
+    if observed > receipt_time + datetime.timedelta(seconds=future_skew_seconds()):
+        return receipt_time
+    return observed
 
 
 def _window(value, minutes):
@@ -104,9 +125,7 @@ def _safe_expected(attributes):
     return {"deployment_id": deployment, "operation_kind": operation}
 
 
-def _case_input(receipt, sensor_event):
-    from . import mojosec_evidence
-
+def _case_input(receipt, sensor_event, web_binding=None):
     kind = sensor_event.get("kind")
     attributes = sensor_event.get("attributes")
     if not isinstance(attributes, dict):
@@ -114,31 +133,25 @@ def _case_input(receipt, sensor_event):
     observed = _observed(sensor_event.get("last_seen"))
     if observed is None:
         return None
+    observed = _bounded_observed(observed, receipt.created)
     count = sensor_event.get("count")
     if not isinstance(count, int) or isinstance(count, bool) or count < 1:
         return None
 
     if kind in ("web.probe", "web.denied", "web.error"):
-        projection = mojosec_evidence.project(
-            kind, attributes, count, sensor_event.get("last_seen"))
+        if web_binding is None:
+            return None
+        projection = web_binding["projection"]
         projected = projection["evidence"]
-        resource_id = projected.get("resource_id", "")
-        response_class = projected.get("response_class", "")
-        policy_version = projected.get("edge_policy_version")
-        trusted = bool(
-            re.fullmatch(r"vhost:(?:0|[1-9][0-9]{0,19})", resource_id) and
-            response_class in (
-                "impossible_path", "redirect", "reverse_proxy", "site_api",
-                "spa_fallback", "static_site") and
-            isinstance(policy_version, int))
+        resource_id = web_binding["resource_id"]
+        response_class = projected["response_class"]
+        policy_version = web_binding["policy"]["version"]
         family = _web_family(projected.get("path"))
         network = _source_network(projection.get("source_ip"))
         start, end = _window(observed, 60)
         is_redirect = (
             projected.get("scheme") == "http" and projected.get("status") == 301)
-        if not trusted:
-            urgency, reason = "info", "unknown_edge_evidence"
-        elif response_class == "impossible_path":
+        if response_class == "impossible_path":
             urgency, reason = "warning", "trusted_impossible_path"
         else:
             urgency, reason = "info", "trusted_bounded_response"
@@ -156,7 +169,8 @@ def _case_input(receipt, sensor_event):
             "occurrences": count, "projected_events": 0 if is_redirect else 1,
             "urgency": urgency, "urgency_reason": reason, "sample": sample,
             "sample_key": _digest(family, network, resource_id, projected.get("path", "/")),
-            "correlation_key": _digest("web", family, network, resource_id or "unknown"),
+            "correlation_key": _digest(
+                "web", family, network, resource_id, policy_version),
         }
 
     if kind in ("fim.change", "fim.overflow", "fim.expected_change_error"):
@@ -191,6 +205,8 @@ def _case_input(receipt, sensor_event):
 
 def _shadow_targets():
     value = settings.get_static("MOJOSEC_CASE_SHADOW_TARGETS", [], kind="list")
+    if len(value) > 32:
+        return []
     targets = []
     for row in value:
         if not isinstance(row, dict) or not set(row).issubset(
@@ -213,22 +229,59 @@ def _shadow_targets():
     return targets
 
 
-def shadow_enabled(receipt, sensor_event):
+def _shadow_binding(receipt, sensor_event):
+    from mojo import errors as merrors
+    from mojo.apps.edge.models import Vhost
+    from mojo.apps.edge import validators
+    from . import mojosec_evidence
+
     kind = sensor_event.get("kind")
-    resource = ""
     attributes = sensor_event.get("attributes")
-    if isinstance(attributes, dict):
-        resource = attributes.get("resource_id", "")
-    match = re.fullmatch(r"vhost:(?P<id>[1-9][0-9]{0,19})", str(resource))
-    vhost_id = int(match.group("id")) if match else None
+    if not isinstance(attributes, dict):
+        attributes = {}
     for target in _shadow_targets():
         if target["installation_key_id"] != receipt.api_key_id:
             continue
         if kind and kind.startswith("fim.") and target["include_fim"]:
-            return True
-        if kind and kind.startswith("web.") and vhost_id in target["vhost_ids"]:
-            return True
-    return False
+            return {"kind": "fim"}
+        if not kind or not kind.startswith("web."):
+            continue
+        projection = mojosec_evidence.project(
+            kind, attributes, sensor_event.get("count"),
+            sensor_event.get("last_seen"))
+        evidence = projection["evidence"]
+        resource_id = evidence.get("resource_id", "")
+        match = re.fullmatch(r"vhost:(?P<id>[1-9][0-9]{0,19})", resource_id)
+        vhost_id = int(match.group("id")) if match else None
+        if vhost_id not in target["vhost_ids"]:
+            continue
+        vhost = Vhost.objects.select_related("domain").filter(
+            pk=vhost_id, is_enabled=True,
+            domain__group__api_keys__pk=receipt.api_key_id).first()
+        if vhost is None:
+            return None
+        try:
+            policy = validators.validate_mojosec_policy(vhost.mojosec_policy)
+        except (merrors.ValueException, TypeError, ValueError):
+            return None
+        family = _web_family(evidence.get("path"))
+        response_class = evidence.get("response_class")
+        response_matches = (
+            response_class == policy.get("response_class") or
+            (response_class == "impossible_path" and
+             family in policy.get("impossible_path_families", ())))
+        if (not policy or evidence.get("edge_policy_version") != policy["version"] or
+                not response_matches):
+            return None
+        return {
+            "kind": "web", "policy": policy, "projection": projection,
+            "resource_id": f"vhost:{vhost.pk}",
+        }
+    return None
+
+
+def shadow_enabled(receipt, sensor_event):
+    return _shadow_binding(receipt, sensor_event) is not None
 
 
 def _record_metric(slug, count=1):
@@ -245,9 +298,12 @@ def contribute(receipt, sensor_event):
     from mojo.apps.incident.models import (
         MojoSecCase, MojoSecCaseTransition, MojoSecReceipt)
 
-    if not shadow_enabled(receipt, sensor_event):
+    binding = _shadow_binding(receipt, sensor_event)
+    if binding is None:
         return None, False
-    normalized = _case_input(receipt, sensor_event)
+    normalized = _case_input(
+        receipt, sensor_event,
+        web_binding=binding if binding["kind"] == "web" else None)
     if normalized is None:
         _record_metric("failures")
         return None, False

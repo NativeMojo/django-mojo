@@ -144,11 +144,13 @@ def on_mojosec_metrics(request):
     return {"status": True, "data": metrics}
 
 
-def _bounded_positive(value, default, maximum):
+def _bounded_positive(value, default, maximum, name="value"):
     value = _int_param(value, default)
     if not isinstance(value, int) or isinstance(value, bool) or value < 1:
-        raise merrors.ValueException("pagination values must be positive integers")
-    return min(value, maximum)
+        raise merrors.ValueException(f"{name} must be a positive integer")
+    if value > maximum:
+        raise merrors.ValueException(f"{name} must be at most {maximum}")
+    return value
 
 
 def _case_row(case, detail=False):
@@ -227,8 +229,9 @@ def on_mojosec_case(request, pk=None):
                 not resource_id.startswith(("vhost:", "installation:"))):
             raise merrors.ValueException("invalid MojoSec case resource_id")
         queryset = queryset.filter(resource_id=resource_id)
-    page = _bounded_positive(request.DATA.get("page"), 1, 1000000)
-    page_size = _bounded_positive(request.DATA.get("page_size"), 50, 100)
+    page = _bounded_positive(request.DATA.get("page"), 1, 100, name="page")
+    page_size = _bounded_positive(
+        request.DATA.get("page_size"), 50, 100, name="page_size")
     start = (page - 1) * page_size
     rows = list(queryset.order_by("-last_seen", "-id")[start:start + page_size + 1])
     return {
@@ -244,11 +247,15 @@ def on_mojosec_case(request, pk=None):
 @md.requires_global_perms("view_security", "security")
 def on_mojosec_case_metrics(request):
     from mojo.apps.incident.models import MojoSecCase
+    from mojo.apps.incident.services import mojosec_correlation
     from mojo.helpers import dates
 
-    days = _bounded_positive(request.DATA.get("days"), 1, 90)
+    days = _bounded_positive(request.DATA.get("days"), 1, 90, name="days")
+    now = dates.utcnow()
     queryset = MojoSecCase.objects.filter(
-        last_seen__gte=dates.utcnow() - dates.timedelta(days=days))
+        last_seen__gte=now - dates.timedelta(days=days),
+        last_seen__lte=now + dates.timedelta(
+            seconds=mojosec_correlation.future_skew_seconds()))
     resource_id = request.DATA.get("resource_id")
     if resource_id not in (None, ""):
         if not isinstance(resource_id, str) or len(resource_id) > 96:

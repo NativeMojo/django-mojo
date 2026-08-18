@@ -289,8 +289,10 @@ member grants do not authorize them, and there are no case mutation, approval,
 recommendation, or execution endpoints. The authoritative Event/Incident feed
 continues unchanged while cases are in shadow mode.
 
-List parameters are `page` (default 1), `page_size` (maximum 100), and indexed
-exact filters `state`, `urgency`, `sensor_kind`, and `resource_id`. State is
+List parameters are `page` (default 1, maximum 100), `page_size` (default 50,
+maximum 100), and indexed exact filters `state`, `urgency`, `sensor_kind`, and
+`resource_id`. Values must be positive integers; values over 100 return HTTP
+400 instead of being clamped, so the maximum offset is 9,900 rows. State is
 `observing` or `elevated`; urgency is `info`, `warning`, `high`, or `critical`;
 sensor kind is `web` or `fim`. The response includes `has_more` rather than an
 unbounded total scan. A list response has this envelope:
@@ -359,18 +361,35 @@ It never returns evidence arrays. Occurrences, receipts, distinct/sample
 counts, and projected Events have different meanings; clients must not treat
 one as an alias for another. HTTP-scheme 301 contributions do not increment
 `projected_event_count`; the shadow evaluator does not try to pair redirect
-twins.
+twins. Metrics exclude rows later than server time plus the configured future
+skew.
 
 Shadow rollout is selected only by the server's file/static
 `MOJOSEC_CASE_SHADOW_TARGETS` setting, initially for one installation key and
 one VHost. It cannot be enabled by this API or by a DB-backed setting. Operators
+should expect a web contribution only when the enabled VHost exists, its
+owning Domain group matches the installation API key's group, and its saved
+policy version and response class match the bounded edge evidence.
+`impossible_path` additionally requires the normalized family to be enabled in
+that policy. Missing, cross-group, disabled, stale, or mismatched evidence
+fails closed to receipt-only evidence. At most 32 target rows and 32 VHost ids
+per row are accepted; exceeding either bound disables the target list. Operators
 observe at least one normal traffic cycle, inspect case urgency and the metrics
 above, and run the bounded `mojosec_shadow_compare` command for receipt
 fidelity, case cardinality, and compression gates. Rollback sets the target
 list to empty and reconverges the application. Existing cases remain readable,
 and receipts, Events, Incidents, acknowledgements, handlers, and notifications
 are unchanged; only new shadow contributions stop. Shadow cases do not become
-an action or notification authority in this rollout.
+an action or notification authority in this rollout. The shadow correlation
+dual-write is acknowledged fail-open and has no case replay outbox in Slice 1;
+Slice 2 must add bounded replay of missed contributions before notification or
+action ownership can move to cases.
+
+`MOJOSEC_CASE_FUTURE_SKEW_SECONDS` is file/static-only, defaults to 300 seconds,
+and accepts 0–3600. Invalid values fail closed to zero. A sensor timestamp over
+receipt creation time plus this allowance uses receipt time for case windows
+and ordering without changing raw receipt evidence. Case metrics and the
+bounded comparison command use the same upper bound.
 
 For Edge VHosts, `mojosec_policy` is the versioned opt-in configuration exposed
 on the normal VHost graph:
