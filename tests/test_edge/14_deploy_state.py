@@ -273,6 +273,46 @@ def test_deploy_status_failure_evidence(opts):
     deploy.clear_status(row.pk)
 
 
+@th.django_unit_test(
+    "deploy_warning files and links a fixed-phase incident without veto power")
+def test_deploy_warning_incident(opts):
+    import uuid
+
+    from django.core.management import call_command
+    import mojo.apps.incident.reporter as reporter_module
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import deploy
+
+    runner = deploy.local_runner_id()
+    row = PlatformDeployment.objects.create(
+        sha=SHA_C, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=[runner], transitions=[])
+    deploy.arm_status(SHA_C, deployment_id=row.pk)
+
+    incident = mock.Mock(return_value=mock.Mock(pk=9131))
+    with mock.patch.object(reporter_module, "report_event", incident):
+        call_command("deploy_warning", "timers")
+
+    row.refresh_from_db()
+    th.assert_true(incident.called,
+                   "an auxiliary deployment failure must create an incident")
+    message = incident.call_args.args[0]
+    th.assert_in("phase=timers", message,
+                 f"the incident must carry only the fixed warning phase, got {message!r}")
+    th.assert_eq(incident.call_args.kwargs.get("level"), 5,
+                 f"a non-veto warning must be level 5, got {incident.call_args!r}")
+    th.assert_in("9131", (row.links or {}).get("incident_events", []),
+                 f"the deployment must link its warning incident, got {row.links!r}")
+
+    # The command deliberately swallows an incident-system outage. The shell
+    # may warn that reporting was unavailable, but the healthy app deploy must
+    # never become non-zero because its incident recorder is down.
+    with mock.patch.object(
+            reporter_module, "report_event", side_effect=RuntimeError("offline")):
+        call_command("deploy_warning", "cron")
+    deploy.clear_status(row.pk)
+
+
 @th.django_unit_test("deploy_status persists proof before exposing canary success")
 def test_deploy_status_proof_precedes_success(opts):
     import os

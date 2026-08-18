@@ -30,10 +30,11 @@
 #   NGINX_ETC / SYSTEMD_ETC / CRON_ETC / LOGROTATE_ETC  test seams, prod defaults
 #   MOJOSEC_ETC / MOJOSEC_STABLE_HELPER                 test seams, prod defaults
 #
-# THIS SCRIPT FAILS LOUDLY ON PURPOSE. A deploy that half-worked and said
-# nothing is worse than one that stops. If you are tempted to add `|| true`
-# to something here, the question to answer first is: what should happen if
-# this step fails? "Carry on silently" is almost never the answer.
+# The release-critical path fails loudly: dependencies, migrations, rendered
+# web configuration, the web service and real request probes. Host housekeeping
+# (security sensor, auxiliary units/timers, cron and log ownership) reports a
+# deployment warning and continues. A healthy release must not be rolled back
+# because an auxiliary control plane is temporarily unhealthy.
 
 set -euo pipefail
 
@@ -54,9 +55,26 @@ MOJOSEC_PYTHON="${MOJOSEC_PYTHON:-/usr/bin/python3}"
 cd "$PROJ_PATH"
 
 DEPLOY_DIR="${PROJ_PATH}/var/deploy"
+DEPLOY_WARNINGS="${PROJ_PATH}/var/deploy_warnings"
+rm -f -- "$DEPLOY_WARNINGS"
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 die() { echo "[$(date '+%H:%M:%S')] FATAL: $*" >&2; exit 1; }
+warn() { echo "[$(date '+%H:%M:%S')] WARN: $*" >&2; }
+
+# Only fixed phase names enter the durable incident system. Command output is
+# still visible in update.sh's bounded private capture, but is never copied to
+# an operator-facing incident where it could disclose credentials.
+record_warning() {
+    local phase="$1" message="$2"
+    warn "$message (phase=${phase}; deploy continues)"
+    if grep -Fqx "$phase" "$DEPLOY_WARNINGS" 2>/dev/null; then
+        return 0
+    fi
+    printf '%s\n' "$phase" >> "$DEPLOY_WARNINGS" 2>/dev/null || true
+    python3 "${PROJ_PATH}/bin/manage.py" deploy_warning "$phase" \
+        >/dev/null 2>&1 || warn "could not file deploy warning incident for ${phase}"
+}
 
 FRAMEWORK=""
 MIGRATE=0
@@ -74,6 +92,18 @@ install_file() {
     local src="$1" dest="$2"
     [[ -f "$src" ]] || die "expected file is missing: $src"
     trusted_change rendered-host-config "$dest" -- cp -f "$src" "$dest"
+}
+
+install_aux_file() {
+    local phase="$1" src="$2" dest="$3"
+    if [[ ! -f "$src" ]]; then
+        record_warning "$phase" "auxiliary source is missing: $src"
+        return 1
+    fi
+    if ! trusted_change rendered-host-config "$dest" -- cp -f "$src" "$dest"; then
+        record_warning "$phase" "could not install auxiliary host config: $dest"
+        return 1
+    fi
 }
 
 # The producer helper deliberately lives outside site-packages. A release that
@@ -170,17 +200,25 @@ MOJOSEC_CURRENT_HELPER="$(cd / && "$MOJOSEC_PYTHON" "${MOJOSEC_PY_FLAGS[@]}" -c 
     'import mojo.deploy.mojosec_changes as m; print(m.__file__)' 2>/dev/null || true)"
 if [ -n "$MOJOSEC_CURRENT_HELPER" ] && [ -f "$MOJOSEC_CURRENT_HELPER" ] && \
         [ ! -L "$MOJOSEC_CURRENT_HELPER" ]; then
+    helper_ok=1
     if [ "$MOJOSEC_STABLE_HELPER_AVAILABLE" = "1" ]; then
         trusted_change mojosec-producer-helper \
             "$(dirname "$MOJOSEC_STABLE_HELPER")" "$MOJOSEC_STABLE_HELPER" -- \
-            install -D -m 0755 "$MOJOSEC_CURRENT_HELPER" "$MOJOSEC_STABLE_HELPER"
+            install -D -m 0755 "$MOJOSEC_CURRENT_HELPER" "$MOJOSEC_STABLE_HELPER" \
+            || helper_ok=0
     else
-        install -D -m 0755 "$MOJOSEC_CURRENT_HELPER" "$MOJOSEC_STABLE_HELPER"
+        install -D -m 0755 "$MOJOSEC_CURRENT_HELPER" "$MOJOSEC_STABLE_HELPER" \
+            || helper_ok=0
     fi
-    stable_helper_is_safe \
-        || die "stable MojoSec trusted-change helper has unsafe ownership or mode"
-    MOJOSEC_STABLE_HELPER_AVAILABLE=1
-    [ ! -e "${MOJOSEC_ETC}/config.json" ] || MOJOSEC_CHANGES_AVAILABLE=1
+    if [ "$helper_ok" = "1" ] && stable_helper_is_safe; then
+        MOJOSEC_STABLE_HELPER_AVAILABLE=1
+        [ ! -e "${MOJOSEC_ETC}/config.json" ] || MOJOSEC_CHANGES_AVAILABLE=1
+    else
+        MOJOSEC_STABLE_HELPER_AVAILABLE=0
+        MOJOSEC_CHANGES_AVAILABLE=0
+        record_warning mojosec_helper \
+            "could not refresh the stable MojoSec trusted-change helper"
+    fi
 fi
 
 # ── migrations ───────────────────────────────────────────────────────────────
@@ -219,9 +257,9 @@ python3 -m mojo.deploy render --dest "$DEPLOY_DIR" \
         --web-user "$WEB_USER" --workers "$ASGI_WORKERS" \
     || die "template render failed — not converging /etc against an unknown contract"
 compgen -G "${DEPLOY_DIR}/cron.d/*" > /dev/null \
-    || die "render left ${DEPLOY_DIR}/cron.d empty — refusing to converge cron against nothing"
-compgen -G "${DEPLOY_DIR}/systemd/*" > /dev/null \
-    || die "render left ${DEPLOY_DIR}/systemd empty — refusing to converge systemd against nothing"
+    || record_warning cron "render produced no cron entries"
+[[ -f "${DEPLOY_DIR}/systemd/mojo-asgi.service" ]] \
+    || die "render did not produce mojo-asgi.service — the web app cannot start"
 
 # ── nginx ────────────────────────────────────────────────────────────────────
 
@@ -229,23 +267,36 @@ log "Updating nginx configs..."
 install_file "${PROJ_PATH}/aws/nginx/nginx.conf"  "${NGINX_ETC}/nginx.conf"
 install_file "${PROJ_PATH}/aws/nginx/asgi.inc"    "${NGINX_ETC}/asgi.inc"
 MOJOSEC_DJANGO_EXISTED=0
-MOJOSEC_DJANGO_BACKUP="$(mktemp "${DEPLOY_DIR}/.mojosec-django.XXXXXX")"
+MOJOSEC_DJANGO_BACKUP=""
 if [ -e "${NGINX_ETC}/django.inc" ]; then
     [ ! -L "${NGINX_ETC}/django.inc" ] \
         || die "refusing symlink nginx django.inc"
     [ -f "${NGINX_ETC}/django.inc" ] \
         || die "nginx django.inc is not a regular file"
-    cp -p "${NGINX_ETC}/django.inc" "$MOJOSEC_DJANGO_BACKUP"
-    MOJOSEC_DJANGO_EXISTED=1
 fi
 install_file "${PROJ_PATH}/aws/nginx/django.inc"  "${NGINX_ETC}/django.inc"
+# MojoSec may augment django.inc, but its rollback baseline is the NEW release
+# contract installed above — never the previous release's routes. Otherwise an
+# auxiliary sensor failure can silently resurrect stale auth routing.
+if MOJOSEC_DJANGO_BACKUP="$(mktemp "${DEPLOY_DIR}/.mojosec-django.XXXXXX")" && \
+        cp -p "${NGINX_ETC}/django.inc" "$MOJOSEC_DJANGO_BACKUP"; then
+    MOJOSEC_DJANGO_EXISTED=1
+else
+    [ -z "$MOJOSEC_DJANGO_BACKUP" ] || rm -f -- "$MOJOSEC_DJANGO_BACKUP"
+    MOJOSEC_DJANGO_BACKUP=""
+    record_warning mojosec "could not snapshot the nginx baseline; skipping MojoSec"
+fi
 
 if compgen -G "${PROJ_PATH}/aws/nginx/sec.d/*.conf" > /dev/null; then
-    trusted_change rendered-nginx "${NGINX_ETC}/sec.d" -- \
-        mkdir -p "${NGINX_ETC}/sec.d"
-    for source in "${PROJ_PATH}/aws/nginx/sec.d/"*.conf; do
-        install_file "$source" "${NGINX_ETC}/sec.d/$(basename "$source")"
-    done
+    if trusted_change rendered-nginx "${NGINX_ETC}/sec.d" -- \
+            mkdir -p "${NGINX_ETC}/sec.d"; then
+        for source in "${PROJ_PATH}/aws/nginx/sec.d/"*.conf; do
+            install_aux_file nginx_security \
+                "$source" "${NGINX_ETC}/sec.d/$(basename "$source")" || true
+        done
+    else
+        record_warning nginx_security "could not prepare nginx security includes"
+    fi
 fi
 
 # Repo-owned vhosts, converged on every deploy — the repo's aws/nginx/conf.d/
@@ -271,6 +322,7 @@ log "  converged ${VHOSTS} vhost(s) from aws/nginx/conf.d"
 # or the application-writable project tree. `observe` reports only; all ban
 # policy remains central. best_effort makes an unenrolled old node a warning,
 # while required makes a configured fleet fail closed at deploy time.
+converge_mojosec() {
 log "Converging MojoSec (${MOJOSEC_MODE}, ${MOJOSEC_DEPLOY_CRITICALITY})..."
 restore_mojosec_django() {
     if [ "$MOJOSEC_DJANGO_EXISTED" = "1" ]; then
@@ -482,6 +534,27 @@ else
              die "cannot retire MojoSec provenance assets after module-absent handoff"; }
 fi
 rm -f -- "$MOJOSEC_DJANGO_BACKUP"
+}
+
+# MojoSec is an observe-and-report subsystem, not an application availability
+# gate. Run it with strict internal rollback, then continue from the new
+# release's nginx baseline if convergence itself fails. The later nginx test
+# remains fatal, so this can never wave through a broken serving graph.
+MOJOSEC_RC=0
+if [ -n "$MOJOSEC_DJANGO_BACKUP" ]; then
+    set +e
+    ( set -e; converge_mojosec )
+    MOJOSEC_RC=$?
+    set -e
+fi
+if [ "$MOJOSEC_RC" -ne 0 ]; then
+    if [ -f "$MOJOSEC_DJANGO_BACKUP" ]; then
+        cp -p "$MOJOSEC_DJANGO_BACKUP" "${NGINX_ETC}/django.inc" \
+            || die "cannot restore the new-release nginx baseline after MojoSec failure"
+        rm -f -- "$MOJOSEC_DJANGO_BACKUP"
+    fi
+    record_warning mojosec "MojoSec convergence failed and restored its prior state"
+fi
 
 # ── retired names ────────────────────────────────────────────────────────────
 #
@@ -510,7 +583,9 @@ if [[ -f "$RETIRED_LIST" ]]; then
         esac
         if [[ -f "$target" ]]; then
             log "  retiring declared name: ${line}"
-            trusted_change retired-node-config "$target" -- rm -f "$target"
+            trusted_change retired-node-config "$target" -- rm -f "$target" \
+                || record_warning retired_config \
+                    "could not retire declared host config: ${line}"
         fi
     done < "$RETIRED_LIST"
 fi
@@ -520,7 +595,7 @@ fi
 # restart the app behind a web server running configuration that no longer
 # matches the code that was just installed.
 nginx -t || die "nginx config test failed — not reloading, and not restarting the app"
-systemctl reload nginx
+systemctl reload nginx || die "nginx passed validation but could not reload"
 
 # ── systemd ──────────────────────────────────────────────────────────────────
 #
@@ -530,25 +605,38 @@ systemctl reload nginx
 
 log "Updating systemd units..."
 UNIT_SRC="${DEPLOY_DIR}/systemd"
+# The ASGI unit is the application. It remains release-critical.
+install_file "${UNIT_SRC}/mojo-asgi.service" "${SYSTEMD_ETC}/mojo-asgi.service"
+systemctl daemon-reload || die "systemd could not load the mojo-asgi unit"
+
+# Everything else is background operation. A bad timer or maintenance service
+# is visible and repairable, but cannot roll back a web app that can serve.
 if compgen -G "${UNIT_SRC}/*.service" > /dev/null; then
     for source in "${UNIT_SRC}/"*.service; do
-        install_file "$source" "${SYSTEMD_ETC}/$(basename "$source")"
+        [[ "$(basename "$source")" = "mojo-asgi.service" ]] && continue
+        install_aux_file auxiliary_systemd \
+            "$source" "${SYSTEMD_ETC}/$(basename "$source")" || true
     done
 fi
 if compgen -G "${UNIT_SRC}/*.timer" > /dev/null; then
     for source in "${UNIT_SRC}/"*.timer; do
-        install_file "$source" "${SYSTEMD_ETC}/$(basename "$source")"
+        install_aux_file auxiliary_systemd \
+            "$source" "${SYSTEMD_ETC}/$(basename "$source")" || true
     done
 fi
-systemctl daemon-reload
+systemctl daemon-reload \
+    || record_warning auxiliary_systemd "systemd rejected auxiliary unit changes"
 
 # Enable any timer we ship. Enabling is idempotent, and a timer that is
 # present but never enabled does nothing while looking installed.
 for unit in "${UNIT_SRC}/"*.timer; do
     [[ -e "$unit" ]] || continue
     name="$(basename "$unit")"
-    systemctl enable --now "$name" || die "could not enable $name"
-    log "  enabled $name"
+    if systemctl enable --now "$name"; then
+        log "  enabled $name"
+    else
+        record_warning timers "could not enable auxiliary timer: $name"
+    fi
 done
 
 # ── cron ─────────────────────────────────────────────────────────────────────
@@ -567,7 +655,7 @@ done
 log "Updating cron entries..."
 if compgen -G "${DEPLOY_DIR}/cron.d/*" > /dev/null; then
     for source in "${DEPLOY_DIR}/cron.d/"*; do
-        install_file "$source" "${CRON_ETC}/$(basename "$source")"
+        install_aux_file cron "$source" "${CRON_ETC}/$(basename "$source")" || true
     done
 fi
 for installed in "${CRON_ETC}"/*; do
@@ -577,7 +665,8 @@ for installed in "${CRON_ETC}"/*; do
     grep -q "${PROJ_PATH}" "$installed" 2>/dev/null || continue
     [[ -f "${DEPLOY_DIR}/cron.d/${name}" ]] && continue
     log "  retiring stale project cron: ${name}"
-    trusted_change retired-project-cron "$installed" -- rm -f "$installed"
+    trusted_change retired-project-cron "$installed" -- rm -f "$installed" \
+        || record_warning cron "could not retire stale project cron: ${name}"
 done
 
 # The root-run manage.py steps above can be the FIRST writer of a framework
@@ -587,7 +676,7 @@ done
 # establishes the full APP_USER:WEB_USER setgid model).
 if [[ -d "${PROJ_PATH}/var/logs" ]]; then
     chown -R "${APP_USER}:${WEB_USER}" "${PROJ_PATH}/var/logs" 2>/dev/null \
-        || log "WARN: could not normalize var/logs ownership (non-fatal off-node)"
+        || record_warning log_ownership "could not normalize var/logs ownership"
 fi
 
 # ── restart ──────────────────────────────────────────────────────────────────

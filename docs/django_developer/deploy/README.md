@@ -370,7 +370,7 @@ project on its next deploy instead of dying in a template nobody re-clones.
 `update.sh` is the fleet update entry (see `docs/django_developer/edge/deploy.md`
 for the orchestrator contract): deploy mode checks out the named sha,
 installs the pinned framework, reports `deploy_status`, and on a canary
-failure reports **before** rolling back; `--manual` is the hands-on path;
+release failure reports **before** rolling back; `--manual` is the hands-on path;
 bare invocation is refused. Deploy mode publishes the installed commit and
 attempt UUID as one atomic `var/deploy_identity.json` before its v2 success
 callback; the old `deploy_sha` / `deployment_uuid` pair is read only as a
@@ -380,8 +380,19 @@ sudo-runs: project deps first, framework last, `migrate_locked` only under
 `conf.d` (`.example` excluded, copied count logged), `node_retired.conf`
 processing, `nginx -t` gate + reload, systemd + cron install from
 `var/deploy/`, the structural stale-cron sweep, `var/logs` ownership, restart,
-and a `PROBE_URL` health gate. It fails loudly at every step — a deploy that
-half-worked and said nothing is worse than one that stops.
+and a `PROBE_URL` health gate.
+
+The rollback boundary is deliberately narrow. Dependency/framework install,
+migrations, collectstatic, render, the app's nginx/systemd contract, nginx
+validation/reload, `mojo-asgi` restart, `PROBE_URL`, and `sanity_check` are
+release-critical: failure means the candidate cannot be trusted to serve and
+the canary rolls back. MojoSec, security include refresh, auxiliary services,
+timers, cron, retired-name cleanup and log ownership are housekeeping: failure
+files a level-5 `edge_deploy` incident with a fixed phase and continues. Raw
+command output never enters the incident. A deployment identity/callback
+failure stops fleet progression and leaves the healthy canary in place so the
+still-running parent job can record it; bookkeeping never rolls healthy code
+back.
 
 Mid-run self-replacement is designed in: the `pip install` inside post_deploy
 swaps both packaged files for new inodes, but the executing bash keeps its fd
@@ -398,9 +409,12 @@ an invalidation marker. Success atomically renames the canonical v2 manifest:
 
 The manifest must exist before the success callback, which carries
 `MOJO_DEPLOY_IDENTITY_READY=2`. A present-but-invalid manifest fails closed and
-never borrows the legacy pair. Rollback restores the snapshot only after reset,
-framework convergence, and sanity all succeed; an incomplete rollback leaves
-no manifest and retains the invalidation marker. A delivery already on the
+never borrows the legacy pair. A real application rollback restores the
+snapshot only after reset, framework convergence, and sanity all succeed; an
+incomplete rollback leaves no manifest and retains the invalidation marker.
+If identity publication or its callback fails after a healthy candidate is
+serving, the attempt remains unproven and fleet progression stops, but the
+candidate is not rolled back. A delivery already on the
 requested SHA/framework with a different attempt UUID still publishes that
 fresh UUID, performs its sanity/callback path, and reaches the normal
 jobman-last tail. Only the same SHA/framework/UUID is a true duplicate no-op.
@@ -576,9 +590,10 @@ mojo/deploy/templates/systemd/   mojo-asgi.service  config-sync.service  config-
 `@APP_USER@`, `@WEB_USER@`, `@WORKERS@` (plain string replacement, no
 engine), writes the results 0644 into `<dest>/{cron.d,systemd}`, then overlays
 the project's own `aws/cron.d/` and `aws/nginx/systemd/` files verbatim. It
-dies loudly on an unwritable dest or any placeholder left unsubstituted, and
-post_deploy dies if the rendered set comes back empty — /etc is never
-converged against an unknown contract.
+dies loudly on an unwritable dest or any placeholder left unsubstituted.
+`post_deploy` requires the rendered `mojo-asgi.service`; without it the web app
+cannot start. An empty cron set is a housekeeping warning, never an application
+rollback.
 
 On a root, production-shaped `${PROJ_PATH}/var/deploy` invocation, `render`
 also converges nginx's persistent spill contract before it writes templates.

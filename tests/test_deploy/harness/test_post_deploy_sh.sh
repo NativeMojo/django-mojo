@@ -420,21 +420,23 @@ assert_eq "$?" 0 "explicit MojoSec off run exits 0"
 assert_in_log "CMD python3 -E -P -m mojo.deploy.mojosec converge --mode off --criticality required" \
     "off/required reaches the exact package lifecycle command"
 
-echo "post_deploy.sh: MojoSec absence is distinct from a converge safety failure"
+echo "post_deploy.sh: MojoSec failures warn, restore the new route baseline, and continue"
 setup_env
 printf '# old graph\n# MojoSec exact receiver cap\ninclude /etc/nginx/snippets/mojosec_receiver.conf;\n' \
     > "$TMP/nginx_etc/django.inc"
-cp "$TMP/nginx_etc/django.inc" "$TMP/prior-django.inc"
 echo "1" > "$CTL/mojosec.converge.exit"
 run_post_deploy_env MOJOSEC_MODE="off" MOJOSEC_DEPLOY_CRITICALITY="required" -- \
     > "$OUT" 2>&1
-rc=$?
-if [ "$rc" -ne 0 ]; then ok "generic MojoSec converge failure exits non-zero"; else fail "generic MojoSec failure was masked"; fi
-if cmp -s "$TMP/prior-django.inc" "$TMP/nginx_etc/django.inc"; then
-    ok "generic failure restores exact pre-deploy django.inc bytes"
+assert_eq "$?" 0 "generic MojoSec failure does not veto a healthy app deploy"
+if cmp -s "$PROJ/aws/nginx/django.inc" "$TMP/nginx_etc/django.inc"; then
+    ok "generic failure restores the new release's django.inc bytes"
 else
-    fail "generic failure did not restore exact pre-deploy django.inc"
+    fail "generic failure did not restore the new release's django.inc"
 fi
+assert_has "$OUT" "phase=mojosec; deploy continues" \
+    "generic failure is an explicit deployment warning"
+assert_in_log "manage.py deploy_warning mojosec" \
+    "generic failure files a fixed-phase incident"
 assert_lacks "$OUT" "module absent" "generic failure never enters downgrade cleanup"
 
 setup_env
@@ -496,9 +498,7 @@ for prior in active inactive; do
     run_post_deploy_env MOJOSEC_MODE="off" MOJOSEC_DEPLOY_CRITICALITY="required" \
         MOJOSEC_AUDIT_HELPER="$helper" MOJOSEC_AUDIT_STATE="$state" \
         MOJOSEC_AUDIT_PYTHON=python3 -- > "$OUT" 2>&1
-    rc=$?
-    if [ "$rc" -ne 0 ]; then ok "old converge failure exits non-zero ($prior)"; \
-    else fail "old converge failure was masked ($prior)"; fi
+    assert_eq "$?" 0 "old converge failure does not veto the app deploy ($prior)"
     if [ "$prior" = "active" ]; then
         [ ! -f "$CTL/mojosec.inactive" ] && ok "old converge failure restores active" || \
             fail "old converge failure stranded active service stopped"
@@ -516,9 +516,7 @@ echo "3" > "$CTL/mojosec.preflight.exit"
 run_post_deploy_env MOJOSEC_MODE="observe" MOJOSEC_DEPLOY_CRITICALITY="required" \
     MOJOSEC_AUDIT_HELPER="$helper" MOJOSEC_AUDIT_STATE="$state" \
     MOJOSEC_AUDIT_PYTHON=python3 -- > "$OUT" 2>&1
-rc=$?
-if [ "$rc" -ne 0 ]; then ok "module-absent terminal failure exits non-zero"; \
-else fail "module-absent observe failure was masked"; fi
+assert_eq "$?" 0 "module-absent observe failure does not veto the app deploy"
 [ ! -f "$CTL/mojosec.inactive" ] && ok "module-absent failure restores active" || \
     fail "module-absent failure stranded active service stopped"
 assert_file "$helper" "module-absent terminal failure preserves provenance assets"
@@ -551,10 +549,10 @@ assert_has "$TMP/nginx_etc/conf.d/00_mojosec.conf" "old security log" \
     "failed downgrade cleanup restores prior security fragment"
 assert_has "$TMP/logrotate_etc/mojosec" "old rotation" \
     "failed downgrade cleanup restores prior rotation file"
-if cmp -s "$TMP/prior-django.inc" "$TMP/nginx_etc/django.inc"; then
-    ok "failed downgrade cleanup restores exact prior django.inc"
+if cmp -s "$PROJ/aws/nginx/django.inc" "$TMP/nginx_etc/django.inc"; then
+    ok "failed downgrade cleanup restores the new release's django.inc"
 else
-    fail "failed downgrade cleanup lost prior django.inc"
+    fail "failed downgrade cleanup lost the new release's django.inc"
 fi
 
 echo "post_deploy.sh: an enrolled node deploys under an ACTIVE trusted-change journal (item 2014)"
@@ -582,7 +580,7 @@ assert_in_log "CMD pip install django-mojo==9.9.9" "pip still runs through the p
 assert_in_log "migrate_locked" "the canary still migrates under the journal"
 assert_in_log "MOJOSEC_CWD /" "the converge child keeps its cwd invariant under the wrapper"
 
-echo "post_deploy.sh: an ACTIVE journal still fails loudly and rolls back a broken converge"
+echo "post_deploy.sh: an ACTIVE journal contains a broken converge without vetoing the app"
 setup_env
 echo '{}' > "$TMP/mojosec_etc/config.json"
 : > "$TMP/mojosec_lib/mojosec_changes.py"
@@ -590,15 +588,36 @@ printf '# active old graph\n' > "$TMP/nginx_etc/django.inc"
 cp "$TMP/nginx_etc/django.inc" "$TMP/prior-django.inc"
 echo "1" > "$CTL/mojosec.converge.exit"
 run_post_deploy --framework 9.9.9 > "$OUT" 2>&1
-rc=$?
-if [ "$rc" -ne 0 ]; then ok "a genuinely failing converge still exits non-zero under the journal"; \
-else fail "the journal masked a failing converge"; fi
+assert_eq "$?" 0 "a failing converge under the journal does not veto the app deploy"
 assert_has "$OUT" "FATAL: MojoSec deployment failed" "the real failure is still named"
-if cmp -s "$TMP/prior-django.inc" "$TMP/nginx_etc/django.inc"; then
-    ok "journaled rollback restores the exact prior django.inc"
+assert_has "$OUT" "phase=mojosec; deploy continues" \
+    "the contained journal failure is promoted to a deployment warning"
+if cmp -s "$PROJ/aws/nginx/django.inc" "$TMP/nginx_etc/django.inc"; then
+    ok "journaled rollback restores the new release's django.inc"
 else
-    fail "journaled rollback lost the prior django.inc"
+    fail "journaled rollback lost the new release's django.inc"
 fi
+
+echo "post_deploy.sh: auxiliary timer failure warns; web restart and probe still decide"
+setup_env
+cat > "$STUB/systemctl" <<'EOF'
+#!/bin/bash
+echo "CMD systemctl $*" >> "$CALLLOG"
+case "$1 $2" in
+    "is-active --quiet") exit 0 ;;
+    "is-enabled --quiet") exit 0 ;;
+    "enable --now") [[ "$3" = *.timer ]] && exit 1 ;;
+esac
+exit 0
+EOF
+chmod +x "$STUB/systemctl"
+run_post_deploy > "$OUT" 2>&1
+assert_eq "$?" 0 "timer failure does not veto a healthy app deploy"
+assert_has "$OUT" "phase=timers; deploy continues" "timer failure is explicit"
+assert_in_log "CMD systemctl restart mojo-asgi" \
+    "the web app still restarts after the timer warning"
+assert_in_log "CMD curl .*http://127.0.0.1/api/version" \
+    "the real app probe still gates the warned deploy"
 
 echo "post_deploy.sh: undeclared collision is inert; declared override applies"
 setup_env

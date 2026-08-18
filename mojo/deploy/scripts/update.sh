@@ -323,9 +323,21 @@ if [ "$MODE" = "deploy" ]; then
         exit 1
     }
 
+    fail_control_plane() {
+        # The candidate application has not proven broken. Leave it serving
+        # and let the still-running parent job file its durable node failure;
+        # rolling healthy code back because bookkeeping failed creates a
+        # second outage without repairing the control plane.
+        local step="$1"
+        log "deployment control-plane failure at: ${step}; healthy candidate is not rolled back"
+        python3 bin/manage.py deploy_warning deployment_control_plane \
+            >/dev/null 2>&1 || true
+        exit 1
+    }
+
     log "UPDATE STARTED deployment=${DEPLOYMENT} sha=${SHA} framework=${FRAMEWORK} migrate=${MIGRATE}"
     if [ "$SAME_RELEASE" != "1" ]; then
-        invalidate_identity || fail_deploy "identity invalidation"
+        invalidate_identity || fail_control_plane "identity invalidation"
         git fetch origin                    || fail_deploy "git fetch"
         git reset --hard "$SHA"             || fail_deploy "git reset to ${SHA}"
         git clean -fd                       || fail_deploy "git clean"
@@ -349,12 +361,13 @@ if [ "$MODE" = "deploy" ]; then
     if ! [[ "$LIVE_SHA" =~ ^[0-9a-f]{40}$ ]] || [[ "$LIVE_SHA" != "$SHA"* ]]; then
         fail_deploy "identity sha mismatch"
     fi
-    publish_identity "$LIVE_SHA" "$DEPLOYMENT" || fail_deploy "identity publish"
+    publish_identity "$LIVE_SHA" "$DEPLOYMENT" || fail_control_plane "identity publish"
 
     if [ "$MIGRATE" = "1" ] || [ "$SAME_RELEASE" = "1" ]; then
-        # A hard failure here (not exit 3) rolls back and leaves no candidate
-        # proof. v2 tells the command that the atomic identity is now readable.
-        report_status deploying "$SHA"  || fail_deploy "deploy_status report"
+        # Exit 3 means superseded and is tolerated by report_status. Any other
+        # callback failure stops fleet progression but leaves the already
+        # healthy, identity-published candidate serving.
+        report_status deploying "$SHA"  || fail_control_plane "deploy_status report"
     fi
 
 # ── manual mode ──────────────────────────────────────────────────────────────

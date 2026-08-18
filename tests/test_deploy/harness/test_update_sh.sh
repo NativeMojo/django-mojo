@@ -5,7 +5,7 @@
 # Runs the REAL packaged script in a throwaway PROJ_PATH with every external
 # command stubbed on PATH — each stub appends its argv to a call log, and
 # per-command control files script exit codes. The properties under test are
-# mostly ORDERINGS (report failed BEFORE rollback, jobman stop LAST) and
+# mostly ORDERINGS (release failure reports BEFORE rollback, jobman stop LAST) and
 # ABSENCES (fleet runs never touch deploy_status, a short-circuit fetches
 # nothing). Packaged delta under test: every sanity_check carries
 # --url "$SANITY_URL" — the skeleton default when the shim exports nothing,
@@ -335,7 +335,7 @@ assert_eq "$(manifest_value deployment "$PROJ/var/deploy_identity.json")" \
 assert_eq "$(grep "^CMD" "$CALLLOG" | tail -1 | grep -c "jobman stop")" 1 \
     "jobman stop is the LAST command"
 
-echo "update.sh: identity-boundary failure restores proof only after rollback succeeds"
+echo "update.sh: identity bookkeeping failure leaves the healthy candidate in place"
 setup_env
 printf '{"schema":2,"sha":"%s","deployment":"%s"}\n' \
     "1111111111111111111111111111111111111111" "$PREVIOUS_UUID" \
@@ -345,12 +345,19 @@ run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
 assert_eq "$?" 1 "identity publish failure remains nonzero"
 assert_not_in_log "deploy_status set deploying" \
     "identity publish failure never announces success"
-assert_eq "$(manifest_value deployment "$PROJ/var/deploy_identity.json")" \
-    "$PREVIOUS_UUID" "successful rollback restores the coherent prior identity"
-assert_eq "$(grep "^CMD" "$CALLLOG" | tail -1 | grep -c "jobman stop")" 1 \
-    "failed migrate still stops jobman last for restarted finalization"
+assert_eq "$(cat "$CTL/head.txt")" "$SHA_NEW" \
+    "identity bookkeeping failure does not roll healthy code back"
+[ -e "$PROJ/var/deploy_identity.invalid" ] && \
+    ok "failed identity publication remains explicitly unproven" || \
+    fail "failed identity publication exposed stale proof"
+assert_not_in_log "CMD sudo bash ./aws/post_deploy.sh --framework 1.5.0" \
+    "identity bookkeeping failure never invokes application rollback"
+assert_not_in_log "CMD jobman stop" \
+    "the live parent job remains available to persist the control-plane failure"
+assert_in_log "manage.py deploy_warning deployment_control_plane" \
+    "identity failure attempts a fixed-phase warning incident"
 
-echo "update.sh: post-identity failure restores on rollback, failed rollback leaves no proof"
+echo "update.sh: callback failure does not roll back a healthy, proven candidate"
 setup_env
 printf '{"schema":2,"sha":"%s","deployment":"%s"}\n' \
     "1111111111111111111111111111111111111111" "$PREVIOUS_UUID" \
@@ -361,7 +368,13 @@ assert_eq "$?" 1 "callback failure remains nonzero"
 assert_order "CMD mv .*deploy_identity.json" "deploy_status set deploying" \
     "candidate identity existed before the injected callback failure"
 assert_eq "$(manifest_value deployment "$PROJ/var/deploy_identity.json")" \
-    "$PREVIOUS_UUID" "successful rollback restores prior proof after invalidation"
+    "$DEPLOYMENT_UUID" "callback failure preserves the candidate's coherent proof"
+assert_eq "$(cat "$CTL/head.txt")" "$SHA_NEW" \
+    "callback failure leaves the healthy candidate code serving"
+assert_not_in_log "CMD sudo bash ./aws/post_deploy.sh --framework 1.5.0" \
+    "callback failure never invokes application rollback"
+assert_not_in_log "CMD jobman stop" \
+    "the parent job remains alive to persist the callback failure"
 
 setup_env
 printf '{"schema":2,"sha":"%s","deployment":"%s"}\n' \
@@ -369,13 +382,11 @@ printf '{"schema":2,"sha":"%s","deployment":"%s"}\n' \
     > "$PROJ/var/deploy_identity.json"
 touch "$CTL/deploy_status.fail_deploying" "$CTL/sudo.fail_second"
 run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
-assert_eq "$?" 1 "failed rollback remains nonzero"
-[ ! -e "$PROJ/var/deploy_identity.json" ] && ok "failed rollback leaves no identity proof" || \
-    fail "failed rollback left deploy_identity.json"
-[ -e "$PROJ/var/deploy_identity.invalid" ] && ok "failed rollback blocks legacy fallback" || \
-    fail "failed rollback did not leave the invalidation marker"
-assert_eq "$(grep "^CMD" "$CALLLOG" | tail -1 | grep -c "jobman stop")" 1 \
-    "failed rollback still reaches post-restart finalization"
+assert_eq "$?" 1 "repeated callback failure remains nonzero"
+assert_eq "$(manifest_value deployment "$PROJ/var/deploy_identity.json")" \
+    "$DEPLOYMENT_UUID" "no rollback path can erase candidate proof"
+assert_not_in_log "CMD sudo bash ./aws/post_deploy.sh --framework 1.5.0" \
+    "even a prepared rollback failure is unreachable for bookkeeping errors"
 
 echo "update.sh: an exported SANITY_URL overrides the probe on every sanity_check"
 setup_env
