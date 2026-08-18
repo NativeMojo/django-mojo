@@ -8,6 +8,8 @@ import sqlite3
 import stat
 import time
 
+from mojo.deploy.audit import select_health_fields
+
 from .aggregation import merge, should_flush
 from .attribution import merge_session
 from .disposition import (
@@ -655,10 +657,7 @@ class Store:
                 "DELETE FROM audit_health_epochs WHERE rowid IN (SELECT rowid FROM "
                 "audit_health_epochs ORDER BY observed_at DESC,rowid DESC LIMIT -1 OFFSET ?)",
                 (HEALTH_EPOCH_CAP,))
-            self.set_meta("audit_health", {key: health[key] for key in (
-                "schema", "version", "boot_id", "generation", "rules_sha256",
-                "sequence", "enabled", "failure", "rate_limit", "backlog_limit",
-                "backlog", "lost", "updated_at")})
+            self.set_meta("audit_health", select_health_fields(health))
 
         self.db.execute("DELETE FROM firewall_receipts WHERE observed_at < ?",
                         (now - FIREWALL_RECEIPT_TTL_SECONDS,))

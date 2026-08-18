@@ -11,6 +11,7 @@ import fcntl
 import glob
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -30,6 +31,14 @@ LOCK_PATH = "/run/mojosec-audit.lock"
 SENSOR_STATE_PATH = "/var/lib/mojosec/state.sqlite3"
 MANAGED_MARKER = "# managed-by: django-mojo mojosec-audit-v1"
 HEALTH_SCHEMA = "mojosec.audit-health"
+HEALTH_ENVELOPE_FIELDS = (
+    "schema", "version", "boot_id", "generation", "rules_sha256", "sequence",
+)
+HEALTH_STATUS_FIELDS = (
+    "enabled", "failure", "rate_limit", "backlog_limit", "backlog", "lost",
+)
+HEALTH_FIELDS = HEALTH_ENVELOPE_FIELDS + HEALTH_STATUS_FIELDS + ("updated_at",)
+HEALTH_INTEGER_MAX = 2 ** 63 - 1
 MAX_HEALTH_AGE_SECONDS = 15
 _DIGEST = re.compile(r"^[a-f0-9]{64}$")
 _BOOT = re.compile(r"^[a-f0-9]{32}$")
@@ -170,38 +179,48 @@ def parse_status(text):
     values = {}
     for line in str(text).splitlines():
         parts = line.split(None, 1)
-        if len(parts) != 2 or not re.fullmatch(r"[a-z_]+", parts[0]):
+        key = parts[0] if parts else ""
+        if key not in HEALTH_STATUS_FIELDS:
             continue
-        try:
-            values[parts[0]] = int(parts[1])
-        except ValueError:
-            continue
-    required = {"enabled", "failure", "rate_limit", "backlog_limit", "backlog", "lost"}
-    if not required.issubset(values):
+        if key in values:
+            raise AuditError(f"auditctl status repeats {key}")
+        if len(parts) != 2 or not re.fullmatch(r"-?[0-9]+", parts[1]):
+            raise AuditError(f"auditctl status field {key} is not an integer")
+        value = int(parts[1])
+        if not 0 <= value <= HEALTH_INTEGER_MAX:
+            raise AuditError(f"auditctl status field {key} is out of range")
+        values[key] = value
+    if set(values) != set(HEALTH_STATUS_FIELDS):
         raise AuditError("auditctl status is incomplete")
-    return values
+    return {key: values[key] for key in HEALTH_STATUS_FIELDS}
+
+
+def select_health_fields(value):
+    """Project one internal health mapping onto the closed publisher contract."""
+    if not isinstance(value, dict):
+        raise AuditError("Audit health value is not a mapping")
+    try:
+        return {key: value[key] for key in HEALTH_FIELDS}
+    except KeyError as err:
+        raise AuditError(f"Audit health value is missing {err.args[0]}") from err
 
 
 def validate_health(value, now=None, previous=None):
     reason = ""
     now = time.time() if now is None else float(now)
-    required = {
-        "schema", "version", "boot_id", "generation", "rules_sha256",
-        "sequence", "enabled", "failure", "rate_limit", "backlog_limit",
-        "backlog", "lost", "updated_at",
-    }
-    if not isinstance(value, dict) or set(value) != required:
+    if not isinstance(value, dict) or set(value) != set(HEALTH_FIELDS):
         return {"healthy": False, "reason": "malformed"}
-    integers = ("sequence", "enabled", "failure", "rate_limit", "backlog_limit",
-                "backlog", "lost")
-    if (value.get("schema") != HEALTH_SCHEMA or value.get("version") != 1 or
+    integers = ("sequence",) + HEALTH_STATUS_FIELDS
+    updated_at = value.get("updated_at")
+    if (value.get("schema") != HEALTH_SCHEMA or type(value.get("version")) is not int or
+            value["version"] != 1 or
             not _BOOT.fullmatch(str(value.get("boot_id") or "")) or
             not _DIGEST.fullmatch(str(value.get("generation") or "")) or
             not _DIGEST.fullmatch(str(value.get("rules_sha256") or "")) or
             any(not isinstance(value.get(key), int) or isinstance(value.get(key), bool) or
-                value[key] < 0 for key in integers) or
-            not isinstance(value.get("updated_at"), (int, float)) or
-            isinstance(value.get("updated_at"), bool)):
+                not 0 <= value[key] <= HEALTH_INTEGER_MAX for key in integers) or
+            not isinstance(updated_at, (int, float)) or isinstance(updated_at, bool) or
+            not math.isfinite(updated_at) or not 0 <= updated_at <= HEALTH_INTEGER_MAX):
         return {"healthy": False, "reason": "malformed"}
     if now < value["updated_at"] - 2 or now - value["updated_at"] > MAX_HEALTH_AGE_SECONDS:
         reason = "stale"
@@ -513,11 +532,12 @@ def publish_health(generation, rules_sha256, sequence, status_text=None,
         prior = read_health(path=path, require_root=True)
         sequence = (int(prior.get("sequence", -1)) + 1
                     if prior and prior.get("boot_id") == boot_id else 0)
-    payload = {
+    enriched = {
         "schema": HEALTH_SCHEMA, "version": 1, "boot_id": boot_id,
         "generation": generation, "rules_sha256": active_digest,
-        "sequence": sequence, "updated_at": time.time(), **status,
+        "sequence": sequence, **status, "updated_at": time.time(),
     }
+    payload = select_health_fields(enriched)
     _atomic_write(path, (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode(), 0o600)
     return payload
 

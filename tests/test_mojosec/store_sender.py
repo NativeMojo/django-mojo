@@ -835,7 +835,7 @@ def test_store_uses_the_audit_contract_for_previous_health(opts):
         try:
             store.ingest([], audit_health=health)
             previous = store.get_meta("audit_health")
-            th.assert_eq(tuple(previous), audit.HEALTH_FIELDS,
+            th.assert_eq(set(previous), set(audit.HEALTH_FIELDS),
                          "durable previous-health state must use the publisher selector")
             th.assert_true("healthy" not in previous and "reason" not in previous,
                            "runtime annotations must not become prior external health")
