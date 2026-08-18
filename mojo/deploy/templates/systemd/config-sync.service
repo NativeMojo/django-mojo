@@ -7,6 +7,9 @@ Description=Pull application config from S3
 After=network-online.target
 Wants=network-online.target
 Before=mojo-asgi.service
+# The sync process uses a non-blocking app restart (`systemctl --no-block`).
+# Waiting here would deadlock against Before=mojo-asgi.service. A queued app
+# failure remains visible through systemd status/journal and health checks.
 
 [Service]
 Type=oneshot
