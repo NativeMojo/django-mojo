@@ -14,6 +14,7 @@ from mojo.helpers.settings import settings
 from mojo.mojosec import protocol
 from mojo.mojosec.disposition import is_local_only
 from . import mojosec_evidence
+from . import mojosec_correlation
 
 
 logger = logit.get_logger(__name__, "incident.log")
@@ -581,6 +582,14 @@ def ingest_batch(api_key, batch):
                     "reason": "handler dispatch was not durably queued",
                 })
                 continue
+            try:
+                mojosec_correlation.contribute(receipt, sensor_event)
+            except Exception:
+                # Shadow state never owns acknowledgements, Event publication,
+                # RuleSet handlers, or replay semantics in this slice.
+                logger.exception(
+                    "MojoSec shadow contribution failed for receipt %s", receipt.pk)
+                mojosec_correlation._record_metric("failures")
             status = "duplicate" if was_published or not did_publish else "accepted"
             result = {"id": sensor_event["id"], "status": status}
             results.append(result)

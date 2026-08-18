@@ -12,3 +12,5 @@ from .mojosec_detector_feedback import MojoSecDetectorFeedback
 from .mojosec_detector_feedback_head import MojoSecDetectorFeedbackHead
 from .mojosec_policy_proposal import MojoSecPolicyProposal
 from .mojosec_policy_evaluation import MojoSecPolicyEvaluation
+from .mojosec_case import MojoSecCase
+from .mojosec_case_transition import MojoSecCaseTransition

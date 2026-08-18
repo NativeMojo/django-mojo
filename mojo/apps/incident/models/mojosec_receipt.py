@@ -44,6 +44,12 @@ class MojoSecReceipt(models.Model, MojoModel):
     incident = models.ForeignKey(
         "incident.Incident", null=True, blank=True, default=None,
         related_name="+", on_delete=models.SET_NULL)
+    mojosec_case = models.ForeignKey(
+        "incident.MojoSecCase", null=True, blank=True, default=None,
+        related_name="receipts", on_delete=models.SET_NULL)
+    case_contributed_at = models.DateTimeField(
+        null=True, blank=True, default=None, db_index=True)
+    case_sample_key = models.CharField(max_length=64, blank=True, default="")
 
     sensor_id = models.CharField(max_length=128, db_index=True)
     wire_event_id = models.CharField(max_length=64)
@@ -73,6 +79,9 @@ class MojoSecReceipt(models.Model, MojoModel):
             models.Index(
                 fields=("publish_state", "-created", "-id"),
                 name="incident_mo_pub_created_idx"),
+            models.Index(
+                fields=("mojosec_case", "case_sample_key"),
+                name="incident_mo_case_sample_idx"),
         ]
 
     class RestMeta:
@@ -90,8 +99,8 @@ class MojoSecReceipt(models.Model, MojoModel):
                 "fields": [
                     "id", "created", "modified", "published_at", "sensor_id",
                     "wire_event_id", "protocol_version", "sensor_policy_revision",
-                    "publish_state", "publish_attempts",
+                    "publish_state", "publish_attempts", "case_contributed_at",
                 ],
-                "graphs": {"event": "reference"},
+                "graphs": {"event": "reference", "mojosec_case": "reference"},
             },
         }
