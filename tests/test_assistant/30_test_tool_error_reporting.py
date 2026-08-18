@@ -20,6 +20,16 @@ TEST_EMAIL = 'tool-err-admin@example.com'
 TEST_PASSWORD = 'TestPass1!'
 
 
+def _clear_events(user, category):
+    from mojo.apps.incident.models import Event
+    Event.objects.filter(uid=user.pk, category=category).delete()
+
+
+def _event(user, category):
+    from mojo.apps.incident.models import Event
+    return Event.objects.filter(uid=user.pk, category=category).latest("pk")
+
+
 class _FakeConversation:
     def __init__(self, pk=42):
         self.pk = pk
@@ -103,29 +113,29 @@ def test_dumps_tool_result_unserializable_reports_incident(opts):
     from mojo.apps.assistant.services.agent import _dumps_tool_result, _json_default
 
     # Force _json_default to raise so the dumps path hits the except branch.
+    _clear_events(opts.user, "assistant:error:serialize")
     with mock.patch(
         "mojo.apps.assistant.services.agent._json_default",
         side_effect=TypeError("boom"),
     ):
-        with mock.patch("mojo.apps.incident.report_event") as mock_report:
-            raw = _dumps_tool_result(
-                {"bad": object()}, user=opts.user,
-                conversation=_FakeConversation(), tool_name="stub_tool",
-            )
+        raw = _dumps_tool_result(
+            {"bad": object()}, user=opts.user,
+            conversation=_FakeConversation(), tool_name="stub_tool",
+        )
     parsed = json.loads(raw)
     assert_true("error" in parsed, "fallback payload must include an error key")
     assert_true(
         "could not be serialized" in parsed["error"],
         "fallback error message should be informative",
     )
-    assert_true(mock_report.called, "serialization failure must raise an incident")
+    event = _event(opts.user, "assistant:error:serialize")
     assert_eq(
-        mock_report.call_args[1]["category"],
+        event.category,
         "assistant:error:serialize",
         "category should be assistant:error:serialize",
     )
     assert_eq(
-        mock_report.call_args[1]["level"], 7,
+        event.level, 7,
         "serialization failure incident level should be 7",
     )
 
@@ -182,21 +192,21 @@ def test_execute_tool_exception_reports_incident_with_traceback(opts):
     block = {"id": "tu_2", "name": "stub_tool", "input": {"key1": "v", "key2": "v"}}
     registry = _make_registry(handler)
 
-    with mock.patch("mojo.apps.incident.report_event") as mock_report:
-        result = _execute_tool(
-            block, registry, opts.user, _FakeConversation(),
-            tools=[], on_event=None, tool_calls_made=[],
-        )
+    _clear_events(opts.user, "assistant:error")
+    result = _execute_tool(
+        block, registry, opts.user, _FakeConversation(),
+        tools=[], on_event=None, tool_calls_made=[],
+    )
 
     parsed = json.loads(result["content"])
     assert_true("error" in parsed, "tool exception must yield an error payload")
-    assert_true(mock_report.called, "tool exception must raise an incident")
+    event = _event(opts.user, "assistant:error")
     assert_eq(
-        mock_report.call_args[1]["category"],
+        event.category,
         "assistant:error",
         "category should be assistant:error",
     )
-    details = mock_report.call_args[0][0]
+    details = event.details
     assert_true(
         "boom inside handler" in details,
         "incident details must include the exception text",

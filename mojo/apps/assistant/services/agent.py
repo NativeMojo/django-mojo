@@ -65,17 +65,18 @@ def _call_handler(handler, tool_input, user, request_meta, conversation):
     return handler(tool_input, user, **kwargs)
 
 
-def _report_event(category, level, title, details, user=None, **kwargs):
+def _report_event(category, level, title, details, user=None, _reporter=None, **kwargs):
     """Report an incident event. Never raises — logs failures instead."""
     try:
-        from mojo.apps.incident import report_event
+        if _reporter is None:
+            from mojo.apps.incident import report_event as _reporter
         extra = {}
         if user:
             extra["uid"] = user.pk
             extra["model_name"] = "account.User"
             extra["model_id"] = user.pk
         extra.update(kwargs)
-        report_event(details, title=title, category=category, level=level, **extra)
+        _reporter(details, title=title, category=category, level=level, **extra)
     except Exception:
         logger.exception("Failed to report event: %s / %s", category, title)
 

@@ -13,6 +13,16 @@ TEST_EMAIL_ADMIN = 'evt-report-admin@example.com'
 TEST_PASSWORD = 'TestPass1!'
 
 
+def _clear_events(user, category):
+    from mojo.apps.incident.models import Event
+    Event.objects.filter(uid=user.pk, category=category).delete()
+
+
+def _event(user, category):
+    from mojo.apps.incident.models import Event
+    return Event.objects.filter(uid=user.pk, category=category).latest("pk")
+
+
 @th.django_unit_setup()
 @th.requires_app("mojo.apps.assistant")
 @th.requires_app("mojo.apps.incident")
@@ -40,18 +50,17 @@ def test_report_event_helper_calls_incident_report(opts):
     """_report_event calls incident.report_event with correct args."""
     from mojo.apps.assistant.services.agent import _report_event
 
-    with mock.patch("mojo.apps.incident.report_event") as mock_report:
-        _report_event(
-            "assistant:test", 5, "Test title", "Test details",
-            user=opts.admin,
-        )
-        assert_true(mock_report.called, "_report_event should call incident.report_event")
-        call_kwargs = mock_report.call_args
-        assert_eq(call_kwargs[0][0], "Test details", "First arg should be details")
-        assert_eq(call_kwargs[1]["category"], "assistant:test", "Category should match")
-        assert_eq(call_kwargs[1]["level"], 5, "Level should match")
-        assert_eq(call_kwargs[1]["title"], "Test title", "Title should match")
-        assert_eq(call_kwargs[1]["uid"], opts.admin.pk, "uid should be user pk")
+    _clear_events(opts.admin, "assistant:test")
+    _report_event(
+        "assistant:test", 5, "Test title", "Test details",
+        user=opts.admin,
+    )
+    event = _event(opts.admin, "assistant:test")
+    assert_eq(event.details, "Test details", "incident details should match")
+    assert_eq(event.category, "assistant:test", "Category should match")
+    assert_eq(event.level, 5, "Level should match")
+    assert_eq(event.title, "Test title", "Title should match")
+    assert_eq(event.uid, opts.admin.pk, "uid should be user pk")
 
 
 @th.django_unit_test()
@@ -59,9 +68,19 @@ def test_report_event_helper_never_raises(opts):
     """_report_event swallows exceptions — never breaks the assistant."""
     from mojo.apps.assistant.services.agent import _report_event
 
-    with mock.patch("mojo.apps.incident.report_event", side_effect=Exception("DB down")):
-        # Should not raise
-        _report_event("assistant:test", 5, "Test", "Details", user=opts.admin)
+    calls = []
+
+    def failing_reporter(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise Exception("DB down")
+
+    # The injected reporter is call-local. A process-wide mock here races every
+    # other module because testit runs packages in shared-process threads.
+    _report_event(
+        "assistant:test", 5, "Test", "Details", user=opts.admin,
+        _reporter=failing_reporter,
+    )
+    assert_eq(len(calls), 1, "the call-local failing reporter must be exercised once")
 
 
 # ---------------------------------------------------------------------------
@@ -77,20 +96,20 @@ def test_permission_denied_fires_event(opts):
     # We'll simulate by calling the agent loop logic directly
     from mojo.apps.assistant.services.agent import _report_event
 
-    with mock.patch("mojo.apps.incident.report_event") as mock_report:
-        _report_event(
-            "assistant:permission_denied", 5,
-            "Permission denied: some_tool",
-            f"User {opts.admin.email} denied access to tool 'some_tool'",
-            user=opts.admin,
-        )
-        assert_true(mock_report.called, "Permission denied should report event")
-        assert_eq(
-            mock_report.call_args[1]["category"],
-            "assistant:permission_denied",
-            "Category should be assistant:permission_denied",
-        )
-        assert_eq(mock_report.call_args[1]["level"], 5, "Permission denied level should be 5")
+    _clear_events(opts.admin, "assistant:permission_denied")
+    _report_event(
+        "assistant:permission_denied", 5,
+        "Permission denied: some_tool",
+        f"User {opts.admin.email} denied access to tool 'some_tool'",
+        user=opts.admin,
+    )
+    event = _event(opts.admin, "assistant:permission_denied")
+    assert_eq(
+        event.category,
+        "assistant:permission_denied",
+        "Category should be assistant:permission_denied",
+    )
+    assert_eq(event.level, 5, "Permission denied level should be 5")
 
 
 # ---------------------------------------------------------------------------
@@ -150,16 +169,16 @@ def test_handler_permission_denied_fires_event(opts):
             return True
         return orig_get(name, *args, **kwargs)
 
+    _clear_events(noperm, "assistant:permission_denied")
     with mock.patch.object(settings, "get", side_effect=patched_get):
-        with mock.patch("mojo.apps.incident.report_event") as mock_report:
-            result = _handle_message(noperm, {"type": "assistant_message", "message": "hello"})
-            assert_eq(result["type"], "assistant_error", "Should return error")
-            assert_true(mock_report.called, "Permission denied should fire event")
-            assert_eq(
-                mock_report.call_args[1]["category"],
-                "assistant:permission_denied",
-                "Category should be assistant:permission_denied",
-            )
+        result = _handle_message(noperm, {"type": "assistant_message", "message": "hello"})
+    assert_eq(result["type"], "assistant_error", "Should return error")
+    event = _event(noperm, "assistant:permission_denied")
+    assert_eq(
+        event.category,
+        "assistant:permission_denied",
+        "Category should be assistant:permission_denied",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -173,19 +192,20 @@ def test_mutating_tool_success_fires_event(opts):
 
     # Simulate what the agent loop does after a successful mutating tool call
     tool_name = "block_ip"
-    with mock.patch("mojo.apps.incident.report_event") as mock_report:
-        _report_event(
-            f"assistant:tool:{tool_name}", 5,
-            f"Assistant tool: {tool_name}",
-            f"User {opts.admin.email} executed mutating tool '{tool_name}'.",
-            user=opts.admin,
-        )
-        assert_true(mock_report.called, "Mutating tool should fire event")
-        assert_eq(
-            mock_report.call_args[1]["category"],
-            "assistant:tool:block_ip",
-            "Category should be assistant:tool:block_ip",
-        )
+    category = f"assistant:tool:{tool_name}"
+    _clear_events(opts.admin, category)
+    _report_event(
+        category, 5,
+        f"Assistant tool: {tool_name}",
+        f"User {opts.admin.email} executed mutating tool '{tool_name}'.",
+        user=opts.admin,
+    )
+    event = _event(opts.admin, category)
+    assert_eq(
+        event.category,
+        "assistant:tool:block_ip",
+        "Category should be assistant:tool:block_ip",
+    )
 
 
 @th.django_unit_test()
@@ -222,15 +242,15 @@ def test_tool_exception_fires_error_event(opts):
     """Tool handler exception should fire an assistant:error event."""
     from mojo.apps.assistant.services.agent import _report_event
 
-    with mock.patch("mojo.apps.incident.report_event") as mock_report:
-        _report_event(
-            "assistant:error", 6,
-            "Tool exception: query_incidents",
-            "Tool 'query_incidents' raised an exception",
-            user=opts.admin,
-        )
-        assert_true(mock_report.called, "Tool exception should fire error event")
-        assert_eq(mock_report.call_args[1]["level"], 6, "Tool exception level should be 6")
+    _clear_events(opts.admin, "assistant:error")
+    _report_event(
+        "assistant:error", 6,
+        "Tool exception: query_incidents",
+        "Tool 'query_incidents' raised an exception",
+        user=opts.admin,
+    )
+    event = _event(opts.admin, "assistant:error")
+    assert_eq(event.level, 6, "Tool exception level should be 6")
 
 
 @th.django_unit_test()
@@ -238,15 +258,15 @@ def test_agent_crash_fires_error_event(opts):
     """Agent loop crash should fire a level 7 assistant:error event."""
     from mojo.apps.assistant.services.agent import _report_event
 
-    with mock.patch("mojo.apps.incident.report_event") as mock_report:
-        _report_event(
-            "assistant:error", 7,
-            "Agent loop exception",
-            "Agent crashed for user test@example.com",
-            user=opts.admin,
-        )
-        assert_true(mock_report.called, "Agent crash should fire error event")
-        assert_eq(mock_report.call_args[1]["level"], 7, "Agent crash level should be 7")
+    _clear_events(opts.admin, "assistant:error")
+    _report_event(
+        "assistant:error", 7,
+        "Agent loop exception",
+        "Agent crashed for user test@example.com",
+        user=opts.admin,
+    )
+    event = _event(opts.admin, "assistant:error")
+    assert_eq(event.level, 7, "Agent crash level should be 7")
 
 
 @th.django_unit_test()
@@ -254,16 +274,16 @@ def test_api_error_fires_event(opts):
     """LLM API errors should fire assistant:error:api events."""
     from mojo.apps.assistant.services.agent import _report_event
 
-    with mock.patch("mojo.apps.incident.report_event") as mock_report:
-        _report_event(
-            "assistant:error:api", 7,
-            "LLM API auth failure",
-            "authentication_error: invalid key",
-            user=opts.admin,
-        )
-        assert_true(mock_report.called, "API error should fire event")
-        assert_eq(
-            mock_report.call_args[1]["category"],
-            "assistant:error:api",
-            "Category should be assistant:error:api",
-        )
+    _clear_events(opts.admin, "assistant:error:api")
+    _report_event(
+        "assistant:error:api", 7,
+        "LLM API auth failure",
+        "authentication_error: invalid key",
+        user=opts.admin,
+    )
+    event = _event(opts.admin, "assistant:error:api")
+    assert_eq(
+        event.category,
+        "assistant:error:api",
+        "Category should be assistant:error:api",
+    )
