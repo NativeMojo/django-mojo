@@ -445,8 +445,15 @@ def test_fm_credential_graphs_never_expose_raw_values(opts):
         unknown_resp = opts.client.get(
             f"/api/fileman/manager/{manager_id}?graph=fm_graph_canary_unknown"
         )
-        assert_eq(unknown_resp.status_code, 200, "unknown FileManager graph must safely fall back to default")
-        _assert_masked_payload(unknown_resp.response.data, "FileManager REST unknown-graph fallback")
+        # Item 2102: an undefined *special* graph name is refused with 400 at the
+        # REST boundary, not silently served as `default`. The refusal exposes
+        # nothing — the raw credentials never appear in the response.
+        assert_eq(unknown_resp.status_code, 400,
+                  "an unknown special graph must be refused, not fall back")
+        assert_true(GRAPH_ACCESS_KEY not in str(unknown_resp.response),
+                    "a refused graph must not expose raw access-key material")
+        assert_true(GRAPH_SECRET_KEY not in str(unknown_resp.response),
+                    "a refused graph must not expose raw secret material")
 
         manager.set_setting("use_shortlinks", False)
         manager.save(update_fields=["mojo_secrets", "modified"])

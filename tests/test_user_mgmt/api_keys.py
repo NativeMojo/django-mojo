@@ -295,14 +295,19 @@ def test_apikey_rest_token_graph(opts):
 
 @th.unit_test("apikey_rest_unknown_graph_fails_closed")
 def test_apikey_rest_unknown_graph_fails_closed(opts):
-    """A mistyped graph name falls back to "default" — never to the token."""
+    """A mistyped *special* graph name is refused with 400 (item 2102) — never
+    served, and never a fallback that could leak the token. `token` is an opt-in
+    special graph, so `tokens` is an undefined special name (refused), not a
+    common name that silently falls back to default."""
     resp = opts.client.get(
         f"/api/group/apikey/{opts.rest_key_id}",
         params={"group": opts.parent_id, "graph": "tokens"},
     )
-    assert resp.status_code == 200, f"unknown-graph get failed: {resp.status_code}"
-    assert resp.response.data.get("token") is None, (
-        "an unrecognized graph name must fall back to default, not expose the token"
+    assert resp.status_code == 400, (
+        f"an unknown special graph must be refused, got {resp.status_code}"
+    )
+    assert opts.rest_raw_token not in str(resp.response), (
+        "a refused graph must never expose the token"
     )
 
 
