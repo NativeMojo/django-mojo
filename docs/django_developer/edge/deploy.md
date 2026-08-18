@@ -67,7 +67,7 @@ durable `edge.PlatformDeployment` journal:
 | Key | Holds | Semantics |
 |---|---|---|
 | `edge:deploy:target` | deployment UUID + commit SHA + who asked | **Last writer wins.** A push mid-deploy overwrites it; the orchestrator's chain check deploys it next. |
-| `edge:deploy:status` | `migrating` / `deploying` / `failed`, stamped with UUID + SHA | Armed with a **Lua compare-and-set: nothing armed, or the armed lease is terminal `failed`.** Terminal writes and deletion are **compare-and-set on UUID and SHA** (Lua), so an older attempt cannot settle a newer same-SHA retry. |
+| `edge:deploy:status` | `migrating` / `deploying` / `failed`, stamped with UUID + SHA | Armed with a **Lua compare-and-set: nothing armed, or the armed lease is terminal `failed`.** Terminal writes compare UUID + SHA; deletion compares the exact UUID owner. An older attempt therefore cannot settle or clear a newer same-SHA retry. |
 
 The invariant is **never a second concurrent deploy while one is live** — not
 "never a second deploy for the whole TTL". A `migrating` or `deploying` lease
@@ -84,8 +84,9 @@ identity, its frozen roster, transitions, and the latest bounded proof per
 runner; incidents remain the alerting trail.
 
 The TTL is no longer the *only* thing between a wedge and the next deploy. The
-five-minute reconciler (`cronjobs.reconcile_platform_deployments`) does two
-things before it closes anything:
+five-minute reconciler (`cronjobs.reconcile_platform_deployments`) runs three
+recovery paths in this order: stranded-target resumption first, then
+`reconcile_stale()`, whose first action is post-restart finalization:
 
 - **`deploy.resume_stranded_target()`** republishes one `deploy_orchestrate`
   for a target whose deploy never started — something armed the lease and then
