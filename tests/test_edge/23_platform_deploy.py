@@ -48,6 +48,24 @@ def test_same_sha_stale_callback_refused(opts):
     deploy.clear_status(new.pk)
 
 
+@th.django_unit_test("one proof matcher requires exact UUID and a full live SHA")
+def test_shared_proof_matcher(opts):
+    from mojo.apps.edge.services import platform_deploy
+
+    row, _ = platform_deploy.create(SHA[:12], source="test")
+    good = {"platform_deployment": str(row.pk), "platform_sha": SHA}
+    th.assert_true(platform_deploy.proof_matches(row, good),
+                   "a full live SHA matching the requested prefix must prove")
+    for bad in (
+            {**good, "platform_deployment": str(uuid.uuid4())},
+            {**good, "platform_sha": SHA[:12]},
+            {**good, "platform_sha": "9" * 40},
+            {**good, "platform_sha": "not-a-sha"},
+            None):
+        th.assert_true(not platform_deploy.proof_matches(row, bad),
+                       f"mismatched or partial proof was accepted: {bad!r}")
+
+
 @th.django_unit_test("node evidence retains latest truth for every frozen runner")
 def test_latest_per_runner_evidence(opts):
     from mojo.apps.edge.services import platform_deploy
@@ -328,6 +346,135 @@ def test_resume_stranded_target(opts):
         th.assert_eq(deploy.resume_stranded_target(), None,
                      "a terminal attempt must never be republished")
     th.assert_eq(publish.call_count, 0, "a closed attempt must not be republished")
+    _clean_deploy_state()
+
+
+@th.django_unit_test(
+    "post-restart finalizer clears exact terminal owners and resumes one successor")
+def test_post_restart_finalizer_and_successor_resume(opts):
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import deploy, platform_deploy, readiness
+
+    _clean_deploy_state()
+    runner = deploy.local_runner_id()
+    finished = _attempt(PlatformDeployment.STATUS_VERIFIED, roster=(runner,))
+    platform_deploy.evidence(
+        finished.pk, runner, deploy.STATUS_DEPLOYING,
+        proof={"platform_deployment": str(finished.pk), "platform_sha": SHA})
+    deploy.arm_status(SHA, deployment_id=finished.pk)
+    deploy.set_status(deploy.STATUS_DEPLOYING, SHA, deployment_id=finished.pk)
+
+    successor = PlatformDeployment.objects.create(
+        sha="9" * 40, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=[runner], status=PlatformDeployment.STATUS_REQUESTED,
+        transitions=[])
+    deploy.set_target(successor.sha, actor="next", deployment_id=successor.pk)
+    proof = {"platform_deployment": str(finished.pk), "platform_sha": SHA}
+    with mock.patch.object(readiness, "local_node_proof", return_value=proof), \
+         mock.patch("mojo.apps.jobs.publish") as publish:
+        result = platform_deploy.finalize_post_restart()
+        again = platform_deploy.finalize_post_restart()
+
+    th.assert_eq(result, str(finished.pk),
+                 f"the exact terminal owner was not finalized: {result!r}")
+    th.assert_eq(again, None,
+                 f"a second startup finalized or resumed twice: {again!r}")
+    finished.refresh_from_db()
+    th.assert_eq(finished.status, PlatformDeployment.STATUS_CONVERGED,
+                 f"matching restarted proof did not converge: {finished.status}")
+    status = deploy.get_status()
+    th.assert_eq((status or {}).get("deployment"), str(successor.pk),
+                 f"the successor was not armed after exact cleanup: {status!r}")
+    th.assert_eq(publish.call_count, 1,
+                 f"the successor must publish exactly once: {publish.call_args_list!r}")
+    th.assert_eq(publish.call_args.kwargs["payload"],
+                 {"sha": successor.sha, "deployment": str(successor.pk)},
+                 f"the successor publish carried the wrong attempt: {publish.call_args!r}")
+    _clean_deploy_state()
+
+
+@th.django_unit_test("post-restart finalizer closes delayed v1 identity proof")
+def test_post_restart_finalizer_v1_bridge(opts):
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import deploy, platform_deploy, readiness
+
+    _clean_deploy_state()
+    runner = deploy.local_runner_id()
+    bridged = _attempt(PlatformDeployment.STATUS_FLEET, roster=(runner,))
+    platform_deploy.evidence(
+        bridged.pk, runner, "identity_pending", proof={},
+        detail={"reason": "legacy_script_identity_order"})
+    deploy.arm_status(SHA, deployment_id=bridged.pk)
+    deploy.set_status(deploy.STATUS_DEPLOYING, SHA, deployment_id=bridged.pk)
+    proof = {"platform_deployment": str(bridged.pk), "platform_sha": SHA}
+
+    with mock.patch.object(readiness, "local_node_proof", return_value=proof):
+        result = platform_deploy.finalize_post_restart()
+
+    th.assert_eq(result, str(bridged.pk),
+                 f"the predecessor bridge was not finalized: {result!r}")
+    bridged.refresh_from_db()
+    th.assert_eq(bridged.status, PlatformDeployment.STATUS_CONVERGED,
+                 f"delayed v1 proof did not converge: {bridged.status}")
+    th.assert_eq(deploy.get_status(), None,
+                 "the completed v1 bridge retained its terminal lease")
+    _clean_deploy_state()
+
+
+@th.django_unit_test(
+    "post-restart finalizer cleans failed/missing owners but preserves live and legacy leases")
+def test_post_restart_finalizer_ownership_guards(opts):
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import deploy, platform_deploy
+
+    runner = deploy.local_runner_id()
+
+    _clean_deploy_state()
+    failed = _attempt(PlatformDeployment.STATUS_FAILED, roster=(runner,))
+    platform_deploy.evidence(failed.pk, runner, "failed", detail={"phase": "rollback"})
+    deploy.arm_status(SHA, deployment_id=failed.pk)
+    deploy.set_status(deploy.STATUS_FAILED, SHA, deployment_id=failed.pk)
+    th.assert_eq(platform_deploy.finalize_post_restart(), str(failed.pk),
+                 "the failed row outside ACTIVE_STATUSES retained its lease")
+    th.assert_eq(deploy.get_status(), None,
+                 "the exact failed owner was not cleared")
+
+    missing = str(uuid.uuid4())
+    deploy.arm_status(SHA, deployment_id=missing)
+    deploy.set_status(deploy.STATUS_FAILED, SHA, deployment_id=missing)
+    th.assert_eq(platform_deploy.finalize_post_restart(), missing,
+                 "a terminal valid-UUID lease with no durable owner was not cleaned")
+    th.assert_eq(deploy.get_status(), None,
+                 "the missing terminal owner retained the lease")
+
+    live = _attempt(PlatformDeployment.STATUS_CANARY, roster=(runner,))
+    deploy.arm_status(SHA, deployment_id=live.pk)
+    th.assert_eq(platform_deploy.finalize_post_restart(), None,
+                 "a live migrating owner was stolen")
+    th.assert_eq((deploy.get_status() or {}).get("deployment"), str(live.pk),
+                 "the live owner lost its lease")
+    deploy.clear_status(live.pk)
+
+    foreign = _attempt(PlatformDeployment.STATUS_VERIFIED,
+                       roster=("another-runner",))
+    platform_deploy.evidence(
+        foreign.pk, "another-runner", deploy.STATUS_DEPLOYING,
+        proof={"platform_deployment": str(foreign.pk), "platform_sha": SHA})
+    deploy.arm_status(SHA, deployment_id=foreign.pk)
+    deploy.set_status(deploy.STATUS_DEPLOYING, SHA, deployment_id=foreign.pk)
+    th.assert_eq(platform_deploy.finalize_post_restart(), None,
+                 "this node finalized another runner's terminal owner")
+    th.assert_eq((deploy.get_status() or {}).get("deployment"), str(foreign.pk),
+                 "a foreign exact-UUID owner lost its lease")
+    deploy.clear_status(foreign.pk)
+
+    deploy.arm_status(SHA)
+    deploy.set_status(deploy.STATUS_FAILED, SHA)
+    th.assert_eq(platform_deploy.finalize_post_restart(), None,
+                 "a legacy unowned lease must remain TTL-bound")
+    th.assert_eq((deploy.get_status() or {}).get("deployment"), "",
+                 "the legacy lease was guessed away")
+    deploy.get_client().delete(deploy.STATUS_KEY)
     _clean_deploy_state()
 
 

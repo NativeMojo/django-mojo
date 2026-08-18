@@ -215,6 +215,7 @@ def test_deploy_status_command(opts):
 
 @th.django_unit_test("deploy_status persists proof before exposing canary success")
 def test_deploy_status_proof_precedes_success(opts):
+    import os
     import uuid
 
     from django.core.management import call_command
@@ -229,9 +230,10 @@ def test_deploy_status_proof_precedes_success(opts):
     deploy.set_target(SHA_C, actor="test", deployment_id=row.pk)
     deploy.arm_status(SHA_C, deployment_id=row.pk)
 
-    with mock.patch.object(
-            readiness, "local_node_proof",
-            side_effect=RuntimeError("proof failed")):
+    with mock.patch.dict(os.environ, {"MOJO_DEPLOY_IDENTITY_READY": "2"}), \
+         mock.patch.object(
+             readiness, "local_node_proof",
+             side_effect=RuntimeError("proof failed")):
         with th.assert_raises(CommandError):
             call_command(
                 "deploy_status", "set", "deploying", sha=SHA_C,
@@ -241,27 +243,88 @@ def test_deploy_status_proof_precedes_success(opts):
                  "proof failure announced canary success to the orchestrator")
 
     order = []
-    with mock.patch.object(
-            readiness, "local_node_proof", return_value={"node_id": "test"}), \
+    matching = {
+        "node_id": "test", "platform_sha": SHA_C,
+        "platform_deployment": str(row.pk),
+    }
+    with mock.patch.dict(os.environ, {"MOJO_DEPLOY_IDENTITY_READY": "2"}), \
+         mock.patch.object(
+            readiness, "local_node_proof", return_value=matching), \
          mock.patch.object(
              platform_deploy, "evidence",
              side_effect=lambda *a, **k: order.append("proof") or True), \
          mock.patch.object(
              deploy, "set_status",
-             side_effect=lambda *a, **k: order.append("status") or True):
+             side_effect=lambda *a, **k: order.append("status") or True), \
+         mock.patch.object(deploy, "resume_stranded_target") as resume, \
+         mock.patch("mojo.apps.jobs.publish") as publish:
         call_command(
             "deploy_status", "set", "deploying", sha=SHA_C,
             deployment=str(row.pk))
     th.assert_eq(order, ["proof", "status"],
                  f"success escaped before durable proof: {order}")
+    th.assert_eq(resume.call_count, 0,
+                 "callback-time code resumed a successor before self-stop")
+    th.assert_eq(publish.call_count, 0,
+                 "callback-time code published work before self-stop")
+    row.refresh_from_db()
+    th.assert_eq(row.status, "verified",
+                 f"one-runner v2 callback must record terminal intent: {row.status}")
+    deploy.clear_status(row.pk)
+
+
+@th.django_unit_test("deploy_status v2 refuses a stale manifest through its own UUID lease")
+def test_deploy_status_v2_identity_mismatch(opts):
+    import os
+    import uuid
+
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import deploy, platform_deploy, readiness
+
+    runner = deploy.local_runner_id()
+    row = PlatformDeployment.objects.create(
+        sha=SHA_C, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=[runner], transitions=[])
+    deploy.set_target(SHA_C, actor="test", deployment_id=row.pk)
+    deploy.arm_status(SHA_C, deployment_id=row.pk)
+    stale = {
+        "node_id": "test", "platform_sha": "d" * 40,
+        "platform_deployment": str(uuid.uuid4()),
+    }
+
+    with mock.patch.dict(os.environ, {"MOJO_DEPLOY_IDENTITY_READY": "2"}), \
+         mock.patch.object(readiness, "local_node_proof", return_value=stale):
+        with th.assert_raises(CommandError):
+            call_command(
+                "deploy_status", "set", "deploying", sha=SHA_C,
+                deployment=str(row.pk))
+
+    status = deploy.get_status()
+    th.assert_eq((status or {}).get("state"), deploy.STATUS_FAILED,
+                 f"a v2 identity mismatch must fail its exact lease, got {status!r}")
+    th.assert_eq((status or {}).get("deployment"), str(row.pk),
+                 f"the mismatch touched a foreign lease: {status!r}")
+    row.refresh_from_db()
+    th.assert_eq(row.status, "failed",
+                 f"the mismatched attempt must close failed, got {row.status}")
+    entry = row.node_evidence[-1]
+    th.assert_eq(entry.get("proof"), {},
+                 f"stale identity must be detail, never durable proof: {entry!r}")
+    th.assert_eq((entry.get("detail") or {}).get("reason"), "identity_mismatch",
+                 f"the bounded refusal reason was lost: {entry!r}")
     deploy.clear_status(row.pk)
 
 
 @th.django_unit_test(
     "deploy_status command: one legacy empty-UUID lease can finish the upgrade")
 def test_deploy_status_legacy_upgrade_bridge(opts):
+    import uuid
+
     from django.core.management import call_command
     from django.core.management.base import CommandError
+    from mojo.apps.edge.models import PlatformDeployment
     from mojo.apps.edge.services import deploy
 
     deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
@@ -275,6 +338,31 @@ def test_deploy_status_legacy_upgrade_bridge(opts):
     th.assert_eq(
         status["deployment"], "",
         f"the compatibility write must not invent UUID ownership, got {status!r}")
+
+    # Contract v1 already carried UUID argv, but wrote the legacy identity
+    # pair only AFTER this callback. The new command may release a multi-node
+    # canary, but it must not turn that stale observation into proof.
+    deploy.get_client().delete(deploy.STATUS_KEY)
+    runner = deploy.local_runner_id()
+    row = PlatformDeployment.objects.create(
+        sha=SHA_C, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=[runner], transitions=[])
+    deploy.arm_status(SHA_C, deployment_id=row.pk)
+    call_command(
+        "deploy_status", "set", "deploying", sha=SHA_C,
+        deployment=str(row.pk))
+    row.refresh_from_db()
+    th.assert_eq(row.status, "fleet",
+                 f"a one-runner v1 bridge must await restarted proof, got {row.status}")
+    entry = row.node_evidence[-1]
+    th.assert_eq(entry.get("state"), "identity_pending",
+                 f"the predecessor callback lost its bridge state: {entry!r}")
+    th.assert_eq(entry.get("proof"), {},
+                 f"a pre-identity v1 observation became false proof: {entry!r}")
+    th.assert_eq((entry.get("detail") or {}).get("reason"),
+                 "legacy_script_identity_order",
+                 f"the bridge reason was not durable: {entry!r}")
+    deploy.clear_status(row.pk)
 
     deployment_id = "11111111-1111-4111-8111-111111111111"
     deploy.arm_status(SHA_B, force=True, deployment_id=deployment_id)
