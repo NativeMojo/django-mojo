@@ -293,22 +293,110 @@ List parameters are `page` (default 1), `page_size` (maximum 100), and indexed
 exact filters `state`, `urgency`, `sensor_kind`, and `resource_id`. State is
 `observing` or `elevated`; urgency is `info`, `warning`, `high`, or `critical`;
 sensor kind is `web` or `fim`. The response includes `has_more` rather than an
-unbounded total scan. Detail returns bounded normalized samples and append-only
-transition snapshots, never receipt replay JSON.
+unbounded total scan. A list response has this envelope:
+
+```json
+{
+  "status": true,
+  "data": [{
+    "id": 81,
+    "created": "<timestamp>",
+    "first_seen": "<timestamp>",
+    "last_seen": "<timestamp>",
+    "window_start": "<timestamp>",
+    "window_end": "<timestamp>",
+    "sensor_kind": "web",
+    "resource_id": "vhost:17",
+    "family": "wordpress",
+    "state": "observing",
+    "state_reason": "shadow_observation",
+    "urgency": "warning",
+    "urgency_reason": "trusted_impossible_path",
+    "occurrence_count": 12,
+    "receipt_count": 2,
+    "projected_event_count": 1,
+    "distinct_count": 1,
+    "sample_count": 1,
+    "overflow_count": 0,
+    "policy_version": 1,
+    "evaluator_version": 1
+  }],
+  "page": 1,
+  "page_size": 50,
+  "has_more": false
+}
+```
+
+Detail uses `{status, data}` with the same case fields and adds `sensor_id`,
+`network`, at most eight normalized `samples`, and the latest 50 `transitions`.
+A transition contains only `id`, `created`, `transition`, `reason`, from/to
+state and urgency, `occurrence_count`, and `receipt_count`. Neither response
+contains receipt replay JSON or integrity digests.
 
 `GET /api/incident/mojosec/case-metrics?days=1&resource_id=vhost:17`
 accepts 1–90 days and an optional exact resource. It returns case,
 occurrence, receipt, projected-Event, distinct, overflow, urgency, and
-compression totals. It never returns evidence arrays. Occurrences, receipts,
-samples, and projected Events are separate counters; clients must not treat
-one as an alias for another.
+compression totals in this exact shape:
+
+```json
+{
+  "status": true,
+  "data": {
+    "days": 1,
+    "cases": 4,
+    "occurrences": 10012,
+    "receipts": 7,
+    "projected_events": 6,
+    "distinct": 5,
+    "overflows": 0,
+    "compression_ratio": 2503.0,
+    "by_urgency": {"info": 3, "warning": 1}
+  }
+}
+```
+
+It never returns evidence arrays. Occurrences, receipts, distinct/sample
+counts, and projected Events have different meanings; clients must not treat
+one as an alias for another. HTTP-scheme 301 contributions do not increment
+`projected_event_count`; the shadow evaluator does not try to pair redirect
+twins.
+
+Shadow rollout is selected only by the server's file/static
+`MOJOSEC_CASE_SHADOW_TARGETS` setting, initially for one installation key and
+one VHost. It cannot be enabled by this API or by a DB-backed setting. Operators
+observe at least one normal traffic cycle, inspect case urgency and the metrics
+above, and run the bounded `mojosec_shadow_compare` command for receipt
+fidelity, case cardinality, and compression gates. Rollback sets the target
+list to empty and reconverges the application. Existing cases remain readable,
+and receipts, Events, Incidents, acknowledgements, handlers, and notifications
+are unchanged; only new shadow contributions stop. Shadow cases do not become
+an action or notification authority in this rollout.
 
 For Edge VHosts, `mojosec_policy` is the versioned opt-in configuration exposed
-on the normal VHost graph. Registered impossible-path families are rejected by
-the edge before an SPA/upstream response. The sensor supplies only the fixed
-response class, derived `vhost:<id>` resource identity, and policy version.
-Clients must not infer response content or compromise from status/length and
-must not centrally fetch a suspicious response.
+on the normal VHost graph:
+
+```json
+{
+  "version": 1,
+  "impossible_path_families": ["wordpress", "secret_files"],
+  "response_class": "spa_fallback"
+}
+```
+
+The object requires exactly those keys. Version is 1–65,535; the family list
+contains at most four unique values from `admin_tools`, `php_runtime`,
+`secret_files`, and `wordpress`. `response_class` must match the VHost shape:
+`api` → `reverse_proxy`, SPA `site` → `spa_fallback`, non-SPA `site` →
+`static_site`, `site_api` → `site_api`, and `redirect` → `redirect`.
+Invalid or mismatched policy rejects the VHost save/render. An empty object is
+the legacy-compatible default.
+
+Registered impossible-path families are rejected by the edge before an
+SPA/upstream response. The sensor supplies only the fixed response class,
+derived `vhost:<id>` resource identity, and policy version; an edge-rejected
+match is classified `impossible_path`. Clients must not infer response content
+or compromise from status/length and must not centrally fetch a suspicious
+response.
 
 Feedback accepts exactly one subject: `receipt_id` or `manual_exemplar`.
 Optional `incident_id` is linked context and must match the explicit published

@@ -233,19 +233,31 @@ the default and preserves the existing renderer. The configured form is:
 }
 ```
 
-The only impossible-path families are `admin_tools`, `php_runtime`,
-`secret_files`, and `wordpress`. The only response classes are
-`reverse_proxy`, `spa_fallback`, `static_site`, `site_api`, and `redirect`.
-Unknown keys, classes, families, duplicate families, and invalid versions stop
-the render. Configured impossible paths receive an edge-generated 404 before
-SPA fallback or an upstream can answer them. This is an opt-in serving policy,
-not a centrally initiated fetch or a detector inference.
+The object has exactly those three keys. `version` is an integer from 1 through
+65,535, and the family list contains at most four unique entries chosen from
+`admin_tools`, `php_runtime`, `secret_files`, and `wordpress`. The response
+class must describe the VHost's configured serving behavior:
 
-The nginx security stream adds three server-derived fields:
+| VHost shape | Required `response_class` |
+|---|---|
+| `api` | `reverse_proxy` |
+| `site` with SPA fallback | `spa_fallback` |
+| `site` without SPA fallback | `static_site` |
+| `site_api` | `site_api` |
+| `redirect` | `redirect` |
+
+Unknown keys, mismatched classes, unknown or duplicate families, and invalid
+versions stop the render. Configured impossible paths receive an edge-generated
+404 before SPA fallback or an upstream can answer them. This is an opt-in
+serving policy, not a centrally initiated fetch or a detector inference.
+
+For configured VHosts, the nginx security stream adds three server-derived
+fields:
 `response_class`, `resource_id` (`vhost:<database id>`), and
 `edge_policy_version`. An impossible-path match has the registered class
 `impossible_path`. The detector accepts only these fixed classes and resource
-shape. Status and byte length never establish content identity. Existing
+shape; unconfigured VHosts leave the fields empty and the detector omits them.
+Status and byte length never establish content identity. Existing
 trusted-proxy resolution remains unchanged, and the stream still excludes
 bodies, cookies, authorization, query-derived case samples, and arbitrary
 headers.

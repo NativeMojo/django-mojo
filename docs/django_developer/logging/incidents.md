@@ -39,7 +39,7 @@ Case counters deliberately mean different things:
 |---|---|
 | `occurrence_count` | Sum of sensor-reported occurrences; preserves volume |
 | `receipt_count` | Unique contributing receipt rows |
-| `projected_event_count` | Non-duplicate authoritative Event-shaped contributions; trusted HTTP→HTTPS 301 twins are discounted |
+| `projected_event_count` | Event-shaped contributions; HTTP-scheme 301 contributions are discounted without trying to pair a redirect twin |
 | `distinct_count` | Distinct normalized family/network/resource samples |
 | `sample_count` | Stored bounded samples (maximum 8) |
 | `overflow_count` | Distinct samples beyond the storage bound |
@@ -53,6 +53,36 @@ overflow family, and validated expected-deployment identity. Raw paths, query
 strings, bodies, cookies, authorization, arbitrary lines, and free-form sensor
 text do not enter cases or case metrics.
 
+### Read-only case API and metrics
+
+The custom case endpoints require a human JWT with global `view_security` or
+`security`. API keys and group/member grants are rejected. There are no create,
+update, delete, approve, recommend, acknowledge, or execute endpoints.
+
+| Method | Path | Input | Response |
+|---|---|---|---|
+| `GET` | `/api/incident/mojosec/case` | `page` (default 1), `page_size` (default 50, maximum 100), and exact `state`, `urgency`, `sensor_kind`, or `resource_id` filters | `{status, data, page, page_size, has_more}`; `data` is a bounded list of case summaries |
+| `GET` | `/api/incident/mojosec/case/<id>` | Case id in the path | `{status, data}`; `data` is one case with at most 8 normalized samples and the latest 50 transition snapshots |
+| `GET` | `/api/incident/mojosec/case-metrics` | `days` (default 1, range 1–90) and optional exact `resource_id` | `{status, data}` with bounded aggregate counters and no evidence arrays |
+
+A list row contains `id`, `created`, `first_seen`, `last_seen`, `window_start`,
+`window_end`, `sensor_kind`, `resource_id`, `family`, state and urgency with
+their reasons, all six counters, and the policy/evaluator versions. Detail adds
+`sensor_id`, `network`, `samples`, and `transitions`. Each transition exposes
+only its id/time, transition and reason, from/to state and urgency, and the
+resulting occurrence/receipt counts; it never exposes receipt replay JSON or
+integrity digests.
+
+The case-metrics `data` keys are `days`, `cases`, `occurrences`, `receipts`,
+`projected_events`, `distinct`, `overflows`, `compression_ratio`, and
+`by_urgency`. Compression is occurrences divided by cases, not by receipts or
+projected Events. The dual-write path also records operational metrics under
+`mojosec:shadow:`: `receipts`, `occurrences`, `compressed_occurrences`,
+`cases_opened`, `cases_updated`, `urgency:<level>`, `promotions`, `overflow`,
+and `failures`. The `overflow` metric counts updates to cases whose bounded
+sample overflow is nonzero; the case's `overflow_count` is the durable distinct
+sample count.
+
 ### Rollout and one-VHost canary
 
 Dual-write is off unless the file/static setting names an exact installation
@@ -63,13 +93,19 @@ plane:
 MOJOSEC_CASE_SHADOW_TARGETS = [{
     "installation_key_id": 42,
     "vhost_ids": [17],
-    "include_fim": True,
+    "include_fim": False,
 }]
 ```
 
+`vhost_ids` gates web evidence to those exact resources. `include_fim=True`
+also enables all supported FIM evidence for that installation key; FIM is
+installation-scoped and is not narrowed by `vhost_ids`. A malformed target row
+fails closed by disabling the complete target list.
+
 Start with one Mojoware VHost. Compare receipt fidelity, occurrence volume,
 case cardinality, projected Events, overflow, urgency, and compression for at
-least one normal traffic cycle. The exact read-only command is:
+least one normal traffic cycle. Use the case API for urgency and bounded case
+inspection. The exact read-only bounds command is:
 
 ```bash
 uv run python manage.py mojosec_shadow_compare --installation-key 42 --vhost 17 --hours 24 --max-cases 500 --min-compression 2
