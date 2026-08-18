@@ -253,6 +253,39 @@ def test_summary_is_frozen_and_secret_free(opts):
     assert "must-never-export" not in str(result), "summary exported secret material"
 
 
+@th.django_unit_test("summary v1 datetimes export as JSON strings, not raw datetimes")
+def test_summary_datetimes_are_json_serializable(opts):
+    import json
+
+    from django.utils import timezone
+
+    from mojo.apps.edge.models import WebAppDeployment
+    from mojo.apps.edge.services import webapp_onboarding
+    from tests.test_edge._helpers import make_release
+
+    web_app = make_webapp(opts.group)
+    release = make_release(web_app, "v1.0.0", status="live")
+    web_app.current_release = release
+    web_app.save(update_fields=["current_release", "modified"])
+    WebAppDeployment.objects.create(
+        webapp=web_app, release=release, status="live",
+        finished=timezone.now())
+
+    result = webapp_onboarding.summary_for(web_app)
+
+    # The Admin Platform overview and the onboarding REST endpoint both hand
+    # this dict straight to JsonResponse; a bare datetime raised
+    # "... is not JSON serializable" the moment a webapp had a release/deploy.
+    json.dumps(result)
+
+    assert isinstance(result["current_release"]["created"], str), \
+        "release.created leaked as a raw datetime and broke JSON serialization"
+    assert isinstance(result["latest_deployment"]["created"], str), \
+        "deployment.created leaked as a raw datetime and broke JSON serialization"
+    assert isinstance(result["latest_deployment"]["finished"], str), \
+        "deployment.finished leaked as a raw datetime and broke JSON serialization"
+
+
 @th.django_unit_test("operation detail authorizes a group member without a global grant")
 def test_detail_uses_operation_group_scope(opts):
     from mojo.apps.account.models import GroupMember
