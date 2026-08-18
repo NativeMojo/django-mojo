@@ -10,6 +10,7 @@ import os
 import pwd
 import shutil
 import tempfile
+from pathlib import Path
 from unittest import mock
 
 from testit import helpers as th
@@ -552,7 +553,7 @@ def test_restart_uses_the_configured_service_name(opts):
 
     th.assert_true(ok, "a returncode of 0 must be reported as success")
     command = fake_subprocess.run.call_args[0][0]
-    th.assert_eq(command, ["systemctl", "restart", "acme-api.service"],
+    th.assert_eq(command, ["systemctl", "--no-block", "restart", "acme-api.service"],
                  f"CONFIG_SYNC_SERVICE must pick the unit, got {command}")
 
 
@@ -567,9 +568,104 @@ def test_restart_defaults_to_mojo_asgi(opts):
         cs.restart_app({}, False)
 
     command = fake_subprocess.run.call_args[0][0]
-    th.assert_eq(command, ["systemctl", "restart", cs.DEFAULT_SERVICE],
+    th.assert_eq(command, ["systemctl", "--no-block", "restart", cs.DEFAULT_SERVICE],
                  f"an unset CONFIG_SYNC_SERVICE must fall back to "
                  f"{cs.DEFAULT_SERVICE}, got {command}")
+
+
+@th.django_unit_test()
+def test_restart_enqueue_failure_is_nonzero(opts):
+    from mojo.deploy import config_sync as cs
+
+    fake_subprocess = mock.Mock()
+    fake_subprocess.run.return_value = mock.Mock(
+        returncode=1, stderr=b"transaction rejected")
+    with mock.patch.object(cs, "subprocess", fake_subprocess), \
+            mock.patch.object(cs, "time", mock.Mock()):
+        ok = cs.restart_app({}, False)
+
+    th.assert_true(not ok,
+                   "a rejected systemd enqueue must fail config_sync instead "
+                   "of claiming the changed config was activated")
+
+
+class _SystemdJobGraph:
+    """Portable model of the two systemd transactions config-sync relies on.
+
+    It models the relevant systemd semantics, not a static dependency check:
+    Before= ordering in a boot transaction, --no-block adding a later restart
+    job, timer activation while the app is already active, and target-unit
+    failure after the oneshot has returned.
+    """
+
+    def __init__(self, app_fails=False):
+        self.app_fails = app_fails
+        self.app_state = "inactive"
+        self.jobs = []
+        self.events = []
+
+    def _start_config(self, changed):
+        self.events.append("config:start")
+        if changed:
+            self.jobs.append("app:restart")
+            self.events.append("config:restart-enqueued")
+        self.events.append("config:complete")
+
+    def _drain(self):
+        while self.jobs:
+            self.jobs.pop(0)
+            self.events.append("app:start")
+            self.app_state = "failed" if self.app_fails else "active"
+            self.events.append(f"app:{self.app_state}")
+
+    def boot(self, changed):
+        self._start_config(changed)
+        if not changed:
+            self.jobs.append("app:start")
+        self._drain()
+
+    def timer(self, changed):
+        self._start_config(changed)
+        self._drain()
+
+
+@th.django_unit_test()
+def test_packaged_unit_and_faithful_systemd_job_graph(opts):
+    import mojo
+
+    root = Path(mojo.__file__).resolve().parents[1]
+    unit = (root / "mojo" / "deploy" / "templates" / "systemd" /
+            "config-sync.service").read_text(encoding="utf-8")
+    th.assert_in("Before=mojo-asgi.service", unit,
+                 "boot must still order config sync before the application")
+    th.assert_in("ExecStart=/usr/bin/python3 -m mojo.deploy.config_sync", unit,
+                 "the packaged unit must remain bound to config_sync")
+    th.assert_in("non-blocking", unit.lower(),
+                 "the unit must explain why a synchronous restart deadlocks "
+                 "its Before= transaction")
+
+    boot = _SystemdJobGraph()
+    boot.boot(changed=True)
+    th.assert_true(
+        boot.events.index("config:complete") < boot.events.index("app:start"),
+        f"boot started the app before config sync completed: {boot.events}")
+    th.assert_eq(boot.app_state, "active",
+                 f"the queued boot restart never activated the app: {boot.events}")
+
+    timer = _SystemdJobGraph()
+    timer.app_state = "active"
+    timer.timer(changed=True)
+    th.assert_true(
+        timer.events.index("config:complete") < timer.events.index("app:start"),
+        f"timer restart ran synchronously inside config sync: {timer.events}")
+
+    failed = _SystemdJobGraph(app_fails=True)
+    failed.timer(changed=True)
+    th.assert_eq(failed.app_state, "failed",
+                 "an eventual target-unit failure must remain visible after "
+                 "the enqueue succeeds")
+    th.assert_in("app:failed", failed.events,
+                 f"the simulated journal lost target failure: {failed.events}")
 
 
 @th.django_unit_test()

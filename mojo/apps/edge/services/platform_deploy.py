@@ -316,6 +316,18 @@ def same_sha_retry(row, actor, created_by=None, idempotency_key=None):
         idempotency_key=idempotency_key, retry_of=row)
 
 
+def proof_matches(row, proof):
+    """True only for this attempt's exact UUID and a full live commit SHA."""
+    if not isinstance(proof, dict):
+        return False
+    from mojo.apps.edge.services import deploy
+    sha = proof.get("platform_sha")
+    return bool(
+        proof.get("platform_deployment") == str(row.pk)
+        and isinstance(sha, str) and len(sha) == 40
+        and deploy.is_valid_sha(sha) and sha.startswith(row.sha))
+
+
 def verify(value, timeout=2.0):
     """Collect bounded UUID/SHA proof from the frozen edge-channel roster."""
     from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
@@ -354,10 +366,7 @@ def verify(value, timeout=2.0):
         response = results.get(runner)
         proof = response.get("result") if (
             isinstance(response, dict) and response.get("status") == "success") else None
-        good = bool(
-            isinstance(proof, dict)
-            and proof.get("platform_deployment") == str(row.pk)
-            and str(proof.get("platform_sha") or "").startswith(row.sha))
+        good = proof_matches(row, proof)
         if good:
             proven += 1
         evidence(
@@ -391,11 +400,83 @@ def converge(value):
     return verify(row.pk)
 
 
+def _local_evidence(row, runner_id):
+    for entry in reversed(list(row.node_evidence or [])):
+        if isinstance(entry, dict) and entry.get("runner") == runner_id:
+            return entry
+    return None
+
+
+def finalize_post_restart():
+    """Finalize one exact single-runner terminal lease after self-restart.
+
+    Callback-time code records intent but never clears the lease: update.sh
+    can kill that engine immediately afterward. The replacement engine proves
+    the installed identity, closes the durable row, clears only its UUID, then
+    gives one queued successor a chance to claim the now-empty lease.
+    """
+    from mojo.apps.edge.services import deploy, readiness
+
+    current = deploy.get_status() or {}
+    if current.get("state") not in deploy.TERMINAL_STATES:
+        return None
+    owner = deployment_id(current.get("deployment"))
+    if not owner:
+        # Empty-UUID v1 leases have no safe durable owner and remain TTL-bound.
+        return None
+    row = get(owner)
+    if row is None:
+        if deploy.clear_status(owner):
+            deploy.resume_stranded_target()
+            return owner
+        return None
+
+    runner_id = deploy.local_runner_id()
+    roster = list(row.frozen_roster or [])
+    if len(roster) != 1 or runner_id not in roster:
+        return None
+    observed = _local_evidence(row, runner_id)
+    if not observed:
+        return None
+
+    if current.get("state") == deploy.STATUS_FAILED:
+        if observed.get("state") not in {"failed", "identity_mismatch"}:
+            return None
+        if row.status != PlatformDeployment.STATUS_FAILED:
+            if not transition(
+                    row.pk, PlatformDeployment.STATUS_FAILED,
+                    {"reason": "post_restart_failed"}):
+                return None
+    else:
+        if observed.get("state") not in {
+                deploy.STATUS_DEPLOYING, "identity_pending", "proven"}:
+            return None
+        try:
+            proof = readiness.local_node_proof()
+        except Exception:
+            return None
+        if not proof_matches(row, proof):
+            return None
+        if not evidence(row.pk, runner_id, "proven", proof=proof, detail={}):
+            return None
+        if row.status != PlatformDeployment.STATUS_CONVERGED:
+            if not transition(
+                    row.pk, PlatformDeployment.STATUS_CONVERGED,
+                    {"source": "post_restart", "proven": 1, "expected": 1}):
+                return None
+
+    if not deploy.clear_status(row.pk):
+        return None
+    deploy.resume_stranded_target()
+    return str(row.pk)
+
+
 def reconcile_stale():
     """Verify released fleets, then close abandoned coordination attempts."""
     from datetime import timedelta
     from mojo.apps.edge.services import deploy
 
+    finalize_post_restart()
     now = timezone.now()
     cutoff = now - timedelta(seconds=max(60, deploy.status_ttl()))
     proof_cutoff = now - timedelta(seconds=FLEET_PROOF_GRACE)

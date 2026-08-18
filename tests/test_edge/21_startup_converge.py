@@ -36,11 +36,17 @@ def test_startup_converge_installs_pools(opts):
 
     declare_pools(["alpha", "beta"])
     installed = []
+    order = []
 
     try:
         with mock.patch(
+                "mojo.apps.edge.services.platform_deploy.finalize_post_restart",
+                side_effect=lambda: order.append("deploy-finalized")), \
+             mock.patch(
                 "mojo.apps.edge.services.installer.install_pools",
-                side_effect=lambda pools: installed.append(list(pools)) or mock.Mock(changed=True)), \
+                side_effect=lambda pools: (
+                    order.append("pools-installed"), installed.append(list(pools)),
+                    mock.Mock(changed=True))[-1]), \
                 th.capture_publishes(
                     lambda c: c.get("channel") == "edge" and c.get("broadcast")
                 ) as edge_broadcasts:
@@ -50,6 +56,8 @@ def test_startup_converge_installs_pools(opts):
 
     assert installed == [["alpha", "beta"]], (
         f"startup convergence must atomically install the pool union, got {installed}")
+    assert order == ["deploy-finalized", "pools-installed"], (
+        f"terminal deploy cleanup must precede ordinary convergence: {order}")
     assert edge_broadcasts == [], (
         "startup convergence is the node reconciling ITSELF — it must not "
         f"broadcast to the fleet, got {edge_broadcasts}")
@@ -64,7 +72,11 @@ def test_startup_converge_honors_gate(opts):
     from mojo.apps.edge import asyncjobs
 
     installed = []
-    with mock.patch("mojo.apps.edge.services.installer.install_pools",
+    finalized = []
+    with mock.patch(
+            "mojo.apps.edge.services.platform_deploy.finalize_post_restart",
+            side_effect=lambda: finalized.append(True)), \
+         mock.patch("mojo.apps.edge.services.installer.install_pools",
                     side_effect=lambda pools: installed.append(list(pools))):
         result = with_setting(
             "EDGE_CONVERGE_ENABLED", False,
@@ -74,6 +86,8 @@ def test_startup_converge_honors_gate(opts):
         f"the gated startup converge must say it was disabled, got {result!r}")
     assert installed == [], (
         f"a disabled startup converge must not install anything, got {installed}")
+    assert finalized == [True], (
+        "disabling hosting convergence must not disable terminal deploy cleanup")
 
 
 @th.django_unit_test("a combined pool failure never claims a partial convergence")

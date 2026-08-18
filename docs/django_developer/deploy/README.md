@@ -202,6 +202,13 @@ takes the whole fleet out simultaneously the moment a config lands. The delay
 slot is stable across runs and reproducible when you are working out what
 happened.
 
+After the delay, config sync uses `systemctl --no-block restart`. This is a
+real systemd transaction enqueue, not a claim that the application has already
+started. A synchronous restart from the boot-time oneshot can deadlock against
+the unit's `Before=mojo-asgi.service` ordering. Enqueue refusal makes config
+sync fail immediately; a later application start failure remains visible in
+the target unit's systemd status/journal and in health checks.
+
 ## systemd
 
 ```ini
@@ -364,7 +371,10 @@ project on its next deploy instead of dying in a template nobody re-clones.
 for the orchestrator contract): deploy mode checks out the named sha,
 installs the pinned framework, reports `deploy_status`, and on a canary
 failure reports **before** rolling back; `--manual` is the hands-on path;
-bare invocation is refused. `post_deploy.sh` is the convergence pass update.sh
+bare invocation is refused. Deploy mode publishes the installed commit and
+attempt UUID as one atomic `var/deploy_identity.json` before its v2 success
+callback; the old `deploy_sha` / `deployment_uuid` pair is read only as a
+bounded one-generation bridge. `post_deploy.sh` is the convergence pass update.sh
 sudo-runs: project deps first, framework last, `migrate_locked` only under
 `--migrate`, collectstatic, **render** (below), nginx top-level + `sec.d` +
 `conf.d` (`.example` excluded, copied count logged), `node_retired.conf`
@@ -377,6 +387,23 @@ Mid-run self-replacement is designed in: the `pip install` inside post_deploy
 swaps both packaged files for new inodes, but the executing bash keeps its fd
 on the old copy, so the in-flight run completes on the code it started with
 and the NEXT run resolves the new copy through `locate`.
+
+The identity boundary is deliberately stricter than the code boundary. Before
+mutating code, `update.sh` snapshots the last coherent identity and publishes
+an invalidation marker. Success atomically renames the canonical v2 manifest:
+
+```json
+{"schema":2,"sha":"<full 40-hex live HEAD>","deployment":"<canonical uuid>"}
+```
+
+The manifest must exist before the success callback, which carries
+`MOJO_DEPLOY_IDENTITY_READY=2`. A present-but-invalid manifest fails closed and
+never borrows the legacy pair. Rollback restores the snapshot only after reset,
+framework convergence, and sanity all succeed; an incomplete rollback leaves
+no manifest and retains the invalidation marker. A delivery already on the
+requested SHA/framework with a different attempt UUID still publishes that
+fresh UUID, performs its sanity/callback path, and reaches the normal
+jobman-last tail. Only the same SHA/framework/UUID is a true duplicate no-op.
 
 ## The shim contract
 
@@ -443,13 +470,13 @@ it (WARN, FAIL under `--require-shims`). `aws/post_deploy.sh` is exempt —
 `update.sh` carries a marker line naming the argv contract it speaks:
 
 ```bash
-# mojo-deploy-contract: 1     # == mojo.apps.edge.services.deploy.DEPLOY_CONTRACT
+# mojo-deploy-contract: 2     # == mojo.apps.edge.services.deploy.DEPLOY_CONTRACT
 ```
 
 and answers it directly, before the `cd`, touching nothing:
 
 ```bash
-aws/update.sh --contract      # prints 1, exits 0 (works even with no PROJ_PATH)
+aws/update.sh --contract      # prints 2, exits 0 (works even with no PROJ_PATH)
 ```
 
 `deploy_node` **reads** the configured script before exec'ing it. A shim always

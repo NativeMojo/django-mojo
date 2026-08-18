@@ -22,7 +22,8 @@ orchestrator (whichever job runner takes it):
   tell the canary to update WITH --migrate, then poll DEPLOY_STATUS
 
   canary's script: install pinned commit + framework ► migrate_locked
-                   ► sanity_check ► deploy_status set deploying|failed
+                   ► sanity_check ► atomically publish UUID/SHA identity
+                   ► deploy_status set deploying|failed
 
   failed / silent ─► incident (level 7). Fleet stays on the old release.
   deploying       ─► tell every snapshot runner (same commit, same version),
@@ -31,7 +32,12 @@ orchestrator (whichever job runner takes it):
 ```
 
 Single-runner fleets degrade cleanly: no canary is possible, the one node
-updates itself with `--migrate`, and the status tail is cleaned by its TTL.
+updates itself with `--migrate`, then kills its own old job engine. On the new
+engine's startup, a post-restart finalizer verifies the exact UUID/full-SHA
+identity, closes the durable row, compare-and-set clears that UUID's lease, and
+resumes at most one queued successor. Callback-time code records terminal
+intent only; it cannot release the lease while the old script can still stop
+the process.
 Multi-runner fleets are the normal case, and there the orchestrator is a
 *different* node from the canary — which is what makes the node-failure
 reporting below observable at all: the reporting node lives to report.
@@ -61,7 +67,7 @@ durable `edge.PlatformDeployment` journal:
 | Key | Holds | Semantics |
 |---|---|---|
 | `edge:deploy:target` | deployment UUID + commit SHA + who asked | **Last writer wins.** A push mid-deploy overwrites it; the orchestrator's chain check deploys it next. |
-| `edge:deploy:status` | `migrating` / `deploying` / `failed`, stamped with UUID + SHA | Armed with a **Lua compare-and-set: nothing armed, or the armed lease is terminal `failed`.** Terminal writes and deletion are **compare-and-set on UUID and SHA** (Lua), so an older attempt cannot settle a newer same-SHA retry. |
+| `edge:deploy:status` | `migrating` / `deploying` / `failed`, stamped with UUID + SHA | Armed with a **Lua compare-and-set: nothing armed, or the armed lease is terminal `failed`.** Terminal writes compare UUID + SHA; deletion compares the exact UUID owner. An older attempt therefore cannot settle or clear a newer same-SHA retry. |
 
 The invariant is **never a second concurrent deploy while one is live** — not
 "never a second deploy for the whole TTL". A `migrating` or `deploying` lease
@@ -69,16 +75,18 @@ is never stealable, so a same-second webhook race still starts exactly one
 deploy. A terminal `failed` lease describes a deploy that is *over*, and the
 next push re-arms straight over it.
 
-The TTL is load-bearing: a canary that dies hard would otherwise leave
+The TTL is load-bearing: a canary that dies hard before recording terminal
+intent would otherwise leave
 `migrating` set forever and wedge every future deploy. The orchestrator clears
-the status at its terminal; the TTL is the backstop, and the only cleaner on a
-single-runner fleet. Redis is not durable. `PlatformDeployment` retains request
+the status at its terminal; the post-restart finalizer owns terminal
+single-runner cleanup. The TTL remains the crash-only backstop. Redis is not durable. `PlatformDeployment` retains request
 identity, its frozen roster, transitions, and the latest bounded proof per
 runner; incidents remain the alerting trail.
 
 The TTL is no longer the *only* thing between a wedge and the next deploy. The
-five-minute reconciler (`cronjobs.reconcile_platform_deployments`) does two
-things before it closes anything:
+five-minute reconciler (`cronjobs.reconcile_platform_deployments`) runs three
+recovery paths in this order: stranded-target resumption first, then
+`reconcile_stale()`, whose first action is post-restart finalization:
 
 - **`deploy.resume_stranded_target()`** republishes one `deploy_orchestrate`
   for a target whose deploy never started — something armed the lease and then
@@ -86,6 +94,14 @@ things before it closes anything:
   no live lease, the target names a valid SHA and UUID, that row still says
   exactly `requested` with a matching SHA, and `arm_status` lands (the atomic
   claim — two reconcilers race and one wins). At most one publish per sweep.
+- **`platform_deploy.finalize_post_restart()`** runs before startup hosting
+  convergence (even when that convergence is disabled), and at the start of
+  the periodic reconcile. It acts only on a terminal lease with a valid exact
+  UUID. Existing single-runner rows require local callback evidence; success
+  additionally requires the shared strict identity matcher. A valid UUID whose
+  row is missing can be CAS-cleared, while a live `migrating` lease and an
+  empty-UUID legacy lease remain untouched. After an exact clear it invokes
+  `resume_stranded_target()` once.
 - **`platform_deploy.reconcile_stale()`** no longer skips every row that owns
   the live lease. A lease that is `migrating`/`deploying` is still hands-off,
   but a **terminal `failed`** lease closes its row `failed`
@@ -163,7 +179,8 @@ be in the index. `aws/post_deploy.sh` is exempt — `update.sh` invokes it as
 
 ### The node-script contract
 
-Contract **v1** is the argv the deploy plane speaks to the node script:
+Contract **v2** retains the v1 argv and adds the atomic identity/callback
+ordering described below:
 
 ```
 --sha <7-40 hex> --framework <version> --deployment <uuid> [--migrate]
@@ -173,7 +190,7 @@ The number lives in two places that must agree: `deploy.DEPLOY_CONTRACT`, and a
 marker line at the top of the packaged `mojo/deploy/scripts/update.sh`:
 
 ```bash
-# mojo-deploy-contract: 1
+# mojo-deploy-contract: 2
 ```
 
 `deploy_node` **reads** the configured script before it execs it (never runs
@@ -213,7 +230,7 @@ level-7 incident titled *Edge deploy node script contract mismatch*:
 
 ```
 deploy <uuid> (<sha>): node update script speaks deploy contract v0; this
-framework requires v1 — the script named by EDGE_DEPLOY_SCRIPT is a stale fork
+framework requires v2 — the script named by EDGE_DEPLOY_SCRIPT is a stale fork
 (see django-mojo docs/django_developer/edge/deploy.md)
 ```
 
@@ -221,7 +238,7 @@ The packaged script also answers the question directly, for an operator or a
 checker on the box:
 
 ```bash
-aws/update.sh --contract     # prints 1, exits 0, touches nothing
+aws/update.sh --contract     # prints 2, exits 0, touches nothing
 ```
 
 It is answered before the `cd`, so it works on a box whose `PROJ_PATH` does not
@@ -328,6 +345,22 @@ a fixed allowlisted phase before it enters Redis, evidence, or an incident;
 arbitrary callback text becomes `update_failed`. Process stdout/stderr and
 provider exception messages never enter durable or operator-facing surfaces.
 
+A v2 success callback carries `MOJO_DEPLOY_IDENTITY_READY=2`. The command then
+reads the node's atomic manifest through `local_node_proof` and uses the same
+matcher as fleet verification: the deployment UUID must equal the durable row
+exactly, and the observed SHA must be a full 40-hex commit beginning with the
+requested SHA. Proof is persisted before the Redis success intent. A mismatch
+persists only bounded `identity_mismatch` detail (never the stale value as
+proof), fails the exact UUID lease and row, and exits non-zero.
+
+An in-flight contract-v1 script may have UUID argv but calls back before
+writing its two legacy identity files. With no v2 signal, the command records
+`identity_pending` with no proof. It may release a multi-node canary; a
+single-runner row moves only to `fleet`, never `verified`, until the restarted
+engine reads the bounded legacy pair and finalizes it. A present malformed v2
+manifest, an invalidation marker, an oversized legacy file, a partial SHA, or
+a different UUID all fail closed.
+
 The 1.9-to-UUID rollout has one compatibility seam: an already-running 1.9
 canary script cannot add `--deployment` after it installs the new framework.
 The command accepts that callback only when Redis still holds the same SHA in
@@ -424,11 +457,14 @@ because a **fork** owns all of it, and because the deploy plane depends on it:
 
 - `update.sh` takes `--sha` and checks out **that commit**, not
   `git reset --hard origin/main`; holds an `flock` so overlapping invocations
-  on one box are impossible; short-circuits when already on the target SHA and
-  framework; calls `deploy_status set` at its terminals. On a `--migrate`
+  on one box are impossible; for a fresh UUID, skips fetch/install—but not
+  proof—when already on the target SHA and framework; atomically publishes a canonical v2 identity
+  before signaling success; calls `deploy_status set` at its terminals. On a `--migrate`
   failure it reports `failed` **first** and only then rolls back — the rollback
   may reinstall a framework version that predates `deploy_status`, so the
-  report must happen while the reporting tool is guaranteed to exist.
+  report must happen while the reporting tool is guaranteed to exist. It
+  restores old proof only after every rollback step succeeds and always leaves
+  `jobman stop` last on a migrate terminal.
 - `post_deploy.sh` runs `manage.py migrate_locked --noinput` (never a
   `var/allow_migrate` flag file, which is not a lock) and installs
   `pip install django-mojo==<the --framework value>` — pinned, never
@@ -457,11 +493,15 @@ overflow, an empty roster, a missing, malformed, mismatched, stale, or
 implausibly future-dated declaration, or a timeout fails platform and WebApp
 deployments closed.
 
-A canary success remains `fleet` while restarted runners repopulate their
+A multi-node canary success remains `fleet` while restarted runners repopulate their
 heartbeats. The five-minute reconciler waits through the restart grace period,
 then collects UUID/SHA proof from every frozen runner and closes the attempt as
 `converged`, `partial`, or `unknown`; canary proof alone is never reported as
 healthy fleet convergence.
+
+The proof matcher is shared by immediate v2 callbacks, single-runner restart
+finalization, and delayed fleet verification. No path accepts an abbreviated
+observed SHA or a UUID nested under caller-supplied wrapper fields.
 
 Job engines synchronously register before initialization succeeds, refresh each
 consumed-channel index before their heartbeat document, prune expired entries,

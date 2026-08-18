@@ -1,5 +1,5 @@
 #!/bin/bash
-# mojo-deploy-contract: 1
+# mojo-deploy-contract: 2
 # ^ the argv contract this script speaks. It must equal
 #   mojo.apps.edge.services.deploy.DEPLOY_CONTRACT: the deploy plane READS this
 #   line before it execs the script and refuses one that declares an older
@@ -76,7 +76,7 @@ EOF
 for arg in "$@"; do
     if [ "$arg" = "--contract" ]; then
         [ "$#" -eq 1 ] || { usage; exit 2; }
-        echo "1"
+        echo "2"
         exit 0
     fi
 done
@@ -149,8 +149,12 @@ fi
 report_status() {
     # report_status <deploying|failed> <sha> [detail]
     local state="$1" sha="$2" detail="${3:-}" rc=0
-    if [ -n "$detail" ]; then
-        python3 bin/manage.py deploy_status set "$state" --sha "$sha" --deployment "$DEPLOYMENT" --detail "$detail" || rc=$?
+    if [ "$state" = "deploying" ]; then
+        MOJO_DEPLOY_IDENTITY_READY=2 python3 bin/manage.py deploy_status set \
+            "$state" --sha "$sha" --deployment "$DEPLOYMENT" || rc=$?
+    elif [ -n "$detail" ]; then
+        python3 bin/manage.py deploy_status set "$state" --sha "$sha" \
+            --deployment "$DEPLOYMENT" --detail "$detail" || rc=$?
     else
         python3 bin/manage.py deploy_status set "$state" --sha "$sha" --deployment "$DEPLOYMENT" || rc=$?
     fi
@@ -161,21 +165,79 @@ report_status() {
     return "$rc"
 }
 
+# ── atomic deployment identity ──────────────────────────────────────────────
+
+PREV_IDENTITY_SHA=""
+PREV_IDENTITY_UUID=""
+
+parse_identity() { # canonical-json
+    local value="$1"
+    local pattern='^\{"schema":2,"sha":"([0-9a-f]{40})","deployment":"([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})"\}$'
+    [[ "$value" =~ $pattern ]] || return 1
+    PREV_IDENTITY_SHA="${BASH_REMATCH[1]}"
+    PREV_IDENTITY_UUID="${BASH_REMATCH[2]}"
+}
+
+write_identity_file() { # sha uuid destination
+    local sha="$1" deployment="$2" destination="$3"
+    local temp="var/.deploy_identity.$$.tmp"
+    (umask 022; printf '{"schema":2,"sha":"%s","deployment":"%s"}\n' \
+        "$sha" "$deployment" > "$temp") || return 1
+    chmod 0644 "$temp" || { rm -f "$temp"; return 1; }
+    mv -f "$temp" "$destination" || { rm -f "$temp"; return 1; }
+}
+
+snapshot_previous_identity() {
+    local value="" sha="" deployment=""
+    rm -f var/previous_deploy_identity.json
+    if [ -e var/deploy_identity.json ]; then
+        value="$(head -c 4097 var/deploy_identity.json 2>/dev/null)"
+        [ "${#value}" -le 4096 ] && parse_identity "$value" || return 0
+    elif [ ! -e var/deploy_identity.invalid ]; then
+        sha="$(head -c 129 var/deploy_sha 2>/dev/null | tr -d '\r\n')"
+        deployment="$(head -c 129 var/deployment_uuid 2>/dev/null | tr -d '\r\n')"
+        if [[ "$sha" =~ ^[0-9a-f]{40}$ ]] && \
+                [[ "$deployment" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]; then
+            PREV_IDENTITY_SHA="$sha"
+            PREV_IDENTITY_UUID="$deployment"
+        fi
+    fi
+    if [ -n "$PREV_IDENTITY_SHA" ] && [ -n "$PREV_IDENTITY_UUID" ]; then
+        write_identity_file "$PREV_IDENTITY_SHA" "$PREV_IDENTITY_UUID" \
+            var/previous_deploy_identity.json || return 1
+    fi
+}
+
+invalidate_identity() {
+    local temp="var/.deploy_identity_invalid.$$.tmp"
+    (umask 022; printf 'invalid\n' > "$temp") || return 1
+    chmod 0644 "$temp" || { rm -f "$temp"; return 1; }
+    mv -f "$temp" var/deploy_identity.invalid \
+        || { rm -f "$temp"; return 1; }
+    rm -f var/deploy_identity.json var/deploy_sha var/deployment_uuid
+}
+
+publish_identity() { # full-sha uuid
+    write_identity_file "$1" "$2" var/deploy_identity.json || return 1
+    rm -f var/deploy_identity.invalid var/deploy_sha var/deployment_uuid
+}
+
 # ── deploy mode ──────────────────────────────────────────────────────────────
 
 if [ "$MODE" = "deploy" ]; then
     HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
     CURRENT_FRAMEWORK="$(python3 -c 'import mojo; print(mojo.__version__)' 2>/dev/null || echo "")"
 
-    # Short-circuit: a redelivered ghost or duplicate publish becomes a no-op.
-    # Prefix match on the sha — the manual deploy endpoint accepts abbreviated
-    # shas and HEAD is always full. The framework must match too: a
-    # framework-only re-pin still runs.
+    # A same-code delivery skips fetch/install, but not deployment identity.
+    # A fresh UUID is a fresh attempt and must still prove itself, report the
+    # callback (including a single-runner non-migrate delivery), and reach the
+    # normal self-stop tail.
+    SAME_RELEASE=0
     case "$HEAD_SHA" in
         "$SHA"*)
             if [ -n "$SHA" ] && [ "$CURRENT_FRAMEWORK" = "$FRAMEWORK" ]; then
-                log "already on ${SHA} / django-mojo ${FRAMEWORK} — nothing to do"
-                exit 0
+                SAME_RELEASE=1
+                log "already on ${SHA} / django-mojo ${FRAMEWORK} — refreshing deployment identity"
             fi
             ;;
     esac
@@ -185,21 +247,31 @@ if [ "$MODE" = "deploy" ]; then
     PREV_FRAMEWORK="$CURRENT_FRAMEWORK"
     echo "$PREV_SHA" > var/previous_sha
     echo "$PREV_FRAMEWORK" > var/previous_framework
+    snapshot_previous_identity || { log "could not snapshot prior deployment identity"; exit 1; }
+    if [ "$SAME_RELEASE" = "1" ] && [ "$PREV_IDENTITY_SHA" = "$HEAD_SHA" ] \
+            && [ "$PREV_IDENTITY_UUID" = "$DEPLOYMENT" ]; then
+        log "deployment ${DEPLOYMENT} is already proven — nothing to do"
+        exit 0
+    fi
 
     fail_deploy() {
         # fail_deploy <step that failed>
         local step="$1"
         log "deploy of ${SHA} failed at: ${step}"
-        if [ "$MIGRATE" = "1" ]; then
+        if [ "$MIGRATE" = "1" ] || [ "$SAME_RELEASE" = "1" ]; then
             # Report FIRST — the rollback below may reinstall a framework
             # that has no deploy_status command.
             report_status failed "$SHA" "$step" || true
-            if [ -n "$PREV_SHA" ] && [ -n "$PREV_FRAMEWORK" ]; then
+            invalidate_identity || log "could not publish identity invalidation marker"
+            rollback_ok=0
+            if [ "$SAME_RELEASE" = "1" ]; then
+                rollback_ok=1
+            elif [ -n "$PREV_SHA" ] && [ -n "$PREV_FRAMEWORK" ]; then
                 log "rolling back to ${PREV_SHA} / django-mojo ${PREV_FRAMEWORK}"
                 if git reset --hard "$PREV_SHA" \
-                        && sudo bash ./aws/post_deploy.sh --framework "$PREV_FRAMEWORK"; then
-                    python3 bin/manage.py sanity_check --url "$SANITY_URL" \
-                        || log "rollback landed but its sanity_check failed"
+                        && sudo bash ./aws/post_deploy.sh --framework "$PREV_FRAMEWORK" \
+                        && python3 bin/manage.py sanity_check --url "$SANITY_URL"; then
+                    rollback_ok=1
                 else
                     log "ROLLBACK FAILED — this node is in an unknown state"
                     report_status failed "$SHA" "rollback failed" || true
@@ -208,6 +280,14 @@ if [ "$MODE" = "deploy" ]; then
                 log "no previous state recorded — cannot roll back"
                 report_status failed "$SHA" "rollback impossible: no previous state" || true
             fi
+            if [ "$rollback_ok" = "1" ] && [ -n "$PREV_IDENTITY_SHA" ] \
+                    && [ -n "$PREV_IDENTITY_UUID" ]; then
+                publish_identity "$PREV_IDENTITY_SHA" "$PREV_IDENTITY_UUID" \
+                    || log "rollback succeeded but prior identity restore failed"
+            fi
+            # The new engine finalizes this exact terminal UUID and releases
+            # any queued successor. Keep the self-stop as the last command.
+            ./bin/jobman stop >> var/update.log 2>&1
         fi
         # Fleet (non-migrate) runs neither report nor roll back: exiting
         # non-zero here happens BEFORE jobman stop, so the still-alive
@@ -216,22 +296,35 @@ if [ "$MODE" = "deploy" ]; then
     }
 
     log "UPDATE STARTED deployment=${DEPLOYMENT} sha=${SHA} framework=${FRAMEWORK} migrate=${MIGRATE}"
-    git fetch origin                    || fail_deploy "git fetch"
-    git reset --hard "$SHA"             || fail_deploy "git reset to ${SHA}"
-    git clean -fd                       || fail_deploy "git clean"
+    if [ "$SAME_RELEASE" != "1" ]; then
+        invalidate_identity || fail_deploy "identity invalidation"
+        git fetch origin                    || fail_deploy "git fetch"
+        git reset --hard "$SHA"             || fail_deploy "git reset to ${SHA}"
+        git clean -fd                       || fail_deploy "git clean"
+        if [ "$MIGRATE" = "1" ]; then
+            sudo bash ./aws/post_deploy.sh --framework "$FRAMEWORK" --migrate \
+                                            || fail_deploy "post_deploy (migrate)"
+        else
+            sudo bash ./aws/post_deploy.sh --framework "$FRAMEWORK" \
+                                            || fail_deploy "post_deploy"
+        fi
+    fi
 
-    if [ "$MIGRATE" = "1" ]; then
-        sudo bash ./aws/post_deploy.sh --framework "$FRAMEWORK" --migrate \
-                                        || fail_deploy "post_deploy (migrate)"
+    if [ "$MIGRATE" = "1" ] || [ "$SAME_RELEASE" = "1" ]; then
         python3 bin/manage.py sanity_check --url "$SANITY_URL" \
                                         || fail_deploy "sanity_check"
-        # A hard failure here (not exit 3) exits non-zero before jobman stop,
-        # so deploy_node reports it — the release is installed but the
-        # orchestrator was never told, which must be loud, not silent.
+    fi
+
+    LIVE_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
+    if ! [[ "$LIVE_SHA" =~ ^[0-9a-f]{40}$ ]] || [[ "$LIVE_SHA" != "$SHA"* ]]; then
+        fail_deploy "identity sha mismatch"
+    fi
+    publish_identity "$LIVE_SHA" "$DEPLOYMENT" || fail_deploy "identity publish"
+
+    if [ "$MIGRATE" = "1" ] || [ "$SAME_RELEASE" = "1" ]; then
+        # A hard failure here (not exit 3) rolls back and leaves no candidate
+        # proof. v2 tells the command that the atomic identity is now readable.
         report_status deploying "$SHA"  || fail_deploy "deploy_status report"
-    else
-        sudo bash ./aws/post_deploy.sh --framework "$FRAMEWORK" \
-                                        || fail_deploy "post_deploy"
     fi
 
 # ── manual mode ──────────────────────────────────────────────────────────────
@@ -249,11 +342,6 @@ fi
 VERSION="$(grep '^__version__' config/settings/version.py | cut -d '"' -f 2)"
 log "system now at: ${VERSION}"
 echo "$VERSION" > var/version
-if [ "$MODE" = "deploy" ]; then
-    echo "$SHA" > var/deploy_sha
-    echo "$DEPLOYMENT" > var/deployment_uuid
-fi
-
 # LAST, and redirected — see the header. Cron's `jobman start` brings the
 # engine back on the new code within a minute.
 ./bin/jobman stop >> var/update.log 2>&1

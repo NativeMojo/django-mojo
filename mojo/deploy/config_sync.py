@@ -253,13 +253,13 @@ def restart_app(config, dry_run):
              service, delay)
     time.sleep(delay)
     done = subprocess.run(
-        ["systemctl", "restart", service],
+        ["systemctl", "--no-block", "restart", service],
         capture_output=True, check=False)
     if done.returncode != 0:
         log.error("%s restart FAILED (%d): %s", service, done.returncode,
                   done.stderr.decode("utf-8", "replace").strip())
         return False
-    log.info("%s restarted", service)
+    log.info("%s restart enqueued", service)
     return True
 
 

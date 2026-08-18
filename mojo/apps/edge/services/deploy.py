@@ -24,9 +24,10 @@ buys nothing and costs every push in that window.
 The TTL is load-bearing: a canary that dies hard would otherwise leave
 ``migrating`` set forever and wedge every future deploy. The multi-node
 orchestrator clears the status at its terminal; the TTL is the backstop for
-every crash in between, and the only cleaner on a single-runner fleet. A
-target whose deploy never started is not left to that backstop either — the
-five-minute reconciler's ``resume_stranded_target`` republishes it.
+every crash before terminal intent. A single-runner replacement engine
+finalizes its exact UUID lease from durable evidence and atomic local proof,
+then resumes one queued target. A target whose deploy never started is not
+left to the TTL backstop either — ``resume_stranded_target`` republishes it.
 
 Redis remains ephemeral coordination, while ``edge.PlatformDeployment`` is the
 durable UUID-addressed attempt journal. A Redis flush can release coordination,
@@ -91,6 +92,10 @@ _FAILURE_PHASES = {
     "post_deploy": "post_deploy",
     "rollback failed": "rollback_failed",
     "rollback impossible: no previous state": "rollback_impossible",
+    "identity mismatch": "identity_mismatch",
+    "identity invalidation": "identity_invalidation",
+    "identity publish": "identity_publish",
+    "identity sha mismatch": "identity_sha_mismatch",
 }
 
 # Phases the NODE decides, not the script: deploy_node reports these when the
@@ -126,8 +131,9 @@ SCRIPT_TIMEOUT = 900
 # this and the marker line in mojo/deploy/scripts/update.sh together; a test
 # fails if they ever disagree.
 #
-#   v1: --sha <hex> --framework <version> --deployment <uuid> [--migrate]
-DEPLOY_CONTRACT = 1
+#   v1: UUID argv, but callback ran before two-file identity publication
+#   v2: atomic identity publication before an explicitly signalled callback
+DEPLOY_CONTRACT = 2
 # What a script writes to declare which contract it speaks, followed by the
 # integer. The packaged update.sh carries it; a fork that keeps up may too.
 CONTRACT_MARKER = "# mojo-deploy-contract:"

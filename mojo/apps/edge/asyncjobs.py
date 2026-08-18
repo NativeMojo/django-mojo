@@ -83,6 +83,9 @@ def on_engine_start(engine):
     and never prevents startup — the ten-minute sweep is still behind it.
     """
     from mojo.apps.edge import cronjobs
+    from mojo.apps.edge.services import platform_deploy
+
+    platform_deploy.finalize_post_restart()
 
     if not cronjobs.converge_enabled():
         return "disabled"
@@ -250,8 +253,8 @@ def deploy_orchestrate(job):
     platform_deploy.transition(deployment_id, "canary", {"runner": me})
     if len(runners) <= 1:
         # Single-runner fleet: this node IS the canary. Fire-and-forget — the
-        # script reports status, and this engine dies with the update. The
-        # status tail is cleaned only by its TTL (D3, documented bound).
+        # script records terminal intent, this engine dies with the update,
+        # and the replacement engine proves/finalizes the exact UUID lease.
         _publish_deploy_node(me, sha, framework, migrate=True, deployment_id=deployment_id)
         logit.info(f"edge deploy {sha}: single runner, updating locally")
         return f"single:{sha}"
