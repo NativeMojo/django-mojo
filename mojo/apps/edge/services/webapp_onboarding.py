@@ -259,17 +259,25 @@ def _verify_external_cname(hostname, target):
     return targets == [target.rstrip(".")]
 
 
-def _external_records(hostname, target, domain):
-    """The exact records a user publishes at their own DNS host: the app CNAME,
-    plus the delegated ACME CNAME when this domain issues certificates through
-    the hub (every ``mojo`` domain does)."""
-    from mojo.apps.dnsman.services import delegation
+def _external_records(hostname, target, domain, include_challenge=False):
+    """Records a user publishes at their own DNS host for an external domain.
 
+    The app CNAME is always required. The ``_acme-challenge`` CNAME is listed
+    only when ``include_challenge`` is set — the failed-certificate recovery
+    case, where that record needs re-adding. In the normal flow the delegation
+    was verified *before* the ``mojo`` Domain existed, so the challenge record
+    is already published and is not the user's job at the address step. That is
+    also what makes a second app on the same domain a single-record add: it
+    reuses the delegation and the wildcard certificate.
+    """
     records = [{"type": "CNAME", "name": hostname, "value": target, "ttl": 300}]
-    row = delegation.for_domain(domain)
-    if row is not None and row.source_name and row.target_name:
-        records.append({"type": "CNAME", "name": row.source_name,
-                        "value": row.target_name, "ttl": 300})
+    if include_challenge:
+        from mojo.apps.dnsman.services import delegation
+
+        row = delegation.for_domain(domain)
+        if row is not None and row.source_name and row.target_name:
+            records.append({"type": "CNAME", "name": row.source_name,
+                            "value": row.target_name, "ttl": 300})
     return records
 
 
@@ -379,12 +387,12 @@ def precheck(group, raw_url, group_intent="existing"):
                       app=app.slug if app is not None else None,
                       reason="That address is already serving a site")
 
-    records = [{"type": "CNAME", "name": hostname, "value": target, "ttl": 300}]
     if domain.provider == PROVIDER_MOJO:
-        row = delegation.for_domain(domain)
-        if row is not None and row.source_name and row.target_name:
-            records.append({"type": "CNAME", "name": row.source_name,
-                            "value": row.target_name, "ttl": 300})
+        # The delegation (and its _acme-challenge record) was already verified
+        # to make this a mojo Domain, so the only record the user still adds is
+        # the app CNAME — one record, whether it is their first app here or
+        # their tenth.
+        records = _external_records(hostname, target, domain)
         published = bool(target) and _verify_external_cname(hostname, target)
         return result("ready" if published else "records_needed",
                       normalized=normalized, domain=_domain_summary(domain),
@@ -398,8 +406,9 @@ def precheck(group, raw_url, group_intent="existing"):
         return result("conflict", normalized=normalized,
                       domain=_domain_summary(domain),
                       reason="That address already points somewhere else")
+    # The platform writes this record itself; it is returned for display only.
     return result("ready", normalized=normalized, domain=_domain_summary(domain),
-                  records=records)
+                  records=_external_records(hostname, target, domain))
 
 
 def options(group, group_intent="existing"):
@@ -974,7 +983,8 @@ def _advance_address(operation):
                 operation.evidence = dict(operation.evidence or {}, address={
                     "status": "waiting", "hostname": hostname, "dns": "verified",
                     "certificate": "failed",
-                    "records": _external_records(hostname, target, domain)})
+                    "records": _external_records(
+                        hostname, target, domain, include_challenge=True)})
                 _activity(
                     operation,
                     "Certificate issuance is waiting on the _acme-challenge record",

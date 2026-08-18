@@ -720,9 +720,14 @@ def test_precheck_external_records_needed(opts):
             lambda: webapp_onboarding.precheck(opts.group, f"https://app.{domain.name}"))
     assert r["verdict"] == "records_needed", \
         f"an external domain with no published CNAME was not records_needed: {r}"
-    assert any(rec["name"] == f"app.{domain.name}" and rec["value"] == TARGET
-               for rec in r["records"]), \
-        f"the app CNAME to publish was not in the records list: {r}"
+    # Exactly one record — the app CNAME. The _acme-challenge was already
+    # verified to make this a mojo domain, so re-showing it would be noise (and
+    # a second app on the same domain is a one-record add).
+    assert len(r["records"]) == 1, \
+        f"records-needed showed more than the single app CNAME: {r['records']}"
+    assert (r["records"][0]["name"] == f"app.{domain.name}"
+            and r["records"][0]["value"] == TARGET), \
+        f"the app CNAME to publish was not the record shown: {r}"
 
 
 # ---------------------------------------------------------------------------
@@ -811,6 +816,8 @@ def test_external_failed_cert_waits(opts):
     assert outcome == webapp_onboarding.WAIT_FOR_USER, \
         f"a failed delegated cert kept spinning instead of waiting: {outcome}"
     request.assert_not_called()  # no fresh cert on an auto-retry — only on user re-check
+    assert op.evidence.get("address", {}).get("certificate") == "failed", \
+        "the failed-cert wait did not surface the certificate state for the user"
 
 
 @th.django_unit_test("an external domain reuses a covering wildcard certificate")
