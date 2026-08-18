@@ -24,6 +24,65 @@ Event (raw signal)
 
 Events are the input. Incidents are the output. Rules, RuleSets, and handlers are the processing pipeline in between.
 
+## MojoSec shadow cases
+
+`MojoSecReceipt` remains the immutable forensic/idempotency ledger and the
+existing receipt → `Event` → RuleSet/handler path remains authoritative.
+`MojoSecCase` is a separate, bounded shadow projection: it summarizes web and
+FIM receipts into deterministic time windows without notifying, blocking,
+recommending, acknowledging, or owning an action. `MojoSecCaseTransition` is an
+append-only snapshot for each receipt contribution.
+
+Case counters deliberately mean different things:
+
+| Counter | Meaning |
+|---|---|
+| `occurrence_count` | Sum of sensor-reported occurrences; preserves volume |
+| `receipt_count` | Unique contributing receipt rows |
+| `projected_event_count` | Non-duplicate authoritative Event-shaped contributions; trusted HTTP→HTTPS 301 twins are discounted |
+| `distinct_count` | Distinct normalized family/network/resource samples |
+| `sample_count` | Stored bounded samples (maximum 8) |
+| `overflow_count` | Distinct samples beyond the storage bound |
+
+The receipt row lock plus its one case contribution timestamp makes replay and
+concurrent duplicate delivery idempotent. The case window has a database unique
+identity and is updated under a row lock. Web cases use one-hour windows and
+normalize registered probe families plus an explicit `other_probe` bucket and
+bounded IP networks. FIM uses 15-minute windows, protected tiers, a dedicated
+overflow family, and validated expected-deployment identity. Raw paths, query
+strings, bodies, cookies, authorization, arbitrary lines, and free-form sensor
+text do not enter cases or case metrics.
+
+### Rollout and one-VHost canary
+
+Dual-write is off unless the file/static setting names an exact installation
+and VHost. It is intentionally unavailable through the DB-backed settings
+plane:
+
+```python
+MOJOSEC_CASE_SHADOW_TARGETS = [{
+    "installation_key_id": 42,
+    "vhost_ids": [17],
+    "include_fim": True,
+}]
+```
+
+Start with one Mojoware VHost. Compare receipt fidelity, occurrence volume,
+case cardinality, projected Events, overflow, urgency, and compression for at
+least one normal traffic cycle. The exact read-only command is:
+
+```bash
+uv run python manage.py mojosec_shadow_compare --installation-key 42 --vhost 17 --hours 24 --max-cases 500 --min-compression 2
+```
+
+It prints the redacted `mojosec.shadow-comparison` v1 JSON contract and exits
+non-zero when receipt fidelity, cardinality, or compression bounds fail. It
+does not write cases or production policy. Disable by setting
+`MOJOSEC_CASE_SHADOW_TARGETS = []` and reconverging the application. Rollback
+leaves receipts, Events, Incidents, handlers, acknowledgements, and existing
+shadow rows untouched; it only stops new shadow contributions. Notification or
+action ownership cutover belongs to a later slice.
+
 ---
 
 ## Fleet-Wide IP Blocking

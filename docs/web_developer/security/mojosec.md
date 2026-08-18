@@ -280,6 +280,35 @@ rejected and group/member grants never authorize this platform-wide surface.
 | `POST` | `/api/incident/mojosec/replay` | global `manage_security` or `security` | Explicit offline evaluation of a draft/shadow proposal |
 | `POST` | `/api/incident/mojosec/shadow` | global `manage_security` or `security` | Explicit offline evaluation of a shadow-labelled proposal |
 | `GET` | `/api/incident/mojosec/metrics` | global `view_security` or `security` | Bounded detector receipt/disposition counts |
+| `GET` | `/api/incident/mojosec/case` | global `view_security` or `security` | Paginated read-only shadow case list |
+| `GET` | `/api/incident/mojosec/case/<id>` | global `view_security` or `security` | One case with at most 8 samples and 50 transitions |
+| `GET` | `/api/incident/mojosec/case-metrics` | global `view_security` or `security` | Bounded aggregate shadow comparison metrics |
+
+The case surfaces are platform/global security-admin reads. API keys and group
+member grants do not authorize them, and there are no case mutation, approval,
+recommendation, or execution endpoints. The authoritative Event/Incident feed
+continues unchanged while cases are in shadow mode.
+
+List parameters are `page` (default 1), `page_size` (maximum 100), and indexed
+exact filters `state`, `urgency`, `sensor_kind`, and `resource_id`. State is
+`observing` or `elevated`; urgency is `info`, `warning`, `high`, or `critical`;
+sensor kind is `web` or `fim`. The response includes `has_more` rather than an
+unbounded total scan. Detail returns bounded normalized samples and append-only
+transition snapshots, never receipt replay JSON.
+
+`GET /api/incident/mojosec/case-metrics?days=1&resource_id=vhost:17`
+accepts 1–90 days and an optional exact resource. It returns case,
+occurrence, receipt, projected-Event, distinct, overflow, urgency, and
+compression totals. It never returns evidence arrays. Occurrences, receipts,
+samples, and projected Events are separate counters; clients must not treat
+one as an alias for another.
+
+For Edge VHosts, `mojosec_policy` is the versioned opt-in configuration exposed
+on the normal VHost graph. Registered impossible-path families are rejected by
+the edge before an SPA/upstream response. The sensor supplies only the fixed
+response class, derived `vhost:<id>` resource identity, and policy version.
+Clients must not infer response content or compromise from status/length and
+must not centrally fetch a suspicious response.
 
 Feedback accepts exactly one subject: `receipt_id` or `manual_exemplar`.
 Optional `incident_id` is linked context and must match the explicit published
