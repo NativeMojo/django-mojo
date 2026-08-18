@@ -41,6 +41,15 @@ restore the pre-feature rules when a release downgrades to a framework without
 the feature. Broker-only units, sudoers and executable are then removed while
 the intentionally retained legacy direct grants keep rollback operational.
 
+The Audit publisher projects command output onto one closed v1 sidecar contract:
+`schema`, `version`, `boot_id`, `generation`, `rules_sha256`, `sequence`,
+`enabled`, `failure`, `rate_limit`, `backlog_limit`, `backlog`, `lost`, and
+`updated_at`. OS telemetry such as `pid`, backlog wait times,
+`loginuid_immutable`, and future `auditctl -s` fields is ignored at the command
+boundary. Unknown or duplicate JSON sidecar keys, missing fields, booleans,
+negative/oversized counters, and non-finite timestamps remain malformed and
+fail closed.
+
 The existing stop-last invariant in `update.sh` is also the explicit engine
 cutover: Audit policy and the sensor are converged first, the old foreground
 engine is stopped only after every fallible deployment step, and the installed
@@ -843,6 +852,18 @@ private/control state. Profile activation is an explicit
 ordinary service startup never blesses the first scan. `check_node` fails an
 active digest without initialized fast, slow, and RPM baselines.
 
+An enabled RPM tier additionally requires the AL2023 system `python3-rpm`
+binding at the configured interpreter. One `-I` helper opens one read-only
+`TransactionSet` for the scan, proves `RPMDBI_INSTFILENAMES` against an actual
+installed file, and records the RPM database cookie. Exact-path responses are
+bounded and structural: no installed owner keeps SHA-256 coverage, exactly one
+validated NEVRA selects package verification, and multiple/invalid results fail
+the tier. Non-installed file states never claim ownership. Index/header/DB
+failure, helper death or timeout, protocol/output/query bounds, unexpected
+stderr, or cookie drift keeps the prior baseline authoritative. There is no
+localized `rpm -qf`, BASENAMES/PROVIDENAME, generic-exit, or per-path helper
+fallback.
+
 `al2023-web-v1` is retained only for existing baseline identity and rollback.
 Do not select it for a new AL2023 baseline: its
 `/var/lib/cloud/instance/scripts` target descends through cloud-init's mutable
@@ -944,8 +965,12 @@ system logrotate timer runs; it is not a continuous hard cap. `check_node --sect
 bounded status/enrollment projections and metadata; it never opens or prints
 the credential, canonical config, SQLite spool, or FIM manifest. It audits
 status freshness, core collectors, backlog/delivery, generated and active nginx
-contracts, proxy CIDRs, log metadata, and config hashes. Default `auto` keeps
-legacy disabled nodes informational.
+contracts, proxy CIDRs, log metadata, and config hashes. In observe mode it also
+runs `python -m mojo.mojosec ... check`; an RPM-enabled profile must pass the
+same isolated binding, transaction, database/header, and installed-file index
+preflight before deployment readiness is green. The check never installs a
+binding or opens the API-key credential. Default `auto` keeps legacy disabled
+nodes informational.
 
 ## Canary and cleanup
 
@@ -1005,6 +1030,13 @@ tenant stamp; explainable event volume; log/spool disk growth within the
 measured test volume; no FD/task leak; and after the burst the sensor stays
 below the agreed canary budget (initial fleet gate: 150 MiB memory, 32 tasks,
 and under 5% of one CPU over a five-minute idle window).
+
+For an enrolled AL2023 release candidate, record the exact isolated RPM probe
+as passing, require the RPM tier's `last_success` to become non-null after a
+complete cycle, and require Audit health to remain green with `lost=0`, bounded
+backlog, and no false provenance failure. The same gate must show zero spool
+drops and at least one accepted signed delivery; unit tests do not substitute
+for that live-node evidence.
 
 Rollback persistently by reinstalling enrollment with `"mode":"off"` and
 running ordinary `post_deploy` (or an enrolled converge). Confirm
