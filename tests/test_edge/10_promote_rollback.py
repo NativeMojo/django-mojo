@@ -117,14 +117,32 @@ def test_verified_release_deploys(opts):
         "verified completion did not start deployment"
 
 
-@th.django_unit_test("there is no out-of-band human promotion endpoint")
+@th.django_unit_test("promotion has no endpoint and rollback stays human-only")
 def test_no_manual_promote_endpoint(opts):
+    # Forward promotion is still not an endpoint: deployment starts only from
+    # release completion.
     login(opts, opts.dnsonly_email, opts.dnsonly_pw)
     resp = opts.client.post("/api/edge/webapp/promote", json=dict(
         webapp=opts.webapp.pk, release=opts.v1.pk))
     assert resp.status_code == 404, (
         "manual promotion endpoint still exists; deployment must start only "
         f"from release completion (status {resp.status_code})")
+
+    # Rollback (item 2099) IS an endpoint, but a CI key cannot drive it — the
+    # invariant this module protects is that automation cannot start a
+    # deployment out of band, and denies_key_backed_session keeps that intact.
+    from mojo.apps.edge.services import webapp_keys
+
+    _, _, token, _ = webapp_keys.link(opts.webapp)
+    _use_apikey(opts, token)
+    try:
+        machine = opts.client.post("/api/edge/webapp/rollback", json=dict(
+            webapp=opts.webapp.pk, release=opts.v1.pk))
+        assert machine.status_code == 403, (
+            "a CI deployment key drove a rollback; automation must never start a "
+            f"deployment out of band (status {machine.status_code})")
+    finally:
+        _clear_apikey(opts)
 
 
 @th.django_unit_test("a key cannot register a release for ANOTHER site")

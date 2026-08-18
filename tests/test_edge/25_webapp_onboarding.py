@@ -8,9 +8,25 @@ from unittest import mock
 from testit import helpers as th
 
 from tests.test_edge._helpers import (
-    declare_release_buckets, login, make_group, make_group_member, make_user,
-    make_webapp,
+    declare_pools, declare_release_buckets, login, make_certificate,
+    make_domain, make_group, make_group_member, make_user, make_vhost,
+    make_webapp, with_setting,
 )
+
+
+TARGET = "edge-webapp-target.example.net"
+
+
+def _address_operation(opts, domain, label="app", slug=None):
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+
+    web_app = make_webapp(opts.group, slug=slug or f"ext{uuid.uuid4().hex[:6]}")
+    return WebAppOnboardingOperation.objects.create(
+        group=opts.group, actor=opts.actor, web_app=web_app,
+        origin="https://example.com", replay_fingerprint=uuid.uuid4().hex,
+        cursor="address",
+        state={"profile": {}, "choices": {
+            "address": {"label": label, "domain": domain.pk}}})
 
 
 @th.django_unit_setup()
@@ -100,7 +116,7 @@ def test_address_requires_one_concrete_label(opts):
         assert error is not None, f"address onboarding accepted label {label!r}"
 
 
-@th.django_unit_test("generated workflow is secret-free and quotes shell inputs")
+@th.django_unit_test("generated workflow references the public action and embeds no secret")
 def test_secret_free_workflow(opts):
     from mojo.apps.edge.services import webapp_onboarding
 
@@ -109,14 +125,21 @@ def test_secret_free_workflow(opts):
     web_app.deployment_ref = "release/2026-08"
     web_app.build_output = "packages/web/dist"
     web_app.save()
-    result = webapp_onboarding.workflow(web_app)
+    result = webapp_onboarding.workflow(web_app, "https://api.example.com/")
 
+    yaml = result["yaml"]
     assert result["schema_version"] == 1, "workflow contract is not versioned"
-    assert "MOJO_DEPLOY_KEY: ${{ secrets.MOJO_DEPLOY_KEY }}" in result["yaml"], \
+    assert "MOJO_DEPLOY_KEY: ${{ secrets.MOJO_DEPLOY_KEY }}" in yaml, \
         "workflow does not consume the named GitHub secret"
-    assert '"${BUILD_OUTPUT}"' in result["yaml"], \
-        "validated build output is not quoted at its shell boundary"
-    assert "Bearer " not in result["yaml"] and "preview-token" not in result["yaml"], \
+    assert ("uses: NativeMojo/django-mojo/examples/github/actions/deploy-webapp@main"
+            in yaml), "workflow does not reference the public composite action at @main"
+    assert "python -m mojo_webapp" not in yaml, \
+        "the generated workflow still names the nonexistent mojo_webapp module"
+    assert 'api-url: "https://api.example.com"' in yaml, \
+        "the platform origin was not passed through (trailing slash not trimmed?)"
+    assert 'artifact-dir: "packages/web/dist"' in yaml, \
+        "the validated build output is not passed as artifact-dir"
+    assert "Bearer " not in yaml and "preview-token" not in yaml, \
         "generated workflow embedded credential material"
 
 
@@ -604,3 +627,280 @@ def test_onboarding_migration_contract(opts):
         "edge 0009 omitted live replay serialization"
     assert "dnsman', '0004_dnsrecordreservation" in text, \
         "edge 0009 lost its DNS reconciliation dependency"
+
+
+# ---------------------------------------------------------------------------
+# URL-first precheck
+# ---------------------------------------------------------------------------
+@th.django_unit_test("precheck steers a path URL to a subdomain")
+def test_precheck_steers_path(opts):
+    from mojo.apps.edge.services import webapp_onboarding
+
+    r = webapp_onboarding.precheck(opts.group, "example.com/myapp")
+    assert r["verdict"] == "path", f"a path URL was not steered: {r}"
+    assert r.get("suggestion") == "myapp.example.com", \
+        f"path steering did not suggest a subdomain: {r}"
+
+
+@th.django_unit_test("precheck offers www for an apex address")
+def test_precheck_apex_offers_www(opts):
+    from mojo.apps.edge.services import webapp_onboarding
+
+    domain = make_domain(group=opts.group, provider="route53")
+    r = webapp_onboarding.precheck(opts.group, f"https://{domain.name}")
+    assert r["verdict"] == "apex", f"apex not detected: {r}"
+    assert r["suggestion"] == f"www.{domain.name}", f"apex did not offer www: {r}"
+
+
+@th.django_unit_test("precheck steers a multi-level label to one label")
+def test_precheck_deep_label(opts):
+    from mojo.apps.edge.services import webapp_onboarding
+
+    domain = make_domain(group=opts.group, provider="route53")
+    r = webapp_onboarding.precheck(opts.group, f"https://a.b.{domain.name}")
+    assert r["verdict"] == "deep_label", f"deep label not steered: {r}"
+
+
+@th.django_unit_test("precheck reports an unmatched domain without leaking foreign ones")
+def test_precheck_unknown_and_cross_tenant(opts):
+    from mojo.apps.edge.services import webapp_onboarding
+
+    unknown = webapp_onboarding.precheck(
+        opts.group, "https://app.no-such-group-domain-xyz.com")
+    assert unknown["verdict"] == "domain_unknown", f"unknown domain: {unknown}"
+    assert "external_available" in unknown["options"], \
+        "domain_unknown did not advertise the external-domain option"
+
+    foreign = make_group("edge-onboard-foreign2")
+    foreign_domain = make_domain(group=foreign, provider="route53")
+    leaked = webapp_onboarding.precheck(opts.group, f"https://app.{foreign_domain.name}")
+    assert leaked["verdict"] == "domain_unknown", \
+        f"a foreign group's domain was matched cross-tenant: {leaked}"
+
+
+@th.django_unit_test("precheck reports a taken address")
+def test_precheck_taken(opts):
+    from mojo.apps.edge.services import webapp_onboarding
+
+    declare_pools()
+    domain = make_domain(group=opts.group, provider="route53")
+    make_vhost(domain, make_certificate(domain), label="www")
+    r = webapp_onboarding.precheck(opts.group, f"https://www.{domain.name}")
+    assert r["verdict"] == "taken", f"an occupied address was not reported taken: {r}"
+
+
+@th.django_unit_test("precheck reports ready for a managed domain and never lists provider records")
+def test_precheck_managed_ready_uses_probe_only(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.services import webapp_onboarding
+
+    domain = make_domain(group=opts.group, provider="route53")
+    with mock.patch("mojo.apps.dnsman.services.dns.list_records") as listed, \
+            mock.patch("mojo.helpers.dns.probe.query_cname",
+                       return_value=mock.Mock(targets=[])):
+        r = with_setting(
+            "EDGE_WEBAPP_CNAME_TARGET", TARGET,
+            lambda: webapp_onboarding.precheck(opts.group, f"https://app.{domain.name}"))
+    assert r["verdict"] == "ready", f"a clear managed address was not ready: {r}"
+    listed.assert_not_called()  # a per-click zone enumeration is the whole thing to avoid
+
+
+@th.django_unit_test("precheck reports records_needed for an external domain")
+def test_precheck_external_records_needed(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.services import webapp_onboarding
+
+    domain = make_domain(group=opts.group, provider="mojo")
+    with mock.patch("mojo.helpers.dns.probe.query_cname",
+                    return_value=mock.Mock(targets=[])):
+        r = with_setting(
+            "EDGE_WEBAPP_CNAME_TARGET", TARGET,
+            lambda: webapp_onboarding.precheck(opts.group, f"https://app.{domain.name}"))
+    assert r["verdict"] == "records_needed", \
+        f"an external domain with no published CNAME was not records_needed: {r}"
+    # Exactly one record — the app CNAME. The _acme-challenge was already
+    # verified to make this a mojo domain, so re-showing it would be noise (and
+    # a second app on the same domain is a one-record add).
+    assert len(r["records"]) == 1, \
+        f"records-needed showed more than the single app CNAME: {r['records']}"
+    assert (r["records"][0]["name"] == f"app.{domain.name}"
+            and r["records"][0]["value"] == TARGET), \
+        f"the app CNAME to publish was not the record shown: {r}"
+
+
+# ---------------------------------------------------------------------------
+# external-domain address advance
+# ---------------------------------------------------------------------------
+@th.django_unit_test("external address waits for the user and never writes DNS")
+def test_external_address_waits_for_user(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.services import webapp_onboarding
+
+    domain = make_domain(group=opts.group, provider="mojo")
+    op = _address_operation(opts, domain)
+
+    def run():
+        with mock.patch("mojo.helpers.dns.probe.query_cname",
+                        return_value=mock.Mock(targets=[])), \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
+                mock.patch("mojo.apps.dnsman.services.dns.list_records") as listed:
+            outcome = webapp_onboarding._advance_address(op)
+            return outcome, upsert, listed
+
+    outcome, upsert, listed = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert outcome == webapp_onboarding.WAIT_FOR_USER, \
+        f"an unpublished external CNAME did not wait for the user: {outcome}"
+    upsert.assert_not_called()  # the platform holds no credential for this domain
+    listed.assert_not_called()
+    assert op.evidence.get("address", {}).get("dns") == "unpublished", \
+        "the waiting evidence did not report the missing record"
+
+
+@th.django_unit_test("a verified external CNAME requests the apex+wildcard cert")
+def test_external_address_requests_wildcard_cert(opts):
+    from unittest import mock
+
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.edge.services import webapp_onboarding
+
+    domain = make_domain(group=opts.group, provider="mojo")
+    op = _address_operation(opts, domain)
+
+    def issue(domain_arg, names=None):
+        # A real row so the FK assignment is valid; created AFTER the reuse
+        # scan, exactly as request_certificate does in production.
+        return Certificate.objects.create(
+            domain=domain_arg, common_name=domain_arg.name,
+            sans=[domain_arg.name, f"*.{domain_arg.name}"], status="pending")
+
+    def run():
+        with mock.patch("mojo.helpers.dns.probe.query_cname",
+                        return_value=mock.Mock(targets=[TARGET])), \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
+                mock.patch("mojo.apps.dnsman.services.certs.request_certificate",
+                           side_effect=issue) as request:
+            outcome = webapp_onboarding._advance_address(op)
+            return outcome, upsert, request
+
+    outcome, upsert, request = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert outcome is True, f"a verified external CNAME did not reach cert issuance: {outcome}"
+    upsert.assert_not_called()
+    request.assert_called_once()
+    assert request.call_args.kwargs.get("names") is None, (
+        "a delegated cert must request the apex+wildcard profile (names=None), "
+        f"got {request.call_args}")
+
+
+@th.django_unit_test("a failed delegated cert waits for the user instead of spinning")
+def test_external_failed_cert_waits(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.services import webapp_onboarding
+
+    domain = make_domain(group=opts.group, provider="mojo")
+    op = _address_operation(opts, domain)
+    op.attempts = 5  # an auto-retry, not a fresh user check
+    op.save(update_fields=["attempts"])
+
+    def run():
+        with mock.patch("mojo.helpers.dns.probe.query_cname",
+                        return_value=mock.Mock(targets=[TARGET])), \
+                mock.patch("mojo.apps.dnsman.services.certs.request_certificate") as request:
+            outcome = webapp_onboarding._advance_address(op)
+            return outcome, request
+
+    outcome, request = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert outcome == webapp_onboarding.WAIT_FOR_USER, \
+        f"a failed delegated cert kept spinning instead of waiting: {outcome}"
+    request.assert_not_called()  # no fresh cert on an auto-retry — only on user re-check
+    assert op.evidence.get("address", {}).get("certificate") == "failed", \
+        "the failed-cert wait did not surface the certificate state for the user"
+
+
+@th.django_unit_test("an external domain reuses a covering wildcard certificate")
+def test_external_reuses_wildcard_cert(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.services import webapp_onboarding
+
+    declare_pools()
+    domain = make_domain(group=opts.group, provider="mojo")
+    make_certificate(domain)  # active, sans = apex + *.domain
+    op = _address_operation(opts, domain, label="app", slug="extreuse")
+
+    def run():
+        with mock.patch("mojo.helpers.dns.probe.query_cname",
+                        return_value=mock.Mock(targets=[TARGET])), \
+                mock.patch("mojo.apps.dnsman.services.certs.request_certificate") as request:
+            outcome = webapp_onboarding._advance_address(op)
+            return outcome, request
+
+    outcome, request = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert outcome is True, f"a reusable wildcard cert did not complete the address step: {outcome}"
+    request.assert_not_called()  # reused the existing wildcard, requested nothing
+    op.web_app.refresh_from_db()
+    assert op.web_app.vhost_id is not None, "no serving vhost was linked"
+
+
+@th.django_unit_test("change-address swaps the vhost and retires the old one")
+def test_change_address_swaps_vhost(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.models import Vhost
+    from mojo.apps.edge.services import webapp_onboarding
+
+    declare_pools()
+    domain = make_domain(group=opts.group, provider="route53")
+    cert = make_certificate(domain)
+    old_vhost = make_vhost(domain, cert, label="old")
+    web_app = make_webapp(opts.group, slug="swapapp", vhost=old_vhost)
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    op = WebAppOnboardingOperation.objects.create(
+        group=opts.group, actor=opts.actor, web_app=web_app,
+        origin="https://example.com", replay_fingerprint=uuid.uuid4().hex,
+        cursor="address",
+        state={"profile": {}, "choices": {
+            "address": {"label": "new", "domain": domain.pk}}})
+
+    def run():
+        with mock.patch("mojo.apps.dnsman.services.dns.list_records", return_value=[]), \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record"):
+            return webapp_onboarding._advance_address(op)
+
+    outcome = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert outcome is True, f"the address swap did not complete: {outcome}"
+    web_app.refresh_from_db()
+    assert web_app.vhost_id and web_app.vhost_id != old_vhost.pk, \
+        "the app was not repointed to the new address"
+    assert not Vhost.objects.filter(pk=old_vhost.pk).exists(), \
+        "the old serving vhost was not retired after the swap"
+
+
+@th.django_unit_test("wait exhaustion parks as waiting and never fails terminally")
+def test_wait_exhaustion_parks(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.models.web_app_onboarding_operation import (
+        STATUS_FAILED, STATUS_WAITING)
+    from mojo.apps.edge.services import webapp_onboarding
+
+    domain = make_domain(group=opts.group, provider="route53")
+    op = _address_operation(opts, domain)
+    op.attempts = webapp_onboarding.MAX_ATTEMPTS
+    op.save(update_fields=["attempts"])
+
+    # A plain provider wait (returns True) at the attempt ceiling must park, not
+    # fail: onboarding that just took a while stays user-recoverable.
+    def run():
+        with mock.patch.object(webapp_onboarding, "_advance_address", return_value=True):
+            return webapp_onboarding.advance(op.pk)
+
+    with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    op.refresh_from_db()
+    assert op.status == STATUS_WAITING, \
+        f"an exhausted wait failed terminally ({op.status}) instead of parking"
+    assert op.status != STATUS_FAILED, "onboarding failed on a legitimate long wait"
+    assert op.attempts == 0, "the parked step did not reset its attempt budget"

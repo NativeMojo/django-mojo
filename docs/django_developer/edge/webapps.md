@@ -278,11 +278,59 @@ The target is the file-only `EDGE_WEBAPP_CNAME_TARGET`. Certificate selection
 reuses an active exact/wildcard certificate outside its renewal window; private
 material never crosses the onboarding surface.
 
+### URL-first entry and external domains
+
+`GET /api/edge/webapp/onboarding/precheck?url=<address>` is a **stateless**
+pre-flight: give it the address a user typed (`https://myapp.example.com`) and
+it normalizes the URL, matches the hostname against the group's own domains,
+derives the label, and returns a `verdict` before any operation is created.
+Verdicts: `ready`, `records_needed`, `apex` (suggests `www.`), `deep_label`
+(suggests one label), `path` (suggests a subdomain), `taken`, `conflict`,
+`domain_unknown` (with an `options` block advertising whether external, purchase
+and GoDaddy paths are available), and `invalid`. Conflict detection is DB checks
+plus **one** authoritative `probe.query_cname` — never a provider record listing
+(which would enumerate a whole zone on shared credentials per keystroke). It is
+group-scoped and non-disclosing: a domain in another group returns
+`domain_unknown`, and an occupied address names the occupying app only within
+the caller's own group.
+
+**A domain whose DNS lives at an outside host works end to end**, with no
+provider credential handed over and nothing to buy. Such a domain arrives
+through the existing delegated-ACME flow (`POST /api/dnsman/delegation/initiate`
+→ the user publishes one `_acme-challenge` CNAME → `POST
+/api/dnsman/delegation/verify`) and becomes a `Domain(provider="mojo")`. The
+address step recognizes `provider="mojo"`: it cannot write records (the `mojo`
+provider has no DNS CRUD), so instead it shows the exact records to publish (the
+app CNAME to `EDGE_WEBAPP_CNAME_TARGET` plus the ACME-delegation CNAME) and
+verifies the app CNAME authoritatively with `probe.query_cname`. The certificate
+is the delegated **apex-plus-wildcard** profile (`certs.request_certificate`
+with `names=None`), so one delegation and one certificate cover every app on
+that domain; the wildcard is what the vhost's covering-certificate scan reuses.
+
+**Waiting on the user is not an error budget.** When the address step is waiting
+on a user-published record — the app CNAME is absent/mismatched, or a delegated
+certificate failed because the `_acme-challenge` record is missing — the step
+returns the internal `WAIT_FOR_USER` sentinel: the operation parks as `waiting`
+with no scheduled retry and its attempt budget reset. The user re-checks by
+re-submitting the address choice (which resets `attempts`), and a fresh
+certificate is requested at most once per re-check, never in the retry loop. A
+long-but-legitimate provider wait that would once have exhausted the retry
+budget now parks the same way instead of failing an onboarding that just took a
+while. Changing the address later is an **in-step vhost swap**: the old address
+keeps serving until the new vhost and certificate are ready, then the old site
+vhost is retired (its delete publishes convergence).
+
 GitHub evidence uses only a `GitHubInstall` whose `group` exactly matches the
 operation. Repository, ref, and build-output values are whitelist validated.
 Evidence is honestly `verified`, explicit `attested`, or `unavailable`. The
-generated workflow keeps inputs in quoted environment variables and references
-`${{ secrets.MOJO_DEPLOY_KEY }}` without embedding a secret.
+generated workflow is a single file that references django-mojo's **public**
+composite action at
+`NativeMojo/django-mojo/examples/github/actions/deploy-webapp@main` and passes
+`MOJO_DEPLOY_KEY` only through `${{ secrets.MOJO_DEPLOY_KEY }}` — no secret is
+embedded, and the deploy logic runs on the GitHub runner, not the user's
+machine. `workflow(web_app, api_origin)` takes the platform origin from the
+same-origin request so `api-url` is concrete. (The earlier generator emitted
+`python -m mojo_webapp deploy`, a module that exists nowhere; that is fixed.)
 
 Final verification makes one DNS-pinned HTTPS request to exactly `/`. Every
 resolved address must be globally routable, SNI and `Host` retain the owned
@@ -290,7 +338,11 @@ hostname, redirects are not followed, and timeout/body size are bounded.
 
 The frozen item-1818 handoff is
 `GET /api/edge/webapp/summary?webapp=<id>`, `schema_version: 1`. It is
-group-scoped and secret-free. Existing v1 meanings cannot change.
+group-scoped and secret-free. Existing v1 meanings cannot change — but v1 is
+**additive**, and item 2099 added `address.domain` (id/name/provider; this also
+fixed the portal's dead "Open domain" link), top-level `current_release`, and
+`latest_deployment`, so a management view can answer "is my app live and serving
+X?" in one call.
 
 ### First-deploy bootstrap
 
@@ -432,6 +484,27 @@ symlinks — so setting it to `1` (or `0`) cannot delete what is being served.
 Pair it with `EDGE_KEEP_GENERATIONS`: a generation retained for rollback is
 useless if the release it points at was pruned, so keeping N generations means
 wanting at least N releases.
+
+## Day-2 management
+
+After a site is live, these endpoints manage it. All are group-scoped through
+`webapp__group`, and the pk-fetching custom actions carry an explicit
+`rest_check_permission_or_raise` (a `requires_perms`/`uses_model_security`
+decorator gates the verb, never the specific row).
+
+| Endpoint | Method | What it does |
+|---|---|---|
+| `edge/deployment`, `edge/deployment/<pk>` | GET | Fleet-convergence history. Filter a list with `?webapp=<id>`. Read-only; rows are made by promote/rollback only, and a cross-tenant id is not readable. |
+| `edge/webapp/rollback` | POST | Repoint a site at an already-verified earlier release. **Human-only**: `denies_key_backed_session` keeps CI keys out, so "deployment starts only from release completion" still holds for automation. A foreign release id 404s; a `pending` release is refused. Returns `webapp_deploy.payload(...)`. |
+| `edge/webapp/health` | GET | On-demand public HTTPS reachability of the live address: `healthy` / `unhealthy` / `not_configured` (no vhost). Never echoes a raw probe exception. |
+| `edge/webapp/detach_address` | POST | Take a site offline: unlink and delete its serving vhost, keep the app. |
+| `DELETE edge/webapp/<pk>` | DELETE | **Safe delete.** `WebApp.on_rest_delete` runs the teardown — deactivate + unlink the `MOJO_DEPLOY_KEY` credential, delete the serving vhost — in the **same** transaction as the row delete. The framework's `on_rest_pre_delete` hook runs *outside* the delete transaction, so it is the wrong hook: teardown there could commit while the row delete fails. A bare cascade orphaned the vhost and left the CI key active. Release bytes in S3 are intentionally left. |
+
+`rollback` is `releases.promote` with an earlier release — the same idempotent,
+supersede-safe primitive as forward promotion, under a `select_for_update` row
+lock. A deployment row cascade-deleted with its WebApp (safe-delete racing an
+in-flight deploy) makes `webapp_deploy.orchestrate` a superseded no-op rather
+than a crashing `DoesNotExist`.
 
 ## Scope boundary
 

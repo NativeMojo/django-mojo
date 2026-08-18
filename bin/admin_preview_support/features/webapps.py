@@ -1,7 +1,12 @@
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 
 NAME = "webapps"
+
+# One managed domain the preview knows about, so URL-first prechecks can show a
+# ready fast-path, an apex steer, and an unknown-domain (keep-my-DNS) fork.
+KNOWN_DOMAIN = "nativemojo.com"
+CNAME_TARGET = "edge.nativemojo.com"
 
 
 def _owner(handler):
@@ -27,17 +32,118 @@ def reset(handler, fixtures, *, key_state="active", onboarding_state="idle", **o
         if onboarding_state not in ("idle", "new_group") else None)
 
 
+def _precheck(url):
+    """URL-first verdict, mirroring the real precheck shape for the preview."""
+    raw = str(url or "").strip()
+    base = {"schema_version": 1, "cname_target": CNAME_TARGET}
+    if not raw:
+        return {**base, "verdict": "invalid", "reason": "Enter the web address you want"}
+    candidate = raw if "://" in raw else f"https://{raw}"
+    parsed = urlsplit(candidate)
+    host = (parsed.hostname or "").strip().lower()
+    trailing = (parsed.path or "").strip("/")
+    if not host:
+        return {**base, "verdict": "invalid", "reason": "That address has no hostname"}
+    if trailing:
+        segment = trailing.split("/")[0]
+        return {**base, "verdict": "path", "host": host,
+                "suggestion": f"{segment}.{host}",
+                "reason": "Apps are served on a whole address, not a path under one"}
+    normalized = {"url": f"https://{host}", "hostname": host,
+                  "scheme_note": "http upgraded to https" if parsed.scheme == "http" else None}
+    domain = {"id": 11, "name": KNOWN_DOMAIN, "provider": "route53"}
+    if host == KNOWN_DOMAIN:
+        normalized["domain_name"] = KNOWN_DOMAIN
+        return {**base, "verdict": "apex", "normalized": normalized, "domain": domain,
+                "suggestion": f"www.{KNOWN_DOMAIN}",
+                "reason": "Apps are served on a subdomain, not the bare domain"}
+    if host.endswith(f".{KNOWN_DOMAIN}"):
+        normalized.update({"domain_name": KNOWN_DOMAIN,
+                           "label": host[: -(len(KNOWN_DOMAIN) + 1)]})
+        return {**base, "verdict": "ready", "normalized": normalized, "domain": domain,
+                "records": [{"type": "CNAME", "name": host, "value": CNAME_TARGET, "ttl": 300}]}
+    return {**base, "verdict": "domain_unknown", "normalized": normalized,
+            "options": {"external_available": True, "purchase_available": True,
+                        "godaddy_available": True}}
+
+
+def _summary():
+    return {
+        "schema_version": 1,
+        "webapp": {"id": 42, "slug": "customer-portal", "display_name": "Customer Portal",
+                   "environment": "production", "repository": "NativeMojo/customer-portal",
+                   "deployment_ref": "main", "build_output": "dist"},
+        "address": {"hostname": "portal.nativemojo.com",
+                    "https_origin": "https://portal.nativemojo.com",
+                    "domain": {"id": 11, "name": KNOWN_DOMAIN, "provider": "route53"}},
+        "current_release": {"id": 8, "version": "2026.08.10", "status": "live",
+                            "created": "2026-08-10T18:00:00Z"},
+        "latest_deployment": {"id": 501, "status": "live",
+                              "created": "2026-08-10T18:00:00Z", "finished": "2026-08-10T18:02:00Z"},
+        "onboarding": {"status": "succeeded", "cursor": "complete", "evidence": {}},
+        "deployment_key": {"linked": True, "active": True},
+    }
+
+
+def _deployments():
+    return [
+        {"id": 501, "created": "2026-08-10T18:00:00Z", "started": "2026-08-10T18:00:10Z",
+         "finished": "2026-08-10T18:02:00Z", "status": "live",
+         "release": {"id": 8, "version": "2026.08.10", "status": "live", "created": "2026-08-10T18:00:00Z"},
+         "previous_release": {"id": 7, "version": "2026.08.09", "status": "superseded", "created": "2026-08-09T18:00:00Z"}},
+        {"id": 498, "created": "2026-08-09T18:00:00Z", "started": "2026-08-09T18:00:10Z",
+         "finished": "2026-08-09T18:02:00Z", "status": "superseded",
+         "release": {"id": 7, "version": "2026.08.09", "status": "superseded", "created": "2026-08-09T18:00:00Z"},
+         "previous_release": None},
+    ]
+
+
+def _releases():
+    return [
+        {"id": 8, "version": "2026.08.10", "status": "live", "created": "2026-08-10T18:00:00Z"},
+        {"id": 7, "version": "2026.08.09", "status": "superseded", "created": "2026-08-09T18:00:00Z"},
+        {"id": 6, "version": "2026.08.08", "status": "uploaded", "created": "2026-08-08T18:00:00Z"},
+    ]
+
+
 def get(handler, parsed):
-    if parsed.path != "/api/edge/webapp/onboarding/detail":
-        return None
-    operation_id = parse_qs(parsed.query).get("operation", [""])[0]
-    receipt = handler.onboarding_receipts.get(operation_id)
-    if receipt is None:
-        return 404, {"error": "WebApp onboarding operation not found"}
-    return 200, receipt
+    path = parsed.path
+    query = parse_qs(parsed.query)
+    if path == "/api/edge/webapp/onboarding/precheck":
+        return 200, _precheck(query.get("url", [""])[0])
+    if path == "/api/edge/webapp/onboarding/detail":
+        operation_id = query.get("operation", [""])[0]
+        receipt = handler.onboarding_receipts.get(operation_id)
+        if receipt is None:
+            return 404, {"error": "WebApp onboarding operation not found"}
+        return 200, receipt
+    if path == "/api/edge/webapp/summary":
+        return 200, _summary()
+    if path == "/api/edge/webapp/deployment":
+        return 200, _deployments()
+    if path == "/api/edge/webapp/release":
+        return 200, _releases()
+    if path == "/api/edge/webapp/health":
+        return 200, {"webapp": 42, "status": "healthy",
+                     "checked": "2026-08-10T18:05:00Z", "detail": "HTTP 200"}
+    return None
 
 
 def post(handler, path, payload):
+    if path == "/api/dnsman/delegation/initiate":
+        return 200, {"id": 77, "domain": 11, "domain_name": payload.get("name"),
+                     "source": f"_acme-challenge.{payload.get('name')}",
+                     "target": "_acme.edge.nativemojo.com", "state": "pending",
+                     "verified_at": None, "last_error_code": ""}
+    if path == "/api/dnsman/delegation/verify":
+        return 200, {"id": payload.get("delegation") or 77, "domain": 11,
+                     "domain_name": "example.com", "state": "verified",
+                     "verified_at": "2026-08-10T18:00:00Z", "last_error_code": ""}
+    if path == "/api/edge/webapp/rollback":
+        return 200, {"webapp": 42, "deployment": 512, "status": "rolling_back",
+                     "release": {"id": payload.get("release"), "version": "2026.08.09"}}
+    if path == "/api/edge/webapp/detach_address":
+        return 200, {"webapp": payload.get("webapp"), "address": None}
     if path != "/api/edge/webapp/onboarding/create":
         return None
     owner = _owner(handler)

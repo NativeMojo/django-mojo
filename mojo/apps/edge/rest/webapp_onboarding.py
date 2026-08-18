@@ -86,6 +86,17 @@ def on_webapp_onboarding_options(request):
     return _webapp_onboarding.options(group, group_intent=intent)
 
 
+@md.GET("webapp/onboarding/precheck")
+@md.denies_key_backed_session()
+@md.custom_security("interactive user plus centralized WebApp group authority")
+def on_webapp_onboarding_precheck(request):
+    """URL-first pre-flight: normalize the desired address and report the
+    verdict before any operation is created. Read-only, so no fresh-auth gate."""
+    intent, group = _group_intent(request)
+    return _webapp_onboarding.precheck(
+        group, request.DATA.get("url"), group_intent=intent)
+
+
 @md.POST("webapp/onboarding/create")
 @md.denies_key_backed_session()
 @md.custom_security("interactive user plus centralized WebApp group authority")
@@ -143,7 +154,8 @@ def on_webapp_onboarding_workflow(request):
             request.user, web_app.group):
         raise me.PermissionDeniedException(
             "WebApp and DNS management are not granted in this group")
-    result = _webapp_onboarding.workflow(web_app)
+    result = _webapp_onboarding.workflow(
+        web_app, _webapp_onboarding.request_origin(request))
     action = str(request.DATA.get("action") or "").strip().lower()
     if action:
         operation_id = request.DATA.get("operation_id")

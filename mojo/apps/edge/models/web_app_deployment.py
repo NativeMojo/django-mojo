@@ -79,6 +79,10 @@ class WebAppDeployment(models.Model, MojoModel):
                 "fields": ["id", "created", "status", "detail"],
                 "graphs": {"release": "basic", "previous_release": "basic"},
             },
+            "list": {
+                "fields": ["id", "created", "started", "finished", "status"],
+                "graphs": {"release": "basic", "previous_release": "basic"},
+            },
         }
 
     @property

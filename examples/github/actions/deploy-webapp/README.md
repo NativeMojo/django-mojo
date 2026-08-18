@@ -1,9 +1,17 @@
 # Deploy a WebApp
 
-This copyable composite action is the standard django-mojo WebApp deployment
-client. It accepts an already-built static directory, registers its immutable
-manifest, uploads each file using its presigned URL, completes server-side
-verification, and waits until the active edge fleet reports the release live.
+This composite action is the standard django-mojo WebApp deployment client. It
+accepts an already-built static directory, registers its immutable manifest,
+uploads each file using its presigned URL, completes server-side verification,
+and waits until the active edge fleet reports the release live.
+
+> **This is a live public contract.** The admin portal's onboarding wizard
+> generates a workflow that references this action at
+> `NativeMojo/django-mojo/examples/github/actions/deploy-webapp@main`, so a
+> breaking change here breaks every generated pipeline on the next run. Treat
+> `action.yml` and `deploy.py` as published API: change inputs additively, and
+> keep the `@main` reference working. (The `@v1` pin below still works for repos
+> that prefer to pin a tag.)
 
 Keep the WebApp's linked service credential in the repository or environment
 secret named exactly `MOJO_DEPLOY_KEY`. Developers do not receive the key. The

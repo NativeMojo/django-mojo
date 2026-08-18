@@ -27,6 +27,11 @@ MAX_ATTEMPTS = 8
 MAX_STATE_BYTES = 32768
 MAX_ACTIVITY = 80
 LEASE_SECONDS = 90
+# A third _advance_* outcome beyond True (retry) / False (advance): the step is
+# waiting on the USER to publish or repair DNS records. advance() parks it as
+# waiting with no error budget and schedules no auto-retry — the user re-checks
+# by re-submitting the choice, which resets the attempt count.
+WAIT_FOR_USER = "wait-for-user"
 SECRET_KEYS = {
     "api_key", "api_secret", "authorization", "confirm_token", "password",
     "private_key", "secret", "token", "mojo_deploy_key",
@@ -217,6 +222,195 @@ def serialize(operation):
     }
 
 
+def _is_label(value):
+    try:
+        validators.validate_label(str(value).strip().lower())
+        return True
+    except me.MojoException:
+        return False
+
+
+def _is_ip_literal(host):
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        return True
+    except ValueError:
+        return False
+
+
+def _domain_summary(domain):
+    return {"id": domain.pk, "name": domain.name, "provider": domain.provider}
+
+
+def _verify_external_cname(hostname, target):
+    """Authoritatively confirm the user published ``hostname`` CNAME -> target.
+
+    Unlike delegated ACME's one-hop ``_acme-challenge`` proof, the app CNAME
+    target (``EDGE_WEBAPP_CNAME_TARGET``) may itself be a CNAME — e.g. to an
+    ELB — so this deliberately does NOT use ``probe.verify_one_hop_cname``'s
+    one-hop restriction on the target side.
+    """
+    from mojo.helpers.dns import probe
+
+    result = probe.query_cname(hostname)
+    targets = sorted(str(value).rstrip(".") for value in (result.targets or []))
+    return targets == [target.rstrip(".")]
+
+
+def _external_records(hostname, target, domain, include_challenge=False):
+    """Records a user publishes at their own DNS host for an external domain.
+
+    The app CNAME is always required. The ``_acme-challenge`` CNAME is listed
+    only when ``include_challenge`` is set — the failed-certificate recovery
+    case, where that record needs re-adding. In the normal flow the delegation
+    was verified *before* the ``mojo`` Domain existed, so the challenge record
+    is already published and is not the user's job at the address step. That is
+    also what makes a second app on the same domain a single-record add: it
+    reuses the delegation and the wildcard certificate.
+    """
+    records = [{"type": "CNAME", "name": hostname, "value": target, "ttl": 300}]
+    if include_challenge:
+        from mojo.apps.dnsman.services import delegation
+
+        row = delegation.for_domain(domain)
+        if row is not None and row.source_name and row.target_name:
+            records.append({"type": "CNAME", "name": row.source_name,
+                            "value": row.target_name, "ttl": 300})
+    return records
+
+
+def precheck(group, raw_url, group_intent="existing"):
+    """Stateless URL-first pre-flight for the wizard, before any operation.
+
+    Given the address a user typed, work out what onboarding will require and
+    steer un-serveable shapes. Never touches provider credentials: the only
+    network call is one authoritative CNAME probe (never ``dns.list_records``,
+    which would enumerate a whole provider zone on shared credentials per click).
+    """
+    from urllib.parse import urlsplit
+
+    from mojo.apps.dnsman.models import Domain
+    from mojo.apps.dnsman.models.domain import PROVIDER_MOJO
+    from mojo.apps.dnsman.services import delegation, naming
+    from mojo.apps.edge.models import Vhost
+    from mojo.helpers.dns import probe
+
+    target = str(settings.get_static(
+        "EDGE_WEBAPP_CNAME_TARGET", "") or "").strip().rstrip(".")
+
+    def result(verdict, **extra):
+        payload = {"schema_version": SCHEMA_VERSION, "verdict": verdict,
+                   "cname_target": target}
+        payload.update(extra)
+        return payload
+
+    raw = str(raw_url or "").strip()
+    if not raw:
+        return result("invalid", reason="Enter the web address you want")
+    candidate = raw if "://" in raw else f"https://{raw}"
+    parsed = urlsplit(candidate)
+    scheme = (parsed.scheme or "https").lower()
+    if scheme not in ("http", "https"):
+        return result("invalid", reason="Use a web address like https://app.example.com")
+    if parsed.username or parsed.password:
+        return result("invalid", reason="Remove the username or password from the address")
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return result("invalid", reason="That address has no hostname")
+    trailing = (parsed.path or "").strip("/")
+    if trailing:
+        segment = trailing.split("/")[0]
+        return result(
+            "path", host=host,
+            suggestion=f"{segment}.{host}" if _is_label(segment) else None,
+            reason="Apps are served on a whole address, not a path under one")
+    if parsed.port and parsed.port not in (80, 443):
+        return result("invalid", reason="Leave the port off the address")
+    if _is_ip_literal(host):
+        return result("invalid", reason="Use a domain name, not an IP address")
+    if host.startswith("*"):
+        return result("invalid", reason="Wildcard addresses are not supported")
+
+    scheme_note = "http upgraded to https" if scheme == "http" else None
+    try:
+        hostname = naming.normalize_domain(host)
+    except me.MojoException:
+        return result("invalid", reason="That is not a valid domain name")
+    normalized = {"url": f"https://{hostname}", "hostname": hostname,
+                  "scheme_note": scheme_note}
+
+    # Longest-suffix match against the group's own domains. A new group has
+    # none, so it always resolves to domain_unknown.
+    domain = None
+    if group_intent != "new" and group is not None:
+        for candidate_domain in Domain.objects.filter(group=group, status="active"):
+            base = candidate_domain.name
+            if hostname == base or hostname.endswith(f".{base}"):
+                if domain is None or len(base) > len(domain.name):
+                    domain = candidate_domain
+
+    if domain is None:
+        return result("domain_unknown", normalized=normalized, options={
+            "external_available": delegation.is_available(),
+            "purchase_available": True,
+            "godaddy_available": True,
+        })
+
+    normalized["domain_name"] = domain.name
+    if hostname == domain.name:
+        return result("apex", normalized=normalized, domain=_domain_summary(domain),
+                      suggestion=f"www.{domain.name}",
+                      reason="Apps are served on a subdomain, not the bare domain")
+    remainder = hostname[: -(len(domain.name) + 1)]
+    if "." in remainder:
+        leaf = remainder.split(".")[-1]
+        return result("deep_label", normalized=normalized,
+                      domain=_domain_summary(domain),
+                      suggestion=f"{leaf}.{domain.name}",
+                      reason="Use a single label under your domain")
+    label = remainder
+    if not _is_label(label):
+        return result("invalid", normalized=normalized,
+                      reason="That subdomain name is not usable")
+    normalized["label"] = label
+
+    # Conflicts are DB checks plus one authoritative CNAME probe — never a
+    # provider record listing.
+    existing = Vhost.objects.filter(
+        domain=domain, label=label, is_enabled=True).first()
+    if existing is not None:
+        app = getattr(existing, "web_app", None)
+        return result("taken", normalized=normalized,
+                      domain=_domain_summary(domain),
+                      app=app.slug if app is not None else None,
+                      reason="That address is already serving a site")
+
+    if domain.provider == PROVIDER_MOJO:
+        # The delegation (and its _acme-challenge record) was already verified
+        # to make this a mojo Domain, so the only record the user still adds is
+        # the app CNAME — one record, whether it is their first app here or
+        # their tenth.
+        records = _external_records(hostname, target, domain)
+        published = bool(target) and _verify_external_cname(hostname, target)
+        return result("ready" if published else "records_needed",
+                      normalized=normalized, domain=_domain_summary(domain),
+                      records=records)
+
+    # A managed domain (route53/godaddy): the platform will write the record,
+    # but a foreign existing CNAME still blocks. One probe, no zone listing.
+    probe_result = probe.query_cname(hostname)
+    targets = sorted(str(v).rstrip(".") for v in (probe_result.targets or []))
+    if targets and targets != [target.rstrip(".")]:
+        return result("conflict", normalized=normalized,
+                      domain=_domain_summary(domain),
+                      reason="That address already points somewhere else")
+    # The platform writes this record itself; it is returned for display only.
+    return result("ready", normalized=normalized, domain=_domain_summary(domain),
+                  records=_external_records(hostname, target, domain))
+
+
 def options(group, group_intent="existing"):
     from mojo.apps.github.models import GitHubInstall
 
@@ -376,8 +570,12 @@ def choose(operation, request, payload):
         locked.status = STATUS_ACTIVE
         locked.last_error = ""
         locked.next_attempt_at = timezone.now()
+        # Every accepted choice is a fresh user action: reset the attempt budget
+        # so a step parked at WAIT_FOR_USER (or exhausted retries) resumes with a
+        # clean slate when the user presses Check.
+        locked.attempts = 0
         _activity(locked, f"Choice accepted for {step}")
-        fields = ["status", "last_error", "next_attempt_at"]
+        fields = ["status", "last_error", "next_attempt_at", "attempts"]
         if purchase_confirmation:
             fields.append("registrar_provider")
         _save_state(locked, state, fields)
@@ -562,17 +760,27 @@ def advance(operation_id, owner=None):
         retry_delay = None
         choice = ((operation.state or {}).get("choices") or {}).get(
             operation.cursor)
-        if wait and choice and operation.attempts < MAX_ATTEMPTS:
+        if wait is WAIT_FOR_USER:
+            # Waiting on the user to publish or repair DNS records. No error
+            # budget and no auto-retry: the user re-checks by re-submitting the
+            # choice, which resets attempts. _release parks it as waiting.
+            operation.attempts = 0
+            operation.next_attempt_at = None
+        elif wait and choice and operation.attempts < MAX_ATTEMPTS:
             operation.attempts += 1
             retry_delay = min(300, 2 ** operation.attempts)
             operation.next_attempt_at = timezone.now() + timedelta(
                 seconds=retry_delay)
         elif wait and choice and operation.attempts >= MAX_ATTEMPTS:
-            operation.status = STATUS_FAILED
-            operation.finished = timezone.now()
-            operation.last_error = "Onboarding recovery attempts were exhausted"
-            _activity(operation, operation.last_error, "error")
-        released = _release(operation, owner, wait=wait)
+            # A long-but-legitimate wait (certificate issuance, DNS
+            # propagation) is not a failure. Park it so the user can re-check,
+            # instead of terminally failing an onboarding that just took a
+            # while.
+            operation.attempts = 0
+            operation.next_attempt_at = None
+            _activity(operation,
+                      "Paused waiting on DNS or certificate; press Check to retry")
+        released = _release(operation, owner, wait=bool(wait))
         if not released:
             return "superseded"
         if retry_delay:
@@ -642,6 +850,7 @@ def _record_values(record):
 def _advance_address(operation):
     from mojo.apps.dnsman.models import Certificate, Domain, DomainPurchase
     from mojo.apps.dnsman.models.certificate import STATUS_ACTIVE as CERT_ACTIVE
+    from mojo.apps.dnsman.models.domain import PROVIDER_MOJO
     from mojo.apps.dnsman.services import certs, dns
 
     choice = ((operation.state or {}).get("choices") or {}).get("address")
@@ -685,38 +894,56 @@ def _advance_address(operation):
     validators.validate_server_name(target)
     if target == hostname:
         raise me.ValueException("The WebApp CNAME target cannot point to itself")
-    records = dns.list_records(domain)
-    same_name = [row for row in records
-                 if str(getattr(row, "name", row.get("name", ""))).rstrip(".") == hostname]
-    cnames = [row for row in same_name
-              if str(getattr(row, "type", row.get("type", ""))).upper() == "CNAME"]
-    conflicts = [row for row in same_name if row not in cnames]
-    if conflicts or len(cnames) > 1:
-        raise me.ValueException(
-            "The selected hostname has ambiguous or non-CNAME DNS records")
-    if cnames and _record_values(cnames[0]) != [target]:
-        raise me.ValueException(
-            "The selected hostname has a foreign CNAME value")
-    if not cnames:
-        state = dict(operation.state or {})
-        intent = dict(state.get("intent") or {})
-        intent["dns"] = {
-            "provider": domain.provider, "type": "CNAME", "name": hostname,
-            "values": [target], "ttl": 300,
-        }
-        state["intent"] = intent
-        _save_state(operation, state, ["domain", "dns_provider"])
-        try:
-            dns.upsert_record(domain, "CNAME", hostname, [target], ttl=300)
-        except Exception:
-            proven = [row for row in dns.list_records(domain)
-                      if str(getattr(row, "name", row.get("name", ""))).rstrip(".") == hostname
-                      and str(getattr(row, "type", row.get("type", ""))).upper() == "CNAME"
-                      and _record_values(row) == [target]]
-            if len(proven) != 1:
-                raise me.ValueException(
-                    "DNS provider outcome is ambiguous; reconciliation will retry",
-                    code=503, status=503)
+    if domain.provider == PROVIDER_MOJO:
+        # External DNS: the platform holds no credential for this domain, so it
+        # cannot write the record (dns.list_records/upsert_record both raise for
+        # provider "mojo"). The user publishes the CNAME at their own host and
+        # we confirm it authoritatively — no error budget while they do.
+        if not (target and _verify_external_cname(hostname, target)):
+            state = dict(operation.state or {})
+            intent = dict(state.get("intent") or {})
+            intent["dns"] = {"provider": "mojo", "type": "CNAME",
+                             "name": hostname, "values": [target], "ttl": 300}
+            state["intent"] = intent
+            _save_state(operation, state, ["domain", "dns_provider"])
+            operation.evidence = dict(operation.evidence or {}, address={
+                "status": "waiting", "hostname": hostname, "dns": "unpublished",
+                "records": _external_records(hostname, target, domain)})
+            _activity(operation, "Waiting for the app address record at your DNS host")
+            return WAIT_FOR_USER
+    else:
+        records = dns.list_records(domain)
+        same_name = [row for row in records
+                     if str(getattr(row, "name", row.get("name", ""))).rstrip(".") == hostname]
+        cnames = [row for row in same_name
+                  if str(getattr(row, "type", row.get("type", ""))).upper() == "CNAME"]
+        conflicts = [row for row in same_name if row not in cnames]
+        if conflicts or len(cnames) > 1:
+            raise me.ValueException(
+                "The selected hostname has ambiguous or non-CNAME DNS records")
+        if cnames and _record_values(cnames[0]) != [target]:
+            raise me.ValueException(
+                "The selected hostname has a foreign CNAME value")
+        if not cnames:
+            state = dict(operation.state or {})
+            intent = dict(state.get("intent") or {})
+            intent["dns"] = {
+                "provider": domain.provider, "type": "CNAME", "name": hostname,
+                "values": [target], "ttl": 300,
+            }
+            state["intent"] = intent
+            _save_state(operation, state, ["domain", "dns_provider"])
+            try:
+                dns.upsert_record(domain, "CNAME", hostname, [target], ttl=300)
+            except Exception:
+                proven = [row for row in dns.list_records(domain)
+                          if str(getattr(row, "name", row.get("name", ""))).rstrip(".") == hostname
+                          and str(getattr(row, "type", row.get("type", ""))).upper() == "CNAME"
+                          and _record_values(row) == [target]]
+                if len(proven) != 1:
+                    raise me.ValueException(
+                        "DNS provider outcome is ambiguous; reconciliation will retry",
+                        code=503, status=503)
 
     from mojo.apps.edge.models import Vhost
     existing_vhost = Vhost.objects.filter(
@@ -747,15 +974,36 @@ def _advance_address(operation):
                 pending = candidate
                 break
         if pending is None:
+            if domain.provider == PROVIDER_MOJO and operation.attempts > 0:
+                # A delegated certificate was requested this cycle and is now
+                # neither pending nor active — it failed, almost always because
+                # the _acme-challenge CNAME is missing or broken. Do not spin
+                # requesting fresh certificates; wait for the user to repair the
+                # record and press Check (which resets attempts and re-requests).
+                operation.evidence = dict(operation.evidence or {}, address={
+                    "status": "waiting", "hostname": hostname, "dns": "verified",
+                    "certificate": "failed",
+                    "records": _external_records(
+                        hostname, target, domain, include_challenge=True)})
+                _activity(
+                    operation,
+                    "Certificate issuance is waiting on the _acme-challenge record",
+                    "warning")
+                return WAIT_FOR_USER
+            # Delegated (mojo) domains issue exactly the apex-plus-wildcard
+            # profile; a single subdomain name set is refused for them.
+            cert_names = ([domain.name, f"*.{domain.name}"]
+                          if domain.provider == PROVIDER_MOJO else [hostname])
             state = dict(operation.state or {})
             intent = dict(state.get("intent") or {})
             intent["certificate"] = {
-                "provider": "acme", "domain": domain.pk,
-                "names": [hostname],
+                "provider": "acme", "domain": domain.pk, "names": cert_names,
             }
             state["intent"] = intent
             _save_state(operation, state, ["certificate"])
-            pending = certs.request_certificate(domain, names=[hostname])
+            pending = certs.request_certificate(
+                domain,
+                names=None if domain.provider == PROVIDER_MOJO else [hostname])
         operation.certificate = pending
         operation.evidence = dict(operation.evidence or {}, address={
             "status": "waiting", "hostname": hostname,
@@ -775,10 +1023,20 @@ def _advance_address(operation):
             pool=str(choice.get("pool") or "default"), spa=True)
     operation.vhost = vhost
     web_app = WebApp.objects.get(pk=operation.web_app_id)
+    old_site_vhost = None
     if web_app.vhost_id not in (None, vhost.pk):
-        raise me.ValueException("The WebApp is already linked to another vhost")
+        previous = Vhost.objects.filter(pk=web_app.vhost_id).first()
+        if previous is None or previous.kind != "site":
+            raise me.ValueException(
+                "The WebApp is already linked to an incompatible address")
+        # Change-address: the old address kept serving until the new vhost and
+        # certificate were ready (they are, here). Retire it now — its delete
+        # publishes convergence so nodes drop the old server block.
+        old_site_vhost = previous
     web_app.vhost = vhost
     web_app.save(update_fields=["vhost", "modified"])
+    if old_site_vhost is not None:
+        old_site_vhost.delete()
     operation.evidence = dict(operation.evidence or {}, address={
         "status": "verified", "hostname": hostname, "dns": "verified",
         "certificate": "reused" if certificate.created < operation.created else "issued",
@@ -877,11 +1135,21 @@ def _advance_verify(operation):
     return False
 
 
-def workflow(web_app):
-    """Return a secret-free workflow whose inputs never become shell syntax."""
+def workflow(web_app, api_origin=None):
+    """The single GitHub Actions workflow a user drops into their repo.
+
+    GitHub-centric by design: the user installs one secret (``MOJO_DEPLOY_KEY``)
+    and one file. The deploy step references django-mojo's public composite
+    action straight from ``@main`` — the repo is public, so there is no
+    version-tag machinery — and that action runs the release client on the
+    GitHub runner. Nothing (no Python, no django-mojo) is installed on the
+    user's machine. The old generator told users to run ``python -m
+    mojo_webapp``, a module that exists nowhere; this is the real contract.
+    """
     repository = validators.validate_github_repository(web_app.github_repository)
     ref_name = validators.validate_deployment_ref(web_app.deployment_ref)
     output = validators.validate_build_output(web_app.build_output)
+    origin = str(api_origin or "").strip().rstrip("/") or "https://YOUR-PLATFORM-ORIGIN"
     yaml = """name: Deploy WebApp
 on:
   push:
@@ -892,9 +1160,6 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    env:
-      MOJO_WEBAPP_ID: \"__WEBAPP_ID__\"
-      BUILD_OUTPUT: \"__OUTPUT__\"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -902,15 +1167,18 @@ jobs:
           node-version: \"22\"
       - run: npm ci
       - run: npm run build
-      - name: Register release
+      - name: Deploy to django-mojo
+        uses: NativeMojo/django-mojo/examples/github/actions/deploy-webapp@main
+        with:
+          api-url: \"__API_URL__\"
+          webapp-id: \"__WEBAPP_ID__\"
+          artifact-dir: \"__OUTPUT__\"
+          version: ${{ github.sha }}
         env:
           MOJO_DEPLOY_KEY: ${{ secrets.MOJO_DEPLOY_KEY }}
-        run: |
-          test -n \"${MOJO_DEPLOY_KEY}\"
-          test -d \"${BUILD_OUTPUT}\"
-          python -m mojo_webapp deploy --webapp \"${MOJO_WEBAPP_ID}\" --directory \"${BUILD_OUTPUT}\"
 """
     yaml = yaml.replace("__REF__", ref_name)
+    yaml = yaml.replace("__API_URL__", origin)
     yaml = yaml.replace("__WEBAPP_ID__", str(web_app.pk))
     yaml = yaml.replace("__OUTPUT__", output)
     return {"schema_version": SCHEMA_VERSION, "repository": repository,
@@ -918,13 +1186,24 @@ jobs:
 
 
 def summary_for(web_app):
-    """Frozen v1 contract for item 1818: group-scoped and secret-free."""
+    """Frozen v1 contract for item 1818: group-scoped and secret-free.
+
+    v1 is additive-only. Item 2099 added, without changing any existing
+    meaning: `address.domain`, top-level `current_release`, and
+    `latest_deployment` — the three facts a day-2 management view needs to
+    answer "is my app live and serving X?" in one call.
+    """
+    from mojo.apps.edge.models import WebAppDeployment
     from mojo.apps.edge.services import webapp_keys
 
     operation = WebAppOnboardingOperation.objects.filter(
         web_app=web_app, group=web_app.group).first()
     key_status = webapp_keys.status(web_app)
-    hostname = web_app.vhost.server_name if web_app.vhost_id else None
+    vhost = web_app.vhost if web_app.vhost_id else None
+    hostname = vhost.server_name if vhost else None
+    domain = vhost.domain if vhost else None
+    release = web_app.current_release
+    deployment = WebAppDeployment.objects.filter(webapp=web_app).first()
     return {
         "schema_version": 1,
         "webapp": {
@@ -935,7 +1214,20 @@ def summary_for(web_app):
             "deployment_ref": web_app.deployment_ref,
             "build_output": web_app.build_output,
         },
-        "address": {"hostname": hostname, "https_origin": f"https://{hostname}" if hostname else None},
+        "address": {
+            "hostname": hostname,
+            "https_origin": f"https://{hostname}" if hostname else None,
+            "domain": ({"id": domain.pk, "name": domain.name,
+                        "provider": domain.provider} if domain else None),
+        },
+        "current_release": ({
+            "id": release.pk, "version": release.version,
+            "status": release.status, "created": release.created,
+        } if release else None),
+        "latest_deployment": ({
+            "id": deployment.pk, "status": deployment.status,
+            "created": deployment.created, "finished": deployment.finished,
+        } if deployment else None),
         "onboarding": {
             "status": operation.status if operation else "not_started",
             "cursor": operation.cursor if operation else None,

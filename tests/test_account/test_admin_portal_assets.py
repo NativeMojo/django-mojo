@@ -107,7 +107,7 @@ def test_feature_asset_contracts(opts):
     assert "result.token = null" in webapps and "quote.token = null" in advanced
     assert "secretPayload.api_secret = ''" in advanced
     assert "data-webapp-key" in webapps
-    assert "oneTimeSecret(webapp, result, returnFocus)" in webapps
+    assert "oneTimeSecret(webapp, result)" in webapps
     assert "--setup-state" in preview and "[redacted]" in preview
     assert "setup_choice_operation" in preview
     assert "Deterministic partial route failure" in preview
@@ -122,61 +122,91 @@ def test_feature_asset_contracts(opts):
         assert endpoint in advanced, f"Advanced is missing {endpoint}"
 
 
-@th.django_unit_test("WebApps owns resumable onboarding and lost-response UX")
+@th.django_unit_test("WebApps owns URL-first onboarding, external domains, and day-2")
 def test_webapp_onboarding_asset_contract(opts):
-    webapps = (ASSETS / "features/webapps/page.js").read_text()
+    wizard = (ASSETS / "features/webapps/wizard.js").read_text()
+    page = (ASSETS / "features/webapps/page.js").read_text()
     webapp_styles = (ASSETS / "features/webapps/styles.css").read_text()
     platform = (ASSETS / "features/platform/page.js").read_text()
     preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
 
-    for step in ("WebApp", "Domain & DNS", "GitHub", "Go live"):
-        assert step in webapps, f"WebApp onboarding omitted {step}"
+    # --- URL-first wizard (wizard.js) ---
+    for step in ("Address", "Set up", "Deploy", "Go live"):
+        assert step in wizard, f"WebApp onboarding omitted step {step}"
+    assert "What web address do you want?" in wizard, \
+        "onboarding does not start from the desired address"
     for endpoint in (
+            "/api/edge/webapp/onboarding/precheck",
             "/api/edge/webapp/onboarding/options",
             "/api/edge/webapp/onboarding/create",
             "/api/edge/webapp/onboarding/detail",
             "/api/edge/webapp/onboarding/choose",
-            "/api/edge/webapp/onboarding/workflow"):
-        assert endpoint in webapps, f"WebApp onboarding omitted {endpoint}"
-    assert "apiOnce('/api/edge/webapp/onboarding/choose'" in webapps, \
+            "/api/edge/webapp/onboarding/cancel"):
+        assert endpoint in wizard, f"WebApp onboarding omitted {endpoint}"
+    assert "apiOnce('/api/edge/webapp/onboarding/choose'" in wizard, \
         "provider-bearing onboarding choice gained a transport retry"
-    assert "do not replay it blindly" in webapps, \
-        "lost provider response has no reconciliation guidance"
-    assert "Apex onboarding is intentionally refused" in webapps, \
-        "the UI implies apex onboarding is supported"
-    assert "aria-current" in webapps and "aria-label': 'WebApp onboarding progress" in webapps, \
+    assert "apiOnce('/api/edge/webapp/onboarding/create'" in wizard, \
+        "the create call is not the single durable one-shot"
+    # URL steering: un-serveable shapes are guided, not errored.
+    assert "['path', 'apex', 'deep_label'].includes" in wizard and "'Use it'" in wizard, \
+        "the wizard does not steer path/apex/deep-label addresses with a suggestion"
+    # External domains ride the delegated-ACME lifecycle inline.
+    assert "/api/dnsman/delegation/initiate" in wizard and "/api/dnsman/delegation/verify" in wizard, \
+        "keeping DNS elsewhere does not drive the delegation lifecycle"
+    for card in ("Keep my DNS where it is", "Buy a new domain", "Use a domain you"):
+        assert card in wizard, f"domain choice omitted the {card!r} path"
+    assert "I’ve added them — check now" in wizard and "I’ve added it — check now" in wizard, \
+        "the records screen has no user-driven re-check"
+    # DNS authority is per selected group, never a global grant.
+    assert "groupDnsAuthority" in wizard and "group?.can_manage_dns" in wizard, \
+        "domain choices still depend on global rather than selected-group DNS authority"
+    assert "NEW_GROUP_VALUE = 'new'" in wizard, \
+        "the nonnumeric new-group sentinel is missing"
+    # Progress is exposed to assistive technology.
+    assert "aria-current" in wizard and "'aria-label': 'Setup progress'" in wizard, \
         "wizard progress is not exposed to assistive technology"
-    start = webapps[webapps.index("function startOnboarding"):webapps.index("export async function webappsPage")]
-    github = webapps[webapps.index("function githubChoice"):webapps.index("function wizardChoice")]
-    assert "owner/repository" not in start and "owner/repository" in github, \
-        "GitHub fields leaked into the WebApp identity step"
-    assert "Continue to Domain & DNS" in start and "A guided setup with DNS included." in start, \
-        "the first wizard step does not explain its single purpose"
-    assert "We create the DNS record automatically" in webapps and "HTTPS is handled automatically" in webapps, \
-        "the domain step does not explain automatic DNS and HTTPS"
-    assert "target: '_blank', rel: 'noopener'" in webapps and "Add or connect a domain" in webapps, \
-        "WebApp onboarding cannot reach first-class domain management safely"
-    assert "group=${encodeURIComponent(groupId || '')}" in webapps and "group: groupId" in webapps, \
-        "domain discovery and purchase are not bound to the selected WebApp group"
-    assert "ctx.groups?.[0]?.id" not in webapps, \
-        "WebApp onboarding silently fell back to the first visible group"
-    assert "ctx.webapp_groups || []" in webapps and "ctx.can_create_webapp_group" in webapps, \
-        "WebApp onboarding does not consume its purpose-specific group choices"
-    assert "Create New Group" in webapps and "NEW_GROUP_VALUE = 'new'" in webapps, \
-        "the conditional nonnumeric new-group sentinel is missing"
-    assert "Number.parseInt(group.value, 10)" in webapps and \
-        "Number(group.value)" not in webapps, \
-        "the group selector can still coerce an empty or new intent to zero"
-    assert "sessionStorage.getItem(ONBOARDING_DRAFT_KEY)" in webapps and \
-        "sessionStorage.setItem(ONBOARDING_DRAFT_KEY" in webapps, \
+    # Durable, crash-safe draft: one UUID survives reload; abandonment is explicit.
+    assert "sessionStorage.getItem(ONBOARDING_DRAFT_KEY)" in wizard and \
+        "sessionStorage.setItem(ONBOARDING_DRAFT_KEY" in wizard, \
         "pending onboarding UUID/profile does not survive navigation and reload"
-    assert "operation_id: crypto.randomUUID()" in webapps and \
-        "apiOnce('/api/edge/webapp/onboarding/create'" in webapps, \
+    assert "submitted: true, payload: frozenPayload" in wizard and "crypto.randomUUID()" in wizard, \
         "create cannot reconcile a lost response with one durable UUID"
-    assert "operation.group.id" in webapps and "operation.cursor === 'app'" in webapps, \
-        "serialized owning group or legacy app-cursor compatibility was lost"
-    assert "clearPendingDraft();" in webapps and "Start over" in webapps, \
+    assert "draft?.submitted && draft.operation_id" in wizard and \
+        "/api/edge/webapp/onboarding/detail?operation=" in wizard, \
+        "reload does not reconcile a saved operation before creating"
+    assert "clearPendingDraft()" in wizard and "Start over" in wizard, \
         "the browser lacks authoritative draft clearing or deliberate abandonment"
+    assert "operation.cursor === 'app'" in wizard and "result.operation || result" in wizard, \
+        "legacy app-cursor auto-advance or serialized-operation shape was lost"
+    # Vocabulary: raw framework words stay out of the primary onboarding copy.
+    for banned in ("vhost", "bucket", "slug"):
+        assert f"text: '{banned}'" not in wizard and f'text: "{banned}"' not in wizard, \
+            f"the wizard shows the framework word {banned!r} in visible copy"
+
+    # --- day-2 management (page.js) ---
+    for endpoint in (
+            "/api/edge/webapp/summary",
+            "/api/edge/webapp/deployment",
+            "/api/edge/webapp/release",
+            "/api/edge/webapp/rollback",
+            "/api/edge/webapp/detach_address",
+            "/api/edge/webapp/health",
+            "/api/edge/webapp/key_status",
+            "/api/edge/webapp/link_key",
+            "/api/edge/webapp/onboarding/workflow"):
+        assert endpoint in page, f"management view omitted {endpoint}"
+    for tab in ("'Overview'", "'Deploys'", "'Deploy key'", "'Setup'", "'Danger'"):
+        assert tab in page, f"management view omitted the {tab} tab"
+    for action in ("Roll back", "Change address", "Take offline", "Delete app"):
+        assert action in page, f"management view omitted the {action!r} action"
+    assert "startWizard" in page and "resumeWizard" in page and "startChangeAddress" in page, \
+        "the list does not launch or resume the wizard"
+    assert "statuses.set(row.id" not in page, \
+        "the list still fans out a per-row key_status request (N+1)"
+    assert "result.token = null" in page and "secretField.value = ''" in page, \
+        "the deploy-key reveal does not scrub its one-time value"
+
+    # --- unchanged platform contracts still hold ---
     assert "Add domains and manage the public records" not in platform, \
         "Platform duplicates the first-class Domains & DNS destination"
     assert "evidenceSummary" in platform and "View raw evidence" in platform, \
@@ -198,12 +228,14 @@ def test_webapp_onboarding_asset_contract(opts):
         "Platform or Setup still renders a duplicate resource directory"
     assert "Technical details" in platform and "Return to Dashboard" in platform, \
         "Setup does not keep technical evidence quiet or preserve the operator journey"
+
+    # --- style + preview contracts ---
     assert ".row-actions" in webapp_styles and "gap: .5rem" in webapp_styles, \
         "WebApp table actions have no stable spacing contract"
-    assert "Technical details" in webapps and "].filter(Boolean)" in webapps, \
+    assert "Technical details" in wizard and "].filter(Boolean)" in page, \
         "provider evidence or empty states can leak raw values into the wizard"
     assert "var(--border)" not in webapp_styles, \
-        "WebApp progress uses an undefined border token"
+        "WebApp styles use an undefined border token"
     assert "--onboarding-state" in preview and "lost_key" in preview and "new_group" in preview, \
         "preview cannot render onboarding recovery states"
     assert "cls._safe_payload(value)" in preview, \
