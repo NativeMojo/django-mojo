@@ -5,6 +5,7 @@ from django.apps import apps
 
 from mojo.apps.assistant import tool
 from mojo.helpers import logit
+from mojo import errors as me
 
 logger = logit.get_logger("assistant", "assistant.log")
 
@@ -623,6 +624,23 @@ def _tool_query_model(params, user):
 
     # Serialization
     graph = params.get("graph", "default").strip()
+    # Gate the caller-supplied graph exactly as the REST boundary does. This
+    # tool serializes OUTSIDE the REST read sites, so without this an assistant
+    # user could pull a permission-gated graph (e.g. a deployment's raw
+    # evidence) that the REST layer would refuse, and could probe unknown graph
+    # names for a 200.
+    try:
+        model.rest_resolve_graph_or_raise(request, graph)
+    except me.PermissionDeniedException as pe:
+        details = f"Graph permission denied: {model_label} graph={graph!r} by user {user.id}"
+        logger.warning(details)
+        _report_security_event(
+            "assistant_permission_denied", 5, details, user,
+            model_name=model_label,
+        )
+        return {"error": pe.reason}
+    except me.MojoException as ge:
+        return {"error": ge.reason}
     results = model.queryset_to_dict(queryset[:limit], graph=graph)
     total = queryset.count()
 

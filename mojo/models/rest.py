@@ -22,6 +22,17 @@ LOGGING_CLASS = None
 MOJO_APP_STATUS_200_ON_ERROR = settings.MOJO_APP_STATUS_200_ON_ERROR
 MOJO_REST_LIST_PERM_DENY = settings.get_static("MOJO_REST_LIST_PERM_DENY", True)
 
+# Graph names that describe HOW MUCH of a record to return, not a purpose-built
+# view. An undefined COMMON name falls back to `default` (ordinary list/detail
+# traffic sends these, so they must keep working); an undefined *special* name
+# is a deliberate request for a particular view and is refused at the REST
+# boundary — answering it with `default` would mislead the caller and hand a
+# prober a 200 for every name they try. Conf-file-only override (get_static): a
+# Setting row must never be able to widen the fallback set.
+COMMON_GRAPH_NAMES = frozenset(settings.get_static(
+    "REST_COMMON_GRAPH_NAMES",
+    ("default", "basic", "list", "simple", "detail", "detailed", "full")))
+
 # Django ORM date-component lookup suffixes. Values are integers, not dates,
 # so normalize_rest_value must skip its datetime-parse branch when it sees one.
 _DATE_COMPONENT_LOOKUPS = {
@@ -341,6 +352,31 @@ class MojoModel:
         callers that recover from a False return.
         """
         perms = cls.get_rest_meta_prop(permission_keys, [])
+        return cls._evaluate_perms(
+            request, perms, permission_keys, instance=instance)
+
+    @classmethod
+    def _evaluate_perms(cls, request, perms, permission_keys, instance=None,
+                        apply_instance_hooks=True):
+        """
+        The permission predicate proper, evaluated against an ALREADY-RESOLVED
+        ``perms`` list instead of RestMeta key names.
+
+        ``_evaluate_permission`` resolves ``permission_keys`` → ``perms`` and
+        delegates here; every existing caller reaches this through it, unchanged.
+        The graph-permission gate is the second caller: it passes a raw perms
+        list (``GRAPH_PERMISSIONS[graph]``) that names no RestMeta key, which the
+        key-based signature could not express.
+
+        ``apply_instance_hooks`` (default True): when False the instance's
+        ``check_view_permission`` / ``check_edit_permission`` hooks are skipped
+        while every other instance-aware step is kept — the api_key
+        inactive-group pre-gate, the owner match, and the unconditional
+        ``request.group`` rebind to the row's true tenant. The graph gate skips
+        the hooks deliberately: ``Group.check_view_permission`` admits any active
+        member while ignoring ``perms``, so routing a graph check through it
+        would silently pass on every hook-bearing model.
+        """
         if perms is None or len(perms) == 0:
             return True, None
 
@@ -419,25 +455,30 @@ class MojoModel:
             else:
                 is_write = any(k in WRITE_KEYS for k in permission_keys)
 
-            if not is_write and hasattr(instance, "check_view_permission"):
-                allowed = instance.check_view_permission(perms, request)
-                if allowed:
-                    return True, None
-                return False, objict.objict(
-                    branch="instance.check_view_permission",
-                    event_type="view_permission_denied",
-                    status=403,
-                )
+            # The graph-permission gate passes apply_instance_hooks=False: a
+            # view/edit hook that admits on membership alone (Group's does)
+            # would nullify the graph check. Every other instance-aware step
+            # below still runs.
+            if apply_instance_hooks:
+                if not is_write and hasattr(instance, "check_view_permission"):
+                    allowed = instance.check_view_permission(perms, request)
+                    if allowed:
+                        return True, None
+                    return False, objict.objict(
+                        branch="instance.check_view_permission",
+                        event_type="view_permission_denied",
+                        status=403,
+                    )
 
-            if hasattr(instance, "check_edit_permission"):
-                allowed = instance.check_edit_permission(perms, request)
-                if allowed:
-                    return True, None
-                return False, objict.objict(
-                    branch="instance.check_edit_permission",
-                    event_type="edit_permission_denied",
-                    status=403,
-                )
+                if hasattr(instance, "check_edit_permission"):
+                    allowed = instance.check_edit_permission(perms, request)
+                    if allowed:
+                        return True, None
+                    return False, objict.objict(
+                        branch="instance.check_edit_permission",
+                        event_type="edit_permission_denied",
+                        status=403,
+                    )
 
             if "owner" in perms:
                 owner_field = instance.get_rest_meta_prop("OWNER_FIELD", "user")
@@ -682,6 +723,88 @@ class MojoModel:
         )
 
     @classmethod
+    def rest_check_graph_permission_or_raise(cls, request, graph, instance=None):
+        """
+        Enforce ``RestMeta.GRAPH_PERMISSIONS`` for the graph ACTUALLY served,
+        additive to ``VIEW_PERMS``. Opt-in: a model that declares no
+        ``GRAPH_PERMISSIONS``, or has no entry for this graph, is allowed and
+        serializes byte-identically to before.
+
+        Denied → 403 naming the graph and the permissions required (never a
+        silent downgrade — an operator seeing missing fields must be able to
+        tell "withheld" from "absent").
+
+        The instance is passed but its view/edit hooks are skipped
+        (``apply_instance_hooks=False``) — see ``_evaluate_perms``. The
+        ``request.group`` rebind still runs, so a member-level grant is checked
+        against the row's own tenant. On a model with no derivable tenancy
+        (groupless, or a hook-only model whose ``_instance_group`` is None) only
+        a GLOBAL grant satisfies the graph gate — fail-closed by construction.
+        """
+        graph_perms = cls.get_rest_meta_prop("GRAPH_PERMISSIONS", None)
+        if not graph_perms:
+            return True
+        perms = graph_perms.get(graph)
+        if not perms:
+            return True
+        allowed, denial = cls._evaluate_perms(
+            request, perms, f"GRAPH_PERMISSIONS.{graph}", instance=instance,
+            apply_instance_hooks=False)
+        if allowed:
+            return True
+        raise me.PermissionDeniedException(
+            reason=f"graph '{graph}' requires one of {list(perms)}",
+            status=denial.status,
+            code=denial.status,
+            branch=denial.branch,
+            perms=list(perms),
+            permission_keys=f"GRAPH_PERMISSIONS.{graph}",
+            model_name=cls.__name__,
+            instance=repr(instance) if instance is not None else None,
+            event_type="graph_permission_denied",
+        )
+
+    @classmethod
+    def rest_resolve_graph_or_raise(cls, request, requested, instance=None):
+        """
+        Resolve a caller-supplied graph name to the graph that will actually be
+        served, refusing the two things a caller must never silently get:
+
+          - an undefined *special* graph name → ``ValueException`` 400;
+          - a graph the caller may not see (``GRAPH_PERMISSIONS``) → 403.
+
+        An undefined *common* name (``COMMON_GRAPH_NAMES``) falls back to
+        ``default``, exactly as the serializer does. A model that declares no
+        ``GRAPHS`` (a deliberate whole-model API) is returned untouched, ungated.
+
+        Returns the ORIGINAL requested name: the serializer performs the real
+        fallback, so the response envelope's ``graph`` field stays byte-identical
+        to today. The permission check runs against the EFFECTIVE (served) graph.
+        """
+        graphs = cls.get_rest_meta_prop("GRAPHS", None)
+        if not graphs:
+            return requested
+        effective = requested
+        if requested not in graphs:
+            if requested in COMMON_GRAPH_NAMES:
+                effective = "default"
+            else:
+                raise me.ValueException(
+                    f"Unknown graph '{requested}' for {cls.__name__}",
+                    code=400, status=400)
+        cls.rest_check_graph_permission_or_raise(request, effective, instance)
+        return requested
+
+    @classmethod
+    def rest_resolve_request_graph(cls, request, default_graph, instance=None):
+        """Read the caller's ``graph`` param (default ``default_graph``) and
+        resolve+gate it. The single choke point the three request-graph read
+        sites and the write pre-flights all share."""
+        requested = request.DATA.get("graph", default_graph)
+        return cls.rest_resolve_graph_or_raise(
+            request, requested, instance=instance)
+
+    @classmethod
     def on_rest_handle_get(cls, request, instance):
         """
         Handle GET requests with permission checks.
@@ -722,6 +845,10 @@ class MojoModel:
             )
 
         cls.rest_check_permission_or_raise(request, ["SAVE_PERMS", "VIEW_PERMS"], instance)
+        # Pre-flight the response graph BEFORE mutating: the save runs before
+        # on_rest_get serializes, so gating only at the read site would apply
+        # the write and then 403 the response.
+        cls.rest_resolve_request_graph(request, "default", instance=instance)
         return instance.on_rest_save_and_respond(request)
 
     @classmethod
@@ -900,6 +1027,8 @@ class MojoModel:
             )
 
         cls.rest_check_permission_or_raise(request, ["CREATE_PERMS", "SAVE_PERMS", "VIEW_PERMS"])
+        # Pre-flight the response graph BEFORE creating, same reason as save.
+        cls.rest_resolve_request_graph(request, "default")
         instance = cls.create_from_request(request)
         return instance.on_rest_get(request)
 
@@ -951,6 +1080,10 @@ class MojoModel:
             )
 
         cls.rest_check_permission_or_raise(request, ["SAVE_PERMS", "VIEW_PERMS"])
+        # Pre-flight the response graph BEFORE the row loop writes anything —
+        # the batch has no transaction, so a graph 403 after the loop would
+        # leave written rows behind and refuse the whole response.
+        cls.rest_resolve_request_graph(request, "list")
 
         batched = request.DATA.get("batched")
         if not isinstance(batched, list):
@@ -1069,7 +1202,7 @@ class MojoModel:
         page_start = request.DATA.get_typed(["start", "offset"], 0, int)
         page_end = page_start+page_size
         paged_queryset = queryset[page_start:page_end]
-        graph = request.DATA.get("graph", "list")
+        graph = cls.rest_resolve_request_graph(request, "list")
         format = request.DATA.get("download_format", "json")
         count = queryset.count()
         # Use serializer manager for optimal performance
@@ -1714,7 +1847,7 @@ class MojoModel:
         Returns:
             JsonResponse representing the object.
         """
-        graph = request.DATA.get("graph", graph)
+        graph = self.rest_resolve_request_graph(request, graph, instance=self)
         # Use serializer manager for optimal performance
         manager = get_serializer_manager()
         serializer = manager.get_serializer(self, graph=graph)
