@@ -21,6 +21,13 @@ function detailGrid(rows) {
   ]));
 }
 
+// Only ever open the app's own origin as a real https link. The value is
+// backend-built, but asserting the scheme keeps a stray javascript:/data: URL
+// out of an href or window.open even if the source ever changed.
+function httpsLink(origin) {
+  return typeof origin === 'string' && origin.startsWith('https://') ? origin : null;
+}
+
 // The deploy key is shown once. When the dialog closes we scrub the node, the
 // closure, and the response so the value cannot be read back from memory.
 function oneTimeSecret(webapp, result, returnFocus) {
@@ -102,7 +109,7 @@ async function manageSection(ctx, app, summary, section, body, reload) {
     const healthValue = h('span', {class: 'muted', text: 'Checking…'});
     body.replaceChildren(detailGrid([
       ['Address', address.hostname ? h('div', {class: 'address-cell'}, h('code', {text: address.hostname}),
-        address.https_origin ? h('a', {class: 'button ghost compact', href: address.https_origin, target: '_blank', rel: 'noopener'}, 'Open') : null) : 'Not set up yet'],
+        httpsLink(address.https_origin) ? h('a', {class: 'button ghost compact', href: httpsLink(address.https_origin), target: '_blank', rel: 'noopener'}, 'Open') : null) : 'Not set up yet'],
       ['Working right now', healthValue],
       ['Live version', summary.current_release ? `${summary.current_release.version || summary.current_release.id} · ${summary.current_release.status}` : 'No deploys yet'],
       ['Environment', summary.webapp?.environment],
@@ -220,7 +227,7 @@ async function openManage(ctx, webapp, reloadList) {
   const status = summary.current_release ? 'Live' : address.hostname ? 'Ready' : 'Setup';
   const header = modelHeader({iconName: 'deploy', primary: webapp.display_name || webapp.slug,
     secondary: address.hostname || 'No address yet', status, actions: [
-      {label: 'Open in a new tab', capability: Boolean(address.https_origin), run: () => window.open(address.https_origin, '_blank', 'noopener')},
+      {label: 'Open in a new tab', capability: Boolean(httpsLink(address.https_origin)), run: () => { const safe = httpsLink(address.https_origin); if (safe) window.open(safe, '_blank', 'noopener'); }},
       {label: 'Related activity', run: () => { location.hash = activityHref('events', {type: 'model', id: webapp.id, model: 'WebApp'}, {return: returnLocation()}); }},
     ], context: {webapp}});
   const inspector = openInspector({title: `Web app · ${webapp.display_name || webapp.slug}`, content: h('div', {class: 'webapp-inspector'}, header, tabs, body), wide: true});
