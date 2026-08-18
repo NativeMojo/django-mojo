@@ -469,6 +469,33 @@ def test_cli_uses_effective_loader_only_for_exact_canonical_path(opts):
 
 
 @th.django_unit_test()
+def test_cli_check_probes_enabled_rpm_binding_capability(opts):
+    import mojo.mojosec.__main__ as cli
+
+    config = {
+        "sensor_id": "prod-web-i-0123456789abcdef0", "version": 1,
+        "collectors": {"rpm": {
+            "enabled": True, "interpreter": "/usr/bin/python3",
+            "max_output_bytes": 65536, "timeout_seconds": 5,
+        }},
+    }
+    with mock.patch.object(cli, "load_effective_config", return_value=config), \
+            mock.patch.object(cli, "probe_rpm_capability") as probe, \
+            mock.patch.object(cli.sys, "stdout", io.StringIO()):
+        th.assert_eq(cli.main(["check"]), 0,
+                     "a healthy installed-file binding probe must pass readiness")
+    probe.assert_called_once_with(config["collectors"]["rpm"])
+
+    with mock.patch.object(cli, "load_effective_config", return_value=config), \
+            mock.patch.object(
+                cli, "probe_rpm_capability",
+                side_effect=cli.RpmError("RPMDBI_INSTFILENAMES unavailable")), \
+            mock.patch.object(cli.sys, "stderr", io.StringIO()):
+        th.assert_eq(cli.main(["check"]), 2,
+                     "a missing or incompatible system RPM binding must fail check")
+
+
+@th.django_unit_test()
 def test_cli_help_imports_without_django_settings(opts):
     import mojo
 
