@@ -133,9 +133,16 @@ Two rules govern what a node's failure is allowed to touch:
   admin Platform page and Dashboard pass it only for
   `view_platform_security` / `manage_platform` / `admin`; the three deploy
   actions already require `manage_platform` plus fresh auth and always pass
-  it. The durable row keeps the tail either way, and the model's REST `admin`
-  graph serves a permanently stripped copy, because graph choice is
-  caller-controlled and carries no permission of its own.
+  it. The durable row keeps the tail either way. The model's own REST `admin`
+  graph is a separate mechanism from the `include_stderr` gate above: it now
+  serves the evidence raw (tail included) rather than a stripped copy, and
+  `RestMeta.GRAPH_PERMISSIONS` gates the graph itself —
+  `manage_platform`/`admin` is required to select `admin` at all, additive to
+  `VIEW_PERMS` (item 2102). A caller without that grant is refused `403`
+  rather than served a downgraded copy; `default`/`basic` stay evidence-free
+  for every other caller, and an unmapped graph name falls back to the
+  evidence-free `default`. See [Core → Graphs § Per-Graph
+  Permissions](../core/graphs.md#per-graph-permissions-graph_permissions).
 
 ### `aws/update.sh` must ship committed 100755
 

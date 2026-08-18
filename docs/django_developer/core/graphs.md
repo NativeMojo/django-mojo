@@ -167,7 +167,7 @@ top-level graph that pulls it in.
 `exclude` and `NO_SHOW_FIELDS` hide a field everywhere. Sometimes a field
 should be readable, just not on every ordinary read — a live credential that
 a caller may deliberately ask for, but that shouldn't ride along on a list or
-a routine detail fetch (and, because of the [fallback](#fallback-for-unrecognized-or-missing-graphs)
+a routine detail fetch (and, because of the [fallback](#graph-resolution-fallback-refusal-and-the-whole-model-guard)
 above, defining no `list` graph means `default` doubles as the list response
 too). The pattern: leave the sensitive value off `default`/`list`, and expose
 it only from a dedicated graph the caller must name explicitly, via an

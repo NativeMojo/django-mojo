@@ -191,8 +191,9 @@ The `default`, `list`, and `basic` REST graphs expose only
 characters keeps only its last four characters visible; a non-empty value of
 four characters or fewer is fully masked. An absent value is returned as an
 empty string. File responses that nest a manager use the same safe `basic`
-graph, and an unknown FileManager graph falls back to the safe `default`
-graph.
+graph. An unmapped *common* graph name (e.g. `full`) falls back to the safe
+`default` graph; an unmapped *special* name is refused with `400` rather than
+served — see [Core → Graphs](../core/graphs.md#graph-resolution-fallback-refusal-and-the-whole-model-guard).
 
 REST create and update requests still accept `aws_key` and `aws_secret` as
 write-only inputs through the model's custom setters. The masked properties are

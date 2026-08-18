@@ -158,8 +158,10 @@ at purchase time, after durable intent. It is now a 400 at save time.
 shape-checked here — AWS validates those.
 
 The row is written with `is_secret=True`, which puts it in `mojo_secrets` and
-keeps it out of every REST graph including the unknown-graph fallback. That is
-**REST masking, not encryption at rest**: `MojoSecrets` derives the secrets
+keeps it out of every REST graph — including an unmapped graph name, whether it
+falls back to `default` or is refused outright (see
+[Core → Graphs](../core/graphs.md#graph-resolution-fallback-refusal-and-the-whole-model-guard)).
+That is **REST masking, not encryption at rest**: `MojoSecrets` derives the secrets
 password from the row's own non-secret columns, so it protects nothing against
 someone holding the database.
 

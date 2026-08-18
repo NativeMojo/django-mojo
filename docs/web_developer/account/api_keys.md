@@ -87,7 +87,7 @@ ACME hub additionally accepts only an active project's ApiKey carrying
 >
 > **The list endpoint honors it too.** `GET /api/group/apikey?graph=token` returns a live token for every key in the group in one response — so this is a bulk credential read, not a per-key one. The opt-in changes *where the secret travels*, not *who may ask for it*: it is open to the same `manage_group` / `manage_groups` / `groups` holders as any other read, and every returned token is audited server-side. Read access to a group's API keys remains equivalent to holding those keys — grant it accordingly.
 >
-> **Watch the spelling.** An unrecognized graph name silently falls back to the default graph, so `?graph=tokens` returns `200` with no `token` field rather than an error.
+> **Watch the spelling.** `token` is not a common graph name, so an unrecognized name like `?graph=tokens` is refused with `400` rather than silently falling back to the default graph — see [Graphs → Unknown graph names](../core/graphs.md#unknown-graph-names-fall-back-or-refuse).
 
 ### Acting as a Member — `user` and `override_user`
 
