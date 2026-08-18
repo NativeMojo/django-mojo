@@ -815,6 +815,36 @@ def test_runtime_requires_post_poll_audit_health_bracket(opts):
 
 
 @th.django_unit_test()
+def test_store_uses_the_audit_contract_for_previous_health(opts):
+    from mojo.deploy import audit
+    from mojo.mojosec import store as store_module
+
+    health = {
+        "schema": audit.HEALTH_SCHEMA, "version": 1,
+        "boot_id": "a" * 32, "generation": "b" * 64,
+        "rules_sha256": "c" * 64, "sequence": 4,
+        "enabled": 1, "failure": 1, "rate_limit": 0,
+        "backlog_limit": 8192, "backlog": 0, "lost": 0,
+        "updated_at": time.time(), "healthy": True, "reason": "",
+    }
+    with tempfile.TemporaryDirectory() as root, \
+            mock.patch.object(
+                store_module, "select_health_fields",
+                wraps=audit.select_health_fields) as selector:
+        store = store_module.Store(root, "health-contract-test", AGGREGATION, DELIVERY)
+        try:
+            store.ingest([], audit_health=health)
+            previous = store.get_meta("audit_health")
+            th.assert_eq(set(previous), set(audit.HEALTH_FIELDS),
+                         "durable previous-health state must use the publisher selector")
+            th.assert_true("healthy" not in previous and "reason" not in previous,
+                           "runtime annotations must not become prior external health")
+            selector.assert_called_once_with(health)
+        finally:
+            store.close()
+
+
+@th.django_unit_test()
 def test_runtime_reconciles_pending_even_when_journal_fails(opts):
     from mojo.mojosec.runtime import Runtime
 

@@ -903,30 +903,137 @@ def test_rpm_parser_is_strict_and_system_site_roots_are_constrained(opts):
 
 
 @th.django_unit_test()
-def test_rpm_ownership_is_rebuilt_for_every_slow_scan(opts):
-    from mojo.mojosec.collectors.rpm import RpmCollector
+def test_rpm_installed_file_ownership_is_structural_and_fail_closed(opts):
+    from mojo.mojosec.collectors.rpm import (
+        RpmCollector, RpmError, _OWNER_HELPER_SCRIPT, _installed_owners,
+    )
+
+    th.assert_true("mojo" not in _OWNER_HELPER_SCRIPT,
+                   "the isolated system-Python helper must be self-contained")
 
     root = "/usr/local/lib/python3.11/site-packages"
     path = root + "/example.py"
-    owners = iter(("example-1-1.x86_64", "example-2-1.x86_64"))
-    calls = []
-
-    def runner(argv, accepted=(0,)):
-        calls.append(argv)
-        return 0, next(owners) + "\n", ""
-
-    collector = RpmCollector({
+    config = {
         "interpreter": "/usr/bin/python3", "interval_seconds": 21600,
         "max_entries": 100, "max_packages": 10, "max_owner_queries": 100,
         "max_output_bytes": 65536, "timeout_seconds": 5,
         "max_file_bytes": 1024, "max_depth": 16,
-    }, {"name": "al2023-web-v1", "version": 1, "digest": "a" * 64}, runner=runner)
+    }
+    identity = {"name": "al2023-web-v1", "version": 1, "digest": "a" * 64}
     shared = {
         path: {
             "kind": "file", "mode": 0o644, "uid": 0, "gid": 0,
             "size": 4, "sha256": "b" * 64,
         },
     }
+
+    class Header(dict):
+        def sprintf(self, unused):
+            return self["nevra"]
+
+    headers = [Header(
+        nevra="example-1-1.x86_64",
+        filenames=[path, root + "/removed.py"],
+        filestates=[0, 1],
+    )]
+    th.assert_eq(_installed_owners(headers, path, 0), ["example-1-1.x86_64"],
+                 "an exact normal installed-file state must claim ownership")
+    th.assert_eq(_installed_owners(headers, root + "/removed.py", 0), [],
+                 "a matching non-installed file state must remain hash-covered")
+
+    created = []
+
+    class Session:
+        def __init__(self, values, fail_close=False):
+            self.values = list(values)
+            self.fail_close = fail_close
+            self.queries = []
+
+        def __enter__(self):
+            created.append(self)
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            if exc_type is None and self.fail_close:
+                raise RpmError("RPM database cookie changed during scan")
+            return False
+
+        def owner(self, query_path):
+            self.queries.append(query_path)
+            return list(self.values)
+
+    def run_with(values, fail_close=False):
+        collector = RpmCollector(
+            config, identity,
+            owner_session_factory=lambda unused_config, unused_deadline:
+            Session(values, fail_close=fail_close))
+        with mock.patch.object(collector, "discover_site_roots", return_value=[root]), \
+                mock.patch.object(collector, "_verify_packages", return_value={}):
+            return collector.scan(shared_snapshot=shared)
+
+    unowned = run_with([])
+    th.assert_true("rpm_owner" not in unowned["snapshot"][path],
+                   "zero installed owners must retain non-RPM hashing")
+    th.assert_eq(unowned["snapshot"][path]["sha256"], "b" * 64,
+                 "an empty structural ownership result must remain hash-covered")
+    owned = run_with(["example-1-1.x86_64"])
+    th.assert_eq(owned["snapshot"][path]["rpm_owner"], "example-1-1.x86_64",
+                 "one valid structural owner must become the package baseline")
+    th.assert_true("sha256" not in owned["snapshot"][path],
+                   "RPM verification, not a duplicate hash, owns an installed file")
+    for values in (["one-1-1.x86_64", "two-1-1.x86_64"], ["bad owner"]):
+        with th.assert_raises(RpmError):
+            run_with(values)
+    with th.assert_raises(RpmError):
+        run_with([], fail_close=True)
+    th.assert_true(all(session.queries == [path] for session in created),
+                   "one scan-local cache must issue at most one structural query per path")
+
+    limited_config = dict(config, max_owner_queries=1)
+    limited_shared = dict(shared)
+    limited_shared[root + "/second.py"] = {"kind": "file", "sha256": "d" * 64}
+    limited = RpmCollector(
+        limited_config, identity,
+        owner_session_factory=lambda unused_config, unused_deadline: Session([]))
+    with mock.patch.object(limited, "discover_site_roots", return_value=[root]), \
+            mock.patch.object(limited, "_verify_packages", return_value={}):
+        with th.assert_raises(RpmError):
+            limited.scan(shared_snapshot=limited_shared)
+
+
+@th.django_unit_test()
+def test_rpm_ownership_session_is_one_lifecycle_per_scan(opts):
+    from mojo.mojosec.collectors.rpm import RpmCollector
+
+    root = "/usr/local/lib/python3.11/site-packages"
+    path = root + "/example.py"
+    owners = iter(("example-1-1.x86_64", "example-2-1.x86_64"))
+    sessions = []
+
+    class Session:
+        def __init__(self):
+            self.value = next(owners)
+            self.queries = 0
+
+        def __enter__(self):
+            sessions.append(self)
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def owner(self, unused_path):
+            self.queries += 1
+            return [self.value]
+
+    collector = RpmCollector({
+        "interpreter": "/usr/bin/python3", "interval_seconds": 21600,
+        "max_entries": 100, "max_packages": 10, "max_owner_queries": 100,
+        "max_output_bytes": 65536, "timeout_seconds": 5,
+        "max_file_bytes": 1024, "max_depth": 16,
+    }, {"name": "al2023-web-v1", "version": 1, "digest": "a" * 64},
+        owner_session_factory=lambda unused_config, unused_deadline: Session())
+    shared = {path: {"kind": "file", "sha256": "b" * 64}}
     with mock.patch.object(collector, "discover_site_roots", return_value=[root]), \
             mock.patch.object(collector, "_verify_packages", return_value={}):
         first = collector.scan(shared_snapshot=shared)
@@ -935,9 +1042,138 @@ def test_rpm_ownership_is_rebuilt_for_every_slow_scan(opts):
     th.assert_eq(first["snapshot"][path]["rpm_owner"], "example-1-1.x86_64",
                  "the first slow scan must record its current RPM owner")
     th.assert_eq(second["snapshot"][path]["rpm_owner"], "example-2-1.x86_64",
-                 "the next slow scan must query ownership again after package changes")
-    th.assert_eq(len(calls), 2,
-                 "RPM ownership cache and its query budget must be scan-local")
+                 "the next slow scan must rebuild ownership after package changes")
+    th.assert_eq([session.queries for session in sessions], [1, 1],
+                 "each scan must use one helper lifecycle and reset its cache")
+
+
+@th.django_unit_test()
+def test_rpm_helper_protocol_is_bounded_and_exact(opts):
+    import time
+
+    from mojo.mojosec.collectors import rpm as rpm_module
+    from mojo.mojosec.collectors.rpm import (
+        RpmError, RpmOwnershipSession, _OWNER_HELPER_SCRIPT,
+        _decode_helper_response,
+    )
+
+    isolated_driver = r'''import sys,types
+class Header(dict):
+    def sprintf(self,unused):
+        return self['nevra']
+class Transaction:
+    def openDB(self):
+        return int(sys.argv[3])
+    def dbCookie(self):
+        return None if sys.argv[2]=='<none>' else sys.argv[2]
+    def dbMatch(self,index,path):
+        return [Header(nevra='rpm-1-1.x86_64',filenames=['/usr/bin/rpm'],filestates=[0])]
+module=types.ModuleType('rpm')
+module.TransactionSet=lambda unused_root: Transaction()
+module.RPMDBI_INSTFILENAMES=1
+module.RPMFILE_STATE_NORMAL=0
+sys.modules['rpm']=module
+exec(sys.argv[1],{'__name__':'__main__'})
+'''
+
+    def isolated_helper(cookie="stable-cookie", open_rc=0):
+        return subprocess.run(
+            [sys.executable, "-I", "-u", "-c", isolated_driver,
+             _OWNER_HELPER_SCRIPT, cookie, str(open_rc)],
+            input=b'{"op":"finish"}\n', stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, timeout=5, check=False,
+            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C", "LANG": "C"})
+
+    isolated = isolated_helper()
+    th.assert_eq(isolated.returncode, 0,
+                 "the self-contained helper must run under isolated Python")
+    th.assert_eq(
+        isolated.stdout.splitlines(),
+        [b'{"op":"ready","ready":true}', b'{"op":"finish","stable":true}'],
+        "the isolated helper must prove readiness and one stable DB generation")
+    th.assert_eq(isolated.stderr, b"",
+                 "the isolated helper must not depend on ambient import diagnostics")
+    for failed in (isolated_helper(cookie="<none>"), isolated_helper(open_rc=1)):
+        th.assert_eq(failed.returncode, 3,
+                     "missing cookie or failed DB open must fail before readiness")
+        th.assert_true(b'"op":"ready"' not in failed.stdout,
+                       "an unproven database must never publish helper readiness")
+
+    decoded = _decode_helper_response(
+        b'{"op":"owner","owners":[]}\n', "owner", 1024)
+    th.assert_eq(decoded, {"op": "owner", "owners": []},
+                 "one compact structural empty result must be accepted")
+    malformed = (
+        b'not-json\n',
+        b'{"op":"owner","owners":[],"extra":true}\n',
+        b'{"op":"owner","owners":"package"}\n',
+        b'{"op":"owner","owners":[],"owners":[]}\n',
+        b'{"op":"finish","stable":true}\n',
+        b'{"op":"owner","owners":[]} trailing\n',
+    )
+    for payload in malformed:
+        with th.assert_raises(RpmError):
+            _decode_helper_response(payload, "owner", 1024)
+    with th.assert_raises(RpmError):
+        _decode_helper_response(b"{" + b" " * 1024 + b"}\n", "owner", 1024)
+
+    def bare_session(payload, maximum=1024, error_payload=b""):
+        read_fd, write_fd = os.pipe()
+        error_read_fd, error_write_fd = os.pipe()
+        if payload is not None:
+            os.write(write_fd, payload)
+        if error_payload:
+            os.write(error_write_fd, error_payload)
+        os.close(write_fd)
+        os.close(error_write_fd)
+        session = RpmOwnershipSession.__new__(RpmOwnershipSession)
+        session.maximum = maximum
+        session.deadline = time.monotonic() + 5
+        session.stderr_size = 0
+        session.stderr_eof = False
+        session.process = types.SimpleNamespace(
+            stdout=os.fdopen(read_fd, "rb", buffering=0),
+            stderr=os.fdopen(error_read_fd, "rb", buffering=0))
+        return session
+
+    dead = bare_session(None)
+    try:
+        with th.assert_raises(RpmError):
+            dead._read("owner")
+    finally:
+        dead.process.stdout.close()
+        dead.process.stderr.close()
+
+    timed = bare_session(b'{"op":"owner","owners":[]}\n')
+    try:
+        with mock.patch.object(rpm_module.select, "select", return_value=([], [], [])):
+            with th.assert_raises(RpmError):
+                timed._read("owner")
+    finally:
+        timed.process.stdout.close()
+        timed.process.stderr.close()
+
+    overflow = bare_session(b"x" * 1025 + b"\n", maximum=1024)
+    try:
+        with th.assert_raises(RpmError):
+            overflow._read("owner")
+    finally:
+        overflow.process.stdout.close()
+        overflow.process.stderr.close()
+
+    noisy = bare_session(
+        b'{"op":"owner","owners":[]}\n', error_payload=b"unexpected diagnostic")
+    try:
+        with th.assert_raises(RpmError):
+            noisy._read("owner")
+    finally:
+        noisy.process.stdout.close()
+        noisy.process.stderr.close()
+
+    expired = RpmOwnershipSession.__new__(RpmOwnershipSession)
+    expired.deadline = time.monotonic() - 1
+    with th.assert_raises(RpmError):
+        expired._remaining()
 
 
 @th.django_unit_test()

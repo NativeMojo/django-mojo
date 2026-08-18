@@ -156,6 +156,20 @@ desired policy: changing the graph requires a new packaged profile name and
 digest. Legacy custom FIM targets remain supported only when no profile is
 selected.
 
+RPM ownership is structural, not parsed from `rpm -qf` prose or inferred from a
+generic exit status. One `/usr/bin/python3 -I` helper and one read-only RPM
+transaction serve the complete tier. Startup proves the `rpm` binding,
+`TransactionSet`, `RPMDBI_INSTFILENAMES`, a readable package header, and a real
+installed-file index lookup, then records the RPM database cookie. Each bounded
+exact-path request returns zero, one, or at most two installed-state NEVRAs:
+zero keeps the file under ordinary SHA-256 coverage, one selects RPM
+verification, and multiple or malformed results make the tier incomplete. A
+same-path header with a removed or other non-installed file state is not an
+owner. Helper failure, timeout, protocol/output bounds, unexpected stderr,
+query exhaustion, or a changed database cookie retains the prior authoritative
+baseline. There is no BASENAMES, PROVIDENAME, localized CLI, or per-file process
+fallback.
+
 `al2023-web-v1` remains packaged for baseline identity and rollback, but must
 not be used for a new AL2023 baseline. Its cloud-init script target descends
 through `/var/lib/cloud/instance`, a mutable symlink that descriptor-safe
@@ -465,7 +479,7 @@ derived from a truncated walk.
 ## Commands and health
 
 ```bash
-# Parse all fields and audit the config file's type, ownership, and mode.
+# Validate config and, when RPM integrity is enabled, probe the isolated binding/index.
 (cd / && sudo /usr/bin/python3 -E -P -m mojo.mojosec --config /etc/mojosec/config.json check)
 
 # One collection/delivery cycle; useful for a deployment canary.
@@ -493,11 +507,15 @@ and `rpm` baselines. Rollback is explicit and digest-confirmed with
 `baseline-rollback --confirm-digest <retained-prior-digest>`; retained profile
 history is never removed merely because another profile is activated.
 
-`check` does not open the API-key credential; `once` and `run` validate it when
-there is a batch to send. A delivery failure during `once` is written to stderr
-and the status snapshot, but does not make the command exit nonzero. Treat the
-`delivery` object in `status` as the canary result rather than relying only on
-the process exit code.
+`check` does not open the API-key credential. For an RPM-enabled profile it does
+start the same bounded isolated helper and fails unless the system binding,
+transaction, read-only database/header access, and installed-file index are
+usable. `check_node` grades that command as deployment readiness. Nothing
+installs or falls back to a CLI binding automatically. `once` and `run` validate
+the API-key credential when there is a batch to send. A delivery failure during
+`once` is written to stderr and the status snapshot, but does not make the
+command exit nonzero. Treat the `delivery` object in `status` as the canary
+result rather than relying only on the process exit code.
 
 An observe-only canary should exercise the actual nginx and authenticated
 receiver path without changing firewall policy. Set the persistent root
@@ -952,6 +970,18 @@ Health units/timer, broker sudoers/wrapper, stable helper and sidecar are
 retired by one shared finalizer only after the old-module converge or the
 module-absent fallback cleanup has fully succeeded. Every earlier failure keeps
 those recovery assets intact.
+
+Audit-health v1 is closed after publication. Its exact fields are `schema`,
+`version`, `boot_id`, `generation`, `rules_sha256`, `sequence`, `enabled`,
+`failure`, `rate_limit`, `backlog_limit`, `backlog`, `lost`, and `updated_at`.
+The command boundary projects only the six recognized `auditctl -s` status
+fields; `pid`, backlog wait-time telemetry, `loginuid_immutable`, and future
+kernel fields are ignored there. They can never silently enlarge v1. By
+contrast, an unknown or duplicate key already present in the JSON sidecar is
+malformed. Missing fields, booleans, negative or oversized counters, and
+non-finite timestamps also fail closed. Runtime `healthy` and `reason`
+annotations remain internal; durable previous-health state selects the same
+canonical publisher fields before the next sequence comparison.
 
 Process nodes live locally for seven days (131,072 rows), incomplete compounds
 for ten minutes (8,192), origin sessions for 30 days (4,096), health epochs for

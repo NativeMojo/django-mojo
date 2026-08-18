@@ -793,6 +793,20 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
     if present.get("service unit"):
         _audit_mojosec_unit(report, run, sudo, mode)
 
+    if mode == "observe" and present.get("runtime config"):
+        command = _mojosec_python(
+            sudo, "-m mojo.mojosec --config /etc/mojosec/config.json check")
+        rc, out, err = run(command)
+        if rc == 0:
+            report.passed(
+                "mojosec", "RPM ownership capability",
+                "isolated system binding, transaction, installed-file index, and DB are ready")
+        else:
+            detail = (err or out or "MojoSec readiness check returned no detail").splitlines()[0]
+            report.fail(
+                "mojosec", "RPM ownership capability unavailable", detail[:256],
+                "install a compatible system python3-rpm binding and rerun deployment")
+
     provenance_assets = (
         ("Audit rollback state", "/etc/mojosec/audit-state.json", "600"),
         ("Audit managed policy", "/etc/audit/rules.d/70-mojosec.rules", "600"),

@@ -54,6 +54,106 @@ def test_health_sidecar_validation(opts):
     th.assert_true(not result["healthy"], "new audit loss must disable suppression")
 
 
+@th.unit_test("real AL2023 Audit status projects to the closed v1 sidecar")
+def test_health_publisher_projects_realistic_status(opts):
+    from mojo.deploy import audit
+
+    status = (
+        "enabled 1\n"
+        "failure 1\n"
+        "pid 847\n"
+        "rate_limit 0\n"
+        "backlog_limit 8192\n"
+        "lost 0\n"
+        "backlog 0\n"
+        "backlog_wait_time 60000\n"
+        "backlog_wait_time_actual 0\n"
+        "loginuid_immutable 0 unlocked\n"
+    )
+    active = (
+        "-a always,exit -k mojosec-root-exec\n"
+        "-a always,exit -k mojosec-app-exec\n"
+        "-w /usr/bin/sudo -p x -k mojosec-sudo\n"
+    )
+    with tempfile.TemporaryDirectory() as root:
+        path = os.path.join(root, "audit-health.json")
+        payload = audit.publish_health(
+            "b" * 64, audit._sha256(active.encode()), 12,
+            status_text=status, path=path, boot_id="a" * 32,
+            active_rules_text=active)
+
+    th.assert_eq(tuple(payload), audit.HEALTH_FIELDS,
+                 "the publisher must emit only the ordered closed v1 contract")
+    th.assert_true(audit.validate_health(
+        payload, now=payload["updated_at"] + 1)["healthy"],
+        "real AL2023 status telemetry must project to a valid healthy sidecar")
+    for ignored in ("pid", "backlog_wait_time", "backlog_wait_time_actual",
+                    "loginuid_immutable"):
+        th.assert_true(ignored not in payload,
+                       f"command telemetry {ignored} must never enlarge v1")
+
+
+@th.unit_test("Audit command status and external sidecars reject malformed numerics")
+def test_health_numeric_contract_is_bounded(opts):
+    from mojo.deploy import audit
+
+    healthy_status = (
+        "enabled 1\nfailure 1\nrate_limit 0\nbacklog_limit 8192\n"
+        "backlog 0\nlost 0\n")
+    parsed = audit.parse_status(healthy_status + "pid 123\nfuture_counter 9\n")
+    th.assert_eq(tuple(parsed), audit.HEALTH_STATUS_FIELDS,
+                 "only recognized v1 status fields may cross the command boundary")
+    malformed_statuses = (
+        healthy_status + "enabled 1\n",
+        healthy_status.replace("lost 0\n", ""),
+        healthy_status.replace("lost 0", "lost nope"),
+        healthy_status.replace("lost 0", f"lost {2 ** 63}"),
+    )
+    for value in malformed_statuses:
+        with th.assert_raises(audit.AuditError):
+            audit.parse_status(value)
+
+    health = {
+        "schema": audit.HEALTH_SCHEMA, "version": 1,
+        "boot_id": "a" * 32, "generation": "b" * 64,
+        "rules_sha256": "c" * 64, "sequence": 7,
+        "enabled": 1, "failure": 1, "rate_limit": 0,
+        "backlog_limit": 8192, "backlog": 0, "lost": 0,
+        "updated_at": 1000.0,
+    }
+    malformed_values = (
+        dict(health, sequence=True),
+        dict(health, lost=-1),
+        dict(health, backlog=2 ** 63),
+        dict(health, updated_at=float("inf")),
+        dict(health, updated_at=float("nan")),
+        dict(health, pid=123),
+    )
+    for value in malformed_values:
+        result = audit.validate_health(value, now=1001.0)
+        th.assert_eq(result["reason"], "malformed",
+                     f"malformed Audit health must fail closed: {value!r}")
+
+
+@th.unit_test("Audit health projection accepts runtime annotations but selects v1")
+def test_health_selector_projects_enriched_runtime_mapping(opts):
+    from mojo.deploy import audit
+
+    enriched = {
+        "schema": audit.HEALTH_SCHEMA, "version": 1,
+        "boot_id": "a" * 32, "generation": "b" * 64,
+        "rules_sha256": "c" * 64, "sequence": 7,
+        "enabled": 1, "failure": 1, "rate_limit": 0,
+        "backlog_limit": 8192, "backlog": 0, "lost": 0,
+        "updated_at": 1000.0, "healthy": True, "reason": "",
+    }
+    selected = audit.select_health_fields(enriched)
+    th.assert_eq(tuple(selected), audit.HEALTH_FIELDS,
+                 "one selector must retain every canonical publisher field in order")
+    th.assert_true("healthy" not in selected and "reason" not in selected,
+                   "runtime-only annotations must not enter the publisher contract")
+
+
 @th.unit_test("audit inventory rejects unknown rule sources")
 def test_inventory_only_admits_known_seed_or_managed(opts):
     from mojo.deploy.audit import AuditError, inventory_sources

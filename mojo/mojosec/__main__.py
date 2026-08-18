@@ -7,6 +7,7 @@ import sys
 from .config import (
     CANONICAL_CONFIG_PATH, ConfigError, load_config, load_effective_config,
 )
+from .collectors.rpm import RpmError, probe_rpm_capability
 from .output import read_status
 
 
@@ -40,6 +41,9 @@ def main(argv=None):
         else:
             config = load_config(args.config)
         if args.command == "check":
+            rpm = config.get("collectors", {}).get("rpm", {})
+            if rpm.get("enabled") is True:
+                probe_rpm_capability(rpm)
             _print_json({"ok": True, "sensor_id": config["sensor_id"],
                          "version": config["version"]})
             return 0
@@ -85,7 +89,7 @@ def main(argv=None):
         else:
             runtime.run()
         return 0
-    except (ConfigError, OSError, ValueError) as err:
+    except (ConfigError, OSError, RpmError, ValueError) as err:
         sys.stderr.write(f"mojosec: {err}\n")
         return 2
 
