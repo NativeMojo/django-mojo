@@ -6,6 +6,7 @@ reach and are deliberately not faked into looking covered.
 """
 
 import hashlib
+import io
 import os
 import pwd
 import shutil
@@ -733,8 +734,11 @@ def test_sync_composes_verified_fleet_override(opts):
         }
         s3 = mock.Mock()
         s3.head_object.side_effect = lambda Bucket, Key: {
-            "ETag": '"etag"', "Metadata": {"sha256": override.sha256(objects[Key])}}
+            "ETag": '"etag"', "ContentLength": len(objects[Key]),
+            "Metadata": {"sha256": override.sha256(objects[Key])}}
         s3.download_file.side_effect = lambda bucket, key, path: Path(path).write_bytes(objects[key])
+        s3.get_object.return_value = {
+            "ContentLength": len(fleet), "Body": io.BytesIO(fleet)}
         config = {
             "AWS_CONFIG_BUCKET": "b", "AWS_CONFIG_PREFIX": "p",
             "CONFIG_SYNC_OVERRIDE_ALLOWED_KEYS": ",".join(values),
@@ -748,6 +752,35 @@ def test_sync_composes_verified_fleet_override(opts):
                        f"the override was not composed into django.conf: {installed!r}")
         th.assert_true("MOJO_FLEET_CONFIG_REVISION = 'bbbb" in installed,
                        "the installed file omitted its fleet revision")
+        th.assert_eq(s3.get_object.call_args.kwargs["IfMatch"], '"etag"',
+                     "override download was not pinned to the headed ETag")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test("config sync rejects an oversized fleet override before download")
+def test_sync_refuses_oversized_fleet_override(opts):
+    from mojo.deploy import config_override as override
+    from mojo.deploy import config_sync as cs
+
+    root = _tempdir()
+    try:
+        target = os.path.join(root, "django.conf")
+        s3 = mock.Mock()
+        s3.head_object.side_effect = [
+            {"ETag": '"override"', "ContentLength": override.MAX_DOCUMENT_BYTES + 1,
+             "Metadata": {"sha256": "a" * 64}},
+        ]
+        config = {
+            "AWS_CONFIG_BUCKET": "b", "AWS_CONFIG_PREFIX": "p",
+            "CONFIG_SYNC_OVERRIDE_ALLOWED_KEYS": ",".join(override.DEFAULTS),
+        }
+
+        code = cs.sync(s3, config, target, "django.conf", False)
+
+        th.assert_eq(code, 1, "an oversized fleet override must fail closed")
+        th.assert_true(not s3.download_file.called,
+                       "config sync downloaded an override already known to be oversized")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

@@ -169,8 +169,8 @@ def build_s3_client(config):
     return boto3.client("s3", region_name=region)
 
 
-def remote_digest(s3, bucket, key, missing_ok=False):
-    """(etag, sha256-from-metadata) for the published object.
+def remote_details(s3, bucket, key, missing_ok=False):
+    """(etag, sha256-from-metadata, content-length) for one object.
 
     A missing object is NOT normal here — a missing config means someone
     pointed this node at the wrong prefix. Reported as an error, and the caller
@@ -186,9 +186,17 @@ def remote_digest(s3, bucket, key, missing_ok=False):
         if code in ("404", "NoSuchKey", "NotFound"):
             if not missing_ok:
                 log.error("nothing published at s3://%s/%s", bucket, key)
-            return None, None
+            return None, None, None
         raise
-    return head.get("ETag", "").strip('"'), head.get("Metadata", {}).get("sha256")
+    return (head.get("ETag", "").strip('"'),
+            head.get("Metadata", {}).get("sha256"),
+            head.get("ContentLength"))
+
+
+def remote_digest(s3, bucket, key, missing_ok=False):
+    """Compatibility pair for callers that do not need the object size."""
+    etag, digest, _ = remote_details(s3, bucket, key, missing_ok=missing_ok)
+    return etag, digest
 
 
 # ---------------------------------------------------------------------------
@@ -353,15 +361,19 @@ def sync(s3, config, target, remote_name, dry_run):
     allowed = config_override.normalize_allowed(
         config.get("CONFIG_SYNC_OVERRIDE_ALLOWED_KEYS", ""))
     override_key = None
-    override_etag = override_sha = None
+    override_etag = override_sha = override_size = None
     if allowed:
         override_name = config.get("CONFIG_SYNC_OVERRIDE_FILENAME") or "django.override.json"
         override_key = "%s/%s" % (
             config["AWS_CONFIG_PREFIX"].strip("/"), override_name)
-        override_etag, override_sha = remote_digest(
+        override_etag, override_sha, override_size = remote_details(
             s3, bucket, override_key, missing_ok=True)
         if override_etag is not None and not override_sha:
             log.error("fleet override carries no sha256 metadata — refusing it")
+            return 1
+        if (override_size is not None and
+                override_size > config_override.MAX_DOCUMENT_BYTES):
+            log.error("fleet override exceeds the maximum document size — refusing it")
             return 1
 
     etag, published_sha = remote_digest(s3, bucket, key)
@@ -404,15 +416,27 @@ def sync(s3, config, target, remote_name, dry_run):
                       "— refusing to install")
             return 1
         if override_etag is not None:
-            override_path = os.path.join(staging_dir, "override")
             try:
-                s3.download_file(bucket, override_key, override_path)
+                response = s3.get_object(
+                    Bucket=bucket, Key=override_key,
+                    IfMatch=f'"{override_etag}"')
             except ClientError as err:
                 log.error("download of fleet override failed (%s) — keeping current config",
                           err.response.get("Error", {}).get("Code", "?"))
                 return 1
-            with open(override_path, "rb") as handle:
-                override_payload = handle.read()
+            if response.get("ContentLength", 0) > config_override.MAX_DOCUMENT_BYTES:
+                log.error("fleet override exceeds the maximum document size — refusing it")
+                return 1
+            body = response["Body"]
+            try:
+                override_payload = body.read(config_override.MAX_DOCUMENT_BYTES + 1)
+            finally:
+                close = getattr(body, "close", None)
+                if close:
+                    close()
+            if len(override_payload) > config_override.MAX_DOCUMENT_BYTES:
+                log.error("fleet override exceeds the maximum document size — refusing it")
+                return 1
             if config_override.sha256(override_payload) != override_sha:
                 log.error("fleet override does not match its published sha256 — refusing it")
                 return 1

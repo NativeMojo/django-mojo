@@ -26,10 +26,19 @@ report only that an ignored database shadow exists. Configured-only rows return
 `{"configured": true|false}`. A legacy secret global row is never decrypted and
 is excluded from the Redis lookup; it reports only configured state with source
 `secret_override`. A secret BASE_URL does not satisfy Setup completeness.
-Responses omit paths, environment names, raw ignored values, exceptions, and
-secret material.
+Catalog entries omit paths, environment names, raw ignored values, exceptions,
+and secret material. The superuser-only provider status described below names
+its configured S3 object key, but never returns either API key.
 
 ## Writers and ownership
+
+| Storage owner | Admin behavior | Runtime behavior |
+|---|---|---|
+| Database `Setting` | Typed immediate write | Shared Redis/database resolution |
+| Dedicated model | Routed to its owner form/service | Model-specific resolution |
+| `fleet_config` | Typed S3 override publication | Config-sync plus restart |
+| Computed/read-only | Status only | No Admin mutation |
+| Deployment/bootstrap | Guidance only | Operator-controlled base config |
 
 `GET /api/account/admin/settings` returns schema version 1, ordered categories,
 and catalog entries. `POST /api/account/admin/settings` accepts exactly one of:
@@ -60,10 +69,19 @@ global `Setting`, and creates or converts the active system `PhoneConfig` to
 the Mojo remote provider. The API-key inputs are configured-only: blank means
 preserve and Clear is explicit. Static GeoIP keys are protected from generic
 database writes because their import-time consumers ignore DB rows.
+The same-origin, fresh interactive form can test both supplied/preserved keys
+without sending an SMS, then applies encrypted DB/model writes before the
+conditional S3 publication. If publication loses an ETag race or AWS refuses
+the write, the surrounding database transaction rolls back and the response
+fails without claiming a fleet change. An unchanged static patch does not
+create a new S3 revision, but every successful provider edit advances a
+database configuration revision so a stale form cannot overwrite a
+credential-only or SMS-only edit.
 
-The panel reports the published revision and the revision loaded by the node
-serving the request. A mismatch means the normal config-sync/restart cycle is
-pending; it is not a claim that every node has restarted. Publishing requires
+The panel reports the provider edit revision, the published S3 revision, and
+the revision loaded by the node serving the request. The edit revision guards
+all provider fields; a published/loaded mismatch means the normal
+config-sync/restart cycle is pending, not that every node has restarted. Publishing requires
 the S3 location, KMS key, application allowlist, and the independent node
 bootstrap delegation documented in [Node deployment tooling](../../deploy/README.md#admin-fleet-overrides).
 

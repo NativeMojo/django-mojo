@@ -38,11 +38,16 @@ def on_admin_settings(request):
 @md.requires_global_perms("manage_settings", "admin")
 def on_admin_settings_mutate(request):
     action = request.DATA.get("action")
-    if action == "configure_providers":
+    if action in ("configure_providers", "test_providers"):
         if set(request.DATA.keys()) != {"action", "providers"}:
             raise merrors.ValueException(
                 "Provider setup accepts only action and providers")
+        from mojo.apps.account.services import system_setup
+        system_setup.require_request_admin(request)
+        system_setup.request_origin(request)
         from mojo.apps.account.services import provider_setup
+        if action == "test_providers":
+            return provider_setup.test(request.user, request.DATA.get("providers"))
         return provider_setup.apply(request.user, request.DATA.get("providers"))
     key = request.DATA.get("key")
     if not isinstance(key, str):

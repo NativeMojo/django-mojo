@@ -15,6 +15,7 @@ FLEET_PROVIDER_KEYS = (
     "GEOIP_PRIMARY_PROVIDER", "GEOIP_FALLBACK_PROVIDER",
     "GEOIP_ADDITIONAL_PROVIDERS", "GEOIP_MOJO_PROVIDER_URL",
     "GEOIP_MOJO_SYNC_ENABLED", "GEOIP_API_KEY_MOJO",
+    "ADMIN_PROVIDER_SETUP_REVISION",
 )
 
 
@@ -133,6 +134,12 @@ def test_static_provider_settings_are_protected(opts):
     with th.assert_raises(me.PermissionDeniedException):
         row.save()
     Setting.objects.filter(key=key).delete()
+    Setting.objects.bulk_create([
+        Setting(key="GEOIP_API_KEY_MOJO", value="", is_secret=True)])
+    secret = Setting.objects.get(key="GEOIP_API_KEY_MOJO", group=None)
+    with th.assert_raises(me.PermissionDeniedException):
+        secret.save()
+    Setting.objects.filter(key="GEOIP_API_KEY_MOJO").delete()
 
 
 @th.django_unit_test("dedicated writer rejects ambiguity and clears every duplicate")
@@ -235,6 +242,9 @@ def test_settings_catalog_redaction(opts):
     assert rows["KMS_KEY_ID"]["effective_value"] in (
         {"configured": True}, {"configured": False}), \
         "a sensitive deployment setting exposed more than configured state"
+    assert rows["GEOIP_API_KEY_MOJO"]["effective_value"] in (
+        {"configured": True}, {"configured": False}), \
+        "the provider secret descriptor exposed more than configured state"
     sensitive = admin_settings.Descriptor(
         "TEST_SECRET", "Test secret", "Security & operations", "Test only.",
         "configured", sensitivity="configured_only")
@@ -291,6 +301,10 @@ def test_settings_rest_decorators(opts):
         "Settings mutation lacks recent interactive authentication"
     assert getattr(func, "_mojo_fresh_auth_seconds", None) == 600, \
         "Settings recent-authentication window is not 600 seconds"
+    source = (ROOT / "mojo/apps/account/rest/admin_settings.py").read_text()
+    assert "system_setup.request_origin(request)" in source and \
+        "system_setup.require_request_admin(request)" in source, \
+        "provider secret/fleet mutations lack the literal-superuser same-Origin gate"
 
 
 @th.django_unit_test("Settings owns one first-class Admin feature and typed owner home")
@@ -338,6 +352,7 @@ def test_provider_setup_publisher_contract(opts):
         "ADMIN_FLEET_CONFIG_FILENAME": "django.override.json",
         "ADMIN_FLEET_CONFIG_KMS_KEY_ID": "alias/config",
         "ADMIN_FLEET_CONFIG_ALLOWED_KEYS": list(provider_setup.FLEET_KEYS),
+        "ADMIN_FLEET_CONFIG_RESTART_ENABLED": True,
     }
     payload = {"geoip": {
         "GEOIP_PRIMARY_PROVIDER": "mojo",
@@ -348,8 +363,15 @@ def test_provider_setup_publisher_contract(opts):
         "GEOIP_API_KEY_MOJO": None,
     }, "sms": {"remote_url": "https://sms.example.com", "api_key": None}}
 
+    s3.put_object.return_value = {"VersionId": "version-1"}
+    verified = {"geoip": {"success": True}, "sms": {"success": True}}
     with mock.patch.object(provider_setup, "_s3_client", return_value=s3), \
+            mock.patch.object(provider_setup, "_published", return_value=None), \
+            mock.patch.object(provider_setup, "_test_provider_credentials", return_value=verified), \
             mock.patch.object(provider_setup, "_save_database") as save_database, \
+            mock.patch.object(provider_setup, "_configuration_revision", return_value=None), \
+            mock.patch.object(provider_setup, "_write_configuration_revision") as write_revision, \
+            mock.patch.object(provider_setup, "_audit"), \
             mock.patch.object(provider_setup, "_static", side_effect=lambda key, default=None: static.get(key, default)):
         result = provider_setup.apply(actor, payload)
 
@@ -360,10 +382,140 @@ def test_provider_setup_publisher_contract(opts):
         f"provider setup published to the wrong canonical object: {kwargs!r}"
     assert kwargs["ServerSideEncryption"] == "aws:kms" and kwargs["SSEKMSKeyId"] == "alias/config", \
         "provider setup did not require KMS server-side encryption"
+    assert kwargs["IfNoneMatch"] == "*", \
+        "the first Admin publication can overwrite a concurrent creator"
     body = kwargs["Body"].decode("utf-8")
     assert "GEOIP_API_KEY_MOJO" not in body and "sms.example.com" not in body, \
         "a database credential or SMS configuration leaked into the fleet object"
     assert save_database.call_count == 1, "validated database settings were not saved"
+    assert write_revision.call_count == 1, "the provider edit revision was not advanced"
+
+
+@th.django_unit_test("provider publication is conditional and skips an unchanged override")
+def test_provider_setup_concurrency_and_noop(opts):
+    from mojo.apps.account.models import Setting, User
+    from mojo.apps.account.services import provider_setup
+
+    actor = User.objects.get(pk=opts.settings_admin)
+    actor.is_superuser = True
+    actor.save(update_fields=["is_superuser"])
+    Setting.objects.filter(
+        key=provider_setup.SETUP_REVISION_KEY, group=None).delete()
+    static = {
+        "ADMIN_FLEET_CONFIG_BUCKET": "config-bucket",
+        "ADMIN_FLEET_CONFIG_PREFIX": "config/prod",
+        "ADMIN_FLEET_CONFIG_FILENAME": "django.override.json",
+        "ADMIN_FLEET_CONFIG_KMS_KEY_ID": "alias/config",
+        "ADMIN_FLEET_CONFIG_ALLOWED_KEYS": list(provider_setup.FLEET_KEYS),
+        "ADMIN_FLEET_CONFIG_RESTART_ENABLED": True,
+    }
+    values = dict(provider_setup.config_override.DEFAULTS)
+    payload = {"expected_revision": "c" * 32,
+               "geoip": {**values, "GEOIP_API_KEY_MOJO": None},
+               "sms": {"remote_url": "https://sms.example.com", "api_key": None}}
+    current = {"document": {"settings": values, "revision": "c" * 32},
+               "etag": '"etag-current"', "version_id": "version-current"}
+    s3 = mock.Mock()
+    verified = {"geoip": {"success": True}, "sms": {"success": True}}
+
+    with mock.patch.object(provider_setup, "_static", side_effect=lambda key, default=None: static.get(key, default)), \
+            mock.patch.object(provider_setup, "_s3_client", return_value=s3), \
+            mock.patch.object(provider_setup, "_published", return_value=current), \
+            mock.patch.object(provider_setup, "_test_provider_credentials", return_value=verified), \
+            mock.patch.object(provider_setup, "_save_database") as save_database, \
+            mock.patch.object(provider_setup, "_audit"):
+        result = provider_setup.apply(actor, payload)
+
+    assert result["unchanged"] is True and not s3.put_object.called, \
+        "an unchanged provider patch uploaded a new revision"
+    assert result["revision"] != payload["expected_revision"], \
+        "a database-only provider mutation did not advance its edit revision"
+    assert save_database.call_count == 1, \
+        "an unchanged static patch skipped the requested DB credential/model writes"
+    from mojo import errors as me
+    with mock.patch.object(provider_setup, "_static", side_effect=lambda key, default=None: static.get(key, default)), \
+            mock.patch.object(provider_setup, "_s3_client", return_value=s3), \
+            mock.patch.object(provider_setup, "_published", return_value=current), \
+            mock.patch.object(provider_setup, "_test_provider_credentials", return_value=verified), \
+            mock.patch.object(provider_setup, "_save_database") as stale_save, \
+            mock.patch.object(provider_setup, "_audit"), \
+            th.assert_raises(me.ValueException):
+        provider_setup.apply(actor, payload)
+    assert not stale_save.called, "a stale database-only provider form was applied"
+    payload["expected_revision"] = result["revision"]
+    external = {**current, "document": {
+        **current["document"], "revision": "d" * 32}}
+    with mock.patch.object(provider_setup, "_static", side_effect=lambda key, default=None: static.get(key, default)), \
+            mock.patch.object(provider_setup, "_s3_client", return_value=s3), \
+            mock.patch.object(provider_setup, "_published", return_value=external), \
+            mock.patch.object(provider_setup, "_test_provider_credentials", return_value=verified), \
+            mock.patch.object(provider_setup, "_save_database") as external_save, \
+            mock.patch.object(provider_setup, "_audit"), \
+            th.assert_raises(me.ValueException):
+        provider_setup.apply(actor, payload)
+    assert not external_save.called, "a stale form overwrote an external S3 revision"
+    changed = {**current, "document": {
+        **current["document"],
+        "settings": {**values, "GEOIP_PRIMARY_PROVIDER": "ipinfo"},
+    }}
+    s3.reset_mock()
+    s3.put_object.return_value = {"VersionId": "version-next"}
+    with mock.patch.object(provider_setup, "_static", side_effect=lambda key, default=None: static.get(key, default)), \
+            mock.patch.object(provider_setup, "_s3_client", return_value=s3), \
+            mock.patch.object(provider_setup, "_published", return_value=changed), \
+            mock.patch.object(provider_setup, "_test_provider_credentials", return_value=verified), \
+            mock.patch.object(provider_setup, "_save_database"), \
+            mock.patch.object(provider_setup, "_audit"):
+        updated = provider_setup.apply(actor, payload)
+    assert updated["published"] is True and \
+        s3.put_object.call_args.kwargs["IfMatch"] == '"etag-current"', \
+        "an existing override was not protected by its current ETag"
+
+
+@th.django_unit_test("provider connection test checks GeoIP and SMS permissions separately")
+def test_provider_setup_connection_permissions(opts):
+    from mojo.apps.account.services import provider_setup
+    from mojo.apps.phonehub.services import mojo_provider
+
+    responses = [
+        mock.Mock(ok=True, permissions={"geoip_sync": True}),
+        mock.Mock(ok=True, permissions={"send_sms": False, "comms": False}),
+        mock.Mock(ok=True, permissions={}),
+    ]
+    with mock.patch.object(mojo_provider, "verify_credentials", side_effect=responses):
+        geo = provider_setup._credential_result(
+            "https://geo.example.com", "secret", ("geoip_sync",))
+        sms = provider_setup._credential_result(
+            "https://sms.example.com", "secret", ("send_sms", "comms"))
+        lookup = provider_setup._credential_result(
+            "https://geo.example.com", "secret", ())
+    assert geo["success"] is True, f"a valid GeoIP key failed testing: {geo!r}"
+    assert sms["success"] is False and sms["code"] == "insufficient_permission", \
+        f"an SMS key without send authority passed testing: {sms!r}"
+    assert lookup["success"] is True, \
+        f"lookup-only GeoIP unnecessarily required write authority: {lookup!r}"
+    with mock.patch.object(
+            provider_setup, "_static", return_value="https://loaded.example.com"):
+        assert provider_setup._stored_geoip_key("https://attacker.example.com") == "", \
+            "a stored GeoIP secret can be replayed to a newly submitted origin"
+
+
+@th.django_unit_test("dedicated provider writer encrypts and explicitly clears its protected key")
+def test_provider_setup_secret_writer(opts):
+    from mojo.apps.account.models import Setting
+    from mojo.apps.account.services import provider_setup
+
+    key = "GEOIP_API_KEY_MOJO"
+    Setting.objects.filter(key=key, group=None).delete()
+    with mock.patch.object(Setting, "_redis", return_value=None):
+        provider_setup._write_secret(key, "rotation-secret", False)
+    row = Setting.objects.get(key=key, group=None)
+    assert row.is_secret and row.value == "" and row.get_value() == "rotation-secret", \
+        "the dedicated provider writer did not encrypt the GeoIP credential"
+    with mock.patch.object(Setting, "_redis", return_value=None):
+        provider_setup._write_secret(key, None, True)
+    assert not Setting.objects.filter(key=key, group=None).exists(), \
+        "the explicit provider credential clear left a protected row behind"
 
 
 @th.django_unit_test("provider setup converts the effective system SMS row to Mojo")

@@ -20,15 +20,58 @@ The GET response has `schema_version`, ordered `sections`, and server-owned
 effective value/status, source, scope, owner, change behavior, and capability
 booleans. Sensitive deployment settings expose only
 `{"configured":true|false}`. Arbitrary Django settings, paths, environment
-names, ignored raw values, provider responses, and exceptions are omitted.
+names, ignored raw values, provider responses, and exceptions are omitted from
+catalog entries. The superuser-only provider status includes its configured S3
+object key and a failure class in `remote_error`, but never either API key.
 The fixed order is General, Sign-in & registration, Users, Email, Domains &
 DNS, Edge & Web Apps, and Security & operations; sections from absent optional
 applications are omitted.
 
-For a literal superuser, GET also includes `provider_setup`: availability,
-delegated keys, configured-only secret flags, the effective GeoIP/SMS values,
-and loaded/published revisions. Non-superusers receive no provider setup
-payload.
+For a literal superuser, GET also includes `provider_setup`: availability, the
+application publisher allowlist, configured-only secret flags, the desired
+GeoIP values, the effective system SMS row, and edit/loaded/published revisions.
+When an override has been published, `geoip` reflects that desired document
+even while `pending_restart` is true. `loaded_revision` is only the revision
+loaded by the node serving this request, not proof of whole-fleet convergence.
+Non-superusers receive no provider setup payload. The response shape is:
+
+```json
+{
+  "provider_setup": {
+    "available": true,
+    "bucket_configured": true,
+    "restart_configured": true,
+    "object_key": "config/prod/django.override.json",
+    "delegated_keys": [
+      "GEOIP_ADDITIONAL_PROVIDERS",
+      "GEOIP_FALLBACK_PROVIDER",
+      "GEOIP_MOJO_PROVIDER_URL",
+      "GEOIP_MOJO_SYNC_ENABLED",
+      "GEOIP_PRIMARY_PROVIDER"
+    ],
+    "loaded_revision": "0123456789abcdef0123456789abcdef",
+    "published_revision": "0123456789abcdef0123456789abcdef",
+    "configuration_revision": "fedcba9876543210fedcba9876543210",
+    "published_version": "s3-version-id",
+    "pending_restart": false,
+    "remote_error": null,
+    "geoip": {
+      "GEOIP_PRIMARY_PROVIDER": "mojo",
+      "GEOIP_FALLBACK_PROVIDER": "ipinfo",
+      "GEOIP_ADDITIONAL_PROVIDERS": [],
+      "GEOIP_MOJO_PROVIDER_URL": "https://api.mojoverify.com",
+      "GEOIP_MOJO_SYNC_ENABLED": false,
+      "GEOIP_API_KEY_MOJO_CONFIGURED": true
+    },
+    "sms": {
+      "configured": true,
+      "remote_url": "https://sms.example.com",
+      "api_key_configured": true,
+      "test_mode": false
+    }
+  }
+}
+```
 
 Sources include `database_cache`, `database`, `deployment`, `default`,
 `computed`, merged `database+deployment+defaults`, `invalid`,
@@ -60,6 +103,7 @@ The same fresh-auth endpoint accepts the superuser-only provider action:
 {
   "action": "configure_providers",
   "providers": {
+    "expected_revision": "0123456789abcdef0123456789abcdef",
     "geoip": {
       "GEOIP_PRIMARY_PROVIDER": "mojo",
       "GEOIP_FALLBACK_PROVIDER": "ipinfo",
@@ -79,11 +123,33 @@ The same fresh-auth endpoint accepts the superuser-only provider action:
 }
 ```
 
+Use the identical `providers` object with `"action":"test_providers"` for a
+zero-side-effect credential and permission check. Both provider actions require
+a fresh interactive literal-superuser Bearer session and an `Origin` exactly
+matching the Admin request origin. Test returns separate results:
+
+```json
+{"tested":true,"success":true,"results":{"geoip":{"success":true,"code":null,"message":"Connection verified"},"sms":{"success":true,"code":null,"message":"Connection verified"}}}
+```
+
 Blank/omitted secret values preserve the encrypted value; clearing requires
-the explicit boolean. The static fields publish one KMS-encrypted, integrity-
-marked S3 override and return its revision. The database secret and system
-`PhoneConfig` take effect without a restart; static GeoIP selection takes
-effect after config sync installs the composed file and restarts the service.
+the explicit boolean. After both checks pass, the database secret and system
+`PhoneConfig` are written first. The static fields then publish one KMS-
+encrypted, integrity-marked S3 override using an ETag precondition and return
+its revision/version. `expected_revision` is the current
+`configuration_revision`, which advances for every successful provider edit,
+including DB-only key or SMS changes, and is also bound to the published S3
+revision so an operator restore invalidates an open form. DB/model values take effect without a restart; static
+GeoIP selection takes effect after config sync installs the composed file and
+restarts the service. The DB/model writes share a stable installation-wide
+lock rather than the acting user's row, and roll back if conditional S3
+publication fails. An unchanged static document skips S3 publication while
+still advancing the edit revision.
+The mutation response is:
+
+```json
+{"published":true,"unchanged":false,"revision":"0123456789abcdef0123456789abcdef","published_revision":"0123456789abcdef0123456789abcdef","version_id":"s3-version-id","pending_restart":true,"results":{"geoip":{"success":true},"sms":{"success":true}}}
+```
 
 Set returns the normalized value; Clear returns the number of removed global
 rows (including every duplicate):

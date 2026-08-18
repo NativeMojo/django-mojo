@@ -28,6 +28,24 @@ These are read through `mojo.helpers.settings.settings` during normal runtime.
   closing the account all anonymize nothing and leave the account active. See
   [Account Closure Delegation](../account/disable_lifecycle.md#account-closure-delegation-account_closure_handler).
 
+### ADMIN FLEET CONFIG
+
+- `ADMIN_FLEET_CONFIG_BUCKET` — S3 bucket containing the exact Admin-owned
+  override object; falls back to `AWS_CONFIG_BUCKET`.
+- `ADMIN_FLEET_CONFIG_PREFIX` — required non-empty environment prefix; falls
+  back to `AWS_CONFIG_PREFIX`.
+- `ADMIN_FLEET_CONFIG_FILENAME` — bounded object basename, default
+  `django.override.json`.
+- `ADMIN_FLEET_CONFIG_KMS_KEY_ID` — SSE-KMS key for publication; falls back to
+  `KMS_KEY_ID`.
+- `ADMIN_FLEET_CONFIG_ALLOWED_KEYS` — positive application-side fleet key
+  delegation. Default empty (publisher disabled).
+- `ADMIN_FLEET_CONFIG_RESTART_ENABLED` — explicit confirmation that config-sync
+  restarts services after install; required to enable Admin publication.
+
+All are file-only bootstrap controls read with `get_static()`. None can grant
+itself through the Admin. See [Admin fleet overrides](../deploy/README.md#admin-fleet-overrides).
+
 ### ALLOW
 
 - `ALLOW_EMAIL_CHANGE` — dynamic boolean, default `True`; Admin Settings can

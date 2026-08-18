@@ -10,6 +10,7 @@ SCHEMA_VERSION = 1
 REVISION_KEY = "MOJO_FLEET_CONFIG_REVISION"
 KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,127}$")
 PROVIDER_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+REVISION_RE = re.compile(r"^[a-f0-9]{32,64}$")
 MAX_DOCUMENT_BYTES = 32768
 MAX_SETTINGS = 64
 
@@ -111,7 +112,7 @@ def decode_document(payload, allowed):
     if document["schema_version"] != SCHEMA_VERSION:
         raise ValueError("fleet settings document version is unsupported")
     revision = document["revision"]
-    if not isinstance(revision, str) or not re.fullmatch(r"[a-f0-9]{32,64}", revision):
+    if not isinstance(revision, str) or not REVISION_RE.fullmatch(revision):
         raise ValueError("fleet settings revision is invalid")
     document["settings"] = validate_settings(document["settings"], allowed)
     return document

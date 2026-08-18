@@ -335,10 +335,15 @@ class Setting(MojoSecrets, MojoModel):
     # ------------------------------------------------------------------
 
     def save(self, *args, **kwargs):
-        self._reject_protected_write()
+        protected_writer = kwargs.pop("_protected_writer", None)
+        skip_cache = kwargs.pop("_skip_cache", False)
+        if not (self.key == "GEOIP_API_KEY_MOJO" and
+                protected_writer == "GEOIP_API_KEY_MOJO"):
+            self._reject_protected_write()
         self._validate_value()
         super().save(*args, **kwargs)
-        self.push_to_cache()
+        if not skip_cache:
+            self.push_to_cache()
         self._invalidate_geofence_decisions()
 
     def delete(self, *args, **kwargs):

@@ -212,22 +212,34 @@ The Admin publisher uses `ADMIN_FLEET_CONFIG_BUCKET`,
 `AWS_CONFIG_*` application settings, filename defaults to
 `django.override.json`, and the KMS key falls back to `KMS_KEY_ID`.
 `ADMIN_FLEET_CONFIG_ALLOWED_KEYS` limits the application side independently.
+It has no permissive default: the deployment must provide the positive list.
+`ADMIN_FLEET_CONFIG_RESTART_ENABLED=true` (or a visible
+`CONFIG_SYNC_RESTART=true`) is also required before the Admin enables Publish.
 The effective writable set is therefore the intersection of framework support,
 the Admin publisher allowlist, and the node bootstrap delegation.
 
-Grant the application role `s3:GetObject`, `s3:PutObject`, and `s3:HeadObject`
-only for the exact override object plus the minimum KMS encrypt permission.
-Keep base-object publication and bootstrap settings outside the Admin role.
+Grant the application role `s3:GetObject` and `s3:PutObject` only for the exact
+override object. (`HeadObject` is covered by `s3:GetObject`; there is no
+separate `s3:HeadObject` IAM action.) For an SSE-KMS object, the KMS key policy
+also needs `kms:GenerateDataKey` for publication and `kms:Decrypt` for the
+Admin status read. The node role needs read access to that object and KMS
+decrypt access. Keep base-object publication and bootstrap settings outside
+the Admin role.
+Enable S3 versioning for recovery. Admin updates use the current ETag as an
+`If-Match` precondition (and `If-None-Match: *` for the first write), so two
+superusers cannot silently overwrite one another.
 The initial delegation is:
 
 ```ini
 CONFIG_SYNC_OVERRIDE_ALLOWED_KEYS=GEOIP_PRIMARY_PROVIDER,GEOIP_FALLBACK_PROVIDER,GEOIP_ADDITIONAL_PROVIDERS,GEOIP_MOJO_PROVIDER_URL,GEOIP_MOJO_SYNC_ENABLED
 ```
 
-Adding a future Admin-managed fleet setting requires all three explicit steps:
-a typed validator/default in `mojo.deploy.config_override`, a curated Admin UI
-field, and both deployment allowlists. Secrets, imports/code expressions, and
-bootstrap keys are never valid override values.
+Adding a future Admin-managed fleet setting requires explicit server-owned
+registration: a `Descriptor(storage="fleet_config", writable="fleet_config")`,
+a typed validator/default in `mojo.deploy.config_override`, and both deployment
+allowlists. The Settings browser renders the descriptor; it has no independent
+key allowlist. Secrets, imports/code expressions, and bootstrap keys are never
+valid override values.
 
 ## Restarts are jittered by hostname
 

@@ -32,7 +32,8 @@ MUTABLE_KEYS = frozenset({
 FLEET_PROVIDER_KEYS = frozenset({
     "GEOIP_PRIMARY_PROVIDER", "GEOIP_FALLBACK_PROVIDER",
     "GEOIP_ADDITIONAL_PROVIDERS", "GEOIP_MOJO_PROVIDER_URL",
-    "GEOIP_MOJO_SYNC_ENABLED",
+    "GEOIP_MOJO_SYNC_ENABLED", "GEOIP_API_KEY_MOJO",
+    "ADMIN_PROVIDER_SETUP_REVISION",
 })
 NON_PUBLIC_HOST_SUFFIXES = frozenset({
     "alt", "arpa", "corp", "example", "home", "internal", "invalid", "lan", "local",
@@ -61,6 +62,7 @@ class Descriptor:
     change_behavior: str = "deploy"
     constraints: str = ""
     owner_route: str = ""
+    storage: str = "deployment"
 
 
 _REGISTRY = {}
@@ -213,6 +215,9 @@ def _resolve(descriptor, rows=None, cached=_NO_CACHE):
             if descriptor.resolver == "dynamic" else resolver(descriptor, rows))
     except Exception:
         return None, "invalid", bool(rows), duplicate
+    if descriptor.sensitivity == "configured_only" and not (
+            isinstance(value, dict) and set(value) == {"configured"}):
+        value = {"configured": bool(value)}
     return _bounded(value), source, ignored, duplicate
 
 
@@ -477,6 +482,34 @@ def register_core_descriptors():
                    "Optional loopback target for Setup probes.", "configured", resolver="static",
                    sensitivity="configured_only", writable="none", owner="Deployment settings",
                    change_behavior="deploy"),
+        Descriptor("GEOIP_PRIMARY_PROVIDER", "Primary GeoIP provider", "Security & operations",
+                   "Provider queried first for IP intelligence.", "string", "mojo",
+                   resolver="static", writable="fleet_config", owner="Mojo providers",
+                   change_behavior="restart", constraints="Provider identifier",
+                   storage="fleet_config"),
+        Descriptor("GEOIP_FALLBACK_PROVIDER", "Fallback GeoIP provider", "Security & operations",
+                   "Provider used when the primary cannot answer.", "string", "ipinfo",
+                   resolver="static", writable="fleet_config", owner="Mojo providers",
+                   change_behavior="restart", constraints="Provider identifier",
+                   storage="fleet_config"),
+        Descriptor("GEOIP_ADDITIONAL_PROVIDERS", "Additional GeoIP providers", "Security & operations",
+                   "Extra providers available after primary and fallback.", "list", [],
+                   resolver="static", writable="fleet_config", owner="Mojo providers",
+                   change_behavior="restart", constraints="Unique provider identifiers",
+                   storage="fleet_config"),
+        Descriptor("GEOIP_MOJO_PROVIDER_URL", "Mojo GeoIP URL", "Security & operations",
+                   "Canonical HTTPS origin of the upstream django-mojo provider.", "origin",
+                   "https://api.mojoverify.com", resolver="static", writable="fleet_config",
+                   owner="Mojo providers", change_behavior="restart",
+                   constraints="One HTTPS origin", storage="fleet_config"),
+        Descriptor("GEOIP_MOJO_SYNC_ENABLED", "Mojo GeoIP sync", "Security & operations",
+                   "Push observed abuse signals back to the upstream provider.", "boolean", False,
+                   resolver="static", writable="fleet_config", owner="Mojo providers",
+                   change_behavior="restart", storage="fleet_config"),
+        Descriptor("GEOIP_API_KEY_MOJO", "Mojo GeoIP API key", "Security & operations",
+                   "Encrypted credential used for Mojo GeoIP federation.", "configured",
+                   resolver="dynamic", sensitivity="configured_only", writable="provider_setup",
+                   owner="Mojo providers", change_behavior="immediate", storage="database"),
     )
     for descriptor in core:
         register_descriptor(descriptor)
