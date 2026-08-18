@@ -92,22 +92,57 @@ function showFatal(error) {
   app.replaceChildren(h('div', {class: 'fatal'}, icon('alert'), h('h1', {text: 'Admin could not load'}), h('p', {text: error.message}), h('a', {class: 'button primary', href: `/auth?redirect=${encodeURIComponent(adminPath)}`}, 'Sign in again')));
 }
 
-function showFreshAuth() {
-  controller?.abort(); clearBusy();
+function showFreshAuth(event) {
+  const detail = event.detail || {};
+  if (typeof detail.resolve !== 'function' || typeof detail.reject !== 'function') return;
+  detail.handled = true; clearBusy();
   if (reauthClose) return;
-  const returnTo = location.pathname + location.search + location.hash;
+  let settled = false;
+  const identity = context.user.username;
+  const message = h('div', {class: 'form-message', role: 'alert'});
+  const password = h('input', {type: 'password', autocomplete: 'current-password', required: true, autofocus: true});
   const cancel = h('button', {class: 'button ghost', type: 'button'}, 'Cancel');
-  const proceed = h('button', {class: 'button primary', type: 'button', autofocus: true}, 'Continue');
-  const contentNode = h('div', {},
-    h('p', {class: 'modal-copy', text: 'Your session is still active. Confirm your identity again before this protected change can continue.'}),
-    h('div', {class: 'form-actions'}, cancel, proceed));
-  reauthClose = openModal({title: 'Recent authentication required', content: contentNode,
-    dismissible: false, onClose: () => { reauthClose = null; }});
-  cancel.addEventListener('click', () => reauthClose?.());
-  proceed.addEventListener('click', () => {
-    reauthClose?.();
-    location.assign(`/auth?redirect=${encodeURIComponent(returnTo)}&force_reauth=1`);
-  });
+  const passkey = window.MojoAuth.isPasskeySupported?.()
+    ? h('button', {class: 'button ghost', type: 'button'}, 'Use passkey') : null;
+  const confirm = h('button', {class: 'button primary', type: 'submit'}, 'Confirm');
+  const buttons = [cancel, passkey, confirm].filter(Boolean);
+  const finish = (error = null) => {
+    if (settled) return;
+    settled = true; reauthClose?.();
+    if (error) detail.reject(error); else detail.resolve();
+  };
+  const authenticate = async (action) => {
+    buttons.forEach((button) => { button.disabled = true; }); message.textContent = '';
+    try {
+      const result = await action();
+      if (result?.mfa_required || result?.requires_password_change) {
+        throw new Error('This account needs another sign-in step. Use a passkey, or sign out and sign in again.');
+      }
+      if (result?.user?.id != null && String(result.user.id) !== String(context.user.id)) {
+        window.MojoAuth.logout();
+        throw new Error('The confirmed account does not match this Admin session. Sign in again.');
+      }
+      finish();
+    } catch (error) {
+      message.textContent = window.MojoAuth.getError?.(error) || error.message || 'Could not confirm your identity.';
+      buttons.forEach((button) => { button.disabled = false; }); password.focus();
+    }
+  };
+  const form = h('form', {onsubmit: (submitEvent) => {
+    submitEvent.preventDefault();
+    authenticate(() => window.MojoAuth.login(context.user.username, password.value));
+  }},
+  h('p', {class: 'modal-copy', text: 'Your session is still active. Confirm your identity here before this protected change can continue.'}),
+  h('label', {class: 'field'}, h('span', {text: `Password for ${identity}`}), password),
+  message, h('div', {class: 'form-actions'}, ...buttons));
+  reauthClose = openModal({title: 'Recent authentication required', content: form,
+    dismissible: false, onClose: () => {
+      reauthClose = null;
+      if (!settled) { settled = true; detail.reject(detail.error); }
+    }});
+  cancel.addEventListener('click', () => finish(detail.error));
+  passkey?.addEventListener('click', () => authenticate(
+    () => window.MojoAuth.loginWithPasskey(context.user.username)));
 }
 
 window.addEventListener('hashchange', () => render().catch(showFatal));

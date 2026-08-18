@@ -29,7 +29,8 @@ def bootstrap(groups, membership_groups=None, can_create_webapp_group=True):
         "webapp_groups": [dict(group, can_manage_dns=True) for group in groups],
         "can_create_webapp_group": can_create_webapp_group,
         "user": {"id": 1, "display_name": "Ian Smith",
-                 "email": "ian@example.com", "is_superuser": True},
+                 "username": "ian@example.com", "email": "ian@example.com",
+                 "is_superuser": True},
         "capabilities": capabilities,
         "features": {provider.NAME: provider.describe(capabilities)
                      for provider in PROVIDERS},

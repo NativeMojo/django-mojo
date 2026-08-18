@@ -64,6 +64,8 @@ def test_authenticated_admin_delivery(opts):
 
     bootstrap = opts.client.get("/api/account/admin/bootstrap")
     data = bootstrap.json.get("data") or {}
+    assert data.get("user", {}).get("username") == ADMIN_EMAIL, \
+        "Admin bootstrap omitted the signed-in username required for inline recent authentication"
     assert data.get("capabilities", {}).get("manage_network") is True, data
     assert tuple(data.get("features", {})) == (
         "dashboard", "people", "webapps", "activity", "platform", "advanced",

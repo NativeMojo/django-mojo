@@ -181,8 +181,15 @@ def test_admin_feedback_contract(opts):
         "HTTP 440 still looks like an automatic logout"
     assert "FreshAuthRequired" in core and "mojo-admin:fresh-auth" in core, \
         "HTTP 440 is not a typed browser event"
-    assert "Your session is still active" in app and "force_reauth=1" in app, \
-        "the explicit recent-authentication prompt is incomplete"
+    assert "Your session is still active" in app and "autocomplete: 'current-password'" in app, \
+        "the Admin recent-authentication modal does not collect the current password"
+    assert "window.MojoAuth.login(context.user.username, password.value)" in app, \
+        "the Admin recent-authentication modal does not mint a fresh JWT in place"
+    assert "force_reauth=1" not in app and "location.assign(`/auth?redirect=" not in app, \
+        "Admin recent authentication still leaves the portal for Bouncer"
+    assert "await requestFreshAuth(error)" in core and \
+        "return requestPayload(path, options, retry, false)" in core, \
+        "a successful Admin recent-authentication modal does not retry the blocked request once"
     assert "const BUSY = new Map()" in overlays and "clearBusy" in overlays, \
         "busy ownership is not tokenized and globally releasable"
     assert "finally" in platform and "busy.close()" in platform and "activeAction" in platform, \
@@ -259,6 +266,8 @@ def test_webapp_new_group_preview_contract(opts):
         "committed-loss recovery duplicated its Group or WebApp"
 
     bootstrap = server.bootstrap(Handler.groups)
+    assert bootstrap["user"]["username"] == "ian@example.com", \
+        "preview bootstrap omitted the username used by inline recent authentication"
     assert all(row.get("can_manage_dns") is True
                for row in bootstrap["webapp_groups"]), \
         "preview bootstrap omitted per-group DNS management authority"
