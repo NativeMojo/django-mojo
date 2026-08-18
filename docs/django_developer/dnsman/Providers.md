@@ -58,7 +58,7 @@ and Maestro Sites HTTP-01 therefore keep their existing dispatch paths.
 | Write | true upsert of one record set | PUT **replaces every record** of that (type, name) |
 | Delete | supported | no true delete |
 | Record read shape | one record **set** per entry | one entry **per value** (JSON array) |
-| Propagation signal | `ChangeInfo` → `INSYNC`, then authoritative probe | authoritative probe only |
+| Propagation signal | `ChangeInfo` → `INSYNC`, then authoritative probe | authoritative probe; ACME TXT then waits GoDaddy's 600s minimum TTL |
 | Purchase | yes | **no** — management only |
 
 ### Change ids and the INSYNC gate

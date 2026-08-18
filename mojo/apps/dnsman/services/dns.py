@@ -240,11 +240,13 @@ def wait_for_propagation(domain, rtype, name, record_values, timeout=None, chang
     Block until the record is authoritatively visible. Returns (ok, seen_values).
 
     Route53 gates on its ChangeInfo reaching INSYNC and then queries the zone's
-    authoritative nameservers; GoDaddy has no change API, so it is the
-    authoritative probe only. `change_id` is optional — pass the one returned by
-    `upsert_record` to get the INSYNC gate when the adapter was not reused. A
-    `RECONCILED_CHANGE_ID` sentinel is dropped here: that write converged
-    through inventory reconciliation and has no change batch to poll.
+    authoritative nameservers. GoDaddy has no change API, so it probes the
+    authority directly; ACME TXT replacements then wait out GoDaddy's enforced
+    minimum TTL so secondary validators cannot see the prior value. `change_id`
+    is optional — pass the one returned by `upsert_record` to get the INSYNC gate
+    when the adapter was not reused. A `RECONCILED_CHANGE_ID` sentinel is dropped
+    here: that write converged through inventory reconciliation and has no change
+    batch to poll.
     """
     rtype, fqdn = _validate(domain, rtype, name)
     if change_id == RECONCILED_CHANGE_ID:

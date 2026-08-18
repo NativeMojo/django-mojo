@@ -105,7 +105,10 @@ CA to validate a record it will never see. Either mistake costs a failed
 issuance and burns rate limit.
 
 Route53 additionally gates on `ChangeInfo` reaching `INSYNC` first. GoDaddy has
-no equivalent, so the probe is the only signal there.
+no equivalent and enforces a 600-second minimum TXT TTL. After its authoritative
+probe succeeds for an ACME record, the provider gate therefore waits one full
+TTL before asking the CA to validate, preventing secondary validation from
+seeing the prior cached challenge value.
 
 Each `dns.*` call resolves a **fresh** provider adapter (see
 [Providers](Providers.md#change-ids-and-the-insync-gate)), so the INSYNC gate

@@ -737,14 +737,14 @@ def test_route53_reconciled_change_id_is_not_polled(opts):
 
 @th.django_unit_test()
 def test_godaddy_propagation_is_the_probe_only(opts):
-    """GoDaddy has no ChangeInfo API, so the authoritative probe is the only gate."""
+    """Ordinary GoDaddy TXT uses only the authoritative probe."""
     from mojo.apps.dnsman.services import dns
 
     with patch(f"{GD_HELPER}.requests"), \
             patch(f"{R53}.get_change") as change, \
             patch(f"{PROBE}.wait_for_txt", return_value=(True, ["digest-one"])) as wait:
         ok, seen = dns.wait_for_propagation(
-            opts.gd_domain, "TXT", "_acme-challenge", ["digest-one"], timeout=30)
+            opts.gd_domain, "TXT", "_amazonses", ["digest-one"], timeout=30)
 
     assert ok is True, "Expected the GoDaddy probe result to be returned"
     assert seen == ["digest-one"], f"Expected the seen values, got {seen}"
@@ -752,5 +752,29 @@ def test_godaddy_propagation_is_the_probe_only(opts):
         "GoDaddy has no ChangeInfo API — Route53's must never be consulted for it")
     assert wait.call_count == 1, (
         f"Expected exactly one authoritative probe, got {wait.call_count}")
-    assert wait.call_args.args[0] == f"_acme-challenge.{GD_DOMAIN}", (
+    assert wait.call_args.args[0] == f"_amazonses.{GD_DOMAIN}", (
         f"Expected the probe to be given the FQDN, got {wait.call_args.args[0]}")
+
+
+@th.django_unit_test()
+def test_godaddy_acme_propagation_waits_out_the_provider_ttl(opts):
+    """An authoritative hit is not enough for ACME on GoDaddy.
+
+    GoDaddy enforces a 600-second TTL.  A CA secondary validator may therefore
+    still have the prior challenge value cached after the authoritative servers
+    show the replacement.  The provider gate must wait out that cache window
+    before issuance tells the CA to validate.
+    """
+    from mojo.apps.dnsman.services import dns
+    from mojo.apps.dnsman.services.providers.godaddy_provider import MIN_TTL
+
+    with patch(f"{GD_HELPER}.requests"), \
+            patch(f"{PROBE}.wait_for_txt", return_value=(True, ["digest-one"])), \
+            patch("mojo.apps.dnsman.services.providers.godaddy_provider.time.sleep",
+                  create=True) as sleep:
+        ok, seen = dns.wait_for_propagation(
+            opts.gd_domain, "TXT", "_acme-challenge", ["digest-one"], timeout=30)
+
+    assert ok is True and seen == ["digest-one"], (
+        f"Expected the propagated value to survive the cache gate, got {(ok, seen)}")
+    sleep.assert_called_once_with(MIN_TTL)
