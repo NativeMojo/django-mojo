@@ -1225,11 +1225,12 @@ def summary_for(web_app):
         },
         "current_release": ({
             "id": release.pk, "version": release.version,
-            "status": release.status, "created": release.created,
+            "status": release.status, "created": release.created.isoformat(),
         } if release else None),
         "latest_deployment": ({
             "id": deployment.pk, "status": deployment.status,
-            "created": deployment.created, "finished": deployment.finished,
+            "created": deployment.created.isoformat(),
+            "finished": deployment.finished.isoformat() if deployment.finished else None,
         } if deployment else None),
         "onboarding": {
             "status": operation.status if operation else "not_started",
