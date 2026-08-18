@@ -457,17 +457,18 @@ def test_script_contract_ladder(opts):
             "shim_locate.sh": (
                 '#!/bin/bash\ntarget="$(python3 -m mojo.deploy locate update.sh)"\n'
                 'exec bash "$target" "$@"\n',
-                ("shim", 1, "")),
+                ("shim", deploy.DEPLOY_CONTRACT, "")),
             "shim_import.py": (
                 "#!/usr/bin/env python3\nfrom mojo.deploy.certbot_sync import main\n",
-                ("shim", 1, "")),
+                ("shim", deploy.DEPLOY_CONTRACT, "")),
             # A wrapper that forwards argv wholesale never inspects the flags,
             # so a --sha in its own usage comment proves nothing about it.
             "forwarder.sh": (
                 '#!/bin/bash\n# usage: update.sh --sha <hex> --framework <v>\n'
                 'exec /opt/api/aws/real_update.sh "$@"\n',
                 ("unknown", None, "forwarder")),
-            "fork_current.sh": (FORK_WITH_EVERY_FLAG, ("inferred", 1, "")),
+            "fork_current.sh": (
+                FORK_WITH_EVERY_FLAG, ("inferred", deploy.DEPLOY_CONTRACT, "")),
             "fork_stale.sh": (FORK_MISSING_DEPLOYMENT, ("stale", 0, "--deployment")),
             "wrapper.sh": (
                 "#!/bin/bash\nsudo systemctl restart api\n",
@@ -479,7 +480,7 @@ def test_script_contract_ladder(opts):
             th.assert_eq(result, expected,
                          f"{name} must read as {expected!r}, got {result!r}")
 
-        refused = ("declared_old.sh", "fork_stale.sh")
+        refused = ("declared.sh", "declared_old.sh", "fork_stale.sh")
         for name, (body, expected) in cases.items():
             allowed = deploy.contract_ok(expected[0], expected[1])
             th.assert_eq(allowed, name not in refused,
@@ -573,3 +574,5 @@ def test_packaged_script_declares_current_contract(opts):
                  f"{deploy.DEPLOY_CONTRACT} — bump the marker and the constant together")
     th.assert_true(deploy.contract_ok(verdict, contract),
                    "the framework must never refuse the script it ships")
+    th.assert_eq(deploy.DEPLOY_CONTRACT, 2,
+                 "atomic identity readiness is node-script contract v2")

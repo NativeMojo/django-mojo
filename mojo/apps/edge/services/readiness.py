@@ -1,11 +1,81 @@
 """System Setup readiness for hosting, fleet proof, and WebApp keys."""
 
+import json
+import stat
+from pathlib import Path
+
 from mojo.apps.account.services import system_readiness, system_settings
 from mojo.helpers import dates
 from mojo.helpers.settings import settings
 
 
 DETAIL_LIMIT = 16
+IDENTITY_LIMIT = 4096
+LEGACY_IDENTITY_LIMIT = 128
+
+
+def _read_bounded(path, limit):
+    """Read one small regular file, refusing races and oversized content."""
+    try:
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > limit:
+            return None
+        value = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+    return value if len(value.encode("utf-8")) <= limit else None
+
+
+def _present(path):
+    try:
+        path.lstat()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        # Unreadable state is present for fail-closed identity purposes.
+        return True
+
+
+def _read_deploy_identity(root=Path("var")):
+    """Read atomic v2 identity, with one bounded predecessor fallback.
+
+    A present manifest is authoritative even when malformed. The invalidation
+    marker closes the otherwise unavoidable window where an interrupted v2
+    update could expose the predecessor's two non-atomic legacy files.
+    """
+    from mojo.apps.edge.services import deploy, platform_deploy
+
+    root = Path(root)
+    manifest = root / "deploy_identity.json"
+    if _present(root / "deploy_identity.invalid"):
+        return "", ""
+    if _present(manifest):
+        raw = _read_bounded(manifest, IDENTITY_LIMIT)
+        try:
+            value = json.loads(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            return "", ""
+        if not isinstance(value, dict) or set(value) != {
+                "schema", "sha", "deployment"} or value.get("schema") != 2:
+            return "", ""
+        sha = value.get("sha")
+        deployment_id = platform_deploy.deployment_id(value.get("deployment"))
+        if (not isinstance(sha, str) or len(sha) != 40
+                or not deploy.is_valid_sha(sha) or not deployment_id
+                or deployment_id != value.get("deployment")):
+            return "", ""
+        return sha, deployment_id
+
+    sha_raw = _read_bounded(root / "deploy_sha", LEGACY_IDENTITY_LIMIT)
+    uuid_raw = _read_bounded(root / "deployment_uuid", LEGACY_IDENTITY_LIMIT)
+    sha = (sha_raw or "").strip()
+    supplied_uuid = (uuid_raw or "").strip()
+    deployment_id = platform_deploy.deployment_id(supplied_uuid)
+    if (len(sha) != 40 or not deploy.is_valid_sha(sha)
+            or not deployment_id or deployment_id != supplied_uuid):
+        return "", ""
+    return sha, deployment_id
 
 
 def _aggregate(code, label, counts, remediation, details=None):
@@ -51,9 +121,6 @@ def local_node_proof(data=None):
     from mojo.apps.edge.services import installer
     from mojo.apps.edge.settings_validators import expected_topology
 
-    from pathlib import Path
-    from mojo.apps.edge.services import deploy, platform_deploy
-
     raw = data or {}
     topology = expected_topology("EDGE_EXPECTED_TOPOLOGY", {
         "nodes": [local_node_id()],
@@ -72,16 +139,7 @@ def local_node_proof(data=None):
             "serving_generation": installed.get("serving_generation"),
             "current_generation": current_generation,
         }
-    deployed_sha = ""
-    deployed_uuid = ""
-    try:
-        candidate = Path("var/deploy_sha").read_text(encoding="utf-8").strip()
-        if deploy.is_valid_sha(candidate):
-            deployed_sha = candidate
-        candidate = Path("var/deployment_uuid").read_text(encoding="utf-8").strip()
-        deployed_uuid = platform_deploy.deployment_id(candidate) or ""
-    except OSError:
-        pass
+    deployed_sha, deployed_uuid = _read_deploy_identity()
     return {
         "node_id": local_node_id(),
         "django_mojo_version": mojo.__version__,

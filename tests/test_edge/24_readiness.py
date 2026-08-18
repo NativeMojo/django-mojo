@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 from unittest import mock
+from pathlib import Path
 
 from testit import helpers as th
 
@@ -274,6 +275,54 @@ def test_local_node_proof_no_secret_shape(opts):
         f"proof exposed more than convergence metadata: {proof}"
     assert "token" not in str(proof).lower() and "secret" not in str(proof).lower(), \
         f"proof exposed credential material: {proof}"
+
+
+@th.django_unit_test("atomic deployment identity is authoritative with one legacy fallback")
+def test_atomic_deploy_identity_manifest_and_legacy_fallback(opts):
+    from mojo.apps.edge.services import readiness
+
+    sha = "a" * 40
+    deployment = "12345678-1234-4123-8123-123456789abc"
+    with tempfile.TemporaryDirectory() as root:
+        var = Path(root)
+        (var / "deploy_identity.json").write_text(json.dumps({
+            "schema": 2, "sha": sha, "deployment": deployment,
+        }), encoding="utf-8")
+        th.assert_eq(readiness._read_deploy_identity(var), (sha, deployment),
+                     "a valid v2 manifest must be the live identity")
+
+        (var / "deploy_sha").write_text("b" * 40, encoding="utf-8")
+        (var / "deployment_uuid").write_text(
+            "87654321-4321-4321-8321-cba987654321", encoding="utf-8")
+        (var / "deploy_identity.json").write_text("{broken", encoding="utf-8")
+        th.assert_eq(readiness._read_deploy_identity(var), ("", ""),
+                     "a present but invalid manifest must fail closed, never "
+                     "borrow a legacy pair")
+
+        (var / "deploy_identity.invalid").write_text("invalid\n", encoding="utf-8")
+        (var / "deploy_identity.json").write_text(json.dumps({
+            "schema": 2, "sha": sha, "deployment": deployment,
+        }), encoding="utf-8")
+        th.assert_eq(readiness._read_deploy_identity(var), ("", ""),
+                     "the invalidation marker must suppress even a candidate "
+                     "manifest until publication commits")
+
+        (var / "deploy_identity.invalid").unlink()
+        (var / "deploy_identity.json").unlink()
+        th.assert_eq(
+            readiness._read_deploy_identity(var),
+            ("b" * 40, "87654321-4321-4321-8321-cba987654321"),
+            "one predecessor generation must still read its bounded legacy pair")
+
+        (var / "deploy_identity.invalid").write_text("invalid\n", encoding="utf-8")
+        th.assert_eq(readiness._read_deploy_identity(var), ("", ""),
+                     "an invalidation marker must suppress stale legacy proof "
+                     "after a failed rollback")
+
+        (var / "deploy_identity.invalid").unlink()
+        (var / "deploy_sha").write_text("b" * 5000, encoding="utf-8")
+        th.assert_eq(readiness._read_deploy_identity(var), ("", ""),
+                     "legacy fallback must refuse unbounded files")
 
 
 @th.django_unit_test("node proof identity defaults to the normalized job hostname")

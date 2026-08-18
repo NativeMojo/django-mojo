@@ -27,6 +27,8 @@ export CALLLOG="$TMP/calls.log"
 export STUBCTL="$CTL"
 
 REAL_PYTHON3="$(command -v python3)"
+REAL_MV="$(command -v mv)"
+export REAL_MV
 
 PASS=0
 FAIL=0
@@ -53,6 +55,9 @@ assert_order() { # first_pattern second_pattern label
         fail "$3 ('$1' at ${a:-none}, '$2' at ${b:-none})"
     fi
 }
+manifest_value() { # key file
+    sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" "$2"
+}
 
 # ── stubs ────────────────────────────────────────────────────────────────────
 
@@ -75,7 +80,10 @@ case "${1:-}" in
     rev-parse) cat "$STUBCTL/head.txt" 2>/dev/null || echo "" ;;
     fetch|reset|clean)
         ctl="$STUBCTL/git_${1}.exit"
-        [ -f "$ctl" ] && exit "$(cat "$ctl")" ;;
+        [ -f "$ctl" ] && exit "$(cat "$ctl")"
+        if [ "$1" = "reset" ] && [ "${3:-}" != "origin/main" ]; then
+            echo "${3:-}" > "$STUBCTL/head.txt"
+        fi ;;
 esac
 exit 0
 EOF
@@ -87,6 +95,11 @@ echo "CMD python3 $*" >> "$CALLLOG"
 case "$*" in
     *"import mojo"*) cat "$STUBCTL/framework.txt" 2>/dev/null || echo "0.0.0"; exit 0 ;;
     *deploy_status*)
+        echo "ENV identity_ready=${MOJO_DEPLOY_IDENTITY_READY:-}" >> "$CALLLOG"
+        if [[ "$*" == *"deploy_status set deploying"* ]] && \
+                [ -f "$STUBCTL/deploy_status.fail_deploying" ]; then
+            exit 1
+        fi
         ctl="$STUBCTL/deploy_status.exit"
         [ -f "$ctl" ] && exit "$(cat "$ctl")" ;;
     *sanity_check*)
@@ -107,8 +120,30 @@ if [ -f "$STUBCTL/sudo.fail_first" ] && [ ! -f "$STUBCTL/.sudo_failed_once" ]; t
     touch "$STUBCTL/.sudo_failed_once"
     exit 1
 fi
+if [ -f "$STUBCTL/sudo.fail_second" ]; then
+    count_file="$STUBCTL/.sudo_count"
+    count=0
+    [ -f "$count_file" ] && count="$(cat "$count_file")"
+    count=$((count+1))
+    echo "$count" > "$count_file"
+    [ "$count" -eq 2 ] && exit 1
+fi
 [ -f "$STUBCTL/sudo.exit" ] && exit "$(cat "$STUBCTL/sudo.exit")"
 exit 0
+EOF
+
+    cat > "$STUB/mv" <<'EOF'
+#!/bin/bash
+echo "CMD mv $*" >> "$CALLLOG"
+dest="${@: -1}"
+if [[ "$dest" == */deploy_identity.json ]] && \
+        [[ "$dest" != */previous_deploy_identity.json ]] && \
+        [ -f "$STUBCTL/mv_identity.fail_once" ] && \
+        [ ! -f "$STUBCTL/.mv_identity_failed" ]; then
+    touch "$STUBCTL/.mv_identity_failed"
+    exit 1
+fi
+exec "$REAL_MV" "$@"
 EOF
 
     cat > "$PROJ/bin/jobman" <<'EOF'
@@ -117,7 +152,7 @@ echo "CMD jobman $*" >> "$CALLLOG"
 exit 0
 EOF
 
-    chmod +x "$STUB/git" "$STUB/python3" "$STUB/sudo" "$PROJ/bin/jobman"
+    chmod +x "$STUB/git" "$STUB/python3" "$STUB/sudo" "$STUB/mv" "$PROJ/bin/jobman"
 
     # flock shim only where the real util is missing (macOS): fcntl.flock on
     # the inherited fd — the lock outlives the shim on the shared OFD. A bash
@@ -179,6 +214,7 @@ run_update_with_url() { # url args...
 
 SHA_NEW="2222222222222222222222222222222222222222"
 DEPLOYMENT_UUID="12345678-1234-4123-8123-123456789abc"
+PREVIOUS_UUID="87654321-4321-4321-8321-cba987654321"
 DEFAULT_URL="http://127.0.0.1/api/version"
 SHIM_URL="http://127.0.0.1:8080/api/version"
 
@@ -205,10 +241,33 @@ assert_eq "$(wc -l < "$CALLLOG" | tr -d ' ')" 0 "no command ran for any refused 
 echo "update.sh: short-circuit when already on target (sha prefix + framework)"
 setup_env
 echo "deadbeef111111111111111111111111111111ff" > "$CTL/head.txt"
+printf '{"schema":2,"sha":"%s","deployment":"%s"}\n' \
+    "deadbeef111111111111111111111111111111ff" "$PREVIOUS_UUID" \
+    > "$PROJ/var/deploy_identity.json"
 run_update --sha "deadbeef" --framework "1.5.0" >/dev/null 2>&1
 assert_eq "$?" 0 "short-circuit exits 0"
 assert_not_in_log "CMD git fetch" "no fetch on a short-circuit"
 assert_not_in_log "CMD sudo" "no post_deploy on a short-circuit"
+assert_in_log "deploy_status set deploying" \
+    "same-SHA with a fresh UUID still reports terminal intent"
+assert_in_log "ENV identity_ready=2" \
+    "same-SHA callback carries the fixed v2 identity-ready signal"
+assert_eq "$(manifest_value deployment "$PROJ/var/deploy_identity.json")" \
+    "$DEPLOYMENT_UUID" "same-SHA publishes the fresh deployment UUID"
+assert_eq "$(grep "^CMD" "$CALLLOG" | tail -1 | grep -c "jobman stop")" 1 \
+    "same-SHA still reaches the normal jobman-last tail"
+
+echo "update.sh: same SHA/framework/UUID is a true duplicate"
+setup_env
+echo "deadbeef111111111111111111111111111111ff" > "$CTL/head.txt"
+printf '{"schema":2,"sha":"%s","deployment":"%s"}\n' \
+    "deadbeef111111111111111111111111111111ff" "$DEPLOYMENT_UUID" \
+    > "$PROJ/var/deploy_identity.json"
+run_update --sha "deadbeef" --framework "1.5.0" >/dev/null 2>&1
+assert_eq "$?" 0 "same-attempt duplicate exits 0"
+assert_not_in_log "CMD git fetch" "same-attempt duplicate fetches nothing"
+assert_not_in_log "deploy_status" "same-attempt duplicate does not callback twice"
+assert_not_in_log "jobman stop" "same-attempt duplicate does not restart the engine"
 
 echo "update.sh: deploy-mode flock waits; --manual fails fast on a held lock"
 setup_env
@@ -259,8 +318,58 @@ assert_order "post_deploy.sh --framework 1.6.0 --migrate" "sanity_check" \
     "sanity_check runs after the install"
 assert_order "sanity_check" "deploy_status set deploying" \
     "deploying is reported only after the sanity check"
+assert_order "CMD mv .*deploy_identity.json" "deploy_status set deploying" \
+    "the atomic identity lands before v2 success reporting"
+assert_in_log "ENV identity_ready=2" \
+    "v2 success carries the fixed identity-ready signal"
+assert_eq "$(manifest_value sha "$PROJ/var/deploy_identity.json")" \
+    "$SHA_NEW" "the manifest records the full live HEAD"
+assert_eq "$(manifest_value deployment "$PROJ/var/deploy_identity.json")" \
+    "$DEPLOYMENT_UUID" "the manifest records the deployment UUID"
 assert_eq "$(grep "^CMD" "$CALLLOG" | tail -1 | grep -c "jobman stop")" 1 \
     "jobman stop is the LAST command"
+
+echo "update.sh: identity-boundary failure restores proof only after rollback succeeds"
+setup_env
+printf '{"schema":2,"sha":"%s","deployment":"%s"}\n' \
+    "1111111111111111111111111111111111111111" "$PREVIOUS_UUID" \
+    > "$PROJ/var/deploy_identity.json"
+touch "$CTL/mv_identity.fail_once"
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_eq "$?" 1 "identity publish failure remains nonzero"
+assert_not_in_log "deploy_status set deploying" \
+    "identity publish failure never announces success"
+assert_eq "$(manifest_value deployment "$PROJ/var/deploy_identity.json")" \
+    "$PREVIOUS_UUID" "successful rollback restores the coherent prior identity"
+assert_eq "$(grep "^CMD" "$CALLLOG" | tail -1 | grep -c "jobman stop")" 1 \
+    "failed migrate still stops jobman last for restarted finalization"
+
+echo "update.sh: post-identity failure restores on rollback, failed rollback leaves no proof"
+setup_env
+printf '{"schema":2,"sha":"%s","deployment":"%s"}\n' \
+    "1111111111111111111111111111111111111111" "$PREVIOUS_UUID" \
+    > "$PROJ/var/deploy_identity.json"
+touch "$CTL/deploy_status.fail_deploying"
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_eq "$?" 1 "callback failure remains nonzero"
+assert_order "CMD mv .*deploy_identity.json" "deploy_status set deploying" \
+    "candidate identity existed before the injected callback failure"
+assert_eq "$(manifest_value deployment "$PROJ/var/deploy_identity.json")" \
+    "$PREVIOUS_UUID" "successful rollback restores prior proof after invalidation"
+
+setup_env
+printf '{"schema":2,"sha":"%s","deployment":"%s"}\n' \
+    "1111111111111111111111111111111111111111" "$PREVIOUS_UUID" \
+    > "$PROJ/var/deploy_identity.json"
+touch "$CTL/deploy_status.fail_deploying" "$CTL/sudo.fail_second"
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_eq "$?" 1 "failed rollback remains nonzero"
+[ ! -e "$PROJ/var/deploy_identity.json" ] && ok "failed rollback leaves no identity proof" || \
+    fail "failed rollback left deploy_identity.json"
+[ -e "$PROJ/var/deploy_identity.invalid" ] && ok "failed rollback blocks legacy fallback" || \
+    fail "failed rollback did not leave the invalidation marker"
+assert_eq "$(grep "^CMD" "$CALLLOG" | tail -1 | grep -c "jobman stop")" 1 \
+    "failed rollback still reaches post-restart finalization"
 
 echo "update.sh: an exported SANITY_URL overrides the probe on every sanity_check"
 setup_env
