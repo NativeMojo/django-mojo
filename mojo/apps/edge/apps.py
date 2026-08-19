@@ -39,7 +39,8 @@ class EdgeConfig(AppConfig):
             resolver="protected", writable="owner",
             owner="Settings platform editor", change_behavior="typed_owner",
             constraints="A published django-mojo version, 'hold' to stay on the "
-                        "last converged fleet version, or unset for newest"))
+                        "last converged fleet version, or unset for newest",
+            unset_meaning="installs the newest published release"))
         register_descriptor(Descriptor(
             "WEBAPP_BASE_URL", "Default WebApp address", "Edge & Web Apps",
             "Default public HTTPS origin used when a WebApp has no group-specific address.",

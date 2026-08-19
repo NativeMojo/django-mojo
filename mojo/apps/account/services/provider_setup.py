@@ -1,6 +1,14 @@
-"""Superuser setup for fleet GeoIP and the system Mojo SMS provider."""
+"""Superuser setup for fleet GeoIP and the system Mojo SMS provider.
 
+Every write is addressed to exactly one **topic**.  GeoIP and SMS share an
+edit token but nothing else: one failing integration must not hold the other
+hostage, and an SMS credential must be savable on an installation that never
+publishes fleet configuration at all.
+"""
+
+import json
 import uuid
+from urllib.parse import urlsplit
 
 from django.db import transaction
 from django.utils import timezone
@@ -13,6 +21,8 @@ from mojo.helpers.settings import settings
 FLEET_KEYS = tuple(config_override.DEFAULTS)
 FILENAME = "django.override.json"
 SETUP_REVISION_KEY = "ADMIN_PROVIDER_SETUP_REVISION"
+VERIFY_STATE_KEY = "ADMIN_PROVIDER_VERIFY_STATE"
+TOPICS = ("geoip", "sms")
 
 
 def _static(name, default=None):
@@ -105,6 +115,31 @@ def _published(s3, bucket, key, allowed):
     }
 
 
+def _key_hint(value):
+    """Last four characters of a stored key, or "" when that would say too much.
+
+    Four characters of an eight-character-or-longer credential identify which
+    key is installed without narrowing a guess; a shorter value gets no hint at
+    all rather than a proportionally large fragment of itself.  Never a prefix
+    (provider keys are prefixed by convention) and never a length.
+    """
+    if not isinstance(value, str) or len(value) < 8:
+        return ""
+    return value[-4:]
+
+
+def known_providers():
+    """GeoIP provider identifiers this installation can actually dispatch to."""
+    try:
+        from mojo.helpers import geoip
+        return sorted(geoip.PROVIDERS)
+    except Exception:
+        # A picker is convenience only; validate_settings remains the authority
+        # on what may be saved, so an unavailable registry costs a list, not a
+        # working page.
+        return []
+
+
 def state(include_remote=True):
     from django.apps import apps
     from mojo.apps.account.models import Setting
@@ -118,17 +153,24 @@ def state(include_remote=True):
             published = _published(_s3_client(), bucket, key, allowed)
         except Exception as error:
             remote_error = error.__class__.__name__
-    secret_configured = Setting.objects.filter(
-        key="GEOIP_API_KEY_MOJO", group=None, is_secret=True).exists()
-    sms = {"configured": False, "remote_url": "", "api_key_configured": False}
+    # One bounded row, decrypted once, sliced immediately: the hint is what lets
+    # the browser say "key set · ····9f2c" without a value ever leaving here.
+    secret_row = Setting.objects.filter(
+        key="GEOIP_API_KEY_MOJO", group=None, is_secret=True).order_by("pk").first()
+    secret_configured = secret_row is not None
+    secret_hint = _key_hint(secret_row.get_value()) if secret_row else ""
+    sms = {"configured": False, "remote_url": "", "api_key_configured": False,
+           "api_key_hint": ""}
     if apps.is_installed("mojo.apps.phonehub"):
         from mojo.apps.phonehub.models import PhoneConfig
         row = PhoneConfig.objects.filter(group=None, provider="mojo", is_active=True).first()
         if row:
+            stored_key = row.get_mojo_api_key()
             sms = {
                 "configured": True,
                 "remote_url": row.mojo_remote_url or "",
-                "api_key_configured": bool(row.get_mojo_api_key()),
+                "api_key_configured": bool(stored_key),
+                "api_key_hint": _key_hint(stored_key),
                 "test_mode": bool(row.test_mode),
             }
     desired_geoip = dict(_loaded_values())
@@ -166,50 +208,75 @@ def state(include_remote=True):
         "geoip": {
             **desired_geoip,
             "GEOIP_API_KEY_MOJO_CONFIGURED": secret_configured,
+            "GEOIP_API_KEY_MOJO_HINT": secret_hint,
         },
+        "geoip_providers": known_providers(),
         "sms": sms,
+        "verify_state": _read_verify_state(),
     }
 
 
-def _normalize_payload(payload):
-    if not isinstance(payload, dict) or set(payload) - {
-            "geoip", "sms", "expected_revision"}:
-        raise merrors.ValueException(
-            "Provider setup accepts only geoip, sms, and expected_revision")
-    geoip = payload.get("geoip") or {}
-    sms = payload.get("sms") or {}
-    if not isinstance(geoip, dict) or not isinstance(sms, dict):
-        raise merrors.ValueException("Provider setup sections must be objects")
-    static_values = {key: geoip.get(key, default)
+def require_topic(topic):
+    """Fail closed on anything but a named topic; there is no default."""
+    if topic not in TOPICS:
+        raise merrors.ValueException("Provider setup requires topic geoip or sms")
+    return topic
+
+
+def _normalize_geoip(section):
+    extra = set(section) - set(config_override.DEFAULTS) - {
+        "GEOIP_API_KEY_MOJO", "clear_api_key"}
+    if extra:
+        raise merrors.ValueException("GeoIP setup contains unsupported fields")
+    static_values = {key: section.get(key, default)
                      for key, default in config_override.DEFAULTS.items()}
     try:
         static_values = config_override.validate_settings(static_values, _allowed_keys())
     except ValueError as error:
         raise merrors.ValueException(str(error)) from None
-    api_key = geoip.get("GEOIP_API_KEY_MOJO")
+    api_key = section.get("GEOIP_API_KEY_MOJO")
     if api_key is not None and (not isinstance(api_key, str) or len(api_key) > 4096):
         raise merrors.ValueException("GeoIP API key is invalid")
-    clear_geoip_key = geoip.get("clear_api_key") is True
-    allowed_sms = {"remote_url", "api_key", "clear_api_key", "test_mode"}
-    if set(sms) - allowed_sms:
+    return {"static_values": static_values, "api_key": api_key,
+            "clear_api_key": section.get("clear_api_key") is True}
+
+
+def _normalize_sms(section):
+    if set(section) - {"remote_url", "api_key", "clear_api_key", "test_mode"}:
         raise merrors.ValueException("SMS setup contains unsupported fields")
-    remote_url = sms.get("remote_url", "")
+    remote_url = section.get("remote_url", "")
     if not config_override.https_origin(remote_url):
         raise merrors.ValueException("SMS remote URL must be one HTTPS origin")
-    sms_key = sms.get("api_key")
-    if sms_key is not None and (not isinstance(sms_key, str) or len(sms_key) > 4096):
+    api_key = section.get("api_key")
+    if api_key is not None and (not isinstance(api_key, str) or len(api_key) > 4096):
         raise merrors.ValueException("SMS API key is invalid")
+    return {"remote_url": remote_url.rstrip("/"), "api_key": api_key,
+            "clear_api_key": section.get("clear_api_key") is True,
+            "test_mode": section.get("test_mode") is True}
+
+
+def _normalize_payload(payload, topic):
+    """Validate exactly one topic's section.
+
+    The other topic's section is a rejection rather than an ignored extra: a
+    save must fail alone, and silently accepting a section this call will never
+    write is how a browser ends up believing it saved something it did not.
+    """
+    require_topic(topic)
+    if not isinstance(payload, dict) or set(payload) - {topic, "expected_revision"}:
+        raise merrors.ValueException(
+            f"Provider setup accepts only {topic} and expected_revision")
+    section = payload.get(topic) or {}
+    if not isinstance(section, dict):
+        raise merrors.ValueException("Provider setup sections must be objects")
     expected_revision = payload.get("expected_revision")
     if expected_revision is not None and (
             not isinstance(expected_revision, str) or
             not config_override.REVISION_RE.fullmatch(expected_revision)):
         raise merrors.ValueException("Provider setup revision is invalid")
-    return static_values, api_key, clear_geoip_key, {
-        "remote_url": remote_url.rstrip("/"),
-        "api_key": sms_key,
-        "clear_api_key": sms.get("clear_api_key") is True,
-        "test_mode": sms.get("test_mode") is True,
-    }, expected_revision
+    normalized = (_normalize_geoip(section) if topic == "geoip"
+                  else _normalize_sms(section))
+    return normalized, expected_revision
 
 
 def _write_secret(key, value, clear):
@@ -276,9 +343,82 @@ def _write_configuration_revision(revision):
             key=SETUP_REVISION_KEY, group=None, is_secret=False, value=revision)])
 
 
-def _save_database(api_key, clear_geoip_key, sms):
+def _read_verify_state():
+    """Return the persisted per-topic verification state of the STORED config.
+
+    Tolerates the duplicate global rows PostgreSQL still permits: the oldest row
+    wins rather than the read failing, because a settings list that cannot
+    render is worse than one showing a stale verification.
+    """
+    from mojo.apps.account.models import Setting
+    row = Setting.objects.filter(
+        key=VERIFY_STATE_KEY, group=None).order_by("pk").first()
+    if row is None or row.is_secret:
+        return {}
+    value = row.value
+    if isinstance(value, (bytes, bytearray)):
+        value = value.decode("utf-8", "ignore")
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+    if not isinstance(value, dict):
+        return {}
+    state = {}
+    for topic in TOPICS:
+        entry = value.get(topic)
+        if not isinstance(entry, dict):
+            continue
+        state[topic] = {
+            "ok": entry.get("ok") is True,
+            "code": str(entry.get("code") or "")[:64] or None,
+            "message": str(entry.get("message") or "")[:200],
+            "at": str(entry.get("at") or "")[:40],
+        }
+    return state
+
+
+def _write_verify_state(topic, result):
+    """Record how the STORED configuration for one topic last verified.
+
+    Only ever called for a credential that is, or has just become, the stored
+    one.  A rejected candidate was never stored, so recording it would make the
+    settings list describe a configuration the installation is not running.
+    Written through the queryset for the same reason as the edit revision:
+    Setting.save/set/remove and the REST surface all refuse this protected key.
+    """
+    from mojo.apps.account.models import Setting, User
+    require_topic(topic)
+    entry = {
+        "ok": bool(result.get("success")),
+        "code": result.get("code") or None,
+        # Messages are built from a host and fixed vocabulary; no credential,
+        # request body, or exception repr ever reaches this row.
+        "message": str(result.get("message") or "")[:200],
+        "at": timezone.now().isoformat(),
+    }
+    with transaction.atomic():
+        User.objects.select_for_update().order_by("pk").first()
+        state = _read_verify_state()
+        state[topic] = entry
+        serialized = json.dumps(state)
+        updated = Setting.objects.filter(
+            key=VERIFY_STATE_KEY, group=None).update(
+                value=serialized, is_secret=False, mojo_secrets=None,
+                modified=timezone.now())
+        if not updated:
+            Setting.objects.bulk_create([Setting(
+                key=VERIFY_STATE_KEY, group=None, is_secret=False,
+                value=serialized)])
+
+
+def _save_geoip_secret(geoip):
+    _write_secret("GEOIP_API_KEY_MOJO", geoip["api_key"], geoip["clear_api_key"])
+
+
+def _save_sms_config(sms):
     from mojo.apps.phonehub.models import PhoneConfig
-    _write_secret("GEOIP_API_KEY_MOJO", api_key, clear_geoip_key)
     with transaction.atomic():
         system_rows = list(PhoneConfig.objects.select_for_update().filter(
             group=None).order_by("pk"))
@@ -303,16 +443,27 @@ def _save_database(api_key, clear_geoip_key, sms):
         row.save()
 
 
-def _stored_geoip_key(submitted_url):
-    from mojo.apps.account.models import Setting
-    loaded_url = str(_static(
+def _loaded_geoip_url():
+    return str(_static(
         "GEOIP_MOJO_PROVIDER_URL",
         config_override.DEFAULTS["GEOIP_MOJO_PROVIDER_URL"]) or "").rstrip("/")
-    if submitted_url.rstrip("/") != loaded_url:
+
+
+def _stored_geoip_key(submitted_url):
+    from mojo.apps.account.models import Setting
+    if submitted_url.rstrip("/") != _loaded_geoip_url():
         return ""
     row = Setting.objects.filter(
         key="GEOIP_API_KEY_MOJO", group=None, is_secret=True).order_by("pk").first()
     return row.get_value() if row else ""
+
+
+def _stored_sms_url():
+    from mojo.apps.phonehub.models import PhoneConfig
+    row = PhoneConfig.objects.filter(group=None, is_active=True).order_by("pk").first()
+    if not row or row.provider != "mojo":
+        return ""
+    return (row.mojo_remote_url or "").rstrip("/")
 
 
 def _stored_sms_key(submitted_url):
@@ -324,89 +475,157 @@ def _stored_sms_key(submitted_url):
     return row.get_mojo_api_key()
 
 
+def _host(url):
+    try:
+        return urlsplit(url).hostname or "The remote provider"
+    except ValueError:
+        return "The remote provider"
+
+
 def _credential_result(url, api_key, required):
+    """Verify one credential and say which host said what.
+
+    The host is the whole diagnosis an operator needs — "api.mojoverify.com
+    rejected the API key" is actionable where "the remote" is not.  The key
+    itself never enters a message, and neither does an exception repr.
+    """
     from mojo.apps.phonehub.services import mojo_provider
+    host = _host(url)
     response = mojo_provider.verify_credentials(url, api_key)
     if not response.ok:
         code = response.code or "connection_failed"
         if code in ("http_401", "http_403"):
-            message = "The remote rejected the API key"
+            message = f"{host} rejected the API key"
         elif code == "http_404":
-            message = "The remote does not expose API-key verification"
+            message = f"{host} does not expose API-key verification"
         elif code == "timeout":
-            message = "The remote provider timed out"
+            message = f"{host} did not answer in time"
         else:
-            message = "The remote provider could not be verified"
+            message = f"{host} could not be reached"
         return {"success": False, "code": code, "message": message}
     permissions = response.permissions or {}
     if required and not any(permissions.get(name) is True for name in required):
         names = " or ".join(required)
         return {"success": False, "code": "insufficient_permission",
-                "message": f"The API key requires {names}"}
+                "message": f"{host} accepted the key, but it is missing {names}"}
     return {"success": True, "code": None, "message": "Connection verified"}
 
 
-def _test_provider_credentials(api_key, clear_geoip_key, sms, static_values):
-    geo_url = static_values["GEOIP_MOJO_PROVIDER_URL"]
-    geo_key = "" if clear_geoip_key else (api_key or _stored_geoip_key(geo_url))
-    sms_key = "" if sms["clear_api_key"] else (
-        sms["api_key"] or _stored_sms_key(sms["remote_url"]))
-    return {
-        "geoip": ({"success": True, "code": "clear_requested",
-                   "message": "GeoIP credential will be cleared"}
-                  if clear_geoip_key else _credential_result(
-                      geo_url, geo_key,
-                      (("geoip_sync",) if static_values["GEOIP_MOJO_SYNC_ENABLED"]
-                       else ()))),
-        "sms": ({"success": True, "code": "clear_requested",
-                 "message": "SMS credential will be cleared"}
-                if sms["clear_api_key"] else _credential_result(
-                    sms["remote_url"], sms_key, ("send_sms", "comms"))),
-    }
+def _test_provider_credentials(topic, section):
+    """Verify one topic's credential.
+
+    Returns ``(results, tested_stored)``.  ``tested_stored`` is the single
+    decision point for persisted verify state: it is true only when both the
+    credential and the target came from storage, so a draft nobody saved can
+    never be recorded as the state of the stored configuration.
+    """
+    require_topic(topic)
+    if topic == "geoip":
+        static_values = section["static_values"]
+        url = static_values["GEOIP_MOJO_PROVIDER_URL"]
+        if section["clear_api_key"]:
+            return {"geoip": {"success": True, "code": "clear_requested",
+                              "message": "GeoIP credential will be cleared"}}, False
+        typed = section["api_key"]
+        sync = static_values["GEOIP_MOJO_SYNC_ENABLED"]
+        stored = bool(
+            not typed and url.rstrip("/") == _loaded_geoip_url() and
+            sync == bool(_static("GEOIP_MOJO_SYNC_ENABLED",
+                                 config_override.DEFAULTS["GEOIP_MOJO_SYNC_ENABLED"])))
+        result = _credential_result(
+            url, typed or _stored_geoip_key(url),
+            ("geoip_sync",) if sync else ())
+        return {"geoip": result}, stored
+    url = section["remote_url"]
+    if section["clear_api_key"]:
+        return {"sms": {"success": True, "code": "clear_requested",
+                        "message": "SMS credential will be cleared"}}, False
+    typed = section["api_key"]
+    stored_url = _stored_sms_url()
+    stored = bool(not typed and stored_url and url.rstrip("/") == stored_url)
+    result = _credential_result(
+        url, typed or _stored_sms_key(url), ("send_sms", "comms"))
+    return {"sms": result}, stored
 
 
-def test(actor, payload):
+def test(actor, topic, payload):
     _superuser(actor)
-    static_values, api_key, clear_geoip_key, sms, _ = _normalize_payload(payload)
-    results = _test_provider_credentials(
-        api_key, clear_geoip_key, sms, static_values)
-    return {"tested": True, "results": results,
+    require_topic(topic)
+    section, _ = _normalize_payload(payload, topic)
+    results, tested_stored = _test_provider_credentials(topic, section)
+    if tested_stored:
+        # Testing what is already stored IS an observation of the stored
+        # configuration, so it is worth persisting.  A draft is not.
+        _write_verify_state(topic, results[topic])
+    return {"tested": True, "topic": topic, "results": results,
             "success": all(item["success"] for item in results.values())}
 
 
-def _audit(actor, outcome, revision, old_revision=None, version_id=None, error=None):
+def _audit(actor, outcome, revision, old_revision=None, version_id=None,
+           error=None, topic=""):
     from mojo.apps.incident import report_event_suppressed
-    keys = ",".join(FLEET_KEYS)
-    message = (f"Admin fleet provider configuration {outcome} by user={actor.pk} "
-               f"keys={keys} old_revision={old_revision or 'none'} "
+    keys = ",".join(FLEET_KEYS) if topic == "geoip" else "phonehub.PhoneConfig"
+    message = (f"Admin provider configuration {outcome} by user={actor.pk} "
+               f"topic={topic or 'none'} keys={keys} "
+               f"old_revision={old_revision or 'none'} "
                f"new_revision={revision or 'none'} version={version_id or 'none'}")
     if error:
         message += f" error={error.__class__.__name__}"
     report_event_suppressed(
-        message, title=f"Fleet provider configuration {outcome}",
+        message, title=f"Provider configuration {outcome}",
         category="admin_settings", level=6 if outcome == "published" else 5,
-        key=f"fleet-provider-{outcome}:{actor.pk}:{revision or old_revision or 'none'}")
+        key=(f"fleet-provider-{outcome}:{topic or 'none'}:{actor.pk}:"
+             f"{revision or old_revision or 'none'}"))
 
 
-def apply(actor, payload):
+def _pending_restart(published_revision):
+    """A restart is pending only when something is actually published."""
+    return bool(published_revision) and published_revision != _static(
+        config_override.REVISION_KEY, "")
+
+
+def _token_document(topic, bucket, key, allowed, s3):
+    """Read the published document the edit token is bound to.
+
+    ``expected_revision`` binds (edit_revision, published_revision), so an SMS
+    save has to perform the same read state() performed even though it will
+    never write the document.  Where state() may degrade to remote_error and a
+    None revision, a writer must not: an unreadable document fails the save
+    closed rather than letting a stale token compare equal to a missing one.
+    """
+    if not (bucket and key and allowed):
+        return None
+    if topic == "geoip":
+        return _published(s3, bucket, key, allowed)
+    try:
+        return _published(_s3_client(), bucket, key, allowed)
+    except Exception:
+        raise merrors.ValueException(
+            "Provider configuration changed; reload before publishing") from None
+
+
+def apply(actor, topic, payload):
     actor = _superuser(actor)
+    require_topic(topic)
     allowed = _allowed_keys()
     bucket, key = _location()
     kms_key = _kms_key()
-    if (not bucket or not key or frozenset(FLEET_KEYS) - allowed or not kms_key or
-            not _restart_enabled()):
+    # GeoIP owns the fleet document and cannot be saved without the publishing
+    # plane.  SMS owns one database row and must stay usable on an installation
+    # that never publishes fleet configuration at all.
+    if topic == "geoip" and (
+            not bucket or not key or frozenset(FLEET_KEYS) - allowed or
+            not kms_key or not _restart_enabled()):
         raise merrors.ValueException(
             "Fleet publishing requires its exact object, all provider delegations, "
             "a KMS key, and config-sync restart")
-    static_values, api_key, clear_geoip_key, sms, expected_revision = \
-        _normalize_payload(payload)
-    results = _test_provider_credentials(
-        api_key, clear_geoip_key, sms, static_values)
+    section, expected_revision = _normalize_payload(payload, topic)
+    results, _ = _test_provider_credentials(topic, section)
     failed = [name for name, result in results.items() if not result["success"]]
     if failed:
         raise merrors.ValueException(
             "Provider verification failed for " + ", ".join(failed))
-    s3 = _s3_client()
+    s3 = _s3_client() if topic == "geoip" else None
     current = None
     old_revision = revision = published_revision = version_id = None
     unchanged = False
@@ -418,24 +637,28 @@ def apply(actor, payload):
             from mojo.apps.account.models import User
             User.objects.select_for_update().order_by("pk").first()
             actor = _superuser(actor, lock=True)
-            current = _published(s3, bucket, key, allowed)
+            current = _token_document(topic, bucket, key, allowed, s3)
             published_revision = current["document"]["revision"] if current else None
             old_revision = _configuration_token(
                 _configuration_revision(lock=True), published_revision)
             if expected_revision != old_revision:
                 raise merrors.ValueException(
                     "Provider configuration changed; reload before publishing")
-            static_changed = (
-                not current or current["document"]["settings"] != static_values)
+            static_values = (section["static_values"] if topic == "geoip" else None)
+            static_changed = bool(topic == "geoip" and (
+                not current or current["document"]["settings"] != static_values))
             if static_changed and current and not current.get("etag"):
                 raise merrors.ValueException(
                     "Published fleet configuration has no concurrency token")
-            _save_database(api_key, clear_geoip_key, sms)
+            if topic == "geoip":
+                _save_geoip_secret(section)
+            else:
+                _save_sms_config(section)
             revision = uuid.uuid4().hex
             _write_configuration_revision(revision)
             if not static_changed:
                 unchanged = True
-                version_id = current.get("version_id")
+                version_id = current.get("version_id") if current else None
                 revision = _configuration_token(revision, published_revision)
             else:
                 body = config_override.encode_document(
@@ -454,21 +677,26 @@ def apply(actor, payload):
                 response = s3.put_object(**put_args)
                 version_id = response.get("VersionId")
                 published_revision = revision
+            # The candidate this call verified is now the stored one, so its
+            # result describes the installation rather than a draft.
+            _write_verify_state(topic, results[topic])
     except Exception as error:
-        _audit(actor, "failed", revision, old_revision=old_revision, error=error)
+        _audit(actor, "failed", revision, old_revision=old_revision, error=error,
+               topic=topic)
         raise
     if unchanged:
         _audit(actor, "unchanged", revision, old_revision=old_revision,
-               version_id=version_id)
-        return {"published": False, "unchanged": True, "revision": revision,
+               version_id=version_id, topic=topic)
+        return {"published": False, "unchanged": True, "topic": topic,
+                "revision": revision,
                 "published_revision": published_revision,
                 "version_id": version_id,
-                "pending_restart": published_revision != _static(
-                    config_override.REVISION_KEY, ""),
+                "pending_restart": _pending_restart(published_revision),
                 "results": results}
     _audit(actor, "published", revision, old_revision=old_revision,
-           version_id=version_id)
-    return {"published": True, "unchanged": False, "revision": revision,
+           version_id=version_id, topic=topic)
+    return {"published": True, "unchanged": False, "topic": topic,
+            "revision": revision,
             "published_revision": published_revision,
             "version_id": version_id, "pending_restart": True,
             "results": results}

@@ -33,7 +33,7 @@ FLEET_PROVIDER_KEYS = frozenset({
     "GEOIP_PRIMARY_PROVIDER", "GEOIP_FALLBACK_PROVIDER",
     "GEOIP_ADDITIONAL_PROVIDERS", "GEOIP_MOJO_PROVIDER_URL",
     "GEOIP_MOJO_SYNC_ENABLED", "GEOIP_API_KEY_MOJO",
-    "ADMIN_PROVIDER_SETUP_REVISION",
+    "ADMIN_PROVIDER_SETUP_REVISION", "ADMIN_PROVIDER_VERIFY_STATE",
 })
 NON_PUBLIC_HOST_SUFFIXES = frozenset({
     "alt", "arpa", "corp", "example", "home", "internal", "invalid", "lan", "local",
@@ -63,6 +63,12 @@ class Descriptor:
     constraints: str = ""
     owner_route: str = ""
     storage: str = "deployment"
+    # The browser cannot derive either of these from a value.  ``unit`` names
+    # what an integer counts; ``unset_meaning`` is the one plain sentence that
+    # says what happens while the value is absent — only where absence is a
+    # legitimate, understood state, never as reassurance about a missing secret.
+    unit: str = ""
+    unset_meaning: str = ""
 
 
 _REGISTRY = {}
@@ -461,15 +467,18 @@ def register_core_descriptors():
         Descriptor("INCIDENT_EMAIL_FROM", "Incident email sender", "Email",
                    "Mailbox used for incident notification email.", "configured",
                    resolver="static", sensitivity="configured_only", writable="owner",
-                   owner="System Setup", change_behavior="setup", owner_route="setup?focus=aws_email"),
+                   owner="System Setup", change_behavior="setup", owner_route="setup?focus=aws_email",
+                   unset_meaning="incident email is not sent"),
         Descriptor("AWS_MONITORING_NAME", "Monitoring identity", "Security & operations",
                    "Stable deployment name used for monitoring resources.", "configured",
                    resolver="static", sensitivity="configured_only", writable="owner", owner="System Setup",
-                   change_behavior="setup", owner_route="setup?focus=aws_monitoring"),
+                   change_behavior="setup", owner_route="setup?focus=aws_monitoring",
+                   unset_meaning="monitoring resources are not named for this deployment"),
         Descriptor("AWS_CLOUDWATCH_ALARM_TOPIC_ARNS", "Monitoring delivery", "Security & operations",
                    "CloudWatch alarm delivery configuration.", "configured",
                    resolver="protected", sensitivity="configured_only", writable="owner",
-                   owner="System Setup", change_behavior="setup", owner_route="setup?focus=aws_monitoring"),
+                   owner="System Setup", change_behavior="setup", owner_route="setup?focus=aws_monitoring",
+                   unset_meaning="CloudWatch alarms are not delivered anywhere"),
         Descriptor("SECURE_POSTURE", "Django HTTPS posture", "Security & operations",
                    "Secure redirect, cookie, and HSTS deployment controls.", "object",
                    resolver="posture", writable="none", owner="Deployment settings",
@@ -481,7 +490,8 @@ def register_core_descriptors():
         Descriptor("SYSTEM_SETUP_LOCAL_API_URL", "Local API probe", "Security & operations",
                    "Optional loopback target for Setup probes.", "configured", resolver="static",
                    sensitivity="configured_only", writable="none", owner="Deployment settings",
-                   change_behavior="deploy"),
+                   change_behavior="deploy",
+                   unset_meaning="Setup probes the public address instead"),
         Descriptor("GEOIP_PRIMARY_PROVIDER", "Primary GeoIP provider", "Security & operations",
                    "Provider queried first for IP intelligence.", "string", "mojo",
                    resolver="static", writable="fleet_config", owner="Mojo providers",
