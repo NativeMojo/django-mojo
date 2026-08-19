@@ -38,7 +38,8 @@ def describe(capabilities):
               "security": capabilities["view_platform_security"],
               "advanced": capabilities["view_advanced"],
               "metrics": capabilities["manage_aws"],
-              "maintenance": capabilities["manage_aws"]}
+              "maintenance": capabilities["manage_aws"],
+              "capacity": bool(capabilities["setup"] and capabilities["manage_aws"])}
     # Same ordering as the real provider: `enabled` comes from the authority
     # values, then the installation-wide flag joins them.
     enabled = any(values.values())

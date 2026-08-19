@@ -22,6 +22,13 @@ def describe(request, capabilities):
         # Metrics. Applying an upgrade needs a platform tier on top of it; that
         # second gate lives on the endpoint, not on whether the page is offered.
         "maintenance": bool(capabilities.get("manage_aws")),
+        # Capacity actions create and destroy infrastructure, so the panel is
+        # offered only where the endpoint would also answer: System Setup
+        # authority (the superuser tier) AND the AWS grant. The endpoint proves
+        # a literal superuser again in its own body — this flag decides whether
+        # the panel is even drawn, never whether the action is allowed.
+        "capacity": bool(capabilities.get("setup")
+                         and capabilities.get("manage_aws")),
     }
     # `enabled` is computed FIRST, from the authority values only. The
     # infrastructure flag is a fact about the installation, true on every

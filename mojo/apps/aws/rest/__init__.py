@@ -7,3 +7,4 @@ from .send import *
 from .templates import *
 from .cloudwatch import *
 from .maintenance import *
+from .capacity import *

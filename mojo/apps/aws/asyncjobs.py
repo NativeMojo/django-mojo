@@ -69,6 +69,25 @@ def _details(report):
     return "\n".join(lines)
 
 
+def capacity_operation(job):
+    """Drive ONE Admin capacity operation to a proven steady state.
+
+    Published max_retries=0: every leg is a mutation against live
+    infrastructure, and a redelivered job would launch a second node or delete
+    a second reader. The operation record carries the failure instead, which is
+    what the panel shows and what the operator acts on.
+    """
+    from mojo.apps.aws.services import capacity
+
+    operation_id = (job.payload or {}).get("operation")
+    if not operation_id:
+        job.add_log("capacity operation job carried no operation id", kind="error")
+        return "no_operation"
+    result = capacity.run_operation(operation_id)
+    job.add_log(f"capacity operation {operation_id} finished: {result}")
+    return result
+
+
 def check_version_drift(job):
     """Inventory managed-service versions and file at most ONE incident event.
 

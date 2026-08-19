@@ -1,7 +1,21 @@
 """
 AWS EC2 Helper Module
 
-Provides simple interfaces for managing AWS EC2 (Elastic Compute Cloud) resources.
+TWO CLIENT PATHS, deliberately separate:
+
+* ``EC2Instance`` / ``EC2SecurityGroup`` — the original convenience classes.
+  They build their own unbounded boto client, swallow ``ClientError`` into
+  ``False``/``None`` return values, and expose no ``IamInstanceProfile`` or
+  ``MetadataOptions``. Left alone, and NOT extended: a capacity mutation that
+  cannot tell "denied" from "did nothing", and that launches a node with IMDSv1
+  enabled and no instance role, is worse than no button at all.
+* the module-level functions at the bottom — the bounded seam the Admin
+  capacity actions use. Every call goes through ``ProviderCaller.call`` with
+  the IAM action and the mutation flag named EXPLICITLY, so a failure raises
+  ``ProviderCallError`` whose ``detail()`` is the only shape safe for an API
+  response or a log line.
+
+New code wants the module-level functions.
 """
 
 import time
@@ -9,7 +23,8 @@ import boto3
 import botocore
 from typing import Dict, List, Optional, Union, Any, Tuple
 
-from .client import get_session
+from .client import get_client, get_session
+from .provider_call import ProviderCaller
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
 
@@ -801,3 +816,264 @@ def get_instances_by_state(state: str = 'running') -> List[Dict]:
     ]
 
     return EC2Instance.list_instances(filters)
+
+
+# ── module-level: the bounded seam for Admin capacity actions ───────────────
+#
+# See the module docstring for why these are not methods on EC2Instance.
+# No type hints below, per repo convention for framework code.
+
+EC2_DEFAULT_TIMEOUT = 10
+MAX_IMAGES = 50
+FLEET_IMAGE_TAG = "mojo:fleet-image"
+CREATED_BY_TAG = "mojo:created-by"
+# IMDSv2 only. A cloned node inherits the source AMI's whole filesystem, so an
+# instance-metadata endpoint reachable without a token is an SSRF away from the
+# instance role's credentials.
+IMDS_V2_ONLY = {
+    "HttpTokens": "required",
+    "HttpEndpoint": "enabled",
+    "HttpPutResponseHopLimit": 1,
+}
+
+_caller = ProviderCaller(logger)
+
+
+def _setting(name, default=None):
+    try:
+        return settings.get_static(name, default)
+    except Exception:
+        return default
+
+
+def _ec2(client=None, region=None, timeout=EC2_DEFAULT_TIMEOUT):
+    """The injection seam. Tests and callers holding a session pass ``client``."""
+    if client is not None:
+        return client
+    region = region or _setting("AWS_REGION", "us-east-1")
+    session = get_session(_setting("AWS_KEY"), _setting("AWS_SECRET"), region)
+    # One attempt: a retried RunInstances is a second live node.
+    return get_client("ec2", session=session, region=region,
+                      timeout=timeout, max_attempts=1)
+
+
+def _tag_map(row):
+    return {tag.get("Key"): tag.get("Value") for tag in row.get("Tags") or []
+            if tag.get("Key")}
+
+
+def _tag_list(tags):
+    return [{"Key": key, "Value": str(value)}
+            for key, value in sorted((tags or {}).items())]
+
+
+def _facts(row):
+    """One describe_instances row, projected to what a clone needs to copy."""
+    profile = (row.get("IamInstanceProfile") or {}).get("Arn")
+    placement = row.get("Placement") or {}
+    tags = _tag_map(row)
+    private_dns = row.get("PrivateDnsName") or ""
+    return {
+        "instance_id": row.get("InstanceId"),
+        "state": str(((row.get("State") or {}).get("Name")) or "").lower(),
+        "instance_type": row.get("InstanceType"),
+        "image_id": row.get("ImageId"),
+        "subnet_id": row.get("SubnetId"),
+        "vpc_id": row.get("VpcId"),
+        "availability_zone": placement.get("AvailabilityZone"),
+        "private_ip": row.get("PrivateIpAddress"),
+        "private_dns_name": private_dns,
+        # The first label is what `hostname -s` reports on the box, which is
+        # the only thing a self-removal check can compare against.
+        "private_hostname": private_dns.split(".", 1)[0].lower(),
+        "security_group_ids": [group.get("GroupId")
+                               for group in row.get("SecurityGroups") or []
+                               if group.get("GroupId")],
+        "iam_instance_profile_arn": profile,
+        "key_name": row.get("KeyName"),
+        "tags": tags,
+        "name": tags.get("Name") or row.get("InstanceId"),
+    }
+
+
+def _describe(ec2, filters, iam_action="ec2:DescribeInstances"):
+    page = _caller.call(
+        "ec2.describe_instances",
+        lambda: ec2.describe_instances(Filters=filters),
+        iam_action=iam_action, mutation=False)
+    rows = []
+    for reservation in page.get("Reservations") or []:
+        for row in reservation.get("Instances") or []:
+            rows.append(_facts(row))
+    return rows
+
+
+def instance_facts(instance_id, client=None, region=None):
+    """Facts for one instance, or None.
+
+    A FILTERED describe, never ``InstanceIds=``: AWS raises
+    ``InvalidInstanceID.NotFound`` for an id it has reaped, and "this instance
+    is gone" must be a None, not an exception.
+    """
+    ec2 = _ec2(client, region)
+    rows = _describe(ec2, [{"Name": "instance-id", "Values": [str(instance_id)]}])
+    return rows[0] if rows else None
+
+
+def instance_map(instance_ids, client=None, region=None):
+    """``{instance_id: facts}`` for many instances, in ONE describe."""
+    ids = [str(value) for value in (instance_ids or []) if str(value).startswith("i-")]
+    if not ids:
+        return {}
+    ec2 = _ec2(client, region)
+    rows = _describe(ec2, [{"Name": "instance-id", "Values": ids[:100]}])
+    return {row["instance_id"]: row for row in rows if row.get("instance_id")}
+
+
+def running_instance(instance_ids, client=None, region=None):
+    """Facts for the first id IN THE CALLER'S ORDER that AWS reports running.
+
+    The order is the caller's preference (the capacity service puts
+    non-primary nodes first), and AWS does not preserve request order in
+    ``Reservations``, so the pick happens here rather than off the response.
+    """
+    ids = [str(value) for value in (instance_ids or []) if str(value).startswith("i-")]
+    if not ids:
+        return None
+    ec2 = _ec2(client, region)
+    rows = _describe(ec2, [
+        {"Name": "instance-id", "Values": ids[:100]},
+        {"Name": "instance-state-name", "Values": ["running"]},
+    ])
+    found = {row["instance_id"]: row for row in rows if row.get("instance_id")}
+    for identifier in ids:
+        if identifier in found:
+            return found[identifier]
+    return None
+
+
+def capture_image(instance_id, name, tag_value, description="", client=None, region=None):
+    """Snapshot one running instance WITHOUT rebooting it. Returns the image id.
+
+    ``NoReboot=True`` is not an optimization — the source is a node that is
+    serving production traffic, and rebooting it to take a picture of it would
+    make an add-capacity action an outage.
+    """
+    ec2 = _ec2(client, region)
+    tags = _tag_list({FLEET_IMAGE_TAG: tag_value, "Name": name})
+    page = _caller.call(
+        "ec2.create_image",
+        lambda: ec2.create_image(
+            InstanceId=instance_id, Name=name, NoReboot=True,
+            Description=description or f"admin capacity clone source {instance_id}",
+            TagSpecifications=[{"ResourceType": "image", "Tags": tags}]),
+        iam_action="ec2:CreateImage", mutation=True)
+    return page.get("ImageId")
+
+
+def image_status(image_id, client=None, region=None):
+    """``{image_id, state, created}`` for one image, or None."""
+    ec2 = _ec2(client, region)
+    page = _caller.call(
+        "ec2.describe_images",
+        lambda: ec2.describe_images(
+            Owners=["self"],
+            Filters=[{"Name": "image-id", "Values": [str(image_id)]}]),
+        iam_action="ec2:DescribeImages", mutation=False)
+    for row in (page.get("Images") or [])[:1]:
+        return {"image_id": row.get("ImageId"),
+                "state": str(row.get("State") or "").lower(),
+                "created": row.get("CreationDate")}
+    return None
+
+
+def _image_age_days(value):
+    """Age in days of an AWS CreationDate string, or None when unparseable."""
+    from datetime import datetime, timezone
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - parsed).total_seconds() / 86400.0
+
+
+def find_reusable_image(tag_value, max_age_days, client=None, region=None):
+    """The newest available fleet image younger than ``max_age_days``, or None.
+
+    Capturing an AMI takes minutes and costs storage forever. A picture of the
+    same fleet taken this week is the same picture — but only for a bounded
+    while, because the node it was taken from keeps moving.
+    """
+    ec2 = _ec2(client, region)
+    page = _caller.call(
+        "ec2.describe_images",
+        lambda: ec2.describe_images(
+            Owners=["self"],
+            Filters=[{"Name": f"tag:{FLEET_IMAGE_TAG}", "Values": [str(tag_value)]},
+                     {"Name": "state", "Values": ["available"]}]),
+        iam_action="ec2:DescribeImages", mutation=False)
+    best = None
+    for row in (page.get("Images") or [])[:MAX_IMAGES]:
+        age = _image_age_days(row.get("CreationDate"))
+        if age is None or age > float(max_age_days):
+            continue
+        if best is None or str(row.get("CreationDate")) > str(best.get("CreationDate")):
+            best = row
+    if best is None:
+        return None
+    return {"image_id": best.get("ImageId"),
+            "state": str(best.get("State") or "").lower(),
+            "created": best.get("CreationDate"),
+            "age_days": round(_image_age_days(best.get("CreationDate")) or 0, 2)}
+
+
+def launch_clone(source_facts, image_id, subnet_id, name, user_data, tags=None,
+                 client=None, region=None):
+    """Launch ONE clone of ``source_facts``. Returns the new instance id.
+
+    Everything that decides where the node lands and what it may do is copied
+    from the source instance rather than configured: instance type, subnet,
+    security groups, and the instance profile. IMDSv2 is forced regardless of
+    what the source had.
+    """
+    ec2 = _ec2(client, region)
+    facts = source_facts or {}
+    all_tags = {"Name": name, CREATED_BY_TAG: "admin-capacity"}
+    all_tags.update(tags or {})
+    params = {
+        "ImageId": image_id,
+        "InstanceType": facts.get("instance_type"),
+        "MinCount": 1,
+        "MaxCount": 1,
+        "SubnetId": subnet_id or facts.get("subnet_id"),
+        "SecurityGroupIds": list(facts.get("security_group_ids") or []),
+        "UserData": user_data or "",
+        "MetadataOptions": dict(IMDS_V2_ONLY),
+        "TagSpecifications": [{"ResourceType": "instance",
+                               "Tags": _tag_list(all_tags)}],
+    }
+    profile = facts.get("iam_instance_profile_arn")
+    if profile:
+        params["IamInstanceProfile"] = {"Arn": profile}
+    page = _caller.call(
+        "ec2.run_instances", lambda: ec2.run_instances(**params),
+        iam_action="ec2:RunInstances", mutation=True)
+    rows = page.get("Instances") or []
+    return rows[0].get("InstanceId") if rows else None
+
+
+def terminate(instance_id, client=None, region=None):
+    """Terminate ONE instance. Returns the state AWS moved it to."""
+    ec2 = _ec2(client, region)
+    page = _caller.call(
+        "ec2.terminate_instances",
+        lambda: ec2.terminate_instances(InstanceIds=[str(instance_id)]),
+        iam_action="ec2:TerminateInstances", mutation=True)
+    for row in page.get("TerminatingInstances") or []:
+        return str((row.get("CurrentState") or {}).get("Name") or "").lower()
+    return ""

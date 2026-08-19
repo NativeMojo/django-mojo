@@ -1,7 +1,8 @@
 """Foundation gallery and reset coordination for the Admin preview."""
 
 from .features import (
-    activity, advanced, dashboard, maintenance, people, platform, settings, webapps,
+    activity, advanced, capacity, dashboard, maintenance, people, platform,
+    settings, webapps,
 )
 
 
@@ -9,7 +10,7 @@ PROVIDERS = (dashboard, people, webapps, activity, platform, advanced, settings)
 # Providers that serve pages but publish no feature lane of their own. They
 # still hold scenario state, so reset must reach them; bootstrap must not,
 # or the shell would learn about a feature its registry has never heard of.
-RESET_ONLY = (maintenance,)
+RESET_ONLY = (maintenance, capacity)
 
 
 def bootstrap(groups, membership_groups=None, can_create_webapp_group=True,
@@ -56,7 +57,8 @@ def reset(handler, fixtures, *, key_state="active", setup_state="idle",
           activity_state="full", onboarding_state="idle",
           dashboard_state="healthy", settings_state="normal",
           metrics_state="live", maintenance_state="findings",
-          deployments_state="mixed", infrastructure_mode="managed"):
+          deployments_state="mixed", capacity_state="healthy",
+          infrastructure_mode="managed"):
     """Reset every stateful provider so scenarios never leak across runs."""
     # An installation-wide property rather than a provider scenario, so it is
     # stamped on the handler here instead of being threaded through resets.
@@ -70,4 +72,5 @@ def reset(handler, fixtures, *, key_state="active", setup_state="idle",
                        settings_state=settings_state,
                        metrics_state=metrics_state,
                        maintenance_state=maintenance_state,
-                       deployments_state=deployments_state)
+                       deployments_state=deployments_state,
+                       capacity_state=capacity_state)
