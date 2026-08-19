@@ -93,7 +93,7 @@ needed:
 | `BASE_URL` | Canonical public HTTPS origin selected by the administrator |
 | `MOJO_INSTALLATION_UUID` | UUID frozen on the first ownership operation |
 | `MOJO_INSTALLATION_SLUG` | `AWS_MONITORING_NAME` when statically configured, otherwise `mojo-` plus the frozen UUID prefix |
-| `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` | JSON list of non-empty topic ARN strings |
+| `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` | JSON list of non-empty topic ARN strings. The runtime reader falls back to `django.conf`, so Fix **merges** both planes through `system_settings.merge_protected_list` instead of replacing the row — see [helpers/settings.md](../helpers/settings.md#protected-settings-live-on-two-planes) |
 | `EDGE_EXPECTED_TOPOLOGY` | `{"nodes": [...], "pools": [...]}` with duplicate-free sorted string lists |
 
 Generic `Setting` REST, `Setting.set()`, `save()`, renames, and deletes refuse

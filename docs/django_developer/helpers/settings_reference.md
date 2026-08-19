@@ -243,9 +243,12 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
   Advanced API into one bounded EC2, RDS, and ElastiCache inventory page.
   When false the section reports `unconfigured`. It never creates or mutates
   resources and omits network endpoints and IP addresses.
-- `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` — **file-only**
-  (`settings.get_static`, `kind="list"`), default `[]`. Exact SNS topic ARN
+- `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` — **protected, DB-backed with a file
+  fallback** (`settings.get`, `kind="list"`), default `[]`. Exact SNS topic ARN
   allowlist for `/api/aws/cloudwatch/sns/alarm`; missing/empty denies all.
+  A protected `Setting` row wins over `django.conf` as a whole value, so System
+  Setup merges both planes when it reconciles monitoring — see
+  [settings.md](settings.md#protected-settings-live-on-two-planes).
 - `AWS_GUARDDUTY_FINDING_TOPIC_ARNS` — **file-only**
   (`settings.get_static`, `kind="list"`), default `[]`. Exact SNS topic ARN
   allowlist for `/api/aws/guardduty/sns/finding`; missing/empty denies all.

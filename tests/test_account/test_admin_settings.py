@@ -136,6 +136,59 @@ def test_settings_registry_contract(opts):
         "categories from absent optional applications remained advertised"
 
 
+@th.django_unit_test("a file-configured protected key reports deployment provenance")
+def test_protected_deployment_fallback_is_per_key(opts):
+    """The fallback is opt-in per descriptor, and both halves matter.
+
+    ``AWS_CLOUDWATCH_ALARM_TOPIC_ARNS`` can be live with no database row at all
+    because the SNS receiver falls through to ``django.conf``; reporting it
+    unconfigured is a lie. The other protected descriptors are read through the
+    database only, so reporting a file value as live would be the same lie
+    inverted.
+    """
+    from mojo.apps.account.services import admin_settings
+
+    rows = {row.key: row for row in admin_settings.descriptors()}
+    assert rows["AWS_CLOUDWATCH_ALARM_TOPIC_ARNS"].deployment_fallback, \
+        "the one protected key the runtime also reads from django.conf lost its fallback"
+    for key in ("BASE_URL", "AUTH_CONFIG", "EDGE_EXPECTED_TOPOLOGY",
+                "EDGE_FRAMEWORK_VERSION"):
+        if key in rows:
+            assert not rows[key].deployment_fallback, \
+                f"{key} is not read from the file plane; a file value must not look live"
+
+    # Synthetic keys: no database row can exist for them, and only their own
+    # static reads are intercepted, so a concurrently running module is
+    # untouched by the patch.
+    def _descriptor(key, fallback):
+        return admin_settings.Descriptor(
+            key, "Test", "Security & operations", "Test only.", "configured",
+            resolver="protected", sensitivity="configured_only",
+            deployment_fallback=fallback)
+
+    honored = _descriptor("TEST_PROTECTED_FILE_HONORED", True)
+    ignored_key = _descriptor("TEST_PROTECTED_FILE_IGNORED", False)
+    real_static = admin_settings.settings.get_static
+    deployed = ["arn:aws:sns:us-east-1:123456789012:file-configured"]
+
+    def only_test_keys(name, default=None, kind=None):
+        if name in (honored.key, ignored_key.key):
+            return deployed
+        return real_static(name, default, kind=kind)
+
+    with mock.patch.object(admin_settings.settings, "get_static", only_test_keys):
+        value, source, shadowed = admin_settings._protected_state(honored, [])
+        assert value == {"configured": True} and source == "deployment" and not shadowed, \
+            "a file-configured protected key reported itself unconfigured"
+        value, source, _ = admin_settings._protected_state(ignored_key, [])
+        assert value == {"configured": False} and source == "default", \
+            "a protected key nothing reads from the file plane reported a file value as live"
+
+    value, source, _ = admin_settings._protected_state(honored, [])
+    assert value == {"configured": False} and source == "default", \
+        "an unconfigured protected key claimed deployment provenance"
+
+
 @th.django_unit_test("catalog protection is global-scope-aware across moves")
 def test_settings_global_protection(opts):
     from mojo import errors as me
