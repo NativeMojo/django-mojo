@@ -1,4 +1,29 @@
-"""Deployment-level AWS readiness audit and create-missing bootstrap."""
+"""Deployment-level AWS readiness audit and create-missing bootstrap.
+
+THREE THINGS IN THIS REPOSITORY LOOK AT AN AWS ACCOUNT. They are not
+interchangeable, and picking the wrong one wastes an afternoon:
+
+    this module                         in-Django, reads settings, and CREATES
+                                        MISSING integration surfaces — the cron
+                                        rule, the S3 file manager, SES, dnsman.
+                                        It is about a running deployment's
+                                        readiness, not about infrastructure.
+                                        Answers "can this deployment talk to
+                                        AWS?".
+    mojo/deploy/check_setup.py          pre-Django, read-only, and it JUDGES.
+                                        It scores an account against the
+                                        django-mojo reference topology and
+                                        universal security expectations, and
+                                        exits non-zero so it can gate a deploy.
+                                        Answers "is this account set up
+                                        correctly?".
+    mojo/deploy/provision/discover.py   pre-Django, read-only, and JUDGES
+                                        NOTHING. It returns the raw shape of
+                                        the resources the provisioner manages
+                                        so its ensure-services can decide what
+                                        to create. Answers "what is already
+                                        there?".
+"""
 
 import os
 import re
