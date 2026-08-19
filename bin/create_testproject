@@ -288,6 +288,7 @@ JOBS_ALLOWED_CHANNELS = ["sms", "exec_broadcast", "exec_retry",
                          "testit_run_jobs_helper", "t906_firewall", "t906_a",
                          "t906_b", "t906_sched", "t906_seed", "t906_orphan",
                          "t936_allowed", "testit_aws_version_drift",
+                         "testit_aws_infra_drift",
                          "testit_edge_deploy", "testit_dnsman_cert_jobs",
                          "t1771_broadcast"]
 JOBS_DEFAULT_MAX_RETRIES = 0
