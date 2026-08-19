@@ -137,6 +137,12 @@ async function manageSection(ctx, app, summary, section, body, reload) {
       ['Repository', summary.webapp?.repository || 'Not connected'],
       ['Deploy key', summary.deployment_key?.linked && summary.deployment_key?.active ? 'Active' : 'Not set up'],
     ]));
+    if (!address.hostname && manage) {
+      // An addressless app's next step is picking an address — offer it right
+      // here so reaching the inspector (the only path to Delete) doesn't hide it.
+      body.append(h('div', {class: 'row-actions'},
+        h('button', {class: 'button primary', onclick: () => changeAddressFor(ctx, app, reload)}, icon('globe'), 'Set address')));
+    }
     if (address.hostname) {
       api(`/api/edge/webapp/health?webapp=${encodeURIComponent(app.id)}`)
         .then((res) => { const tone = res.status === 'healthy' ? 'success' : res.status === 'not_configured' ? 'neutral' : 'danger';
@@ -278,18 +284,21 @@ function wireRowAction(row, run) {
   return row;
 }
 
-function webappRow(ctx, item, {onOpen, onSetAddress}) {
+function webappRow(ctx, item, {onOpen}) {
   const app = item.webapp || {};
   const name = app.display_name || app.slug || `#${app.id}`;
   const address = item.address;
   const release = item.current_release;
   const deployment = item.latest_deployment;
   if (!address) {
+    // Always open the management inspector — its Danger tab carries both "Set
+    // address" and "Delete app", and Overview offers "Set address" directly.
+    // Routing a manager straight to the address wizard here used to trap an
+    // addressless app (a half-finished onboarding) with no way to delete it.
     return wireRowAction(statusRow({tone: 'warn', name,
       value: 'No address yet — not reachable',
-      action: ctx.capabilities.manage_webapps
-        ? {label: 'Set address', href: '#'} : {label: 'Open', href: '#'}}),
-    ctx.capabilities.manage_webapps ? onSetAddress : onOpen);
+      action: {label: ctx.capabilities.manage_webapps ? 'Set up' : 'Open', href: '#'}}),
+    onOpen);
   }
   if (!release) {
     return wireRowAction(statusRow({tone: 'warn', name,
@@ -381,7 +390,6 @@ export async function deploymentsPage(ctx, route = 'deployments', navigate = nul
     const items = state.apps?.items || [];
     return items.map((item) => webappRow(ctx, item, {
       onOpen: () => openManage(ctx, item.webapp, render),
-      onSetAddress: () => changeAddressFor(ctx, item.webapp, render),
     }));
   }
 

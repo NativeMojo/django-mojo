@@ -245,6 +245,28 @@ def test_webapp_onboarding_destination_contract(opts):
         "the managed-domain copy does not explain the automatic add / HTTPS / deploy"
 
 
+@th.django_unit_test("an addressless WebApp row reaches management (delete), not a delete-less wizard jump")
+def test_addressless_webapp_row_reaches_management(opts):
+    root = Path(__file__).resolve().parents[2]
+    page = (root / "mojo/apps/account/admin_portal/assets/features/webapps/page.js").read_text()
+
+    # Every list row must open the management inspector — its Danger tab is the
+    # only path to Delete. An addressless app (a half-finished onboarding) used
+    # to route straight to the address wizard (onSetAddress), trapping it with
+    # no way to delete it. The state-gated wizard routing must be gone.
+    assert "onSetAddress" not in page, \
+        "an addressless WebApp row still routes to the wizard instead of management"
+    window = page[page.index("function webappRow"):page.index("function webappRow") + 1000]
+    assert "No address yet" in window and "onOpen)" in window, \
+        "the addressless WebApp row does not open the management inspector"
+    # Setup stays one click away: the Overview tab offers Set address for an
+    # addressless app, so reaching the inspector doesn't hide the common action.
+    overview = page[page.index("section === 'overview'"):page.index("section === 'deploys'")]
+    assert "!address.hostname && manage" in overview and "changeAddressFor" in overview \
+        and "Set address" in overview, \
+        "the Overview tab does not offer Set address for an addressless app"
+
+
 @th.django_unit_test("literal admin and partial globals do not grant backend WebApp authority")
 def test_webapp_authority_rejects_frontend_admin_and_partial_grants(opts):
     from types import SimpleNamespace
