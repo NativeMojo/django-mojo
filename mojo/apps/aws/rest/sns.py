@@ -256,10 +256,11 @@ def _receive_signed_sns(request, allowlist_setting):
     ``response`` is final and must be returned verbatim by the caller; a
     non-None ``envelope`` is a verified ``Notification`` ready for processing.
 
-    ``allowlist_setting`` names the file-only static list of exact topic ARNs
-    this receiver accepts. Each receiver gets its own list on purpose: a topic
-    allowlisted for one signal must not be able to confirm a subscription on
-    another receiver.
+    ``allowlist_setting`` names the list of exact topic ARNs this receiver
+    accepts. It resolves through ``settings.get``, so a protected database row
+    wins and the deployment file sits behind it -- see the comment at the read
+    below. Each receiver gets its own list on purpose: a topic allowlisted for
+    one signal must not be able to confirm a subscription on another receiver.
 
     Signature verification is NEVER optional here. ``allow_debug`` is hardcoded
     False rather than exposed as a parameter, so no future caller can turn a
