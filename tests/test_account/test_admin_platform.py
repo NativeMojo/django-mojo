@@ -381,6 +381,51 @@ def test_stderr_tail_hidden_from_read_only_viewer(opts):
         "the dashboard's last_deployment must be gated the same way"
 
 
+@th.django_unit_test("the platform overview honors a sections allowlist without widening authority")
+def test_platform_overview_sections_filter(opts):
+    from mojo.apps.account.services import admin_platform
+
+    all_sections = {"api", "fleet", "jobs", "sanity", "database", "redis",
+                    "deployments", "certificates", "security", "webapps"}
+    seen = {}
+
+    def record(request, specs):
+        seen["specs"] = dict(specs)
+        return {name: {"status": "healthy"} for name in specs}
+
+    def overview(sections=None):
+        request = _viewer("view_platform", "view_platform_security")
+        request.DATA = {} if sections is None else {"sections": sections}
+        return admin_platform.platform_overview(request)
+
+    with mock.patch.object(admin_platform, "_section_map", side_effect=record):
+        bare = overview()
+        assert set(bare["sections"]) == all_sections, \
+            f"a bare overview call no longer collects the full roster: {set(bare['sections'])}"
+
+        narrowed = overview("deployments,api")
+        assert set(narrowed["sections"]) == {"deployments", "api"}, \
+            f"the sections allowlist did not narrow the roster: {set(narrowed['sections'])}"
+        assert set(seen["specs"]) == {"deployments", "api"}, \
+            "excluded sections still reached the collector pool — the webapps probe fan-out survives"
+        assert seen["specs"]["api"][0] == ("view_platform", "manage_platform", "admin"), \
+            "narrowing changed a section's permission tuple"
+
+        typo = overview("deployments,api,bogus")
+        assert set(typo["sections"]) == {"deployments", "api"}, \
+            f"an unknown section name was not ignored: {set(typo['sections'])}"
+
+    # One unmocked narrowed read through the real pool: only the two cheap
+    # local collectors run, and each still returns its bounded envelope.
+    live = overview("database,redis")
+    assert set(live["sections"]) == {"database", "redis"}, \
+        f"the live narrowed overview collected the wrong sections: {set(live['sections'])}"
+    for name in ("database", "redis"):
+        assert live["sections"][name]["status"] in (
+            "healthy", "unhealthy", "timeout", "unavailable"), \
+            f"the narrowed {name} section lost its envelope: {live['sections'][name]}"
+
+
 @th.django_unit_test("security and deploy authority read the tail on Platform, never on Dashboard")
 def test_stderr_tail_visible_to_privileged_tiers(opts):
     """Platform is where deploy diagnostics live. The Dashboard row is a sha,

@@ -785,21 +785,36 @@ def platform_overview(request):
     # security tier. Decide once, on the request thread, and close it into the
     # collector — _section_map submits zero-arg callables to a pool.
     stderr = _permitted(request, "view_platform_security", "manage_platform", "admin")
+    specs = {
+        "api": (("view_platform", "manage_platform", "admin"), _api),
+        "fleet": (("view_platform", "manage_platform", "admin"), _fleet),
+        "jobs": (("view_platform", "manage_platform", "admin"), _jobs),
+        "sanity": (("view_platform", "manage_platform", "admin"), _sanity),
+        "database": (("view_platform", "manage_platform", "admin"), _database),
+        "redis": (("view_platform", "manage_platform", "admin"), _redis),
+        "deployments": (("view_platform", "manage_platform", "admin"),
+                        lambda: _deployments(include_stderr=stderr)),
+        "certificates": (("view_platform", "manage_platform", "admin"), _certificates),
+        "security": (("view_platform_security", "manage_platform", "admin"), _security),
+        "webapps": (("view_platform", "manage_platform", "admin"), _webapps),
+    }
+    # `?sections=` names an allowlist of sections to collect (item 2158): the
+    # merged Deployments page reads only deployments+api, and paying the full
+    # roster there would fan out per-app summary_for + HTTPS probes on every
+    # visit. The filter narrows WORK, never authority — each named section
+    # keeps its own permission tuple. Unknown names are ignored; a bare or
+    # empty parameter keeps today's full roster. A parameter naming no known
+    # section collects nothing: the caller asked to narrow, and widening a
+    # typo into the full fan-out is the exact cost this filter removes.
+    # Non-string values (service callers pass bare mock/service requests)
+    # read as absent.
+    wanted = request.DATA.get("sections") if hasattr(request, "DATA") else None
+    if isinstance(wanted, str) and wanted.strip():
+        names = {name.strip() for name in wanted.split(",") if name.strip()}
+        specs = {name: spec for name, spec in specs.items() if name in names}
     return {
         "schema_version": SCHEMA_VERSION,
-        "sections": _section_map(request, {
-            "api": (("view_platform", "manage_platform", "admin"), _api),
-            "fleet": (("view_platform", "manage_platform", "admin"), _fleet),
-            "jobs": (("view_platform", "manage_platform", "admin"), _jobs),
-            "sanity": (("view_platform", "manage_platform", "admin"), _sanity),
-            "database": (("view_platform", "manage_platform", "admin"), _database),
-            "redis": (("view_platform", "manage_platform", "admin"), _redis),
-            "deployments": (("view_platform", "manage_platform", "admin"),
-                            lambda: _deployments(include_stderr=stderr)),
-            "certificates": (("view_platform", "manage_platform", "admin"), _certificates),
-            "security": (("view_platform_security", "manage_platform", "admin"), _security),
-            "webapps": (("view_platform", "manage_platform", "admin"), _webapps),
-        }),
+        "sections": _section_map(request, specs),
     }
 
 
