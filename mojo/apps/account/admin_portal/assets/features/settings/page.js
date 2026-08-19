@@ -12,7 +12,7 @@ import {decodeRouteState, routeHref} from '../../components/routes.js';
 import {rowSection, statusRow} from '../../components/rows.js';
 import {errorState, skeletonState} from '../../components/views.js';
 import {actionFor, agoText, defaultSuffix, detailHref, hostOf, isMono,
-  sentence, toneFor} from './language.js';
+  sentence, toneFor, verifyIsCurrent} from './language.js';
 import {authPanel, geoipPanel, settingPanel, smsPanel, topologyPanel} from './panels.js';
 
 const INTEGRATIONS = 'Integrations';
@@ -65,6 +65,10 @@ function catalogRow(row, state) {
 
 function verifyDetail(entry) {
   if (!entry) return {};
+  if (!verifyIsCurrent(entry)) {
+    const ago = agoText(entry.at);
+    return ago ? {detail: `last ${ago}`} : {};
+  }
   if (entry.ok) return {detail: agoText(entry.at)};
   return {detail: entry.message || 'Last check failed', detailTone: 'danger'};
 }
@@ -72,13 +76,14 @@ function verifyDetail(entry) {
 function geoipRow(setup, state) {
   const geo = setup.geoip || {};
   const verify = (setup.verify_state || {}).geoip;
+  const current = verifyIsCurrent(verify);
   const order = [geo.GEOIP_PRIMARY_PROVIDER, geo.GEOIP_FALLBACK_PROVIDER].filter(Boolean);
   const value = [
     order.length > 1 ? `${order[0]}, then ${order[1]}` : (order[0] || 'no provider chosen'),
     geo.GEOIP_MOJO_PROVIDER_URL ? hostOf(geo.GEOIP_MOJO_PROVIDER_URL) : null,
     geo.GEOIP_API_KEY_MOJO_CONFIGURED ? 'key set' : 'no key',
   ].filter(Boolean).join(' · ');
-  const failing = Boolean(verify && !verify.ok);
+  const failing = Boolean(verify && !verify.ok && current);
   const href = routeHref('settings', {...state, focus: 'geoip'});
   const node = statusRow({
     tone: failing ? 'danger' : setup.pending_restart ? 'warn' : 'muted',
@@ -95,11 +100,12 @@ function geoipRow(setup, state) {
 function smsRow(setup, state) {
   const sms = setup.sms || {};
   const verify = (setup.verify_state || {}).sms;
+  const current = verifyIsCurrent(verify);
   const value = sms.configured
     ? [hostOf(sms.remote_url), sms.api_key_configured ? 'key set' : 'no key',
       sms.test_mode ? 'test mode' : null].filter(Boolean).join(' · ')
     : 'No SMS provider set up';
-  const failing = Boolean(verify && !verify.ok);
+  const failing = Boolean(verify && !verify.ok && current);
   const href = routeHref('settings', {...state, focus: 'sms'});
   const node = statusRow({
     tone: failing ? 'danger' : 'muted', name: 'Text messages', value,
