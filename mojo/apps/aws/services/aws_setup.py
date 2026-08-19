@@ -631,6 +631,7 @@ class AWSSetupService:
 
     def configure_email(self, actor, domain_name, sender):
         from mojo.apps.aws.models import EmailDomain, Mailbox
+        from mojo.apps.aws.services import mailbox_defaults
         system_settings.require_system_admin(actor)
         if domain_name not in self.discover_verified_domains():
             raise system_readiness.DefinitiveSetupFailure(
@@ -654,11 +655,12 @@ class AWSSetupService:
             domain.region = self.region
             domain.status = "verified"
             domain.save(update_fields=["region", "status", "modified"])
-            Mailbox.objects.select_for_update().filter(is_system_default=True).exclude(
-                email=sender).update(is_system_default=False)
             mailbox, _ = Mailbox.objects.update_or_create(
-                email=sender, defaults={"domain": domain, "allow_outbound": True,
-                                        "is_system_default": True})
+                email=sender, defaults={"domain": domain, "allow_outbound": True})
+            # The locked helper is the ONE writer for the system-default
+            # invariant (shared with Mailbox.on_rest_saved and the admin
+            # mailbox-default endpoint). Still inside this transaction.
+            mailbox_defaults.claim_system_default(mailbox)
             install_missing()
         return mailbox
 
