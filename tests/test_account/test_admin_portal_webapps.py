@@ -37,7 +37,7 @@ def setup_admin_portal_webapps(opts):
     from datetime import timedelta
 
     from django.utils import timezone
-    from mojo.apps.account.models import Group, Setting, User
+    from mojo.apps.account.models import Group, User
     from mojo.apps.dnsman.models import Certificate, Domain
     from mojo.apps.edge.models import Vhost, WebApp
 
@@ -97,7 +97,10 @@ def setup_admin_portal_webapps(opts):
 
     # Summaries fixtures: one vhost-backed app and one bare app inside the
     # scoped member's authority, one app in a group they cannot see.
-    Setting.set("EDGE_RELEASE_BUCKETS", [SUMMARIES_BUCKET], group=None)
+    # No EDGE_RELEASE_BUCKETS write: the bucket allowlist is only read by
+    # validate_web_app (mocked below), and replacing that global Setting
+    # mid-run yanks other modules' declared buckets out from under edge's
+    # pool convergence when test_edge runs concurrently.
     domain = Domain.objects.create(
         name=SUMMARIES_DOMAIN, group=parent, provider="godaddy",
         status="active", verified=True)
@@ -105,8 +108,13 @@ def setup_admin_portal_webapps(opts):
         domain=domain, common_name=f"portal.{SUMMARIES_DOMAIN}",
         sans=[SUMMARIES_DOMAIN, f"*.{SUMMARIES_DOMAIN}"], status="active",
         not_after=timezone.now() + timedelta(days=60))
+    # is_enabled=False keeps this fixture out of edge's desired-state and
+    # hosted-auth convergence, which iterate every ENABLED vhost fleet-wide;
+    # the summaries endpoint and drill-in read the vhost/certificate FKs
+    # regardless of the serving flag.
     vhost = Vhost.objects.create(
-        domain=domain, certificate=certificate, label="portal", kind="site")
+        domain=domain, certificate=certificate, label="portal", kind="site",
+        is_enabled=False)
     with mock.patch("mojo.apps.edge.validators.validate_web_app"):
         fixtures = {}
         for slug, owner, linked in (
