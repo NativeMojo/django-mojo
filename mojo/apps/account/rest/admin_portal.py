@@ -156,6 +156,7 @@ def on_admin_bootstrap(request):
             has(["view_dns", "manage_dns", "security"]) or
             can_manage_webapps),
         "manage_webapps": can_manage_webapps,
+        "manage_aws": has(["manage_aws"]),
         "view_platform": has(["view_platform", "manage_platform", "admin"]),
         "manage_platform": has(["manage_platform", "admin"]),
         "view_platform_security": has([
