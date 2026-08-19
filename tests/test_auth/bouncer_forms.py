@@ -1326,8 +1326,11 @@ def test_challenge_preserves_reset_token(opts):
                 "only password-reset tokens are stashed — nothing else in a "
                 "query string should end up in storage")
 
+    # Anchor on the redirect STATEMENT, not the first mention of the config
+    # key — the stash's own explanatory comment names CFG.redirectUrl and sits
+    # above the setItem, which is exactly where a comment belongs.
     stash = html.index("mat_reset_token")
-    redirect = html.index("CFG.redirectUrl")
+    redirect = html.index("window.location.href = CFG.redirectUrl")
     assert_true(stash < redirect,
                 f"the stash must happen BEFORE the redirect that loses the "
                 f"query string (stash at {stash}, redirect at {redirect})")

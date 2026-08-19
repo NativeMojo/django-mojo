@@ -82,7 +82,7 @@ def test_packaged_scripts_parse(opts):
     root = _repo_root()
     for rel in ("mojo/deploy/scripts/update.sh",
                 "mojo/deploy/scripts/post_deploy.sh",
-                "mojo/deploy/scripts/stage1.sh"):
+                "mojo/deploy/provision/scripts/stage1.sh"):
         path = os.path.join(root, rel)
         th.assert_true(os.path.isfile(path),
                        f"{rel} must ship inside the package")
