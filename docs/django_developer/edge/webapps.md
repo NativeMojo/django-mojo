@@ -274,8 +274,10 @@ and `Domain.metadata.purchase`, not by replaying money movement.
 Guided DNS accepts exactly one concrete non-apex, non-wildcard label. It
 inventories the complete record set, adopts an exact CNAME, and refuses mixed,
 ambiguous, or foreign values.
-The target is the file-only `EDGE_WEBAPP_CNAME_TARGET`. Certificate selection
-reuses an active exact/wildcard certificate outside its renewal window; private
+The target is resolved by `webapp_destination.resolve()` — the explicit
+`EDGE_WEBAPP_CNAME_TARGET` override, else a CNAME to the platform's own public
+`BASE_URL` hostname (below) — never a blank value. Certificate selection reuses
+an active exact/wildcard certificate outside its renewal window; private
 material never crosses the onboarding surface.
 
 ### URL-first entry and external domains
@@ -287,12 +289,36 @@ derives the label, and returns a `verdict` before any operation is created.
 Verdicts: `ready`, `records_needed`, `apex` (suggests `www.`), `deep_label`
 (suggests one label), `path` (suggests a subdomain), `taken`, `conflict`,
 `domain_unknown` (with an `options` block advertising whether external, purchase
-and GoDaddy paths are available), and `invalid`. Conflict detection is DB checks
-plus **one** authoritative `probe.query_cname` — never a provider record listing
-(which would enumerate a whole zone on shared credentials per keystroke). It is
-group-scoped and non-disclosing: a domain in another group returns
-`domain_unknown`, and an occupied address names the occupying app only within
-the caller's own group.
+and GoDaddy paths are available), `configuration_required` (the installation has
+no serving destination yet — below), and `invalid`. Conflict detection is DB
+checks plus **one** authoritative `probe.query_cname` — never a provider record
+listing (which would enumerate a whole zone on shared credentials per
+keystroke). It is group-scoped and non-disclosing: a domain in another group
+returns `domain_unknown`, and an occupied address names the occupying app only
+within the caller's own group.
+
+**One resolver decides where every guided address points**
+(`mojo.apps.edge.services.webapp_destination.resolve(hostname=None)`), used by
+precheck, `options()`, `create`, and the address-advance step alike.
+Precedence: the explicit `EDGE_WEBAPP_CNAME_TARGET` override, else a CNAME to
+the platform's own public `BASE_URL` hostname — so an ordinary installation
+needs zero destination configuration once `BASE_URL` is set. Set
+`EDGE_WEBAPP_CNAME_TARGET` only for a split topology, where the tier serving
+web apps is not the tier the platform's own hostname fronts; leave it unset
+otherwise. Neither source resolving to a usable hostname raises
+`DestinationUnavailable`, which precheck reports as `configuration_required`
+and `create` refuses as a plain 400 **before** any WebApp — or a purchase that
+would move money — is created. A hostname that resolves to the platform's own
+address is a plain `invalid` instead: that is a bad request, not an unserveable
+installation. See [Serving-destination readiness](#serving-destination-readiness)
+below for how System Setup surfaces this ahead of onboarding.
+
+A managed domain's `ready` verdict carries the resolved `destination` —
+`{type: "CNAME", value, provenance}`, `provenance` one of `override` or
+`platform_base_url` — and **no `records` key**: the platform writes that
+record itself, so there is nothing to copy. External (`mojo`-provider)
+`ready`/`records_needed` verdicts are unchanged and still carry `records`,
+since that domain's DNS lives outside the platform.
 
 **A domain whose DNS lives at an outside host works end to end**, with no
 provider credential handed over and nothing to buy. Such a domain arrives
@@ -300,8 +326,8 @@ through the existing delegated-ACME flow (`POST /api/dnsman/delegation/initiate`
 → the user publishes one `_acme-challenge` CNAME → `POST
 /api/dnsman/delegation/verify`) and becomes a `Domain(provider="mojo")`. The
 address step recognizes `provider="mojo"`: it cannot write records (the `mojo`
-provider has no DNS CRUD), so instead it shows the exact records to publish (the
-app CNAME to `EDGE_WEBAPP_CNAME_TARGET` plus the ACME-delegation CNAME) and
+provider has no DNS CRUD), so instead it shows the exact records to publish
+(the app CNAME to the resolved destination plus the ACME-delegation CNAME) and
 verifies the app CNAME authoritatively with `probe.query_cname`. The certificate
 is the delegated **apex-plus-wildcard** profile (`certs.request_certificate`
 with `names=None`), so one delegation and one certificate cover every app on
@@ -539,3 +565,15 @@ rotated, inactive, or revoked using `WebAppKeyOperation` receipts and safe
 once, and a replay returns only the receipt/current status. Losing that response
 requires an explicit rotation. The readiness response contains no token hash,
 encrypted token, or recoverable credential material.
+
+## Serving-destination readiness
+
+System Setup's `webapp_destination` section (order 44) runs the same
+`webapp_destination.resolve()` used by onboarding and reports `pass` with the
+resolved destination and its provenance, `pending` when nothing is configured
+yet (an install that has simply not finished Setup, not a broken one), or
+`fail` when `EDGE_WEBAPP_CNAME_TARGET` is set but not a usable hostname (a
+misconfiguration to fix now). This is what lets an operator see, before
+onboarding anyone, whether the installation can serve app addresses at all —
+see [destination resolution](#url-first-entry-and-external-domains) above for
+the resolver itself.

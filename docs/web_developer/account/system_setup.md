@@ -332,10 +332,12 @@ as an error:
   operator seeing three unresolved AWS sections next to one green one has a
   correct report, not a broken one.
 
-Hosting integration adds four non-fixable readiness sections. Their
+Hosting integration adds five non-fixable readiness sections. Their
 remediation links should open the normal guarded Domains, Certificates,
-Vhosts/Routes, Fleet, or WebApp key workflows; System Setup never mints a
-reveal-once deployment token in a report.
+Vhosts/Routes, Fleet, or WebApp key workflows — except `webapp_destination`,
+whose own remediation is completing System Setup's `BASE_URL` step (or, for a
+split serving topology, the file-only `EDGE_WEBAPP_CNAME_TARGET` override).
+System Setup never mints a reveal-once deployment token in a report.
 
 | Code | Ready only when |
 |---|---|
@@ -343,11 +345,14 @@ reveal-once deployment token in a report.
 | `hosting_vhosts` | At least one enabled Vhost has an active domain and certificate, and every enabled Vhost passes that check |
 | `edge_fleet` | Every node/pool in `EDGE_EXPECTED_TOPOLOGY` answers from an `edge`-channel runner with the expected django-mojo version and desired generation, and its combined serving generation equals the live generation, with no excluded or pending material |
 | `webapp_keys` | Every WebApp's safe key metadata is active; missing is `pending`, inactive is `fail`, and revoked is `warn` |
+| `webapp_destination` | A guided WebApp address has somewhere to point: the `EDGE_WEBAPP_CNAME_TARGET` override or the platform's own `BASE_URL` hostname resolves. Unconfigured is `pending`; a set-but-unusable override is `fail` |
 
 The fleet section never treats a missing topology, node, response, pool, or
 generation as green. WebApp checks return only bounded metadata such as
 `webapp`, `linked`, `active`, and `last_action`; no token/hash/ciphertext can be
-recovered through Setup.
+recovered through Setup. The destination check's `details` carry only the
+resolved hostname and its `provenance` (`override` or `platform_base_url`) —
+never a token or credential, since none is involved.
 
 Every hosting section's first check is a global summary over all matching rows;
 only the subsequent problem-detail rows are bounded to 16. Render the summary

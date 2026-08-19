@@ -275,13 +275,25 @@ an operation's detail is readable only by the actor who created it.
 
 | Method | Endpoint | Purpose | Access |
 |---|---|---|---|
-| GET | `/api/edge/webapp/onboarding/precheck?url=<address>` | URL-first pre-flight. Normalizes the typed address and returns a `verdict` before any operation is created: `ready`, `records_needed`, `apex`, `deep_label`, `path`, `taken`, `conflict`, `domain_unknown`, or `invalid`. | Human-only, read-only (no fresh-auth) |
-| GET | `/api/edge/webapp/onboarding/options?group=<id>` (or `group_intent=new`) | Selectable buckets, environments, and `github_connected` for a group. | Human-only |
+| GET | `/api/edge/webapp/onboarding/precheck?url=<address>` | URL-first pre-flight. Normalizes the typed address and returns a `verdict` before any operation is created: `ready`, `records_needed`, `apex`, `deep_label`, `path`, `taken`, `conflict`, `domain_unknown`, `configuration_required` (this installation cannot serve app addresses yet), or `invalid`. A managed-domain `ready` carries a `destination` object, **not** `records` — the platform writes that record itself. | Human-only, read-only (no fresh-auth) |
+| GET | `/api/edge/webapp/onboarding/options?group=<id>` (or `group_intent=new`) | Selectable buckets, environments, `github_connected`, and this installation's `destination`/`destination_error` for a group. | Human-only |
 | POST | `/api/edge/webapp/onboarding/create` | Create the onboarding operation. | Human-only, fresh-auth |
 | GET | `/api/edge/webapp/onboarding/detail?operation=<uuid>` | Poll the versioned, secret-free operation state. | Human-only |
 | POST | `/api/edge/webapp/onboarding/choose` | Submit the choice for the current step (`address` / `github` / `verify`), matching the returned `revision`. | Human-only, fresh-auth. **No transport retry** |
 | POST | `/api/edge/webapp/onboarding/cancel` | Abandon the operation. | Human-only, fresh-auth |
 | POST | `/api/edge/webapp/onboarding/workflow` | Return the generated GitHub workflow YAML for one WebApp; optionally mint or rotate `MOJO_DEPLOY_KEY` once (with `action` + a fresh `operation_id`). | Human-only, fresh-auth |
+
+**A `configuration_required` verdict, or a null `options.destination` with a
+non-null `destination_error`, means this installation cannot serve app
+addresses yet** — it is not a problem with the address typed. Route the
+operator to System Setup rather than asking them to fix DNS. `create` also
+refuses with a 400 in this state, before the WebApp exists and before a
+purchase could move money; check for it on the connected-domain and purchase
+paths, which never see a precheck verdict. A resolved `destination` (from
+either precheck's `ready` or `options`) is `{type: "CNAME", value, provenance}`,
+`provenance` one of `override` or `platform_base_url`. Only an **external**
+(`mojo`-provider) domain's `records_needed`/`ready` verdict carries `records`
+to publish yourself — a managed domain never does.
 
 **Do not auto-retry `choose`.** It carries provider-affecting intent, and a
 provider can accept a mutation while losing the response. Reload `detail` and

@@ -53,7 +53,10 @@ choice → records (only if the domain lives elsewhere) → name → deploy setu
 go live**. A stateless pre-check normalizes the address and steers gently — a
 path like `example.com/myapp` becomes `myapp.example.com`, a bare apex becomes
 `www`, and `http` becomes `https` — returning a `verdict` before any operation
-is created. At the domain step the operator either keeps DNS where it is (the
+is created. An installation with no serving destination configured yet
+(System Setup incomplete) gets a `configuration_required` verdict and a link
+into System Setup instead of a domain choice — never a fabricated record to
+publish. At the domain step the operator either keeps DNS where it is (the
 common path: the wizard shows the exact records to publish and verifies them —
 no provider credentials handed over, nothing purchased), moves the domain under
 platform management, or buys a new one with typed domain/price confirmation. A
@@ -62,12 +65,13 @@ delegated-ACME flow, with one apex-plus-wildcard certificate covering every app
 on it. The identity screen does not ask for repository details; those wait
 until deploy setup, which generates a single GitHub workflow referencing the
 public `NativeMojo/django-mojo/examples/github/actions/deploy-webapp@main`
-action and mints `MOJO_DEPLOY_KEY` once. Choosing a managed domain creates the
-required CNAME automatically, while the permanent Domains & DNS page handles
-adding, adopting, purchasing, and inspecting names. Users need both WebApp and
-DNS authority to own an existing WebApp group; adding a managed domain remains
-a DNS administrator action. HTTPS issuance and renewal are automatic and do not
-appear as onboarding decisions.
+action and mints `MOJO_DEPLOY_KEY` once. Choosing a managed domain shows a
+confirmation of what will happen — the required CNAME is created and HTTPS
+issued automatically, no DNS changes from the operator — while the permanent
+Domains & DNS page handles adding, adopting, purchasing, and inspecting names.
+Users need both WebApp and DNS authority to own an existing WebApp group;
+adding a managed domain remains a DNS administrator action. HTTPS issuance and
+renewal are automatic and do not appear as onboarding decisions.
 
 After a site is live, each app has a single **management view** with
 **Overview** (address + domain, health, and current release, via

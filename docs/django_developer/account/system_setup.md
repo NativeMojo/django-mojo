@@ -135,7 +135,7 @@ the protected topology's nodes.
 
 ## Hosting readiness sections
 
-The edge app registers four read-only sections. They deliberately have no
+The edge app registers five read-only sections. They deliberately have no
 generic setup fixer: domain purchase/adoption, certificate issuance, Vhost
 design, and reveal-once deployment-key handling remain explicit operator
 actions through their existing guarded services.
@@ -146,17 +146,22 @@ actions through their existing guarded services.
 | `hosting_vhosts` | Every enabled Vhost has an active domain and certificate; no enabled rows is pending |
 | `edge_fleet` | Every protected topology node answers on an `edge`-channel runner with the installed django-mojo version, matching per-pool desired generation, and a combined serving generation that equals the live generation, with zero excluded/pending content or certificates |
 | `webapp_keys` | Safe WebApp key metadata and latest mint/rotate/revoke receipt; no token or recoverable credential material |
+| `webapp_destination` | Where a guided WebApp address will point (`webapp_destination.resolve()`'s result and provenance) and whether it resolves at all |
 
 Missing topology, runner, node response, pool evidence, or generation never
 reports green. Fleet proof calls only live runners returned for channel
 `edge`; unrelated job runners are neither counted nor contacted. A revoked key
 is `warn`, an inactive linked key is `fail`, and a missing key is `pending`.
-Each hosting section scans its complete queryset and puts global status counts
-in the first check; only the following problem details are bounded to 16. A
-failure anywhere after that detail limit therefore still makes the section
-fail. WebApp key summaries retain only counts by status and last operation
-action; per-WebApp detail is emitted only for non-green rows and remains
-non-secret.
+The destination check is `pass` with the resolved value once `BASE_URL` (or
+the `EDGE_WEBAPP_CNAME_TARGET` override) yields a usable hostname; `pending`
+when nothing is configured yet (Setup simply isn't finished); `fail` only when
+the override is set but unusable (a misconfiguration to fix now, not a
+pending state). Each hosting section scans its complete queryset and puts
+global status counts in the first check; only the following problem details
+are bounded to 16. A failure anywhere after that detail limit therefore still
+makes the section fail. WebApp key summaries retain only counts by status and
+last operation action; per-WebApp detail is emitted only for non-green rows
+and remains non-secret.
 
 ## Durable operation model
 
