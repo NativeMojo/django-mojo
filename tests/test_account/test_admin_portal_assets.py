@@ -17,6 +17,7 @@ def test_modular_shell_contract(opts):
     registry = (ASSETS / "features/registry.js").read_text()
     platform = (ASSETS / "features/platform/feature.js").read_text()
     advanced = (ASSETS / "features/advanced/feature.js").read_text()
+    webapps = (ASSETS / "features/webapps/feature.js").read_text()
     assert "feature.render({ctx: context, route, navigate, signal: renderController.signal})" in app
     assert "controller?.abort()" in app and "page.dispose?.()" in app
     assert "page instanceof Node" in app and "closeAllOverlays()" in app
@@ -25,7 +26,14 @@ def test_modular_shell_contract(opts):
         assert f"./{name}/feature.js" in registry
     assert "[dashboard, webapps, advanced, people, activity, platform, settings]" in registry, \
         "primary navigation does not follow the approved operator journey"
-    assert "routes: ['platform', 'deployments', 'setup', 'metrics', 'maintenance']" in platform
+    assert "routes: ['platform', 'setup', 'metrics', 'maintenance']" in platform, \
+        "Platform grew or lost a route — deployments belongs to the merged lane"
+    assert "routes: ['deployments', 'webapps']" in webapps, \
+        "the merged Deployments lane does not own both routes"
+    assert "label: 'Deployments'" in webapps, \
+        "the lane is not labeled Deployments in primary navigation"
+    assert "ctx.features?.platform?.capabilities?.view === true" in webapps, \
+        "platform viewers lost their route to deploy history"
     assert "setupPage(ctx, signal)" in platform and "platformPage(ctx, route)" in platform
     assert "const ROUTES = ['advanced', 'domains', 'credentials', 'dns', 'certificates'" in advanced
     assert "route: 'domains'" in advanced and "label: 'Domains & DNS'" in advanced, \
@@ -277,6 +285,7 @@ def test_feature_asset_contracts(opts):
 def test_webapp_onboarding_asset_contract(opts):
     wizard = (ASSETS / "features/webapps/wizard.js").read_text()
     page = (ASSETS / "features/webapps/page.js").read_text()
+    api_side = (ASSETS / "features/webapps/api.js").read_text()
     webapp_styles = (ASSETS / "features/webapps/styles.css").read_text()
     platform = (ASSETS / "features/platform/page.js").read_text()
     preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
@@ -356,6 +365,47 @@ def test_webapp_onboarding_asset_contract(opts):
         "the list still fans out a per-row key_status request (N+1)"
     assert "result.token = null" in page and "secretField.value = ''" in page, \
         "the deploy-key reveal does not scrub its one-time value"
+
+    # --- merged Deployments list (page.js) ---
+    assert "/api/edge/webapp/summaries" in page, \
+        "the merged list does not read the bounded summaries endpoint"
+    assert "statusRow(" in page and "rowSection(" in page and "statusHeadline(" in page, \
+        "the merged list does not build on the shared row grammar"
+    assert "history.replaceState" in page and "routeHref('deployments'" in page, \
+        "#/webapps does not canonicalize to #/deployments"
+    assert "No address yet — not reachable" in page and "'Set address'" in page, \
+        "a missing address is not the row's health story"
+    assert "label: 'Created'" not in page, \
+        "the redesign removed the Created column; last deploy is the date that matters"
+    assert "badge(r.current_release" not in page, \
+        "release identifiers are back inside green pills"
+    assert ".slice(0, 10)" in page and ".slice(0, 10)" in api_side, \
+        "full-length identifiers leaked onto the row surface"
+    assert "innerHTML" not in page and "innerHTML" not in api_side, \
+        "the Deployments lane writes markup instead of text nodes"
+
+    # --- API section + drill-ins (api.js) ---
+    assert "'/api/account/admin/platform?sections=deployments,api'" in api_side, \
+        "the API section pays the full platform overview instead of the sections allowlist"
+    assert "'/api/account/admin/platform/deploy/'" in api_side and "Retry same SHA" in api_side \
+        and "'verify', 'Verify'" in api_side and "'converge', 'Converge'" in api_side, \
+        "the API drill-in lost its same-SHA recovery controls"
+    assert "'/api/account/admin/platform/framework'" in api_side \
+        and "'/api/account/admin/platform/framework/update'" in api_side, \
+        "the django-mojo row does not use the shared framework endpoints"
+    assert "confirm_version" in api_side, \
+        "the framework update lost its typed version echo"
+    assert "framework_pin" in api_side and "settings_owner_edit" in api_side, \
+        "the framework hold is not surfaced through the owner-tier writer"
+    assert "apiOnce" in api_side, \
+        "provider-bearing mutations gained a transport retry"
+    for reason in ("no_converged_deployment", "requires_superuser", "update_unavailable"):
+        assert reason in api_side, \
+            f"the framework drill-in cannot explain the {reason} block"
+    assert "capabilities?.manage === true" in api_side, \
+        "API recovery controls are not gated on manage_platform"
+    assert "Technical details" in api_side, \
+        "full shas and attempt UUIDs are not confined to a disclosure"
 
     # --- unchanged platform contracts still hold ---
     assert "Add domains and manage the public records" not in platform, \

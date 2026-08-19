@@ -1,5 +1,14 @@
-/* WebApps: URL-first wizard + per-app management. Themed with the shared
+/* Deployments: merged fleet list (shared rows.css grammar) + URL-first wizard
+   + per-app management + API/framework drill-ins. Themed with the shared
    tokens only — use --line for borders; the --border token is undefined here. */
+
+/* ---- API + framework drill-ins ---- */
+.deploy-inspector { display: grid; gap: .85rem; }
+.deploy-attempts { display: grid; gap: .6rem; }
+.deploy-attempt { display: grid; gap: .45rem; }
+.deploy-attempt-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.deploy-technical summary { color: var(--muted); cursor: pointer; font-size: .78rem; font-weight: 700; }
+.framework-inspector { display: grid; gap: .85rem; }
 
 /* ---- wizard shell ---- */
 .wizard-body { display: grid; gap: 1rem; }

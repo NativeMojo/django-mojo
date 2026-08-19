@@ -234,12 +234,17 @@ def test_platform_feature_package(opts):
         "assets/features/platform/feature.js", "assets/features/platform/page.js",
         "assets/features/platform/styles.css", "assets/features/advanced/feature.js",
         "assets/features/advanced/page.js", "assets/features/advanced/styles.css",
+        "assets/features/webapps/api.js",
     }
     assert required <= set(assets)
     platform = (ROOT / "mojo/apps/account/admin_portal/assets/features/platform/feature.js").read_text()
+    webapps = (ROOT / "mojo/apps/account/admin_portal/assets/features/webapps/feature.js").read_text()
     advanced = (ROOT / "mojo/apps/account/admin_portal/assets/features/advanced/feature.js").read_text()
     preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
-    assert "deployments" in platform and "platformPage" in platform
+    assert "deployments" not in platform and "platformPage" in platform, \
+        "the deployments route crept back into the Platform descriptor"
+    assert "deployments" in webapps, \
+        "the merged Deployments lane does not claim the deployments route"
     assert "advancedControlPage" in advanced and "domains" in advanced
     # Named individually rather than as one contiguous string: the import list
     # is alphabetical, so a new sibling provider used to break this assertion
