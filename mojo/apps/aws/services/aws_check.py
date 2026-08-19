@@ -1,6 +1,6 @@
 """Deployment-level AWS readiness audit and create-missing bootstrap.
 
-THREE THINGS IN THIS REPOSITORY LOOK AT AN AWS ACCOUNT. They are not
+FOUR THINGS IN THIS REPOSITORY LOOK AT AN AWS ACCOUNT. They are not
 interchangeable, and picking the wrong one wastes an afternoon:
 
     this module                         in-Django, reads settings, and CREATES
@@ -23,6 +23,14 @@ interchangeable, and picking the wrong one wastes an afternoon:
                                         so its ensure-services can decide what
                                         to create. Answers "what is already
                                         there?".
+    aws/services/infra_drift.py         in-Django, read-only, and CREATES
+                                        NOTHING. It judges observed state
+                                        against this installation's RECORDED
+                                        INTENT (EDGE_EXPECTED_TOPOLOGY) rather
+                                        than against a reference topology, and
+                                        reports the difference as prose.
+                                        Answers "did anything change outside
+                                        this portal?".
 """
 
 import os
@@ -1644,6 +1652,24 @@ class AWSCheckRunner:
                       "AWS version drift incident defaults are not installed",
                       remediation=("Rerun with --apply --section rules and set "
                                    "AWS_VERSION_DRIFT_ENABLED=True to schedule the scan."))
+        # Fleet-drift events are generated in-process too, so this RuleSet is
+        # outside the receiver gate for the same reason.
+        from mojo.apps.aws.services.infra_drift import RULESET_CATEGORY as DRIFT_CATEGORY
+        drift = RuleSet.objects.filter(
+            category=DRIFT_CATEGORY, name="Health - Infrastructure Drift").first()
+        if drift:
+            self._add("rules", "pass", "rules.infra_drift_present",
+                      "Fleet drift incident defaults are installed", {"ruleset_id": drift.pk})
+        elif self._approve("Create the fleet drift incident RuleSet?"):
+            drift, created = RuleSet.ensure_infra_drift_rules()
+            self._add("rules", "pass", "rules.infra_drift_created",
+                      "Created fleet drift incident defaults",
+                      {"ruleset_id": drift.pk}, changed=created)
+        else:
+            self._add("rules", "warn", "rules.infra_drift_missing",
+                      "Fleet drift incident defaults are not installed",
+                      remediation=("Rerun with --apply --section rules and set "
+                                   "AWS_INFRA_DRIFT_ENABLED=True to schedule the scan."))
 
     def check_versions(self):
         """Opt-in managed-service version inventory. Never reports `fail`.
