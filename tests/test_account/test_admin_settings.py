@@ -846,6 +846,13 @@ def test_settings_rest_topic_contract(opts):
         with th.assert_raises(me.ValueException):
             provider_setup.apply(actor, topic, _sms_payload())
 
+    # phonehub is optional and SMS is addressable on its own, so an absent app
+    # must produce a sentence rather than an import failure inside a writer.
+    from django.apps import apps as django_apps
+    with mock.patch.object(django_apps, "is_installed", return_value=False), \
+            th.assert_raises(me.ValueException):
+        provider_setup.test(actor, "sms", _sms_payload())
+
 
 @th.django_unit_test("Settings speaks plainly and guards before it formats")
 def test_settings_plain_language_contract(opts):

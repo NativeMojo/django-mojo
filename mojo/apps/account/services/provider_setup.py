@@ -242,6 +242,12 @@ def _normalize_geoip(section):
 
 
 def _normalize_sms(section):
+    # phonehub is optional, and SMS is now addressable on its own. Refuse with
+    # a sentence rather than letting the model import fail deep in a writer.
+    from django.apps import apps
+    if not apps.is_installed("mojo.apps.phonehub"):
+        raise merrors.ValueException(
+            "Text messaging is not installed on this platform")
     if set(section) - {"remote_url", "api_key", "clear_api_key", "test_mode"}:
         raise merrors.ValueException("SMS setup contains unsupported fields")
     remote_url = section.get("remote_url", "")
