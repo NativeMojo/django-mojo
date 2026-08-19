@@ -1,0 +1,1510 @@
+"""Admin capacity actions: add/remove an app node, an RDS reader, a cache replica.
+
+The alternative to this module is an operator in the AWS console at 2am, adding
+a node by hand and hoping they picked the same instance type, the same subnet,
+the same security groups and the same instance profile — with no record of who
+did it and no proof the new box is running the code the rest of the fleet runs.
+
+Three things make that safe enough to put behind a button:
+
+**Every guard is re-derived from the provider, at apply time.** Not from the
+dashboard cache, not from the request body. The last-healthy-target check
+re-describes EVERY attached group of EVERY balancer; the reader delete
+re-reads whether the target really is a replica; ElastiCache's failover posture
+is read before its replica count is touched. A ten-minute-old report is a fine
+thing to render and a terrible thing to mutate against.
+
+**An added node is not "launched", it is PROVEN.** The clone boots, takes a
+unique hostname derived from its own instance id, joins the job fleet as its
+own runner, is told to deploy the fleet's last CONVERGED commit, and is
+registered behind the balancer only after it reports back that it is running
+that exact sha. A node that never proves is left unregistered — costing money
+and serving nothing — because the failure mode on the other side is serving
+production traffic from a box running unknown code.
+
+**Nothing here is reversible by accident.** Draining and terminating are
+SEPARATE actions, and terminate re-proves the drain server-side; a node cannot
+be removed if it is the last healthy target anywhere, or if it is the node
+answering the request.
+
+The hostname is the identity, everywhere. The jobs runner id is
+``<hostname>-engine``; the readiness node id is the hostname; the certbot
+primary is elected by comparing the hostname to ``PRIMARY_BALANCER_HOST``. That
+is why the clone's user-data sets a hostname derived from its instance id
+before anything else — a clone that kept the source's hostname would be a
+second engine claiming the source's runner id, and the fleet would have two
+nodes answering as one.
+
+Progress lives in the cache, not in a table: an operation is a bounded
+observation of AWS state, and losing the observation loses nothing that
+``report()`` cannot re-derive from the provider. Losing a MUTATION is what
+would matter, and every mutation is AWS-side before the record is written.
+"""
+
+import time
+import uuid
+
+from django.core.cache import cache
+
+from mojo.helpers import infrastructure
+from mojo.helpers import logit
+from mojo.helpers.aws import ec2 as ec2_helper
+from mojo.helpers.aws import elasticache as elasticache_helper
+from mojo.helpers.aws import elbv2 as elbv2_helper
+from mojo.helpers.aws import rds as rds_helper
+from mojo.helpers.aws.provider_call import ProviderCallError
+from mojo.helpers.settings import settings
+
+
+logger = logit.get_logger("aws_capacity", "aws.log")
+
+SCHEMA_VERSION = 1
+CACHE_PREFIX = "mojo:aws:capacity"
+REPORT_TTL = 120
+# 90 minutes: an add that captures a fresh AMI, boots, converges and proves can
+# legitimately take the better part of an hour, and a claim that expires under
+# a running operation would let a second add start on top of it.
+CLAIM_TTL = 5400
+
+ACTION_ADD_NODE = "add_node"
+ACTION_DRAIN_NODE = "drain_node"
+ACTION_TERMINATE_NODE = "terminate_node"
+ACTION_ADD_READER = "add_reader"
+ACTION_REMOVE_READER = "remove_reader"
+ACTION_SET_CACHE_REPLICAS = "set_cache_replicas"
+ACTIONS = (ACTION_ADD_NODE, ACTION_DRAIN_NODE, ACTION_TERMINATE_NODE,
+           ACTION_ADD_READER, ACTION_REMOVE_READER, ACTION_SET_CACHE_REPLICAS)
+
+# Adds serialize on ONE fixed key, never on the resource: two concurrent adds
+# name different resources (or none at all), so a per-resource key would let
+# them both through and race on the same image, the same topology write, and
+# the same convergence. Everything else is genuinely per-resource.
+ADD_NODE_CLAIM = "add_node:fleet"
+
+PHASES = {
+    ACTION_ADD_NODE: ("capturing", "launching", "booting", "converging",
+                      "proving", "registering", "settling"),
+    ACTION_DRAIN_NODE: ("draining",),
+    ACTION_TERMINATE_NODE: ("terminating",),
+    ACTION_ADD_READER: ("creating", "settling"),
+    ACTION_REMOVE_READER: ("deleting",),
+    ACTION_SET_CACHE_REPLICAS: ("scaling", "settling"),
+}
+
+STATE_RUNNING = "running"
+STATE_DONE = "done"
+STATE_FAILED = "failed"
+
+# Bounds. Each is a deadline, never a sleep: the operation job polls on
+# POLL_INTERVAL and gives up at the deadline with a named error code.
+POLL_INTERVAL = 10
+IMAGE_TIMEOUT = 1800        # AMI pending -> nothing was launched
+LAUNCH_TIMEOUT = 600        # instance pending -> it exists; say so
+RUNNER_TIMEOUT = 1200       # no runner on `edge` -> left unregistered, safe
+PROOF_MARGIN = 300          # on top of canary_timeout()
+HEALTH_TIMEOUT = 900        # registered but never healthy -> offer Drain
+DRAIN_MARGIN = 300          # on top of the group's deregistration_delay
+RDS_TIMEOUT = 3600          # a reader can genuinely take this long
+CACHE_TIMEOUT = 1800
+
+DEFAULT_IMAGE_MAX_AGE_DAYS = 14
+DEFAULT_NODE_ROOT = "/opt/api"
+IMAGE_TAG_VALUE = "admin-capacity"
+RDS_SETTLED = "available"
+
+
+class CapacityError(Exception):
+    """A wire-safe refusal or provider failure, with the status it should get."""
+
+    def __init__(self, message, error_code, status=400, data=None):
+        self.message = str(message)
+        self.error_code = str(error_code)
+        self.status = int(status)
+        self.data = dict(data or {})
+        super().__init__(self.message)
+
+
+def _provider_error(err, message):
+    """The single translation from a provider failure to a wire answer."""
+    if err.denied:
+        status, code = 403, "provider_denied"
+    elif err.retryable:
+        status, code = 503, "provider_unavailable"
+    else:
+        status, code = 502, "provider_error"
+    return CapacityError(message, code, status, {"failure": err.detail()})
+
+
+def _setting(name, default=None):
+    try:
+        return settings.get_static(name, default)
+    except Exception:
+        return default
+
+
+def _region():
+    return _setting("AWS_REGION", "us-east-1")
+
+
+def _image_max_age_days():
+    try:
+        return max(0, int(_setting("ADMIN_CAPACITY_IMAGE_MAX_AGE_DAYS",
+                                   DEFAULT_IMAGE_MAX_AGE_DAYS)))
+    except (TypeError, ValueError):
+        return DEFAULT_IMAGE_MAX_AGE_DAYS
+
+
+def _node_root():
+    return str(_setting("ADMIN_CAPACITY_NODE_ROOT", DEFAULT_NODE_ROOT) or
+               DEFAULT_NODE_ROOT)
+
+
+def _now():
+    from mojo.helpers import dates
+    return dates.utcnow().isoformat()
+
+
+# ── cache keys ──────────────────────────────────────────────────────────────
+
+def _report_key():
+    return f"{CACHE_PREFIX}:report:{_region()}"
+
+
+def _claim_key(action, resource):
+    if action == ACTION_ADD_NODE:
+        return f"{CACHE_PREFIX}:claim:{ADD_NODE_CLAIM}"
+    return f"{CACHE_PREFIX}:claim:{action}:{resource}"
+
+
+def _operation_key(operation_id):
+    return f"{CACHE_PREFIX}:op:{operation_id}"
+
+
+def invalidate():
+    """Drop every cached view a mutation just made wrong.
+
+    The dashboard's balancer cache is invalidated too: after a register or a
+    deregister the Dashboard's EC2 and load-balancer rows are stale in the one
+    direction that matters, and a 60-second lie about serving-tier membership
+    is exactly what an operator is watching for.
+    """
+    from mojo.apps.account.services.admin_platform import LOAD_BALANCER_CACHE_KEY
+    for key in (_report_key(), LOAD_BALANCER_CACHE_KEY):
+        try:
+            cache.delete(key)
+        except Exception:
+            logger.warning("capacity: cache key %s could not be invalidated", key)
+
+
+# ── single flight ───────────────────────────────────────────────────────────
+
+def _claim(action, resource, actor_pk):
+    """Single-flight. A cache that cannot answer is a refusal, never a go-ahead."""
+    key = _claim_key(action, resource)
+    try:
+        acquired = cache.add(key, {"actor": actor_pk, "at": _now()}, CLAIM_TTL)
+    except Exception:
+        raise CapacityError(
+            "The coordination cache is unavailable, so a second concurrent "
+            "capacity change cannot be ruled out. Try again shortly.",
+            "cache_unavailable", 503) from None
+    if acquired:
+        return key
+    # `add` returning False means either "somebody holds it" or "the backend
+    # silently did nothing". Reading the key back tells those apart, and they
+    # get different answers.
+    try:
+        holder = cache.get(key)
+    except Exception:
+        holder = None
+    if holder:
+        raise CapacityError(
+            "A capacity change for this resource is already in progress.",
+            "capacity_in_progress", 409)
+    raise CapacityError(
+        "The coordination cache is unavailable, so a second concurrent "
+        "capacity change cannot be ruled out. Try again shortly.",
+        "cache_unavailable", 503)
+
+
+def _release(key):
+    try:
+        cache.delete(key)
+    except Exception:
+        logger.warning("capacity: claim %s could not be released", key)
+
+
+# ── operation record ────────────────────────────────────────────────────────
+
+def _write_operation(record):
+    record["updated"] = _now()
+    try:
+        cache.set(_operation_key(record["id"]), record, CLAIM_TTL)
+    except Exception:
+        logger.warning("capacity: operation %s could not be recorded",
+                       record.get("id"))
+    return record
+
+
+def _read_operation(operation_id):
+    try:
+        record = cache.get(_operation_key(operation_id))
+    except Exception:
+        record = None
+    return record if isinstance(record, dict) else None
+
+
+def _new_operation(action, resource, actor, claim, detail=None):
+    phases = PHASES.get(action) or ()
+    return _write_operation({
+        "schema_version": SCHEMA_VERSION,
+        "id": str(uuid.uuid4()),
+        "action": action,
+        "resource": resource,
+        "actor": getattr(actor, "pk", None),
+        "started": _now(),
+        "state": STATE_RUNNING,
+        "phase": phases[0] if phases else "working",
+        "phases": list(phases),
+        "message": "requested",
+        "error_code": None,
+        "warnings": [],
+        "detail": dict(detail or {}),
+        "claim": claim,
+    })
+
+
+def _advance(record, phase, message, **detail):
+    record["phase"] = phase
+    record["message"] = message
+    if detail:
+        record["detail"].update(detail)
+    return _write_operation(record)
+
+
+def _finish(record, message, **detail):
+    record["state"] = STATE_DONE
+    record["phase"] = "complete"
+    record["message"] = message
+    if detail:
+        record["detail"].update(detail)
+    _release(record.get("claim"))
+    invalidate()
+    return _write_operation(record)
+
+
+def _fail(record, error_code, message, hold_claim=False, **detail):
+    record["state"] = STATE_FAILED
+    record["error_code"] = str(error_code)
+    record["message"] = message
+    if detail:
+        record["detail"].update(detail)
+    if not hold_claim:
+        _release(record.get("claim"))
+    invalidate()
+    logger.warning("capacity operation %s failed action=%s code=%s",
+                   record.get("id"), record.get("action"), error_code)
+    return _write_operation(record)
+
+
+def _warn(record, code, message):
+    warnings = list(record.get("warnings") or [])
+    warnings.append({"code": str(code), "message": str(message)})
+    record["warnings"] = warnings[-8:]
+    return _write_operation(record)
+
+
+# ── guards ──────────────────────────────────────────────────────────────────
+
+def _primary_host():
+    """The certbot primary's hostname, lowercased, or ''.
+
+    Only a preference: an add clones a NON-primary node when one is available,
+    because capturing an image of the primary is one more thing happening to
+    the node that renews the fleet's certificates. It is never a blocker — the
+    clone gets its own hostname, so it is never elected primary either way.
+    """
+    return str(_setting("PRIMARY_BALANCER_HOST", "") or "").strip().lower()
+
+
+def _local_hostname():
+    import socket
+    return socket.gethostname().split(".", 1)[0].strip().lower()
+
+
+def _is_primary(facts, primary):
+    if not primary:
+        return False
+    candidates = {str(facts.get("private_hostname") or "").lower(),
+                  str(facts.get("name") or "").lower()}
+    return primary in candidates
+
+
+def _source_node(healthy_ids, client=None, region=None):
+    """The instance to clone: a healthy, running fleet member, non-primary first.
+
+    Only healthy node is the primary? Clone it anyway — a NoReboot image does
+    not interrupt it, and the clone takes its own hostname, so the primary
+    election is unaffected.
+    """
+    ids = [value for value in (healthy_ids or []) if str(value).startswith("i-")]
+    if not ids:
+        return None
+    primary = _primary_host()
+    facts = ec2_helper.instance_map(ids, client=client, region=region)
+    running = [value for value in ids
+               if (facts.get(value) or {}).get("state") == "running"]
+    ordered = [value for value in running if not _is_primary(facts[value], primary)]
+    ordered += [value for value in running if value not in ordered]
+    for value in ordered:
+        return facts[value]
+    return None
+
+
+def _serving(client=None, region=None):
+    """Every attached target group of every balancer, freshly described."""
+    return elbv2_helper.serving_map(client=client, region=region)
+
+
+def _groups_holding(serving, instance_id):
+    return [group for group in (serving.get("groups") or [])
+            if any(target.get("id") == instance_id
+                   for target in group.get("targets") or [])]
+
+
+def _would_strand(instance_id, serving):
+    """Would removing ``instance_id`` leave a group with no healthy target?
+
+    Checked across EVERY attached group of EVERY balancer, not just the one
+    the dashboard happens to render. A node that is the last healthy target of
+    an internal group nobody looks at is still the thing keeping that group up.
+    """
+    for group in serving.get("groups") or []:
+        healthy = [target.get("id") for target in group.get("targets") or []
+                   if target.get("state") == "healthy"]
+        if instance_id in healthy and len(healthy) <= 1:
+            return group
+    return None
+
+
+def _self_id(facts_map):
+    """``(instance_id_or_None, status)`` for "which of these is me?".
+
+    This box's short hostname against each instance's PrivateDnsName first
+    label AND its Name tag. A fleet that sets its own hostnames matches on the
+    tag; a fleet on AWS-assigned names matches on the DNS label. When neither
+    matches, the answer is ``"unavailable"`` — NOT "this is not me". Absent
+    evidence has never been proof of safety, and the confirmation copy says so
+    out loud rather than implying the check passed.
+    """
+    local = _local_hostname()
+    if not local:
+        return None, "unavailable"
+    for identifier, row in (facts_map or {}).items():
+        candidates = {str(row.get("private_hostname") or "").lower(),
+                      str(row.get("name") or "").lower()}
+        if local in candidates:
+            return identifier, "matched"
+    return None, "unavailable"
+
+
+def _self_check(serving_instance_ids, client=None, region=None):
+    """``_self_id`` over ONE describe_instances. The apply-path form."""
+    return _self_id(ec2_helper.instance_map(
+        serving_instance_ids, client=client, region=region))
+
+
+def _node_id_pinned():
+    """True when this fleet pins EDGE_NODE_ID in its settings file.
+
+    A pinned node id means every node reports the SAME readiness identity, so
+    an added node is indistinguishable from the one it was cloned from. There
+    is no safe way to prove a new node under that configuration, so the add is
+    refused rather than half-done.
+    """
+    return bool(str(_setting("EDGE_NODE_ID", "") or "").strip())
+
+
+# ── report ──────────────────────────────────────────────────────────────────
+
+def _node_rows(serving, facts_map, self_id, primary):
+    """One row per registered instance, with everything an operator decides on.
+
+    ``primary`` is shown, never acted on: the certbot primary is elected by
+    hostname, so it is worth seeing which node renews the fleet's certificates
+    before choosing one to drain — but it is not a refusal, and an added clone
+    never becomes primary by accident because it takes its own hostname.
+    """
+    rows = []
+    seen = set()
+    for group in serving.get("groups") or []:
+        for target in group.get("targets") or []:
+            identifier = target.get("id")
+            if not identifier or not str(identifier).startswith("i-"):
+                continue
+            if identifier in seen:
+                continue
+            seen.add(identifier)
+            facts = (facts_map or {}).get(identifier) or {}
+            rows.append({
+                "id": identifier,
+                "name": facts.get("name") or identifier,
+                "state": target.get("state"),
+                "instance_state": facts.get("state"),
+                "instance_type": facts.get("instance_type"),
+                "zone": facts.get("availability_zone"),
+                "healthy": target.get("state") == "healthy",
+                "self": identifier == self_id,
+                "primary": _is_primary(facts, primary),
+                "added_by_capacity": (facts.get("tags") or {}).get(
+                    ec2_helper.CREATED_BY_TAG) == "admin-capacity",
+                "groups": [],
+            })
+    by_id = {row["id"]: row for row in rows}
+    for group in serving.get("groups") or []:
+        for target in group.get("targets") or []:
+            row = by_id.get(target.get("id"))
+            if row is not None and group.get("arn") not in row["groups"]:
+                row["groups"].append(group.get("arn"))
+    return rows
+
+
+def _database_rows(rds_client=None, region=None):
+    """Every Aurora cluster and standalone instance, with its reader picture.
+
+    django-mojo does NOT consume a reader endpoint today: DATABASES points at
+    one host and every query goes there. A reader added here is standby read
+    capacity plus an endpoint string for the project to wire in, and the UI is
+    required to say exactly that rather than imply the app got faster.
+    """
+    rows = []
+    clusters = rds_helper.cluster_statuses(client=rds_client, region=region)
+    instances = rds_helper.instance_statuses(client=rds_client, region=region)
+    for identifier in sorted(clusters):
+        detail = rds_helper.cluster_members(
+            identifier, client=rds_client, region=region) or {}
+        rows.append({
+            "identifier": identifier,
+            "kind": "aurora",
+            "engine": detail.get("engine"),
+            "status": clusters[identifier].get("status"),
+            "writer": detail.get("writer"),
+            "readers": list(detail.get("readers") or []),
+            "reader_endpoint": detail.get("reader_endpoint"),
+            "endpoint": detail.get("endpoint"),
+        })
+    members = {row["identifier"] for row in rows}
+    for identifier in sorted(instances):
+        detail = rds_helper.instance_role(
+            identifier, client=rds_client, region=region) or {}
+        if detail.get("cluster"):
+            continue
+        if identifier in members:
+            continue
+        rows.append({
+            "identifier": identifier,
+            "kind": "standalone",
+            "engine": detail.get("engine"),
+            "status": instances[identifier].get("status"),
+            "writer": None if detail.get("is_replica") else identifier,
+            "replica_of": detail.get("replica_source"),
+            "is_replica": bool(detail.get("is_replica")),
+            "instance_class": detail.get("instance_class"),
+            "readers": [],
+            "endpoint": detail.get("endpoint"),
+        })
+    # A standalone replica belongs to its source's row, not its own.
+    sources = {row["identifier"]: row for row in rows if row["kind"] == "standalone"}
+    for row in list(rows):
+        source = sources.get(row.get("replica_of"))
+        if source is not None:
+            source["readers"].append(row["identifier"])
+    return [row for row in rows if not row.get("is_replica")]
+
+
+def _cache_rows(cache_client=None, region=None):
+    """Every replication group, with the facts the replica floor depends on."""
+    rows = []
+    for facts in elasticache_helper.replication_groups(
+            client=cache_client, region=region):
+        blocked = None
+        if facts.get("cluster_enabled"):
+            blocked = elasticache_helper.CLUSTER_MODE_UNSUPPORTED
+        rows.append({
+            "identifier": facts.get("identifier"),
+            "status": facts.get("status"),
+            "replica_count": facts.get("replica_count"),
+            "cluster_enabled": facts.get("cluster_enabled"),
+            "automatic_failover_on": facts.get("automatic_failover_on"),
+            "multi_az_on": facts.get("multi_az_on"),
+            "members": facts.get("members"),
+            # The lowest count this group may be moved to. One, not zero, when
+            # anything would fail over onto a replica that would no longer be
+            # there.
+            "min_replicas": 1 if (facts.get("automatic_failover_on")
+                                  or facts.get("multi_az_on")) else 0,
+            "blocked_reason": blocked,
+        })
+    return rows
+
+
+def _collect(envelope, code, iam_action, loader):
+    """Run one bounded read, degrading to a named warning instead of a 500."""
+    try:
+        return loader()
+    except ProviderCallError as err:
+        detail = err.detail()
+        envelope["warnings"].append({
+            "code": code,
+            "iam_action": detail.get("iam_action") or iam_action,
+            "aws_code": detail.get("provider_code"),
+            "message": (f"{iam_action} did not answer, so this section could "
+                        f"not be read"),
+        })
+        logger.warning("capacity report read failed %s %s", code, detail)
+        return None
+    except Exception:
+        envelope["warnings"].append({
+            "code": code, "iam_action": iam_action, "aws_code": None,
+            "message": f"{iam_action} did not answer, so this section could "
+                       f"not be read"})
+        logger.exception("capacity report read failed %s", code)
+        return None
+
+
+def _offers(envelope):
+    """Per-action ``offered``/``blocked_reason``, computed once, server-side.
+
+    The panel renders these; it never derives them. A control the server would
+    refuse must not be a button the operator can press.
+    """
+    external = envelope.get("mode") == infrastructure.EXTERNAL
+    nodes = envelope.get("nodes") or {}
+    instances = nodes.get("instances") or []
+    healthy = [row for row in instances if row.get("healthy")]
+    offers = {}
+
+    def offer(name, blocked):
+        offers[name] = {"offered": blocked is None, "blocked_reason": blocked}
+
+    node_block = None
+    if external:
+        node_block = infrastructure.ERROR_CODE
+    elif envelope.get("node_id_pinned"):
+        node_block = "node_id_pinned"
+    elif not healthy:
+        node_block = "no_source_node"
+    offer(ACTION_ADD_NODE, node_block)
+
+    remove_block = infrastructure.ERROR_CODE if external else (
+        "last_healthy_target" if len(healthy) <= 1 else None)
+    offer(ACTION_DRAIN_NODE, remove_block)
+    offer(ACTION_TERMINATE_NODE, infrastructure.ERROR_CODE if external else None)
+
+    database_block = infrastructure.ERROR_CODE if external else (
+        None if envelope.get("databases") else "no_database")
+    offer(ACTION_ADD_READER, database_block)
+    offer(ACTION_REMOVE_READER, infrastructure.ERROR_CODE if external else (
+        None if any(row.get("readers") for row in envelope.get("databases") or [])
+        else "no_reader"))
+
+    cache_block = infrastructure.ERROR_CODE if external else (
+        None if envelope.get("caches") else "no_cache_group")
+    offer(ACTION_SET_CACHE_REPLICAS, cache_block)
+    return offers
+
+
+def _build(elbv2_client=None, ec2_client=None, rds_client=None, cache_client=None):
+    envelope = {
+        "schema_version": SCHEMA_VERSION,
+        "region": _region(),
+        "mode": infrastructure.infrastructure_mode(),
+        "generated_at": _now(),
+        "node_id_pinned": _node_id_pinned(),
+        "nodes": {"balancers": [], "groups": [], "instances": [],
+                  "self": None, "self_check": "unavailable"},
+        "databases": [],
+        "caches": [],
+        "warnings": [],
+    }
+    serving = _collect(envelope, "serving", "elasticloadbalancing:DescribeTargetHealth",
+                       lambda: _serving(client=elbv2_client))
+    if serving is not None:
+        ids = sorted({target.get("id")
+                      for group in serving.get("groups") or []
+                      for target in group.get("targets") or []
+                      if str(target.get("id") or "").startswith("i-")})
+        # ONE describe_instances for the whole panel: the self check, the
+        # primary flag, the instance types and the capacity-added tag all come
+        # out of the same read.
+        facts = {}
+        if ids:
+            facts = _collect(envelope, "instances", "ec2:DescribeInstances",
+                             lambda: ec2_helper.instance_map(
+                                 ids, client=ec2_client)) or {}
+        self_id, self_status = _self_id(facts) if facts else (None, "unavailable")
+        envelope["nodes"] = {
+            "balancers": serving.get("balancers") or [],
+            "groups": [{key: group[key] for key in
+                        ("arn", "name", "target_type", "port", "protocol")}
+                       for group in serving.get("groups") or []],
+            "instances": _node_rows(serving, facts, self_id, _primary_host()),
+            "self": self_id,
+            "self_check": self_status,
+        }
+    databases = _collect(envelope, "databases", "rds:DescribeDBClusters",
+                         lambda: _database_rows(rds_client=rds_client))
+    envelope["databases"] = databases or []
+    caches = _collect(envelope, "caches", "elasticache:DescribeReplicationGroups",
+                      lambda: _cache_rows(cache_client=cache_client))
+    envelope["caches"] = caches or []
+    envelope["actions"] = _offers(envelope)
+    return envelope
+
+
+def report(refresh=False, elbv2_client=None, ec2_client=None, rds_client=None,
+           cache_client=None):
+    """The capacity panel's whole read. Cached briefly per region.
+
+    Short TTL on purpose: this is a page an operator opens BECAUSE something is
+    changing, so it must not show them a five-minute-old fleet. Every apply
+    invalidates it, and the panel's refresh control bypasses it entirely.
+    """
+    injected = any(value is not None for value in
+                   (elbv2_client, ec2_client, rds_client, cache_client))
+    key = _report_key()
+    if not refresh and not injected:
+        try:
+            cached = cache.get(key)
+        except Exception:
+            cached = None
+        if isinstance(cached, dict) and cached.get("schema_version") == SCHEMA_VERSION:
+            return cached
+    envelope = _build(elbv2_client, ec2_client, rds_client, cache_client)
+    if not injected:
+        try:
+            cache.set(key, envelope, REPORT_TTL)
+        except Exception:
+            logger.warning("capacity report could not be cached")
+    return envelope
+
+
+# ── user data ───────────────────────────────────────────────────────────────
+
+def node_user_data(base_name, root=None):
+    """The clone's first-boot script.
+
+    Order is the whole point:
+
+    1. IMDSv2 (token first — the launch forces ``HttpTokens=required``, so an
+       unauthenticated metadata read would simply fail) for this instance's own
+       id, and a hostname derived from it. Unique by construction, and derived
+       from something only this box knows.
+    2. config-sync, so the node pulls ITS OWN ``django.conf`` from S3 rather
+       than running on whatever the AMI happened to bake. The baked config is
+       deliberately NOT deleted: config-sync failing on a node with no config
+       at all is an unbootable box, and the sync overwrites in place anyway.
+    3. ``node_setup``, which is idempotent and converges var/ ownership,
+       systemd units and the jobs cron.
+    4. A restart of the app service and the job engine. Cloud-init runs LATE:
+       both were already started from the AMI, under the SOURCE's hostname, so
+       without this the clone's engine registers as the source's runner id and
+       two boxes answer as one node. Best-effort — a fleet that names its units
+       differently loses the restart, not the boot.
+    """
+    root = root or _node_root()
+    safe_base = "".join(char if (char.isalnum() or char == "-") else "-"
+                        for char in str(base_name or "mojo-node").lower()).strip("-")
+    safe_base = safe_base or "mojo-node"
+    safe_root = str(root).replace('"', "")
+    return "\n".join([
+        "#!/bin/bash",
+        "set -u",
+        "TOKEN=$(curl -sS -X PUT "
+        '"http://169.254.169.254/latest/api/token" '
+        '-H "X-aws-ec2-metadata-token-ttl-seconds: 300" || true)',
+        'IID=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" '
+        '"http://169.254.169.254/latest/meta-data/instance-id" || true)',
+        'if [ -n "$IID" ]; then',
+        f'  hostnamectl set-hostname "{safe_base}-${{IID##*-}}"',
+        "fi",
+        "systemctl start config-sync.service || true",
+        f'python3 -m mojo.deploy.node_setup --root "{safe_root}" || true',
+        "systemctl restart mojo-asgi.service || true",
+        f'"{safe_root}/bin/jobman" restart || true',
+        "",
+    ])
+
+
+def expected_node_id(base_name, instance_id):
+    """The hostname the user-data above will set, computed the same way.
+
+    ``${IID##*-}`` in the script is exactly ``instance_id.split("-")[-1]`` here,
+    and this value IS the readiness node id — the runner id is it plus
+    ``-engine``. Deriving it server-side is what lets the join leg wait for one
+    named runner instead of diffing the roster and guessing.
+    """
+    safe_base = "".join(char if (char.isalnum() or char == "-") else "-"
+                        for char in str(base_name or "mojo-node").lower()).strip("-")
+    return f"{safe_base or 'mojo-node'}-{str(instance_id).rsplit('-', 1)[-1]}"
+
+
+def expected_runner_id(node_id):
+    from mojo.apps.jobs import ENGINE_CHANNEL_SUFFIX
+    return f"{node_id}{ENGINE_CHANNEL_SUFFIX}"
+
+
+# ── apply ───────────────────────────────────────────────────────────────────
+
+def _refuse_external(action_label):
+    """Backstop for NON-REST callers (a shell, a job, a future importer).
+
+    The REST gate already answered HTTP for every ordinary caller, so reaching
+    this line means something bypassed it — which is exactly when a deliberate,
+    logged refusal is worth the duplication.
+    """
+    if not infrastructure.is_external():
+        return
+    logger.error("capacity apply refused: %s is %s on this installation",
+                 infrastructure.SETTING, infrastructure.EXTERNAL)
+    raise CapacityError(
+        infrastructure.refusal_message(action_label),
+        infrastructure.ERROR_CODE, 403)
+
+
+def _require_instance(resource, serving):
+    if not str(resource or "").startswith("i-"):
+        raise CapacityError("A node identifier is required", "invalid_request")
+    holding = _groups_holding(serving, resource)
+    if not holding:
+        raise CapacityError(
+            f"{resource} is not registered behind any load balancer.",
+            "not_registered", 409)
+    return holding
+
+
+def _prepare_add_node(serving, ec2_client=None):
+    """Everything an add decides BEFORE anything is created."""
+    if _node_id_pinned():
+        raise CapacityError(
+            "This fleet pins EDGE_NODE_ID, so every node reports the same "
+            "readiness identity and a new node could never be proven. Remove "
+            "the pin before adding capacity.",
+            "node_id_pinned", 409)
+    healthy = [target.get("id") for group in serving.get("groups") or []
+               for target in group.get("targets") or []
+               if target.get("state") == "healthy"
+               and str(target.get("id") or "").startswith("i-")]
+    source = _source_node(sorted(set(healthy)), client=ec2_client)
+    if source is None:
+        raise CapacityError(
+            "No healthy, running fleet member is available to clone. A node "
+            "can only be added from a node that is currently serving.",
+            "no_source_node", 409)
+    groups = [{"arn": group.get("arn"), "name": group.get("name"),
+               "port": next((target.get("port")
+                             for target in group.get("targets") or []
+                             if target.get("id") == source["instance_id"]), None)}
+              for group in _groups_holding(serving, source["instance_id"])]
+    return source, groups
+
+
+def apply(actor, action, resource="", **params):
+    """Start ONE capacity change. Returns the operation record.
+
+    Every guard that can be evaluated before a mutation IS evaluated before a
+    mutation, against a fresh provider read. What survives that is claimed
+    single-flight, recorded, and handed to a job — the long legs (an AMI, a
+    boot, a convergence, a proof) are minutes of polling and belong nowhere
+    near a request thread.
+    """
+    _refuse_external("Changing capacity")
+    if action not in ACTIONS:
+        raise CapacityError(f"Unknown capacity action '{action}'", "invalid_request")
+    resource = str(resource or "").strip()
+
+    if action in (ACTION_ADD_NODE, ACTION_DRAIN_NODE, ACTION_TERMINATE_NODE):
+        return _apply_node(actor, action, resource, **params)
+    if action in (ACTION_ADD_READER, ACTION_REMOVE_READER):
+        return _apply_reader(actor, action, resource, **params)
+    return _apply_cache(actor, resource, **params)
+
+
+def _apply_node(actor, action, resource, elbv2_client=None, ec2_client=None, **_ignored):
+    try:
+        serving = _serving(client=elbv2_client)
+    except ProviderCallError as err:
+        raise _provider_error(
+            err, "AWS did not report the serving tier, so no node change is "
+                 "safe to make.") from None
+
+    if action == ACTION_ADD_NODE:
+        source, groups = _prepare_add_node(serving, ec2_client=ec2_client)
+        claim = _claim(action, "fleet", getattr(actor, "pk", None))
+        record = _new_operation(action, source["instance_id"], actor, claim, {
+            "source_instance": source["instance_id"],
+            "source_name": source.get("name"),
+            "instance_type": source.get("instance_type"),
+            "subnet_id": source.get("subnet_id"),
+            "target_groups": groups,
+        })
+        _dispatch(record)
+        return record
+
+    holding = _require_instance(resource, serving)
+    self_id, self_status = _self_check(
+        [row.get("id") for group in serving.get("groups") or []
+         for row in group.get("targets") or []], client=ec2_client)
+    if self_id and self_id == resource:
+        raise CapacityError(
+            f"{resource} is the node answering this request. Removing it "
+            f"would cut the connection carrying the removal.",
+            "cannot_remove_self", 409, {"self_check": self_status})
+
+    if action == ACTION_DRAIN_NODE:
+        stranded = _would_strand(resource, serving)
+        if stranded is not None:
+            raise CapacityError(
+                f"{resource} is the only healthy target in "
+                f"{stranded.get('name') or stranded.get('arn')}. Draining it "
+                f"would take that target group out of service.",
+                "last_healthy_target", 409,
+                {"target_group": stranded.get("name") or stranded.get("arn")})
+        claim = _claim(action, resource, getattr(actor, "pk", None))
+        record = _new_operation(action, resource, actor, claim, {
+            "target_groups": [{"arn": group.get("arn"), "name": group.get("name"),
+                               "port": next((target.get("port")
+                                             for target in group.get("targets") or []
+                                             if target.get("id") == resource), None)}
+                              for group in holding],
+            "self_check": self_status,
+        })
+        _dispatch(record)
+        return record
+
+    # terminate: the drain is re-proved HERE, server-side, from a fresh read.
+    # A client that says "already drained" is a client, not evidence.
+    for group in holding:
+        rows = [target for target in group.get("targets") or []
+                if target.get("id") == resource]
+        if not elbv2_helper.drained(rows):
+            raise CapacityError(
+                f"{resource} is still registered in "
+                f"{group.get('name') or group.get('arn')} and has not finished "
+                f"draining. Drain it first, and wait for the drain to complete.",
+                "not_drained", 409,
+                {"target_group": group.get("name") or group.get("arn"),
+                 "states": sorted({row.get("state") for row in rows})})
+    claim = _claim(action, resource, getattr(actor, "pk", None))
+    record = _new_operation(action, resource, actor, claim,
+                            {"self_check": self_status})
+    _dispatch(record)
+    return record
+
+
+def _apply_reader(actor, action, resource, rds_client=None, **params):
+    if not resource:
+        raise CapacityError("A database identifier is required", "invalid_request")
+    try:
+        if action == ACTION_ADD_READER:
+            cluster = rds_helper.cluster_members(resource, client=rds_client)
+            if cluster is not None:
+                detail = {"kind": "aurora", "cluster": resource,
+                          "instance_class": params.get("instance_class")
+                          or _default_class(cluster, rds_client),
+                          "engine": cluster.get("engine")}
+            else:
+                source = rds_helper.instance_role(resource, client=rds_client)
+                if source is None:
+                    raise CapacityError(
+                        f"AWS reports no database called {resource}.",
+                        "resource_not_found", 404)
+                if source.get("is_replica"):
+                    raise CapacityError(
+                        f"{resource} is itself a read replica. Add the reader "
+                        f"to its source database instead.",
+                        "not_a_source", 409)
+                detail = {"kind": "standalone", "source": resource,
+                          "instance_class": source.get("instance_class"),
+                          "engine": source.get("engine")}
+            detail["reader_id"] = _reader_id(resource)
+            claim = _claim(action, resource, getattr(actor, "pk", None))
+            record = _new_operation(action, resource, actor, claim, detail)
+            _dispatch(record)
+            return record
+
+        # remove: the target must PROVABLY be a reader/replica. Nothing else is
+        # deletable here, and SkipFinalSnapshot makes being wrong permanent.
+        target = rds_helper.instance_role(resource, client=rds_client)
+        if target is None:
+            raise CapacityError(
+                f"AWS reports no database instance called {resource}.",
+                "resource_not_found", 404)
+        cluster_id = target.get("cluster")
+        if cluster_id:
+            cluster = rds_helper.cluster_members(cluster_id, client=rds_client) or {}
+            if resource not in (cluster.get("readers") or []):
+                raise CapacityError(
+                    f"{resource} is the writer of {cluster_id}, not a reader.",
+                    "not_a_reader", 409)
+        elif not target.get("is_replica"):
+            raise CapacityError(
+                f"{resource} is not a read replica — it is a primary database. "
+                f"This control only removes read capacity.",
+                "not_a_reader", 409)
+    except ProviderCallError as err:
+        raise _provider_error(
+            err, "AWS did not report this database, so no change was made."
+        ) from None
+    claim = _claim(action, resource, getattr(actor, "pk", None))
+    record = _new_operation(action, resource, actor, claim, {
+        "cluster": target.get("cluster"), "replica_of": target.get("replica_source")})
+    _dispatch(record)
+    return record
+
+
+def _default_class(cluster, rds_client=None):
+    """Match a new Aurora reader to the writer's instance class."""
+    writer = cluster.get("writer")
+    if not writer:
+        return None
+    row = rds_helper.instance_role(writer, client=rds_client) or {}
+    return row.get("instance_class")
+
+
+def _reader_id(resource):
+    stamp = uuid.uuid4().hex[:8]
+    base = str(resource)[:40].rstrip("-")
+    return f"{base}-reader-{stamp}"
+
+
+def _apply_cache(actor, resource, count=None, apply_immediately=None,
+                 cache_client=None, **_ignored):
+    if not resource:
+        raise CapacityError("A cache group identifier is required", "invalid_request")
+    if count is None:
+        raise CapacityError(
+            "count is required: state the number of replicas the group should "
+            "have when this finishes", "invalid_request")
+    try:
+        wanted = int(count)
+    except (TypeError, ValueError):
+        raise CapacityError("count must be a whole number", "invalid_request") from None
+    if apply_immediately is not True:
+        # ElastiCache supports only an immediate replica-count change. Rather
+        # than silently rewrite a False into a True, say what the operator is
+        # actually agreeing to.
+        raise CapacityError(
+            "apply_immediately must be true: ElastiCache applies a replica-count "
+            "change immediately and offers no maintenance-window option.",
+            "invalid_request")
+    try:
+        facts = elasticache_helper.replication_group_facts(resource, client=cache_client)
+    except ProviderCallError as err:
+        raise _provider_error(
+            err, "AWS did not report this cache group, so no change was made."
+        ) from None
+    if facts is None:
+        raise CapacityError(
+            f"AWS reports no replication group called {resource}.",
+            "resource_not_found", 404)
+    if facts.get("cluster_enabled"):
+        raise CapacityError(
+            f"{resource} is cluster-mode enabled. Its replica count is a "
+            f"per-shard resharding decision, not a capacity change, and this "
+            f"control does not make it.",
+            elasticache_helper.CLUSTER_MODE_UNSUPPORTED, 409)
+    current = int(facts.get("replica_count") or 0)
+    if wanted < 0:
+        raise CapacityError("count cannot be negative", "invalid_request")
+    if wanted == current:
+        raise CapacityError(
+            f"{resource} already has {current} replica(s).", "no_change", 409)
+    if wanted < 1 and (facts.get("automatic_failover_on") or facts.get("multi_az_on")):
+        raise CapacityError(
+            f"{resource} has automatic failover enabled, which requires at "
+            f"least one replica. Removing the last replica would leave nothing "
+            f"to fail over to.",
+            elasticache_helper.FAILOVER_REQUIRES_REPLICA, 409)
+    claim = _claim(ACTION_SET_CACHE_REPLICAS, resource, getattr(actor, "pk", None))
+    record = _new_operation(ACTION_SET_CACHE_REPLICAS, resource, actor, claim, {
+        "from_count": current, "to_count": wanted,
+        "automatic_failover_on": facts.get("automatic_failover_on"),
+        "multi_az_on": facts.get("multi_az_on"),
+        "apply_immediately": True,
+    })
+    _dispatch(record)
+    return record
+
+
+def _dispatch(record):
+    """Hand one recorded operation to a job. A publish failure fails the op."""
+    from mojo.apps import jobs
+    try:
+        jobs.publish(
+            func="mojo.apps.aws.asyncjobs.capacity_operation",
+            payload={"operation": record["id"]},
+            channel="cleanup", max_retries=0,
+            max_exec_seconds=_deadline_for(record["action"]) + 120)
+    except Exception:
+        logger.exception("capacity: operation %s could not be dispatched",
+                         record.get("id"))
+        _fail(record, "dispatch_failed",
+              "The operation could not be handed to a job runner, so nothing "
+              "was started.")
+        raise CapacityError(
+            "This installation's job runners did not accept the operation, so "
+            "nothing was changed.", "dispatch_failed", 503) from None
+    logger.info("capacity operation %s dispatched action=%s resource=%s actor=%s",
+                record["id"], record["action"], record["resource"], record["actor"])
+
+
+def _deadline_for(action):
+    if action == ACTION_ADD_NODE:
+        return (IMAGE_TIMEOUT + LAUNCH_TIMEOUT + RUNNER_TIMEOUT
+                + PROOF_MARGIN + HEALTH_TIMEOUT)
+    if action == ACTION_DRAIN_NODE:
+        return 3600
+    if action in (ACTION_ADD_READER, ACTION_REMOVE_READER):
+        return RDS_TIMEOUT
+    if action == ACTION_SET_CACHE_REPLICAS:
+        return CACHE_TIMEOUT
+    return 900
+
+
+# ── status ──────────────────────────────────────────────────────────────────
+
+def operation_status(operation_id):
+    """One operation's recorded progress, or a 404.
+
+    Deliberately a pure READ. The phases below are proven by the operation job,
+    not by whoever happens to be polling: a status endpoint that advanced the
+    work would let a caller with read-only grants drive a registration.
+    """
+    record = _read_operation(str(operation_id or "").strip())
+    if record is None:
+        raise CapacityError(
+            "That capacity operation is not on record. It finished more than "
+            "90 minutes ago, or the coordination cache was cleared.",
+            "operation_not_found", 404)
+    return record
+
+
+# ── the operation job ───────────────────────────────────────────────────────
+
+def run_operation(operation_id):
+    """Drive one recorded operation to a proven steady state, or a named failure."""
+    record = _read_operation(operation_id)
+    if record is None:
+        logger.warning("capacity: operation %s vanished before it ran", operation_id)
+        return "missing"
+    if record.get("state") != STATE_RUNNING:
+        return str(record.get("state"))
+    runners = {
+        ACTION_ADD_NODE: _run_add_node,
+        ACTION_DRAIN_NODE: _run_drain_node,
+        ACTION_TERMINATE_NODE: _run_terminate_node,
+        ACTION_ADD_READER: _run_add_reader,
+        ACTION_REMOVE_READER: _run_remove_reader,
+        ACTION_SET_CACHE_REPLICAS: _run_set_cache_replicas,
+    }
+    runner = runners.get(record.get("action"))
+    if runner is None:
+        _fail(record, "invalid_request", "Unknown capacity action.")
+        return "invalid"
+    try:
+        runner(record)
+    except ProviderCallError as err:
+        detail = err.detail()
+        _fail(record,
+              "provider_denied" if err.denied else "provider_error",
+              "AWS refused or could not complete this change.",
+              # Mutation state unknown means a retry could double-apply, so the
+              # claim is deliberately held until its TTL.
+              hold_claim=err.mutation_state != "none",
+              failure=detail)
+    except Exception:
+        logger.exception("capacity: operation %s raised", operation_id)
+        _fail(record, "operation_failed",
+              "This operation stopped with an unexpected error. Check the "
+              "capacity report before retrying.", hold_claim=True)
+    return str((_read_operation(operation_id) or {}).get("state") or STATE_FAILED)
+
+
+def _sleep(seconds=POLL_INTERVAL):
+    time.sleep(seconds)
+
+
+def _run_add_node(record):
+    from mojo.apps.edge.services import deploy, platform_deploy
+
+    detail = record["detail"]
+    source_id = detail["source_instance"]
+    source = ec2_helper.instance_facts(source_id)
+    if source is None:
+        return _fail(record, "no_source_node",
+                     "The node chosen as the clone source no longer exists.")
+
+    # ── capturing ──────────────────────────────────────────────────────────
+    reusable = ec2_helper.find_reusable_image(IMAGE_TAG_VALUE, _image_max_age_days())
+    if reusable:
+        image_id = reusable["image_id"]
+        _advance(record, "capturing", "reusing a recent fleet image",
+                 image_id=image_id, image_reused=True,
+                 image_age_days=reusable.get("age_days"))
+    else:
+        stamp = _now().replace(":", "").replace("-", "")[:15]
+        image_id = ec2_helper.capture_image(
+            source_id, f"mojo-fleet-{stamp}", IMAGE_TAG_VALUE)
+        _advance(record, "capturing",
+                 "capturing an image of the source node (no reboot)",
+                 image_id=image_id, image_reused=False)
+        deadline = time.time() + IMAGE_TIMEOUT
+        while time.time() < deadline:
+            _sleep()
+            status = ec2_helper.image_status(image_id) or {}
+            if status.get("state") == "available":
+                break
+            if status.get("state") in ("failed", "error", "invalid"):
+                return _fail(record, "image_failed",
+                             "AWS could not build an image of the source node. "
+                             "Nothing was launched.")
+        else:
+            return _fail(record, "image_timeout",
+                         f"The image was still building after "
+                         f"{IMAGE_TIMEOUT // 60} minutes. Nothing was launched.")
+
+    # ── launching ──────────────────────────────────────────────────────────
+    base = detail.get("source_name") or source.get("name") or "mojo-node"
+    _advance(record, "launching", "launching the new node")
+    instance_id = ec2_helper.launch_clone(
+        source, image_id, source.get("subnet_id"),
+        name=f"{base}-clone",
+        user_data=node_user_data(base))
+    if not instance_id:
+        return _fail(record, "launch_failed",
+                     "AWS accepted the launch but named no instance.")
+    node_id = expected_node_id(base, instance_id)
+    runner_id = expected_runner_id(node_id)
+    _advance(record, "launching", f"launched {instance_id}",
+             instance_id=instance_id, node_id=node_id, runner_id=runner_id)
+    invalidate()
+
+    deadline = time.time() + LAUNCH_TIMEOUT
+    while time.time() < deadline:
+        _sleep()
+        facts = ec2_helper.instance_facts(instance_id) or {}
+        if facts.get("state") == "running":
+            break
+        if facts.get("state") in ("terminated", "shutting-down"):
+            return _fail(record, "launch_failed",
+                         f"{instance_id} stopped before it finished booting.")
+    else:
+        return _fail(record, "launch_timeout",
+                     f"{instance_id} did not reach the running state. It exists "
+                     f"and is NOT registered behind the balancer.")
+
+    # ── booting ────────────────────────────────────────────────────────────
+    _advance(record, "booting",
+             f"waiting for {runner_id} to join the edge channel")
+    if not _await_runner(runner_id, RUNNER_TIMEOUT):
+        return _fail(record, "runner_missing",
+                     f"{instance_id} is running but never joined the job fleet "
+                     f"as {runner_id}. It is NOT registered behind the "
+                     f"balancer, so it is serving nothing.")
+
+    # ── converging ─────────────────────────────────────────────────────────
+    row = platform_deploy.last_converged_deployment()
+    if row is None:
+        return _fail(record, "no_converged_deployment",
+                     f"{instance_id} joined the fleet, but no deployment has "
+                     f"ever converged here, so there is no proven commit to "
+                     f"put on it. It is NOT registered.")
+    _advance(record, "converging",
+             f"deploying the fleet's last converged commit {row.sha[:12]}",
+             sha=row.sha, deployment=str(row.pk))
+    from mojo.apps.edge.asyncjobs import _publish_deploy_node
+    # ONE targeted publish, to the NEW runner's own box-direct channel. Never
+    # DEPLOY_CHANNEL: that is a fleet-wide broadcast, and redeploying the whole
+    # fleet because one node was added is precisely the blast radius this
+    # feature exists to avoid.
+    _publish_deploy_node(runner_id, row.sha, row.framework_version,
+                         migrate=False, deployment_id=row.pk)
+
+    # ── proving ────────────────────────────────────────────────────────────
+    _advance(record, "proving",
+             "waiting for the new node to prove it is running that commit")
+    if not _await_proof(runner_id, row, deploy.canary_timeout() + PROOF_MARGIN):
+        return _fail(record, "proof_timeout",
+                     f"{instance_id} did not prove it is running {row.sha[:12]}. "
+                     f"It has deliberately NOT been registered behind the "
+                     f"balancer — an unproven node must not serve traffic.")
+
+    # ── registering ────────────────────────────────────────────────────────
+    groups = detail.get("target_groups") or []
+    _advance(record, "registering", "registering the proven node behind the balancer")
+    for group in groups:
+        elbv2_helper.register_target(group["arn"], instance_id, group.get("port"))
+    invalidate()
+    _extend_topology(record, node_id)
+
+    # ── settling ───────────────────────────────────────────────────────────
+    _advance(record, "settling", "waiting for the balancer to report it healthy")
+    if not _await_healthy(instance_id, [group["arn"] for group in groups],
+                          HEALTH_TIMEOUT):
+        return _fail(record, "never_healthy",
+                     f"{instance_id} was registered but the balancer never "
+                     f"reported it healthy. Drain it and investigate before "
+                     f"leaving it in the serving path.")
+    _converge_pools(record)
+    return _finish(record,
+                   f"{instance_id} is serving as {node_id}",
+                   healthy=True)
+
+
+def _await_runner(runner_id, timeout):
+    from mojo.apps import jobs
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        _sleep()
+        try:
+            rows = jobs.get_runners_bounded(channel="edge", timeout=1.0) or []
+        except Exception:
+            continue
+        for row in rows:
+            if row.get("runner_id") == runner_id and row.get("alive"):
+                return True
+    return False
+
+
+def _await_proof(runner_id, row, timeout):
+    from mojo.apps.edge.services import platform_deploy
+    from mojo.apps.jobs.manager import get_manager
+
+    deadline = time.time() + timeout
+    manager = get_manager()
+    while time.time() < deadline:
+        _sleep()
+        try:
+            response = manager.execute_on_runner(
+                runner_id, "mojo.apps.edge.services.readiness.local_node_proof",
+                {"deployment": str(row.pk), "sha": row.sha}, timeout=2.0)
+        except Exception:
+            continue
+        if not isinstance(response, dict) or response.get("status") != "success":
+            continue
+        if platform_deploy.proof_matches(row, response.get("result")):
+            return True
+    return False
+
+
+def _await_healthy(instance_id, group_arns, timeout):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        _sleep()
+        try:
+            states = []
+            for arn in group_arns:
+                states += [target.get("state") for target in
+                           elbv2_helper.target_health(arn, instance_id)]
+        except ProviderCallError:
+            continue
+        if states and all(state == "healthy" for state in states):
+            return True
+    return False
+
+
+def _extend_topology(record, node_id):
+    """Add the new node to EDGE_EXPECTED_TOPOLOGY. Extend-only, never fatal.
+
+    A node that is serving traffic is serving traffic whether or not a settings
+    row lists it. Failing the add here would leave a proven, registered,
+    healthy node reported as a failure — so this degrades to a warning the
+    panel shows, with the one manual step spelled out.
+
+    Only an EXISTING topology is extended. Writing one where none was
+    configured would newly constrain a fleet that had deliberately left
+    readiness to derive its own per-node view.
+    """
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import system_settings
+
+    try:
+        current = system_settings.get_value(
+            system_settings.EXPECTED_EDGE_TOPOLOGY, None)
+        if not isinstance(current, dict) or not current.get("nodes"):
+            return _warn(record, "topology_not_updated",
+                         "EDGE_EXPECTED_TOPOLOGY is not configured, so nothing "
+                         "was extended. Fleet readiness derives its own view.")
+        nodes = sorted(set(current.get("nodes") or []) | {node_id})
+        if nodes == sorted(set(current.get("nodes") or [])):
+            return record
+        actor = User.objects.filter(pk=record.get("actor")).first()
+        system_settings.set_value(
+            actor, system_settings.EXPECTED_EDGE_TOPOLOGY,
+            {"nodes": nodes, "pools": list(current.get("pools") or [])})
+        record["detail"]["topology_nodes"] = nodes
+        return _write_operation(record)
+    except Exception:
+        logger.exception("capacity: topology extend failed for %s", node_id)
+        return _warn(record, "topology_not_updated",
+                     f"The node is serving, but EDGE_EXPECTED_TOPOLOGY could "
+                     f"not be extended. Add {node_id} to it by hand so fleet "
+                     f"readiness expects it.")
+
+
+def _converge_pools(record):
+    """Kick the existing combined pool convergence so readiness settles green.
+
+    Not a new mechanism — the same sweep the ten-minute cron runs. Right after
+    an add, the fleet summary reads `pending` until it completes, which is
+    expected and which the panel says out loud.
+    """
+    try:
+        from mojo.apps.edge import cronjobs
+        cronjobs.converge_edge()
+    except Exception:
+        logger.exception("capacity: pool convergence could not be triggered")
+        _warn(record, "convergence_not_triggered",
+              "The node is serving, but the vhost convergence sweep could not "
+              "be queued. The scheduled sweep will pick it up.")
+
+
+def _run_drain_node(record):
+    resource = record["resource"]
+    groups = record["detail"].get("target_groups") or []
+    _advance(record, "draining", "taking the node out of the serving path")
+    longest = 0
+    for group in groups:
+        elbv2_helper.deregister_target(group["arn"], resource, group.get("port"))
+        longest = max(longest, elbv2_helper.deregistration_delay(group["arn"]))
+    invalidate()
+    deadline = time.time() + longest + DRAIN_MARGIN
+    while time.time() < deadline:
+        _sleep()
+        try:
+            done = True
+            states = []
+            for group in groups:
+                rows = elbv2_helper.target_health(group["arn"], resource)
+                states += [row.get("state") for row in rows]
+                done = done and elbv2_helper.drained(rows)
+        except ProviderCallError:
+            continue
+        _advance(record, "draining",
+                 f"draining ({', '.join(sorted(set(states))) or 'gone'})")
+        if done:
+            invalidate()
+            return _finish(record,
+                           f"{resource} is drained and no longer serving traffic.")
+    return _fail(record, "drain_timeout",
+                 f"{resource} was still draining after the target group's "
+                 f"deregistration delay. It is NOT terminated.")
+
+
+def _run_terminate_node(record):
+    resource = record["resource"]
+    _advance(record, "terminating", "terminating the node")
+    state = ec2_helper.terminate(resource)
+    invalidate()
+    _advance(record, "terminating", f"AWS reports {state or 'shutting-down'}")
+    deadline = time.time() + LAUNCH_TIMEOUT
+    while time.time() < deadline:
+        _sleep()
+        facts = ec2_helper.instance_facts(resource)
+        if facts is None or facts.get("state") == "terminated":
+            return _finish(record, f"{resource} is terminated.")
+    return _fail(record, "terminate_timeout",
+                 f"AWS accepted the termination of {resource} but it has not "
+                 f"reached the terminated state yet.")
+
+
+def _run_add_reader(record):
+    detail = record["detail"]
+    reader_id = detail["reader_id"]
+    _advance(record, "creating", f"creating {reader_id}")
+    if detail.get("kind") == "aurora":
+        rds_helper.create_cluster_reader(
+            detail["cluster"], reader_id, detail.get("instance_class"),
+            detail.get("engine"))
+    else:
+        rds_helper.create_read_replica(
+            detail["source"], reader_id, detail.get("instance_class"))
+    invalidate()
+    _advance(record, "settling", "waiting for AWS to bring the reader up")
+    deadline = time.time() + RDS_TIMEOUT
+    while time.time() < deadline:
+        _sleep(30)
+        row = rds_helper.instance_role(reader_id)
+        if row is None:
+            continue
+        _advance(record, "settling", f"{reader_id} is {row.get('status')}")
+        if row.get("status") == RDS_SETTLED:
+            endpoint = row.get("endpoint")
+            invalidate()
+            return _finish(
+                record,
+                f"{reader_id} is available. django-mojo does not read from a "
+                f"reader endpoint today — wire {endpoint} into the project's "
+                f"DATABASES to use it.",
+                reader_id=reader_id, endpoint=endpoint)
+    return _fail(record, "reader_timeout",
+                 f"{reader_id} was created but has not become available. It is "
+                 f"billable; check the RDS console.")
+
+
+def _run_remove_reader(record):
+    resource = record["resource"]
+    _advance(record, "deleting", f"deleting {resource}")
+    rds_helper.delete_instance(resource)
+    invalidate()
+    deadline = time.time() + RDS_TIMEOUT
+    while time.time() < deadline:
+        _sleep(30)
+        row = rds_helper.instance_role(resource)
+        if row is None:
+            invalidate()
+            return _finish(record, f"{resource} is deleted.")
+        _advance(record, "deleting", f"{resource} is {row.get('status')}")
+    return _fail(record, "delete_timeout",
+                 f"AWS accepted the deletion of {resource} but it is still "
+                 f"listed. Check the RDS console.")
+
+
+def _run_set_cache_replicas(record):
+    resource = record["resource"]
+    detail = record["detail"]
+    wanted = int(detail["to_count"])
+    _advance(record, "scaling",
+             f"moving {resource} from {detail['from_count']} to {wanted} replica(s)")
+    try:
+        result = elasticache_helper.set_replica_count(resource, wanted, True)
+    except elasticache_helper.ReplicaCountError as err:
+        return _fail(record, err.reason, str(err))
+    if not result.get("changed"):
+        return _finish(record, f"{resource} already has {wanted} replica(s).")
+    invalidate()
+    _advance(record, "settling", "waiting for the group to settle")
+    deadline = time.time() + CACHE_TIMEOUT
+    while time.time() < deadline:
+        _sleep(30)
+        facts = elasticache_helper.replication_group_facts(resource)
+        if facts is None:
+            continue
+        _advance(record, "settling",
+                 f"{resource} is {facts.get('status')} with "
+                 f"{facts.get('replica_count')} replica(s)")
+        if (facts.get("status") == elasticache_helper.SETTLED
+                and int(facts.get("replica_count") or 0) == wanted):
+            invalidate()
+            note = ("A replica is failover capacity, not read throughput — "
+                    "django-mojo talks to the primary endpoint only."
+                    if wanted > int(detail["from_count"]) else
+                    "Automatic failover is off on this group, so it now has no "
+                    "standby to fail over to." if wanted == 0 else
+                    "The group is smaller; the primary endpoint is unchanged.")
+            return _finish(record,
+                           f"{resource} now has {wanted} replica(s). {note}")
+    return _fail(record, "cache_timeout",
+                 f"{resource} did not settle at {wanted} replica(s). Check the "
+                 f"ElastiCache console.")
