@@ -6,7 +6,12 @@
 .settings-page .status-row.is-linked:hover{background:var(--surface-2)}
 .settings-page .status-row.is-linked:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .settings-page .row-link.muted{color:var(--muted)}
+/* A single-column grid sizes its column to content unless told otherwise, so
+   the non-wrapping chip strip would otherwise widen the whole page past the
+   viewport and take every row with it. */
+.settings-page,.settings-list,.settings-page .row-section,.settings-page .row-list{grid-template-columns:minmax(0,1fr)}
 .settings-list{display:grid;gap:28px}
+.settings-categories{min-width:0}
 .settings-note{color:var(--muted);font-size:11px}
 p.settings-note{margin:0}
 .settings-back{font-size:12px}
@@ -23,7 +28,9 @@ p.settings-note{margin:0}
 /* One topic per panel: a form, its own errors, and the technical detail the
    list no longer carries. */
 .settings-panel{max-width:720px}
-.settings-panel .field-grid{display:grid;gap:12px}
+.settings-wide{grid-column:1/-1}
+.settings-picker{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:0 9px}
+.settings-picker .check-field span{white-space:nowrap}
 .settings-secret-slot{display:grid;gap:8px}
 .settings-secret-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
 .settings-secret-state{min-width:0;overflow-wrap:anywhere;font-size:12px;font-weight:600}
@@ -32,7 +39,6 @@ p.settings-note{margin:0}
 .settings-field-error:empty{display:none}
 .settings-result{color:var(--success);font-size:11px;font-weight:700}
 .settings-result:empty{display:none}
-.settings-picker{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 9px}
 .settings-footer{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:6px}
 .settings-technical{margin-top:12px;padding-top:9px;border-top:1px solid var(--line)}
 .settings-technical summary{cursor:pointer;color:var(--muted);font-size:10px;font-weight:700}
@@ -51,6 +57,8 @@ p.settings-note{margin:0}
 .settings-token-add{display:flex;gap:6px}
 .settings-token-add input{min-width:0}
 .settings-token-add .button{flex:0 0 auto}
-@media(max-width:760px){.settings-toolbar,.settings-toolbar .search{width:100%}.settings-categories{width:100%;flex-wrap:nowrap;overflow-x:auto;padding-bottom:3px}.settings-categories button{white-space:nowrap}.settings-methods,.settings-picker{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:600px){.settings-list{gap:22px}.settings-page .status-row{grid-template-columns:7px minmax(0,1fr) auto}}
-@media(max-width:390px){.settings-details{grid-template-columns:1fr}.settings-methods,.settings-picker{grid-template-columns:1fr}.settings-secret-row{display:block}.settings-secret-actions{margin-top:9px;justify-content:space-between}.settings-token-add{align-items:stretch}.settings-token-add .button{min-width:52px}}
+@media(max-width:760px){.settings-toolbar,.settings-toolbar .search{width:100%}.settings-categories{width:100%;flex-wrap:nowrap;overflow-x:auto;padding-bottom:3px}.settings-categories button{white-space:nowrap}.settings-methods{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* A settings row's value is a sentence and its right side is a pointer, so on a
+   phone they stack instead of competing for the same line. */
+@media(max-width:600px){.settings-list{gap:22px}.settings-page .status-row{grid-template-columns:7px minmax(0,1fr);row-gap:2px}.settings-page .status-row>.row-name,.settings-page .status-row>.row-value,.settings-page .status-row>.row-right{grid-column:2}.settings-page .status-row>.row-right{justify-content:flex-start;text-align:left}}
+@media(max-width:390px){.settings-details{grid-template-columns:1fr}.settings-methods{grid-template-columns:1fr}.settings-secret-row{display:block}.settings-secret-actions{margin-top:9px;justify-content:space-between}.settings-token-add{align-items:stretch}.settings-token-add .button{min-width:52px}}

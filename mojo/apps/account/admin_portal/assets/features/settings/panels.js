@@ -166,9 +166,12 @@ export function geoipPanel(report, actions) {
     if (locked) input.setAttribute('disabled', '');
     const error = fieldMessage();
     if (entry.key === 'GEOIP_MOJO_PROVIDER_URL') errors.url = error;
+    // A pick-many control needs the row to itself; squeezed into a third of
+    // the grid it wraps provider names mid-word.
+    const wide = entry.value_type === 'list' ? 'settings-wide' : '';
     const node = entry.value_type === 'boolean'
-      ? h('div', {}, checkField(entry.label, input), error)
-      : h('div', {}, field(entry.label, input, entry.constraints), error);
+      ? h('div', {class: wide}, checkField(entry.label, input), error)
+      : h('div', {class: wide}, field(entry.label, input, entry.constraints), error);
     return {entry, input, node};
   });
 
