@@ -512,6 +512,14 @@ reasoning: [edge README](../edge/README.md#settings),
 - `EDGE_DEPLOY_STATUS_TTL` — **file-only** (`settings.get_static`), int
   seconds, default `900`. Expiry on the Redis deploy target/status keys — the
   backstop that stops a canary dying hard from wedging every future deploy.
+- `EDGE_PYPI_VERSION_TTL` — **file-only** (`settings.get_static`), int seconds,
+  default `21600` (6 hours). How long a successful PyPI lookup for the newest
+  published `django-mojo` is cached by `edge.services.framework_version`. The
+  Admin dashboard reads it on every page load, so this is what keeps the page
+  off the network; a daily cron warms it.
+- `EDGE_PYPI_VERSION_ERROR_TTL` — **file-only** (`settings.get_static`), int
+  seconds, default `900`. The shorter TTL used when the lookup failed, so an
+  outage is retried in minutes rather than hours. Both are floored at `60`.
 
 ### EMAIL
 

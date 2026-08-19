@@ -25,6 +25,7 @@ const SVG = {
   refresh: '<path d="M20 11a8 8 0 1 0 1 5"/><path d="M20 4v7h-7"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3m3 0-1 14H7L6 7m4 4v6m4-6v6"/>',
   activity: '<path d="M3 12h4l2-6 4 12 2-6h6"/>',
+  chart: '<path d="M4 3v16a2 2 0 0 0 2 2h15"/><path d="m8 15 3.5-4.5 3 2.2L20 6"/>',
 };
 
 export function icon(name, label = '') {

@@ -162,8 +162,11 @@ descriptors; no URL, package name, or module path comes from user or deployment
 settings.
 
 Dashboard consumes `GET /api/account/admin/dashboard`, never Setup readiness.
-Its independently permissioned evidence and status vocabulary are documented
-in the [Dashboard API](admin_portal/dashboard.md).
+It is a status page: one availability sentence that turns red only when a
+source proves a failure, aligned infrastructure/software rows, and an attention
+backlog that stays muted. Its per-source authorities, the schema-2 payload, and
+the availability-vs-attention split are documented in the
+[Dashboard API](admin_portal/dashboard.md).
 
 Feature renderers receive `{ctx, route, navigate, signal}` and return one DOM
 node. Honor the abort signal for fetches and attach a `dispose()` function to
@@ -412,6 +415,8 @@ This prevents non-admin users from escalating their own access.
 | Secure settings | `GET/POST /api/settings`, `DELETE /api/settings/<id>` | `groups` |
 | System Setup | `/api/account/admin/setup/*` | Literal active superuser only |
 | Platform evidence/deploy recovery | `/api/account/admin/platform`, `/api/account/admin/platform/deploy/*` | Dedicated global Platform grants; writes require fresh non-key auth |
+| Framework version / update | `/api/account/admin/platform/framework[/update]` | `view_platform` to read; `manage_platform` or `admin` to update, fresh non-key auth. Clearing a pin is literal-superuser only |
+| Managed-service maintenance | `/api/aws/maintenance/versions`, `/api/aws/maintenance/status`, `/api/aws/maintenance/apply` | `manage_aws` to read; the apply needs `manage_aws` **and** superuser / `manage_platform` / `admin`, fresh non-key auth. See [aws/maintenance](../aws/maintenance.md) |
 | Advanced evidence/settings | `/api/account/admin/advanced`, `/api/account/admin/advanced/settings` | Dedicated global Advanced grants; settings additionally require literal superuser |
 | Security dashboard | `GET /api/incident/incident`, `GET /api/incident/event` | `security` |
 | Firewall / IP blocks | `GET/POST /api/incident/ipset` — see [IPSet Bulk Blocking](../security/README.md#ipset-bulk-blocking) | `security` |

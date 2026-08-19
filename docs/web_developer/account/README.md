@@ -38,6 +38,7 @@
 - [Admin Portal API Guide](admin_portal.md) — Building admin consoles (users, groups, secure settings)
 - [Admin Dashboard API](admin_portal/dashboard.md) — Permission-separated health and attention sources, status semantics, and cross-feature links
 - [Admin Settings API](admin_portal/settings.md) — Curated effective configuration, typed overrides, ownership, and provenance
+- [Admin Metrics API](admin_portal/metrics.md) — CloudWatch charts for EC2/RDS/ElastiCache: controls, range/granularity matrix, deep links, and degraded responses
 - [System Setup API](system_setup.md) — Superuser-only readiness, durable Fix Setup operations, late choices, resume, Origin binding, and protected settings
 - [Platform and Advanced APIs](admin_portal/platform.md) — Global health, UUID deployment recovery, bounded inventory, and expert diagnostics
 - [API Keys](api_keys.md) — Long-lived tokens for programmatic access

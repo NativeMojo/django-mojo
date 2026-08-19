@@ -3,7 +3,7 @@
 The built-in Admin separates platform operations into two feature-owned lanes.
 **Platform** owns public API and local sanity proof, deployment history, fleet,
 jobs/scheduler, database, Redis, certificate/security evidence, the public
-WebApp summary contract, and System Setup. **Advanced** owns hosting inventory,
+WebApp summary contract, System Setup, and CloudWatch Metrics. **Advanced** owns hosting inventory,
 bounded opt-in AWS inventory and raw network controls. Ongoing configuration
 has one first-class [Settings](settings.md) home. Platform
 is an operational evidence surface, not another directory: ongoing Domains &
@@ -76,6 +76,45 @@ passes. Writes require `manage_platform` or `manage_advanced`, reject API-key
 and group-token sessions, and require authentication no older than 600 seconds.
 Typed AUTH_CONFIG/topology owner writes additionally re-read an active literal
 `account.User` superuser.
+
+The feature owns five routes: `platform`, `deployments`, `setup`, `metrics`,
+and `maintenance`. The first three follow the grants above; the last two are
+gated separately on `manage_aws`, published as
+`features.platform.capabilities.metrics` and
+`features.platform.capabilities.maintenance` and enforced on `/api/aws/*` by
+`@md.requires_global_perms("manage_aws")`. An operator holding only
+`manage_aws` therefore sees the Metrics and Maintenance sidebar entries and
+nothing else in this lane. See [Admin Metrics](metrics.md).
+
+### Maintenance
+
+`maintenance` is the only Platform route that changes infrastructure outside
+this installation, and it needs **two** grants, not one: `manage_aws` opens the
+page, and applying an upgrade additionally requires superuser, `manage_platform`,
+or `admin`. The decorator composes its permissions with OR, so the AND is an
+explicit in-body check on `POST /api/aws/maintenance/apply`. `manage_aws` alone
+is the grant that reads CloudWatch charts; it is not the grant that reboots the
+production database.
+
+The same page owns the framework update, on the platform grants rather than the
+AWS one:
+
+- `GET /api/account/admin/platform/framework` (`view_platform`,
+  `manage_platform`, `admin`) reports installed vs published, the pin, and a
+  single `blocked_reason` — `update_unavailable`, `requires_superuser`, or
+  `no_converged_deployment`.
+- `POST /api/account/admin/platform/framework/update` (`manage_platform`,
+  `admin`, plus key denial and 600-second fresh auth) **clears** any pin and
+  redeploys the last converged commit. It never writes a version into the pin:
+  that would freeze the fleet at today's release instead of updating it, and
+  the mistake would stay invisible until the next release.
+
+`platform_deploy.last_converged_deployment()` is the row-returning sibling of
+`last_converged_framework()` — converged, because that status is the
+reconciler's proof the commit actually runs on this fleet.
+
+Full contract, IAM actions, and error codes:
+[aws/maintenance.md](../../aws/maintenance.md).
 
 `AUTH_CONFIG` and `EDGE_EXPECTED_TOPOLOGY` are protected from generic global
 Setting create, update, rename, and delete. Their compatibility writer merges appearance,

@@ -8,11 +8,15 @@ from django.db import connection, transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
+from mojo import errors as merrors
 from mojo.apps.account.services import system_settings
 from mojo.helpers.settings import settings
 
 
 SCHEMA_VERSION = 1
+# Dashboard alone. Its source roster, availability contract, and envelope keys
+# changed; Platform/Advanced still speak SCHEMA_VERSION 1.
+DASHBOARD_SCHEMA_VERSION = 2
 COLLECTOR_TIMEOUT = 3.0
 STALE_SECONDS = 600
 ROW_LIMIT = 100
@@ -21,6 +25,18 @@ WEBAPP_WORKERS = 4
 WEBAPP_PROBE_TIMEOUT = 1.5
 WEBAPP_COLLECTOR_DEADLINE = 2.5
 INCIDENT_TERMINAL_STATUSES = ("ignored", "resolved", "closed")
+# A drift finding older than this is not evidence about the engine running now.
+VERSION_DRIFT_MAX_AGE = timedelta(days=3)
+LOAD_BALANCER_CACHE_KEY = "mojo:admin:dashboard:elbv2"
+LOAD_BALANCER_CACHE_TTL = 60
+
+_ENGINE_DISPLAY = {
+    "postgresql": "Postgres",
+    "mysql": "MySQL",
+    "sqlite": "SQLite",
+    "oracle": "Oracle",
+    "microsoft": "SQL Server",
+}
 
 
 def _bounded_redis():
@@ -37,7 +53,7 @@ def _redis_client():
         client.close()
 
 
-def _envelope(status, data=None, reason=None):
+def _envelope(status, data=None, reason=None, reason_detail=None):
     observed = timezone.now()
     value = {
         "status": status, "observed_at": observed.isoformat(),
@@ -46,6 +62,8 @@ def _envelope(status, data=None, reason=None):
     }
     if reason:
         value["reason"] = reason
+    if reason_detail:
+        value["reason_detail"] = reason_detail
     return value
 
 
@@ -66,11 +84,13 @@ def _collect(func):
         value = future.result(timeout=COLLECTOR_TIMEOUT)
         status = "healthy"
         reason = None
+        reason_detail = None
         if isinstance(value, dict):
             value = dict(value)
             status = value.pop("_collector_status", status)
             reason = value.pop("_collector_reason", None)
-        return _envelope(status, value, reason=reason)
+            reason_detail = value.pop("_collector_reason_detail", None)
+        return _envelope(status, value, reason=reason, reason_detail=reason_detail)
     except TimeoutError:
         future.cancel()
         return _envelope("timeout", reason="collector_timeout")
@@ -127,13 +147,19 @@ def _api():
     import mojo
     from mojo.apps.account.services import system_readiness
     origin = system_settings.get_value(system_settings.BASE_URL)
+    # What THIS node would answer /api/version with. The probe reports what the
+    # public origin actually served, so the pair is the only way to see a node
+    # serving an older build than the one the operator is looking at.
+    node_version = str(settings.get_static("VERSION", "") or "")
     if not origin:
         return {"_collector_status": "unconfigured",
-                "django_mojo_version": mojo.__version__, "public_origin": None,
+                "django_mojo_version": mojo.__version__,
+                "node_version": node_version, "public_origin": None,
                 "configured": False}
     proof = system_readiness.probe_public_api_details(origin, timeout=2.0)
     return {"_collector_status": "healthy" if proof["ok"] else "unhealthy",
-            "django_mojo_version": mojo.__version__, "public_origin": origin,
+            "django_mojo_version": mojo.__version__,
+            "node_version": node_version, "public_origin": origin,
             "configured": True, "probe": proof}
 
 
@@ -402,15 +428,6 @@ def _webapps():
     return _webapp_evidence()
 
 
-def _dashboard_webapps():
-    """Small WebApp rollup; Dashboard does not serialize every application."""
-    evidence = _webapp_evidence()
-    rollup = dict(evidence["rollup"])
-    rollup["_collector_status"] = evidence["_collector_status"]
-    rollup["truncated"] = evidence["truncated"]
-    return rollup
-
-
 def _platform_deployment_status(row):
     if row.status == "failed":
         return "unhealthy"
@@ -425,20 +442,280 @@ def _platform_deployment_status(row):
     return "unknown"
 
 
-def _dashboard_deployment(include_stderr=False):
-    """Return one durable attempt without loading coordination or history."""
+def _dashboard_deployment():
+    """One durable attempt, projected to the six facts the row shows.
+
+    Deliberately NOT the full serializer: node evidence carries a deploy stderr
+    tail that can survive redaction with a credential in it, and the Dashboard
+    row renders a sha, an outcome, and a time. Not projecting it here is what
+    makes the tail unreachable from this endpoint for every role.
+    """
     from mojo.apps.edge.models import PlatformDeployment
-    from mojo.apps.edge.services import platform_deploy
-    row = PlatformDeployment.objects.select_related("retry_of").first()
+    row = PlatformDeployment.objects.first()
     if row is None:
         return {"_collector_status": "unconfigured", "items": []}
-    from mojo.apps.edge.services import deploy
-    with _redis_client() as redis:
-        target = deploy._loads(redis.get(deploy.TARGET_KEY))
     return {"_collector_status": _platform_deployment_status(row),
-            "items": [platform_deploy.serialize(
-                row, desired_commit=(target or {}).get("sha"),
-                include_stderr=include_stderr)]}
+            "items": [{
+                "id": str(row.pk), "sha": row.sha, "status": row.status,
+                "created": row.created.isoformat(),
+                "finished": row.finished.isoformat() if row.finished else None,
+                "actor": row.actor,
+            }]}
+
+
+def _dashboard_database():
+    """Reachability first; engine facts are enrichment that must never mask it."""
+    try:
+        base = _database()
+    except Exception:
+        # A raise-through would become "unavailable" and then "unknown" — a
+        # database nobody can reach is a proven failure, not an unknown one.
+        return {"_collector_status": "unhealthy",
+                "_collector_reason": "database_unreachable",
+                "reachable": False, "vendor": connection.vendor}
+    if not base.get("reachable"):
+        return {"_collector_status": "unhealthy",
+                "_collector_reason": "database_unreachable", **base}
+    data = {"_collector_status": "healthy", "engine": None, "version": None,
+            "drift": None, **base}
+    try:
+        data["engine"] = _ENGINE_DISPLAY.get(
+            connection.vendor, str(connection.vendor or "").title() or None)
+    except Exception:
+        pass
+    try:
+        version = connection.get_database_version()
+        data["version"] = ".".join(str(part) for part in version) \
+            if isinstance(version, (tuple, list)) else str(version)
+    except Exception:
+        pass
+    try:
+        data["drift"] = _version_drift_finding(
+            ("rds", "aurora"), data.get("version"))
+    except Exception:
+        pass
+    return data
+
+
+def _dashboard_cache():
+    """Redis down MUST redden the page — never degrade into 'unknown'."""
+    try:
+        base = _redis()
+    except Exception:
+        return {"_collector_status": "unhealthy",
+                "_collector_reason": "cache_unreachable", "reachable": False}
+    if not base.get("reachable"):
+        return {"_collector_status": "unhealthy",
+                "_collector_reason": "cache_unreachable", **base}
+    data = {"_collector_status": "healthy", "engine": "Redis", "version": None,
+            "memory_used": None, **base}
+    try:
+        # Plain .info(): on RedisCluster redis-py routes a section-less INFO to
+        # the default node, while a named section fans out to every node.
+        with _redis_client() as redis:
+            info = redis.info()
+        data["version"] = info.get("redis_version")
+        data["memory_used"] = info.get("used_memory_human")
+    except Exception:
+        pass
+    return data
+
+
+def _dashboard_certificates():
+    """Zero managed certificates means 'not managed here', never a failure."""
+    from mojo.apps.dnsman.models import Certificate
+    base = _certificates()
+    total = sum(base["counts"].values())
+    data = {"total": total, "active": base["counts"].get("active", 0),
+            "failing": base["counts"].get("failed", 0)
+            + base["counts"].get("revoked", 0),
+            "soonest_renew": None, "soonest_renew_name": None,
+            "soonest_expiry": None, **base}
+    if not total:
+        return {"_collector_status": "unconfigured", **data}
+    active = Certificate.objects.filter(status="active")
+    renew = active.filter(renew_after__isnull=False).order_by(
+        "renew_after").values("common_name", "renew_after").first()
+    expiry = active.filter(not_after__isnull=False).order_by(
+        "not_after").values("not_after").first()
+    if renew:
+        data["soonest_renew"] = renew["renew_after"].isoformat()
+        data["soonest_renew_name"] = renew["common_name"]
+    if expiry:
+        data["soonest_expiry"] = expiry["not_after"].isoformat()
+    return {"_collector_status": "unhealthy" if data["failing"] else "healthy",
+            "_collector_reason": "certificate_failed" if data["failing"] else None,
+            **data}
+
+
+def _newest_drift_event():
+    """The newest managed-engine drift event still inside the freshness window."""
+    from mojo.apps.aws.services import version_drift
+    from mojo.apps.incident.models import Event
+    return Event.objects.filter(
+        category=version_drift.CATEGORY,
+        created__gte=timezone.now() - VERSION_DRIFT_MAX_AGE).order_by(
+            "-created").values("metadata").first()
+
+
+def _version_drift_finding(kinds, current_version=None):
+    """The newest still-relevant managed-engine upgrade finding, or None.
+
+    Two suppressions, both deliberate: a finding older than
+    ``VERSION_DRIFT_MAX_AGE`` is not evidence about today's engine, and a
+    finding whose ``current_version`` no longer matches the version the engine
+    actually reports is about a database that has already been upgraded.
+    """
+    row = _newest_drift_event()
+    findings = (row or {}).get("metadata")
+    findings = findings.get("findings") if isinstance(findings, dict) else None
+    if not isinstance(findings, list):
+        return None
+    for finding in findings:
+        if not isinstance(finding, dict) or finding.get("kind") not in kinds:
+            continue
+        observed = str(finding.get("current_version") or "")
+        if current_version and observed and observed != str(current_version):
+            return None
+        return {
+            "available_major": finding.get("available_major"),
+            "deadline": finding.get("deadline"),
+            "note": finding.get("note"),
+        }
+    return None
+
+
+def _cached_frontend(refresh=False):
+    """One shared, short-lived ELBv2 read behind the load balancer and EC2 rows.
+
+    Both collectors run in the same wave, so the cache is what keeps the pair
+    to one set of provider calls; a cold race costs at most one extra bounded
+    read, which is cheaper than serializing them onto the request thread.
+    """
+    from django.core.cache import cache
+    if not refresh:
+        value = cache.get(LOAD_BALANCER_CACHE_KEY)
+        if isinstance(value, dict):
+            return value
+    from mojo.helpers.aws.elbv2 import LoadBalancerHelper
+    value = LoadBalancerHelper().frontend()
+    cache.set(LOAD_BALANCER_CACHE_KEY, value, LOAD_BALANCER_CACHE_TTL)
+    return value
+
+
+def _provider_unavailable(frontend):
+    """No balancer and no evidence: say which, without inventing a failure."""
+    if frontend.get("denied"):
+        return {"_collector_status": "unknown",
+                "_collector_reason": "provider_denied",
+                "_collector_reason_detail": {"iam_action": frontend["denied"][0]}}
+    if frontend.get("failures"):
+        return {"_collector_status": "unknown",
+                "_collector_reason": "provider_unavailable"}
+    return {"_collector_status": "unconfigured",
+            "_collector_reason": "no_load_balancer"}
+
+
+def _load_balancer(refresh=False):
+    """Serving-tier health from the balancer's own registered targets."""
+    frontend = _cached_frontend(refresh)
+    balancer = frontend.get("balancer") or {}
+    serving = [row for row in frontend.get("groups") or [] if row["registered"]]
+    data = {
+        "configured": frontend.get("configured", False),
+        "balancer": balancer or None,
+        "groups": frontend.get("groups") or [],
+        "registered": frontend.get("registered", 0),
+        "healthy": frontend.get("healthy", 0),
+        "denied": frontend.get("denied") or [],
+        # An NLB with no allocation id has no address that survives its own
+        # replacement. Worth saying out loud; not by itself an outage.
+        "elastic_ip_missing": bool(
+            balancer and not balancer.get("elastic_ips")),
+    }
+    if not frontend.get("configured"):
+        return {**_provider_unavailable(frontend), **data}
+    if frontend.get("denied"):
+        return {"_collector_status": "unknown",
+                "_collector_reason": "provider_denied",
+                "_collector_reason_detail": {"iam_action": frontend["denied"][0]},
+                **data}
+    if any(row["healthy"] == 0 for row in serving):
+        return {"_collector_status": "unhealthy",
+                "_collector_reason": "no_healthy_target", **data}
+    if serving and not balancer.get("addresses"):
+        return {"_collector_status": "unhealthy",
+                "_collector_reason": "no_balancer_address", **data}
+    if not serving:
+        return {"_collector_status": "unconfigured",
+                "_collector_reason": "no_registered_target", **data}
+    if data["healthy"] < data["registered"]:
+        return {"_collector_status": "degraded",
+                "_collector_reason": "target_unhealthy", **data}
+    return {"_collector_status": "healthy", **data}
+
+
+def _compute(refresh=False):
+    """EC2 scoped to what the balancer actually serves, when there is one."""
+    from mojo.helpers.aws.provider_call import ProviderCallError
+    frontend = _cached_frontend(refresh)
+    ids = list(frontend.get("instance_ids") or [])
+    if ids:
+        healthy = [value for value in frontend.get("healthy_instance_ids") or []]
+        names = {}
+        try:
+            from mojo.helpers.aws.elbv2 import LoadBalancerHelper
+            names = LoadBalancerHelper().instance_names(ids)
+        except Exception:
+            names = {}
+        status = "healthy" if len(healthy) == len(ids) else "degraded"
+        if not healthy:
+            status = "unhealthy"
+        return {"_collector_status": status, "source": "target_group",
+                "total": len(ids), "up": len(healthy),
+                "instances": [{"id": value, "name": names.get(value, value),
+                               "healthy": value in healthy} for value in ids]}
+    if frontend.get("denied"):
+        return {"_collector_status": "unknown",
+                "_collector_reason": "provider_denied",
+                "_collector_reason_detail": {"iam_action": frontend["denied"][0]},
+                "source": "target_group", "total": 0, "up": 0, "instances": []}
+    # No balancer to scope by. A raw instance count proves nothing about
+    # whether traffic is being served, so this path NEVER reports unhealthy.
+    try:
+        from mojo.helpers.aws.elbv2 import LoadBalancerHelper
+        page = LoadBalancerHelper().ec2.describe_instances(
+            Filters=[{"Name": "instance-state-name", "Values": ["running"]}],
+            MaxResults=100)
+    except ProviderCallError as err:
+        detail = err.detail()
+        value = {"_collector_status": "unknown", "source": "ec2",
+                 "_collector_reason": "provider_denied" if err.denied
+                 else "provider_unavailable",
+                 "total": 0, "up": 0, "instances": []}
+        if detail.get("iam_action"):
+            value["_collector_reason_detail"] = {"iam_action": detail["iam_action"]}
+        return value
+    except Exception:
+        return {"_collector_status": "unknown", "source": "ec2",
+                "_collector_reason": "provider_unavailable",
+                "total": 0, "up": 0, "instances": []}
+    running = sum(len(row.get("Instances") or [])
+                  for row in page.get("Reservations") or [])
+    return {"_collector_status": "healthy" if running else "unconfigured",
+            "source": "ec2", "total": running, "up": running, "instances": []}
+
+
+def _framework(refresh=False):
+    """Installed django-mojo, and whether an unpinned fleet is behind PyPI."""
+    from mojo.apps.edge.services import framework_version
+    if refresh:
+        framework_version.refresh()
+    value = framework_version.status()
+    update = bool(value.get("update_available"))
+    return {"_collector_status": "degraded" if update else "healthy",
+            "_collector_reason": "update_available" if update else None,
+            **value}
 
 
 def _hosting():
@@ -564,6 +841,7 @@ def _dashboard_envelope(value, *, empty_is_unconfigured=False):
         "observed_at": value.get("observed_at"),
         "stale_after": value.get("stale_after"),
         "reason": value.get("reason"),
+        "reason_detail": value.get("reason_detail"),
         "data": data,
     }
 
@@ -574,52 +852,198 @@ def _attention(request, model_name, permissions):
         return _envelope("unauthorized", reason="permission_required")
     def collect():
         if model_name == "incidents":
-            count = _open_incidents().count()
+            rows = _open_incidents()
         else:
             from mojo.apps.incident.models import Ticket
-            count = Ticket.objects.exclude(status__in=("resolved", "closed")).count()
+            rows = Ticket.objects.exclude(status__in=("resolved", "closed"))
+        count = rows.count()
+        oldest = rows.order_by("created").values_list(
+            "created", flat=True).first()
         return {"_collector_status": "healthy" if count == 0 else "degraded",
                 "_collector_reason": "open_attention" if count else None,
-                "open": count}
+                "open": count,
+                "oldest_created": oldest.isoformat() if oldest else None,
+                "oldest_age_days": (timezone.now() - oldest).days if oldest else None}
     return _collect(collect)
 
 
-def dashboard_overview(request):
+# The sources that can prove customers cannot use the system. A backlog of
+# open incidents is work, not an outage, so it is deliberately not here.
+AVAILABILITY_SOURCES = (
+    "load_balancer", "compute", "database", "cache", "certificates", "public_api")
+
+# Verbatim row names, so the headline names the same thing the row does.
+SOURCE_LABELS = {
+    "load_balancer": "Load balancer",
+    "compute": "EC2",
+    "database": "RDS",
+    "cache": "Elasticache",
+    "certificates": "SSL certs",
+    "public_api": "Public API",
+}
+
+
+def _availability(sources):
+    """Green/red from proven failures only — never from attention or denial."""
+    down = [SOURCE_LABELS[name] for name in AVAILABILITY_SOURCES
+            if (sources.get(name) or {}).get("status") == "unhealthy"]
+    if down:
+        message = f"{down[0]} is down" if len(down) == 1 else \
+            f"{len(down)} things are down: {', '.join(down)}"
+        return {"state": "down", "message": message, "down": down}
+    reporting = any((sources.get(name) or {}).get("status") == "healthy"
+                    for name in AVAILABILITY_SOURCES)
+    if not reporting:
+        return {"state": "unknown",
+                "message": "Status unknown — no source is reporting.", "down": []}
+    return {"state": "ok", "message": "Everything is running", "down": []}
+
+
+def _attention_message(sources, down):
+    """The muted sub-line. Open work is never allowed to sound like an outage."""
+    incidents = sources.get("incidents") or {}
+    if incidents.get("status") == "permission_denied":
+        return None
+    count = (incidents.get("data") or {}).get("open") or 0
+    if not count:
+        return None
+    noun = "incident needs" if count == 1 else "incidents need"
+    if down:
+        return f"{count} {noun} review."
+    return f"{count} {noun} review — nothing is down."
+
+
+def dashboard_overview(request, refresh=False):
     """Return the small, independently permissioned Admin landing matrix.
 
     This intentionally never calls System Setup readiness. Setup is a
     superuser-only Platform workflow, not an implicit Dashboard dependency.
     """
-    stderr = _permitted(request, "view_platform_security", "manage_platform", "admin")
+    platform = ("view_platform", "manage_platform", "admin")
+    security = ("view_security", "manage_security", "security", "admin")
     raw = _section_map(request, {
-        "public_api": (("view_platform", "manage_platform", "admin"), _api),
-        "fleet": (("view_platform", "manage_platform", "admin"), _fleet),
-        "webapps": (("view_dns", "manage_dns", "security", "admin"), _dashboard_webapps),
-        "security": (("view_platform_security", "manage_platform", "admin"), _security),
-        "last_deployment": (("view_platform", "manage_platform", "admin"),
-                            lambda: _dashboard_deployment(include_stderr=stderr)),
+        "load_balancer": (platform, lambda: _load_balancer(refresh)),
+        "compute": (platform, lambda: _compute(refresh)),
+        "database": (platform, _dashboard_database),
+        "cache": (platform, _dashboard_cache),
+        "certificates": (platform, _dashboard_certificates),
+        "public_api": (platform, _api),
+        "framework": (platform, lambda: _framework(refresh)),
+        "last_deployment": (platform, _dashboard_deployment),
     })
-    raw["incidents"] = _attention(
-        request, "incidents", ("view_security", "manage_security", "security", "admin"))
-    raw["tickets"] = _attention(
-        request, "tickets", ("view_security", "manage_security", "security", "admin"))
+    raw["incidents"] = _attention(request, "incidents", security)
+    raw["tickets"] = _attention(request, "tickets", security)
     sources = {
         name: _dashboard_envelope(
             value, empty_is_unconfigured=name == "last_deployment")
         for name, value in raw.items()
     }
-    observable = [
-        item["status"] for item in sources.values()
-        if item["status"] in _DASHBOARD_STATUS_ORDER
-    ]
-    overall = max(
-        observable, key=lambda status: _DASHBOARD_STATUS_ORDER[status]) \
-        if observable else "unknown"
+    availability = _availability(sources)
+    return {
+        "schema_version": DASHBOARD_SCHEMA_VERSION,
+        "observed_at": timezone.now().isoformat(),
+        "availability": availability,
+        "attention": {
+            "message": _attention_message(sources, availability["down"])},
+        "sources": sources,
+    }
+
+
+def framework_overview(request, refresh=False):
+    """Which django-mojo runs here, and whether this caller could update it.
+
+    Entirely derived from ``framework_version.status()`` — there is exactly one
+    PyPI check in this codebase and this is not a second one.
+
+    ``blocked_reason`` names the ONE thing standing in the way, so the portal
+    can disable the control and say why instead of offering an action that
+    fails:
+
+    * ``update_unavailable`` — nothing newer is published, or PyPI is not
+      answering.
+    * ``requires_superuser`` — a pin or hold is set. Clearing it is a protected
+      settings write, and only a literal superuser may make it.
+    * ``no_converged_deployment`` — nothing has ever been proven to run on this
+      fleet, so there is no commit to redeploy. Checked last because it is the
+      only reason that costs a query.
+    """
+    from mojo.apps.edge.services import framework_version, platform_deploy
+    if refresh:
+        framework_version.refresh()
+    value = framework_version.status()
+    pin = value.get("pin") or {"mode": "latest", "value": None}
+    pinned = pin.get("mode") != "latest"
+    superuser = bool(getattr(request.user, "is_superuser", False))
+
+    blocked = None
+    if not value.get("latest") or not (value.get("update_available") or pinned):
+        blocked = "update_unavailable"
+    elif pinned and not superuser:
+        blocked = "requires_superuser"
+    elif platform_deploy.last_converged_deployment() is None:
+        blocked = "no_converged_deployment"
     return {
         "schema_version": SCHEMA_VERSION,
-        "overall": overall,
-        "observable_sources": len(observable),
-        "sources": sources,
+        "installed": value.get("installed"),
+        "latest": value.get("latest"),
+        "checked_at": value.get("checked_at"),
+        "source": value.get("source"),
+        "update_available": bool(value.get("update_available")),
+        "pin": pin,
+        "can_update": blocked is None,
+        "blocked_reason": blocked,
+    }
+
+
+def apply_framework_update(request, version):
+    """Put the fleet back on the newest published django-mojo.
+
+    Two steps, in this order, and NEITHER of them writes a version into the pin:
+
+    1. If a pin or hold is set, CLEAR it. The pin is what would otherwise make
+       step 2 reinstall the version the operator is trying to leave. Writing
+       ``version`` into it instead would silently freeze the fleet at today's
+       release — the opposite of "update", and invisible until the next one.
+       The writer enforces the literal-superuser rule itself.
+    2. Redeploy the last converged commit. The framework version is resolved at
+       install time, so re-running the proven commit is what actually installs
+       the new release; there is no separate "install framework" path.
+    """
+    from mojo.apps.edge.services import deploy, platform_deploy
+    from mojo.apps.edge.settings_validators import FRAMEWORK_VERSION_KEY
+
+    pin = None
+    try:
+        pin = deploy.framework_version_pin()
+    except Exception:
+        pin = None
+    if pin:
+        # Target records the transition, matching the framework_pin writer's
+        # convention: "who cleared what" must survive in the audit trail.
+        system_settings.set_value(request.user, FRAMEWORK_VERSION_KEY, "")
+        audit_after_commit(request.user, "framework_pin", f"{pin}->latest")
+
+    row = platform_deploy.last_converged_deployment()
+    if row is None:
+        raise merrors.ValueException(
+            "No deployment has ever converged on this fleet, so there is no "
+            "proven commit to redeploy.", code=409, status=409)
+    try:
+        deployment = platform_deploy.same_sha_retry(
+            row, actor=f"framework-update:{request.user.pk}",
+            created_by=request.user,
+            idempotency_key=request.META.get("HTTP_IDEMPOTENCY_KEY"))
+    except deploy.DeploymentCoordinationError:
+        raise merrors.ValueException(
+            "Deploy coordination unavailable", code=503, status=503) from None
+    audit_after_commit(request.user, "framework_update",
+                       f"{version}:{deployment.pk}")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "requested": True,
+        "version": version,
+        "cleared_pin": pin or None,
+        "deployment": platform_deploy.serialize(deployment, include_stderr=True),
     }
 
 

@@ -53,6 +53,16 @@ def converge_edge():
         broadcast=True)
 
 
+# Daily at 06:40 — warm the published-version cache. The Admin dashboard reads
+# framework_version.status() on page load; without a warm cache the first
+# operator of the day pays a live PyPI request inside a bounded collector.
+@schedule(minutes="40", hours="6")
+def warm_framework_version():
+    from mojo.apps.edge.services import framework_version
+    result = framework_version.status()
+    return f"installed={result['installed']} latest={result['latest'] or 'unknown'}"
+
+
 @schedule(minutes="*/5")
 def reconcile_platform_deployments():
     """Resume a stranded target, then close abandoned coordination attempts.

@@ -118,20 +118,28 @@ def test_dashboard_permission_matrix(opts):
     user.has_permission.side_effect = lambda values: False
     request = mock.Mock(user=user)
     with mock.patch.object(admin_platform, "_api") as api, \
+            mock.patch.object(admin_platform, "_load_balancer") as balancer, \
+            mock.patch.object(admin_platform, "_compute") as compute, \
+            mock.patch.object(admin_platform, "_dashboard_database") as database, \
+            mock.patch.object(admin_platform, "_dashboard_cache") as cache, \
+            mock.patch.object(admin_platform, "_dashboard_certificates") as certs, \
+            mock.patch.object(admin_platform, "_framework") as framework, \
             mock.patch.object(admin_platform, "_fleet") as fleet, \
-            mock.patch.object(admin_platform, "_dashboard_webapps") as webapps, \
             mock.patch.object(admin_platform, "_security") as security, \
             mock.patch.object(admin_platform, "_dashboard_deployment") as deployments, \
             mock.patch("mojo.apps.account.services.system_readiness.run") as setup:
         report = admin_platform.dashboard_overview(request)
-    th.assert_eq(report["overall"], "unknown",
-                 "denied sources must not manufacture an overall state")
-    th.assert_eq(report["observable_sources"], 0,
-                 "permission-denied sources are not observable evidence")
+    th.assert_eq(report["availability"]["state"], "unknown",
+                 "denied sources must not manufacture an availability verdict")
+    th.assert_eq(report["availability"]["down"], [],
+                 "a denied source is not proof that anything is down")
+    th.assert_eq(report["attention"]["message"], None,
+                 "a denied incident source must not produce an attention line")
     for name, source in report["sources"].items():
         th.assert_eq(source["status"], "permission_denied",
                      f"{name} must distinguish denial from source failure")
-    for collector in (api, fleet, webapps, security, deployments, setup):
+    for collector in (api, balancer, compute, database, cache, certs, framework,
+                      fleet, security, deployments, setup):
         th.assert_true(not collector.called,
                        "Dashboard issued a forbidden or Setup readiness read")
 
@@ -313,9 +321,11 @@ def test_malformed_forced_password_incident_boundary(opts):
                    "malformed forced-password credential persisted in incident evidence")
 
 
-@th.django_unit_test("private assets use seven primary items and scrub every transient secret")
+@th.django_unit_test("private assets keep the fixed feature order and scrub every transient secret")
 def test_merged_browser_secret_and_route_contract(opts):
     registry = (ROOT / "mojo/apps/account/admin_portal/assets/features/registry.js").read_text()
+    platform_feature = (
+        ROOT / "mojo/apps/account/admin_portal/assets/features/platform/feature.js").read_text()
     routes = (ROOT / "mojo/apps/account/admin_portal/assets/components/routes.js").read_text()
     people = (ROOT / "mojo/apps/account/admin_portal/assets/features/people/page.js").read_text()
     webapps = (ROOT / "mojo/apps/account/admin_portal/assets/features/webapps/page.js").read_text()
@@ -326,7 +336,15 @@ def test_merged_browser_secret_and_route_contract(opts):
     classifier = (ROOT / "mojo/helpers/request.py").read_text()
     th.assert_true(
         "[dashboard, webapps, advanced, people, activity, platform, settings]" in registry,
-        "feature order does not match the seven-item product navigation")
+        "feature order does not match the approved product navigation")
+    # The sidebar is no longer one entry per feature: a feature contributes as
+    # many entries as its own capabilities allow, and Platform contributes
+    # Metrics on top of its own entry when the AWS grant is present.
+    th.assert_true(
+        "label: 'Platform'" in platform_feature
+        and "label: 'Metrics'" in platform_feature
+        and "capabilities.metrics" in platform_feature,
+        "Platform no longer contributes its capability-gated Metrics entry")
     th.assert_true(
         "route: 'domains'" in advanced_feature
         and "label: 'Domains & DNS'" in advanced_feature

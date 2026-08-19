@@ -24,10 +24,12 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | [email/](email/README.md) | AWS SES email, templates, mailboxes, inbound handling |
 | [aws/credentials.md](aws/credentials.md) | AWS credential modes — static keys, ambient/instance-profile, and cross-account AssumeRole |
 | [aws/cloudwatch.md](aws/cloudwatch.md) | CloudWatch monitoring — EC2, RDS, and ElastiCache metrics via boto3 |
+| [aws/load_balancer.md](aws/load_balancer.md) | Read-only ELBv2 serving-tier health — balancer, attached target groups, registered-target health, elastic IPs, and bounded denial reporting |
 | [aws/guardduty.md](aws/guardduty.md) | GuardDuty findings via EventBridge/SNS — severity policy, dedupe and occurrence contract, bounded metadata, opt-in RuleSet |
 | [aws/aws_check.md](aws/aws_check.md) | Audit and safely bootstrap AWS credentials, cron, S3, SES, SNS/CloudWatch, dnsman ACME/certificate state, and incident defaults |
 | [aws/s3.md](aws/s3.md) | Bounded S3 inventory, verified public/private posture, private creation, and confirmed version-aware emptying |
 | [aws/version_drift.md](aws/version_drift.md) | Daily RDS/Aurora and ElastiCache major-version drift inventory, support deadlines, and the opt-in ticket/board escalation |
+| [aws/maintenance.md](aws/maintenance.md) | Applying a pending RDS/ElastiCache engine upgrade and the django-mojo framework update — server-derived targets, single flight, and the permission AND |
 | [dnsman/](dnsman/README.md) | Domains, DNS records across providers, WHOIS/privacy, and centrally-issued TLS certificates |
 | [edge/](edge/README.md) | nginx vhosts as structured rows, and the node-side installer that lands certs + vhosts as one validated generation |
 | [jobs/](jobs/README.md) | Async job queue — publishing, scheduling, retries, webhooks, broadcasting, monitoring |

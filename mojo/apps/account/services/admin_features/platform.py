@@ -12,6 +12,13 @@ def describe(request, capabilities):
                          capabilities.get("view_advanced_inventory") or
                          capabilities.get("view_advanced_security") or
                          capabilities.get("view_advanced_settings")),
+        # CloudWatch charts read AWS directly, so the lane follows the AWS
+        # grant rather than the platform-evidence grants above.
+        "metrics": bool(capabilities.get("manage_aws")),
+        # Maintenance reads AWS directly, so the lane follows the same grant as
+        # Metrics. Applying an upgrade needs a platform tier on top of it; that
+        # second gate lives on the endpoint, not on whether the page is offered.
+        "maintenance": bool(capabilities.get("manage_aws")),
     }
     return {"id": "platform", "enabled": any(values.values()),
             "capabilities": values}

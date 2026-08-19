@@ -1,3 +1,7 @@
+import json
+from types import SimpleNamespace
+from unittest import mock
+
 from testit import helpers as th
 from testit import TestitSkip
 from mojo.helpers.settings import settings
@@ -33,6 +37,192 @@ def _assert_has_data(data_dict, label):
 def _get_values(data_dict, slug):
     """Return the values list for a slug from the {slug: [values]} dict."""
     return data_dict.get(slug)
+
+
+# ------------------------------------------------------------------
+# Degradation-envelope fixtures
+#
+# opts.client talks to a SEPARATE server process, so a stubbed AWS helper can
+# never reach it. The degradation tests below call the view body directly —
+# ``__wrapped__`` steps past the permission decorator, which the HTTP tests
+# further down already cover — and install a stub through the module's own
+# ``_get_helper`` seam.
+# ------------------------------------------------------------------
+
+SECRET_MARKER = "SIGNEDURLSECRET-aws-should-never-leak"
+
+
+class _StubCloudWatch:
+    """Stand-in for CloudWatchHelper. Any value may be an exception to raise."""
+
+    def __init__(self, ec2=None, rds=None, redis=None, series=None):
+        self._ec2 = ec2
+        self._rds = rds
+        self._redis = redis
+        self._series = series
+
+    @staticmethod
+    def _answer(value):
+        if isinstance(value, Exception):
+            raise value
+        return [dict(row) for row in (value or [])]
+
+    def list_ec2_instances(self):
+        return self._answer(self._ec2)
+
+    def list_rds_instances(self):
+        return self._answer(self._rds)
+
+    def list_elasticache_clusters(self):
+        return self._answer(self._redis)
+
+    def fetch(self, **kwargs):
+        if isinstance(self._series, Exception):
+            raise self._series
+        return self._series or {"data": {"web-1": [1.5, 2.5]},
+                                "labels": ["00:00", "01:00"]}
+
+
+def _client_error(code, status, operation, message=SECRET_MARKER):
+    from botocore.exceptions import ClientError
+
+    return ClientError({
+        "Error": {"Code": code, "Message": message},
+        "ResponseMetadata": {"HTTPStatusCode": status,
+                             "RequestId": "abcdefgh12345678"},
+    }, operation)
+
+
+def _call(view_name, stub, **data):
+    """Invoke a cloudwatch view body against a stubbed helper."""
+    from objict import objict
+    from mojo.apps.aws.rest import cloudwatch as cloudwatch_rest
+
+    view = getattr(cloudwatch_rest, view_name).__wrapped__
+    with mock.patch.object(cloudwatch_rest, "_get_helper", return_value=stub):
+        response = view(SimpleNamespace(DATA=objict(**data)))
+    return json.loads(response.content)
+
+
+@th.django_unit_test("missing AWS credentials degrade the resource list instead of failing")
+def test_resources_credentials_unavailable(opts):
+    from botocore.exceptions import NoCredentialsError
+
+    error = NoCredentialsError()
+    payload = _call("on_cloudwatch_resources",
+                    _StubCloudWatch(ec2=error, rds=error, redis=error))
+    assert payload["status"] is True, \
+        f"a degraded listing must stay a success envelope: {payload}"
+    assert payload["available"] is False, \
+        f"every service failed, so available must be False: {payload}"
+    assert payload["reason"] == "credentials_unavailable", \
+        f"expected credentials_unavailable, got {payload['reason']!r}"
+    assert payload["ec2"] == [] and payload["rds"] == [] and payload["redis"] == [], \
+        f"a failed service must return an empty list, not partial data: {payload}"
+
+
+@th.django_unit_test("an unreachable AWS endpoint reports network_unavailable")
+def test_resources_network_unavailable(opts):
+    from botocore.exceptions import ReadTimeoutError
+
+    error = ReadTimeoutError(endpoint_url="https://ec2.us-east-1.amazonaws.com/")
+    payload = _call("on_cloudwatch_resources",
+                    _StubCloudWatch(ec2=error, rds=error, redis=error))
+    assert payload["available"] is False and payload["reason"] == "network_unavailable", \
+        f"a read timeout must degrade as network_unavailable: {payload}"
+
+
+@th.django_unit_test("an AccessDenied ClientError reports denied")
+def test_resources_access_denied(opts):
+    error = _client_error("AccessDenied", 403, "DescribeInstances")
+    payload = _call("on_cloudwatch_resources",
+                    _StubCloudWatch(ec2=error, rds=error, redis=error))
+    assert payload["available"] is False and payload["reason"] == "denied", \
+        f"an AccessDenied error must degrade as denied: {payload}"
+
+
+@th.django_unit_test("a bare 403 with no denial code still reports denied")
+def test_resources_bare_403_denied(opts):
+    # Some AWS services answer 403 with a code outside the denial vocabulary;
+    # the HTTP status alone must still be read as a refusal.
+    error = _client_error("Forbidden", 403, "DescribeDBInstances")
+    payload = _call("on_cloudwatch_resources",
+                    _StubCloudWatch(ec2=error, rds=error, redis=error))
+    assert payload["available"] is False and payload["reason"] == "denied", \
+        f"a bare 403 must degrade as denied: {payload}"
+
+
+@th.django_unit_test("one failed service leaves the others listed")
+def test_resources_partial_degradation(opts):
+    error = _client_error("AccessDenied", 403, "DescribeDBInstances")
+    payload = _call("on_cloudwatch_resources", _StubCloudWatch(
+        ec2=[{"id": "i-0abc", "name": "web-1", "state": "running"}],
+        rds=error,
+        redis=[{"id": "cache-1", "status": "available"}]))
+    assert payload["available"] is True, \
+        f"two live services must not be reported as unavailable: {payload}"
+    assert payload["reason"] is None, \
+        f"a partial outage has no single cause: {payload['reason']!r}"
+    assert payload["degraded"] == {"rds": "denied"}, \
+        f"only the failed service belongs in degraded: {payload['degraded']}"
+    assert [row["slug"] for row in payload["ec2"]] == ["web-1"], \
+        f"the live EC2 listing lost its friendly slug: {payload['ec2']}"
+    assert [row["slug"] for row in payload["redis"]] == ["cache-1"], \
+        f"the live ElastiCache listing lost its slug: {payload['redis']}"
+
+
+@th.django_unit_test("no botocore text reaches the wire on a degraded listing")
+def test_resources_no_provider_text_on_wire(opts):
+    error = _client_error("AccessDenied", 403, "DescribeInstances")
+    payload = _call("on_cloudwatch_resources",
+                    _StubCloudWatch(ec2=error, rds=error, redis=error))
+    rendered = json.dumps(payload)
+    assert SECRET_MARKER not in rendered, \
+        f"the raw provider message reached the API response: {rendered}"
+    assert "botocore" not in rendered and "arn:aws" not in rendered, \
+        f"provider internals reached the API response: {rendered}"
+
+
+@th.django_unit_test("fetch reports availability inside data, where the client reads it")
+def test_fetch_degradation_is_nested(opts):
+    error = _client_error("AccessDenied", 403, "GetMetricStatistics")
+    payload = _call("on_cloudwatch_fetch", _StubCloudWatch(series=error),
+                    account="ec2", category="cpu")
+    assert payload["status"] is True, \
+        f"a degraded fetch stays a success envelope: {payload}"
+    assert "available" not in payload, \
+        f"available must live inside data — the portal client drops top-level siblings: {payload}"
+    data = payload["data"]
+    assert data["available"] is False and data["reason"] == "denied", \
+        f"the degraded fetch did not carry its reason: {data}"
+    assert data["data"] == {} and data["labels"] == [], \
+        f"a degraded fetch must return an empty series: {data}"
+    assert SECRET_MARKER not in json.dumps(payload), \
+        "the raw provider message reached the fetch response"
+
+
+@th.django_unit_test("a healthy fetch marks itself available alongside its series")
+def test_fetch_available_flag(opts):
+    payload = _call("on_cloudwatch_fetch", _StubCloudWatch(),
+                    account="ec2", category="cpu")
+    data = payload["data"]
+    assert data["available"] is True and data["reason"] is None, \
+        f"a healthy fetch must report itself available: {data}"
+    assert data["data"] == {"web-1": [1.5, 2.5]}, \
+        f"the healthy fetch lost its series: {data}"
+
+
+@th.django_unit_test("a non-provider failure is still a real error, not a degradation")
+def test_fetch_unclassified_error_propagates(opts):
+    payload = None
+    try:
+        payload = _call("on_cloudwatch_fetch",
+                        _StubCloudWatch(series=RuntimeError("bug in mojo")),
+                        account="ec2", category="cpu")
+    except RuntimeError:
+        return
+    raise AssertionError(
+        f"a RuntimeError was swallowed into a degraded response: {payload}")
 
 
 # ------------------------------------------------------------------

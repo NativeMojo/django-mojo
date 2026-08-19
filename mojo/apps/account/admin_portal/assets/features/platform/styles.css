@@ -1,3 +1,39 @@
+/* Series palette. Declared in all three theme blocks so a chart keeps its
+   contrast whether the operator picked light, dark, or followed the system. */
+:root {
+  --chart-1:#3c5ccf; --chart-2:#0f8a6a; --chart-3:#b3560f; --chart-4:#8a3fbd;
+  --chart-5:#0d7d99; --chart-6:#b62a55;
+}
+html[data-theme="dark"] {
+  --chart-1:#7f97ff; --chart-2:#4dc398; --chart-3:#e9a35b; --chart-4:#c191f0;
+  --chart-5:#5cc4dd; --chart-6:#f284a4;
+}
+@media (prefers-color-scheme:dark) {
+  html[data-theme="system"] {
+    --chart-1:#7f97ff; --chart-2:#4dc398; --chart-3:#e9a35b; --chart-4:#c191f0;
+    --chart-5:#5cc4dd; --chart-6:#f284a4;
+  }
+}
+.metrics-body { display: grid; gap: 14px; }
+.metrics-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.metrics-note { margin: 0; color: var(--muted); font-size: .8rem; }
+.metrics-chart-slot { min-height: 12rem; }
+.metrics-chart { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
+.metrics-chart-frame { overflow-x: auto; }
+.metrics-chart-svg { display: block; width: 100%; height: auto; min-width: 22rem; touch-action: pan-y; }
+.metrics-gridline { stroke: var(--line); stroke-width: 1; }
+.metrics-guide { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.metrics-line { stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
+.metrics-axis-label { fill: var(--muted); font-size: 10px; }
+.metrics-chart-note { margin: 0; color: var(--muted); font-size: .78rem; }
+.metrics-readout { display: flex; flex-wrap: wrap; gap: 12px; min-height: 1.2rem; color: var(--muted); font-size: .78rem; }
+.metrics-readout-at { font-weight: 700; color: var(--text); }
+.metrics-readout-item, .metrics-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.metrics-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: .8rem; }
+.metrics-legend-value { color: var(--muted); }
+.metrics-swatch { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
+.metrics-resources .metrics-pick { margin: 0; }
+@media (max-width: 700px) { .metrics-controls .toolbar-select { flex: 1 1 45%; } }
 .setup-flow { view-transition-name: admin-platform-setup; }
 .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); gap: 1rem; }
 .platform-evidence { display: grid; align-content: start; gap: 0; overflow: hidden; }
@@ -22,3 +58,10 @@
 .owner-guidance { color: var(--muted); font-size: .8rem; font-weight: 650; }
 [data-focus]:focus { outline: 3px solid color-mix(in srgb, var(--accent) 38%, transparent); outline-offset: 3px; }
 @media (max-width: 700px) { .platform-destinations { grid-template-columns: 1fr; } .check-row { align-items: start; } .check-actions { justify-items: start; grid-column: 2; } }
+.maintenance-body { display: grid; gap: 14px; }
+.maintenance-note { margin: 0; color: var(--muted); font-size: .8rem; }
+.maintenance-arrow { color: var(--muted); }
+.maintenance-windows { display: grid; gap: 4px; margin: 4px 0 14px; }
+.maintenance-window { align-items: flex-start; margin: 0; }
+.maintenance-window span { display: grid; gap: 2px; }
+.maintenance-window small { color: var(--muted); }

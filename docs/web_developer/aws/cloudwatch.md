@@ -92,9 +92,22 @@ labels and accepted as input by the `fetch` endpoint's `slugs` parameter. Use
       "num_nodes": 1
     }
   ],
+  "degraded": {},
+  "available": true,
+  "reason": null,
   "status": true
 }
 ```
+
+The three services are read independently, so one refused or unreachable service
+still lists the other two:
+
+- `degraded` maps the failed service names (`ec2` / `rds` / `redis`) to their
+  reason code. It is `{}` when everything answered.
+- `available` is `false` only when **every** service failed.
+- `reason` names the single cause when `available` is `false`, otherwise `null`.
+
+See [Degraded responses](#degraded-responses) for the codes.
 
 ---
 
@@ -157,11 +170,18 @@ The response shape is identical to the metrics app — `data` is a dict of
       "web-server-1": [12.4, 15.1, 9.8],
       "api-server-2": [8.2,  9.1,  7.3]
     },
-    "labels": ["10:00", "11:00", "12:00"]
+    "labels": ["10:00", "11:00", "12:00"],
+    "available": true,
+    "reason": null
   },
   "status": true
 }
 ```
+
+`available` and `reason` sit **inside** `data`, beside the series — not beside
+`data`. Admin-portal-style clients that unwrap `payload.data` would never see a
+top-level sibling. A degraded fetch returns `data: {}` and `labels: []` with
+`available: false` and a reason code.
 
 ---
 
@@ -265,7 +285,27 @@ SES and S3. Alarm delivery requires the deployment to set
 | `400` | Missing `account` or `category`, unknown `account` value, or `category` not supported for the given `account` type |
 | `401` | Not authenticated |
 | `403` | Authenticated but missing `manage_aws` permission |
-| `500` | AWS API error — check server logs for details |
+| `500` | A genuine server-side failure — an AWS provider failure is a 200, see below |
+
+### Degraded responses
+
+An installation with no AWS credentials, a refused IAM identity, or an
+unreachable AWS endpoint is a normal state for these read endpoints, not a
+server error. Both answer **200** with `available: false` and a reason code, so
+a client can explain the situation rather than render a failure:
+
+| `reason` | Meaning |
+|---|---|
+| `credentials_unavailable` | No usable AWS credentials are configured |
+| `denied` | AWS refused the configured identity (an explicit denial code, or any HTTP 403) |
+| `network_unavailable` | AWS did not answer within the timeout — retryable |
+| `service_error` | Any other AWS error; details are in the server log |
+
+Raw provider messages are never returned: botocore text can carry credentials,
+signed URLs, and request parameters. Only the reason code reaches the client.
+
+This replaced an unhandled 500 on every one of these conditions. A client that
+previously treated any non-200 as "AWS is broken" now needs to read `available`.
 
 ---
 

@@ -25,7 +25,7 @@ def test_modular_shell_contract(opts):
         assert f"./{name}/feature.js" in registry
     assert "[dashboard, webapps, advanced, people, activity, platform, settings]" in registry, \
         "primary navigation does not follow the approved operator journey"
-    assert "routes: ['platform', 'deployments', 'setup']" in platform
+    assert "routes: ['platform', 'deployments', 'setup', 'metrics', 'maintenance']" in platform
     assert "setupPage(ctx, signal)" in platform and "platformPage(ctx, route)" in platform
     assert "const ROUTES = ['advanced', 'domains', 'credentials', 'dns', 'certificates'" in advanced
     assert "route: 'domains'" in advanced and "label: 'Domains & DNS'" in advanced, \
@@ -39,6 +39,157 @@ def test_modular_shell_contract(opts):
         "Admin shell does not use the Mojo logo as its browser favicon"
     assert ".brand-mark{display:block;width:32px;height:32px;object-fit:contain" in styles, \
         "Admin logo has no stable sidebar sizing contract"
+
+
+@th.django_unit_test("the shared row layout is packaged, linked, and used by Dashboard")
+def test_row_component_contract(opts):
+    from mojo.apps.account.services import admin_assets
+
+    index = (ROOT / "mojo/apps/account/admin_portal/index.html").read_text()
+    rows = (ASSETS / "components/rows.js").read_text()
+    row_styles = (ASSETS / "components/rows.css").read_text()
+    dashboard = (ASSETS / "features/dashboard/page.js").read_text()
+    preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
+    assets = admin_assets.load_manifest()
+
+    for asset in ("assets/components/rows.js", "assets/components/rows.css"):
+        assert asset in assets, f"{asset} is not a declared package asset"
+    assert '<link rel="stylesheet" href="assets/components/rows.css">' in index, \
+        "the shared row stylesheet is never loaded by the Admin shell"
+
+    for builder in ("export function rowSection", "export function statusRow",
+                    "export function statusHeadline", "export function rowLink"):
+        assert builder in rows, f"rows.js does not expose {builder!r}"
+    assert "valueNode" in rows and "detailNode" in rows and "action" in rows, \
+        "statusRow lost the extension points sibling pages build on"
+    for rule in (".row-page", ".row-section-label", ".status-row", ".row-value",
+                 ".row-detail", ".row-link", ".status-headline", ".status-sub",
+                 ".row-asof"):
+        assert rule in row_styles, f"the shared row stylesheet is missing {rule}"
+    assert "7px 130px minmax(0, 1fr) auto" in row_styles, \
+        "the four-column row grid is not the locked layout"
+    assert "@media (max-width: 600px)" in row_styles, \
+        "the row layout does not collapse on a narrow viewport"
+
+    assert "'../../components/rows.js'" in dashboard, \
+        "Dashboard does not build on the shared row components"
+    assert "statusHeadline(" in dashboard and "rowSection(" in dashboard, \
+        "Dashboard did not adopt the locked status-page structure"
+    assert "featureDescriptors" in dashboard and "'maintenance'" in dashboard, \
+        "the maintenance link is not gated on the route actually existing"
+    assert "refresh=1" in dashboard, \
+        "the refresh control does not bypass the server-side caches"
+    for jargon in ("Current evidence is healthy", "independently permissioned",
+                   "Four answers", "dashboard-source", "dashboard-grid"):
+        assert jargon not in dashboard, \
+            f"the rebuilt Dashboard still carries {jargon!r}"
+    assert '"down"' in preview or "'down'" in preview, \
+        "the visual preview cannot render a proven outage"
+
+
+@th.django_unit_test("the Metrics lane is capability-gated, degradation-aware, and markup-free")
+def test_metrics_asset_contract(opts):
+    from mojo.apps.account.services import admin_assets
+
+    metrics = (ASSETS / "features/platform/metrics.js").read_text()
+    chart = (ASSETS / "features/platform/chart.js").read_text()
+    feature = (ASSETS / "features/platform/feature.js").read_text()
+    styles = (ASSETS / "features/platform/styles.css").read_text()
+    core = (ASSETS / "core.js").read_text()
+    assets = admin_assets.load_manifest()
+
+    for asset in ("assets/features/platform/metrics.js",
+                  "assets/features/platform/chart.js"):
+        assert asset in assets, f"{asset} is not a declared package asset"
+
+    for endpoint in ("/api/aws/cloudwatch/resources", "/api/aws/cloudwatch/fetch"):
+        assert endpoint in metrics, f"the Metrics page never calls {endpoint}"
+    assert "ctx.features?.platform?.capabilities?.metrics" in metrics, \
+        "the Metrics page reads a raw capability instead of its feature lane"
+    assert "dt_start" in metrics and "toISOString()" in metrics, \
+        "the Metrics page does not send an explicit ISO time range"
+    for reason in ("credentials_unavailable", "denied", "network_unavailable",
+                   "service_error"):
+        assert reason in metrics, f"the Metrics page cannot explain {reason}"
+    assert "signal: local.signal" in metrics or "{signal: local.signal}" in metrics, \
+        "the metric fetch is not abortable"
+
+    assert "document.createElementNS" in chart, \
+        "the chart does not build real SVG nodes"
+    assert "innerHTML" not in chart, \
+        "the chart writes markup — series names come from attacker-influenceable Name tags"
+    assert "innerHTML" not in metrics, \
+        "the Metrics page writes markup instead of textContent"
+    assert "polyline" in chart and "fill: 'none'" in chart, \
+        "the chart does not draw an unfilled line per series"
+    assert "pointermove" in chart and "removeEventListener" in chart, \
+        "the chart guide line leaks its listeners"
+    assert "No non-zero datapoints in this range" in chart, \
+        "an all-zero range is not called out"
+
+    assert "--chart-1" in styles, "the chart palette is never declared"
+    dark = styles.split('html[data-theme="dark"]', 1)
+    assert len(dark) == 2 and "--chart-1" in dark[1].split("}", 1)[0], \
+        "the chart palette is not redefined for the dark theme"
+    assert "prefers-color-scheme:dark" in styles, \
+        "the chart palette ignores an operator following the system theme"
+
+    assert "capabilities.metrics" in feature and "route: 'metrics'" in feature, \
+        "the Metrics sidebar entry is not gated on its capability"
+    assert "chart:" in core, "the chart icon is missing from the shared catalog"
+
+
+@th.django_unit_test("the Maintenance lane is capability-gated, confirmed, and honest about success")
+def test_maintenance_asset_contract(opts):
+    from mojo.apps.account.services import admin_assets
+
+    maintenance = (ASSETS / "features/platform/maintenance.js").read_text()
+    feature = (ASSETS / "features/platform/feature.js").read_text()
+    core = (ASSETS / "core.js").read_text()
+    assets = admin_assets.load_manifest()
+
+    assert "assets/features/platform/maintenance.js" in assets, \
+        "maintenance.js is not a declared package asset"
+    for endpoint in ("/api/aws/maintenance/versions", "/api/aws/maintenance/status",
+                     "/api/aws/maintenance/apply",
+                     "/api/account/admin/platform/framework"):
+        assert endpoint in maintenance, f"the Maintenance page never calls {endpoint}"
+
+    assert "ctx.features?.platform?.capabilities?.maintenance" in maintenance, \
+        "the Maintenance page reads a raw capability instead of its feature lane"
+    assert "capabilities.maintenance" in feature and "route: 'maintenance'" in feature, \
+        "the Maintenance sidebar entry is not gated on its capability"
+    assert "refresh:" in core, "the refresh icon is missing from the shared catalog"
+
+    # A browser confirm() cannot carry the apply window or the typed echo, and
+    # cannot be styled as the destructive action it is.
+    assert "openModal" in maintenance, \
+        "the Maintenance page does not build its confirmation on the portal modal"
+    assert "window.confirm" not in maintenance, \
+        "the Maintenance page uses a browser confirm instead of the portal modal"
+    assert "confirm_resource" in maintenance and "confirm_version" in maintenance, \
+        "the typed confirmation is never sent to the server"
+    assert "apply_immediately: choice.apply_immediately" in maintenance, \
+        "the apply window is not sent as an explicit operator choice"
+
+    # The poll must stop when the page goes away, and must never call an
+    # unchanged engine version a success.
+    assert "signal?.aborted" in maintenance and "signal?.addEventListener('abort'" in maintenance, \
+        "the status poll is not abort-aware and would outlive the page"
+    assert "POLL_INTERVAL = 10000" in maintenance and "POLL_LIMIT = 180" in maintenance, \
+        "the poll cadence or its 30-minute ceiling changed silently"
+    assert "live.upgraded" in maintenance, \
+        "the poll reports on status instead of the engine version"
+    assert "the engine version is unchanged — the upgrade did not take effect" in maintenance, \
+        "a settled-but-unchanged resource is not called out"
+    assert "innerHTML" not in maintenance, \
+        "the Maintenance page writes markup — identifiers come from AWS"
+
+    for reason in ("no_converged_deployment", "requires_superuser", "update_unavailable"):
+        assert reason in maintenance, \
+            f"the Maintenance page cannot explain the {reason} block"
+    assert "routeHref('deployments')" in maintenance, \
+        "the framework update never hands the operator to Deployments"
 
 
 @th.django_unit_test("shared relationship controls preserve paged REST envelopes")

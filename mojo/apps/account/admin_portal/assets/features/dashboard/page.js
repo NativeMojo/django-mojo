@@ -1,100 +1,216 @@
-import {api, badge, formatDate, h, icon, pageHeader} from '../../core.js';
-import {routeHref} from '../../components/routes.js';
+import {api, formatDate, h} from '../../core.js';
+import {activityHref, routeHref} from '../../components/routes.js';
+import {rowSection, statusHeadline, statusRow} from '../../components/rows.js';
+import {featureDescriptors} from '../registry.js';
 import {errorState, loadingState} from '../../components/views.js';
 
-const LABELS = {
-  public_api: 'Public API', fleet: 'Edge fleet', webapps: 'Web Apps',
-  security: 'Detection', last_deployment: 'Last deployment',
-  incidents: 'Open incidents', tickets: 'Open tickets',
-};
-const LINKS = {
-  public_api: ['setup', 'Configure API'], fleet: ['platform', 'View fleet'],
-  webapps: ['webapps', 'Open Web Apps'], security: ['activity', 'Open Activity'],
-  last_deployment: ['deployments', 'Open deployments'],
-  incidents: ['activity', 'Open incidents'], tickets: ['activity', 'Open tickets'],
-};
-const COPY = {
-  healthy: 'Current evidence is healthy.',
-  unhealthy: 'Current evidence proves a failure. Open the source and remediate it.',
-  degraded: 'The source is reachable but needs operator attention.',
-  stale: 'The last observation is too old to establish current health.',
-  unconfigured: 'This source has no configured target or durable record yet.',
-  unknown: 'The source did not return authoritative evidence. No health is inferred.',
-  permission_denied: 'Your role cannot read this source. No request was issued for it.',
-};
+const HEADLINE_TONE = {ok: 'ok', down: 'danger', unknown: 'muted'};
 
-function tone(status) {
-  if (status === 'healthy') return 'success';
+function tone(source) {
+  const status = source?.status || 'unknown';
+  if (status === 'healthy') return 'ok';
   if (status === 'unhealthy') return 'danger';
-  if (['degraded', 'stale', 'unconfigured'].includes(status)) return 'warning';
-  return 'neutral';
+  if (status === 'degraded') return 'warn';
+  return 'muted';
 }
 
-function sourceValue(name, source) {
+// Two different denials read the same on the page: the operator's role cannot
+// read the source, or the platform's AWS identity lacks the IAM grant.
+function denied(source) {
+  return source?.status === 'permission_denied'
+    || Boolean(source?.reason_detail?.iam_action);
+}
+
+function restrictedRow(name, source) {
+  const action = source?.reason_detail?.iam_action;
+  return statusRow({tone: 'muted', name, value: 'Restricted',
+    detail: action ? `needs ${action}` : ''});
+}
+
+function section(label, entries) {
+  const rows = entries.filter((entry) => entry.source);
+  if (rows.length && rows.every((entry) => denied(entry.source))) {
+    const named = rows.find((entry) => entry.source.reason_detail?.iam_action);
+    return rowSection(label, [restrictedRow('Restricted', (named || rows[0]).source)]);
+  }
+  return rowSection(label, rows.map((entry) => denied(entry.source)
+    ? restrictedRow(entry.name, entry.source)
+    : entry.build(entry.source)));
+}
+
+// The maintenance destination ships separately. Linking to a route the shell
+// cannot resolve would send the operator to a silent fallback, so the link
+// exists only once the feature is registered.
+function maintenanceHref() {
+  return featureDescriptors.some((feature) =>
+    (feature.routes || []).includes('maintenance')) ? routeHref('maintenance') : null;
+}
+
+function loadBalancerRow(source) {
   const data = source.data || {};
-  if (source.status === 'permission_denied') return 'Restricted';
-  if (source.status === 'unknown') return 'Unknown';
-  if (name === 'public_api') return data.probe?.version ? `v${data.probe.version}` : (data.configured ? 'Observed' : 'Not configured');
-  if (name === 'fleet') return `${data.runners?.length || 0} runner${data.runners?.length === 1 ? '' : 's'}`;
-  if (name === 'webapps') return `${data.count || 0} app${data.count === 1 ? '' : 's'}`;
-  if (name === 'security') return `${data.open_incidents?.count ?? '—'} open`;
-  if (name === 'last_deployment') return data.items?.[0]?.sha?.slice(0, 10) || 'None';
-  if (name === 'incidents' || name === 'tickets') return String(data.open ?? '—');
-  return '—';
+  const ips = data.balancer?.elastic_ips || [];
+  let value = `${data.healthy || 0} / ${data.registered || 0} targets healthy`;
+  if (!data.configured) value = 'Not configured';
+  else if (!data.registered) value = 'No registered targets';
+  let detailNode = null;
+  if (ips.length) detailNode = h('span', {class: 'row-detail mono', text: ips.join(', ')});
+  else if (data.configured && data.elastic_ip_missing) {
+    detailNode = h('span', {class: 'row-detail warning',
+      text: 'no elastic IP — the address changes if it is replaced'});
+  }
+  return statusRow({tone: tone(source), name: 'Load balancer', value, detailNode});
 }
 
-function sourceLink(name) {
-  const [route, label] = LINKS[name];
-  const state = name === 'public_api' ? {focus: 'django.base_url', return: routeHref('dashboard')}
-    : name === 'fleet' ? {focus: 'fleet', return: routeHref('dashboard')}
-    : name === 'incidents' ? {tab: 'incidents', return: routeHref('dashboard')}
-    : name === 'tickets' ? {tab: 'tickets', return: routeHref('dashboard')} : {};
-  return h('a', {class: 'button ghost compact', href: routeHref(route, state)}, label);
+function computeRow(source) {
+  const data = source.data || {};
+  const names = (data.instances || []).map((row) => row.name).filter(Boolean);
+  const value = data.total ? `${data.up || 0} / ${data.total} up` : 'None running';
+  return statusRow({tone: tone(source), name: 'EC2', value,
+    detail: names.slice(0, 4).join(', ')});
 }
 
-function sourceCard(name, source) {
-  const status = source.status || 'unknown';
-  return h('article', {class: `dashboard-source ${tone(status)}`, 'data-source': name},
-    h('header', {}, h('span', {text: LABELS[name]}), badge(status.replaceAll('_', ' '), tone(status))),
-    h('strong', {text: sourceValue(name, source)}),
-    h('p', {text: COPY[status] || COPY.unknown}),
-    source.observed_at ? h('small', {text: `Observed ${formatDate(source.observed_at)}`}) : null,
-    status !== 'permission_denied' ? sourceLink(name) : null);
+function databaseRow(source) {
+  const data = source.data || {};
+  const engine = [data.engine, data.version].filter(Boolean).join(' ');
+  const value = source.status === 'unhealthy' ? 'Unreachable'
+    : ['Available', engine].filter(Boolean).join(' · ');
+  const upgrade = data.drift?.available_major;
+  if (!upgrade) return statusRow({tone: tone(source), name: 'RDS', value});
+  const label = `${upgrade} available`;
+  const href = maintenanceHref();
+  return statusRow({tone: 'warn', name: 'RDS', value,
+    action: href ? {label, href} : null,
+    detail: href ? '' : label, detailTone: 'warning'});
 }
 
-function setupLink(ctx, report) {
-  if (!ctx.capabilities.setup) return null;
-  const needsSetup = Object.values(report.sources || {}).some((source) =>
-    ['unhealthy', 'degraded', 'stale', 'unconfigured'].includes(source.status));
-  return h('a', {class: `button ${needsSetup ? 'primary' : 'ghost'}`, href: routeHref('setup')},
-    icon('settings'), needsSetup ? 'Open System Setup' : 'Review System Setup');
+function cacheRow(source) {
+  const data = source.data || {};
+  const engine = [data.engine, data.version].filter(Boolean).join(' ');
+  const value = source.status === 'unhealthy' ? 'Unreachable'
+    : ['Available', engine].filter(Boolean).join(' · ');
+  return statusRow({tone: tone(source), name: 'Elasticache', value,
+    detail: data.memory_used ? `${data.memory_used} used` : ''});
+}
+
+function certificatesRow(source, ctx) {
+  const data = source.data || {};
+  if (source.status === 'unconfigured' || !data.total) {
+    return statusRow({tone: 'muted', name: 'SSL certs', value: 'Not managed here'});
+  }
+  const href = ctx.capabilities.network ? routeHref('certificates') : null;
+  return statusRow({
+    tone: tone(source), name: 'SSL certs',
+    value: data.failing ? `${data.failing} not valid` : 'All valid',
+    detail: data.soonest_renew ? `renews ${formatDate(data.soonest_renew)}` : '',
+    action: href ? {label: 'Certificates', href} : null});
+}
+
+function publicApiRow(source, ctx) {
+  const data = source.data || {};
+  if (source.status === 'unconfigured' || !data.configured) {
+    const href = ctx.capabilities.setup
+      ? routeHref('setup', {focus: 'django.base_url', return: routeHref('dashboard')})
+      : null;
+    return statusRow({tone: 'muted', name: 'Public API', value: 'Not configured',
+      action: href ? {label: 'Set it up', href} : null});
+  }
+  const probed = data.probe?.version || '';
+  const node = data.node_version || '';
+  if (source.status === 'unhealthy') {
+    return statusRow({tone: 'danger', name: 'Public API',
+      value: probed || 'Unreachable', mono: Boolean(probed),
+      detail: 'the public address did not answer', detailTone: 'danger'});
+  }
+  const mismatch = Boolean(probed && node && probed !== node);
+  return statusRow({tone: mismatch ? 'warn' : tone(source), name: 'Public API',
+    value: probed || 'Reachable', mono: Boolean(probed),
+    detail: mismatch ? `this node reports ${node}` : (probed && node ? 'up to date' : ''),
+    detailTone: mismatch ? 'warning' : ''});
+}
+
+function frameworkRow(source) {
+  const data = source.data || {};
+  const installed = data.installed || '—';
+  if (data.update_available && data.latest) {
+    const label = `Update to ${data.latest}`;
+    const href = maintenanceHref();
+    return statusRow({tone: 'warn', name: 'django-mojo', value: installed, mono: true,
+      action: href ? {label, href} : null,
+      detail: href ? '' : label, detailTone: 'warning'});
+  }
+  const held = data.pin?.mode && data.pin.mode !== 'latest';
+  const behind = Boolean(data.latest && data.latest !== installed);
+  return statusRow({tone: tone(source), name: 'django-mojo', value: installed, mono: true,
+    detail: held && behind ? `${data.latest} available · pinned` : ''});
+}
+
+function incidentsRow(source) {
+  const data = source.data || {};
+  const open = data.open || 0;
+  const age = data.oldest_age_days;
+  const value = open
+    ? [`${open} open`, age == null ? null : `oldest ${age} day${age === 1 ? '' : 's'}`]
+      .filter(Boolean).join(' · ')
+    : 'None open';
+  return statusRow({tone: open ? 'warn' : 'ok', name: 'Incidents', value,
+    action: open ? {label: 'Review', href: activityHref('incidents')} : null});
+}
+
+function ticketsRow(source) {
+  const open = source.data?.open || 0;
+  return statusRow({tone: 'warn', name: 'Tickets', value: `${open} open`,
+    action: {label: 'Review', href: activityHref('tickets')}});
+}
+
+function deploymentRow(source) {
+  const item = (source.data?.items || [])[0];
+  if (!item) return statusRow({tone: 'muted', name: 'Deployment', value: 'None recorded'});
+  const when = formatDate(item.finished || item.created);
+  return statusRow({tone: tone(source), name: 'Deployment',
+    valueNode: [h('span', {class: 'mono', text: String(item.sha || '').slice(0, 7)}),
+      ` · ${item.status} · ${when}`],
+    action: {label: 'History', href: routeHref('deployments')}});
 }
 
 export async function dashboardPage(ctx) {
-  const body = h('div', {class: 'dashboard-body'}, loadingState('Loading observable system evidence…'));
-  const root = h('div', {class: 'page'},
-    pageHeader('Control plane', 'Dashboard', 'Can customers use the system, and can we detect failures?'), body);
-  async function load() {
-    body.replaceChildren(loadingState('Loading observable system evidence…'));
+  const body = h('div', {class: 'row-page dashboard-body'}, loadingState('Loading…'));
+  const root = h('div', {}, h('h1', {class: 'sr-only', text: 'Dashboard', tabindex: '-1'}), body);
+  async function load(refresh = false) {
+    body.replaceChildren(loadingState('Loading…'));
     try {
-      const report = await api('/api/account/admin/dashboard');
+      const report = await api(`/api/account/admin/dashboard${refresh ? '?refresh=1' : ''}`);
       const sources = report.sources || {};
-      const environment = ['public_api', 'fleet', 'webapps', 'security'];
-      const attention = ['incidents', 'tickets'];
+      const availability = report.availability || {};
       body.replaceChildren(
-        h('section', {class: `dashboard-answer ${tone(report.overall)}`},
-          h('div', {}, h('span', {text: 'Customer readiness'}), h('strong', {text: String(report.overall || 'unknown').replaceAll('_', ' ')}),
-            h('p', {text: `${report.observable_sources || 0} independently permissioned source(s) contributed. Denied and unknown sources never become green.`})),
-          setupLink(ctx, report)),
-        h('section', {class: 'dashboard-section'},
-          h('div', {class: 'section-title'}, h('h2', {text: 'Environment'}), h('p', {text: 'Four answers, each from its own authority.'})),
-          h('div', {class: 'dashboard-grid'}, ...environment.map((name) => sourceCard(name, sources[name] || {status: 'unknown'})))),
-        h('section', {class: 'dashboard-section dashboard-lower'},
-          h('div', {class: 'attention-panel'}, h('div', {class: 'section-title'}, h('h2', {text: 'Open attention'}), h('p', {text: 'Actionable work, not an all-time event count.'})),
-            h('div', {class: 'attention-grid'}, ...attention.map((name) => sourceCard(name, sources[name] || {status: 'unknown'})))),
-          h('div', {class: 'deployment-panel'}, h('div', {class: 'section-title'}, h('h2', {text: 'Deployment'}), h('p', {text: 'Most recent durable attempt.'})),
-            sourceCard('last_deployment', sources.last_deployment || {status: 'unknown'}))));
-    } catch (error) { body.replaceChildren(errorState(error, load)); }
+        statusHeadline({
+          tone: HEADLINE_TONE[availability.state] || 'muted',
+          message: availability.message || 'Status unknown — no source is reporting.',
+          sub: report.attention?.message || '',
+          observedAt: report.observed_at,
+          onRefresh: () => load(true),
+        }),
+        section('Infrastructure', [
+          {name: 'Load balancer', source: sources.load_balancer, build: loadBalancerRow},
+          {name: 'EC2', source: sources.compute, build: computeRow},
+          {name: 'RDS', source: sources.database, build: databaseRow},
+          {name: 'Elasticache', source: sources.cache, build: cacheRow},
+          {name: 'SSL certs', source: sources.certificates,
+            build: (source) => certificatesRow(source, ctx)},
+        ]),
+        section('Software', [
+          {name: 'Public API', source: sources.public_api,
+            build: (source) => publicApiRow(source, ctx)},
+          {name: 'django-mojo', source: sources.framework, build: frameworkRow},
+        ]),
+        section('Needs attention', [
+          {name: 'Incidents', source: sources.incidents, build: incidentsRow},
+          {name: 'Deployment', source: sources.last_deployment, build: deploymentRow},
+          // A ticket queue at zero is not news; the row is absent, not green.
+          {name: 'Tickets',
+            source: sources.tickets?.data?.open ? sources.tickets : null,
+            build: ticketsRow},
+        ]));
+    } catch (error) { body.replaceChildren(errorState(error, () => load())); }
   }
   await load(); return root;
 }
