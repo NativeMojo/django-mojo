@@ -16,9 +16,11 @@ run on the node itself, outside Django:
 | `mojo.deploy.firewall_broker` | Root semantic firewall executor; accepts no argv and constructs closed operations |
 | `mojo.deploy.provision` | Takes an **empty AWS account** to a running environment — eight prompts, a committed `aws/environments/<env>.json`, a priced preview, then an idempotent converge. Creates and modifies; never deletes. See [provision.md](provision.md) |
 | `python3 -m mojo.deploy locate <name>` | Prints the absolute packaged path of `update.sh` / `post_deploy.sh` for the project shims |
-| `python3 -m mojo.deploy render --dest …` | Materializes the packaged cron/systemd templates into `${PROJ_PATH}/var/deploy` |
+| `python3 -m mojo.deploy render --dest …` | Materializes the packaged cron/systemd templates into `${PROJ_PATH}/var/deploy`. **Not the same thing as `mojo.deploy.provision.render`**, which builds and publishes an environment's `django.conf` to S3 — same verb, opposite direction: this one writes files on a node, that one writes an object a node reads |
 | `mojo/deploy/scripts/update.sh` | The fleet update entry (deploy / manual modes) — packaged bash, run through a project shim |
 | `mojo/deploy/scripts/post_deploy.sh` | Post-checkout convergence: deps → framework → migrate → render → nginx/systemd/cron → restart + probe |
+| `mojo/deploy/scripts/stage1.sh` | What a freshly launched EC2 node runs: untar the tree → `ec2_bootstrap.sh` → pin `django-mojo==<version>` → `ec2_deploy.sh` → `var/profile` → CloudWatch agent → `config_sync`. Published to the config bucket by `provision apply`, downloaded and exec'd by stage-0 user data. **Not** resolvable through `locate` — see below |
+| `mojo/deploy/scripts/cloudwatch-agent.json` | The agent configuration template stage 1 installs, with this environment's three log-group names substituted in by the CLI |
 
 Everything is invoked with `python3 -m` (the bash scripts through their shims):
 
@@ -485,6 +487,19 @@ target="$(python3 -m mojo.deploy locate post_deploy.sh)" \
 [ -f "$target" ] || { echo "FATAL: django-mojo is not installed and no snapshot exists — cannot run post_deploy (provisioning installs the framework first)" >&2; exit 1; }
 exec bash "$target" "$@"
 ```
+
+### `stage1.sh` is deliberately NOT locatable
+
+`LOCATABLE` is `("update.sh", "post_deploy.sh")` and nothing else. That tuple
+is a sudo-execution guard: a project shim runs whatever `locate` prints, as
+root, so the set of names it will resolve is the set of things a shim may be
+talked into executing. Keeping it at two is the whole control.
+
+`stage1.sh` is never reached that way. It is published to the config bucket by
+`provision apply` and downloaded by a booting node with its instance role, so
+the provisioner resolves it by package path
+(`storage.scripts_dir() + "/stage1.sh"`) instead. Adding it to `LOCATABLE`
+would widen the oracle for a path that does not use it.
 
 `aws/update.sh` is the same shape **without** the `var/deploy` fallback —
 locate-or-FATAL. Python entry points that a project wants to keep at their
