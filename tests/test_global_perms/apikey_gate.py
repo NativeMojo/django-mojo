@@ -46,6 +46,7 @@ def test_apikey_denied_on_global_endpoints(opts):
             # BEFORE on_rest_request runs.
             ("GET", "/api/aws/email/domain"),
             ("GET", "/api/aws/email/mailbox"),
+            ("GET", "/api/aws/email/summary"),
             ("GET", "/api/aws/email/template"),
             ("GET", "/api/aws/email/incoming"),
             ("GET", "/api/aws/email/sent"),

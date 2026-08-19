@@ -182,16 +182,10 @@ def _posture_state(descriptor, rows):
 
 
 def _email_posture_state(descriptor, rows):
-    from mojo.apps.aws.models import Mailbox
-    from mojo.apps.aws.services.email_templates import shipped_status
-    defaults = Mailbox.objects.filter(is_system_default=True, allow_outbound=True).count()
-    template_status = shipped_status()
-    return {
-        "default_sender_configured": defaults == 1,
-        "default_sender_conflict": defaults > 1,
-        "templates_installed": len(template_status["missing"]) == 0,
-        "missing_template_count": len(template_status["missing"]),
-    }, "computed", False
+    # One source of truth: the admin email service owns this computation and
+    # the Dashboard/summary reuse it. The dict must stay byte-identical.
+    from mojo.apps.aws.services.email_admin import email_posture
+    return email_posture(), "computed", False
 
 
 def _resolve(descriptor, rows=None, cached=_NO_CACHE):

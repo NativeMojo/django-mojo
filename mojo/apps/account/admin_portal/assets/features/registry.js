@@ -5,8 +5,10 @@ import people from './people/feature.js';
 import platform from './platform/feature.js';
 import webapps from './webapps/feature.js';
 import settings from './settings/feature.js';
+import sms from './sms/feature.js';
+import email from './email/feature.js';
 
-const DESCRIPTORS = Object.freeze([dashboard, webapps, advanced, people, activity, platform, settings]);
+const DESCRIPTORS = Object.freeze([dashboard, webapps, advanced, people, activity, platform, settings, sms, email]);
 const ROUTES = new Map();
 
 for (const feature of DESCRIPTORS) {

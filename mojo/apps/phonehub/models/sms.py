@@ -230,16 +230,24 @@ class SMS(models.Model, MojoModel):
                 sms.mark_failed(error_code=resp.code, error_message=resp.error)
             return sms
 
-        # --- Twilio (default) / AWS — existing behavior, unchanged ---
-        resolved_from = from_number or twilio.get_from_number()
-        if not resolved_from or not isinstance(resolved_from, str):
+        # --- Twilio (default) / AWS ---
+        # Sender and credentials resolve atomically, anchored on the config's
+        # credential pair (D2, maestro #2189). A twilio config that stores
+        # both credentials owns the whole triple; one that stores neither
+        # falls back to settings; a half-supplied pair is refused outright so
+        # a foreign number is never sent with the default account's keys.
+        twilio_config = config if (config and config.provider == 'twilio') else None
+        resolution = twilio.resolve_credentials(twilio_config, from_number)
+        if resolution.error:
             sms = cls.objects.create(
                 user=user, group=group, direction='outbound',
                 from_number='', to_number=to_number, body=body,
                 status='failed', provider=twilio.PROVIDER, metadata=metadata or {},
             )
-            sms.mark_failed(error_code='config_error', error_message='No from_number configured (set TWILIO_NUMBER in settings)')
+            sms.mark_failed(error_code=resolution.error_code,
+                            error_message=resolution.error)
             return sms
+        resolved_from = resolution.from_number
         sms = cls.objects.create(
             user=user,
             group=group,
@@ -259,7 +267,10 @@ class SMS(models.Model, MojoModel):
                 sms.mark_sent(f"test{to_number}")
                 return sms
             to_number = fake_mapping
-        resp = twilio.send_sms(body, to_number, from_number=resolved_from)
+        resp = twilio.send_sms(
+            body, to_number, from_number=resolved_from,
+            account_sid=resolution.account_sid,
+            auth_token=resolution.auth_token)
         if resp.sent:
             sms.mark_sent(resp.id)
         else:

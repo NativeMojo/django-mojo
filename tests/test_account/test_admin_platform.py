@@ -778,6 +778,32 @@ def test_dashboard_jobs_and_sanity_never_redden_availability(opts):
                      f"the {name} row lost its own amber state")
 
 
+@th.django_unit_test("the email source is permissioned evidence, never availability")
+def test_dashboard_email_source(opts):
+    from mojo.apps.account.services import admin_platform
+
+    th.assert_true("email" not in admin_platform.AVAILABILITY_SOURCES,
+                   "email became an availability source")
+
+    degraded = {"_collector_status": "degraded",
+                "_collector_reason": "no_sendable_domain",
+                "configured": True, "domains": 1, "sendable_domains": 0}
+    report = _run_dashboard(_viewer("view_platform", "manage_aws"),
+                            _dashboard_email=degraded)
+    source = report["sources"]["email"]
+    th.assert_eq(source["status"], "degraded",
+                 f"the email envelope did not carry the collector state: {source}")
+    th.assert_eq(source["data"].get("configured"), True,
+                 f"the email envelope lost its payload: {source}")
+    th.assert_eq(report["availability"]["state"], "ok",
+                 f"a broken email setup was read as an outage: "
+                 f"{report['availability']!r}")
+
+    denied = _run_dashboard(_operator(), _dashboard_email=degraded)
+    th.assert_eq(denied["sources"]["email"]["status"], "permission_denied",
+                 "a caller without the email tier still read the email source")
+
+
 @th.django_unit_test("the Platform overview payload is unchanged by the Dashboard's wrappers")
 def test_platform_overview_payload_unchanged(opts):
     from mojo.apps.account.services import admin_platform

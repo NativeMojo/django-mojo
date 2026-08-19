@@ -22,9 +22,9 @@ def test_modular_shell_contract(opts):
     assert "controller?.abort()" in app and "page.dispose?.()" in app
     assert "page instanceof Node" in app and "closeAllOverlays()" in app
     assert "features/platform/page.js" not in app and "features/people/page.js" not in app
-    for name in ("dashboard", "people", "webapps", "activity", "platform", "advanced", "settings"):
+    for name in ("dashboard", "people", "webapps", "activity", "platform", "advanced", "settings", "sms", "email"):
         assert f"./{name}/feature.js" in registry
-    assert "[dashboard, webapps, advanced, people, activity, platform, settings]" in registry, \
+    assert "[dashboard, webapps, advanced, people, activity, platform, settings, sms, email]" in registry, \
         "primary navigation does not follow the approved operator journey"
     assert "routes: ['setup', 'metrics', 'maintenance']" in platform, \
         "Platform grew or lost a route — health dissolved into the Dashboard, " \

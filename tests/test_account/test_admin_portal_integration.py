@@ -409,7 +409,7 @@ def test_merged_browser_secret_and_route_contract(opts):
     preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
     classifier = (ROOT / "mojo/helpers/request.py").read_text()
     th.assert_true(
-        "[dashboard, webapps, advanced, people, activity, platform, settings]" in registry,
+        "[dashboard, webapps, advanced, people, activity, platform, settings, sms, email]" in registry,
         "feature order does not match the approved product navigation")
     # The sidebar is no longer one entry per feature: a feature contributes as
     # many entries as its own capabilities allow. The Platform page itself is

@@ -41,6 +41,7 @@ Companion track for framework developers: [docs/django_developer/README.md](../d
 | [aws/maintenance](aws/maintenance.md) | Pending managed-service upgrades, applying one behind typed confirmation, and the django-mojo framework update |
 | [aws/capacity](aws/capacity.md) | Adding/removing an app node, an RDS reader, or a cache replica — the three endpoints, the operation phase ladders, and every error code |
 | [aws/infrastructure_mode](aws/infrastructure_mode.md) | Which endpoints answer 403 `infrastructure_external`, the body shape, and how a client learns the installation's mode |
+| [aws/admin_email](aws/admin_email.md) | Admin email management — SES domain/mailbox summary, the always-200 test send and its error vocabulary, and setting the default mailbox |
 | [dnsman/](dnsman/README.md) | Domain search/purchase, DNS records, WHOIS/privacy, TLS certificates |
 | [edge/](edge/README.md) | nginx vhosts and declared upstreams — how a domain gets served |
 | [filevault/](filevault/README.md) | Encrypted file vault |

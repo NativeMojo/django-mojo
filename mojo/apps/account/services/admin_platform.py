@@ -649,6 +649,51 @@ def _dashboard_sanity():
     return data
 
 
+def _dashboard_sms():
+    """The system SMS provider row — configuration evidence, not availability.
+
+    Reports which provider governs the installation's OTP/MFA/reset SMS, its
+    active state, and the last recorded verification outcome. ``configured``
+    False (phonehub absent, or no active system PhoneConfig) renders as an
+    ABSENT row, never a red one — an unconfigured SMS provider is not an
+    outage, which is also why this source is not in AVAILABILITY_SOURCES.
+    """
+    from django.apps import apps
+    if not apps.is_installed("mojo.apps.phonehub"):
+        return {"installed": False, "configured": False}
+    from mojo.apps.phonehub.models import PhoneConfig
+    row = PhoneConfig.objects.filter(
+        group__isnull=True, is_active=True).order_by("pk").first()
+    if row is None:
+        return {"installed": True, "configured": False}
+    from mojo.apps.account.services.provider_setup import sms_verify_state
+    verified = sms_verify_state()
+    data = {
+        "installed": True, "configured": True,
+        "provider": row.provider, "name": row.name,
+        "is_active": bool(row.is_active), "test_mode": bool(row.test_mode),
+        "verified": verified,
+    }
+    if verified and verified.get("ok") is False:
+        data["_collector_status"] = "degraded"
+        data["_collector_reason"] = "verification_failed"
+    return data
+
+
+def _dashboard_email():
+    """The system email (SES) row — configuration evidence, not availability.
+
+    Reads only what the last persisted SES audit wrote (``EmailDomain.status``,
+    ``can_send``/``can_recv``) plus the default-sender/templates posture —
+    zero AWS calls. ``configured`` False (no EmailDomain rows) renders as an
+    ABSENT row, never a red one, and the source is deliberately never
+    ``unhealthy`` — a broken email setup is not an outage, which is also why
+    it is not in AVAILABILITY_SOURCES.
+    """
+    from mojo.apps.aws.services import email_admin
+    return email_admin.dashboard_source()
+
+
 def _newest_drift_event():
     """The newest managed-engine drift event still inside the freshness window."""
     from mojo.apps.aws.services import version_drift
@@ -1048,6 +1093,8 @@ def dashboard_overview(request, refresh=False):
         "certificates": (platform, _dashboard_certificates),
         "public_api": (platform, _api),
         "framework": (platform, lambda: _framework(refresh)),
+        "sms": (platform, _dashboard_sms),
+        "email": (("manage_aws", "comms", "admin"), _dashboard_email),
         "last_deployment": (platform, _dashboard_deployment),
         "jobs": (platform, _dashboard_jobs),
         "sanity": (platform, _dashboard_sanity),

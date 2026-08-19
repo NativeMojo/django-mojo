@@ -1,0 +1,21 @@
+.email-page .email-body{display:flex;flex-direction:column;gap:14px}
+.email-note{margin:6px 0 0;font-size:10px;color:var(--muted)}
+.email-note.warning{color:var(--warning)}
+.email-results{min-height:16px}
+.email-result{margin:0;font-size:11px}
+.email-result-ok{color:var(--success)}
+.email-result-danger{color:var(--danger)}
+.email-default-control{display:inline-flex;gap:6px;align-items:center;margin-left:8px}
+.email-test{padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.email-test h2{margin:0 0 4px;font-size:14px}
+.email-test .email-note{margin-bottom:12px}
+.email-inspector{display:flex;flex-direction:column;gap:10px}
+.email-audit{min-height:20px}
+.email-check{margin:2px 0;font-size:11px}
+.email-check-ok{color:var(--success)}
+.email-check-warn{color:var(--warning)}
+.email-check-danger{color:var(--danger)}
+.email-recommendations{margin:6px 0 0;padding-left:16px;font-size:11px}
+.email-recommendations p{margin:2px 0 6px}
+.email-technical{margin-top:8px}
+.email-technical pre{max-height:240px;overflow:auto}
