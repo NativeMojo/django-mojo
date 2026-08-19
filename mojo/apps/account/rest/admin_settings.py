@@ -3,6 +3,7 @@
 from mojo import decorators as md
 from mojo import errors as merrors
 from mojo.apps.account.services import admin_settings as _admin_settings
+from mojo.apps.account.services import system_settings
 
 
 def _capabilities(user):
@@ -11,8 +12,10 @@ def _capabilities(user):
     catalog_write = superuser or permissions.get("manage_settings") is True or permissions.get("admin") is True
     owner_display = superuser or any(permissions.get(key) is True for key in (
         "view_advanced_settings", "manage_advanced", "admin"))
-    owner_edit = superuser and (
-        superuser or permissions.get("manage_advanced") is True or permissions.get("admin") is True)
+    # Owner-tier writes land in system_settings, which demands a live literal
+    # superuser. manage_advanced/admin clear the endpoint decorator and are then
+    # refused by the writer, so they must not be advertised here.
+    owner_edit = system_settings.can_system_admin(user)
     return {
         "catalog_write": catalog_write,
         "owner_display": owner_display,

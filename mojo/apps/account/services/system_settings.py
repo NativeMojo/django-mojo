@@ -58,6 +58,17 @@ def require_system_admin(actor):
     return current
 
 
+def can_system_admin(actor):
+    """Advisory twin of require_system_admin, for capability advertisement.
+
+    A plain attribute read, deliberately no per-request query: the writer's own
+    re-read stays the authority, so a superuser deactivated since this response
+    was built is still refused at write time. Keep the two in lockstep — a
+    capability that outruns the writer advertises an editor that 403s.
+    """
+    return bool(getattr(actor, "is_superuser", False))
+
+
 def validate_base_url(value):
     """Return one canonical public HTTPS origin suitable for BASE_URL."""
     if not isinstance(value, str):

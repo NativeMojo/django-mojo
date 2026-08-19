@@ -219,6 +219,23 @@ Django production settings and deploy. `AUTH_CONFIG`,
 superuser plus `manage_advanced`/`admin` authority. That endpoint remains for
 compatibility, but Settings is its only browser UI home.
 
+The effective authority for those owner-tier writes is **a literal superuser**.
+`manage_advanced`/`admin` only satisfy the endpoint's
+`requires_global_perms("manage_advanced", "admin")` decorator; every writer then
+re-proves an active literal superuser through
+`system_settings.require_system_admin`, so a `manage_advanced` holder who is not
+a superuser is refused at save time. The advertised capability says exactly
+that: `_capabilities()["owner_edit"]` in `rest/admin_settings.py` and
+`capabilities.settings_owner_edit` in `rest/admin_portal.py` both call
+`system_settings.can_system_admin`, the non-raising twin of
+`require_system_admin`. Keep the three in lockstep and do not loosen the
+capability on its own — an advertisement that outruns the writer is an editor
+that 403s, and what stands behind this gate includes `EDGE_FRAMEWORK_VERSION`,
+the hold that decides which django-mojo version the whole fleet installs.
+`can_system_admin` is a plain attribute read with no query: the writer's own
+re-read remains the authority for liveness, so a superuser deactivated after the
+response was built is still refused.
+
 `EDGE_FRAMEWORK_VERSION` ("Framework version hold") is the topology's sibling:
 a protected, owner-writable string in Edge & Web Apps that decides which
 django-mojo version every fleet deploy installs. It accepts a published

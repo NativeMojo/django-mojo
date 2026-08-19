@@ -15,6 +15,18 @@ does not receive AUTH_CONFIG or topology owner rows. Literal
 `permissions.admin` is an exact grant for these listed gates, not a backend
 permission wildcard; `User.is_superuser` is the wildcard.
 
+**Owner-tier edit is superuser-only.** `manage_advanced`/`admin` clear the
+`/api/account/admin/advanced/settings` decorator, but the writers behind it
+re-prove an active literal superuser, so those grants alone do **not** confer
+owner edit — they get owner *display* and a refusal on save. Accordingly the
+`owner_edit` capability (and `capabilities.settings_owner_edit` in bootstrap)
+is true only for `is_superuser`. Do not treat `manage_advanced` as a signal to
+render owner editors: a client that does will show controls the server 403s.
+The capability mirrors `system_settings.can_system_admin`, and neither may be
+loosened without loosening `require_system_admin` first — the same gate stands
+in front of `EDGE_FRAMEWORK_VERSION`, which decides the django-mojo version
+every fleet deploy installs.
+
 The GET response has `schema_version`, ordered `sections`, and server-owned
 `entries`. Each entry supplies friendly label, description, type, constraints,
 effective value/status, source, scope, owner, change behavior, and capability
