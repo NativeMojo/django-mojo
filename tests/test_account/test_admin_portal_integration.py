@@ -127,6 +127,8 @@ def test_dashboard_permission_matrix(opts):
             mock.patch.object(admin_platform, "_fleet") as fleet, \
             mock.patch.object(admin_platform, "_security") as security, \
             mock.patch.object(admin_platform, "_dashboard_deployment") as deployments, \
+            mock.patch.object(admin_platform, "_dashboard_jobs") as jobs, \
+            mock.patch.object(admin_platform, "_dashboard_sanity") as sanity, \
             mock.patch("mojo.apps.account.services.system_readiness.run") as setup:
         report = admin_platform.dashboard_overview(request)
     th.assert_eq(report["availability"]["state"], "unknown",
@@ -139,7 +141,7 @@ def test_dashboard_permission_matrix(opts):
         th.assert_eq(source["status"], "permission_denied",
                      f"{name} must distinguish denial from source failure")
     for collector in (api, balancer, compute, database, cache, certs, framework,
-                      fleet, security, deployments, setup):
+                      fleet, security, deployments, jobs, sanity, setup):
         th.assert_true(not collector.called,
                        "Dashboard issued a forbidden or Setup readiness read")
 
@@ -167,6 +169,74 @@ def test_dashboard_status_vocabulary(opts):
     })
     th.assert_eq(stale["status"], "stale",
                  "expired evidence remained healthy")
+
+
+ATTENTION_EMAIL = "admin_portal_attention@test.com"
+ATTENTION_PASSWORD = "Admin_portal_attention_pw_99"
+
+
+def _bootstrap_capabilities(opts):
+    response = opts.client.get("/api/account/admin/bootstrap")
+    th.assert_eq(response.status_code, 200, "the Admin bootstrap read failed")
+    return (response.json.get("data") or {}).get("capabilities") or {}
+
+
+@th.django_unit_test("the System Setup badge tracks the one thing Setup is still needed for")
+def test_setup_attention_matches_dashboard_link(opts):
+    """System Setup left the page grid, so the sidebar entry has to carry the
+    reason to open it: a superuser looking at an installation with no public
+    address. Nobody else is ever badged."""
+    from mojo.apps.account.models import Setting, User
+    from mojo.apps.account.services import system_settings
+
+    admin = User.objects.get(pk=opts.integration_admin)
+    original, existed = Setting.get_from_db(system_settings.BASE_URL)
+    User.objects.filter(email=ATTENTION_EMAIL).delete()
+    reader = User.objects.create_user(
+        username=ATTENTION_EMAIL, email=ATTENTION_EMAIL, password=ATTENTION_PASSWORD)
+    reader.is_active = True
+    reader.is_email_verified = True
+    reader.requires_mfa = False
+    reader.save()
+    reader.add_permission("view_admin")
+    try:
+        # No public address yet: the badge is on for the superuser.
+        Setting.objects.filter(key=system_settings.BASE_URL).delete()
+        th.assert_true(opts.client.login(ADMIN_EMAIL, ADMIN_PASSWORD),
+                       "integration Admin login failed")
+        unset = _bootstrap_capabilities(opts)
+        th.assert_eq(unset["setup_attention"], True,
+                     f"an installation with no BASE_URL is not badged: {unset!r}")
+        th.assert_eq(unset["setup"], True,
+                     "a superuser lost the System Setup destination itself")
+        opts.client.logout()
+
+        # Same installation, a non-superuser: no destination, so no badge.
+        th.assert_true(opts.client.login(ATTENTION_EMAIL, ATTENTION_PASSWORD),
+                       "the non-superuser Admin reader could not sign in")
+        plain = _bootstrap_capabilities(opts)
+        th.assert_eq(plain["setup_attention"], False,
+                     f"a non-superuser was badged for Setup: {plain!r}")
+        th.assert_eq(plain["setup"], False,
+                     f"a non-superuser was offered System Setup: {plain!r}")
+        opts.client.logout()
+
+        # Configured installation: the badge goes away for everyone.
+        system_settings.set_value(
+            admin, system_settings.BASE_URL, "https://admin-attention.example.com")
+        th.assert_true(opts.client.login(ADMIN_EMAIL, ADMIN_PASSWORD),
+                       "integration Admin login failed after the BASE_URL write")
+        configured = _bootstrap_capabilities(opts)
+        th.assert_eq(configured["setup_attention"], False,
+                     f"a configured installation is still badged: {configured!r}")
+        th.assert_eq(configured["setup"], True,
+                     "a superuser lost System Setup once BASE_URL was set")
+    finally:
+        opts.client.logout()
+        User.objects.filter(email=ATTENTION_EMAIL).delete()
+        Setting.objects.filter(key=system_settings.BASE_URL).delete()
+        if existed:
+            system_settings.set_value(admin, system_settings.BASE_URL, original)
 
 
 @th.django_unit_test("real Admin HTTP responses and resulting logs contain no non-reveal secrets")
@@ -338,13 +408,18 @@ def test_merged_browser_secret_and_route_contract(opts):
         "[dashboard, webapps, advanced, people, activity, platform, settings]" in registry,
         "feature order does not match the approved product navigation")
     # The sidebar is no longer one entry per feature: a feature contributes as
-    # many entries as its own capabilities allow, and Platform contributes
-    # Metrics on top of its own entry when the AWS grant is present.
+    # many entries as its own capabilities allow. The Platform page itself is
+    # dissolved, so what it contributes is Metrics, Maintenance, and the
+    # System Setup entry — never a "Platform" destination.
     th.assert_true(
-        "label: 'Platform'" in platform_feature
+        "label: 'System Setup'" in platform_feature
         and "label: 'Metrics'" in platform_feature
         and "capabilities.metrics" in platform_feature,
-        "Platform no longer contributes its capability-gated Metrics entry")
+        "Platform no longer contributes its capability-gated Setup and Metrics entries")
+    th.assert_true(
+        "route: 'platform'" not in platform_feature
+        and "label: 'Platform'" not in platform_feature,
+        "the dissolved Platform destination came back to the sidebar")
     th.assert_true(
         "route: 'domains'" in advanced_feature
         and "label: 'Domains & DNS'" in advanced_feature

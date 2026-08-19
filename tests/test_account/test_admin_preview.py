@@ -224,6 +224,82 @@ def test_platform_preview_truth_axes(opts):
         (ASSETS / "features/platform/page.js").read_text(), \
         "preview cannot exercise compatibility filtering for legacy local-listener noise"
 
+    # The fleet fixture must be the exact projection _fleet() returns: a runner
+    # proves itself with a heartbeat, never with a synthesized alive flag.
+    from urllib.parse import urlparse
+
+    class Handler:
+        pass
+
+    provider = _server().platform
+    provider.reset(Handler, {"setup_choice": lambda: None})
+    _, payload = provider.get(
+        Handler, urlparse("/api/account/admin/platform?sections=fleet"))
+    runners = payload["sections"]["fleet"]["data"]["runners"]
+    assert runners and all(
+        set(row) == {"runner", "channels", "last_heartbeat"} for row in runners), \
+        f"the fleet fixture does not match what _fleet() returns: {runners!r}"
+    assert '"alive"' not in platform, \
+        "the fleet fixture still invents an alive flag the collector never sends"
+
+
+@th.django_unit_test("preview renders the jobs and sanity Dashboard sources in every state")
+def test_dashboard_preview_jobs_and_sanity_states(opts):
+    from urllib.parse import urlparse
+
+    server = _server()
+    source = (ROOT / "bin/admin_preview_support/server.py").read_text()
+    gallery = (ROOT / "bin/admin_preview_support/gallery.py").read_text()
+    provider = server.dashboard
+
+    for state in ("jobs_stalled", "sanity_failed"):
+        assert state in source, f"the preview cannot select the {state} scenario"
+    assert '"setup_attention": True' in gallery, \
+        "the deterministic bootstrap never badges System Setup"
+    assert server.bootstrap([])["features"]["platform"]["capabilities"][
+        "setup_attention"] is True, \
+        "the preview bootstrap does not publish the Setup attention flag"
+
+    class Handler:
+        pass
+
+    states = ("healthy", "degraded", "down", "jobs_stalled", "sanity_failed",
+              "denied", "unknown")
+    for state in states:
+        provider.reset(Handler, {}, dashboard_state=state)
+        status, body = provider.get(Handler, urlparse("/api/account/admin/dashboard"))
+        assert status == 200, f"{state}: the dashboard fixture answered {status}"
+        for name in ("jobs", "sanity"):
+            assert name in body["sources"], \
+                f"{state}: the {name} source is missing from the fixture"
+
+    provider.reset(Handler, {}, dashboard_state="jobs_stalled")
+    _, stalled = provider.get(Handler, urlparse("/api/account/admin/dashboard"))
+    jobs = stalled["sources"]["jobs"]
+    assert jobs["status"] == "degraded" and jobs["data"]["scheduler_active"] is False, \
+        f"the stalled scenario does not stall the scheduler: {jobs!r}"
+    assert jobs["data"]["failed_recent"] == 4, \
+        f"the stalled scenario has no failures inside the window: {jobs!r}"
+    assert stalled["availability"]["state"] == "ok", \
+        "a stalled queue reddened the preview headline — jobs is not an outage"
+
+    provider.reset(Handler, {}, dashboard_state="sanity_failed")
+    _, failed = provider.get(Handler, urlparse("/api/account/admin/dashboard"))
+    checks = failed["sources"]["sanity"]["data"]["checks"]
+    failing = [row["name"] for row in checks if not row["ok"]]
+    assert failing == ["migrations"], \
+        f"the sanity scenario does not fail exactly one named check: {checks!r}"
+    assert failed["availability"]["state"] == "ok", \
+        "a failing node check reddened the preview headline"
+
+    # The healthy fixture must carry a large all-time ledger beside an empty
+    # window, or the row's "never colour from the ledger" rule is untested.
+    provider.reset(Handler, {}, dashboard_state="healthy")
+    _, healthy = provider.get(Handler, urlparse("/api/account/admin/dashboard"))
+    data = healthy["sources"]["jobs"]["data"]
+    assert data["jobs"]["failed"] > 100 and data["failed_recent"] == 0, \
+        f"the healthy jobs fixture cannot prove the ledger is ignored: {data!r}"
+
 
 @th.django_unit_test("preview renders every CloudWatch metrics state deterministically")
 def test_metrics_preview_states(opts):

@@ -31,7 +31,9 @@ METRICS_BUCKETS = {"minutes": 60, "hours": 24, "days": 30}
 
 
 def describe(capabilities):
-    values = {"setup": capabilities["setup"], "view": capabilities["view_platform"],
+    values = {"setup": capabilities["setup"],
+              "setup_attention": capabilities["setup_attention"],
+              "view": capabilities["view_platform"],
               "manage": capabilities["manage_platform"],
               "security": capabilities["view_platform_security"],
               "advanced": capabilities["view_advanced"],
@@ -134,7 +136,13 @@ def _platform(handler):
     return 200, {"schema_version": 1, "sections": {
         "api": section({"django_mojo_version": "1.9.0", "configured": True},
                        observed_at=1786384800),
-        "fleet": section({"channel": "edge", "runners": [{"runner": "edge-a-engine", "alive": True}, {"runner": "edge-b-engine", "alive": True}]}),
+        # The exact projection _fleet() returns — a runner proves itself with a
+        # heartbeat timestamp, never with a synthesized liveness flag.
+        "fleet": section({"channel": "edge", "runners": [
+            {"runner": "edge-a-engine", "channels": ["edge", "default"],
+             "last_heartbeat": "2026-08-10T17:59:41+00:00"},
+            {"runner": "edge-b-engine", "channels": ["edge"],
+             "last_heartbeat": "2026-08-10T17:59:44+00:00"}], "truncated": False}),
         "database": section({"reachable": True, "vendor": "postgresql"}),
         "redis": section({"reachable": True}),
         "deployments": section({

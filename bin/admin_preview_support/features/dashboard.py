@@ -5,7 +5,9 @@ STALE = "2026-08-10T18:10:00Z"
 
 PLATFORM_SOURCES = (
     "load_balancer", "compute", "database", "cache", "certificates",
-    "public_api", "framework", "last_deployment")
+    "public_api", "framework", "last_deployment", "jobs", "sanity")
+
+SANITY_CHECKS = ("django apps", "database", "migrations", "redis", "local request")
 
 
 def describe(capabilities):
@@ -66,6 +68,14 @@ def _healthy_sources():
             "id": "18180000-0000-4000-8000-000000000001", "sha": "8" * 40,
             "status": "converged", "created": NOW, "finished": NOW,
             "actor": "admin:1"}]}),
+        # A long-lived queue carries a large all-time failed count; only the
+        # one-hour window is allowed to colour the row.
+        "jobs": _source(data={
+            "scheduler_active": True, "failed_recent": 0,
+            "jobs": {"pending": 1, "running": 0, "failed": 11701}}),
+        "sanity": _source(data={
+            "checks": [{"name": name, "ok": True} for name in SANITY_CHECKS],
+            "local_target_source": "configured_static", "migration_check": True}),
         "incidents": _source(data={"open": 0, "oldest_created": None,
                                    "oldest_age_days": None}),
         "tickets": _source(data={"open": 0, "oldest_created": None,
@@ -104,6 +114,21 @@ def get(handler, parsed):
             "oldest_age_days": 6}, "open_attention")
         availability = _availability("down", "Elasticache is down", ["Elasticache"])
         attention = {"message": "121 incidents need review."}
+    elif handler.dashboard_state == "jobs_stalled":
+        # Amber that is explicitly NOT an outage: the scheduler stopped and
+        # jobs failed inside the last hour. Availability stays green.
+        sources["jobs"] = _source("degraded", {
+            "scheduler_active": False, "failed_recent": 4,
+            "jobs": {"pending": 37, "running": 0, "failed": 11705}},
+            "scheduler_inactive")
+    elif handler.dashboard_state == "sanity_failed":
+        # One core node check is failing. The Public API row says so in plain
+        # words; the headline still reports what customers can reach.
+        sources["sanity"] = _source("degraded", {
+            "checks": [{"name": name, "ok": name != "migrations"}
+                       for name in SANITY_CHECKS],
+            "local_target_source": "configured_static",
+            "migration_check": False}, "sanity_check_failed")
     elif handler.dashboard_state == "denied":
         for name in PLATFORM_SOURCES:
             sources[name] = _source("permission_denied", reason="permission_required")

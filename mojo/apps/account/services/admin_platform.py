@@ -563,6 +563,15 @@ def _dashboard_certificates():
             **data}
 
 
+def _recent_job_failures():
+    """Failures inside the window. A seam, so the row's logic is testable."""
+    from mojo.apps.jobs.models import Job
+    # status and modified are both indexed, so this is one bounded count.
+    return Job.objects.filter(
+        status="failed",
+        modified__gte=timezone.now() - JOBS_FAILURE_WINDOW).count()
+
+
 def _dashboard_jobs():
     """Queue depth, plus failures inside the last hour — never an outage.
 
@@ -574,12 +583,8 @@ def _dashboard_jobs():
     The all-time ``failed`` count stays in the payload for the drill-in but
     never colours the row — on a long-lived queue it is permanently large.
     """
-    from mojo.apps.jobs.models import Job
     data = dict(_jobs())
-    # status and modified are both indexed, so this is one bounded count.
-    data["failed_recent"] = Job.objects.filter(
-        status="failed",
-        modified__gte=timezone.now() - JOBS_FAILURE_WINDOW).count()
+    data["failed_recent"] = _recent_job_failures()
     if not data.get("scheduler_active"):
         status, reason = "degraded", "scheduler_inactive"
     elif data["failed_recent"]:
