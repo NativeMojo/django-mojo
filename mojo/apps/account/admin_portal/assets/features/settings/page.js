@@ -159,7 +159,9 @@ function panelFor(focus, report, actions) {
     return byKey.EDGE_EXPECTED_TOPOLOGY
       ? topologyPanel(byKey.EDGE_EXPECTED_TOPOLOGY, actions) : null;
   }
-  return byKey[focus] ? settingPanel(byKey[focus], actions) : null;
+  // Own-key check: a focus like "constructor" must fall back to the list,
+  // not resolve a prototype member into an empty panel.
+  return Object.hasOwn(byKey, focus) ? settingPanel(byKey[focus], actions) : null;
 }
 
 export async function settingsPage(ctx, route, signal) {
