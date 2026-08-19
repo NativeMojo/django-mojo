@@ -10,6 +10,16 @@ once, and nothing else in this repo would notice.
 Each test spawns a real subprocess with DJANGO_SETTINGS_MODULE stripped,
 because an in-process check would be answered by a test runner that has
 already configured Django.
+
+THE MODULE LIST COMES FROM THE FILESYSTEM, not from a tuple maintained by hand.
+It used to name six modules; the package had thirteen, so more than half of it
+was uncovered and a new one arrived uncovered by default — which is the exact
+failure mode this file exists to prevent.
+
+Deliberately `os.walk` and NOT `pkgutil.walk_packages`: pkgutil imports each
+package it descends into, in THIS process, which has Django configured. It would
+answer the question with the wrong interpreter and report a clean result for a
+module that cannot import on a bootstrap node.
 """
 
 import os
@@ -22,6 +32,33 @@ from testit import helpers as th
 def _repo_root():
     import mojo
     return os.path.dirname(os.path.dirname(os.path.abspath(mojo.__file__)))
+
+
+def _deploy_root():
+    import mojo.deploy
+    return os.path.dirname(os.path.abspath(mojo.deploy.__file__))
+
+
+def _discover_modules():
+    """Every importable module under mojo/deploy/, as dotted names.
+
+    Skipped: `__init__.py` (imported as a side effect of importing anything
+    inside the package), `__main__.py` (running it IS the import, and it is
+    covered by the `-m` tests below), anything else starting with an underscore
+    (private by convention), and `__pycache__`.
+    """
+    root = _deploy_root()
+    found = []
+    for directory, subdirectories, files in os.walk(root):
+        subdirectories[:] = [name for name in subdirectories
+                             if name != "__pycache__"]
+        for name in files:
+            if not name.endswith(".py") or name.startswith("_"):
+                continue
+            relative = os.path.relpath(os.path.join(directory, name), root)
+            dotted = relative[:-3].replace(os.sep, ".")
+            found.append(f"mojo.deploy.{dotted}")
+    return sorted(found)
 
 
 def _settings_free_env():
@@ -37,10 +74,47 @@ def _run(args):
         env=_settings_free_env(), capture_output=True, text=True, timeout=120)
 
 
-DEPLOY_MODULES = ("config_sync", "check_setup", "jobman", "node_setup",
-                  "certbot_sync", "check_node")
+DEPLOY_MODULES = _discover_modules()
 
-_IMPORT_ALL = "import " + ", ".join("mojo.deploy." + n for n in DEPLOY_MODULES)
+_IMPORT_ALL = "import " + ", ".join(DEPLOY_MODULES)
+
+
+@th.django_unit_test("the module list is read off disk, so a new module cannot arrive uncovered")
+def test_discovery_finds_every_module_on_disk(opts):
+    found = _discover_modules()
+
+    th.assert_true(len(found) >= 13,
+                   f"mojo/deploy has had at least thirteen modules since "
+                   f"before this test was written — finding {len(found)} means "
+                   f"the walk is looking in the wrong place: {found}")
+    for expected in ("mojo.deploy.config_sync", "mojo.deploy.check_setup",
+                     "mojo.deploy.check_node", "mojo.deploy.mojosec",
+                     "mojo.deploy.firewall_broker", "mojo.deploy.audit"):
+        th.assert_in(expected, found,
+                     f"{expected} exists on disk and must be covered")
+
+    th.assert_in("mojo.deploy.provision.spec", found,
+                 f"modules inside a subpackage must be discovered too — that "
+                 f"is most of what was added after this walk replaced a "
+                 f"hardcoded tuple: {found}")
+    th.assert_in("mojo.deploy.provision.plan", found,
+                 "the provision DAG module must be covered")
+
+    for dotted in found:
+        leaf = dotted.rsplit(".", 1)[-1]
+        th.assert_eq(leaf.startswith("_"), False,
+                     f"{dotted} should have been skipped — dunder and private "
+                     f"modules are not part of this contract")
+
+    root = _deploy_root()
+    on_disk = sum(1 for directory, subs, files in os.walk(root)
+                  for name in files
+                  if name.endswith(".py") and not name.startswith("_")
+                  and "__pycache__" not in directory)
+    th.assert_eq(len(found), on_disk,
+                 "every non-private .py file under mojo/deploy must appear in "
+                 "the list — a module that silently drops out of this test is "
+                 "a module that can break config fetch on every node")
 
 
 @th.django_unit_test()

@@ -43,8 +43,31 @@ can gate a deploy. BLIND counts because a gate that returns green when it cannot
 see is worse than no gate: an audit key without iam:List* would otherwise report
 a clean IAM section it never actually read.
 
-This is NOT the same tool as `mojo.apps.aws.services.aws_check` — see
-docs/django_developer/aws/aws_check.md.
+THREE THINGS IN THIS REPOSITORY LOOK AT AN AWS ACCOUNT. They are not
+interchangeable, and picking the wrong one wastes an afternoon:
+
+    this module                         pre-Django, read-only, and it JUDGES.
+                                        It scores an account against the
+                                        django-mojo reference topology and
+                                        universal security expectations, and
+                                        exits non-zero so it can gate a deploy.
+                                        Answers "is this account set up
+                                        correctly?".
+    mojo/apps/aws/services/aws_check.py in-Django, reads settings, and CREATES
+                                        MISSING integration surfaces — the cron
+                                        rule, the S3 file manager, SES, dnsman.
+                                        It is about a running deployment's
+                                        readiness, not about infrastructure.
+                                        Answers "can this deployment talk to
+                                        AWS?".
+    mojo/deploy/provision/discover.py   pre-Django, read-only, and JUDGES
+                                        NOTHING. It returns the raw shape of
+                                        the resources the provisioner manages
+                                        so its ensure-services can decide what
+                                        to create. Answers "what is already
+                                        there?".
+
+See docs/django_developer/aws/aws_check.md.
 """
 
 import argparse
