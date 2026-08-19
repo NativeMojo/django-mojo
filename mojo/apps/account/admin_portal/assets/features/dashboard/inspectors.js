@@ -160,6 +160,14 @@ function controlList(posture) {
 
 function securityView(section) {
   const data = section?.data || {};
+  // An envelope that carries no evidence says so. Rendering "No heartbeat
+  // recorded" from an empty payload would report absent evidence as a finding.
+  if (!Object.keys(data).length) {
+    return [
+      h('p', {class: 'muted small', text: 'Security posture unavailable'}),
+      h('p', {class: 'muted small', text: plainReason(section) || 'no evidence'}),
+    ];
+  }
   const beat = data.cron_heartbeat || {};
   const delivery = data.monitoring_delivery || {};
   const disabled = data.secure_posture?.disabled || [];
