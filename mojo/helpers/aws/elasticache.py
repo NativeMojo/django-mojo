@@ -193,3 +193,159 @@ def modify_cache_cluster_engine_version(identifier, target_version, apply_immedi
         "elasticache.modify_cache_cluster",
         lambda: cache.modify_cache_cluster(**params),
         iam_action="elasticache:ModifyCacheCluster", mutation=True)
+
+
+# ── replica count ───────────────────────────────────────────────────────────
+#
+# A replica in a replication group is FAILOVER capacity, not read throughput:
+# django-mojo talks to the primary endpoint only. Removing the last replica of
+# a group with automatic failover enabled therefore does not "free a node" — it
+# removes the thing that would take over when the primary dies, and AWS refuses
+# the call anyway. That refusal is worth making before the API round trip, with
+# a sentence saying what is lost.
+
+CLUSTER_MODE_UNSUPPORTED = "cluster_mode_unsupported"
+FAILOVER_REQUIRES_REPLICA = "automatic_failover_requires_replica"
+# AutomaticFailover reports four values; two of them mean it is on or coming on.
+FAILOVER_ON = frozenset({"enabled", "enabling"})
+MULTI_AZ_ON = frozenset({"enabled", "enabling"})
+
+
+class ReplicaCountError(ValueError):
+    """A replica-count change this module refuses to send. Carries a reason."""
+
+    def __init__(self, message, reason):
+        self.reason = str(reason)
+        super().__init__(message)
+
+
+def _members(row):
+    """Per-member role and status, flattened across every node group."""
+    members = []
+    for group in (row.get("NodeGroups") or [])[:MAX_ROWS]:
+        for member in (group.get("NodeGroupMembers") or [])[:MAX_ROWS]:
+            members.append({
+                "id": member.get("CacheClusterId"),
+                "node_group": group.get("NodeGroupId"),
+                "role": str(member.get("CurrentRole") or "").lower(),
+                "zone": member.get("PreferredAvailabilityZone"),
+            })
+    return members
+
+
+def _group_facts(row):
+    members = _members(row)
+    replicas = [member for member in members if member["role"] == "replica"]
+    failover = str(row.get("AutomaticFailover") or "").lower()
+    multi_az = str(row.get("MultiAZ") or "").lower()
+    return {
+        "identifier": row.get("ReplicationGroupId"),
+        "status": str(row.get("Status") or "").lower(),
+        "description": row.get("Description"),
+        "cluster_enabled": bool(row.get("ClusterEnabled")),
+        "automatic_failover": failover,
+        "automatic_failover_on": failover in FAILOVER_ON,
+        "multi_az": multi_az,
+        "multi_az_on": multi_az in MULTI_AZ_ON,
+        "node_groups": len(row.get("NodeGroups") or []),
+        "members": members,
+        "member_clusters": list(row.get("MemberClusters") or [])[:MAX_ROWS],
+        "replica_count": len(replicas),
+        "primary_count": sum(1 for member in members if member["role"] == "primary"),
+    }
+
+
+def replication_group_facts(identifier, client=None, region=None):
+    """Everything the replica-count guards need about ONE group, or None.
+
+    ``cluster_enabled`` is read straight from the group rather than inferred
+    from node-group count: a cluster-mode-enabled group with a single shard
+    looks exactly like a cluster-mode-disabled one from the outside, and the
+    Increase/DecreaseReplicaCount operations behave differently on it.
+    """
+    cache = _cache(client, region)
+    try:
+        page = _caller.call(
+            "elasticache.describe_replication_groups",
+            lambda: cache.describe_replication_groups(ReplicationGroupId=identifier),
+            iam_action="elasticache:DescribeReplicationGroups", mutation=False)
+    except ProviderCallError as err:
+        if err.provider_code in NOT_FOUND_CODES:
+            return None
+        raise
+    rows = page.get("ReplicationGroups") or []
+    return _group_facts(rows[0]) if rows else None
+
+
+def replication_groups(client=None, region=None):
+    """The same facts for EVERY replication group, in ONE describe."""
+    cache = _cache(client, region)
+    page = _caller.call(
+        "elasticache.describe_replication_groups",
+        lambda: cache.describe_replication_groups(),
+        iam_action="elasticache:DescribeReplicationGroups", mutation=False)
+    return [_group_facts(row)
+            for row in (page.get("ReplicationGroups") or [])[:MAX_ROWS]
+            if row.get("ReplicationGroupId")]
+
+
+def set_replica_count(identifier, new_count, apply_immediately, facts=None,
+                      client=None, region=None):
+    """Move ONE replication group to ``new_count`` replicas per shard.
+
+    Refuses, before any API call:
+
+    * a cluster-mode-enabled group, by name — its replica count is per shard
+      and changing it is a resharding decision, not a capacity button;
+    * a decrease below one replica while automatic failover or Multi-AZ is on.
+      AWS rejects it too, but its message is not the sentence an operator needs.
+
+    ``ReplicasToRemove`` is deliberately never sent on a decrease: naming the
+    node to kill means choosing which availability zone loses its standby, and
+    ElastiCache picks better than a portal that cannot see the shard layout.
+
+    ``ApplyImmediately`` is the caller's explicit choice and is passed through
+    unchanged; ElastiCache currently supports only ``True`` on these two
+    operations, and a caller sending ``False`` should hear that from AWS rather
+    than have this module quietly rewrite the request.
+    """
+    facts = facts if facts is not None else replication_group_facts(
+        identifier, client=client, region=region)
+    if facts is None:
+        raise ReplicaCountError(
+            f"{identifier} is not a replication group", CLUSTER_MODE_UNSUPPORTED)
+    if facts.get("cluster_enabled"):
+        raise ReplicaCountError(
+            f"{identifier} is cluster-mode enabled; its replica count is a "
+            f"per-shard resharding decision, not a capacity change",
+            CLUSTER_MODE_UNSUPPORTED)
+    new_count = int(new_count)
+    current = int(facts.get("replica_count") or 0)
+    if new_count < 0:
+        raise ReplicaCountError("a replica count cannot be negative", "invalid_request")
+    if new_count == current:
+        return {"operation": None, "changed": False, "replica_count": current}
+    if new_count < 1 and (facts.get("automatic_failover_on")
+                          or facts.get("multi_az_on")):
+        raise ReplicaCountError(
+            f"{identifier} has automatic failover enabled, which requires at "
+            f"least one replica", FAILOVER_REQUIRES_REPLICA)
+
+    cache = _cache(client, region)
+    if new_count > current:
+        _caller.call(
+            "elasticache.increase_replica_count",
+            lambda: cache.increase_replica_count(
+                ReplicationGroupId=identifier, NewReplicaCount=new_count,
+                ApplyImmediately=bool(apply_immediately)),
+            iam_action="elasticache:IncreaseReplicaCount", mutation=True)
+        return {"operation": "elasticache.increase_replica_count",
+                "changed": True, "replica_count": new_count}
+    _caller.call(
+        "elasticache.decrease_replica_count",
+        lambda: cache.decrease_replica_count(
+            ReplicationGroupId=identifier, NewReplicaCount=new_count,
+            ApplyImmediately=bool(apply_immediately)),
+        iam_action="elasticache:DecreaseReplicaCount", mutation=True)
+    return {"operation": "elasticache.decrease_replica_count",
+            "changed": True, "replica_count": new_count}

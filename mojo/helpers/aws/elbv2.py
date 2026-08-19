@@ -1,17 +1,28 @@
 """
 AWS Elastic Load Balancing (v2) Helper Module
 
-Read-only view of the serving tier: which balancer fronts the fleet, which
-target groups are attached to it, and how many registered targets are healthy.
+TWO CLIENT PATHS, deliberately separate:
 
-Nothing here mutates. Every call is wrapped in ``ProviderClient`` so a denial
-or a network failure raises ``ProviderCallError`` and never puts raw botocore
-text (which can carry credentials, signed URLs, and request parameters) into an
-API response.
+* ``LoadBalancerHelper`` — the read seam behind the Admin dashboard. Which
+  balancer fronts the fleet, which target groups are attached to it, and how
+  many registered targets are healthy. It mutates nothing and wraps every call
+  in ``ProviderClient``.
+* the module-level functions at the bottom — the serving-tier MUTATIONS
+  (register/deregister) plus the two reads the capacity guards need. They use
+  ``ProviderCaller`` directly with the IAM action and the mutation flag named
+  EXPLICITLY, because ``ProviderClient`` derives mutation from the method-name
+  prefix and neither ``register_`` nor ``deregister_`` is one of its prefixes.
+  Left to inference, a failed DeregisterTargets would claim
+  ``mutation_state="none"`` — a wrong answer on the one question that matters
+  after a failed drain.
+
+Raw botocore text (which can carry credentials, signed URLs, and request
+parameters) never leaves this module: a failure raises ``ProviderCallError``,
+whose ``detail()`` is the only shape safe for an API response or a log line.
 """
 
 from .client import get_client, get_session
-from .provider_call import ProviderCallError, ProviderClient
+from .provider_call import ProviderCallError, ProviderClient, ProviderCaller
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
 
@@ -20,9 +31,22 @@ logger = logit.get_logger("aws_elbv2", "aws.log")
 
 DEFAULT_MAX_GROUPS = 4
 MAX_TARGETS = 100
+# A dashboard read may time out in 2s; a registration may not.
+MUTATION_TIMEOUT = 5
 # botocore names the client "elbv2" but IAM names the service
 # "elasticloadbalancing"; ProviderClient would otherwise derive "elb".
 IAM_SERVICE = "elasticloadbalancing"
+
+# The two target-health states that mean "still carrying traffic". AWS reports
+# `draining` (and, for an already-failing target, `unhealthy.draining`) for the
+# whole deregistration delay: neither is drain-complete, and treating either as
+# done is how a node gets terminated with live connections on it.
+IN_FLIGHT_STATES = frozenset({"draining", "unhealthy.draining"})
+# The state a fully drained but still-listed target settles on.
+DRAINED_STATE = "unused"
+DEREGISTRATION_DELAY_KEY = "deregistration_delay.timeout_seconds"
+
+_caller = ProviderCaller(logger)
 
 
 def _balancer_facts(balancer):
@@ -214,3 +238,165 @@ class LoadBalancerHelper:
                         for tag in row.get("Tags") or []}
                 names[identifier] = tags.get("Name") or identifier
         return names
+
+
+# ── module-level: serving-tier mutations and the guard reads ────────────────
+#
+# Used by the Admin capacity actions. See the module docstring for why these
+# are not methods on LoadBalancerHelper and why `mutation=` is explicit.
+
+def _setting(name, default=None):
+    try:
+        return settings.get_static(name, default)
+    except Exception:
+        return default
+
+
+def _elbv2(client=None, region=None, timeout=MUTATION_TIMEOUT):
+    """The injection seam. Tests and callers holding a session pass ``client``."""
+    if client is not None:
+        return client
+    region = region or _setting("AWS_REGION", "us-east-1")
+    session = get_session(_setting("AWS_KEY"), _setting("AWS_SECRET"), region)
+    # One attempt: a retried register/deregister is the one thing this module
+    # must not do on the operator's behalf.
+    return get_client("elbv2", session=session, region=region,
+                      timeout=timeout, max_attempts=1)
+
+
+def _target(instance_id, port=None):
+    target = {"Id": instance_id}
+    if port:
+        target["Port"] = int(port)
+    return target
+
+
+def register_target(group_arn, instance_id, port=None, client=None, region=None):
+    """Put one instance into one target group. The LAST step of an add."""
+    elbv2 = _elbv2(client, region)
+    return _caller.call(
+        "elbv2.register_targets",
+        lambda: elbv2.register_targets(
+            TargetGroupArn=group_arn, Targets=[_target(instance_id, port)]),
+        iam_action=f"{IAM_SERVICE}:RegisterTargets", mutation=True)
+
+
+def deregister_target(group_arn, instance_id, port=None, client=None, region=None):
+    """Start draining one instance out of one target group.
+
+    Returning does NOT mean the target is drained — it means AWS accepted the
+    request and started the deregistration delay. ``target_health`` is what
+    proves the drain finished.
+    """
+    elbv2 = _elbv2(client, region)
+    return _caller.call(
+        "elbv2.deregister_targets",
+        lambda: elbv2.deregister_targets(
+            TargetGroupArn=group_arn, Targets=[_target(instance_id, port)]),
+        iam_action=f"{IAM_SERVICE}:DeregisterTargets", mutation=True)
+
+
+def target_health(group_arn, instance_id=None, client=None, region=None):
+    """``[{id, port, state, reason}]`` for one group, newest read every time.
+
+    Deliberately ONE unfiltered describe narrowed in process rather than a
+    ``Targets=`` filtered describe: AWS raises ``InvalidTarget`` for a target
+    that is not registered, and "not registered" is exactly the answer a drain
+    poll is waiting for. An exception is a terrible way to say "done".
+    """
+    elbv2 = _elbv2(client, region)
+    page = _caller.call(
+        "elbv2.describe_target_health",
+        lambda: elbv2.describe_target_health(TargetGroupArn=group_arn),
+        iam_action=f"{IAM_SERVICE}:DescribeTargetHealth", mutation=False)
+    rows = []
+    for item in (page.get("TargetHealthDescriptions") or [])[:MAX_TARGETS]:
+        target = item.get("Target") or {}
+        health = item.get("TargetHealth") or {}
+        identifier = target.get("Id")
+        if instance_id and identifier != instance_id:
+            continue
+        rows.append({
+            "id": identifier,
+            "port": target.get("Port"),
+            "state": str(health.get("State") or "").lower(),
+            "reason": str(health.get("Reason") or "").lower(),
+        })
+    return rows
+
+
+def target_group_attributes(group_arn, client=None, region=None):
+    """``{key: value}`` for one group. Read for ``deregistration_delay``."""
+    elbv2 = _elbv2(client, region)
+    page = _caller.call(
+        "elbv2.describe_target_group_attributes",
+        lambda: elbv2.describe_target_group_attributes(TargetGroupArn=group_arn),
+        iam_action=f"{IAM_SERVICE}:DescribeTargetGroupAttributes", mutation=False)
+    return {row.get("Key"): row.get("Value")
+            for row in (page.get("Attributes") or []) if row.get("Key")}
+
+
+def deregistration_delay(group_arn, default=300, client=None, region=None):
+    """The group's configured drain window in seconds, or ``default``."""
+    try:
+        raw = target_group_attributes(group_arn, client=client, region=region).get(
+            DEREGISTRATION_DELAY_KEY)
+        return max(0, int(raw))
+    except (ProviderCallError, TypeError, ValueError):
+        return int(default)
+
+
+def drained(rows):
+    """True only when nothing in ``rows`` is still carrying traffic.
+
+    An empty list is drained (the target is gone). A `draining` row is NOT,
+    however long it has been there.
+    """
+    for row in rows or []:
+        state = row.get("state")
+        if state in IN_FLIGHT_STATES:
+            return False
+        if state != DRAINED_STATE:
+            return False
+    return True
+
+
+def serving_map(client=None, region=None, max_groups=20):
+    """EVERY attached target group of EVERY balancer, described fresh.
+
+    ``LoadBalancerHelper.frontend`` reads the FIRST balancer only and caches
+    for a minute — right for a dashboard row, wrong for a guard. A node that is
+    the last healthy target of an internal group behind a second balancer is
+    still the thing keeping that group up, and a 60-second-old answer is not
+    evidence about a fleet somebody is actively changing.
+    """
+    elbv2 = _elbv2(client, region)
+    page = _caller.call(
+        "elbv2.describe_load_balancers",
+        lambda: elbv2.describe_load_balancers(),
+        iam_action=f"{IAM_SERVICE}:DescribeLoadBalancers", mutation=False)
+    balancers = [_balancer_facts(row) for row in page.get("LoadBalancers") or []]
+    arns = {row["arn"] for row in balancers if row.get("arn")}
+    # ONE describe_target_groups for the whole account, attachment read off
+    # each group's LoadBalancerArns — a per-balancer call would be an N+1
+    # against a rate-limited API for an identical answer.
+    groups_page = _caller.call(
+        "elbv2.describe_target_groups",
+        lambda: elbv2.describe_target_groups(),
+        iam_action=f"{IAM_SERVICE}:DescribeTargetGroups", mutation=False)
+    groups = []
+    for row in groups_page.get("TargetGroups") or []:
+        attached = [arn for arn in (row.get("LoadBalancerArns") or []) if arn in arns]
+        if not attached or len(groups) >= max(1, int(max_groups)):
+            continue
+        arn = row.get("TargetGroupArn")
+        groups.append({
+            "arn": arn,
+            "name": row.get("TargetGroupName"),
+            "target_type": row.get("TargetType"),
+            "protocol": row.get("Protocol"),
+            "port": row.get("Port"),
+            "balancers": attached,
+            "targets": target_health(arn, client=elbv2, region=region),
+        })
+    return {"balancers": balancers, "groups": groups}

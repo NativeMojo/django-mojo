@@ -1,10 +1,21 @@
 """
 AWS RDS Helper Module
 
-Engine-version reads and the two engine-version mutations, for the Admin
-Maintenance view. Deliberately narrow: this module answers "what version is
-this database on, and is it settled?" and applies one requested upgrade. It
-does not create, delete, resize, or snapshot anything.
+Two narrow jobs, no more:
+
+* **Engine versions**, for the Admin Maintenance view — "what version is this
+  database on, is it settled?" plus the one requested upgrade.
+* **Read capacity**, for the Admin capacity actions — what shape a database is
+  (Aurora cluster vs standalone instance), adding one reader, and deleting one.
+
+The shape question is not cosmetic. Aurora does NOT support
+``CreateDBInstanceReadReplica`` for a cluster: a reader is a plain
+``create_db_instance`` carrying ``DBClusterIdentifier``, and the cluster is
+what replicates. A standalone instance is the opposite — it has no cluster, and
+its replica is made with ``create_db_instance_read_replica``. Sending either
+call to the other kind of database is an API error, so the shape is resolved
+LIVE at apply time (``instance_role`` / ``cluster_members``) rather than read
+off a cached report.
 
 Every provider call goes through ``ProviderCaller.call`` with the IAM action
 named EXPLICITLY, and with ``mutation`` passed explicitly rather than inferred.
@@ -156,3 +167,137 @@ def modify_cluster_engine_version(identifier, target_version, apply_immediately,
     return _caller.call(
         "rds.modify_db_cluster", lambda: rds.modify_db_cluster(**params),
         iam_action="rds:ModifyDBCluster", mutation=True)
+
+
+# ── read capacity ───────────────────────────────────────────────────────────
+
+def _endpoint(row):
+    endpoint = row.get("Endpoint") or {}
+    address = endpoint.get("Address")
+    port = endpoint.get("Port")
+    return f"{address}:{port}" if address and port else address or None
+
+
+def instance_role(identifier, client=None, region=None):
+    """What ONE DB instance is, or None when AWS has no such instance.
+
+    ``is_replica`` is true for a standalone read replica (it names a source)
+    and for a non-writer Aurora member; ``cluster`` is the only reliable
+    discriminator between the two shapes.
+    """
+    rds = _rds(client, region)
+    page = _caller.call(
+        "rds.describe_db_instances",
+        lambda: rds.describe_db_instances(DBInstanceIdentifier=identifier),
+        iam_action="rds:DescribeDBInstances", mutation=False)
+    rows = page.get("DBInstances") or []
+    if not rows:
+        return None
+    row = rows[0]
+    source = row.get("ReadReplicaSourceDBInstanceIdentifier")
+    return {
+        "identifier": row.get("DBInstanceIdentifier"),
+        "status": str(row.get("DBInstanceStatus") or "").lower(),
+        "engine": row.get("Engine"),
+        "engine_version": row.get("EngineVersion"),
+        "instance_class": row.get("DBInstanceClass"),
+        "availability_zone": row.get("AvailabilityZone"),
+        "cluster": row.get("DBClusterIdentifier"),
+        "replica_source": source,
+        "is_replica": bool(source),
+        "endpoint": _endpoint(row),
+    }
+
+
+def cluster_members(identifier, client=None, region=None):
+    """One Aurora cluster's members and reader endpoint, or None.
+
+    ``is_writer`` comes from ``IsClusterWriter`` — the ONLY place Aurora says
+    which member is the primary. An identifier alone proves nothing.
+    """
+    rds = _rds(client, region)
+    page = _caller.call(
+        "rds.describe_db_clusters",
+        lambda: rds.describe_db_clusters(DBClusterIdentifier=identifier),
+        iam_action="rds:DescribeDBClusters", mutation=False)
+    rows = page.get("DBClusters") or []
+    if not rows:
+        return None
+    row = rows[0]
+    members = []
+    # DBClusterMembers carries no per-member lifecycle status — only the
+    # parameter-group sync state, which is a different question. A member's
+    # real status comes from describe_db_instances (instance_role).
+    for member in (row.get("DBClusterMembers") or [])[:MAX_ROWS]:
+        members.append({
+            "id": member.get("DBInstanceIdentifier"),
+            "is_writer": bool(member.get("IsClusterWriter")),
+        })
+    return {
+        "identifier": row.get("DBClusterIdentifier"),
+        "engine": row.get("Engine"),
+        "engine_version": row.get("EngineVersion"),
+        "status": str(row.get("Status") or "").lower(),
+        "endpoint": row.get("Endpoint"),
+        "reader_endpoint": row.get("ReaderEndpoint"),
+        "members": members,
+        "readers": [member["id"] for member in members if not member["is_writer"]],
+        "writer": next((member["id"] for member in members if member["is_writer"]), None),
+    }
+
+
+def create_cluster_reader(cluster_id, instance_id, instance_class, engine,
+                          availability_zone=None, client=None, region=None):
+    """Add ONE reader to an Aurora cluster.
+
+    ``create_db_instance`` with ``DBClusterIdentifier``, NOT
+    ``create_db_instance_read_replica`` — Aurora does not support the latter
+    for a cluster member. No storage or credentials are passed: an Aurora
+    member takes both from the cluster.
+    """
+    rds = _rds(client, region)
+    params = {
+        "DBInstanceIdentifier": instance_id,
+        "DBClusterIdentifier": cluster_id,
+        "DBInstanceClass": instance_class,
+        "Engine": engine,
+    }
+    if availability_zone:
+        params["AvailabilityZone"] = availability_zone
+    return _caller.call(
+        "rds.create_db_instance", lambda: rds.create_db_instance(**params),
+        iam_action="rds:CreateDBInstance", mutation=True)
+
+
+def create_read_replica(source_id, replica_id, instance_class=None,
+                        availability_zone=None, client=None, region=None):
+    """Add ONE read replica of a STANDALONE DB instance. See the Aurora twin."""
+    rds = _rds(client, region)
+    params = {
+        "DBInstanceIdentifier": replica_id,
+        "SourceDBInstanceIdentifier": source_id,
+    }
+    if instance_class:
+        params["DBInstanceClass"] = instance_class
+    if availability_zone:
+        params["AvailabilityZone"] = availability_zone
+    return _caller.call(
+        "rds.create_db_instance_read_replica",
+        lambda: rds.create_db_instance_read_replica(**params),
+        iam_action="rds:CreateDBInstanceReadReplica", mutation=True)
+
+
+def delete_instance(identifier, client=None, region=None):
+    """Delete ONE DB instance with no final snapshot.
+
+    ``SkipFinalSnapshot=True`` is correct ONLY because the caller has already
+    proved the target is a reader/replica — a copy of data that lives
+    elsewhere. The proof is the caller's job; this function does not re-derive
+    it, so never call it on something whose role you have not checked.
+    """
+    rds = _rds(client, region)
+    return _caller.call(
+        "rds.delete_db_instance",
+        lambda: rds.delete_db_instance(
+            DBInstanceIdentifier=identifier, SkipFinalSnapshot=True),
+        iam_action="rds:DeleteDBInstance", mutation=True)
