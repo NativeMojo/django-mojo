@@ -294,7 +294,8 @@ response.
 
 | Method | Endpoint | Purpose | Access |
 |---|---|---|---|
-| GET | `/api/edge/webapp/summary?webapp=<id>` | Frozen v1 read model: address + domain, `current_release`, `latest_deployment`, and deploy-key readiness. Secret-free — never a token, certificate key, or internal state. | Human-only; `view_dns` / `manage_dns` / `security` + object access |
+| GET | `/api/edge/webapp/summary?webapp=<id>` | Frozen v1 read model: address + domain + `certificate` (`status`, `not_after`; null only without a vhost), `current_release`, `latest_deployment`, and deploy-key readiness. Secret-free — never a token, certificate key, or internal state. | Human-only; `view_dns` / `manage_dns` / `security` + object access |
+| GET | `/api/edge/webapp/summaries` | Bounded list projection for the merged Admin Deployments lane: one slim summary-v1-subset item per visible app (`webapp` identity, `address` + `certificate`, `current_release`, `latest_deployment`), ordered by slug, `{schema_version: 1, items, count, limit: 50, truncated}`. Scope is exactly the REST list's — global-or-group `VIEW_PERMS`, always intersected with a caller-supplied `?group=`. | Human-only (key-backed sessions refused); `view_dns` / `manage_dns` / `security` globally or in at least one group |
 | GET | `/api/edge/webapp/deployment?webapp=<id>` (and `/deployment/<pk>`) | Deployment (fleet-convergence) history, group-scoped. Read-only; a cross-tenant id is not readable. | `view_dns` / `manage_dns` / `security` |
 | POST | `/api/edge/webapp/rollback` | Repoint the app at an already-verified earlier release. Body `{webapp, release}`. A foreign release id 404s; a `pending` (unverified) release is refused. | Human-only (CI keys denied), fresh-auth; `manage_webapp` + explicit object check |
 | POST | `/api/edge/webapp/detach_address` | Take the app offline: unlink and delete its serving vhost, keep the app and its release history. | Human-only, fresh-auth; `manage_webapp` |

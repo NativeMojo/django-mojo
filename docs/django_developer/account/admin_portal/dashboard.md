@@ -1,10 +1,12 @@
 # Admin Dashboard integration contract
 
 The built-in Admin has seven primary navigation items, in this order: Dashboard,
-Web Apps, Domains & DNS, People, Activity, Platform, and Settings. Domains & DNS appears
+Deployments, Domains & DNS, People, Activity, Platform, and Settings. Domains & DNS appears
 only with DNS read/manage authority and owns ongoing domain and public-record
-work. System Setup and deployments are destinations inside Platform; Advanced
-is one expert-diagnostics destination rather than a raw-resource directory.
+work. Deployments is the merged lane for the API service, the django-mojo
+framework, and every web app; System Setup is a destination inside Platform;
+Advanced is one expert-diagnostics destination rather than a raw-resource
+directory.
 
 Dashboard answers one question — **is anything down right now, and if not, what
 needs attention?** `GET /api/account/admin/dashboard` returns

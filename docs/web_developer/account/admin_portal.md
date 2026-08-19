@@ -122,13 +122,33 @@ mode remains the correct way to exercise write, busy, 440, error, and
 ambiguous-response states without mutating a live installation.
 
 The packaged portal is divided into seven fixed, capability-gated feature lanes.
-Primary navigation is Dashboard, Web Apps, Domains & DNS, People, Activity,
+Primary navigation is Dashboard, Deployments, Domains & DNS, People, Activity,
 Platform, and Settings. Domains & DNS appears only with DNS read/manage authority;
 Advanced is one expert-diagnostics destination from Platform, alongside
-deployments and literal-superuser System Setup. Activity owns the
-bounded Incidents, Events, Logs, and Tickets operator journey. Platform owns
-public/local health, UUID deployment recovery, fleet evidence, System Setup,
-and readiness. Platform does not duplicate Domains & DNS or expand Advanced's
+literal-superuser System Setup. Activity owns the
+bounded Incidents, Events, Logs, and Tickets operator journey.
+
+Deployments (`#/deployments` — the `webapps` feature; `#/webapps` still
+resolves and canonicalizes via `history.replaceState`) is the one page for
+everything running on the fleet. Its API section renders only for platform
+viewers (no platform capability means no request, not a 403) from
+`GET /api/account/admin/platform?sections=deployments,api` and
+`GET /api/account/admin/platform/framework`: an API service row whose drill-in
+carries the deploy history and the per-attempt Retry-same-SHA / Verify /
+Converge controls (`manage_platform`; read-only viewers get history without
+actions), and a django-mojo row whose Update calls
+`POST /api/account/admin/platform/framework/update` with the typed
+`confirm_version` echo, with Hold/Resume surfacing the advanced-settings
+`framework_pin` writer at the owner tier. The Web apps section reads
+`GET /api/edge/webapp/summaries`; each row leads with the address (a missing
+address is amber "No address yet — not reachable" with **Set address**), SSL
+state, and last deploy, with the release id as short muted metadata. Deep links
+`#/deployments?inspector=<id>` type-dispatch — an integer opens that web app's
+inspector, a deployment UUID opens the API drill-in — so pre-merge Activity
+links keep working. Platform owns
+public/local health, fleet evidence, System Setup,
+and readiness; deployment history renders in the Deployments lane. Platform
+does not duplicate Domains & DNS or expand Advanced's
 resource directory. Advanced owns bounded hosting/AWS inventory,
 and the raw Domains, Credentials,
 DNS, Certificates, Upstreams, Vhosts, Routes, and network resources. Bootstrap
@@ -414,7 +434,8 @@ This prevents non-admin users from escalating their own access.
 | API-key lifecycle | `POST /api/account/admin/apikey/action` | Object edit authority, non-key session, interactive auth in the last 600 seconds |
 | Secure settings | `GET/POST /api/settings`, `DELETE /api/settings/<id>` | `groups` |
 | System Setup | `/api/account/admin/setup/*` | Literal active superuser only |
-| Platform evidence/deploy recovery | `/api/account/admin/platform`, `/api/account/admin/platform/deploy/*` | Dedicated global Platform grants; writes require fresh non-key auth |
+| Platform evidence/deploy recovery | `/api/account/admin/platform` (optional `?sections=` allowlist), `/api/account/admin/platform/deploy/*` | Dedicated global Platform grants; writes require fresh non-key auth |
+| Web-app deployment rows | `GET /api/edge/webapp/summaries` | Human-only (key-backed sessions refused); WebApp `VIEW_PERMS` globally or in at least one group, always intersected with `?group=` |
 | Framework version / update | `/api/account/admin/platform/framework[/update]` | `view_platform` to read; `manage_platform` or `admin` to update, fresh non-key auth. Clearing a pin is literal-superuser only |
 | Managed-service maintenance | `/api/aws/maintenance/versions`, `/api/aws/maintenance/status`, `/api/aws/maintenance/apply` | `manage_aws` to read; the apply needs `manage_aws` **and** superuser / `manage_platform` / `admin`, fresh non-key auth. See [aws/maintenance](../aws/maintenance.md) |
 | Advanced evidence/settings | `/api/account/admin/advanced`, `/api/account/admin/advanced/settings` | Dedicated global Advanced grants; settings additionally require literal superuser |

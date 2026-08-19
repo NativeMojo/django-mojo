@@ -255,7 +255,7 @@ header is never stored automatically.
 
 There is no duplicate Network & Hosting resource directory in Setup. A failed
 row may have at most one exact action: configure its durable Setup choice, open
-its first-class owner (Domains & DNS or Web Apps), or change a named deployment
+its first-class owner (Domains & DNS or Deployments), or change a named deployment
 setting. System Setup never calls those owners' mutation APIs on the operator's
 behalf. In
 particular, deployment-key create/rotate/revoke and the reveal-once token stay

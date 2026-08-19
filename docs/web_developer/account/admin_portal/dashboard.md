@@ -1,10 +1,11 @@
 # Admin Dashboard API
 
-The packaged Admin uses seven primary destinations: Dashboard, Web Apps,
+The packaged Admin uses seven primary destinations: Dashboard, Deployments,
 Domains & DNS, People, Activity, Platform, and Settings. Domains & DNS is permission-gated by
 DNS read/manage authority because it is an ongoing application control, not a
-setup-only surface. Deployments and literal-superuser System Setup live under
-Platform; Advanced is one expert-diagnostics destination rather than a
+setup-only surface. Deployments is the merged lane for the API service, the
+django-mojo framework, and every web app; literal-superuser System Setup lives
+under Platform; Advanced is one expert-diagnostics destination rather than a
 resource list.
 
 `GET /api/account/admin/dashboard` requires the same global source-access grant
