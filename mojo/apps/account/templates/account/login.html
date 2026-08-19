@@ -266,6 +266,15 @@
         history.replaceState({}, "", cfg.params.toString() ? location.pathname + "?" + cfg.params.toString() : location.pathname);
         showView("setPassword");
         m.showMessage("Please set your new password.", "info");
+    } else if (sessionStorage.getItem("mat_reset_token")) {
+        // The token is not in the URL because the bouncer challenge page
+        // bounced this visitor on their way here and dropped it — it stashed
+        // the token instead (see bouncer_challenge.html). Reaching this branch
+        // is what makes a reset link work on its FIRST click for someone with
+        // no session; the reset handler further down already reads the same
+        // key, it was simply never arrived at.
+        showView("setPassword");
+        m.showMessage("Please set your new password.", "info");
     }
 
     (function () {
