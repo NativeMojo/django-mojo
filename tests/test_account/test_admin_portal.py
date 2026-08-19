@@ -87,7 +87,7 @@ def test_authenticated_admin_delivery(opts):
     assert data.get("capabilities", {}).get("manage_network") is True, data
     assert tuple(data.get("features", {})) == (
         "dashboard", "people", "webapps", "activity", "platform", "advanced",
-        "settings"), data.get("features")
+        "settings", "sms"), data.get("features")
     assert data["features"]["activity"] == {
         "id": "activity", "enabled": True,
         "capabilities": {

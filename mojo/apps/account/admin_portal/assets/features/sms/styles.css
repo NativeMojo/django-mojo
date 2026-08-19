@@ -1,0 +1,14 @@
+.sms-page .sms-body{display:flex;flex-direction:column;gap:14px}
+.sms-note{margin:6px 0 0;font-size:10px;color:var(--muted)}
+.sms-note.warning{color:var(--warning)}
+.sms-actions{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap}
+.sms-actions input{flex:0 1 190px;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:var(--surface-2);font-size:12px}
+.sms-results{min-height:16px}
+.sms-result{margin:0;font-size:11px}
+.sms-result-ok{color:var(--success)}
+.sms-result-warn{color:var(--warning)}
+.sms-result-danger{color:var(--danger)}
+.sms-editor{padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.sms-editor h2{margin:0 0 4px;font-size:14px}
+.sms-editor .sms-note{margin-bottom:12px}
+@media(max-width:600px){.sms-actions input{flex:1 1 100%}}

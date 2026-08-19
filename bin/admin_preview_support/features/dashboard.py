@@ -64,6 +64,12 @@ def _healthy_sources():
             "installed": "1.12.3", "latest": "1.12.3", "update_available": False,
             "checked_at": NOW, "source": "cache",
             "pin": {"mode": "latest", "value": None}}),
+        "sms": _source(data={
+            "installed": True, "configured": True, "provider": "mojo",
+            "name": "Mojo Remote SMS", "is_active": True, "test_mode": False,
+            "verified": {"ok": True, "code": None,
+                         "message": "Connection verified",
+                         "at": "2026-08-18T09:14:00+00:00"}}),
         "last_deployment": _source(data={"items": [{
             "id": "18180000-0000-4000-8000-000000000001", "sha": "8" * 40,
             "status": "converged", "created": NOW, "finished": NOW,

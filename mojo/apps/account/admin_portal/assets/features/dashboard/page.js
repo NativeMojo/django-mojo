@@ -259,6 +259,27 @@ function frameworkRow(source) {
     detail: held && behind ? `${data.latest} available · pinned` : ''}, open);
 }
 
+const SMS_PROVIDER_LABELS = {twilio: 'Twilio', aws: 'AWS SNS', mojo: 'Mojo remote'};
+
+function smsRow(source) {
+  const data = source.data || {};
+  const provider = SMS_PROVIDER_LABELS[data.provider] || data.provider || 'Unknown';
+  const value = `${provider} · ${data.is_active ? 'Active' : 'Inactive'}`;
+  const verified = data.verified;
+  let detail = '';
+  let detailNode = null;
+  if (verified && verified.ok === false) {
+    detailNode = h('span', {class: 'row-detail warning',
+      text: verified.message || 'last connection test failed'});
+  } else if (data.test_mode) {
+    detail = 'test mode — real messages still send';
+  } else if (verified && verified.ok === true) {
+    detail = 'connection verified';
+  }
+  return statusRow({tone: tone(source), name: 'Text messages', value, detail,
+    detailNode, action: {label: 'Manage', href: routeHref('messaging-sms')}});
+}
+
 function incidentsRow(source, ctx) {
   const data = source.data || {};
   const open = data.open || 0;
@@ -323,6 +344,10 @@ export async function dashboardPage(ctx) {
           {name: 'Public API', source: sources.public_api,
             build: (source) => publicApiRow(source, ctx, sources.sanity)},
           {name: 'django-mojo', source: sources.framework, build: frameworkRow},
+          // Absent, not red, until a system SMS provider actually exists.
+          {name: 'Text messages',
+            source: sources.sms?.data?.configured ? sources.sms : null,
+            build: smsRow},
         ]),
         section('Needs attention', [
           {name: 'Incidents', source: sources.incidents,

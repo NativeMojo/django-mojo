@@ -24,3 +24,4 @@ from .admin_people import *
 from .system_setup import *
 from .admin_platform import *
 from .admin_settings import *
+from .admin_sms import *

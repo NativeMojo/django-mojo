@@ -360,14 +360,14 @@ def test_settings_feature_assets(opts):
         "assets/features/settings/styles.css",
     }
     assert required <= set(assets), "the private Settings feature package is incomplete"
-    assert admin_features.FEATURE_NAMES[-1] == "settings", \
+    assert "settings" in admin_features.FEATURE_NAMES, \
         "the server fixed feature roster omitted Settings"
     registry = (ROOT / "mojo/apps/account/admin_portal/assets/features/registry.js").read_text()
     page = (ROOT / "mojo/apps/account/admin_portal/assets/features/settings/page.js").read_text()
     panels = (ROOT / "mojo/apps/account/admin_portal/assets/features/settings/panels.js").read_text()
     advanced = (ROOT / "mojo/apps/account/admin_portal/assets/features/advanced/page.js").read_text()
-    assert "[dashboard, webapps, advanced, people, activity, platform, settings]" in registry, \
-        "the sidebar feature order is not Dashboard/Web Apps/Domains/People/Activity/Platform/Settings"
+    assert "[dashboard, webapps, advanced, people, activity, platform, settings, sms]" in registry, \
+        "the sidebar feature order is not Dashboard/Web Apps/Domains/People/Activity/Platform/Settings/SMS"
     for contract in ("Search settings", "openBusy", "apiOnce", "configure_providers",
                      "rowSection", "statusRow", "How this platform is configured.",
                      "focus: 'geoip'"):

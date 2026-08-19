@@ -705,3 +705,70 @@ def test_preview_infrastructure_mode(opts):
         f"the external preview names the wrong block: {overview['blocked_reason']!r}"
     assert overview["installed"] and overview["latest"], \
         f"the external preview hid the version facts: {overview}"
+
+
+@th.django_unit_test("preview renders every Text messages provider state deterministically")
+def test_sms_preview_states(opts):
+    from urllib.parse import urlparse
+
+    gallery = (ROOT / "bin/admin_preview_support/gallery.py").read_text()
+    assert "sms_state" in gallery, \
+        "gallery reset does not thread the SMS scenario to providers"
+    assert "messaging_sms" in gallery and "messaging_sms_system_write" in gallery, \
+        "the deterministic bootstrap fixed roster omitted the SMS capabilities"
+
+    feature = _server().sms
+    for state in ("configured", "unset", "verify_failed", "test_mode",
+                  "not_installed"):
+        class Handler:
+            pass
+
+        feature.reset(Handler, {}, sms_state=state)
+        code, report = feature.get(
+            Handler, urlparse("/api/account/admin/messaging-sms/summary"))
+        assert code == 200, f"{state}: the SMS fixture answered {code}"
+        if state == "not_installed":
+            assert report["installed"] is False, \
+                f"{state}: the fixture claims phonehub is installed"
+            continue
+        assert report["installed"] is True, \
+            f"{state}: the fixture claims phonehub is missing"
+        if state == "unset":
+            assert report["system"] is None, \
+                f"{state}: an unset fixture still carries a system config"
+            continue
+        system = report["system"]
+        assert system and set(system["secrets"].values()) <= {True, False}, \
+            f"{state}: secret presence must be booleans only: {system!r}"
+        assert "api_key" not in system, \
+            f"{state}: the fixture leaked a secret value: {system!r}"
+        assert report["verify_state"]["ok"] is (state != "verify_failed"), \
+            f"{state}: verification outcome does not match the scenario"
+
+    class TestMode:
+        pass
+
+    feature.reset(TestMode, {}, sms_state="test_mode")
+    status, result = feature.post(
+        TestMode, "/api/account/admin/messaging-sms",
+        {"action": "test_connection"})
+    assert status == 200 and result["state"] == "test_mode", \
+        f"test_mode must stay a distinct third state, got {result!r}"
+    assert "not contacted" in result["message"], \
+        f"test_mode result does not say the provider was skipped: {result!r}"
+
+    class Failing:
+        pass
+
+    feature.reset(Failing, {}, sms_state="verify_failed")
+    status, refused = feature.post(
+        Failing, "/api/account/admin/messaging-sms",
+        {"action": "save", "provider": "mojo",
+         "remote_url": "https://sms.example.com"})
+    assert status == 400, \
+        f"a failing verification fixture accepted a save: {refused!r}"
+    status, sent = feature.post(
+        Failing, "/api/account/admin/messaging-sms",
+        {"action": "send_test", "to_number": "+15550001111"})
+    assert status == 200 and sent["test_number"] is True, \
+        f"a +1555 recipient is not reported as a test number: {sent!r}"

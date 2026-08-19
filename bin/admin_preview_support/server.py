@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from .gallery import bootstrap, reset
-from .features import activity, advanced, capacity, maintenance, platform, settings, webapps
+from .features import activity, advanced, capacity, maintenance, platform, settings, sms, webapps
 from .features import dashboard
 
 
@@ -610,7 +610,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if activity_response is not None:
             status, payload = activity_response
             return self._send(payload, status=status)
-        for provider in (dashboard, webapps, platform, advanced, settings, maintenance, capacity):
+        for provider in (dashboard, webapps, platform, advanced, settings, sms, maintenance, capacity):
             response = provider.get(self, parsed)
             if response is not None:
                 status, payload = response
@@ -736,7 +736,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         payload = self._read_body()
         self._record_event(path, payload)
-        for provider in (webapps, platform, advanced, settings, maintenance, capacity):
+        for provider in (webapps, platform, advanced, settings, sms, maintenance, capacity):
             response = provider.post(self, path, payload)
             if response is not None:
                 status, body = response
