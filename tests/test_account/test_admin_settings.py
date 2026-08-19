@@ -885,3 +885,77 @@ def test_settings_plain_language_contract(opts):
                    "HTTPS redirect ", "templates ready", "No fleet expected yet",
                    "DNSMAN_CERT_RENEW_DAYS", "EMAIL_DELIVERY_POSTURE"):
         assert phrase in language, f"the plain-language registry lost {phrase!r}"
+
+
+def _owner_principal(username, superuser=False, permissions=None):
+    """Build one throwaway principal; callers delete the name before and after."""
+    from mojo.apps.account.models import User
+    user = User.objects.create_user(
+        email=f"{username}@test.com", username=username, password="example")
+    user.is_active = True
+    user.is_superuser = superuser
+    user.permissions = dict(permissions or {})
+    user.save()
+    return user
+
+
+@th.django_unit_test("advertised owner_edit matches the writer that actually decides")
+def test_owner_edit_matches_writer_authority(opts):
+    from mojo import errors as me
+    from mojo.apps.account.models import User
+    from mojo.apps.account.rest import admin_settings as views
+    from mojo.apps.account.services import system_settings
+
+    # These principals are this test's own: the module fixture users are
+    # permanently promoted by earlier tests and cannot state a truth table.
+    names = ("owner-edit-super", "owner-edit-advanced", "owner-edit-admin",
+             "owner-edit-settings")
+    User.objects.filter(username__in=names).delete()
+    try:
+        # A superuser holding no permission keys at all is the case the
+        # collapsed conjunction could never tell apart from a real grant check.
+        root = _owner_principal("owner-edit-super", superuser=True)
+        assert views._capabilities(root)["owner_edit"] is True, \
+            "a literal superuser was not offered the owner-tier settings editor"
+        # The patch is deliberately empty: it clears require_system_admin and is
+        # then refused by validation, so authority is proven without persisting a
+        # global AUTH_CONFIG row that every later reader would inherit.
+        with th.assert_raises(me.ValueException):
+            system_settings.set_auth_safe_fields(root, {})
+
+        for username, permission in (
+                ("owner-edit-advanced", "manage_advanced"),
+                ("owner-edit-admin", "admin"),
+                ("owner-edit-settings", "manage_settings")):
+            actor = _owner_principal(username, permissions={permission: True})
+            assert views._capabilities(actor)["owner_edit"] is False, \
+                f"{permission} was advertised an owner editor the writer refuses"
+            with th.assert_raises(me.PermissionDeniedException):
+                system_settings.set_auth_safe_fields(actor, {})
+    finally:
+        User.objects.filter(username__in=names).delete()
+
+
+@th.django_unit_test("owner_edit has one authority, quoted by both advertisers")
+def test_owner_edit_has_one_authority(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import system_settings
+
+    for name in ("mojo/apps/account/rest/admin_settings.py",
+                 "mojo/apps/account/rest/admin_portal.py"):
+        source = (ROOT / name).read_text()
+        assert "can_system_admin" in source, \
+            f"{name} advertises owner-tier edit without asking the writer's predicate"
+
+    names = ("owner-authority-super", "owner-authority-advanced")
+    User.objects.filter(username__in=names).delete()
+    try:
+        root = _owner_principal("owner-authority-super", superuser=True)
+        granted = _owner_principal(
+            "owner-authority-advanced", permissions={"manage_advanced": True})
+        assert system_settings.can_system_admin(root) is True, \
+            "the advisory predicate refused a literal superuser the writer accepts"
+        assert system_settings.can_system_admin(granted) is False, \
+            "the advisory predicate granted manage_advanced what require_system_admin denies"
+    finally:
+        User.objects.filter(username__in=names).delete()

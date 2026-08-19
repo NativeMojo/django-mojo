@@ -180,8 +180,9 @@ def on_admin_bootstrap(request):
         "catalog_write": exact("manage_settings") or exact("admin"),
         "settings_owner_display": any(exact(key) for key in (
             "view_advanced_settings", "manage_advanced", "admin")),
-        "settings_owner_edit": bool(request.user.is_superuser and (
-            exact("manage_advanced") or exact("admin"))),
+        # Owner-tier writes are refused by system_settings unless the actor is a
+        # live literal superuser, so that predicate is the only honest source.
+        "settings_owner_edit": system_settings.can_system_admin(request.user),
     }
     return {
         "version": mojo.__version__,
