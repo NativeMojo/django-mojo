@@ -5,5 +5,5 @@ export default {
   enabled: (ctx) => ctx.features?.settings?.enabled === true,
   navigation: () => [{route: 'settings', label: 'Settings', icon: 'settings', section: 'Control plane'}],
   title: () => 'Settings',
-  render: ({ctx, signal}) => settingsPage(ctx, signal),
+  render: ({ctx, route, signal}) => settingsPage(ctx, route, signal),
 };
