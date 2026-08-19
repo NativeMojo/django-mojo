@@ -91,6 +91,12 @@ outright, and SMS was unreachable on an installation that never publishes fleet
 configuration; now each topic saves and fails alone. GeoIP never touches
 `PhoneConfig`, and SMS never publishes the fleet document.
 
+`sms` fails closed on its own too: phonehub is an optional app, and
+`_normalize_sms` checks `apps.is_installed("mojo.apps.phonehub")` before any
+credential check or write, refusing with
+`ValueException("Text messaging is not installed on this platform")` rather
+than letting a model import fail deep inside the writer.
+
 SMS still performs the same guarded read-only `_published()` fetch `state()`
 performs, because the single `expected_revision` token binds
 `(edit_revision, published_revision)` — skipping the read would fail every SMS
@@ -133,6 +139,16 @@ identify which key is installed without narrowing a guess. Never a prefix
 itself. The GeoIP hint costs one bounded row fetch and one decrypt inside
 `state()`, sliced immediately and never logged. The whole surface is
 superuser-only, exactly like the rest of `provider_setup`.
+
+### Provider picker
+
+`state()` also returns `geoip_providers`: `known_providers()` sorts
+`mojo.helpers.geoip.PROVIDERS`, or returns `[]` if that import fails. A picker
+is convenience only — `validate_settings` remains the authority on what may be
+saved — so an unavailable registry costs a list, not a working page. The GeoIP
+panel's Primary/Fallback selects and Additional-providers picker always keep a
+currently configured value even when it is absent from the list, rather than
+silently dropping it on save.
 
 ### Persisted verification state
 

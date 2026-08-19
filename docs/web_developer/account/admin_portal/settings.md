@@ -209,6 +209,10 @@ What each topic writes differs, and so does what it requires:
   publishing plane at all. It writes only the system `PhoneConfig` row and never
   writes S3 — but it still reads the published document, because
   `expected_revision` binds both the edit revision and the published revision.
+  `phonehub` is an optional app: on an installation without it, both
+  `test_providers` and `configure_providers` for topic `sms` return `400` with
+  `"Text messaging is not installed on this platform"` before any credential
+  check runs.
 
 `expected_revision` is the current `configuration_revision`, which advances for
 every successful provider edit — including DB-only key or SMS changes — and is

@@ -619,7 +619,7 @@ For a new deployment the recommended downstream defaults are `mojo` primary,
 `ipinfo` fallback, no additional providers,
 `https://api.mojoverify.com`, and outbound sync disabled until the federation
 key is intentionally provisioned. A literal superuser can apply those values
-from **Admin → Settings → Mojo providers**. The five non-secret provider fields
+from **Admin → Settings → GeoIP**. The five non-secret provider fields
 are published as typed S3/config-sync overrides and require the normal rolling
 restart; `GEOIP_API_KEY_MOJO` is an encrypted global DB setting read at request
 time. Do not create DB rows for the five static fields—their consumers use
