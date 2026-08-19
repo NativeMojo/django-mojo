@@ -1161,6 +1161,28 @@ the way to inspect a node without touching it, and it works as any user. A real
 run **requires root** — it writes under `/etc` — and refuses with one line
 otherwise.
 
+## `node_setup` on a node the portal added
+
+The Admin capacity action that adds an EC2 node runs exactly this, from the
+clone's cloud-init user-data, after `config-sync` and before restarting
+`mojo-asgi` and the job engine:
+
+```bash
+python3 -m mojo.deploy.node_setup --root "$ADMIN_CAPACITY_NODE_ROOT" || true
+```
+
+Idempotence is what makes that safe: the clone boots from an AMI of a node
+where `node_setup` had already converged, so on a healthy clone it prints
+`nothing to change` and exits. It is there for the case where the source's
+units or cron had drifted from what the installed django-mojo expects.
+
+The restart that FOLLOWS it is the load-bearing part. Cloud-init runs late, so
+the app service and the job engine already started under the source AMI's
+hostname; the capacity user-data sets a unique hostname first and then restarts
+both, because the hostname IS the runner id, the readiness node id, and the
+certbot primary election. See
+[aws/capacity.md](../aws/capacity.md).
+
 ## `--owner` is not `--cron-user`
 
 | Flag | Default | Governs |
