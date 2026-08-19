@@ -183,6 +183,7 @@ function addressPhase(state, render, finish) {
       domainId: verdictResult.domain?.id, label: normalized.label,
       hostname: normalized.hostname, domainName: normalized.domain_name,
       provider: verdictResult.domain?.provider, records: verdictResult.records || [],
+      destination: verdictResult.destination || null,
     };
     state.phase = 'identity'; render();
   }
@@ -212,6 +213,25 @@ function addressPhase(state, render, finish) {
       return;
     }
     if (kind === 'domain_unknown') { state.phase = 'domain'; render(); return; }
+    if (kind === 'configuration_required') {
+      // The installation cannot serve app addresses yet. Never invent a record;
+      // send the operator to the check that fixes it.
+      verdict.replaceChildren(h('div', {class: 'verdict blocked'}, icon('alert'),
+        h('div', {}, h('strong', {text: 'This installation isn’t ready to serve app addresses yet'}),
+          h('p', {text: result.reason || 'Finish System Setup, then try again.'}),
+          h('a', {class: 'button ghost compact', href: routeHref('setup'), onclick: () => finish()}, 'Open System Setup'))));
+      return;
+    }
+    if (kind === 'ready' && result.domain && result.domain.provider !== 'mojo') {
+      // A managed domain: the platform adds the record and issues HTTPS itself.
+      // Confirm what will happen before creating anything — no record to copy.
+      const host = normalized.hostname || state.url;
+      verdict.replaceChildren(h('div', {class: 'verdict ready'}, icon('check'),
+        h('div', {}, h('strong', {text: `${result.domain.name} is managed here`}),
+          h('p', {text: `We’ll add ${host} automatically, issue and renew its HTTPS certificate, and then show you how to deploy — no DNS changes needed from you.`}),
+          h('button', {class: 'button primary compact', type: 'button', onclick: () => settle(result)}, 'Continue'))));
+      return;
+    }
     if (kind === 'ready' || kind === 'records_needed') { settle(result); return; }
     message.textContent = result.reason || 'That address cannot be used yet.';
   }
@@ -399,6 +419,15 @@ function identityPhase(state, render, finish) {
       if (adopt) { bucket.value = adopt.bucket; bucket.disabled = true; }
       advanced.hidden = false;
       if (!(data.buckets || []).length) { message.textContent = 'No release storage is configured for this installation.'; return; }
+      if (!data.destination) {
+        // The connected-domain and purchase paths reach here without a precheck
+        // verdict, so this is where an installation that cannot serve app
+        // addresses is caught before the app is created.
+        message.replaceChildren(
+          h('span', {text: data.destination_error || 'This installation isn’t ready to serve app addresses yet. Finish System Setup, then try again.'}),
+          h('a', {class: 'button ghost compact', href: routeHref('setup'), onclick: () => finish()}, 'Open System Setup'));
+        return;
+      }
       submit.disabled = false;
     } catch (error) { message.textContent = error.message; }
   }
@@ -438,21 +467,16 @@ async function createOperation(state, identity, render) {
   };
   savePendingDraft({operation_id: operationId, submitted: true, payload: frozenPayload});
   const result = await apiOnce('/api/edge/webapp/onboarding/create', {method: 'POST', body: JSON.stringify(frozenPayload)});
-  let operation = result.operation || result;
-  if (operation.cursor === 'app') {
-    try {
-      const next = await apiOnce('/api/edge/webapp/onboarding/choose', {method: 'POST', body: JSON.stringify({
-        operation: operation.operation_id, revision: operation.revision, step: 'app', choice: {},
-      })});
-      operation = next.operation || next;
-    } catch (_) { /* the run panel keeps an explicit continuation available */ }
-  }
-  state.operation = operation;
-  // A resolved domain submits its address choice automatically. Purchase waits
-  // for the buy step, which the run panel renders.
-  if (state.resolved?.domainId && operation.cursor === 'address') {
-    try { await submitChoice(state, 'address', {domain: state.resolved.domainId, label: state.resolved.label}); }
-    catch (_) { /* surfaced by the run panel from the operation state */ }
+  state.operation = result.operation || result;
+  state.addressSubmitted = false;
+  state.choiceError = '';
+  // Kick the app step so the worker starts advancing. The address choice is NOT
+  // submitted here: for an existing workspace the create response is still at
+  // 'app' — only the worker moves the cursor to 'address' — so submitting on the
+  // create response never fired. The run-panel state machine (maybeAutoAdvance)
+  // submits it once it observes the 'address' cursor, with that fetch's revision.
+  if (state.operation.cursor === 'app') {
+    await submitChoiceRecovering(state, 'app', {});
   }
   state.phase = 'run'; render();
   driveRun(state, render);
@@ -468,6 +492,48 @@ async function submitChoice(state, step, choice) {
   state.operation = result.operation || result;
 }
 
+function isWaitStateError(error) {
+  // The lease/revision/cursor guards return transient refusals: the worker
+  // hasn't moved the cursor yet, is mid-reconcile, or bumped the revision. A
+  // re-fetch brings fresh state and the next attempt succeeds, so these are
+  // wait-states, not failures. (400s all round, so the message is what tells
+  // them apart from a real validation error.)
+  const text = String((error && error.message) || '');
+  return /current onboarding step is|reconciling|reload before/i.test(text);
+}
+
+// Submit a choice, updating state.operation. A transient wait-state refusal is
+// swallowed so polling retries with the fresh revision; any other refusal is
+// recorded on state.choiceError for the run panel to show honestly. Returns
+// true only when the choice was actually recorded.
+async function submitChoiceRecovering(state, step, choice) {
+  try {
+    await submitChoice(state, step, choice);
+    return true;
+  } catch (error) {
+    if (isWaitStateError(error)) return false;
+    state.choiceError = error.message;
+    return false;
+  }
+}
+
+function pendingAutoAddress(state) {
+  // A resolved managed/connected domain still needs its address choice
+  // submitted — but only once the worker has advanced to the address step.
+  const op = state.operation;
+  return Boolean(op && !state.choiceError && op.cursor === 'address'
+    && state.resolved?.domainId && !(op.choices || {}).address);
+}
+
+async function maybeAutoAdvance(state) {
+  if (!pendingAutoAddress(state) || state.submittingAddress) return;
+  state.submittingAddress = true;
+  try {
+    await submitChoiceRecovering(state, 'address',
+      {domain: state.resolved.domainId, label: state.resolved.label});
+  } finally { state.submittingAddress = false; }
+}
+
 function isAdvancing(op) {
   // Poll while the server is actively reconciling, or while a scheduled retry
   // (certificate issuance, propagation) is pending. A parked wait needs the
@@ -480,17 +546,24 @@ function isAdvancing(op) {
 
 async function driveRun(state, render) {
   if (state.pollTimer) { clearTimeout(state.pollTimer); state.pollTimer = null; }
-  const tick = async () => {
+  // Poll while the server is reconciling OR while the resolved-domain address
+  // choice still needs auto-submitting (the worker moves the cursor to
+  // 'address' after the create response, so this is where that submit fires).
+  const keepPolling = () => isAdvancing(state.operation) || pendingAutoAddress(state);
+  const step = async (fetchFirst) => {
     if (state.disposed || !state.operation) return;
-    if (!isAdvancing(state.operation)) { render(); return; }
-    try {
-      const next = await api(`/api/edge/webapp/onboarding/detail?operation=${encodeURIComponent(state.operation.operation_id)}`);
-      state.operation = next; render();
-      if (!state.disposed && isAdvancing(next)) state.pollTimer = setTimeout(tick, 1800);
-    } catch (_) { /* keep the last state; the user can retry from the panel */ }
+    if (fetchFirst) {
+      try {
+        state.operation = await api(`/api/edge/webapp/onboarding/detail?operation=${encodeURIComponent(state.operation.operation_id)}`);
+      } catch (_) { render(); return; }  // keep the last state; the user can retry
+    }
+    await maybeAutoAdvance(state);
+    render();
+    if (!state.disposed && keepPolling()) {
+      state.pollTimer = setTimeout(() => step(true), fetchFirst ? 1800 : 1200);
+    }
   };
-  render();
-  if (isAdvancing(state.operation)) state.pollTimer = setTimeout(tick, 1200);
+  step(false);
 }
 
 function runPhase(state, render, finish) {
@@ -507,14 +580,28 @@ function runPhase(state, render, finish) {
   else if (op.cursor === 'verify') body = verifyStep(state, render);
   else body = h('p', {text: 'Setting things up…'});
 
-  const evidence = Object.entries(op.evidence || {}).map(([key, value]) =>
+  // Technical details for support: a status badge per evidence key, plus the
+  // address specifics (destination + provenance, provider, write capability,
+  // DNS/cert status) and the next automatic retry. All server-sanitized.
+  const detailRows = Object.entries(op.evidence || {}).map(([key, value]) =>
     h('div', {}, h('dt', {text: key}), h('dd', {}, badge(value?.status || 'recorded'))));
+  const address = (op.evidence || {}).address || {};
+  const addRow = (label, value) => {
+    if (value != null && value !== '') detailRows.push(h('div', {}, h('dt', {text: label}), h('dd', {text: String(value)})));
+  };
+  addRow('Address', address.hostname);
+  if (address.destination) addRow('Destination', `${address.destination.value} (${address.destination.provenance})`);
+  addRow('Provider', address.provider);
+  if (address.provider != null) addRow('Platform-managed DNS', address.writable ? 'yes' : 'no');
+  addRow('DNS', address.dns);
+  addRow('Certificate', address.certificate);
+  addRow('Next automatic retry', op.next_attempt_at);
   return h('div', {class: 'wizard-panel'}, stepBar(index),
     h('div', {class: 'run-heading'}, h('strong', {text: op.profile?.display_name || 'Your app'}),
       h('button', {class: 'button ghost compact', type: 'button', onclick: () => refresh(state, render)}, icon('refresh'), 'Check again')),
-    op.last_error ? h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: op.last_error})) : null,
+    (state.choiceError || op.last_error) ? h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: state.choiceError || op.last_error})) : null,
     body,
-    evidence.length ? h('details', {class: 'run-evidence'}, h('summary', {text: 'Technical details'}), h('dl', {class: 'details'}, ...evidence)) : null);
+    detailRows.length ? h('details', {class: 'run-evidence'}, h('summary', {text: 'Technical details'}), h('dl', {class: 'details'}, ...detailRows)) : null);
 }
 
 async function refresh(state, render) {
@@ -538,15 +625,39 @@ function addressStep(state, render) {
   const op = state.operation;
   const evidence = (op.evidence || {}).address || {};
   const purchase = state.resolved?.mode === 'purchase' && !op.resources?.domain;
+  const external = state.resolved?.provider === 'mojo';
 
   if (purchase) return purchaseStep(state, render);
-  if (isAdvancing(op)) {
-    const issuing = evidence.dns === 'verified' && evidence.certificate && evidence.certificate !== 'failed';
-    return busyRow(issuing ? 'Issuing your HTTPS certificate' : 'Setting up your address',
-      issuing ? 'This can take a few minutes. You can leave this open — it keeps checking.' : 'Checking DNS and getting your address ready…');
+
+  // A submit was refused for a real reason (not a transient wait-state): show it
+  // honestly and offer a retry — never fall back to a fabricated records panel.
+  if (state.choiceError) {
+    const retry = h('button', {class: 'button primary', type: 'button'}, 'Try again');
+    retry.addEventListener('click', async () => {
+      retry.disabled = true; state.choiceError = '';
+      await submitChoiceRecovering(state, 'address', addressChoicePayload(state));
+      driveRun(state, render);
+    });
+    return h('div', {class: 'wizard-choice'},
+      intro('alert', 'We couldn’t start setting up your address', state.choiceError),
+      h('div', {class: 'form-actions'}, retry));
   }
-  // Parked, waiting on the person to publish records.
-  const records = evidence.records || state.resolved?.records || [];
+
+  if (isAdvancing(op) || pendingAutoAddress(state)) {
+    const issuing = evidence.dns === 'verified' && evidence.certificate && evidence.certificate !== 'failed';
+    if (issuing) return busyRow('Issuing your HTTPS certificate',
+      'This can take a few minutes. You can leave this open — it keeps checking.');
+    return busyRow('Setting up your address',
+      external ? 'Checking your DNS record and getting your address ready…'
+        : 'Adding your address record and issuing HTTPS — automatic, no DNS changes needed from you.');
+  }
+  // Records come from server evidence. The precheck fallback survives ONLY for a
+  // genuinely external domain whose records are complete — a managed domain
+  // never renders a manual instruction the platform performs itself.
+  let records = evidence.records || [];
+  if (!records.length && external) {
+    records = (state.resolved?.records || []).filter((r) => r && r.type && r.name && r.value);
+  }
   if (records.length) {
     const message = h('div', {class: 'form-message', role: 'alert'});
     const check = h('button', {class: 'button primary', type: 'button'}, 'I’ve added them — check now');

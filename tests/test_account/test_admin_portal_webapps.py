@@ -208,6 +208,43 @@ def test_webapp_onboarding_browser_contract(opts):
         "the WebApps header exposes globally gated Domains to a scoped-only admin"
 
 
+@th.django_unit_test("the onboarding wizard derives its destination and never fakes a manual record")
+def test_webapp_onboarding_destination_contract(opts):
+    root = Path(__file__).resolve().parents[2]
+    wizard = (root / "mojo/apps/account/admin_portal/assets/features/webapps/wizard.js").read_text()
+
+    # No internal setting name leaks into the wizard copy or logic.
+    assert "EDGE_WEBAPP_CNAME_TARGET" not in wizard, \
+        "the wizard references an internal setting name"
+    # The silent choice-swallowing catches are gone; refusals are classified.
+    assert "catch (_) { /* the run panel keeps an explicit continuation available */ }" not in wizard and \
+        "catch (_) { /* surfaced by the run panel from the operation state */ }" not in wizard, \
+        "the wizard still swallows choice-submission errors silently"
+    assert "submitChoiceRecovering" in wizard and "isWaitStateError" in wizard, \
+        "the wizard has no wait-state-aware choice submission"
+    # The address auto-submit is a run-panel state-machine transition keyed on
+    # the fetched cursor, not on the create-response cursor (the dead gate).
+    assert "function pendingAutoAddress" in wizard and "maybeAutoAdvance" in wizard, \
+        "the resolved-domain address choice is not auto-submitted from the run loop"
+    create = wizard[wizard.index("async function createOperation"):wizard.index("async function submitChoice")]
+    assert "operation.cursor === 'address'" not in create, \
+        "the address choice is still (dead-)gated on the create-response cursor"
+    # Records render from server evidence; the precheck fallback is external-only
+    # and complete-only. A managed domain never renders a manual records panel.
+    assert "state.resolved?.provider === 'mojo'" in wizard and "r.type && r.name && r.value" in wizard, \
+        "the records fallback is not restricted to complete external-domain records"
+    # A configuration-required verdict steers to System Setup.
+    assert "configuration_required" in wizard and "routeHref('setup')" in wizard, \
+        "the wizard does not route an unserveable installation to System Setup"
+    # The identity step is gated on the resolved destination, covering the
+    # connected-domain and purchase paths that never see a precheck verdict.
+    assert "data.destination" in wizard and "destination_error" in wizard, \
+        "the identity step is not gated on the installation's serving destination"
+    # Managed-domain copy tells the operator what happens automatically.
+    assert "automatically" in wizard and "HTTPS" in wizard and "deploy" in wizard, \
+        "the managed-domain copy does not explain the automatic add / HTTPS / deploy"
+
+
 @th.django_unit_test("literal admin and partial globals do not grant backend WebApp authority")
 def test_webapp_authority_rejects_frontend_admin_and_partial_grants(opts):
     from types import SimpleNamespace
