@@ -1339,7 +1339,8 @@ def _extend_topology(record, node_id):
         nodes = sorted(set(current.get("nodes") or []) | {node_id})
         if nodes == sorted(set(current.get("nodes") or [])):
             return record
-        actor = User.objects.filter(pk=record.get("actor")).first()
+        actor_pk = record.get("actor")
+        actor = User.objects.filter(pk=actor_pk).first() if actor_pk else None
         system_settings.set_value(
             actor, system_settings.EXPECTED_EDGE_TOPOLOGY,
             {"nodes": nodes, "pools": list(current.get("pools") or [])})
