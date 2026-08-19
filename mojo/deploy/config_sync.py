@@ -7,7 +7,7 @@ in one direction only — S3 is authoritative, no node ever writes back.
     s3://<AWS_CONFIG_BUCKET>/<AWS_CONFIG_PREFIX>/django.conf
         |
         v   python3 -m mojo.deploy.config_sync (systemd oneshot at boot + timer)
-    /opt/api/var/django.conf   0600, owned by the app user
+    /opt/api/var/django.conf   0640, owned app_user:web_user
 
 WHY THIS EXISTS. The alternative is baking django.conf into the AMI, which works
 and is simpler, but makes the image a secret-bearing artifact: every secret you
@@ -88,9 +88,13 @@ TARGET_PATH = "/opt/api/var/django.conf"
 # the script root-only for no reason connected to what it guards.
 LOCK_SUFFIX = ".config_sync.lock"
 
-# The file lands 0600. It holds every downstream credential the app has; the
-# app process is the only thing that should be able to read it.
-FILE_MODE = 0o600
+# The file lands 0640, owned CONFIG_SYNC_OWNER (app_user:web_user). It holds
+# every downstream credential the app has, so it stays unreadable to the rest
+# of the box — but the writer (app_user) and the reader (the web app, running
+# as web_user) are different processes, so the group-read bit is load-bearing:
+# 0600 would strand whichever of the two is not the owner. See check_node.py's
+# check_config_plane, which audits nodes against this same contract.
+FILE_MODE = 0o640
 
 # Staging directories are created as <target dir>/config_sync.XXXXXX by mkdtemp.
 STAGING_PREFIX = "config_sync."

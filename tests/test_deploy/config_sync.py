@@ -134,7 +134,7 @@ def test_as_bool_spellings(opts):
 # ---------------------------------------------------------------------------
 
 @th.django_unit_test()
-def test_install_lands_at_0600(opts):
+def test_install_lands_at_0640(opts):
     from mojo.deploy import config_sync as cs
 
     root = _tempdir()
@@ -147,9 +147,10 @@ def test_install_lands_at_0600(opts):
         cs.install(staged, dest, None)
 
         mode = os.stat(dest).st_mode & 0o777
-        th.assert_eq(oct(mode), oct(0o600),
-                     f"the installed config must be 0600, got {oct(mode)} — it "
-                     "holds every downstream credential the app has")
+        th.assert_eq(oct(mode), oct(0o640),
+                     f"the installed config must be 0640, got {oct(mode)} — it "
+                     "holds every downstream credential the app has, but the "
+                     "web app reads it via the group bit")
         th.assert_true(not os.path.exists(staged),
                        "the staged file must have been moved, not copied")
     finally:
@@ -190,7 +191,7 @@ def test_install_sets_mode_and_owner_before_replacing(opts):
                        "the destination must not exist yet when replace runs, "
                        "so the config is never visible with the wrong mode")
         th.assert_eq(calls[0][1], cs.FILE_MODE,
-                     f"chmod must use FILE_MODE (0600), got {oct(calls[0][1])}")
+                     f"chmod must use FILE_MODE (0640), got {oct(calls[0][1])}")
         th.assert_true(os.path.exists(dest),
                        "the config must be in place after install()")
     finally:
@@ -259,8 +260,8 @@ def test_sync_installs_when_the_sha_matches(opts):
         with open(target) as handle:
             th.assert_eq(handle.read(), payload,
                          "the published bytes must be what lands on disk")
-        th.assert_eq(os.stat(target).st_mode & 0o777, 0o600,
-                     "sync must install through install(), which means 0600")
+        th.assert_eq(os.stat(target).st_mode & 0o777, 0o640,
+                     "sync must install through install(), which means 0640")
         th.assert_eq(s3.download_file.call_args[0][1], "p/django.conf",
                      "the object key must be <prefix>/<remote name>, with the "
                      "prefix's slashes stripped")
