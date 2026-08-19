@@ -288,7 +288,7 @@ still truncate. The packaged Admin presents `mutation_attempted`,
 
 ## AWS sections and choices
 
-AWS integration adds four section codes to `options`:
+AWS integration adds five section codes to `options`:
 
 | Code | Fixable | Behavior |
 |---|---:|---|
@@ -296,6 +296,41 @@ AWS integration adds four section codes to `options`:
 | `aws_s3` | Yes | Discovers conservative private media-bucket candidates and adopts the exact selected bucket as the private system FileManager. |
 | `aws_email` | Yes | Imports an existing verified SES domain, selects its system sender, and installs only missing shipped templates. |
 | `aws_monitoring` | Yes | Creates or explicitly adopts the owned operations topic, HTTPS subscription, CloudWatch alarm profile, and delivery proof. |
+| `aws_infrastructure` | **No** | Read-only observation of the provisioned VPC/database/cache/node topology, plus the installation's infrastructure mode. |
+
+### `aws_infrastructure`
+
+Its first check is always `aws_infrastructure.mode`, which reports whether this
+portal owns the installation's AWS estate. On an installation running
+`INFRASTRUCTURE_MODE = external` that row is **`warn`**, and its explanation is
+the same sentence the gated endpoints return in their 403 body. The section
+never turns that into a failure and never blocks anything — it is a statement
+about who owns the infrastructure, not a defect. See
+[aws/infrastructure_mode](../aws/infrastructure_mode.md).
+
+The section is **not fixable**, and `fixable` is `false` on every one of its
+rows. "Fix all" cannot repair infrastructure and does not try; converging the
+topology is the provisioning CLI's job, run by an operator with a shell.
+
+Its remaining rows follow the same summary-then-problems shape as the hosting
+sections. `aws_infrastructure.summary` is authoritative — render its counts even
+when the detail rows below it are bounded — and detail rows appear only for
+provisioning steps that are not ready, worst first, with an
+`aws_infrastructure.additional_steps` row when more need attention than fit.
+
+Two states are normal rather than broken, and a client should not present either
+as an error:
+
+- **`pending`, with a single `aws_infrastructure.environment` row.** This
+  installation's infrastructure was not provisioned by django-mojo — there is no
+  `aws/environments/<env>.json` to observe, or several exist and nothing names
+  which one this installation is. No AWS call is made in that state at all.
+- **`aws_s3`, `aws_email`, and `aws_monitoring` unresolved on a freshly
+  provisioned install, while `aws_infrastructure` is already green.** That is
+  by design: the CLI builds the topology, and the media bucket, verified SES
+  domain, and operations topic are adopted afterwards through Fix Setup. An
+  operator seeing three unresolved AWS sections next to one green one has a
+  correct report, not a broken one.
 
 Hosting integration adds four non-fixable readiness sections. Their
 remediation links should open the normal guarded Domains, Certificates,
