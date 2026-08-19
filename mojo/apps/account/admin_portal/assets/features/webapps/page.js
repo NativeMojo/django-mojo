@@ -351,10 +351,12 @@ export async function deploymentsPage(ctx, route = 'deployments', navigate = nul
         state.report.sections?.deployments?.data?.framework_pin?.resolved || null;
     }
     state.observedAt = new Date().toISOString();
-    render();
+    paint();
   }
 
-  const reload = () => load();
+  // Every callback that finishes work re-renders THROUGH a refetch — the old
+  // page's render() did both, and the wizard/inspector callbacks rely on it.
+  const render = () => load();
 
   function deploymentsSection() {
     return state.report?.sections?.deployments || null;
@@ -365,11 +367,11 @@ export async function deploymentsPage(ctx, route = 'deployments', navigate = nul
     if (state.reportError) return [];
     const rows = [
       apiServiceRow(ctx, deploymentsSection(), {
-        onOpen: () => openApiInspector(ctx, deploymentsSection(), reload),
+        onOpen: () => openApiInspector(ctx, deploymentsSection(), render),
       }),
       frameworkRow(ctx, state.framework, {
-        onOpen: () => openFrameworkInspector(ctx, state.framework, reload),
-        onUpdate: () => applyFrameworkUpdate(ctx, state.framework, reload),
+        onOpen: () => openFrameworkInspector(ctx, state.framework, render),
+        onUpdate: () => applyFrameworkUpdate(ctx, state.framework, render),
       }),
     ];
     return rows.filter(Boolean);
@@ -378,8 +380,8 @@ export async function deploymentsPage(ctx, route = 'deployments', navigate = nul
   function appRows() {
     const items = state.apps?.items || [];
     return items.map((item) => webappRow(ctx, item, {
-      onOpen: () => openManage(ctx, item.webapp, reload),
-      onSetAddress: () => changeAddressFor(ctx, item.webapp, reload),
+      onOpen: () => openManage(ctx, item.webapp, render),
+      onSetAddress: () => changeAddressFor(ctx, item.webapp, render),
     }));
   }
 
@@ -402,14 +404,14 @@ export async function deploymentsPage(ctx, route = 'deployments', navigate = nul
       onRefresh: () => load(true)});
   }
 
-  function render() {
+  function paint() {
     const apiRowNodes = apiRows();
     const appRowNodes = appRows();
     const children = [
       pageHeader('Control plane', 'Deployments', 'Everything running on your fleet, and what version it’s at.', [
         ctx.capabilities.manage_webapps ? h('button', {class: 'button primary', onclick: () => startWizard(ctx, render)}, icon('plus'), 'New web app') : null,
       ].filter(Boolean)),
-      hasPendingWizard() ? resumeBanner(ctx, reload) : null,
+      hasPendingWizard() ? resumeBanner(ctx, render) : null,
       headline(apiRowNodes, appRowNodes),
       // Sections fail independently: a platform outage never hides the web
       // apps, and vice versa.
@@ -443,13 +445,13 @@ export async function deploymentsPage(ctx, route = 'deployments', navigate = nul
       const linked = (state.apps.items || []).find((item) => String(item.webapp?.id) === String(webappKey));
       if (linked) {
         linkedInspectorOpened = true;
-        openManage(ctx, linked.webapp, reload);
+        openManage(ctx, linked.webapp, render);
       }
       return;
     }
     if (deployKey && state.report) {
       linkedInspectorOpened = true;
-      openApiInspector(ctx, deploymentsSection(), reload);
+      openApiInspector(ctx, deploymentsSection(), render);
     }
   }
 
