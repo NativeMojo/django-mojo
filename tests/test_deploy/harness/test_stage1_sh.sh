@@ -1,5 +1,5 @@
 #!/bin/bash
-# Harness for the packaged mojo/deploy/scripts/stage1.sh (maestro item 2170).
+# Harness for the packaged mojo/deploy/provision/scripts/stage1.sh (maestro item 2170).
 #
 # WHAT THIS IS ACTUALLY GUARDING: the ORDER of stage 1's steps. Every one of
 # them "works" in isolation and three of them are silently wrong in the wrong
@@ -208,7 +208,7 @@ setup_stubs
 ( env -u DJANGO_SETTINGS_MODULE PATH="$STUB:$PATH" PROJ_PATH="$PROJ" \
     BOOTSTRAP_CONF="$PROJ/var/bootstrap.conf" STAGE1_LOG="$TMP/raw.log" \
     CW_AGENT_ETC="$CWETC" CALLLOG="$CALLLOG" \
-    bash "$REPO/mojo/deploy/scripts/stage1.sh" ); rc=$?
+    bash "$REPO/mojo/deploy/provision/scripts/stage1.sh" ); rc=$?
 if [ "$rc" -ne 0 ]; then ok "the packaged (unsubstituted) script exits non-zero"; else fail "the packaged script ran with an unsubstituted version pin"; fi
 assert_has "$TMP/raw.log" "never substituted" "and says why"
 assert_lacks "$CALLLOG" "CMD pip" "nothing was installed on that path"

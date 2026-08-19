@@ -374,12 +374,16 @@ def scripts_dir():
     allowlist. That tuple exists so a project's sudo-executed shim can resolve
     exactly two scripts and nothing else; stage1.sh is downloaded and run by a
     booting node, never located by a shim, so widening the allowlist for it
-    would give away the guard for no benefit.
+    would give away the guard for no benefit. The files live under the
+    provision package, not `mojo/deploy/scripts/` — that directory's inventory
+    IS the shim contract, pinned by a test, and these payloads are not part
+    of it.
     """
-    import mojo.deploy
+    import mojo.deploy.provision
 
     return os.path.join(
-        os.path.dirname(os.path.abspath(mojo.deploy.__file__)), "scripts")
+        os.path.dirname(os.path.abspath(mojo.deploy.provision.__file__)),
+        "scripts")
 
 
 def django_mojo_version():

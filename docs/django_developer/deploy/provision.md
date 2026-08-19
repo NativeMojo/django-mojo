@@ -368,7 +368,7 @@ enforced in code. It sets the hostname, makes swap, writes
 on the box and echoed back by `describe-instance-attribute` to anyone with EC2
 read access. The node reads S3 with its instance role.
 
-**Stage 1** is `mojo/deploy/scripts/stage1.sh`, packaged in the wheel,
+**Stage 1** is `mojo/deploy/provision/scripts/stage1.sh`, packaged in the wheel,
 published to the config bucket with the version pin substituted, and logged to
 `/var/log/mojo-stage1.log`. Its order is the whole point:
 

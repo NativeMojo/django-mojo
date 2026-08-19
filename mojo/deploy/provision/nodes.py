@@ -123,7 +123,7 @@ def stage0_user_data(spec, hostname):
             f"stage-0 user data is {len(script.encode('utf-8'))} bytes, past "
             f"this package's own {USER_DATA_BUDGET}-byte budget (EC2's hard "
             f"limit is {USER_DATA_LIMIT}). Move whatever grew into "
-            f"mojo/deploy/scripts/stage1.sh, which is downloaded, not embedded")
+            f"mojo/deploy/provision/scripts/stage1.sh, which is downloaded, not embedded")
     return script
 
 
