@@ -1194,7 +1194,10 @@ def summary_for(web_app):
     v1 is additive-only. Item 2099 added, without changing any existing
     meaning: `address.domain`, top-level `current_release`, and
     `latest_deployment` — the three facts a day-2 management view needs to
-    answer "is my app live and serving X?" in one call.
+    answer "is my app live and serving X?" in one call. Item 2158 added
+    `address.certificate` ({status, not_after}; null only when there is no
+    vhost) so the same view can answer "is SSL healthy?" without a second
+    read — Vhost.certificate is a non-null FK.
     """
     from mojo.apps.edge.models import WebAppDeployment
     from mojo.apps.edge.services import webapp_keys
@@ -1205,6 +1208,7 @@ def summary_for(web_app):
     vhost = web_app.vhost if web_app.vhost_id else None
     hostname = vhost.server_name if vhost else None
     domain = vhost.domain if vhost else None
+    certificate = vhost.certificate if vhost and vhost.certificate_id else None
     release = web_app.current_release
     deployment = WebAppDeployment.objects.filter(webapp=web_app).first()
     return {
@@ -1222,6 +1226,11 @@ def summary_for(web_app):
             "https_origin": f"https://{hostname}" if hostname else None,
             "domain": ({"id": domain.pk, "name": domain.name,
                         "provider": domain.provider} if domain else None),
+            "certificate": ({
+                "status": certificate.status,
+                "not_after": (certificate.not_after.isoformat()
+                              if certificate.not_after else None),
+            } if certificate else None),
         },
         "current_release": ({
             "id": release.pk, "version": release.version,

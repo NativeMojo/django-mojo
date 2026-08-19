@@ -179,3 +179,97 @@ def on_webapp_summary(request):
     WebApp.rest_check_permission_or_raise(
         request, ["VIEW_PERMS", "SAVE_PERMS"], web_app)
     return _webapp_onboarding.summary_for(web_app)
+
+
+SUMMARIES_LIMIT = 50
+
+
+@md.GET("webapp/summaries")
+@md.denies_key_backed_session()
+@md.custom_security("interactive user; WebApp VIEW_PERMS list-path parity, "
+                    "including the unconditional request.group intersection")
+def on_webapp_summaries(request):
+    """Bounded slim row projection for every app this caller may LIST.
+
+    Serves the merged Deployments lane one item per app — the summary-v1
+    subset a list row needs (address + certificate, current release, latest
+    deployment) — at flat query cost, where per-app ``summary_for()`` would be
+    ~4 queries each. The full summary stays the drill-in's contract.
+
+    Visibility copies BOTH halves of the real list path:
+
+    1. The permission branches: a global ``VIEW_PERMS`` holder sees all rows;
+       otherwise groups where the member holds a VIEW perm; otherwise denied.
+    2. The **unconditional** ``request.group`` intersection — the twin of
+       ``on_rest_list``'s group filter. The dispatcher binds ``request.group``
+       from caller input on every request, which flips
+       ``rest_check_permission`` into its member branch; without this
+       intersection a member-level grant would read every tenant's rows.
+
+    Invariant: returns rows for exactly the ids ``GET /api/edge/webapp`` would
+    list for the same request.
+    """
+    from mojo.apps.edge.models import WebAppDeployment
+
+    _human(request)
+    view_perms = WebApp.get_rest_meta_prop("VIEW_PERMS", [])
+    if WebApp.rest_check_permission(request, "VIEW_PERMS"):
+        queryset = WebApp.objects.all()
+    else:
+        groups = request.user.get_groups_with_permission(view_perms)
+        if not groups:
+            raise me.PermissionDeniedException(
+                "WebApp visibility is not granted globally or in any group")
+        queryset = WebApp.objects.filter(group__in=groups)
+    if request.group is not None:
+        queryset = queryset.filter(group=request.group)
+
+    rows = list(queryset.select_related(
+        "vhost__domain", "vhost__certificate", "current_release",
+        "group").order_by("slug")[:SUMMARIES_LIMIT + 1])
+    truncated = len(rows) > SUMMARIES_LIMIT
+    rows = rows[:SUMMARIES_LIMIT]
+    # One batched latest-deployment read (Postgres DISTINCT ON), matching
+    # summary_for's `.first()` "latest" semantics (-created default ordering).
+    latest = {
+        deployment.webapp_id: deployment
+        for deployment in WebAppDeployment.objects.filter(
+            webapp__in=rows).order_by("webapp_id", "-created").distinct(
+                "webapp_id")
+    }
+
+    items = []
+    for row in rows:
+        vhost = row.vhost if row.vhost_id else None
+        certificate = vhost.certificate if vhost and vhost.certificate_id else None
+        release = row.current_release
+        deployment = latest.get(row.pk)
+        items.append({
+            "webapp": {
+                "id": row.pk, "slug": row.slug,
+                "display_name": row.display_name,
+                "environment": row.environment,
+                "deployment_ref": row.deployment_ref,
+            },
+            "address": ({
+                "hostname": vhost.server_name,
+                "certificate": ({
+                    "status": certificate.status,
+                    "not_after": (certificate.not_after.isoformat()
+                                  if certificate.not_after else None),
+                } if certificate else None),
+            } if vhost else None),
+            "current_release": ({
+                "id": release.pk, "version": release.version,
+                "status": release.status,
+                "created": release.created.isoformat(),
+            } if release else None),
+            "latest_deployment": ({
+                "id": deployment.pk, "status": deployment.status,
+                "created": deployment.created.isoformat(),
+                "finished": (deployment.finished.isoformat()
+                             if deployment.finished else None),
+            } if deployment else None),
+        })
+    return {"schema_version": 1, "items": items, "count": len(items),
+            "limit": SUMMARIES_LIMIT, "truncated": truncated}

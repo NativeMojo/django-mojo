@@ -364,7 +364,12 @@ def _webapp_collector_status(summaries, truncated=False):
 def _webapp_evidence():
     from mojo.apps.edge.models import WebApp, WebAppOnboardingOperation
     from mojo.apps.edge.services import webapp_onboarding
-    rows = list(WebApp.objects.select_related("vhost", "api_key").all()[:WEBAPP_LIMIT + 1])
+    # vhost__certificate/vhost__domain ride along because summary_for reads
+    # them per app (item 2158's additive address.certificate) — without the
+    # join this budgeted collector would pay +1 query per app.
+    rows = list(WebApp.objects.select_related(
+        "vhost", "vhost__certificate", "vhost__domain",
+        "api_key").all()[:WEBAPP_LIMIT + 1])
     truncated = len(rows) > WEBAPP_LIMIT
     rows = rows[:WEBAPP_LIMIT]
     operations = WebAppOnboardingOperation.objects.exclude(
