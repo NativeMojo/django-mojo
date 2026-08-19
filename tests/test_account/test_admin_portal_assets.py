@@ -26,21 +26,25 @@ def test_modular_shell_contract(opts):
         assert f"./{name}/feature.js" in registry
     assert "[dashboard, webapps, advanced, people, activity, platform, settings]" in registry, \
         "primary navigation does not follow the approved operator journey"
-    assert "routes: ['platform', 'setup', 'metrics', 'maintenance']" in platform, \
-        "Platform grew or lost a route — deployments belongs to the merged lane"
+    assert "routes: ['setup', 'metrics', 'maintenance']" in platform, \
+        "Platform grew or lost a route — health dissolved into the Dashboard, " \
+        "deployments belongs to the merged lane"
     assert "routes: ['deployments', 'webapps']" in webapps, \
         "the merged Deployments lane does not own both routes"
     assert "label: 'Deployments'" in webapps, \
         "the lane is not labeled Deployments in primary navigation"
     assert "ctx.features?.platform?.capabilities?.view === true" in webapps, \
         "platform viewers lost their route to deploy history"
-    assert "setupPage(ctx, signal)" in platform and "platformPage(ctx, route)" in platform
-    assert "const ROUTES = ['advanced', 'domains', 'credentials', 'dns', 'certificates'" in advanced
+    assert "setupPage(ctx, signal)" in platform and "platformPage" not in platform, \
+        "Setup lost its render call, or the dissolved Platform page came back"
+    assert "const ROUTES = ['domains', 'credentials', 'dns', 'certificates'" in advanced, \
+        "Advanced kept its raw-evidence route or lost a hosting route"
     assert "route: 'domains'" in advanced and "label: 'Domains & DNS'" in advanced, \
         "the permanent Domains & DNS control is missing from the sidebar"
     assert "ctx.capabilities.network || ctx.capabilities.manage_network" in advanced, \
         "Domains & DNS sidebar visibility is not permission-gated"
-    assert "networkPage(ctx, route)" in advanced and "advancedControlPage(ctx)" in advanced
+    assert "networkPage(ctx, route)" in advanced and "advancedControlPage" not in advanced, \
+        "Advanced no longer renders hosting only — the raw-evidence page is back"
     assert "src: 'assets/mojo-logo.png'" in app and "brand-mark', text: 'M'" not in app, \
         "Admin shell did not replace the placeholder badge with the Mojo logo"
     assert '<link rel="icon" type="image/png" href="assets/mojo-logo.png">' in index, \
@@ -93,6 +97,72 @@ def test_row_component_contract(opts):
             f"the rebuilt Dashboard still carries {jargon!r}"
     assert '"down"' in preview or "'down'" in preview, \
         "the visual preview cannot render a proven outage"
+
+
+@th.django_unit_test("every Dashboard row's evidence is one deliberate click away")
+def test_dashboard_drilldown_contract(opts):
+    import json
+    from mojo.apps.account.services import admin_assets
+
+    manifest = json.loads(
+        (ASSETS / "features/dashboard/manifest.json").read_text())
+    inspectors = (ASSETS / "features/dashboard/inspectors.js").read_text()
+    dashboard = (ASSETS / "features/dashboard/page.js").read_text()
+    assets = admin_assets.load_manifest()
+
+    assert "inspectors.js" in manifest["assets"], \
+        "the drill-in module is not owned by the dashboard feature manifest"
+    assert "assets/features/dashboard/inspectors.js" in assets, \
+        "inspectors.js is not a declared package asset"
+
+    assert "openInspector" in inspectors and "'../../components/overlays.js'" in inspectors, \
+        "the drill-ins do not use the shared overlay layer"
+    assert "JSON.stringify(" in inspectors and "Technical details" in inspectors, \
+        "the exact collector payload is not reachable behind a disclosure"
+
+    # Both extra reads are narrowed and paid only when the drill-in is opened.
+    assert "sections=fleet" in inspectors and "sections=security" in inspectors, \
+        "the drill-ins pay the full platform overview instead of a sections slice"
+    assert "capabilities?.view !== true" in inspectors, \
+        "the edge runner roster is not gated on platform view"
+    assert "capabilities?.security !== true" in inspectors, \
+        "security posture is not gated on the platform-security tier"
+
+    for name in ("feature.js", "page.js", "inspectors.js", "styles.css"):
+        text = (ASSETS / f"features/dashboard/{name}").read_text()
+        assert "innerHTML" not in text, \
+            f"the Dashboard writes markup instead of text nodes in {name}"
+        assert "checks passing" not in text, \
+            f"{name} counts checks at the operator instead of naming the failure"
+
+    assert "jobsRow" in dashboard and "SANITY_COPY" in dashboard, \
+        "the Dashboard lost the jobs row or the plain-words sanity copy"
+    assert "failed_recent" in dashboard, \
+        "the jobs row colours itself from the all-time ledger, not the last hour"
+
+
+@th.django_unit_test("System Setup is a badged sidebar destination, ordered below daily work")
+def test_system_setup_nav_contract(opts):
+    platform = (ASSETS / "features/platform/feature.js").read_text()
+    registry = (ASSETS / "features/registry.js").read_text()
+    app = (ASSETS / "app.js").read_text()
+    styles = (ASSETS / "admin.css").read_text()
+
+    assert "route: 'setup'" in platform and "label: 'System Setup'" in platform, \
+        "System Setup is not a primary navigation destination"
+    assert "section: 'System'" in platform and "order: 100" in platform, \
+        "System Setup is not pinned below the Control plane entries"
+    assert "badge: capabilities.setup_attention === true" in platform, \
+        "the Setup entry's badge is not bound to the bootstrap attention flag"
+    assert "capabilities.setup" in platform, \
+        "the Setup entry is not gated on the superuser-only capability"
+
+    assert "(left.order || 0) - (right.order || 0)" in registry, \
+        "the sidebar no longer honours an entry's declared order"
+    assert "'nav-badge'" in app and "'aria-label': 'Needs attention'" in app, \
+        "the shell does not render an accessible attention badge"
+    assert ".nav-badge{" in styles, \
+        "the attention badge has no styling contract"
 
 
 @th.django_unit_test("the Metrics lane is capability-gated, degradation-aware, and markup-free")
@@ -414,8 +484,10 @@ def test_webapp_onboarding_asset_contract(opts):
     # --- unchanged platform contracts still hold ---
     assert "Add domains and manage the public records" not in platform, \
         "Platform duplicates the first-class Domains & DNS destination"
-    assert "evidenceSummary" in platform and "View raw evidence" in platform, \
-        "Platform still exposes raw evidence instead of a professional summary-first card"
+    # The evidence cards are gone entirely: raw payloads now live in the
+    # Dashboard drill-in disclosures, one row at a time.
+    assert "evidenceSummary" not in platform and "View raw evidence" not in platform, \
+        "the dissolved Platform evidence grid came back"
     assert "Configure BASE_URL" in platform and "check.code === 'django.base_url'" in platform, \
         "Setup does not attach BASE_URL repair to the exact failing check"
     assert "operatorChecks" in platform and "django.static_directories" in platform \

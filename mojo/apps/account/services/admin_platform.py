@@ -27,6 +27,9 @@ WEBAPP_COLLECTOR_DEADLINE = 2.5
 INCIDENT_TERMINAL_STATUSES = ("ignored", "resolved", "closed")
 # A drift finding older than this is not evidence about the engine running now.
 VERSION_DRIFT_MAX_AGE = timedelta(days=3)
+# A job that failed inside this window is happening now. The all-time failed
+# count is a ledger, not a symptom — it never colours the Dashboard row.
+JOBS_FAILURE_WINDOW = timedelta(hours=1)
 LOAD_BALANCER_CACHE_KEY = "mojo:admin:dashboard:elbv2"
 LOAD_BALANCER_CACHE_TTL = 60
 
@@ -121,9 +124,10 @@ def _section_map(request, specs):
             output[name] = _envelope("unauthorized", reason="permission_required")
     if not permitted:
         return output
-    # At most two waves for today's Platform roster. Each _collect response is
-    # bounded; its provider work is independently bounded by SDK/RPC timeouts.
-    with ThreadPoolExecutor(max_workers=min(8, len(permitted))) as pool:
+    # One wave for both of today's rosters — Platform's ten sections and the
+    # Dashboard's ten platform-tier sources. Each _collect response is bounded;
+    # its provider work is independently bounded by SDK/RPC timeouts.
+    with ThreadPoolExecutor(max_workers=min(12, len(permitted))) as pool:
         futures = {name: pool.submit(_collect, collector)
                    for name, collector in permitted.items()}
         for name, future in futures.items():
@@ -192,14 +196,20 @@ def _jobs():
             "scheduler_active": bool(scheduler), "jobs": counts}
 
 
-def _sanity():
+def _sanity(redis_client=None):
     from mojo.apps.account.services import system_readiness
     from mojo.apps.edge.services import sanity
     local_target = system_readiness.trusted_local_api_target()
-    results = sanity.run({
+    options = {
         "url": local_target["url"],
         "timeout": 1.0, "retries": 1, "delay": 0,
-    })
+    }
+    # The checks otherwise reach for the process-wide Redis client and its
+    # 60-second socket timeout. Callers on a response budget pass a bounded
+    # one; Platform keeps today's behaviour by passing nothing.
+    if redis_client is not None:
+        options["redis_client"] = redis_client
+    results = sanity.run(options)
     rows = [{"name": row.get("name"), "ok": bool(row.get("ok"))}
             for row in results[:16]]
     return {"_collector_status": "healthy" if rows and all(
@@ -551,6 +561,64 @@ def _dashboard_certificates():
     return {"_collector_status": "unhealthy" if data["failing"] else "healthy",
             "_collector_reason": "certificate_failed" if data["failing"] else None,
             **data}
+
+
+def _recent_job_failures():
+    """Failures inside the window. A seam, so the row's logic is testable."""
+    from mojo.apps.jobs.models import Job
+    # status and modified are both indexed, so this is one bounded count.
+    return Job.objects.filter(
+        status="failed",
+        modified__gte=timezone.now() - JOBS_FAILURE_WINDOW).count()
+
+
+def _dashboard_jobs():
+    """Queue depth, plus failures inside the last hour — never an outage.
+
+    ``_jobs`` reports a stalled scheduler as unhealthy, which is right for the
+    Platform evidence card. Here it is deliberately downgraded to amber: work
+    piling up is not proof that customers cannot use the system, and this row
+    is not an availability source.
+
+    The all-time ``failed`` count stays in the payload for the drill-in but
+    never colours the row — on a long-lived queue it is permanently large.
+    """
+    data = dict(_jobs())
+    data["failed_recent"] = _recent_job_failures()
+    if not data.get("scheduler_active"):
+        status, reason = "degraded", "scheduler_inactive"
+    elif data["failed_recent"]:
+        status, reason = "degraded", "recent_failures"
+    else:
+        status, reason = "healthy", None
+    data["_collector_status"] = status
+    data["_collector_reason"] = reason
+    return data
+
+
+def _dashboard_sanity():
+    """The core node checks this node can actually prove about itself.
+
+    Two deliberate narrowings versus ``_sanity``:
+
+    * ``local request`` is dropped unless the operator configured the local
+      target explicitly. An inferred target that does not answer is evidence
+      about the inference, not about this node — the same suppression the
+      Setup report already applies (``operatorChecks``).
+    * A failing check is amber, never red. These checks are cheap local
+      liveness probes, and the Dashboard's red is reserved for proven
+      customer-facing failure.
+    """
+    with _redis_client() as redis:
+        data = dict(_sanity(redis_client=redis))
+    if data.get("local_target_source") != "configured_static":
+        data["checks"] = [row for row in data.get("checks") or []
+                          if row.get("name") != "local request"]
+    checks = data.get("checks") or []
+    healthy = bool(checks) and all(row["ok"] for row in checks)
+    data["_collector_status"] = "healthy" if healthy else "degraded"
+    data["_collector_reason"] = None if healthy else "sanity_check_failed"
+    return data
 
 
 def _newest_drift_event():
@@ -937,7 +1005,10 @@ def dashboard_overview(request, refresh=False):
     """Return the small, independently permissioned Admin landing matrix.
 
     This intentionally never calls System Setup readiness. Setup is a
-    superuser-only Platform workflow, not an implicit Dashboard dependency.
+    superuser-only workflow, not an implicit Dashboard dependency;
+    ``_dashboard_sanity`` adds only the bounded node checks (one local HTTP
+    probe with a 1s budget, plus a bounded Redis client), never the readiness
+    report's provider fan-out.
     """
     platform = ("view_platform", "manage_platform", "admin")
     security = ("view_security", "manage_security", "security", "admin")
@@ -950,6 +1021,8 @@ def dashboard_overview(request, refresh=False):
         "public_api": (platform, _api),
         "framework": (platform, lambda: _framework(refresh)),
         "last_deployment": (platform, _dashboard_deployment),
+        "jobs": (platform, _dashboard_jobs),
+        "sanity": (platform, _dashboard_sanity),
     })
     raw["incidents"] = _attention(request, "incidents", security)
     raw["tickets"] = _attention(request, "tickets", security)

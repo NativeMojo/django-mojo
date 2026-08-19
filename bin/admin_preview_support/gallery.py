@@ -14,7 +14,9 @@ RESET_ONLY = (maintenance,)
 
 def bootstrap(groups, membership_groups=None, can_create_webapp_group=True):
     capabilities = {
-        "setup": True, "people": True, "groups": True,
+        # The readiness fixture deliberately fails django.base_url, so the
+        # honest bootstrap state is "System Setup wants attention".
+        "setup": True, "setup_attention": True, "people": True, "groups": True,
         "manage_users": True, "manage_groups": True,
         "manage_api_keys": True, "view_logins": True,
         "view_logs": True, "view_events": True,

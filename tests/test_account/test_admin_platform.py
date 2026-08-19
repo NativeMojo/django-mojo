@@ -238,14 +238,29 @@ def test_platform_feature_package(opts):
     }
     assert required <= set(assets)
     platform = (ROOT / "mojo/apps/account/admin_portal/assets/features/platform/feature.js").read_text()
+    platform_page = (ROOT / "mojo/apps/account/admin_portal/assets/features/platform/page.js").read_text()
     webapps = (ROOT / "mojo/apps/account/admin_portal/assets/features/webapps/feature.js").read_text()
     advanced = (ROOT / "mojo/apps/account/admin_portal/assets/features/advanced/feature.js").read_text()
+    advanced_page = (ROOT / "mojo/apps/account/admin_portal/assets/features/advanced/page.js").read_text()
     preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
-    assert "deployments" not in platform and "platformPage" in platform, \
+    assert "routes: ['setup', 'metrics', 'maintenance']" in platform, \
+        "Platform is no longer exactly Setup, Metrics and Maintenance"
+    assert "platformPage" not in platform and "platformPage" not in platform_page, \
+        "the dissolved Platform health page came back"
+    assert "platformDestinations" not in platform_page, \
+        "Platform still renders a destination grid instead of primary navigation"
+    assert "deployments" not in platform, \
         "the deployments route crept back into the Platform descriptor"
     assert "deployments" in webapps, \
         "the merged Deployments lane does not claim the deployments route"
-    assert "advancedControlPage" in advanced and "domains" in advanced
+    # `id: 'advanced'` stays — the feature still owns the hosting routes. What
+    # must be gone is the route itself and the page it rendered.
+    assert "const ROUTES = ['domains'," in advanced \
+        and "advancedControlPage" not in advanced \
+        and "advancedControlPage" not in advanced_page, \
+        "the raw Advanced diagnostics destination came back"
+    assert "domains" in advanced, \
+        "Advanced lost the Domains & DNS destination it still owns"
     # Named individually rather than as one contiguous string: the import list
     # is alphabetical, so a new sibling provider used to break this assertion
     # without breaking anything it was protecting.
@@ -477,7 +492,8 @@ def _run_dashboard(request, attention=None, **overrides):
         "_load_balancer": healthy, "_compute": healthy,
         "_dashboard_database": healthy, "_dashboard_cache": healthy,
         "_dashboard_certificates": healthy, "_api": healthy,
-        "_framework": healthy,
+        "_framework": healthy, "_dashboard_jobs": healthy,
+        "_dashboard_sanity": healthy,
         "_dashboard_deployment": {"_collector_status": "healthy",
                                   "items": [{"id": "1", "sha": "a" * 40,
                                              "status": "converged"}]},
@@ -582,6 +598,193 @@ def test_dashboard_denied_source_degrades_one_row(opts):
                  "a denial was treated as a proven failure")
     th.assert_eq(report["availability"]["down"], [],
                  "a denied source was listed as down")
+
+
+def _jobs_evidence(scheduler=True, pending=1, running=0, failed=11701):
+    """What the bare _jobs collector returns, stalled or not."""
+    return {"_collector_status": "healthy" if scheduler else "unhealthy",
+            "scheduler_active": scheduler,
+            "jobs": {"pending": pending, "running": running, "failed": failed}}
+
+
+@th.django_unit_test("a stalled scheduler or a fresh failure is amber, and a big ledger is not")
+def test_dashboard_jobs_row_states(opts):
+    from mojo.apps.account.services import admin_platform
+
+    def run(scheduler=True, recent=0, failed=11701):
+        with mock.patch.object(admin_platform, "_jobs",
+                               return_value=_jobs_evidence(scheduler, failed=failed)), \
+                mock.patch.object(admin_platform, "_recent_job_failures",
+                                  return_value=recent):
+            return admin_platform._dashboard_jobs()
+
+    quiet = run()
+    th.assert_eq(quiet["_collector_status"], "healthy",
+                 f"a running scheduler with no recent failure is green: {quiet!r}")
+    th.assert_eq(quiet["_collector_reason"], None,
+                 f"a healthy queue must name no reason: {quiet!r}")
+    th.assert_eq(quiet["failed_recent"], 0,
+                 f"the one-hour window is missing from the payload: {quiet!r}")
+    th.assert_eq(quiet["jobs"]["failed"], 11701,
+                 "the all-time ledger must survive for the drill-in")
+
+    stalled = run(scheduler=False)
+    th.assert_eq(stalled["_collector_status"], "degraded",
+                 f"a stalled scheduler must be amber, never red: {stalled!r}")
+    th.assert_eq(stalled["_collector_reason"], "scheduler_inactive",
+                 f"the stalled scheduler is not named: {stalled!r}")
+
+    failing = run(recent=4)
+    th.assert_eq(failing["_collector_status"], "degraded",
+                 f"failures inside the window must be amber: {failing!r}")
+    th.assert_eq(failing["_collector_reason"], "recent_failures",
+                 f"the recent failures are not named: {failing!r}")
+    th.assert_eq(failing["failed_recent"], 4,
+                 f"the window count did not reach the payload: {failing!r}")
+
+    # A stalled scheduler is what _jobs itself calls unhealthy. The Dashboard
+    # deliberately downgrades it: a backed-up queue is not an outage.
+    for value in (quiet, stalled, failing, run(scheduler=False, recent=9)):
+        th.assert_true(value["_collector_status"] != "unhealthy",
+                       f"the jobs row claimed a proven outage: {value!r}")
+
+
+def _sanity_rows(migrations=True, local=True):
+    return {"_collector_status": "healthy", "checks": [
+        {"name": "django apps", "ok": True}, {"name": "database", "ok": True},
+        {"name": "migrations", "ok": migrations}, {"name": "redis", "ok": True},
+        {"name": "local request", "ok": local}],
+        "local_target_source": "configured_static",
+        "migration_check": migrations}
+
+
+@th.django_unit_test("an inferred local-request failure never reaches the Dashboard")
+def test_dashboard_sanity_suppresses_unproven_local_request(opts):
+    from mojo.apps.account.services import admin_platform
+
+    def run(source, **rows):
+        value = _sanity_rows(**rows)
+        value["local_target_source"] = source
+        with mock.patch.object(admin_platform, "_redis_client"), \
+                mock.patch.object(admin_platform, "_sanity", return_value=value):
+            return admin_platform._dashboard_sanity()
+
+    inferred = run("default_80", local=False)
+    names = [row["name"] for row in inferred["checks"]]
+    th.assert_true("local request" not in names,
+                   f"an unproven local target was still shown as a check: {names!r}")
+    th.assert_eq(inferred["_collector_status"], "healthy",
+                 f"a check nobody could prove reddened the row: {inferred!r}")
+
+    configured = run("configured_static", local=False)
+    names = [row["name"] for row in configured["checks"]]
+    th.assert_true("local request" in names,
+                   f"a configured local target lost its check: {names!r}")
+    th.assert_eq(configured["_collector_status"], "degraded",
+                 f"a configured local target that failed stayed green: {configured!r}")
+
+    failing = run("default_80", migrations=False)
+    th.assert_eq(failing["_collector_status"], "degraded",
+                 f"a failing migration check must be amber: {failing!r}")
+    th.assert_true(failing["_collector_status"] != "unhealthy",
+                   "a node sanity check claimed a proven outage")
+    th.assert_eq(failing["migration_check"], False,
+                 f"the projection dropped the migration fact: {failing!r}")
+
+
+@th.django_unit_test("the Dashboard's sanity checks run against a bounded Redis client")
+def test_dashboard_sanity_uses_bounded_redis(opts):
+    from mojo.apps.account.services import admin_platform
+    from mojo.apps.edge.services import sanity
+
+    bounded = mock.Mock(name="bounded-redis")
+    seen = {}
+
+    def record(options=None, **kwargs):
+        seen["options"] = dict(options or {})
+        return [{"name": "database", "ok": True, "detail": "ready"}]
+
+    with mock.patch("mojo.helpers.redis.get_bounded_connection",
+                    return_value=bounded) as factory, \
+            mock.patch.object(sanity, "run", side_effect=record):
+        admin_platform._dashboard_sanity()
+
+    th.assert_true(factory.called,
+                   "the Dashboard's sanity read used the process-wide Redis client")
+    budget = factory.call_args.kwargs.get("timeout")
+    th.assert_true(budget is not None and budget <= 1.0,
+                   f"the bounded client was built without a small budget: {budget!r}")
+    th.assert_true(seen["options"].get("redis_client") is bounded,
+                   f"the bounded client never reached the check: {seen['options']!r}")
+    th.assert_true(bounded.close.called,
+                   "the bounded client was left open after the collector returned")
+
+    # And the seam itself: an injected client is what gets pinged.
+    stub = mock.Mock()
+    sanity.check_redis({"redis_client": stub})
+    th.assert_true(stub.ping.called,
+                   "check_redis ignored the injected client and reached for its own")
+
+
+@th.django_unit_test("jobs and sanity can never redden the availability headline")
+def test_dashboard_jobs_and_sanity_never_redden_availability(opts):
+    from mojo.apps.account.services import admin_platform
+
+    th.assert_eq(admin_platform.AVAILABILITY_SOURCES,
+                 ("load_balancer", "compute", "database", "cache", "certificates",
+                  "public_api"),
+                 "the availability roster changed — a new source can now redden "
+                 "the page")
+    for name in ("jobs", "sanity"):
+        th.assert_true(name not in admin_platform.AVAILABILITY_SOURCES,
+                       f"{name} became an availability source")
+
+    report = _run_dashboard(
+        _operator(),
+        _dashboard_jobs={"_collector_status": "degraded",
+                         "_collector_reason": "scheduler_inactive",
+                         "scheduler_active": False, "failed_recent": 4,
+                         "jobs": {"pending": 37, "running": 0, "failed": 11705}},
+        _dashboard_sanity={"_collector_status": "degraded",
+                           "_collector_reason": "sanity_check_failed",
+                           "checks": [{"name": "migrations", "ok": False}],
+                           "local_target_source": "configured_static"})
+
+    th.assert_eq(report["availability"]["state"], "ok",
+                 f"a stalled queue or failing check was read as an outage: "
+                 f"{report['availability']!r}")
+    th.assert_eq(report["availability"]["down"], [],
+                 "jobs or sanity put a source on the down list")
+    for name in ("jobs", "sanity"):
+        th.assert_eq(report["sources"][name]["status"], "degraded",
+                     f"the {name} row lost its own amber state")
+
+
+@th.django_unit_test("the Platform overview payload is unchanged by the Dashboard's wrappers")
+def test_platform_overview_payload_unchanged(opts):
+    from mojo.apps.account.services import admin_platform
+    from mojo.apps.edge.services import sanity
+
+    with mock.patch.object(admin_platform, "_redis_client"):
+        jobs = admin_platform._jobs()
+    th.assert_eq(set(jobs), {"_collector_status", "scheduler_active", "jobs"},
+                 f"the Platform jobs section grew or lost a key: {set(jobs)!r}")
+    th.assert_true("failed_recent" not in jobs,
+                   "the Dashboard's one-hour window leaked into Platform's payload")
+
+    seen = {}
+
+    def record(options=None, **kwargs):
+        seen["options"] = dict(options or {})
+        return [{"name": "database", "ok": True, "detail": "ready"}]
+
+    with mock.patch.object(sanity, "run", side_effect=record):
+        value = admin_platform._sanity()
+    th.assert_eq(set(value), {"_collector_status", "checks", "local_target_source",
+                              "migration_check"},
+                 f"the Platform sanity section grew or lost a key: {set(value)!r}")
+    th.assert_true("redis_client" not in seen["options"],
+                   "the bare Platform collector started injecting a client")
 
 
 @th.django_unit_test("engine drift reaches the RDS row, and stops being relevant on its own")

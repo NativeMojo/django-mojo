@@ -1,7 +1,17 @@
-# Platform and Advanced APIs
+# System Setup and platform evidence APIs
 
 These built-in Admin routes are global operator surfaces, not substitutes for
 tenant-scoped DNS, WebApp, or model REST APIs.
+
+The packaged portal no longer has a Platform page or an Advanced diagnostics
+page. `/api/account/admin/platform` is read **only through `?sections=`** — the
+Deployments lane sends `?sections=deployments,api`, and two Dashboard drill-ins
+send `?sections=fleet` and `?sections=security` when they are opened.
+`/api/account/admin/advanced` is unchanged and still served, but nothing in the
+packaged portal calls it: `view_advanced`, `view_advanced_inventory`, and
+`view_advanced_security` are API-only grants today, as is the `registrar_vs_dns`
+evidence inside `webapps.data` (pending the Domains & DNS review). Everything
+below is the contract for your own client.
 
 | Method | Route | Authority |
 |---|---|---|
@@ -37,10 +47,15 @@ still receive `unauthorized` for a narrower section.
 
 `GET /api/account/admin/platform` accepts an optional `?sections=` comma-
 separated allowlist, for example `?sections=deployments,api` (what the merged
-Admin Deployments lane sends). It narrows work, not authority — each section
-keeps its own permission check. Unknown names are ignored; an absent or empty
-parameter returns the full roster above; a parameter naming no known section
-returns an empty `sections` object.
+Admin Deployments lane sends), `?sections=fleet`, or `?sections=security` (what
+the Dashboard drill-ins send when opened). It narrows work, not authority —
+each section keeps its own permission check. Unknown names are ignored; an
+absent or empty parameter returns the full roster above; a parameter naming no
+known section returns an empty `sections` object.
+
+Prefer it. A bare call pays the whole roster, including the per-app WebApp
+summary fan-out and its HTTPS probes; ask for the sections your view actually
+renders.
 
 `sanity.data.local_target_source` is one of `configured_static`,
 `request_server_port`, or `default_80`; no raw local setting is serialized.

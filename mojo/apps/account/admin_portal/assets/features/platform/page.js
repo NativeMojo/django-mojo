@@ -1,7 +1,7 @@
 import {api, apiOnce, badge, formatDate, h, icon, listData, pageHeader, statusTone} from '../../core.js';
 import {openBusy} from '../../components/overlays.js';
-import {activityHref, decodeRouteState, restoreReturnLocation, returnLocation, routeHref} from '../../components/routes.js';
-import {errorState, loadingState, permissionDeniedState} from '../../components/views.js';
+import {decodeRouteState, restoreReturnLocation, routeHref} from '../../components/routes.js';
+import {errorState, loadingState} from '../../components/views.js';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
 const DEEP_LINKS = {
@@ -324,99 +324,5 @@ export async function setupPage(ctx, signal = null) {
     }
   } catch (error) { root.replaceChildren(errorState(error)); }
   root.dispose = () => { cancelled = true; };
-  return root;
-}
-
-function evidenceSummary(name, data) {
-  if (name === 'api') return data.configured
-    ? [`django-mojo ${data.probe?.version || data.django_mojo_version || 'observed'}`, data.public_origin || 'Public API configured']
-    : ['Public API not configured', 'Set the protected BASE_URL in System Setup.'];
-  if (name === 'fleet') {
-    const rows = data.runners || [];
-    return [`${rows.length} live edge runner${rows.length === 1 ? '' : 's'}`,
-      rows.length ? rows.map((row) => row.runner).join(' · ') : 'No current edge heartbeat evidence.'];
-  }
-  if (name === 'jobs') {
-    const jobs = data.jobs || {};
-    return [`${jobs.pending || 0} pending · ${jobs.running || 0} running`,
-      `${jobs.failed || 0} recorded failures · Scheduler ${data.scheduler_active ? 'active' : 'inactive'}`];
-  }
-  if (name === 'sanity') {
-    const checks = data.checks || []; const passing = checks.filter((row) => row.ok).length;
-    return [`${passing} of ${checks.length} checks passing`, checks.filter((row) => !row.ok).map((row) => row.name).join(' · ') || 'Core application checks passed.'];
-  }
-  if (name === 'database') return [data.reachable ? 'Database reachable' : 'Database unavailable', data.vendor || 'No vendor evidence'];
-  if (name === 'redis') return [data.reachable ? 'Redis reachable' : 'Redis unavailable', 'Cache and coordination service'];
-  if (name === 'certificates') return [`${data.counts?.active || 0} active certificates`, `${data.expiring_within_30_days || 0} expiring within 30 days`];
-  if (name === 'security') {
-    const disabled = data.secure_posture?.disabled || [];
-    return [`${data.open_incidents?.count ?? '—'} open incidents`, disabled.length
-      ? `Disabled controls: ${disabled.map((value) => value.replaceAll('_', ' ')).join(' · ')}`
-      : (data.monitoring_delivery?.present ? 'Secure redirect, cookies, HSTS, and monitoring are enabled.' : 'Monitoring delivery proof is missing')];
-  }
-  if (name === 'webapps') {
-    const rollup = data.rollup || {};
-    const health = rollup.current_health || {};
-    return [`${health.healthy || 0} of ${rollup.configured_origins || 0} configured origins healthy`,
-      `${rollup.count || 0} apps · ${rollup.deployment_keys?.active || 0} active deploy keys · ${rollup.onboarding?.succeeded || 0} completed onboarding`];
-  }
-  return ['Evidence available', 'Open the response only when troubleshooting.'];
-}
-
-function evidenceOwner(name) {
-  if (name === 'fleet') return [routeHref('platform', {focus: 'fleet'}), 'View fleet'];
-  if (name === 'webapps') return [routeHref('deployments'), 'Open Deployments'];
-  if (name === 'security') return [activityHref('incidents'), 'Open incidents'];
-  if (name === 'api') return [routeHref('setup', {focus: 'django.base_url', return: returnLocation()}), 'Configure API'];
-  return null;
-}
-
-function evidenceCard(name, section) {
-  const title = name.replaceAll('_', ' ').replace(/^./, (value) => value.toUpperCase());
-  const data = section?.data || {};
-  const [value, detail] = evidenceSummary(name, data);
-  const owner = evidenceOwner(name);
-  return h('section', {class: 'panel platform-evidence', 'data-focus': name, tabindex: '-1'},
-    h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: title}),
-      h('p', {text: section?.reason || `Observed ${section?.observed_at ? formatDate(section.observed_at) : 'now'}`})),
-      badge(String(section?.status || 'unavailable').toUpperCase(), statusTone(section?.status))),
-    h('div', {class: 'evidence-summary'}, h('strong', {text: value}), h('p', {text: detail}),
-      owner ? h('a', {class: 'button ghost compact evidence-owner', href: owner[0]}, owner[1]) : null),
-    h('details', {class: 'evidence-disclosure'}, h('summary', {}, icon('activity'), h('span', {text: 'View raw evidence'})),
-      h('pre', {class: 'evidence-json', text: JSON.stringify(data, null, 2)})));
-}
-
-function platformDestinations(ctx) {
-  const advanced = ctx.features?.advanced?.enabled === true;
-  return h('section', {class: 'platform-destinations'},
-    ctx.capabilities.setup ? h('a', {class: 'destination-card', href: routeHref('setup')},
-      icon('settings'), h('div', {}, h('strong', {text: 'System Setup'}),
-        h('span', {text: 'Check or repair installation dependencies as a literal superuser.'})), icon('chevron')) : null,
-    advanced ? h('a', {class: 'destination-card', href: routeHref('advanced')},
-      icon('settings'), h('div', {}, h('strong', {text: 'Advanced diagnostics'}),
-        h('span', {text: 'Open bounded hosting and inventory evidence for expert troubleshooting.'})), icon('chevron')) : null);
-}
-
-// The deployment journal and its same-SHA recovery controls live in the
-// merged Deployments lane (webapps feature, api.js); Platform keeps the
-// health grid and System Setup.
-export async function platformPage(ctx, route = 'platform') {
-  const root = h('div', {class: 'page'});
-  async function load() {
-    if (!ctx.features?.platform?.capabilities?.view) {
-      root.replaceChildren(pageHeader('Control plane', 'Platform', 'Platform health is independently permissioned.'),
-        permissionDeniedState('Your role cannot read Platform health.'), platformDestinations(ctx));
-      return;
-    }
-    const report = await api('/api/account/admin/platform');
-    const sections = report.sections || {};
-    root.replaceChildren(pageHeader('Platform control plane', 'Platform health', 'Bounded evidence for API, fleet, data services, certificates, security, and WebApps.', [
-      h('button', {class: 'button ghost', onclick: load}, icon('refresh'), 'Refresh evidence'),
-    ]), platformDestinations(ctx), h('div', {class: 'health-grid'}, ...Object.entries(sections).filter(([name]) => name !== 'deployments').map(([name, section]) => evidenceCard(name, section))));
-    const focus = decodeRouteState().state.focus;
-    const target = focus ? root.querySelector(`[data-focus="${CSS.escape(focus)}"]`) : null;
-    if (target) requestAnimationFrame(() => target.focus({preventScroll: false}));
-  }
-  try { await load(); } catch (error) { root.replaceChildren(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
   return root;
 }

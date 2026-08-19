@@ -11,9 +11,9 @@ management, permanent Domains/Credentials/DNS/Certificates/Upstreams/Vhosts/
 Routes pages, a curated [Settings catalog](admin_portal/settings.md), an
 Activity center for Incidents, Events, Logs, and Tickets, and
 WebApp `MOJO_DEPLOY_KEY` management with light, dark, and system themes.
-Domains & DNS is a first-class Platform and Deployments destination: operators
-can register an existing domain or buy a new one before selecting it during
-WebApp onboarding.
+Domains & DNS is a first-class navigation destination beside Deployments:
+operators can register an existing domain or buy a new one before selecting it
+during WebApp onboarding.
 
 System Setup is a stricter surface than ordinary Admin pages: only an active
 literal superuser with an interactive JWT can use it. See the
@@ -124,10 +124,17 @@ ambiguous-response states without mutating a live installation.
 
 The packaged portal is divided into seven fixed, capability-gated feature lanes.
 Primary navigation is Dashboard, Deployments, Domains & DNS, People, Activity,
-Platform, and Settings. Domains & DNS appears only with DNS read/manage authority;
-Advanced is one expert-diagnostics destination from Platform, alongside
-literal-superuser System Setup. Activity owns the
-bounded Incidents, Events, Logs, and Tickets operator journey.
+Metrics, Maintenance, and Settings, then literal-superuser System Setup in its
+own **System** group at the bottom. Domains & DNS appears only with DNS
+read/manage authority. Activity owns the bounded Incidents, Events, Logs, and
+Tickets operator journey.
+
+There is **no Platform destination and no Advanced diagnostics destination**.
+Both were evidence grids; that evidence is summarized on the Dashboard rows,
+with each row's raw collector payload behind its own Details drill-in. A nav
+entry may carry a numeric `order` (stable-sorted, default 0) and a `badge` dot;
+System Setup uses both — it sits last, and it is badged when
+`capabilities.setup_attention` is true.
 
 Deployments (`#/deployments` — the `webapps` feature; `#/webapps` still
 resolves and canonicalizes via `history.replaceState`) is the one page for
@@ -146,15 +153,13 @@ address is amber "No address yet — not reachable" with **Set address**), SSL
 state, and last deploy, with the release id as short muted metadata. Deep links
 `#/deployments?inspector=<id>` type-dispatch — an integer opens that web app's
 inspector, a deployment UUID opens the API drill-in — so pre-merge Activity
-links keep working. Platform owns
-public/local health, fleet evidence, System Setup,
-and readiness; deployment history renders in the Deployments lane. Platform
-does not duplicate Domains & DNS or expand Advanced's
-resource directory. Advanced owns bounded hosting/AWS inventory,
-and the raw Domains, Credentials,
-DNS, Certificates, Upstreams, Vhosts, Routes, and network resources. Bootstrap
-returns both the stable flat `capabilities` object and a namespaced `features`
-object:
+links keep working. The Platform lane is now System Setup, Metrics and
+Maintenance only; its public/local health and fleet evidence read from the
+Dashboard rows and their drill-ins. Advanced owns the Domains & DNS destination
+and the raw Domains, Credentials, DNS, Certificates, Upstreams, Vhosts, and
+Routes pages — its own evidence endpoint is still served but has no page.
+Bootstrap returns both the stable flat `capabilities` object and a namespaced
+`features` object:
 
 ```json
 {
@@ -435,11 +440,11 @@ This prevents non-admin users from escalating their own access.
 | API-key lifecycle | `POST /api/account/admin/apikey/action` | Object edit authority, non-key session, interactive auth in the last 600 seconds |
 | Secure settings | `GET/POST /api/settings`, `DELETE /api/settings/<id>` | `groups` |
 | System Setup | `/api/account/admin/setup/*` | Literal active superuser only |
-| Platform evidence/deploy recovery | `/api/account/admin/platform` (optional `?sections=` allowlist), `/api/account/admin/platform/deploy/*` | Dedicated global Platform grants; writes require fresh non-key auth |
+| Platform evidence/deploy recovery | `/api/account/admin/platform` (read it through the `?sections=` allowlist — the portal sends `deployments,api`, `fleet`, or `security`), `/api/account/admin/platform/deploy/*` | Dedicated global Platform grants, checked per section; writes require fresh non-key auth |
 | Web-app deployment rows | `GET /api/edge/webapp/summaries` | Human-only (key-backed sessions refused); WebApp `VIEW_PERMS` globally or in at least one group, always intersected with `?group=` |
 | Framework version / update | `/api/account/admin/platform/framework[/update]` | `view_platform` to read; `manage_platform` or `admin` to update, fresh non-key auth. Clearing a pin is literal-superuser only |
 | Managed-service maintenance | `/api/aws/maintenance/versions`, `/api/aws/maintenance/status`, `/api/aws/maintenance/apply` | `manage_aws` to read; the apply needs `manage_aws` **and** superuser / `manage_platform` / `admin`, fresh non-key auth. See [aws/maintenance](../aws/maintenance.md) |
-| Advanced evidence/settings | `/api/account/admin/advanced`, `/api/account/admin/advanced/settings` | Dedicated global Advanced grants; settings additionally require literal superuser |
+| Advanced evidence/settings | `/api/account/admin/advanced` (served, but no packaged portal page reads it), `/api/account/admin/advanced/settings` | Dedicated global Advanced grants; settings additionally require literal superuser |
 | Security dashboard | `GET /api/incident/incident`, `GET /api/incident/event` | `security` |
 | Firewall / IP blocks | `GET/POST /api/incident/ipset` — see [IPSet Bulk Blocking](../security/README.md#ipset-bulk-blocking) | `security` |
 | Geofence admin | `GET/POST /api/geo/rules`, `GET/POST /api/geo/allowlist` — see [Geofence Admin](geofence.md) | `security` (or `view_geofence`/`manage_geofence`) |

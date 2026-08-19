@@ -7,7 +7,7 @@
   - [Settings catalog](admin_portal/settings.md) — Existing-Setting provenance, typed overrides, owner routing, and Admin UX
   - [Metrics feature](admin_portal/metrics.md) — `manage_aws` capability flow, the CloudWatch degradation envelope and reason codes, the markup-free chart, and the five preview states
 - [System Setup and Readiness](system_setup.md) — Protected installation settings, versioned readiness registry, immutable ownership identity, and durable reconcile-before-retry operations
-- [Platform and Advanced Admin controls](admin_portal/platform.md) — UUID deployment truth, bounded health/inventory evidence, dedicated global permissions, and expert diagnostics
+- [System Setup and platform evidence](admin_portal/platform.md) — UUID deployment truth, bounded health/inventory evidence read through `?sections=`, dedicated global permissions, and the Setup/Metrics/Maintenance lane
 - [User Model](user.md) — User model, permissions, JWT auth
 - [Group Model](group.md) — Group/organization model, membership, hierarchy
 - [Authentication Flow](auth.md) — JWT tokens, login, password reset

@@ -59,20 +59,32 @@ exactly one DOM `Node`; an optional `node.dispose()` releases feature-local
 listeners or work.
 
 Primary navigation is Dashboard, Deployments, Domains & DNS, People, Activity,
-Platform, Metrics, and Settings. A feature contributes as many sidebar entries
-as its own capabilities allow, so the entry count is not the feature count:
-Domains & DNS is a permission-gated Advanced entry and stays beside Deployments
-because domains and public records are ongoing application controls, and Metrics
-is a Platform entry shown only with the `manage_aws` grant. Deployments (the
-`webapps` feature — the id is unchanged, only its routes and label) is the one
-place for everything running on the fleet: the API service and django-mojo
-framework rows on top, one row per web app below. It owns the `deployments`
-and legacy `webapps` routes; `#/webapps` canonicalizes to `#/deployments`.
-Platform contains health evidence, literal-superuser System Setup, and one
-link to Advanced expert diagnostics; deployment history and its same-SHA
-recovery live in the Deployments lane. See
+Metrics, Maintenance, and Settings, then System Setup in its own **System**
+group at the bottom. A feature contributes as many sidebar entries as its own
+capabilities allow, so the entry count is not the feature count: Domains & DNS
+is a permission-gated Advanced entry and stays beside Deployments because
+domains and public records are ongoing application controls, while Metrics,
+Maintenance and System Setup are three separate Platform entries on three
+different grants. Deployments (the `webapps` feature — the id is unchanged,
+only its routes and label) is the one place for everything running on the
+fleet: the API service and django-mojo framework rows on top, one row per web
+app below. It owns the `deployments` and legacy `webapps` routes; `#/webapps`
+canonicalizes to `#/deployments`.
+
+**There is no Platform page.** Its health grid and the Advanced diagnostics
+page were dissolved into the Dashboard rows, each row carrying a Details
+drill-in over the same evidence; deployment history and its same-SHA recovery
+live in the Deployments lane. See
 [Dashboard integration](admin_portal/dashboard.md) for the permissioned source
-matrix and canonical cross-feature route state.
+matrix, the drill-in layer, and canonical cross-feature route state.
+
+A navigation entry may declare a numeric `order`; `navigationFor` sorts the
+flattened entry list by it, and the sort is stable, so an entry without one
+keeps its descriptor position. An entry may also declare `badge: true`, which
+renders a small amber `.nav-badge` dot inside the sidebar link (labelled
+"Needs attention" for assistive technology). System Setup is the only entry
+using either today: `order: 100` puts installation work below daily work, and
+its badge follows `features.platform.capabilities.setup_attention`.
 
 Python publishes the same fixed namespaces at `bootstrap.features`, alongside
 the stable flat `bootstrap.capabilities` compatibility object. Provider output
@@ -140,13 +152,14 @@ built in and stored only in browser local storage. The responsive shell keeps
 keyboard-visible controls, traps focus in modals, restores focus on close, and
 uses text nodes for API data; only the fixed local SVG icon catalog uses HTML.
 
-The Platform feature owns API/service health, fleet/certificate/security
-evidence, and the System Setup/readiness journey. UUID-addressed deployment
-history and its recovery controls render in the Deployments lane; Platform's
-health grid keeps summarizing the evidence. Its private
-`assets/features/platform/page.js` module renders the normalized readiness
-report, durable step progress, typed
-late choices, cancellation, and bounded live log. See
+The Platform feature owns exactly three routes — `setup`, `metrics`, and
+`maintenance` — work an operator starts on purpose. The evidence it used to
+render (API/service health, fleet, certificate and security posture) is
+summarized on the Dashboard rows and reachable in full through their Details
+drill-ins; UUID-addressed deployment history and its recovery controls render
+in the Deployments lane. Its private `assets/features/platform/page.js` module
+is now the System Setup journey alone: the normalized readiness report, durable
+step progress, typed late choices, cancellation, and bounded live log. See
 [System Setup and Readiness](system_setup.md) for the service and security
 contracts.
 
@@ -158,10 +171,13 @@ and ElastiCache, gated on `manage_aws` and rendered by
 See [Platform and Advanced Admin controls](admin_portal/platform.md) for the
 dedicated permissions and bounded evidence contract.
 
-The Advanced feature owns the first-class Domains & DNS destination plus
-read-only hosting/AWS inventory and raw Credentials,
-Certificates,
-Upstreams, Vhosts, and Routes. Its `assets/features/advanced/page.js` module is
+The Advanced feature owns the first-class Domains & DNS destination plus the
+raw Credentials, Certificates, Upstreams, Vhosts, and Routes pages. Its
+raw-evidence `advanced` route is gone with the Platform page that linked to it;
+`advanced_overview()` and `GET /api/account/admin/advanced` are unchanged and
+still served, but no portal surface reads them, so `view_advanced`,
+`view_advanced_inventory`, and `view_advanced_security` are API-only grants
+today. Its `assets/features/advanced/page.js` module is
 the permanent hosting UI. It does not
 create portal-only mutation endpoints. Provider DNS writes are keyed
 single-flight and receive no automatic transport retry. Every write is
@@ -174,9 +190,8 @@ successful rows.
 
 The Settings feature owns ongoing framework configuration and the typed
 AUTH_CONFIG/expected-fleet browser controls. See
-[Admin Settings catalog](admin_portal/settings.md). Advanced remains reachable
-from Platform for expert diagnostics but has no sidebar entry and no duplicate
-settings form.
+[Admin Settings catalog](admin_portal/settings.md). Advanced contributes only
+the Domains & DNS sidebar entry and keeps no duplicate settings form.
 
 The People feature owns the complete User and Group operator journey. Its
 capabilities are issued by the backend per operation (view/manage Users,

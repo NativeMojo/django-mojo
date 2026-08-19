@@ -9,7 +9,7 @@ from django.http import HttpResponse, HttpResponseRedirect
 import mojo
 from mojo import decorators as md
 from mojo.apps.account.services import admin_assets, admin_features, admin_portal
-from mojo.apps.account.services import webapp_authority
+from mojo.apps.account.services import system_settings, webapp_authority
 from mojo.helpers.response import JsonResponse
 
 
@@ -139,6 +139,12 @@ def on_admin_bootstrap(request):
     exact = lambda key: bool(request.user.is_superuser or permissions.get(key) is True)
     capabilities = {
         "setup": bool(request.user.is_superuser),
+        # System Setup left the primary page grid, so the one unmissable
+        # reason to open it — an installation with no public address yet —
+        # has to travel with the sidebar entry itself.
+        "setup_attention": bool(
+            request.user.is_superuser
+            and not system_settings.get_value(system_settings.BASE_URL)),
         "people": has(["view_users", "manage_users", "admin"]),
         "groups": has(["view_groups", "manage_groups", "admin"]),
         "manage_users": has(["manage_users", "users", "admin"]),

@@ -4,3 +4,14 @@
 .dashboard-body { max-width: 760px; }
 .dashboard-body .row-name { white-space: nowrap; }
 .dashboard-body .state-view { padding: 24px 0; }
+
+/* ---- row drill-ins (inspectors.js) ---- */
+.dash-inspector { display: grid; gap: .85rem; }
+.dash-inspector .muted { color: var(--muted); }
+.dash-inspector .small { font-size: .78rem; }
+.dash-block { display: grid; gap: .5rem; }
+.dash-subhead { margin: 0; font-size: .8rem; font-weight: 700; }
+.dash-runners { display: grid; gap: .35rem; margin: 0; padding: 0; list-style: none; font-size: .82rem; }
+.dash-runners li { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; }
+.dash-technical summary { color: var(--muted); cursor: pointer; font-size: .78rem; font-weight: 700; }
+.dash-technical .evidence-json { margin: 8px 0 0; max-height: 22rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .78rem; }

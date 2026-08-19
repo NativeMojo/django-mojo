@@ -35,7 +35,8 @@ function refreshNavigation(route) {
   for (const item of navigationFor(context)) {
     if (item.section !== section) { section = item.section; children.push(h('div', {class: `nav-label ${children.length ? 'nav-space' : ''}`, text: section})); }
     const active = (item.matches || [item.route]).includes(route);
-    children.push(h('a', {href: `#/${item.route}`, class: active ? 'active' : ''}, icon(item.icon), h('span', {text: item.label})));
+    children.push(h('a', {href: `#/${item.route}`, class: active ? 'active' : ''}, icon(item.icon), h('span', {text: item.label}),
+      item.badge ? h('span', {class: 'nav-badge', 'aria-label': 'Needs attention'}) : null));
   }
   navigation.replaceChildren(...children);
 }
