@@ -871,23 +871,25 @@ def test_attention_oldest_age(opts):
         Incident.objects.filter(category=category).delete()
 
 
-@th.django_unit_test("no managed certificate is 'not managed here', never a failure")
-def test_certificates_empty_is_unconfigured(opts):
+@th.django_unit_test("certificate health reflects the latest attempt for each name set")
+def test_certificates_use_current_name_set_state(opts):
     from mojo.apps.account.services import admin_platform
 
-    with mock.patch.object(admin_platform, "_certificates", return_value={
-            "counts": {}, "expiring_within_30_days": 0}):
-        empty = admin_platform._dashboard_certificates()
-    th.assert_eq(empty["_collector_status"], "unconfigured",
-                 f"an empty certificate table was read as health: {empty!r}")
-    th.assert_eq(empty["total"], 0, "an empty table reported certificates")
+    rows = [
+        {"id": 8, "domain_id": 1, "common_name": "example.test",
+         "sans": ["example.test", "*.example.test"], "status": "active"},
+        {"id": 7, "domain_id": 1, "common_name": "example.test",
+         "sans": ["*.example.test", "example.test"], "status": "failed"},
+        {"id": 6, "domain_id": 2, "common_name": "other.test",
+         "sans": ["other.test"], "status": "revoked"},
+    ]
+    current = admin_platform._current_certificate_rows(rows)
+    th.assert_eq([row["id"] for row in current], [8, 6],
+                 f"historical attempts still counted as current: {current!r}")
 
-    with mock.patch.object(admin_platform, "_certificates", return_value={
-            "counts": {"active": 2, "revoked": 1}, "expiring_within_30_days": 0}):
-        failing = admin_platform._dashboard_certificates()
-    th.assert_eq(failing["_collector_status"], "unhealthy",
-                 f"a revoked certificate did not redden the row: {failing!r}")
-    th.assert_eq(failing["failing"], 1, f"the failing count is wrong: {failing!r}")
+    counts = admin_platform._certificate_counts(current)
+    th.assert_eq(counts, {"active": 1, "revoked": 1},
+                 f"current-state counts are wrong: {counts!r}")
 
 
 @th.django_unit_test("a raw instance count never proves an outage")

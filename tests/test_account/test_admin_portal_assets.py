@@ -350,6 +350,7 @@ def test_feature_asset_contracts(opts):
     for endpoint in (
             "/api/dnsman/registrar/purchase", "/api/dnsman/credential/link",
             "/api/dnsman/dns", "/api/dnsman/certificate/request",
+            "/api/dnsman/certificate/remove-failed",
             "/api/edge/upstream/declare", "/api/edge/vhost",
             "/api/edge/route"):
         assert endpoint in advanced, f"Advanced is missing {endpoint}"

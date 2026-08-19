@@ -473,7 +473,7 @@ This prevents non-admin users from escalating their own access.
 | WebApp health | `GET /api/edge/webapp/health?webapp=<id>` | `view_dns`, `manage_dns`, or `security`, plus object access |
 | Domains and live DNS | `/api/dnsman/domain`, `/api/dnsman/dns*`, `/api/dnsman/registrar/*` | `view_dns` / `manage_dns`; adopt/discover are literal superuser only |
 | DNS provider credentials | `/api/dnsman/credential`, `/api/dnsman/credential/link` | `view_dns` / `manage_dns`; secrets are write-only |
-| Certificates | `/api/dnsman/certificate`, `/api/dnsman/certificate/request` | `view_dns` / `manage_dns`; portal never calls material |
+| Certificates | `/api/dnsman/certificate`, `/api/dnsman/certificate/request`, `/api/dnsman/certificate/remove-failed` | `view_dns` / `manage_dns`; failed-attempt cleanup is status-gated and the portal never calls material |
 | Upstreams | `/api/edge/upstream`, `/api/edge/upstream/declare`, `/api/edge/upstream/retire` | Read by DNS grants; declare/retire are literal platform-admin actions |
 | Vhosts and Routes | `/api/edge/vhost`, `/api/edge/route` | `view_dns` / `manage_dns` / `security` |
 

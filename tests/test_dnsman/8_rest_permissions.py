@@ -227,6 +227,26 @@ def test_material_custody_unavailable(opts):
     assert_no_secrets(resp.response, "certificate material (unavailable)")
 
 
+@th.django_unit_test("a superuser can remove only failed certificate attempts")
+def test_remove_failed_certificate_attempt(opts):
+    from mojo.apps.dnsman.models import Certificate
+
+    failed = make_certificate(opts.domain, status="failed")
+    login(opts, opts.admin_email, opts.admin_pw)
+    resp = opts.client.post("/api/dnsman/certificate/remove-failed", json=dict(
+        certificate=failed.pk))
+    assert resp.status_code == 200, (
+        f"a superuser could not remove a failed attempt: {resp.response}")
+    assert not Certificate.objects.filter(pk=failed.pk).exists(), (
+        "the failed attempt still exists after a successful removal")
+
+    resp = opts.client.post("/api/dnsman/certificate/remove-failed", json=dict(
+        certificate=opts.certificate.pk))
+    assert resp.status_code != 200, "the cleanup endpoint removed an active certificate"
+    assert Certificate.objects.filter(pk=opts.certificate.pk).exists(), (
+        "an active certificate was deleted")
+
+
 # ---------------------------------------------------------------------------
 # Purchase is off, and proves it without touching AWS
 # ---------------------------------------------------------------------------

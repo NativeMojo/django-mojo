@@ -658,6 +658,16 @@ Status, SANs, issuer, serial, validity window, `renew_after`, and
 `status`: `pending` → `issuing` → `active`, or `failed` (see `last_error`) or
 `revoked`.
 
+### `POST /api/dnsman/certificate/remove-failed`
+```json
+{ "certificate": 7 }
+```
+Removes an inert failed issuance attempt from the operator inventory. The same
+model permissions and house-certificate superuser gate as revocation apply,
+and any status other than `failed` is refused. Successful issuance removes
+older failed attempts for the same domain and exact name set automatically.
+Failure evidence remains in job and application logs.
+
 ### `GET /api/dnsman/certificate/material/<pk>`
 The only way to obtain key material. Requires `manage_dns`; every release is
 logged.

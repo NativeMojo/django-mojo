@@ -606,6 +606,9 @@ def test_certs_issue_success_stores_and_cleans_up(opts):
 
     domain = _reset_domain("issue-certs.test")
     names = [domain.name, f"*.{domain.name}"]
+    failed = Certificate.objects.create(
+        domain=domain, common_name=domain.name,
+        sans=list(reversed(names)), status="failed", last_error="old attempt")
     cert = _pending_certificate(domain, names)
     chain, leaf = _make_chain(names, days=90, serial=0xABC123)
     client = FakeAcmeClient([domain.name, domain.name], chain=chain)
@@ -631,6 +634,8 @@ def test_certs_issue_success_stores_and_cleans_up(opts):
         assert "dnsman Test CA R1" in (stored.issuer or ""), (
             f"the issuer should come from the issued certificate, got {stored.issuer}")
         assert stored.not_after is not None, "not_after must be read off the certificate"
+        assert not Certificate.objects.filter(pk=failed.pk).exists(), (
+            "a successful replacement must remove its superseded failed attempt")
 
         expected_renew = stored.not_after - timedelta(days=certs.renew_days())
         assert stored.renew_after == expected_renew, (

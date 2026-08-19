@@ -264,14 +264,40 @@ def _deployments(include_stderr=False):
     }
 
 
+def _current_certificate_rows(rows):
+    """Newest lifecycle row for each managed certificate name set."""
+    current = []
+    seen = set()
+    for row in rows:
+        names = row.get("sans") or [row.get("common_name")]
+        identity = (
+            row.get("domain_id"),
+            tuple(sorted(str(name).strip().lower().rstrip(".") for name in names)))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        current.append(row)
+    return current
+
+
+def _certificate_counts(rows):
+    counts = {}
+    for row in rows:
+        status = row.get("status")
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
 def _certificates():
-    from django.db.models import Count
     from mojo.apps.dnsman.models import Certificate
-    counts = {row["status"]: row["count"] for row in
-              Certificate.objects.values("status").annotate(count=Count("id"))}
-    expiring = Certificate.objects.filter(
-        not_after__isnull=False,
-        not_after__lte=timezone.now() + timedelta(days=30)).count()
+    rows = _current_certificate_rows(Certificate.objects.order_by(
+        "-created", "-pk").values(
+            "id", "domain_id", "common_name", "sans", "status", "not_after"))
+    counts = _certificate_counts(rows)
+    cutoff = timezone.now() + timedelta(days=30)
+    expiring = sum(
+        1 for row in rows
+        if row.get("not_after") is not None and row["not_after"] <= cutoff)
     return {"counts": counts, "expiring_within_30_days": expiring}
 
 

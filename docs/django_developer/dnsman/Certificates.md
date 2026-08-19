@@ -159,6 +159,13 @@ On every successful issue or renewal, dnsman broadcasts a `certificate_updated`
 job on `DNSMAN_CERT_SYNC_CHANNEL` carrying **only** the certificate id, domain
 and expiry. Subscribed hosts pull the material themselves and reload locally.
 
+After a successful initial issuance, failed attempts for the same domain and
+exact SAN set are removed from the live inventory. The Admin certificate page
+also exposes `POST certificate/remove-failed` for manual cleanup; it accepts
+only `failed` rows and never deletes active material. The Dashboard groups
+lifecycle history by domain and SAN set and reports only the newest row, so a
+superseded attempt cannot claim that serving TLS is down.
+
 dnsman never pushes into a serving box. There is no SSH, no shared filesystem,
 and no second auth surface — the job channel already exists.
 

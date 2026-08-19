@@ -491,6 +491,13 @@ function certificateRequest(domains, reload) {
   const close = openModal({title: 'Request certificate', subtitle: 'Issuance runs asynchronously; this portal polls status metadata only.', content: form.render()});
 }
 
+async function removeFailedCertificate(row, reload) {
+  const confirmed = await confirmAction({title: `Remove failed attempt for ${row.common_name}?`, copy: 'This removes the obsolete certificate attempt from the inventory. The failure remains in the job and application logs.', confirmLabel: 'Remove failed attempt', danger: true});
+  if (!confirmed) return;
+  await apiOnce('/api/dnsman/certificate/remove-failed', {method: 'POST', body: JSON.stringify({certificate: row.id})});
+  await reload();
+}
+
 async function certificatesPage(ctx) {
   const root = h('div', {class: 'page'}); let pollTicks = 0; let pollTimer = null;
   async function render() {
@@ -506,6 +513,7 @@ async function certificatesPage(ctx) {
       {label: 'Domain', render: (row) => row.domain?.name || '—'},
       {label: 'Issuer', render: (row) => row.issuer || 'Pending'},
       {label: 'Expires', render: (row) => row.days_remaining == null ? formatDate(row.not_after) : `${row.days_remaining} days`},
+      {label: '', render: (row) => ctx.capabilities.manage_network && row.status === 'failed' ? h('button', {class: 'icon-button danger-text', 'aria-label': `Remove failed certificate attempt for ${row.common_name}`, onclick: async (event) => { event.stopPropagation(); await removeFailedCertificate(row, render); }}, icon('trash')) : null},
     ]}).render());
     if (rows.some((row) => ['pending', 'issuing'].includes(row.status)) && pollTicks < 36 && location.hash.startsWith('#/certificates')) {
       pollTicks += 1; pollTimer = setTimeout(() => render().catch(() => {}), 10000);

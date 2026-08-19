@@ -505,6 +505,7 @@ def _issue_locked(certificate):
         else:
             cleanup_challenges(domain, planted)
 
+    remove_superseded_failures(certificate)
     publish_sync(certificate)
     logit.info(
         f"dnsman: issued {certificate.common_name} "
@@ -541,6 +542,33 @@ def _record_issue_failure(certificate, error, renewing):
         f"dnsman: certificate {certificate.pk} ({certificate.common_name}) "
         f"issuance failed: {error}")
     return objict(ok=False, certificate=certificate, error=str(error))
+
+
+def remove_superseded_failures(certificate):
+    """Remove failed attempts replaced by this active certificate.
+
+    Failure history remains in the job and application logs. Certificate rows
+    describe the inventory an operator can act on, so a successful replacement
+    should not leave an obsolete red row behind. Cleanup is deliberately
+    best-effort: bookkeeping must never turn a valid issuance into a failure.
+    """
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.dnsman.models.certificate import STATUS_FAILED
+
+    wanted = sorted(certificate.sans or [certificate.common_name])
+    try:
+        stale = Certificate.objects.filter(
+            domain_id=certificate.domain_id,
+            common_name=certificate.common_name,
+            status=STATUS_FAILED).exclude(pk=certificate.pk)
+        stale_ids = [row.pk for row in stale if sorted(
+            row.sans or [row.common_name]) == wanted]
+        if stale_ids:
+            Certificate.objects.filter(pk__in=stale_ids).delete()
+    except Exception as err:
+        logit.error(
+            f"dnsman: could not remove superseded failed attempts for "
+            f"certificate {certificate.pk}: {err}")
 
 
 def _publish_delegated_challenges(row, challenges):

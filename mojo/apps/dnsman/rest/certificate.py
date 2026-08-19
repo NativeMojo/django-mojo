@@ -88,6 +88,26 @@ def on_certificate_revoke(request):
     return certificate.on_rest_get(request)
 
 
+@md.POST('certificate/remove-failed')
+@md.requires_params("certificate")
+def on_certificate_remove_failed(request):
+    """Remove an inert failed issuance attempt from the operator inventory."""
+    certificate = Certificate.get_instance_or_404(request.DATA.get("certificate"))
+    Certificate.rest_check_permission_or_raise(
+        request, ["SAVE_PERMS", "VIEW_PERMS"], certificate)
+    _guard_house_certificate(
+        request, certificate, "Removing a failed house certificate attempt")
+    if certificate.status != "failed":
+        raise me.ValueException(
+            f"Certificate is {certificate.status}, not a failed attempt")
+    certificate_id = certificate.pk
+    certificate.delete()
+    logit.info(
+        f"dnsman: removed failed certificate attempt {certificate_id} "
+        f"(user={getattr(request.user, 'pk', None)}, ip={request.ip})")
+    return {"id": certificate_id, "status": "removed"}
+
+
 # Dynamic segment last: mid-path pk segments are forbidden by the repo's REST
 # conventions (see .claude/rules/rest.md).
 @md.GET('certificate/material/<int:pk>')
