@@ -201,6 +201,47 @@ The command uses the signed receiver already exposed at
 5. Run the documented disposable-alarm ALARM→OK test. The durable transition receipt proves delivery.
 6. Apply the default RuleSet only after delivery is verified.
 
+### One owner for the alarms
+
+**On a managed installation the portal owns the CloudWatch alarms.** It converges
+one operations topic, `django-mojo-<slug>-operations`, tags it with
+`OWNERSHIP_TAGS`, reserves the `django-mojo/<slug>/` alarm name space, and
+discovers what to alarm on from the resources that actually exist rather than
+from state written months ago.
+
+There is one other thing that can create alarms for the same estate: the
+skeleton's `aws/terraform/modules/observability`. **It ships off.**
+`enable_alarms` is `false` in both shipped tfvars, every topic, subscription and
+alarm in that module is behind it, and the root's `django_conf_fragment`
+deliberately omits `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` when it is off. A current
+skeleton therefore creates no second topic and no second alarm set. See
+`aws/terraform/README.md` in the skeleton for that side.
+
+**If you deliberately set `enable_alarms = true`** — a reasonable answer when an
+infrastructure team owns monitoring — you own two topics, and you must add the
+OpenTofu topic ARN to `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` in `var/django.conf`
+yourself. System Setup's monitoring Fix **merges** the deployment file and the
+stored value rather than replacing one with the other, so a file-configured ARN
+survives the write — and is restored if an older version had dropped it. See
+[settings.md](../helpers/settings.md) for how protected settings resolve across
+the two planes.
+
+The two name spaces cannot collide: alarms are `django-mojo/<slug>/...` here and
+`<project>-<env>-*` there, and the tofu provider's `ManagedBy = "opentofu"` never
+matches this command's `managed-by: django-mojo`. So the two owners do not fight.
+**Nothing dedupes them either** — the receiver keys an incident on the alarm ARN,
+so two topics watching one condition open two incidents and bill twice. That is a
+choice to make knowingly, not a bug to discover later.
+
+**This command never deletes an AWS resource.** Retiring a tofu-owned topic or
+alarm set is `enable_alarms = false` and an apply, on the OpenTofu side; deleting
+one through the API just means the next apply recreates it.
+
+**External mode is not an exception to ownership.** `INFRASTRUCTURE_MODE=external`
+governs whether the portal may *mutate* infrastructure — it does not hand the
+alarm topic to somebody else. The portal's own operations topic, and the delivery
+path into `/api/aws/cloudwatch/sns/alarm`, remain the portal's in both modes.
+
 Discovery covers EC2, RDS, ElastiCache and **ELBv2 target groups**. Every alarm
 uses stable names, ownership tags and ALARM/OK actions on the single owned topic.
 
