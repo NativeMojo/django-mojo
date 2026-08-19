@@ -399,11 +399,15 @@ def ensure_security_groups(clients, spec, observed, apply=False):
     ec2 = clients.get("ec2")
 
     vpc_id = observed.get("vpc_id") or (observed.get("vpc") or {}).get("VpcId")
-    if not vpc_id:
+    if not vpc_id and apply:
         findings.append(report.missing(
             SG_STEP, "sg.no_vpc", "no VPC to put security groups in",
             "the network step has to succeed first"))
         return findings, actions, result
+    # With no VPC and no intent to create anything, keep going: a dry run
+    # against an empty account should still say the three groups are missing
+    # and what apply would build. The ingress rules are skipped further down
+    # because they reference the node group's id, which does not exist yet.
 
     existing = observed.get("security_groups") or {}
     group_ids = {}

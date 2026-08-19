@@ -142,7 +142,8 @@ def ensure_balancer(clients, spec, observed, apply=False):
     result.set("balancer_zone_id", (balancer or {}).get("CanonicalHostedZoneId"))
 
     if balancer_arn:
-        _ensure_attributes(elbv2, spec, balancer_arn, findings, actions, apply)
+        _ensure_attributes(elbv2, spec, observed, balancer_arn, findings,
+                           actions, apply)
         _ensure_listeners(elbv2, spec, observed, balancer_arn, group_arns,
                           findings, actions, apply)
     _ensure_targets(elbv2, spec, observed, group_arns, instance_ids,
@@ -254,16 +255,31 @@ def _subnet_mappings(ec2, spec, observed, subnet_ids, findings, actions):
     return mappings
 
 
-def _ensure_attributes(elbv2, spec, balancer_arn, findings, actions, apply):
+def _ensure_attributes(elbv2, spec, observed, balancer_arn, findings, actions,
+                       apply):
     wanted = {"load_balancing.cross_zone.enabled": "true"}
     # Deletion protection on production only. On a dev environment it is the
     # thing that makes tearing down a test account annoying, and this package
     # cannot delete the balancer either way.
     if spec.env in ("prod", "production"):
         wanted["deletion_protection.enabled"] = "true"
+
+    current = observed.get("balancer_attributes") or {}
+    changed = {key: value for key, value in wanted.items()
+               if current.get(key) != value}
+    if not changed:
+        findings.append(report.existing(
+            STEP, "balancer.attributes.ok",
+            "cross-zone load balancing and deletion protection match"))
+        return
+
+    findings.append(report.drift(
+        STEP, "balancer.attributes",
+        f"the balancer differs on {', '.join(sorted(changed))}",
+        "apply sets them in place"))
     actions.append(report.Action(STEP, "modify",
                                  spec_module.names(spec)["balancer"],
-                                 ", ".join(sorted(wanted))))
+                                 ", ".join(sorted(changed))))
     if not apply:
         return
     report.safe(

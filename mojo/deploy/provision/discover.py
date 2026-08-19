@@ -202,6 +202,7 @@ def blank():
         cache_subnet_group=None, cache_group=None,
         ami_id=None, instances=[], addresses=[],
         balancer=None, target_groups={}, listeners=[], targets={},
+        balancer_attributes={},
         cloudtrail_bucket=None, trails=[], detector_ids=[], log_groups={},
         hosted_zone=None, record_sets=[],
     )
@@ -547,6 +548,17 @@ def _observe_balancer(clients, spec, observed, findings):
                 elbv2, "describe_listeners", "Listeners",
                 LoadBalancerArn=observed.balancer.LoadBalancerArn), [])
         observed.listeners = wrap(listeners or [])
+        # Read the attributes rather than writing them blind on every run. A
+        # converge that always calls modify_load_balancer_attributes is not a
+        # no-op, and "a second apply creates nothing" is the property this
+        # whole design rests on.
+        attributes = optional(
+            findings, STEP, "elbv2.describe_load_balancer_attributes",
+            lambda: elbv2.describe_load_balancer_attributes(
+                LoadBalancerArn=observed.balancer.LoadBalancerArn), {})
+        observed.balancer_attributes = {
+            row.get("Key"): row.get("Value")
+            for row in (attributes or {}).get("Attributes") or []}
 
     health = {}
     for role, group in groups.items():

@@ -209,7 +209,11 @@ def ensure_key_pair(clients, spec, observed, apply=False):
             Body=json.dumps(secrets, indent=2, sort_keys=True).encode("utf-8"),
             ContentType="application/json",
             ServerSideEncryption="AES256"))
-    if not stored:
+    # `is None` rather than a truthiness check: `report.safe` returns its
+    # default (None) on failure, and a successful S3 response can legitimately
+    # be an empty mapping. Treating that as a failure would report a key as
+    # lost that was in fact written.
+    if stored is None:
         findings.append(report.Finding(
             KEY_STEP, report.BLIND, "key_pair.material_lost",
             f"key pair {key_name} was created but its private key could not be "

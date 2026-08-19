@@ -186,17 +186,17 @@ def _ordered(steps=STEPS):
     return ordered
 
 
-def observe(clients, spec):
+def observe(clients, spec, steps=STEPS):
     """Read the account and evaluate every step without changing anything.
 
     Returns `(findings, actions, run)`. The actions are what `apply` WOULD do —
     that is the whole point of the dry run, and it is what the CLI shows before
     asking for a yes.
     """
-    return _walk(clients, spec, apply=False)
+    return _walk(clients, spec, apply=False, steps=steps)
 
 
-def apply(clients, spec):
+def apply(clients, spec, steps=STEPS):
     """Converge the account toward the spec.
 
     Step 0 is name validation, and it runs BEFORE the first AWS call. A target
@@ -204,10 +204,10 @@ def apply(clients, spec):
     after the VPC, the subnets and an encrypted Aurora cluster already exist, it
     is a bill and a manual cleanup, because nothing in this package deletes.
     """
-    return _walk(clients, spec, apply=True)
+    return _walk(clients, spec, apply=True, steps=steps)
 
 
-def _walk(clients, spec, apply=False):
+def _walk(clients, spec, apply=False, steps=STEPS):
     findings, actions = [], []
     run = objict(steps=objict(), observed=discover.blank(), worst=report.PASS,
                  blocking=False, validated=True, problems=[])
@@ -220,7 +220,7 @@ def _walk(clients, spec, apply=False):
             findings.append(report.Finding(
                 "validate", report.MANUAL, "names.invalid", problem,
                 "fix the spec and re-run — nothing was created"))
-        for step in STEPS:
+        for step in steps:
             run.steps[step.name] = objict(
                 status=BLOCKED, depends_on=list(step.depends_on),
                 blocked_by=["validate"], values={})
@@ -230,7 +230,7 @@ def _walk(clients, spec, apply=False):
     findings.extend(observed_findings)
     run.observed = observed
 
-    for step in _ordered():
+    for step in _ordered(steps):
         if not step.enabled(spec):
             run.steps[step.name] = objict(
                 status=DISABLED, depends_on=list(step.depends_on),
