@@ -101,7 +101,16 @@ def on_webapp_onboarding_precheck(request):
 @md.denies_key_backed_session()
 @md.custom_security("interactive user plus centralized WebApp group authority")
 def on_webapp_onboarding_create(request):
+    from mojo.apps.edge.services import webapp_destination
+
     intent, group = _group_intent(request)
+    # Refuse before any WebApp exists when the installation has no serving
+    # destination. This is the boundary backstop for the connected-domain and
+    # purchase paths, which reach create without a precheck verdict — and the
+    # only thing standing before a purchase moves money on an installation that
+    # could never serve the app. A DestinationUnavailable is a plain 400 whose
+    # message steers the operator to System Setup.
+    webapp_destination.resolve()
     operation, created = _webapp_onboarding.create(
         group, request.user, _webapp_onboarding.request_origin(request),
         request.DATA, group_intent=intent)

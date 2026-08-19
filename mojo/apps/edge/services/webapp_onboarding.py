@@ -12,7 +12,6 @@ from django.utils import timezone
 
 from mojo import errors as me
 from mojo.apps.account.services import webapp_authority
-from mojo.helpers.settings import settings
 
 from mojo.apps.edge import validators
 from mojo.apps.edge.models import WebApp, WebAppOnboardingOperation
@@ -270,6 +269,13 @@ def _external_records(hostname, target, domain, include_challenge=False):
     also what makes a second app on the same domain a single-record add: it
     reuses the delegation and the wildcard certificate.
     """
+    if not target:
+        # The render invariant: never hand back a record the operator would
+        # copy with a blank destination. The destination resolver makes this
+        # unreachable in the normal flow; this is the backstop for a direct or
+        # future caller.
+        raise me.ValueException(
+            "No serving destination is configured for this app address")
     records = [{"type": "CNAME", "name": hostname, "value": target, "ttl": 300}]
     if include_challenge:
         from mojo.apps.dnsman.services import delegation
@@ -295,14 +301,11 @@ def precheck(group, raw_url, group_intent="existing"):
     from mojo.apps.dnsman.models.domain import PROVIDER_MOJO
     from mojo.apps.dnsman.services import delegation, naming
     from mojo.apps.edge.models import Vhost
+    from mojo.apps.edge.services import webapp_destination
     from mojo.helpers.dns import probe
 
-    target = str(settings.get_static(
-        "EDGE_WEBAPP_CNAME_TARGET", "") or "").strip().rstrip(".")
-
     def result(verdict, **extra):
-        payload = {"schema_version": SCHEMA_VERSION, "verdict": verdict,
-                   "cname_target": target}
+        payload = {"schema_version": SCHEMA_VERSION, "verdict": verdict}
         payload.update(extra)
         return payload
 
@@ -387,40 +390,76 @@ def precheck(group, raw_url, group_intent="existing"):
                       app=app.slug if app is not None else None,
                       reason="That address is already serving a site")
 
+    def destination_or_block():
+        # Managed and external addresses alike need a serving destination. An
+        # installation that has none is configuration-required (fix Setup); a
+        # hostname that resolves to the platform's own address is plain-invalid.
+        try:
+            return webapp_destination.resolve(hostname), None
+        except webapp_destination.DestinationUnavailable as err:
+            return None, result(
+                "configuration_required", normalized=normalized,
+                domain=_domain_summary(domain), reason=str(err),
+                setup_check="webapp_destination")
+        except me.ValueException as err:
+            return None, result("invalid", normalized=normalized,
+                                domain=_domain_summary(domain), reason=str(err))
+
     if domain.provider == PROVIDER_MOJO:
         # The delegation (and its _acme-challenge record) was already verified
         # to make this a mojo Domain, so the only record the user still adds is
         # the app CNAME — one record, whether it is their first app here or
         # their tenth.
-        records = _external_records(hostname, target, domain)
-        published = bool(target) and _verify_external_cname(hostname, target)
+        destination, blocked = destination_or_block()
+        if blocked is not None:
+            return blocked
+        records = _external_records(hostname, destination.value, domain)
+        published = _verify_external_cname(hostname, destination.value)
         return result("ready" if published else "records_needed",
                       normalized=normalized, domain=_domain_summary(domain),
                       records=records)
 
     # A managed domain (route53/godaddy): the platform will write the record,
     # but a foreign existing CNAME still blocks. One probe, no zone listing.
+    destination, blocked = destination_or_block()
+    if blocked is not None:
+        return blocked
     probe_result = probe.query_cname(hostname)
     targets = sorted(str(v).rstrip(".") for v in (probe_result.targets or []))
-    if targets and targets != [target.rstrip(".")]:
+    if targets and targets != [destination.value.rstrip(".")]:
         return result("conflict", normalized=normalized,
                       domain=_domain_summary(domain),
                       reason="That address already points somewhere else")
-    # The platform writes this record itself; it is returned for display only.
+    # The platform writes this record itself, so a managed ready carries the
+    # resolved destination and its provenance — never a record to copy.
     return result("ready", normalized=normalized, domain=_domain_summary(domain),
-                  records=_external_records(hostname, target, domain))
+                  destination={"type": destination.type,
+                               "value": destination.value,
+                               "provenance": destination.provenance})
 
 
 def options(group, group_intent="existing"):
     from mojo.apps.github.models import GitHubInstall
+    from mojo.apps.edge.services import webapp_destination
 
     buckets = validators.release_buckets()
+    # The installation-level serving destination the wizard shows and gates the
+    # identity step on. Its absence (destination_error) is what steers the
+    # connected-domain and purchase paths, which never pass through precheck.
+    destination = None
+    destination_error = None
+    try:
+        resolved = webapp_destination.resolve()
+        destination = {"type": resolved.type, "value": resolved.value,
+                       "provenance": resolved.provenance}
+    except webapp_destination.DestinationUnavailable as err:
+        destination_error = str(err)
     return {
         "schema_version": SCHEMA_VERSION,
         "buckets": buckets,
         "environments": ["production", "staging", "preview", "development"],
-        "cname_target": str(settings.get_static(
-            "EDGE_WEBAPP_CNAME_TARGET", "") or ""),
+        "destination": destination,
+        "destination_error": destination_error,
         "group_intent": group_intent,
         "github_connected": bool(
             group is not None and
@@ -890,10 +929,23 @@ def _advance_address(operation):
     operation.dns_provider = domain.provider
 
     hostname = f"{label}.{domain.name}"
-    target = str(settings.get_static("EDGE_WEBAPP_CNAME_TARGET", "") or "").strip().rstrip(".")
-    validators.validate_server_name(target)
-    if target == hostname:
-        raise me.ValueException("The WebApp CNAME target cannot point to itself")
+    # One resolver decides the serving destination for every provider: it
+    # validates the value, rejects a self-referential hostname, and raises
+    # DestinationUnavailable when the installation has none. A raise here is a
+    # plain retried failure (never WAIT_FOR_USER, never the external panel);
+    # precheck and create already block the normal paths up front.
+    from mojo.apps.edge.services import webapp_destination
+    destination = webapp_destination.resolve(hostname)
+    target = destination.value
+
+    def address_evidence(**extra):
+        base = {"hostname": hostname, "provider": domain.provider,
+                "writable": domain.provider != PROVIDER_MOJO,
+                "destination": {"type": destination.type, "value": destination.value,
+                                "provenance": destination.provenance}}
+        base.update(extra)
+        return base
+
     if domain.provider == PROVIDER_MOJO:
         # External DNS: the platform holds no credential for this domain, so it
         # cannot write the record (dns.list_records/upsert_record both raise for
@@ -906,9 +958,10 @@ def _advance_address(operation):
                              "name": hostname, "values": [target], "ttl": 300}
             state["intent"] = intent
             _save_state(operation, state, ["domain", "dns_provider"])
-            operation.evidence = dict(operation.evidence or {}, address={
-                "status": "waiting", "hostname": hostname, "dns": "unpublished",
-                "records": _external_records(hostname, target, domain)})
+            operation.evidence = dict(
+                operation.evidence or {}, address=address_evidence(
+                    status="waiting", dns="unpublished",
+                    records=_external_records(hostname, target, domain)))
             _activity(operation, "Waiting for the app address record at your DNS host")
             return WAIT_FOR_USER
     else:
@@ -980,11 +1033,11 @@ def _advance_address(operation):
                 # the _acme-challenge CNAME is missing or broken. Do not spin
                 # requesting fresh certificates; wait for the user to repair the
                 # record and press Check (which resets attempts and re-requests).
-                operation.evidence = dict(operation.evidence or {}, address={
-                    "status": "waiting", "hostname": hostname, "dns": "verified",
-                    "certificate": "failed",
-                    "records": _external_records(
-                        hostname, target, domain, include_challenge=True)})
+                operation.evidence = dict(
+                    operation.evidence or {}, address=address_evidence(
+                        status="waiting", dns="verified", certificate="failed",
+                        records=_external_records(
+                            hostname, target, domain, include_challenge=True)))
                 _activity(
                     operation,
                     "Certificate issuance is waiting on the _acme-challenge record",
@@ -1005,9 +1058,9 @@ def _advance_address(operation):
                 domain,
                 names=None if domain.provider == PROVIDER_MOJO else [hostname])
         operation.certificate = pending
-        operation.evidence = dict(operation.evidence or {}, address={
-            "status": "waiting", "hostname": hostname,
-            "dns": "verified", "certificate": pending.status})
+        operation.evidence = dict(
+            operation.evidence or {}, address=address_evidence(
+                status="waiting", dns="verified", certificate=pending.status))
         _activity(operation, "DNS is reconciled; certificate issuance is pending")
         return True
 
@@ -1040,10 +1093,12 @@ def _advance_address(operation):
     web_app.save(update_fields=["vhost", "modified"])
     if old_site_vhost is not None:
         old_site_vhost.delete()
-    operation.evidence = dict(operation.evidence or {}, address={
-        "status": "verified", "hostname": hostname, "dns": "verified",
-        "certificate": "reused" if certificate.created < operation.created else "issued",
-        "vhost": vhost.pk})
+    operation.evidence = dict(
+        operation.evidence or {}, address=address_evidence(
+            status="verified", dns="verified",
+            certificate=("reused" if certificate.created < operation.created
+                         else "issued"),
+            vhost=vhost.pk))
     operation.cursor = "github"
     operation.attempts = 0
     operation.next_attempt_at = None

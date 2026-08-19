@@ -498,3 +498,36 @@ def test_convergence_publish_failure_is_pending(opts):
         f"convergence logged a raw provider exception: {logged.call_args}"
     assert "RuntimeError" in str(logged.call_args), \
         "convergence lost bounded exception class evidence"
+
+
+@th.django_unit_test("serving-destination readiness reports the target and steers when absent")
+def test_webapp_destination_readiness(opts):
+    from mojo.apps.edge.services import readiness
+
+    def check():
+        return readiness.check_webapp_destination({})[0]
+
+    # Resolvable from the platform address → pass, naming the destination.
+    def resolved():
+        with mock.patch("mojo.apps.edge.services.webapp_destination._base_url",
+                        return_value="https://api.stage.example"):
+            return check()
+    row = with_setting("EDGE_WEBAPP_CNAME_TARGET", "", resolved)
+    assert row["status"] == "pass", f"a resolvable destination was not green: {row}"
+    assert "api.stage.example" in row["explanation"], \
+        f"the readiness row did not name the destination: {row}"
+
+    # Nothing configured yet → pending (not broken), with remediation.
+    def unset():
+        with mock.patch("mojo.apps.edge.services.webapp_destination._base_url",
+                        return_value=""):
+            return check()
+    pending = with_setting("EDGE_WEBAPP_CNAME_TARGET", "", unset)
+    assert pending["status"] == "pending", \
+        f"an unconfigured destination was not pending: {pending}"
+    assert pending["remediation"], "the pending destination row carried no remediation"
+
+    # A set-but-invalid override is a misconfiguration to fix now → fail.
+    invalid = with_setting("EDGE_WEBAPP_CNAME_TARGET", "not a hostname", check)
+    assert invalid["status"] == "fail", \
+        f"a set-but-invalid override was not a hard failure: {invalid}"

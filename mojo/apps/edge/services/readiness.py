@@ -364,6 +364,40 @@ def check_webapp_keys(context):
         {f"action_{action}": count for action, count in actions.items()})] + rows
 
 
+def check_webapp_destination(context):
+    """Where guided WebApp addresses will point, and whether it resolves.
+
+    A managed-domain WebApp needs one thing the browser cannot supply: the
+    hostname its CNAME points at. This surfaces the resolved destination and its
+    provenance so an operator sees, before onboarding anyone, that the
+    installation can serve app addresses — and what to fix when it cannot.
+    """
+    from mojo.apps.edge.services import webapp_destination
+
+    override = str(settings.get_static(
+        webapp_destination.OVERRIDE_SETTING, "") or "").strip()
+    try:
+        resolved = webapp_destination.resolve()
+    except webapp_destination.DestinationUnavailable as err:
+        # A set-but-invalid override is a misconfiguration to fix now (fail); an
+        # install that has simply not finished Setup is pending, not broken.
+        status = "fail" if override else "pending"
+        return [system_readiness.result(
+            "webapp.destination", status, str(err),
+            "Set the platform's public address (BASE_URL) in System Setup, or "
+            "set EDGE_WEBAPP_CNAME_TARGET for a split serving topology.",
+            details={"override_configured": bool(override)})]
+    source = ("a configured override" if resolved.provenance == "override"
+              else "the platform's public address")
+    return [system_readiness.result(
+        "webapp.destination", "pass",
+        f"WebApp addresses will point at {resolved.value} (from {source}). This "
+        f"assumes {resolved.value} fronts the nodes that serve web apps; set "
+        "EDGE_WEBAPP_CNAME_TARGET if a different tier or pool serves them.",
+        details={"destination": resolved.value,
+                 "provenance": resolved.provenance})]
+
+
 def register_sections():
     system_readiness.register_section(
         "hosting_dns", "Domains and certificates", check_dns, order=40)
@@ -373,3 +407,6 @@ def register_sections():
         "edge_fleet", "Fleet deployment readiness", check_fleet, order=42)
     system_readiness.register_section(
         "webapp_keys", "WebApp deployment keys", check_webapp_keys, order=43)
+    system_readiness.register_section(
+        "webapp_destination", "WebApp serving destination",
+        check_webapp_destination, order=44)

@@ -946,3 +946,255 @@ def test_wait_exhaustion_parks(opts):
         f"an exhausted wait failed terminally ({op.status}) instead of parking"
     assert op.status != STATUS_FAILED, "onboarding failed on a legitimate long wait"
     assert op.attempts == 0, "the parked step did not reset its attempt budget"
+
+
+# ---------------------------------------------------------------------------
+# destination derivation (item 2191)
+# ---------------------------------------------------------------------------
+@th.django_unit_test("managed precheck never reports ready with a blank serving destination")
+def test_precheck_managed_missing_destination_is_not_blank_ready(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.services import webapp_onboarding
+
+    domain = make_domain(group=opts.group, provider="godaddy")
+
+    # No override and no platform address: the platform owns a managed domain
+    # but has nowhere to point it. It must not report the address ready carrying
+    # a DNS record with a blank destination — the WMWX-stage regression. The
+    # _base_url patch makes "unresolvable" deterministic under the shared DB.
+    def run():
+        with mock.patch("mojo.helpers.dns.probe.query_cname",
+                        return_value=mock.Mock(targets=[])), \
+                mock.patch("mojo.apps.edge.services.webapp_destination._base_url",
+                           return_value=""):
+            return webapp_onboarding.precheck(
+                opts.group, f"https://app.{domain.name}")
+
+    r = with_setting("EDGE_WEBAPP_CNAME_TARGET", "", run)
+    for record in r.get("records") or []:
+        assert record.get("value"), \
+            f"precheck returned a DNS record with a blank destination: {r}"
+    assert r["verdict"] == "configuration_required", (
+        "a managed domain with no resolvable serving destination was not "
+        f"reported configuration_required: {r}")
+    assert r.get("setup_check") == "webapp_destination", \
+        f"configuration_required did not point at the Setup check: {r}"
+    assert "EDGE_" not in r.get("reason", "") and "vhost" not in r.get("reason", ""), \
+        f"the operator-facing reason leaked a setting name or jargon: {r}"
+
+
+@th.django_unit_test("managed precheck derives its destination from the platform address")
+def test_precheck_managed_derives_destination_from_base_url(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.services import webapp_onboarding
+
+    for provider in ("route53", "godaddy"):
+        domain = make_domain(group=opts.group, provider=provider)
+
+        def run():
+            with mock.patch("mojo.helpers.dns.probe.query_cname",
+                            return_value=mock.Mock(targets=[])), \
+                    mock.patch("mojo.apps.dnsman.services.dns.list_records") as listed, \
+                    mock.patch(
+                        "mojo.apps.edge.services.webapp_destination._base_url",
+                        return_value="https://api.stage.example"):
+                return webapp_onboarding.precheck(
+                    opts.group, f"https://app.{domain.name}"), listed
+
+        # No EDGE_WEBAPP_CNAME_TARGET — the destination comes from BASE_URL.
+        r, listed = with_setting("EDGE_WEBAPP_CNAME_TARGET", "", run)
+        assert r["verdict"] == "ready", \
+            f"a {provider} domain with a derived destination was not ready: {r}"
+        assert r.get("destination") == {
+            "type": "CNAME", "value": "api.stage.example",
+            "provenance": "platform_base_url"}, \
+            f"the managed ready did not carry the derived destination: {r}"
+        assert "records" not in r, \
+            f"a managed ready must not carry a record to copy: {r}"
+        listed.assert_not_called()  # the probe-only precheck rule is preserved
+
+
+@th.django_unit_test("the address step writes the derived CNAME and records its provenance")
+def test_advance_address_derives_destination(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.services import webapp_onboarding
+
+    declare_pools()
+    domain = make_domain(group=opts.group, provider="route53")
+    make_certificate(domain, common_name=f"app.{domain.name}",
+                     sans=[f"app.{domain.name}"])
+    op = _address_operation(opts, domain)
+
+    def run():
+        with mock.patch("mojo.apps.dnsman.services.dns.list_records", return_value=[]), \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
+                mock.patch(
+                    "mojo.apps.edge.services.webapp_destination._base_url",
+                    return_value="https://api.stage.example"):
+            outcome = webapp_onboarding._advance_address(op)
+            return outcome, upsert
+
+    # No override; the write target is derived from the platform address.
+    outcome, upsert = with_setting("EDGE_WEBAPP_CNAME_TARGET", "", run)
+    assert outcome is True, f"the derived-destination address step did not complete: {outcome}"
+    upsert.assert_called_once()
+    assert upsert.call_args.args[3] == ["api.stage.example"], \
+        f"the platform wrote a CNAME to the wrong destination: {upsert.call_args}"
+    address = op.evidence.get("address", {})
+    assert address.get("writable") is True, \
+        f"a managed address did not record that the platform writes it: {address}"
+    assert address.get("destination", {}).get("provenance") == "platform_base_url", \
+        f"the address evidence did not record the destination provenance: {address}"
+
+
+@th.django_unit_test("the destination resolver honors override precedence and refuses unusable topology")
+def test_destination_resolver(opts):
+    from unittest import mock
+
+    from mojo import errors as me
+    from mojo.apps.edge.services import webapp_destination
+
+    # The explicit override wins over the platform address, trailing dot stripped.
+    def override_beats_base():
+        with mock.patch("mojo.apps.edge.services.webapp_destination._base_url",
+                        return_value="https://api.platform.example"):
+            return webapp_destination.resolve()
+    resolved = with_setting("EDGE_WEBAPP_CNAME_TARGET", "edge.example.net.", override_beats_base)
+    assert resolved.provenance == "override" and resolved.value == "edge.example.net", \
+        f"the override did not take precedence with its stripped value: {resolved}"
+
+    # An invalid override is configuration-required, not a mid-flight crash.
+    with th.assert_raises(webapp_destination.DestinationUnavailable):
+        with_setting("EDGE_WEBAPP_CNAME_TARGET", "not a hostname",
+                     webapp_destination.resolve)
+
+    def with_base(value):
+        def run():
+            with mock.patch("mojo.apps.edge.services.webapp_destination._base_url",
+                            return_value=value):
+                return webapp_destination.resolve()
+        return with_setting("EDGE_WEBAPP_CNAME_TARGET", "", run)
+
+    derived = with_base("https://api.stage.example")
+    assert derived.provenance == "platform_base_url" and derived.value == "api.stage.example", \
+        f"a hostname BASE_URL did not derive a usable destination: {derived}"
+
+    # A numeric platform address cannot be a CNAME destination.
+    with th.assert_raises(webapp_destination.DestinationUnavailable):
+        with_base("https://203.0.113.9")
+    # No platform address at all is configuration-required.
+    with th.assert_raises(webapp_destination.DestinationUnavailable):
+        with_base("")
+
+    # A hostname that is the platform's own address is a bad request, not an
+    # unserveable installation.
+    def self_ref():
+        with mock.patch("mojo.apps.edge.services.webapp_destination._base_url",
+                        return_value="https://app.stage.example"):
+            return webapp_destination.resolve("app.stage.example")
+    try:
+        with_setting("EDGE_WEBAPP_CNAME_TARGET", "", self_ref)
+        raised = None
+    except webapp_destination.DestinationUnavailable as exc:
+        raised = ("unavailable", exc)
+    except me.ValueException as exc:
+        raised = ("value", exc)
+    assert raised and raised[0] == "value", \
+        f"a self-referential hostname was not a plain value error: {raised}"
+
+
+@th.django_unit_test("the create endpoint refuses before app creation on an unserveable installation")
+def test_create_endpoint_refuses_without_destination(opts):
+    from unittest import mock
+
+    from django.test import RequestFactory
+    from mojo.apps.account.models import User
+    from mojo.apps.edge.models import WebApp, WebAppOnboardingOperation
+    from mojo.apps.edge.rest import webapp_onboarding as rest_onboarding
+    from mojo.apps.edge.services import webapp_destination
+
+    actor = User.objects.get(pk=opts.actor.pk)
+    before_ops = WebAppOnboardingOperation.objects.filter(group=opts.group).count()
+    before_apps = WebApp.objects.filter(group=opts.group).count()
+    payload = {
+        "group": opts.group.pk, "operation_id": str(uuid.uuid4()),
+        "slug": f"noserve{uuid.uuid4().hex[:6]}", "display_name": "No Destination",
+        "bucket": "edge-test-releases", "environment": "production",
+        "deployment_ref": "main", "build_output": "dist", "github_repository": "",
+    }
+    request = RequestFactory().post(
+        "/api/edge/webapp/onboarding/create",
+        HTTP_ORIGIN="https://admin.example.com", secure=True,
+        HTTP_HOST="admin.example.com")
+    request.user = actor
+    request.group_token = None
+    request.DATA = payload
+
+    def run():
+        with mock.patch("mojo.apps.edge.services.webapp_destination._base_url",
+                        return_value=""):
+            return rest_onboarding.on_webapp_onboarding_create(request)
+
+    # The connected-domain and purchase paths reach create without a precheck
+    # verdict; the endpoint must refuse before any WebApp exists, and before a
+    # purchase could move money in the address step that follows.
+    with th.assert_raises(webapp_destination.DestinationUnavailable):
+        with_setting("EDGE_WEBAPP_CNAME_TARGET", "", run)
+    assert WebAppOnboardingOperation.objects.filter(group=opts.group).count() == before_ops, \
+        "the refused create still minted an onboarding operation"
+    assert WebApp.objects.filter(group=opts.group).count() == before_apps, \
+        "the refused create still minted a WebApp"
+
+
+@th.django_unit_test("options reports the resolved destination or a plain configuration error")
+def test_options_reports_destination(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.services import webapp_onboarding
+
+    def resolved():
+        with mock.patch("mojo.apps.edge.services.webapp_destination._base_url",
+                        return_value="https://api.stage.example"):
+            return webapp_onboarding.options(opts.group)
+    ok = with_setting("EDGE_WEBAPP_CNAME_TARGET", "", resolved)
+    assert ok["destination"] == {
+        "type": "CNAME", "value": "api.stage.example",
+        "provenance": "platform_base_url"}, \
+        f"options did not report the resolved destination: {ok}"
+    assert ok["destination_error"] is None, \
+        f"a resolvable destination still reported an error: {ok}"
+
+    def unresolved():
+        with mock.patch("mojo.apps.edge.services.webapp_destination._base_url",
+                        return_value=""):
+            return webapp_onboarding.options(opts.group)
+    bad = with_setting("EDGE_WEBAPP_CNAME_TARGET", "", unresolved)
+    assert bad["destination"] is None and bad["destination_error"], \
+        f"options did not surface the configuration error for the wizard gate: {bad}"
+
+
+@th.django_unit_test("external precheck with no destination is configuration_required, never a blank record")
+def test_precheck_external_missing_destination(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.services import webapp_onboarding
+
+    domain = make_domain(group=opts.group, provider="mojo")
+
+    def run():
+        with mock.patch("mojo.helpers.dns.probe.query_cname",
+                        return_value=mock.Mock(targets=[])), \
+                mock.patch("mojo.apps.edge.services.webapp_destination._base_url",
+                           return_value=""):
+            return webapp_onboarding.precheck(
+                opts.group, f"https://app.{domain.name}")
+
+    r = with_setting("EDGE_WEBAPP_CNAME_TARGET", "", run)
+    assert r["verdict"] == "configuration_required", \
+        f"an external domain with no destination was not configuration_required: {r}"
+    for record in r.get("records") or []:
+        assert record.get("value"), \
+            f"external precheck offered a record with a blank destination: {r}"
