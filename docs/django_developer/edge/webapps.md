@@ -276,9 +276,14 @@ inventories the complete record set, adopts an exact CNAME, and refuses mixed,
 ambiguous, or foreign values.
 The target is resolved by `webapp_destination.resolve()` — the explicit
 `EDGE_WEBAPP_CNAME_TARGET` override, else a CNAME to the platform's own public
-`BASE_URL` hostname (below) — never a blank value. Certificate selection reuses
-an active exact/wildcard certificate outside its renewal window; private
-material never crosses the onboarding surface.
+`BASE_URL` hostname (below) — never a blank value. A `*.{domain}` CNAME already
+pointing at that destination covers every subdomain, so the address step writes
+**nothing** in that case — a wildcard-covered domain onboards each app with
+zero DNS writes. Certificate selection reuses an active exact/wildcard
+certificate outside its renewal window; when none covers the hostname, every
+provider issues the **apex-plus-wildcard** profile — one certificate per
+domain, ever; the first app pays the issuance wait and every later app reuses
+it. Private material never crosses the onboarding surface.
 
 ### URL-first entry and external domains
 
@@ -295,7 +300,12 @@ checks plus **one** authoritative `probe.query_cname` — never a provider recor
 listing (which would enumerate a whole zone on shared credentials per
 keystroke). It is group-scoped and non-disclosing: a domain in another group
 returns `domain_unknown`, and an occupied address names the occupying app only
-within the caller's own group.
+within the caller's own group. A probed CNAME answer that differs from the
+resolved destination is confirmed against one random sibling label before it
+counts as a `conflict`: an identical answer there means the response was
+synthesized by a `*.{domain}` wildcard record, which a host-specific record
+always overrides — so a wildcard pointing elsewhere never falsely blocks
+onboarding, while a genuine host-specific foreign record still does.
 
 **One resolver decides where every guided address points**
 (`mojo.apps.edge.services.webapp_destination.resolve(hostname=None)`), used by
