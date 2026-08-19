@@ -166,6 +166,14 @@ export async function capacityPanel(ctx, signal = null) {
     });
   }
 
+  // The drill-in this panel lives in has no abort signal of its own, so a
+  // closed inspector is detected by the panel leaving the document. Without
+  // it, closing the overlay mid-operation would leave an hour of polling
+  // rendering into a detached tree.
+  function stopped() {
+    return signal?.aborted || !root.isConnected;
+  }
+
   function note(key, tone, text) {
     progress.set(key, {tone, text});
     render();
@@ -176,9 +184,9 @@ export async function capacityPanel(ctx, signal = null) {
   // stopped watching at "requested" would be reporting a wish.
   async function follow(key, operation) {
     const params = new URLSearchParams({operation});
-    for (let count = 0; count < POLL_LIMIT && !signal?.aborted; count += 1) {
+    for (let count = 0; count < POLL_LIMIT && !stopped(); count += 1) {
       await wait(POLL_INTERVAL);
-      if (signal?.aborted) return;
+      if (stopped()) return;
       let live;
       try {
         live = await api(`${STATUS_PATH}?${params.toString()}`, {signal});
@@ -201,7 +209,7 @@ export async function capacityPanel(ctx, signal = null) {
       await load(true);
       return;
     }
-    if (!signal?.aborted) {
+    if (!stopped()) {
       note(key, 'warn', 'still running after an hour — check the AWS console');
     }
   }
