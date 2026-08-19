@@ -35,7 +35,8 @@ def describe(capabilities):
               "manage": capabilities["manage_platform"],
               "security": capabilities["view_platform_security"],
               "advanced": capabilities["view_advanced"],
-              "metrics": capabilities["manage_aws"]}
+              "metrics": capabilities["manage_aws"],
+              "maintenance": capabilities["manage_aws"]}
     return {"id": NAME, "enabled": any(values.values()), "capabilities": values}
 
 

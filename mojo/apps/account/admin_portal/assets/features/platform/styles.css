@@ -58,3 +58,10 @@ html[data-theme="dark"] {
 .owner-guidance { color: var(--muted); font-size: .8rem; font-weight: 650; }
 [data-focus]:focus { outline: 3px solid color-mix(in srgb, var(--accent) 38%, transparent); outline-offset: 3px; }
 @media (max-width: 700px) { .platform-destinations { grid-template-columns: 1fr; } .check-row { align-items: start; } .check-actions { justify-items: start; grid-column: 2; } }
+.maintenance-body { display: grid; gap: 14px; }
+.maintenance-note { margin: 0; color: var(--muted); font-size: .8rem; }
+.maintenance-arrow { color: var(--muted); }
+.maintenance-windows { display: grid; gap: 4px; margin: 4px 0 14px; }
+.maintenance-window { align-items: flex-start; margin: 0; }
+.maintenance-window span { display: grid; gap: 2px; }
+.maintenance-window small { color: var(--muted); }

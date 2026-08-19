@@ -1,9 +1,10 @@
 import {platformPage, setupPage} from './page.js';
 import {metricsPage} from './metrics.js';
+import {maintenancePage} from './maintenance.js';
 import {permissionDeniedState} from '../../components/views.js';
 
 export default {
-  id: 'platform', routes: ['platform', 'deployments', 'setup', 'metrics'], style: 'assets/features/platform/styles.css',
+  id: 'platform', routes: ['platform', 'deployments', 'setup', 'metrics', 'maintenance'], style: 'assets/features/platform/styles.css',
   enabled: (ctx) => ctx.features?.platform?.enabled === true,
   navigation: (ctx) => {
     const capabilities = ctx.features?.platform?.capabilities || {};
@@ -15,12 +16,17 @@ export default {
     if (capabilities.metrics) {
       entries.push({route: 'metrics', label: 'Metrics', icon: 'chart', section: 'Control plane'});
     }
+    if (capabilities.maintenance) {
+      entries.push({route: 'maintenance', label: 'Maintenance', icon: 'refresh', section: 'Control plane'});
+    }
     return entries;
   },
-  title: (route) => ({platform: 'Platform', deployments: 'Deployments', setup: 'System Setup', metrics: 'Metrics'}[route] || 'Platform'),
+  title: (route) => ({platform: 'Platform', deployments: 'Deployments', setup: 'System Setup', metrics: 'Metrics', maintenance: 'Maintenance'}[route] || 'Platform'),
   render: ({ctx, route, signal}) => route === 'metrics'
     ? metricsPage(ctx, signal)
-    : route === 'setup'
-      ? (ctx.capabilities.setup ? setupPage(ctx, signal) : permissionDeniedState('System Setup requires an active literal superuser.'))
-      : platformPage(ctx, route),
+    : route === 'maintenance'
+      ? maintenancePage(ctx, signal)
+      : route === 'setup'
+        ? (ctx.capabilities.setup ? setupPage(ctx, signal) : permissionDeniedState('System Setup requires an active literal superuser.'))
+        : platformPage(ctx, route),
 };
