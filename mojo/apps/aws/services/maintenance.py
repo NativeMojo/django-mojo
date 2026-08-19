@@ -23,6 +23,7 @@ Raw provider text never reaches a caller: every failure is re-raised as
 
 from django.core.cache import cache
 
+from mojo.helpers import infrastructure
 from mojo.helpers import logit
 from mojo.helpers.aws import elasticache as elasticache_helper
 from mojo.helpers.aws import rds as rds_helper
@@ -277,6 +278,17 @@ def _dispatch(kind, resource_id, target_version, apply_immediately,
 def apply_upgrade(actor, kind, resource_id, target_version, apply_immediately,
                   scanner=None, rds_client=None, elasticache_client=None):
     """Request ONE engine-version upgrade the server itself is offering."""
+    # Backstop for NON-REST callers (a shell, a job, a future importer). The
+    # REST gate already answered HTTP for every ordinary caller, so reaching
+    # this line means something bypassed it — which is exactly when a
+    # deliberate, logged refusal is worth the duplication.
+    if infrastructure.is_external():
+        logger.error(
+            "maintenance apply refused: %s is %s on this installation",
+            infrastructure.SETTING, infrastructure.EXTERNAL)
+        raise MaintenanceError(
+            infrastructure.refusal_message("Applying an engine-version upgrade"),
+            infrastructure.ERROR_CODE, 403)
     if kind not in KINDS:
         raise MaintenanceError(f"Unknown maintenance kind '{kind}'", "invalid_request")
     if not resource_id:

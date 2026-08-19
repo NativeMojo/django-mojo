@@ -4,6 +4,7 @@ from mojo import decorators as md
 from mojo import errors as me
 from mojo.apps.account.services import admin_platform as _admin_platform
 from mojo.apps.account.services import system_settings
+from mojo.helpers import infrastructure
 
 
 def _deployment(value):
@@ -100,10 +101,17 @@ def on_admin_platform_framework(request):
 def on_admin_platform_framework_update(request):
     """Move the fleet to the newest published django-mojo.
 
+    ``INFRASTRUCTURE_MODE`` is answered first, before the caller's grants and
+    before the offered-version re-check: on an installation whose fleet is
+    applied by external IaC, this is not a permission question at all.
+
     The version is confirmed by typed echo and then re-checked against what
     this installation is actually offering — a stale tab must not be able to
     request a release that is no longer the latest.
     """
+    denied = infrastructure.refuse("Updating the fleet's django-mojo version")
+    if denied is not None:
+        return denied
     overview = _admin_platform.framework_overview(request)
     version = request.DATA.get("version")
     if not overview["can_update"]:

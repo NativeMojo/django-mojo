@@ -25,6 +25,10 @@ const BLOCKED_COPY = {
   update_unavailable: 'No newer django-mojo release is published, or the update check is unavailable.',
   requires_superuser: 'The fleet is pinned to a version, and clearing the pin requires an active superuser.',
   no_converged_deployment: 'No deployment has ever converged on this fleet, so there is no proven commit to redeploy.',
+  // INFRASTRUCTURE_MODE=external. can_update is already false in that mode, so
+  // the row and the inspector reach this copy through the paths they already
+  // had — the Update button is never offered, and the words say who owns it.
+  infrastructure_external: 'external infrastructure mode — the update is applied by your infrastructure team\'s IaC.',
 };
 
 const PIN_COPY = {

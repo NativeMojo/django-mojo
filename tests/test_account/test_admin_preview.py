@@ -654,3 +654,54 @@ def test_maintenance_preview_states(opts):
         assert final["settled"] is True, f"{state}: the upgrade never settled: {final}"
         assert final["upgraded"] is upgraded, \
             f"{state}: expected upgraded={upgraded}, got {final}"
+
+
+@th.django_unit_test("the preview can demonstrate an externally-managed installation")
+def test_preview_infrastructure_mode(opts):
+    from urllib.parse import urlparse
+
+    server = _server()
+    source = (ROOT / "bin/admin_preview_support/server.py").read_text()
+
+    assert "--infrastructure-mode" in source \
+        and "infrastructure_mode=args.infrastructure_mode" in source, \
+        "the preview cannot select an infrastructure mode"
+
+    # The default must keep every existing caller — the tests included — on the
+    # payload they had.
+    default = server.bootstrap([])
+    assert default["infrastructure"] == {"mode": "managed", "managed": True}, \
+        f"the default preview installation is not managed: {default['infrastructure']}"
+    assert default["capabilities"]["infrastructure_managed"] is True, \
+        "the default preview bootstrap does not publish the managed capability"
+    for name in ("platform", "webapps"):
+        assert default["features"][name]["capabilities"]["infrastructure_managed"] is True, \
+            f"the default preview {name} lane does not mirror the managed flag"
+
+    external = server.bootstrap([], infrastructure_mode="external")
+    assert external["infrastructure"] == {"mode": "external", "managed": False}, \
+        f"the preview cannot publish external mode: {external['infrastructure']}"
+    assert external["capabilities"]["infrastructure_managed"] is False, \
+        "the external preview bootstrap still claims a portal-managed installation"
+    for name in ("platform", "webapps"):
+        assert external["features"][name]["capabilities"]["infrastructure_managed"] is False, \
+            f"the external preview {name} lane still claims managed"
+    assert external["features"]["platform"]["enabled"] is True, \
+        "external mode closed the Platform lane instead of only disabling controls"
+
+    # The framework fixture must show what production shows, or the preview is
+    # demonstrating a screen that cannot happen.
+    class Handler:
+        pass
+
+    server.maintenance.reset(Handler, {}, maintenance_state="findings")
+    Handler.infrastructure_mode = "external"
+    code, overview = server.maintenance.get(
+        Handler, urlparse("/api/account/admin/platform/framework"))
+    assert code == 200, f"the framework fixture answered {code} in external mode"
+    assert overview["can_update"] is False, \
+        "the external preview still offers a framework update"
+    assert overview["blocked_reason"] == "infrastructure_external", \
+        f"the external preview names the wrong block: {overview['blocked_reason']!r}"
+    assert overview["installed"] and overview["latest"], \
+        f"the external preview hid the version facts: {overview}"

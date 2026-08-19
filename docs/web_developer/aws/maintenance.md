@@ -22,6 +22,11 @@ Both POST endpoints refuse key-backed sessions (ApiKey, GroupScopedToken) and
 require authentication within the last 600 seconds. A stale session gets
 HTTP 440 `reauth_required`; re-authenticate and retry.
 
+Both POST endpoints are also disabled outright on an installation whose AWS
+estate is applied by external IaC — 403 `error_code: "infrastructure_external"`,
+checked before permissions. Reads are unaffected. See
+[infrastructure_mode](infrastructure_mode.md).
+
 ---
 
 ## GET /api/aws/maintenance/versions
@@ -129,6 +134,7 @@ upgrade finished — poll the status endpoint.
 | HTTP | `error_code` | Meaning |
 |---|---|---|
 | 400 | `invalid_request` | Unknown `kind`, missing `resource`, mismatched `confirm_resource`, or an unstated `apply_immediately` |
+| 403 | `infrastructure_external` | This installation's AWS estate is applied by external IaC. Checked **first**, before permissions — no grant changes it. See [infrastructure_mode](infrastructure_mode.md) |
 | 403 | — | The caller holds `manage_aws` but no platform management tier |
 | 403 | `provider_denied` | IAM refused. `data.failure.iam_action` names the action to grant |
 | 409 | `upgrade_not_offered` | That version is not what the server is offering for that resource |
@@ -216,7 +222,7 @@ it.
 |---|---|
 | `pin.mode` | `latest` (unpinned), `pinned` (a specific version), or `hold` (stay on the last converged version) |
 | `source` | `pypi`, `cache`, or `unavailable` when PyPI could not be reached |
-| `blocked_reason` | `null`, `update_unavailable`, `requires_superuser`, or `no_converged_deployment` |
+| `blocked_reason` | `null`, `update_unavailable`, `requires_superuser`, `no_converged_deployment`, or `infrastructure_external` |
 
 Render `blocked_reason` instead of offering a control that would fail:
 
@@ -224,6 +230,10 @@ Render `blocked_reason` instead of offering a control that would fail:
 - `requires_superuser` — a pin or hold is set; clearing it is superuser-only.
 - `no_converged_deployment` — nothing has ever converged on this fleet, so
   there is no proven commit to redeploy.
+- `infrastructure_external` — this installation's fleet is applied by external
+  IaC. It **overrides** the other three, and the `installed` / `latest` / `pin`
+  facts stay truthful alongside it. See
+  [infrastructure_mode](infrastructure_mode.md).
 
 ---
 
@@ -264,6 +274,7 @@ here — it carries per-node proof.
 | HTTP | Meaning |
 |---|---|
 | 400 | `confirm_version` does not match `version` |
+| 403 | `error_code: "infrastructure_external"` — this installation's fleet is applied by external IaC. Checked **first**, before permissions and before the offered-version re-check |
 | 403 | Only a literal superuser may clear a pin |
 | 409 | `version` is not what the installation is offering, or `can_update` is false |
 | 440 | `reauth_required` |

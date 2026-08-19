@@ -25,7 +25,11 @@ const BLOCKED_COPY = {
   update_unavailable: 'No newer django-mojo release is published, or PyPI is not answering.',
   requires_superuser: 'The fleet is pinned to a version. Only a superuser can clear the pin.',
   no_converged_deployment: 'No deployment has ever converged on this fleet, so there is no proven commit to redeploy.',
+  infrastructure_external: 'external infrastructure mode — the update is applied by your infrastructure team\'s IaC.',
 };
+
+const EXTERNAL_DETAIL = 'external infrastructure mode — upgrades are applied by your infrastructure team\'s IaC';
+const EXTERNAL_SUB = 'Infrastructure mode is external, so this portal does not apply upgrades.';
 
 const KIND_LABELS = {
   'rds-instance': 'database', 'rds-cluster': 'cluster', elasticache: 'cache',
@@ -174,6 +178,11 @@ export async function maintenancePage(ctx, signal = null) {
       'Infrastructure maintenance requires the manage_aws permission.');
   }
 
+  // A MISSING flag means managed: an older server that never learned about
+  // INFRASTRUCTURE_MODE must not have its controls silently disabled. Only an
+  // explicit false — a server that said "external" — takes them away.
+  const managed = ctx.features?.platform?.capabilities?.infrastructure_managed !== false;
+
   const body = h('div', {class: 'row-page maintenance-body'}, loadingState('Loading…'));
   const root = h('div', {class: 'maintenance-page'},
     pageHeader('Platform control plane', 'Maintenance',
@@ -240,7 +249,7 @@ export async function maintenancePage(ctx, signal = null) {
   }
 
   async function applyUpgrade(finding) {
-    if (busy) return;
+    if (busy || !managed) return;
     const choice = await confirmUpgrade(finding);
     if (!choice) return;
     busy = true;
@@ -264,7 +273,7 @@ export async function maintenancePage(ctx, signal = null) {
   }
 
   async function applyFrameworkUpdate() {
-    if (busy || !framework?.can_update) return;
+    if (busy || !managed || !framework?.can_update) return;
     const choice = await confirmFrameworkUpdate(framework);
     if (!choice) return;
     busy = true;
@@ -292,6 +301,17 @@ export async function maintenancePage(ctx, signal = null) {
         valueNode: versionNode(finding), detail: running.text,
         detailTone: running.tone === 'danger' ? 'danger'
           : running.tone === 'ok' ? '' : 'warning'});
+    }
+    if (!managed) {
+      // The finding still matters — an out-of-support engine is out of support
+      // whoever applies the fix. Only the control goes away, replaced by who
+      // owns the change here.
+      return statusRow({
+        tone: findingTone(finding), name: finding.resource_id,
+        valueNode: versionNode(finding),
+        detail: `${deadlineText(finding)} · ${EXTERNAL_DETAIL}`,
+        detailTone: 'warning',
+      });
     }
     return statusRow({
       tone: findingTone(finding), name: finding.resource_id,
@@ -356,11 +376,17 @@ export async function maintenancePage(ctx, signal = null) {
       detailTone: behind ? 'warning' : ''});
   }
 
+  // statusHeadline takes one sub line, so the mode note joins whatever else
+  // the page had to say rather than displacing it.
+  function sub(text) {
+    return [text, managed ? '' : EXTERNAL_SUB].filter(Boolean).join(' ');
+  }
+
   function headline() {
     if (report?.status === 'unavailable') {
       return statusHeadline({tone: 'muted',
         message: 'AWS is not answering, so pending upgrades are unknown.',
-        sub: 'No credentials are configured for this installation, or the endpoint is unreachable.',
+        sub: sub('No credentials are configured for this installation, or the endpoint is unreachable.'),
         onRefresh: () => load(true)});
     }
     const pending = (report?.findings || []).length;
@@ -371,9 +397,9 @@ export async function maintenancePage(ctx, signal = null) {
       message: pending
         ? `${pending} managed service${pending === 1 ? '' : 's'} can be upgraded`
         : 'No managed service is behind on a major version',
-      sub: report?.scheduled === false
+      sub: sub(report?.scheduled === false
         ? 'Scheduled drift scanning is off, so this page only reflects what it read just now.'
-        : '',
+        : ''),
       observedAt: report?.generated_at,
       onRefresh: () => load(true)});
   }

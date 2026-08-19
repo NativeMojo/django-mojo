@@ -10,6 +10,8 @@ from django.utils.dateparse import parse_datetime
 
 from mojo import errors as merrors
 from mojo.apps.account.services import system_settings
+from mojo.helpers import infrastructure
+from mojo.helpers import logit
 from mojo.helpers.settings import settings
 
 
@@ -1085,6 +1087,12 @@ def framework_overview(request, refresh=False):
     * ``no_converged_deployment`` — nothing has ever been proven to run on this
       fleet, so there is no commit to redeploy. Checked last because it is the
       only reason that costs a query.
+    * ``infrastructure_external`` — ``INFRASTRUCTURE_MODE`` says this
+      installation's fleet is applied by an external IaC pipeline. It OVERRIDES
+      the other three because it is not about this caller or this release: the
+      endpoint will refuse whatever the version facts say. The installed /
+      latest / pin facts stay truthful so every surface can still report what
+      runs here and what is published.
     """
     from mojo.apps.edge.services import framework_version, platform_deploy
     if refresh:
@@ -1101,6 +1109,8 @@ def framework_overview(request, refresh=False):
         blocked = "requires_superuser"
     elif platform_deploy.last_converged_deployment() is None:
         blocked = "no_converged_deployment"
+    if infrastructure.is_external():
+        blocked = infrastructure.ERROR_CODE
     return {
         "schema_version": SCHEMA_VERSION,
         "installed": value.get("installed"),
@@ -1130,6 +1140,17 @@ def apply_framework_update(request, version):
     """
     from mojo.apps.edge.services import deploy, platform_deploy
     from mojo.apps.edge.settings_validators import FRAMEWORK_VERSION_KEY
+
+    # Backstop for NON-REST callers only. The REST gate has already answered
+    # HTTP for every ordinary caller, so anything arriving here bypassed it —
+    # and the incident this raise fires is exactly what should happen then.
+    if infrastructure.is_external():
+        logit.error(
+            f"framework update refused: {infrastructure.SETTING} is "
+            f"{infrastructure.EXTERNAL} on this installation")
+        raise merrors.PermissionDeniedException(
+            infrastructure.refusal_message(
+                "Updating the fleet's django-mojo version"))
 
     pin = None
     try:

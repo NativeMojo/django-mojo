@@ -39,7 +39,11 @@ def describe(capabilities):
               "advanced": capabilities["view_advanced"],
               "metrics": capabilities["manage_aws"],
               "maintenance": capabilities["manage_aws"]}
-    return {"id": NAME, "enabled": any(values.values()), "capabilities": values}
+    # Same ordering as the real provider: `enabled` comes from the authority
+    # values, then the installation-wide flag joins them.
+    enabled = any(values.values())
+    values["infrastructure_managed"] = capabilities["infrastructure_managed"]
+    return {"id": NAME, "enabled": enabled, "capabilities": values}
 
 
 def reset(handler, fixtures, *, setup_state="idle", metrics_state="live",

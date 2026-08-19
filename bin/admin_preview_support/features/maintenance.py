@@ -128,6 +128,10 @@ def _framework(handler):
         blocked = "no_converged_deployment"
     elif state == "clear":
         blocked = "update_unavailable"
+    if getattr(handler, "infrastructure_mode", "managed") == "external":
+        # Mirrors framework_overview: the mode overrides every other block, and
+        # the version facts stay truthful.
+        blocked = "infrastructure_external"
     return 200, {
         "schema_version": 1,
         "installed": FRAMEWORK_INSTALLED,

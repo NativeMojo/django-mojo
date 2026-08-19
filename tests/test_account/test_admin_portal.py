@@ -1,8 +1,26 @@
 """Private Admin delivery, feature bootstrap, and asset-boundary regressions."""
 
+from contextlib import contextmanager
 from unittest import mock
 
 from testit import helpers as th
+
+
+@contextmanager
+def _override_setting(name, value):
+    """In-process Django settings override (th.server_settings only affects the
+    separate server process; override_settings is banned by testing rules)."""
+    import django.conf
+    sentinel = object()
+    original = getattr(django.conf.settings, name, sentinel)
+    setattr(django.conf.settings, name, value)
+    try:
+        yield
+    finally:
+        if original is sentinel:
+            delattr(django.conf.settings, name)
+        else:
+            setattr(django.conf.settings, name, original)
 
 
 ADMIN_EMAIL = "admin_portal@test.com"
@@ -150,3 +168,74 @@ def test_private_asset_manifest_is_exact(opts):
                   "assets/./app.js", "assets//app.js",
                   "assets/features/people/../platform/page.js", "/etc/passwd"):
         assert admin_assets.asset_path(value) is None, value
+
+
+# ── INFRASTRUCTURE_MODE ─────────────────────────────────────────────────────
+
+def _bootstrap(opts):
+    import inspect
+    from mojo.apps.account.models import User
+    from mojo.apps.account.rest import admin_portal as views
+
+    user = User.objects.get(pk=opts.portal_user_id)
+    return inspect.unwrap(views.on_admin_bootstrap)(mock.Mock(user=user))
+
+
+@th.django_unit_test("bootstrap publishes the infrastructure mode as a fact and a capability")
+def test_bootstrap_publishes_infrastructure_mode(opts):
+    managed = _bootstrap(opts)
+    with _override_setting("INFRASTRUCTURE_MODE", "external"):
+        external = _bootstrap(opts)
+
+    assert managed["infrastructure"] == {"mode": "managed", "managed": True}, \
+        f"a default installation is not published as managed: {managed['infrastructure']}"
+    assert managed["capabilities"]["infrastructure_managed"] is True, \
+        "the managed capability is missing from a default installation"
+    assert external["infrastructure"] == {"mode": "external", "managed": False}, \
+        f"external mode is not published: {external['infrastructure']}"
+    assert external["capabilities"]["infrastructure_managed"] is False, \
+        "the capability did not flip with the mode"
+
+    # The feature validator accepts named booleans only, so the mode STRING
+    # must never ride inside a feature's capabilities — it would disable the
+    # whole lane rather than describe it.
+    for payload in (managed, external):
+        for name, feature in payload["features"].items():
+            for key, value in feature["capabilities"].items():
+                assert isinstance(value, bool), \
+                    f"features.{name}.capabilities.{key} is not a bool: {value!r}"
+
+
+@th.django_unit_test("the Platform lane never opens on the infrastructure flag alone")
+def test_platform_feature_enabled_ignores_infrastructure_flag(opts):
+    from mojo.apps.account.services.admin_features import platform, webapps
+
+    lane = platform.describe(None, {"infrastructure_managed": True})
+    assert lane["enabled"] is False, \
+        ("a caller with no platform grant was given the Platform lane by a flag "
+         f"that is true on every managed install: {lane}")
+    assert lane["capabilities"]["infrastructure_managed"] is True, \
+        "the flag was dropped instead of merely being kept out of `enabled`"
+
+    merged = webapps.describe(None, {"infrastructure_managed": True})
+    assert merged["enabled"] is False, \
+        f"the Deployments lane opened on the infrastructure flag alone: {merged}"
+    assert merged["capabilities"]["infrastructure_managed"] is True, \
+        "the Deployments lane dropped the flag"
+
+
+@th.django_unit_test("the infrastructure capability survives feature validation as a bool")
+def test_infrastructure_capability_survives_validation(opts):
+    from mojo.apps.account.services import admin_features
+
+    for managed in (True, False):
+        features = admin_features.bootstrap_features(
+            None, {"infrastructure_managed": managed})
+        for name in ("platform", "webapps"):
+            capabilities = features[name]["capabilities"]
+            assert "infrastructure_managed" in capabilities, \
+                (f"{name} lost the infrastructure flag in validation — the "
+                 f"provider was rejected and failed closed: {features[name]}")
+            assert capabilities["infrastructure_managed"] is managed, \
+                (f"{name} published {capabilities['infrastructure_managed']!r} "
+                 f"for a mode of managed={managed}")

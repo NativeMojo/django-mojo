@@ -518,3 +518,42 @@ def test_webapp_onboarding_asset_contract(opts):
         "preview cannot render onboarding recovery states"
     assert "cls._safe_payload(value)" in preview, \
         "preview redaction is not recursive"
+
+
+@th.django_unit_test("every portal surface that could mutate infrastructure reads the mode")
+def test_infrastructure_mode_asset_contract(opts):
+    maintenance = (ASSETS / "features/platform/maintenance.js").read_text()
+    api = (ASSETS / "features/webapps/api.js").read_text()
+    setup = (ASSETS / "features/platform/page.js").read_text()
+
+    # A MISSING capability is an older server, and an older server is a managed
+    # install — the controls must not disappear on a payload that predates the
+    # switch. Only an explicit false takes them away.
+    assert "capabilities?.infrastructure_managed !== false" in maintenance, \
+        "Maintenance does not treat a missing infrastructure capability as managed"
+    assert "if (busy || !managed) return;" in maintenance, \
+        "the Maintenance apply control has no belt-and-braces mode guard"
+    assert "if (busy || !managed || !framework?.can_update) return;" in maintenance, \
+        "the framework update control has no belt-and-braces mode guard"
+    assert "infrastructure_external" in maintenance, \
+        "Maintenance cannot explain an infrastructure_external block"
+
+    # The Deployments-lane framework row and its drill-in both route through
+    # BLOCKED_COPY, so the copy entry is the whole contract there.
+    assert "infrastructure_external:" in api, \
+        "the Deployments framework drill-in cannot explain external mode"
+    assert "BLOCKED_COPY[framework?.blocked_reason]" in api, \
+        "the framework drill-in no longer reads blocked_reason for its copy"
+
+    # System Setup names the mode in words, from the top-level bootstrap fact.
+    assert "ctx?.infrastructure?.managed !== false" in setup, \
+        "System Setup does not read the published infrastructure fact"
+    assert "Infrastructure: managed by this portal" in setup \
+        and "Infrastructure: external" in setup, \
+        "System Setup does not state which kind of installation this is"
+    assert "infrastructureNote(ctx)" in setup, \
+        "the System Setup mode line is never rendered"
+
+    for source in (maintenance, api, setup):
+        assert "innerHTML" not in source, \
+            "an infrastructure-mode surface writes markup instead of building nodes"

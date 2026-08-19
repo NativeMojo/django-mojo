@@ -17,7 +17,9 @@ def describe(capabilities):
     values = {"view": capabilities["webapps"],
               "manage": capabilities["manage_webapps"],
               "onboard": capabilities["manage_webapps"]}
-    return {"id": NAME, "enabled": values["view"], "capabilities": values,
+    enabled = values["view"]
+    values["infrastructure_managed"] = capabilities["infrastructure_managed"]
+    return {"id": NAME, "enabled": enabled, "capabilities": values,
             "contracts": {"onboarding": 1, "summary": 1}}
 
 

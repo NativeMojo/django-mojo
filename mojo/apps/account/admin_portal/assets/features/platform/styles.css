@@ -41,6 +41,7 @@ html[data-theme="dark"] {
 .check-technical summary { cursor: pointer; }
 .check-technical .evidence-json { max-width: 34rem; margin: 8px 0 0; white-space: pre-wrap; }
 .owner-guidance { color: var(--muted); font-size: .8rem; font-weight: 650; }
+.infrastructure-note { margin: 0; color: var(--muted); font-size: .8rem; }
 [data-focus]:focus { outline: 3px solid color-mix(in srgb, var(--accent) 38%, transparent); outline-offset: 3px; }
 @media (max-width: 700px) { .check-row { align-items: start; } .check-actions { justify-items: start; grid-column: 2; } }
 .maintenance-body { display: grid; gap: 14px; }

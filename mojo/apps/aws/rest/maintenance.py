@@ -20,10 +20,17 @@ must echo the identifier exactly, and the mismatch is refused BEFORE any
 provider call. ``apply_immediately`` has no default — "now" and "next
 maintenance window" are different outage decisions, and a missing field is a
 question that was never asked, not a "no".
+
+``INFRASTRUCTURE_MODE`` is checked before any of that. It is a property of the
+INSTALLATION, not of the caller — on an install whose AWS estate is applied by
+an external IaC pipeline nobody may apply an upgrade here, however privileged.
+So it is the first statement in the apply body (route decorators still run
+first, being decorators), and no amount of extra grants changes the answer.
 """
 
 from mojo import decorators as md
 from mojo import errors as me
+from mojo.helpers import infrastructure
 from mojo.helpers import logit
 from mojo.helpers.response import JsonResponse
 from mojo.apps.aws.services import maintenance as maintenance_service
@@ -104,6 +111,9 @@ def on_maintenance_status(request):
 @md.requires_global_perms("manage_aws")
 def on_maintenance_apply(request):
     """Request one engine-version upgrade the server itself is offering."""
+    denied = infrastructure.refuse("Applying an engine-version upgrade")
+    if denied is not None:
+        return denied
     _require_manage_tier(request)
     data = request.DATA
     kind = _text(data, "kind")
