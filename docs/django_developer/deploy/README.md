@@ -14,6 +14,7 @@ run on the node itself, outside Django:
 | `mojo.deploy.mojosec` | Safely installs and operates the privileged, observe-only MojoSec sensor |
 | `mojo.deploy.audit` | Converges selective Linux Audit execution provenance and publishes constrained health |
 | `mojo.deploy.firewall_broker` | Root semantic firewall executor; accepts no argv and constructs closed operations |
+| `mojo.deploy.provision` | Takes an **empty AWS account** to a running environment — eight prompts, a committed `aws/environments/<env>.json`, a priced preview, then an idempotent converge. Creates and modifies; never deletes. See [provision.md](provision.md) |
 | `python3 -m mojo.deploy locate <name>` | Prints the absolute packaged path of `update.sh` / `post_deploy.sh` for the project shims |
 | `python3 -m mojo.deploy render --dest …` | Materializes the packaged cron/systemd templates into `${PROJ_PATH}/var/deploy` |
 | `mojo/deploy/scripts/update.sh` | The fleet update entry (deploy / manual modes) — packaged bash, run through a project shim |
@@ -30,6 +31,7 @@ python3 -m mojo.deploy.jobman status
 python3 -m mojo.deploy.node_setup --dry-run
 (cd / && sudo /usr/bin/python3 -E -P -m mojo.deploy.mojosec converge --mode observe)
 python3 -m mojo.deploy locate update.sh
+python3 -m mojo.deploy.provision apply --env prod --dry-run
 ```
 
 MojoSec convergence snapshots every Audit rules source, generated and active
@@ -80,6 +82,10 @@ config, which is the only interesting case.
 `check_setup` is a `-m` program for a weaker reason: it audits an AWS account,
 not a running deployment, and is routinely run from a laptop against an account
 whose Django project is not installed locally.
+
+`provision` is the strongest case of all: it runs against an account that has no
+django-mojo in it *anywhere* yet — no node, no config bucket, no `django.conf` to
+read — so there is nothing a management command could bootstrap itself from.
 
 There are deliberately **no `[project.scripts]` console entry points**. Those
 reintroduce a dependency on wherever pip put the script directory — the exact

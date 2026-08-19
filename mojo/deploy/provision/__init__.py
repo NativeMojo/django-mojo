@@ -69,4 +69,24 @@ THE MODULES
     dns             optional hosted zone and A records.
     plan            the DAG that orders all of the above, and the two entry
                     points `observe()` and `apply()`.
+
+AND THE OPERATOR-FACING HALF, which consumes all of it and creates nothing of
+its own:
+
+    inputs          the eight questions, the committed `aws/environments/
+                    <env>.json`, and `infrastructure_mode()` — the fail-closed
+                    accessor the node-configuration step writes verbatim into
+                    `django.conf`.
+    clients         the boto3 session factory (`--profile` / `--role-arn` /
+                    ambient) that puts REAL clients in the `Clients` container.
+                    The one file here that decides which credential a run uses.
+    __main__        `python3 -m mojo.deploy.provision init|apply|status`. Asks,
+                    previews, prices, confirms, renders. Every AWS mutation it
+                    causes belongs to `plan.apply()`.
+
+There is deliberately NO `[project.scripts]` entry point, for the same reason
+the rest of `mojo/deploy/` has none: a console script reintroduces a dependency
+on wherever pip put the script directory, and skeleton nodes run no virtualenv.
+`python3 -m` resolves against the interpreter that has django-mojo installed,
+which is the only thing that is reliably true everywhere.
 """

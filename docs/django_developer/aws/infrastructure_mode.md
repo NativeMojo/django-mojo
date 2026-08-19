@@ -81,12 +81,42 @@ The 403 body:
 
 ## What is gated today
 
-Two endpoints, each at both layers:
+Two endpoints, each at both layers, plus the provisioning CLI:
 
-| Endpoint | REST gate | Service backstop |
+| Surface | Gate | Backstop |
 |---|---|---|
 | `POST /api/aws/maintenance/apply` | `mojo/apps/aws/rest/maintenance.py` | `maintenance.apply_upgrade` raises `MaintenanceError(..., "infrastructure_external", 403)` |
 | `POST /api/account/admin/platform/framework/update` | `mojo/apps/account/rest/admin_platform.py` | `admin_platform.apply_framework_update` raises `PermissionDeniedException` |
+| `python3 -m mojo.deploy.provision apply` | `mojo/deploy/provision/__main__.py` refuses with exit `3` | — the CLI *is* the only caller of its own converge |
+
+### The CLI reads the ENV FILE, not this setting
+
+`mojo.deploy.provision` reads `infrastructure_mode` from the committed
+`aws/environments/<env>.json`, not from `INFRASTRUCTURE_MODE` in a settings
+file, and it does not import `mojo/helpers/infrastructure.py` at all.
+
+That is not a shortcut, it is the only thing that can work. The CLI provisions
+an **empty account**: at the moment it runs there is no node, no
+`/opt/api/var/django.conf`, and no Django settings for `settings.get_static` to
+read — the setting this page documents does not exist yet, because the thing
+that would hold it has not been created. `mojo/deploy/` is also barred from
+importing `mojo.helpers.*` entirely (see `mojo/deploy/__init__.py`).
+
+So `mojo/deploy/provision/inputs.py` restates the same two literals and the same
+fail-closed value table, and a test in `tests/test_deploy/provision_cli.py`
+imports **both** modules in one process — legal there, since a test process has
+settings configured — and asserts they agree across the whole value table. A
+duplicated fail-closed rule is only safe while something proves the copies have
+not drifted.
+
+The two are then joined at the other end: `inputs.infrastructure_mode(answers)`
+is what the node-configuration step writes into `django.conf`'s
+`INFRASTRUCTURE_MODE`, verbatim. The file is the source; the setting is its
+image on a node that now exists. A CLI run launched with `--override-external`
+still renders `external`, because the override is a property of one invocation
+and never of the environment.
+
+See [deploy/provision.md](../deploy/provision.md).
 
 The **backstops exist for non-REST callers only** — a shell, a job, a future
 importer. The REST gate has already answered HTTP for every ordinary caller, so
