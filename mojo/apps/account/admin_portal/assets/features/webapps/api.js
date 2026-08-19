@@ -179,12 +179,16 @@ export function frameworkRow(ctx, framework, {onOpen, onUpdate}) {
   }
   const installed = framework.installed || '—';
   const pin = framework.pin || {mode: 'latest', value: null};
-  if (framework.update_available && framework.can_update) {
+  const manage = ctx.features?.platform?.capabilities?.manage === true;
+  if (framework.update_available) {
+    // The Update control belongs only to callers the endpoint would accept
+    // (manage tier); viewers still see the fact, with the drill-in as action.
+    const canUpdate = framework.can_update && manage;
     const row = statusRow({tone: 'warn', name: 'django-mojo',
       value: `${framework.latest} available — installed ${installed}`,
-      detailNode: detailLink('Details', onOpen),
-      action: {label: 'Update', href: '#'}});
-    return wireAction(row, onUpdate);
+      detailNode: canUpdate ? detailLink('Details', onOpen) : null,
+      action: {label: canUpdate ? 'Update' : 'Details', href: '#'}});
+    return wireAction(row, canUpdate ? onUpdate : onOpen);
   }
   if (pin.mode === 'hold') {
     return wireAction(statusRow({tone: 'muted', name: 'django-mojo',
@@ -287,6 +291,7 @@ async function writeFrameworkPin(value, reload) {
 export function openFrameworkInspector(ctx, framework, reload) {
   const pin = framework?.pin || {mode: 'latest', value: null};
   const ownerEdit = ctx.capabilities?.settings_owner_edit === true;
+  const manage = ctx.features?.platform?.capabilities?.manage === true;
   const rows = h('dl', {class: 'details'},
     h('div', {}, h('dt', {text: 'Installed'}),
       h('dd', {class: 'mono', text: framework?.installed || 'unknown'})),
@@ -300,12 +305,14 @@ export function openFrameworkInspector(ctx, framework, reload) {
     title: 'django-mojo framework',
     content: h('div', {class: 'framework-inspector'}, rows,
       h('p', {class: 'muted small', text: PIN_COPY[pin.mode] || PIN_COPY.latest}),
-      framework?.can_update
+      framework?.can_update && manage
         ? h('div', {class: 'form-actions'}, h('button', {class: 'button primary',
           onclick: async () => { inspector.close(); await applyFrameworkUpdate(ctx, framework, reload); },
         }, `Update to ${framework.latest}`))
         : h('p', {class: 'muted small',
-          text: BLOCKED_COPY[framework?.blocked_reason] || 'No update is available right now.'}),
+          text: framework?.can_update && !manage
+            ? 'Updating requires platform manage access.'
+            : (BLOCKED_COPY[framework?.blocked_reason] || 'No update is available right now.')}),
       ownerEdit ? h('div', {class: 'form-actions'},
         pin.mode === 'latest'
           ? h('button', {class: 'button ghost', onclick: async () => {
