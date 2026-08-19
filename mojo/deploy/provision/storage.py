@@ -527,6 +527,32 @@ def ensure_bootstrap_payload(clients, spec, observed, apply=False):
     names = spec_module.names(spec)
     bucket = observed.get("config_bucket") or names["config_bucket"]
     version = django_mojo_version()
+    s3 = clients.get("s3")
+    keys = (names["stage1_script_object"], names["cloudwatch_object"],
+            names["app_archive_object"])
+
+    if not apply:
+        # A preview must stay cheap. Building the tarball and asking PyPI about
+        # the version are both real work — a `status` run does them on every
+        # invocation otherwise — and neither changes the answer a dry run can
+        # give: whether the objects are there. The full check happens on the
+        # run that is about to launch something.
+        absent = [key for key in keys if published_sha(s3, bucket, key) is None]
+        if not absent:
+            findings.append(report.existing(
+                PAYLOAD_STEP, "payload.ok",
+                f"the boot payload is published under s3://{bucket}/"
+                f"{names['bootstrap_prefix']}/"))
+            return findings, actions, result
+        for key in absent:
+            findings.append(report.missing(
+                PAYLOAD_STEP, "payload.missing",
+                f"s3://{bucket}/{key} does not exist",
+                "apply publishes it — and checks the version pin against PyPI "
+                "— before any node is launched"))
+            actions.append(report.Action(PAYLOAD_STEP, "write",
+                                         f"s3://{bucket}/{key}"))
+        return findings, actions, result
 
     published = pypi_has_version(version)
     if published is False:
@@ -570,7 +596,6 @@ def ensure_bootstrap_payload(clients, spec, observed, apply=False):
         (names["app_archive_object"], archive, "application/gzip"),
     )
 
-    s3 = clients.get("s3")
     stale = []
     for key, body, _ in objects:
         payload = body.encode("utf-8") if isinstance(body, str) else body
@@ -585,9 +610,6 @@ def ensure_bootstrap_payload(clients, spec, observed, apply=False):
             f"s3://{bucket}/{key} is missing or out of date",
             "apply publishes it before any node is launched"))
         actions.append(report.Action(PAYLOAD_STEP, "write", f"s3://{bucket}/{key}"))
-
-    if not apply:
-        return findings, actions, result
 
     for key, body, content_type in objects:
         if key not in stale:

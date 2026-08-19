@@ -179,7 +179,9 @@ class Command(BaseCommand):
             self.stdout.write(token)
             return
 
-        self.stdout.write(self.style.SUCCESS(f"Login link: {url}"))
+        # Deliberately unstyled: this line is meant to be copied, and an
+        # ANSI-wrapped URL breaks that everywhere it is pasted.
+        self.stdout.write(f"Login link: {url}")
         self.stdout.write(
             "This link is single use and expires in one hour. It sets the "
             "account's password; it does not reveal one.")
