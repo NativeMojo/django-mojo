@@ -81,13 +81,220 @@ The 403 body:
 
 ## What is gated today
 
-Two endpoints, each at both layers, plus the provisioning CLI:
+Two endpoints, each at both layers, the provisioning CLI, and one readiness
+section that reports the mode without gating anything:
 
 | Surface | Gate | Backstop |
 |---|---|---|
 | `POST /api/aws/maintenance/apply` | `mojo/apps/aws/rest/maintenance.py` | `maintenance.apply_upgrade` raises `MaintenanceError(..., "infrastructure_external", 403)` |
 | `POST /api/account/admin/platform/framework/update` | `mojo/apps/account/rest/admin_platform.py` | `admin_platform.apply_framework_update` raises `PermissionDeniedException` |
 | `python3 -m mojo.deploy.provision apply` | `mojo/deploy/provision/__main__.py` refuses with exit `3` | — the CLI *is* the only caller of its own converge |
+| System Setup's `aws_infrastructure` section | reported as a `warn` row, not a refusal | `infra_setup.refuse_external()` raises `DefinitiveSetupFailure` |
+
+### The third surface: `aws_infrastructure`
+
+`mojo/apps/aws/services/infra_setup.py` registers a **read-only** System Setup
+section at order 34. It is the third gated surface and the only one whose gate
+is not a refusal, which makes it worth stating precisely how it differs from the
+two 403s above.
+
+| | The two endpoints | `aws_infrastructure` |
+|---|---|---|
+| Shape | `JsonResponse`, HTTP 403 | a `system_readiness.result` row |
+| Helper | `infrastructure.refuse(action)` | `infrastructure.refusal_message(action)` |
+| Status | 403 | `warn` — never `fail` |
+| `error_code` | `infrastructure_external` | none; a readiness row carries no error code |
+| Trigger | a caller tried to mutate | reading the report |
+
+`refuse()` is the wrong tool here and calling it would be a bug: it returns a
+`JsonResponse`, which is meaningless inside a readiness check. The section calls
+`refusal_message()` and puts the sentence in the row's `explanation`.
+
+**The section registers with `fix=None`, and that is load-bearing.** Registering
+any fixer here — even one that politely refused under `external` — would break
+the flow it is meant to participate in, because two shipped behaviors compose
+badly:
+
+1. `system_setup._build_steps()` adds a step for **every** fixable section on
+   **every** "Fix all" run, regardless of that section's current status.
+2. `_execute_planned` treats a raised `DefinitiveSetupFailure` as **terminal**:
+   `operation.status = "failed"`.
+
+So an always-refusing infrastructure fixer would hard-fail every Fix-all run on
+an external-mode install — before the operator ever reached the sections that
+*can* be repaired, and before `final_readiness`. Read-only avoids that entirely.
+
+There is a second trap for whoever adds a fixer later: a section registered with
+a `fix` and no `reconcile` hangs forever in `_execute_reconcile`, which returns
+`{"status": "pending"}` indefinitely. Re-read `_build_steps` and
+`_execute_reconcile` before changing this, and add both halves or neither.
+
+`refuse_external(action_label)` exists as the backstop for any apply path this
+module ever grows. Note what it can and cannot do:
+
+```python
+from mojo.apps.aws.services import infra_setup
+
+infra_setup.refuse_external("Infrastructure repair")
+# None when managed; raises DefinitiveSetupFailure when external.
+```
+
+**The message it raises never reaches the operator.** `_execute_planned` catches
+`DefinitiveSetupFailure` and records only `exception_class` — the human-readable
+explanation is discarded by design, because an exception message is not a
+trusted string to render. That is precisely why the explanation lives in the
+`check` row instead, where an operator actually reads it.
+
+### What the portal observes, and what only the CLI applies
+
+This is the Setup boundary, and getting it wrong in either direction wastes an
+afternoon:
+
+| | Portal (`aws_infrastructure`) | CLI (`python3 -m mojo.deploy.provision`) |
+|---|---|---|
+| Observes the topology | yes — the same `plan.observe` | yes |
+| Creates or modifies anything | **never** | `apply` does |
+| Needs a shell on the operator's machine | no | yes |
+| Needs AWS credentials | read-only ones, from the running install | provisioning ones |
+
+The portal answers *"is what was provisioned still what the declaration says?"*.
+It never answers *"make it so"* — nothing in the portal has, or should have, the
+credentials to build a VPC.
+
+**Section codes are frozen once shipped.** `register_section` stamps
+`definition_version=1` and System Setup persists `section:<code>` step ids in
+`SystemSetupOperation.steps`. Renaming `aws_infrastructure` later strands every
+persisted operation that referenced it; a rename needs a reconciliation adapter,
+not an edit.
+
+### Three things observe an AWS account, and this is not a fourth
+
+`infra_setup.py` owns no opinion about an account. It resolves which environment
+this installation is and hands the spec to `mojo.deploy.provision.plan.observe`
+— the same observation the CLI runs before an `apply`. The judgement is the
+provisioner's; only the rendering is the portal's.
+
+| Module | When | Judges? | Answers |
+|---|---|---|---|
+| `mojo/deploy/check_setup.py` | pre-Django | yes, and exits non-zero | "is this account set up correctly?" |
+| `mojo/apps/aws/services/aws_check.py` | in-Django | yes, and creates missing integration surfaces | "can this deployment talk to AWS?" |
+| `mojo/deploy/provision/discover.py` | pre-Django | no | "what is already there?" |
+
+The import direction is the legal one. `mojo/deploy/` may never import Django or
+`mojo.helpers.*` (see `mojo/deploy/__init__.py`); a Django-side module importing
+`mojo.deploy.provision` is fine, and is exactly what `infra_setup` does. It must
+never become the reason someone adds the reverse import to the provisioner.
+
+### Which environment, and why nothing scans an account it was not given
+
+`mojo.apps.aws` is installed on every fresh clone, and `plan.observe()` is dozens
+of Describe calls. So the environment is resolved by **discovering**
+`<project>/aws/environments/*.json` — and **no client is constructed until it
+resolves**:
+
+| What is on disk | Result |
+|---|---|
+| exactly one `<env>.json` | that environment is observed |
+| several, and `MOJO_ENVIRONMENT` names one | that one is observed |
+| several, and nothing names one | `pending` — remediation names `MOJO_ENVIRONMENT` |
+| none | `pending` — remediation names the provisioning CLI |
+| the named `<env>.json` is absent, unreadable, or fails `inputs.problems()` | `pending`, naming the environment |
+
+`MOJO_ENVIRONMENT` is read with `settings.get_static`, so it is file-only for the
+same reason `INFRASTRUCTURE_MODE` is. Every unresolved case is `pending`, never
+`fail`: an installation whose infrastructure someone else built is not broken.
+And every one of them makes zero AWS calls — the failure mode this avoids is a
+fresh clone quietly scanning a stranger's account because a section was
+registered.
+
+The observation is cached in `django.core.cache` for 120 seconds (matching
+`capacity.REPORT_TTL`), keyed by **region and spec identity** — keyed on the spec
+alone, two installations pointing one declaration at different accounts would
+serve each other's observation. The final-readiness path bypasses the cache
+entirely (`context["operation"]` is set only there), because serving a pre-fix
+observation as proof of a post-fix state is wrong rather than merely stale.
+
+### Rows, and the two ceilings that shape them
+
+`system_readiness.run` keeps 64 checks per section, but that is not the binding
+limit: `setup_safety.sanitize` bounds the **whole serialized report** to 256
+items, shared across every registered section, and one detailed check row costs
+a dozen. So the section follows the same shape the hosting sections use — a
+summary row, then problem rows only:
+
+| Row | When |
+|---|---|
+| `aws_infrastructure.mode` | always, first |
+| `aws_infrastructure.environment` | only when the environment did not resolve |
+| `aws_infrastructure.summary` | whenever an observation ran; counts are authoritative |
+| `aws_infrastructure.<step>` | one per DAG step that is **not** `pass`, worst first, bounded to 12 |
+| `aws_infrastructure.additional_steps` | when more steps need attention than fit |
+| `aws_infrastructure.observation` | the observation itself failed |
+
+A converged account costs exactly two rows. Detail rows are ordered by severity
+**before** they are bounded, because both ceilings truncate from the end of the
+list — a `fail` that sorted after twelve `warn`s would vanish while the warnings
+survived, which turns a display limit into a correctness bug.
+
+Finding status maps as follows. `PENDING` and `MANUAL` are real shipped statuses
+and each has a reason for where it lands:
+
+| `report` status | Readiness | Why |
+|---|---|---|
+| `PASS` | `pass` | |
+| `DRIFT` | `warn` | exists, differs, and `apply` can modify it in place |
+| `MISSING` | `pending` | not there yet; `apply` will create it |
+| `MANUAL` | `warn` | exists and works, but the differing field is immutable — nothing this portal can do, and a red for an unrepairable state trains operators to ignore red |
+| `PENDING` | `pending` | AWS is still building it; an Aurora cluster reports `creating` for ten minutes |
+| `BLOCKED` | `fail` | a dependency failed, so this step never ran |
+| `BLIND` | **split by cause** | see below |
+
+`BLIND` splits the way `system_setup` already splits an exception with an
+`iam_action`: a finding whose code ends in `.denied` names a permission the
+provisioning credential does not have, which is a permanent operator problem and
+reads `fail`. Everything else `BLIND` — a throttle, a timeout, an unreachable
+endpoint — is `pending`. It still blocks green (a section nobody was allowed to
+read must never look converged) without painting the whole Setup page red for a
+transient AWS blip.
+
+`ProviderCallError` becomes a `fail` row carrying `exc.detail()` and a
+`Grant {iam_action} …` remediation. **Nothing escapes `check_infrastructure`** —
+an escaping exception does not produce a worse row, it replaces the entire
+section with `system_readiness.run`'s opaque `check_error`, losing the mode row
+and every step with it.
+
+### After a fresh provision, three AWS sections are unresolved by design
+
+`aws_s3`, `aws_email` and `aws_monitoring` are still unresolved the first time an
+operator logs into a freshly provisioned install, while `aws_infrastructure` is
+already green. That is correct, not a broken report: the CLI builds the topology,
+and the media bucket, verified SES domain and operations topic are adopted
+afterwards through Fix Setup. Say so before an operator sees three reds beside
+one green and concludes the green must be lying too.
+
+### Tearing an environment down
+
+Nothing in `mojo.deploy.provision` deletes — `discover.GuardedClient` blocks
+every `delete_`/`terminate_`/`revoke_` verb at the seam, deliberately. Removing
+an environment is therefore a manual operator task, and the order matters
+because of dependencies:
+
+1. Delete the DNS records and, if the CLI created it, the hosted zone.
+2. Delete the load balancer, its listeners, and its target groups.
+3. Terminate the nodes and release their elastic IPs.
+4. Delete the Aurora cluster (take a final snapshot first, or you lose the data)
+   and its subnet group.
+5. Delete the ElastiCache replication group and its subnet group.
+6. Empty and delete the config bucket, then the CloudTrail bucket.
+7. Detach and delete the node role and instance profile, and the key pair.
+8. Delete the security groups, then the VPC — subnets, gateway and routes go
+   with it, and the VPC refuses while anything still uses it.
+9. Remove `aws/environments/<env>.json` from the project, so
+   `aws_infrastructure` stops observing an environment that no longer exists.
+
+CloudTrail and GuardDuty are account-level and are deliberately **not** on that
+list — turning them off is a security decision about the whole account, not part
+of removing one environment.
 
 ### The CLI reads the ENV FILE, not this setting
 
@@ -212,3 +419,4 @@ as production does.
 - [Admin Platform](../account/admin_portal/platform.md)
 - [Settings reference](../helpers/settings_reference.md)
 - Web-developer view: [aws/infrastructure_mode](../../web_developer/aws/infrastructure_mode.md)
+- Web-developer view of the readiness section: [account/system_setup](../../web_developer/account/system_setup.md#aws_infrastructure)

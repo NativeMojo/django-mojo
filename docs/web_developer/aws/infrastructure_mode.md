@@ -16,6 +16,38 @@ Every other endpoint is unchanged, including every read. The mode never hides
 data — an out-of-support engine is still reported, the installed and published
 framework versions are still reported, and the pin is still reported.
 
+## The third surface is a readiness row, not a 403
+
+System Setup's `aws_infrastructure` section reports the mode too, and it is the
+only surface that reports it without anybody having attempted a mutation.
+
+| | The two endpoints | `aws_infrastructure` |
+|---|---|---|
+| Shape | HTTP 403 | a `check` row inside the readiness report |
+| Status | — | `warn` (never `fail`) |
+| `error_code` | `infrastructure_external` | none — a readiness row has no error code |
+| Explanation | the `error` field | the row's `explanation`, the same sentence |
+| Trigger | a caller tried to mutate | reading the report |
+
+```json
+{
+  "code": "aws_infrastructure.mode",
+  "status": "warn",
+  "explanation": "Infrastructure repair is disabled: INFRASTRUCTURE_MODE is external, so AWS infrastructure is managed by your infrastructure team, not this portal.",
+  "fixable": false,
+  "details": {"mode": "external", "setting": "INFRASTRUCTURE_MODE"}
+}
+```
+
+Branch on `details.mode` here, the way you branch on `error_code` there.
+
+The section is **never fixable in either mode** — `fixable` is `false` on the
+section and on every row — so "Fix all" never attempts an infrastructure repair
+and never fails because of one. Do not render a fix affordance for this section
+even when other sections offer one.
+
+See [account/system_setup](../account/system_setup.md#aws_infrastructure).
+
 ## The 403 body
 
 ```json

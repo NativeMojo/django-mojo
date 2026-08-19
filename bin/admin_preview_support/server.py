@@ -224,6 +224,10 @@ def readiness_sections():
         section("aws_s3", "System S3 storage", "pass", [check("aws.s3", "pass", "Private system FileManager uses mojo-media-production with direct-upload CORS.")]),
         section("aws_email", "SES email", "warn", [check("aws.sender", "warn", "The sender mailbox is awaiting final verification.", "Select a verified SES domain and sender in Fix Setup.", True)]),
         section("aws_monitoring", "SNS and CloudWatch", "pass", [check("aws.monitoring", "pass", "Operations topic, subscription, alarms, and delivery proof are ready.")]),
+        section("aws_infrastructure", "AWS infrastructure", "pass", [
+            check("aws_infrastructure.mode", "pass", "This portal owns this installation's AWS infrastructure."),
+            check("aws_infrastructure.summary", "pass", "Infrastructure readiness: 14 ready, 0 warning, 0 pending, 0 failed across 14 provisioning steps."),
+        ]),
         section("hosting_dns", "Domains and certificates", "warn", [check("hosting.dns", "warn", "DNS and certificate readiness: 4 ready, 1 warning, 0 pending, 0 failed across 5 items.", "Open Certificates to finish the issuing certificate.")]),
         section("hosting_vhosts", "Vhosts and routes", "pass", [check("hosting.vhosts", "pass", "Vhost readiness: 3 ready, 0 warning, 0 pending, 0 failed across 3 items.")]),
         section("edge_fleet", "Fleet deployment readiness", "pass", [check("fleet.summary", "pass", "Fleet node/pool readiness: 4 ready, 0 warning, 0 pending, 0 failed across 4 node/pool pairs.")]),
