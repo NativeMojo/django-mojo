@@ -1050,6 +1050,117 @@ def test_advance_address_derives_destination(opts):
         f"the address evidence did not record the destination provenance: {address}"
 
 
+@th.django_unit_test("a wildcard-synthesized CNAME answer is not a precheck conflict")
+def test_precheck_wildcard_synthesis_is_not_conflict(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.services import webapp_onboarding
+
+    domain = make_domain(group=opts.group, provider="route53")
+
+    # Every name in the zone answers with the same CNAME target — the shape of
+    # a `*.{domain}` record's synthesis, never of a host-specific record. A
+    # specific record the platform writes takes precedence over the wildcard,
+    # so this must not block onboarding.
+    def run():
+        with mock.patch("mojo.helpers.dns.probe.query_cname",
+                        return_value=mock.Mock(targets=["legacy.example.net"])), \
+                mock.patch("mojo.apps.dnsman.services.dns.list_records") as listed:
+            return webapp_onboarding.precheck(
+                opts.group, f"https://app.{domain.name}"), listed
+
+    r, listed = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert r["verdict"] == "ready", \
+        f"a wildcard-synthesized answer was reported as a conflict: {r}"
+    listed.assert_not_called()  # the probe-only precheck rule is preserved
+
+    # A genuine host-specific record pointing elsewhere still blocks: the
+    # random sibling label resolves clean while the requested hostname does not.
+    def host_specific(fqdn, *args, **kwargs):
+        if str(fqdn) == f"app.{domain.name}":
+            return mock.Mock(targets=["legacy.example.net"])
+        return mock.Mock(targets=[])
+
+    def run_conflict():
+        with mock.patch("mojo.helpers.dns.probe.query_cname",
+                        side_effect=host_specific):
+            return webapp_onboarding.precheck(
+                opts.group, f"https://app.{domain.name}")
+
+    r = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run_conflict)
+    assert r["verdict"] == "conflict", \
+        f"a genuine foreign host-specific CNAME was not reported: {r}"
+
+
+@th.django_unit_test("a covering wildcard CNAME means the address step writes no DNS")
+def test_advance_address_wildcard_covers_no_write(opts):
+    from unittest import mock
+
+    from objict import objict
+
+    from mojo.apps.edge.services import webapp_onboarding
+
+    declare_pools()
+    domain = make_domain(group=opts.group, provider="route53")
+    make_certificate(domain)  # active apex+wildcard cert — reused, no issuance
+    op = _address_operation(opts, domain, slug="wcskip")
+
+    zone = [objict(type="CNAME", name=f"*.{domain.name}",
+                   record_values=[TARGET], ttl=300)]
+
+    def run():
+        with mock.patch("mojo.apps.dnsman.services.dns.list_records",
+                        return_value=zone), \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
+                mock.patch("mojo.apps.dnsman.services.certs.request_certificate") as request:
+            outcome = webapp_onboarding._advance_address(op)
+            return outcome, upsert, request
+
+    outcome, upsert, request = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert outcome is True, \
+        f"a wildcard-covered address did not complete the step: {outcome}"
+    upsert.assert_not_called()  # the wildcard already routes this hostname
+    request.assert_not_called()  # and the wildcard certificate is reused
+    op.web_app.refresh_from_db()
+    assert op.web_app.vhost_id is not None, \
+        "the wildcard-covered address produced no serving vhost"
+
+
+@th.django_unit_test("a managed domain issues the apex+wildcard certificate profile")
+def test_managed_cert_requests_wildcard_profile(opts):
+    from unittest import mock
+
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.edge.services import webapp_onboarding
+
+    declare_pools()
+    domain = make_domain(group=opts.group, provider="route53")
+    op = _address_operation(opts, domain, slug="wcprofile")
+
+    def issue(domain_arg, names=None):
+        return Certificate.objects.create(
+            domain=domain_arg, common_name=domain_arg.name,
+            sans=[domain_arg.name, f"*.{domain_arg.name}"], status="pending")
+
+    def run():
+        with mock.patch("mojo.apps.dnsman.services.dns.list_records",
+                        return_value=[]), \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record"), \
+                mock.patch("mojo.apps.dnsman.services.certs.request_certificate",
+                           side_effect=issue) as request:
+            outcome = webapp_onboarding._advance_address(op)
+            return outcome, request
+
+    outcome, request = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert outcome is True, \
+        f"the managed cert-issuance path did not queue and continue: {outcome}"
+    request.assert_called_once()
+    assert request.call_args.kwargs.get("names") is None and \
+        len(request.call_args.args) == 1, (
+        "a managed domain must issue the apex+wildcard profile (no names "
+        f"narrowing) so one certificate serves every app: {request.call_args}")
+
+
 @th.django_unit_test("the destination resolver honors override precedence and refuses unusable topology")
 def test_destination_resolver(opts):
     from unittest import mock

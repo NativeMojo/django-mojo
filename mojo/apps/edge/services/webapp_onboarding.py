@@ -258,6 +258,24 @@ def _verify_external_cname(hostname, target):
     return targets == [target.rstrip(".")]
 
 
+def _wildcard_synthesized(domain, targets):
+    """Whether a probed CNAME answer came from a ``*.{domain}`` record.
+
+    A wildcard answers every otherwise-empty name in its zone, so a random
+    sibling label returning the identical target set proves the answer was
+    synthesized rather than served by a host-specific record. A specific
+    record always takes precedence over the wildcard, so a synthesized answer
+    never blocks the platform from routing one hostname itself.
+    """
+    from mojo.helpers.dns import probe
+
+    sibling = f"mojo-wildcard-check-{uuid.uuid4().hex[:12]}.{domain.name}"
+    result = probe.query_cname(sibling)
+    sibling_targets = sorted(
+        str(value).rstrip(".") for value in (result.targets or []))
+    return bool(sibling_targets) and sibling_targets == targets
+
+
 def _external_records(hostname, target, domain, include_challenge=False):
     """Records a user publishes at their own DNS host for an external domain.
 
@@ -426,7 +444,8 @@ def precheck(group, raw_url, group_intent="existing"):
         return blocked
     probe_result = probe.query_cname(hostname)
     targets = sorted(str(v).rstrip(".") for v in (probe_result.targets or []))
-    if targets and targets != [destination.value.rstrip(".")]:
+    if (targets and targets != [destination.value.rstrip(".")]
+            and not _wildcard_synthesized(domain, targets)):
         return result("conflict", normalized=normalized,
                       domain=_domain_summary(domain),
                       reason="That address already points somewhere else")
@@ -977,7 +996,15 @@ def _advance_address(operation):
         if cnames and _record_values(cnames[0]) != [target]:
             raise me.ValueException(
                 "The selected hostname has a foreign CNAME value")
-        if not cnames:
+        # A `*.{domain}` CNAME already pointing at the destination routes every
+        # subdomain, this one included — writing a per-host record would be a
+        # no-op in resolution and pure clutter in the zone.
+        wildcard_covers = any(
+            str(getattr(row, "name", row.get("name", ""))).rstrip(".") == f"*.{domain.name}"
+            and str(getattr(row, "type", row.get("type", ""))).upper() == "CNAME"
+            and _record_values(row) == [target]
+            for row in records)
+        if not cnames and not wildcard_covers:
             state = dict(operation.state or {})
             intent = dict(state.get("intent") or {})
             intent["dns"] = {
@@ -1043,10 +1070,11 @@ def _advance_address(operation):
                     "Certificate issuance is waiting on the _acme-challenge record",
                     "warning")
                 return WAIT_FOR_USER
-            # Delegated (mojo) domains issue exactly the apex-plus-wildcard
-            # profile; a single subdomain name set is refused for them.
-            cert_names = ([domain.name, f"*.{domain.name}"]
-                          if domain.provider == PROVIDER_MOJO else [hostname])
+            # Every provider issues the apex-plus-wildcard profile — one
+            # certificate per domain, ever. The first app pays the issuance
+            # wait; every later app (and any admin-created vhost) reuses it via
+            # the covering-certificate scan above.
+            cert_names = [domain.name, f"*.{domain.name}"]
             state = dict(operation.state or {})
             intent = dict(state.get("intent") or {})
             intent["certificate"] = {
@@ -1054,9 +1082,7 @@ def _advance_address(operation):
             }
             state["intent"] = intent
             _save_state(operation, state, ["certificate"])
-            pending = certs.request_certificate(
-                domain,
-                names=None if domain.provider == PROVIDER_MOJO else [hostname])
+            pending = certs.request_certificate(domain)
         operation.certificate = pending
         operation.evidence = dict(
             operation.evidence or {}, address=address_evidence(
