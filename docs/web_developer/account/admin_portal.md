@@ -11,9 +11,9 @@ management, permanent Domains/Credentials/DNS/Certificates/Upstreams/Vhosts/
 Routes pages, a curated [Settings catalog](admin_portal/settings.md), an
 Activity center for Incidents, Events, Logs, and Tickets, and
 WebApp `MOJO_DEPLOY_KEY` management with light, dark, and system themes.
-Domains & DNS is a first-class Platform and WebApps destination: operators can
-register an existing domain or buy a new one before selecting it during WebApp
-onboarding.
+Domains & DNS is a first-class Platform and Deployments destination: operators
+can register an existing domain or buy a new one before selecting it during
+WebApp onboarding.
 
 System Setup is a stricter surface than ordinary Admin pages: only an active
 literal superuser with an interactive JWT can use it. See the
@@ -99,8 +99,9 @@ explicit abandonment boundary before any edits or a new UUID.
 Certificates poll list/detail metadata only. Upstreams are declared or retired,
 never repointed. The Vhost wizard exposes only the four structured edge shapes;
 Routes are created sequentially and a partial failure offers repair of only the
-missing rows. WebApps is the sole UI that receives the reveal-once deployment
-token for create/rotate and offers revoke; System Setup only links there.
+missing rows. Deployments is the sole UI that receives the reveal-once
+deployment token for create/rotate and offers revoke; System Setup only links
+there.
 
 ### Modular browser contract
 

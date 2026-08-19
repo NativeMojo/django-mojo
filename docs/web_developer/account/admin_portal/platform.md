@@ -35,6 +35,13 @@ returns `hosting`, `aws_inventory`, and `network_security`. The curated
 Permission is checked per section, so a caller admitted to the endpoint can
 still receive `unauthorized` for a narrower section.
 
+`GET /api/account/admin/platform` accepts an optional `?sections=` comma-
+separated allowlist, for example `?sections=deployments,api` (what the merged
+Admin Deployments lane sends). It narrows work, not authority — each section
+keeps its own permission check. Unknown names are ignored; an absent or empty
+parameter returns the full roster above; a parameter naming no known section
+returns an empty `sections` object.
+
 `sanity.data.local_target_source` is one of `configured_static`,
 `request_server_port`, or `default_80`; no raw local setting is serialized.
 Security returns boolean secure-posture controls plus the names of disabled

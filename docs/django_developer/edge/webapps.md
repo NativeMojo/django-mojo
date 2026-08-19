@@ -215,7 +215,7 @@ to the configured deployment branch is the authorization event.
 
 ### Durable onboarding
 
-Admin → WebApps drives a resumable four-step operation: **WebApp → Domain &
+Admin → Deployments drives a resumable four-step operation: **WebApp → Domain &
 DNS → GitHub → Go live**. The first screen collects only application identity;
 repository and build settings wait until the GitHub step. At Domain & DNS the
 operator selects a managed domain or buys a new one, and can open the permanent
@@ -388,8 +388,8 @@ python manage.py webapp_bootstrap \
 Pipe that stdout into `gh secret set` in the same way. The command writes the
 created `MOJO_WEBAPP_ID` to stderr so it remains visible while stdout carries
 only the token. It refuses to replace an existing key unless `--rotate` is
-explicit. Normal later rotation belongs in **Admin → WebApps → Manage key** in
-the built-in Admin portal.
+explicit. Normal later rotation belongs in **Admin → Deployments → Manage
+key** in the built-in Admin portal.
 
 The onboarding flow supersedes this manual bootstrap for new sites. The command
 remains for recovery and pre-Admin installations.

@@ -66,15 +66,16 @@ AWS inventory is file-opt-in, uses bounded SDK
 timeouts and one capped page per service, omits endpoints/IPs, and never creates
 EC2, RDS, or ElastiCache resources.
 
-The WebApp lane consumes only `webapp_onboarding.summary_for()` schema version
-1 and redacted onboarding evidence, then independently probes each configured
-HTTPS origin with the existing DNS-pinned, no-redirect public probe. The
-collector is capped at 24 applications, four workers, 1.5 seconds per probe,
-and a 2.5-second collector deadline. Each result carries `observed_at` and
-`stale_after`; timeout, unsafe, missing, and unknown evidence never becomes
-green. Current public health, configured origin, historical onboarding state,
-and deployment-key state are separate axes, so `not_started` history does not
-claim a currently healthy site is down. Registrar-versus-DNS provider evidence
+The `webapps` evidence section consumes only `webapp_onboarding.summary_for()`
+schema version 1 and redacted onboarding evidence, then independently probes
+each configured HTTPS origin with the existing DNS-pinned, no-redirect public
+probe. The collector is capped at 24 applications, four workers, 1.5 seconds
+per probe, and a 2.5-second collector deadline. Each result carries
+`observed_at` and `stale_after`; timeout, unsafe, missing, and unknown
+evidence never becomes green. Current public health, configured origin,
+historical onboarding state, and deployment-key state are separate axes, so
+`not_started` history does not claim a currently healthy site is down.
+Registrar-versus-DNS provider evidence
 comes from the durable onboarding operation. No deployment key or provider
 secret enters the Platform response.
 

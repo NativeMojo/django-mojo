@@ -80,7 +80,7 @@ is validated as named boolean capabilities. An exception or malformed provider
 disables only that feature and logs its exception class, never request data or
 secrets.
 
-WebApps uses two additive bootstrap fields instead of the shared membership
+Deployments uses two additive bootstrap fields instead of the shared membership
 list: `webapp_groups` is the case-insensitively sorted set of effectively active
 groups the caller may manage, each row includes `can_manage_dns`, and
 `can_create_webapp_group` says whether the wizard may offer **Create New
