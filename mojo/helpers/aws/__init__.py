@@ -16,6 +16,9 @@ from .sns import SNSTopic, SNSSubscription
 from .ec2 import EC2Instance, EC2SecurityGroup
 from .cloudwatch import CloudWatchHelper
 from .elbv2 import LoadBalancerHelper
+# Module-level function namespaces, not classes: these carry no per-caller
+# state beyond the client seam each function already accepts.
+from . import elasticache, rds
 
 __all__ = [
     # Base
@@ -51,4 +54,8 @@ __all__ = [
 
     # ELBv2
     'LoadBalancerHelper',
+
+    # Managed-service engine versions (read + the upgrade mutations)
+    'rds',
+    'elasticache',
 ]

@@ -8,6 +8,7 @@ from django.db import connection, transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
+from mojo import errors as merrors
 from mojo.apps.account.services import system_settings
 from mojo.helpers.settings import settings
 
@@ -945,6 +946,104 @@ def dashboard_overview(request, refresh=False):
         "attention": {
             "message": _attention_message(sources, availability["down"])},
         "sources": sources,
+    }
+
+
+def framework_overview(request, refresh=False):
+    """Which django-mojo runs here, and whether this caller could update it.
+
+    Entirely derived from ``framework_version.status()`` — there is exactly one
+    PyPI check in this codebase and this is not a second one.
+
+    ``blocked_reason`` names the ONE thing standing in the way, so the portal
+    can disable the control and say why instead of offering an action that
+    fails:
+
+    * ``update_unavailable`` — nothing newer is published, or PyPI is not
+      answering.
+    * ``requires_superuser`` — a pin or hold is set. Clearing it is a protected
+      settings write, and only a literal superuser may make it.
+    * ``no_converged_deployment`` — nothing has ever been proven to run on this
+      fleet, so there is no commit to redeploy. Checked last because it is the
+      only reason that costs a query.
+    """
+    from mojo.apps.edge.services import framework_version, platform_deploy
+    if refresh:
+        framework_version.refresh()
+    value = framework_version.status()
+    pin = value.get("pin") or {"mode": "latest", "value": None}
+    pinned = pin.get("mode") != "latest"
+    superuser = bool(getattr(request.user, "is_superuser", False))
+
+    blocked = None
+    if not value.get("latest") or not (value.get("update_available") or pinned):
+        blocked = "update_unavailable"
+    elif pinned and not superuser:
+        blocked = "requires_superuser"
+    elif platform_deploy.last_converged_deployment() is None:
+        blocked = "no_converged_deployment"
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "installed": value.get("installed"),
+        "latest": value.get("latest"),
+        "checked_at": value.get("checked_at"),
+        "source": value.get("source"),
+        "update_available": bool(value.get("update_available")),
+        "pin": pin,
+        "can_update": blocked is None,
+        "blocked_reason": blocked,
+    }
+
+
+def apply_framework_update(request, version):
+    """Put the fleet back on the newest published django-mojo.
+
+    Two steps, in this order, and NEITHER of them writes a version into the pin:
+
+    1. If a pin or hold is set, CLEAR it. The pin is what would otherwise make
+       step 2 reinstall the version the operator is trying to leave. Writing
+       ``version`` into it instead would silently freeze the fleet at today's
+       release — the opposite of "update", and invisible until the next one.
+       The writer enforces the literal-superuser rule itself.
+    2. Redeploy the last converged commit. The framework version is resolved at
+       install time, so re-running the proven commit is what actually installs
+       the new release; there is no separate "install framework" path.
+    """
+    from mojo.apps.edge.services import deploy, platform_deploy
+    from mojo.apps.edge.settings_validators import FRAMEWORK_VERSION_KEY
+
+    pin = None
+    try:
+        pin = deploy.framework_version_pin()
+    except Exception:
+        pin = None
+    if pin:
+        # Target records the transition, matching the framework_pin writer's
+        # convention: "who cleared what" must survive in the audit trail.
+        system_settings.set_value(request.user, FRAMEWORK_VERSION_KEY, "")
+        audit_after_commit(request.user, "framework_pin", f"{pin}->latest")
+
+    row = platform_deploy.last_converged_deployment()
+    if row is None:
+        raise merrors.ValueException(
+            "No deployment has ever converged on this fleet, so there is no "
+            "proven commit to redeploy.", code=409, status=409)
+    try:
+        deployment = platform_deploy.same_sha_retry(
+            row, actor=f"framework-update:{request.user.pk}",
+            created_by=request.user,
+            idempotency_key=request.META.get("HTTP_IDEMPOTENCY_KEY"))
+    except deploy.DeploymentCoordinationError:
+        raise merrors.ValueException(
+            "Deploy coordination unavailable", code=503, status=503) from None
+    audit_after_commit(request.user, "framework_update",
+                       f"{version}:{deployment.pk}")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "requested": True,
+        "version": version,
+        "cleared_pin": pin or None,
+        "deployment": platform_deploy.serialize(deployment, include_stderr=True),
     }
 
 

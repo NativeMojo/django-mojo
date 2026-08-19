@@ -310,6 +310,12 @@ def last_converged_framework():
                 "framework_version", flat=True).first() or None
 
 
+def last_converged_deployment():
+    """The newest CONVERGED deploy ROW, or None. See last_converged_framework."""
+    return PlatformDeployment.objects.filter(
+        status=PlatformDeployment.STATUS_CONVERGED).order_by("-created").first()
+
+
 def same_sha_retry(row, actor, created_by=None, idempotency_key=None):
     return create(
         row.sha, actor=actor, source="admin_retry", created_by=created_by,

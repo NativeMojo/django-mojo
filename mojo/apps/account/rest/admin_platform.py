@@ -85,6 +85,41 @@ def on_admin_platform_converge(request):
     return {"schema_version": 1, "deployment": platform_deploy.serialize(result, include_stderr=True)}
 
 
+@md.GET("account/admin/platform/framework")
+@md.requires_global_perms(
+    "view_platform", "manage_platform", "admin")
+def on_admin_platform_framework(request):
+    refresh = str(request.DATA.get("refresh") or "").lower() in ("1", "true", "yes")
+    return _admin_platform.framework_overview(request, refresh=refresh)
+
+
+@md.POST("account/admin/platform/framework/update")
+@md.denies_key_backed_session()
+@md.requires_fresh_auth(seconds=600)
+@md.requires_global_perms("manage_platform", "admin")
+def on_admin_platform_framework_update(request):
+    """Move the fleet to the newest published django-mojo.
+
+    The version is confirmed by typed echo and then re-checked against what
+    this installation is actually offering — a stale tab must not be able to
+    request a release that is no longer the latest.
+    """
+    overview = _admin_platform.framework_overview(request)
+    version = request.DATA.get("version")
+    if not overview["can_update"]:
+        raise me.ValueException(
+            f"A framework update is not available right now "
+            f"({overview['blocked_reason']})",
+            code=409, status=409)
+    if not version or version != overview["latest"]:
+        raise me.ValueException(
+            f"This installation is offering {overview['latest']}. "
+            f"Reload Platform and try again.", code=409, status=409)
+    if request.DATA.get("confirm_version") != version:
+        raise me.ValueException("confirm_version must exactly match the version")
+    return _admin_platform.apply_framework_update(request, version)
+
+
 @md.POST("account/admin/advanced/settings")
 @md.denies_key_backed_session()
 @md.requires_fresh_auth(seconds=600)
