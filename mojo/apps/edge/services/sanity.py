@@ -51,8 +51,12 @@ def check_static_directories(options=None):
 
 
 def check_redis(options=None):
-    from mojo.helpers.redis import get_client
-    get_client().ping()
+    options = options or {}
+    client = options.get("redis_client")
+    if client is None:
+        from mojo.helpers.redis import get_client
+        client = get_client()
+    client.ping()
 
 
 def check_request(options=None):

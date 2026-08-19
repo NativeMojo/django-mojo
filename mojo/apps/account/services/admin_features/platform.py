@@ -4,6 +4,9 @@
 def describe(request, capabilities):
     values = {
         "setup": bool(capabilities.get("setup")),
+        # Rides in `values` and therefore into `enabled`, which is harmless:
+        # attention is only ever true when `setup` is already true.
+        "setup_attention": bool(capabilities.get("setup_attention")),
         "view": bool(capabilities.get("view_platform")),
         "manage": bool(capabilities.get("manage_platform")),
         "security": bool(capabilities.get("view_platform_security")),
