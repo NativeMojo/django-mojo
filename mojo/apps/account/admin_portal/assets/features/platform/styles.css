@@ -51,3 +51,10 @@ html[data-theme="dark"] {
 .maintenance-window { align-items: flex-start; margin: 0; }
 .maintenance-window span { display: grid; gap: 2px; }
 .maintenance-window small { color: var(--muted); }
+
+/* Capacity rows live inside a narrow drill-in: let the name shrink to its
+   content, keep the state word on one line, and wrap the long guidance
+   detail instead of crushing the value column. */
+.capacity-body .status-row { grid-template-columns: 7px auto minmax(0, 1fr) minmax(0, 50%); }
+.capacity-body .row-value { white-space: nowrap; }
+.capacity-body .row-detail { white-space: normal; }
