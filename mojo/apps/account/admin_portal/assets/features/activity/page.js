@@ -150,11 +150,22 @@ function activityEnvelope(envelope) {
   };
 }
 
+// Display-shaping only: the API already serves admins the raw metadata, so these
+// caps exist to keep a pathological blob from hanging the renderer — never to
+// withhold evidence. Every cap must be far beyond real data, and every
+// truncation must announce itself.
 function maskEvidence(value, depth = 0) {
-  if (depth >= 5) return '[depth limit]';
-  if (Array.isArray(value)) return value.slice(0, 40).map((item) => maskEvidence(item, depth + 1));
+  if (depth >= 1000) return '[depth limit]';
+  if (Array.isArray(value)) {
+    const masked = value.slice(0, 500).map((item) => maskEvidence(item, depth + 1));
+    if (value.length > masked.length) masked.push(`[+${value.length - masked.length} more items]`);
+    return masked;
+  }
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).slice(0, 80).map(([key, item]) => [key, SENSITIVE_KEY.test(key) ? '[redacted]' : maskEvidence(item, depth + 1)]));
+    const entries = Object.entries(value);
+    const masked = Object.fromEntries(entries.slice(0, 500).map(([key, item]) => [key, SENSITIVE_KEY.test(key) ? '[redacted]' : maskEvidence(item, depth + 1)]));
+    if (entries.length > 500) masked['[truncated]'] = `+${entries.length - 500} more keys`;
+    return masked;
   }
   if (typeof value === 'string' && value.length > 4000) return `${value.slice(0, 4000)}… [truncated]`;
   return value;
@@ -166,10 +177,14 @@ function parseEvidence(value) {
 }
 
 function evidenceBlock(label, value) {
-  const safe = maskEvidence(parseEvidence(value));
+  const parsed = parseEvidence(value);
+  const safe = maskEvidence(parsed);
   const text = typeof safe === 'string' ? safe : JSON.stringify(safe, null, 2);
+  // Copy hands over the stored value exactly — investigations must never
+  // inherit the display mask.
+  const raw = typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2);
   const copy = h('button', {class: 'button ghost compact', type: 'button', onclick: async (event) => {
-    await navigator.clipboard?.writeText(text); event.currentTarget.textContent = 'Copied';
+    await navigator.clipboard?.writeText(raw); event.currentTarget.textContent = 'Copied';
   }}, 'Copy evidence');
   return h('section', {class: 'activity-evidence'}, h('header', {}, h('h3', {text: label}), copy), h('pre', {text}));
 }

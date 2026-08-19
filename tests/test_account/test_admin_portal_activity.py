@@ -173,7 +173,13 @@ def test_activity_browser_contract(opts):
     assert "state.subject_type = ''" not in page, "clearing visible filters must preserve contextual subject scope"
     assert ".activity-filter-panel[hidden]" in styles and "display: none" in styles, "collapsed secondary filters must leave the content flow"
     assert "var(--border)" not in styles and "var(--surface-alt)" not in styles, "Activity styles must use the portal's defined surface tokens"
-    assert "SENSITIVE_KEY" in page and "[redacted]" in page and "depth >= 5" in page
+    assert "SENSITIVE_KEY" in page and "[redacted]" in page
+    assert "depth >= 1000" in page, "the depth guard is stack protection only — it must never reach real evidence (mojosec samples sit at depth 5+)"
+    assert "depth >= 5" not in page and "slice(0, 40)" not in page and "slice(0, 80)" not in page, \
+        "display caps must be too large for legitimate evidence to hit"
+    assert "more items" in page and "more keys" in page, "display truncation must announce itself, never drop data silently"
+    assert "writeText(raw)" in page and "writeText(text)" not in page, \
+        "Copy evidence must copy the raw stored value, not the masked render"
     assert "envelope.count > 0 && state.start >= envelope.count" in page
     assert "Unavailable" in page and "String(envelope.count)" in page
     assert "/api/incident/stats" not in page
