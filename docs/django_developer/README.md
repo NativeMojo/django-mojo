@@ -30,6 +30,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | [aws/aws_check.md](aws/aws_check.md) | Audit and safely bootstrap AWS credentials, cron, S3, SES, SNS/CloudWatch, dnsman ACME/certificate state, and incident defaults |
 | [aws/s3.md](aws/s3.md) | Bounded S3 inventory, verified public/private posture, private creation, and confirmed version-aware emptying |
 | [aws/version_drift.md](aws/version_drift.md) | Daily RDS/Aurora and ElastiCache major-version drift inventory, support deadlines, and the opt-in ticket/board escalation |
+| [aws/infra_drift.md](aws/infra_drift.md) | Daily read-only fleet drift scan — what is actually serving traffic vs. the fleet recorded in `EDGE_EXPECTED_TOPOLOGY`, in both directions, as operator-facing prose |
 | [aws/maintenance.md](aws/maintenance.md) | Applying a pending RDS/ElastiCache engine upgrade and the django-mojo framework update — server-derived targets, single flight, and the permission AND |
 | [aws/capacity.md](aws/capacity.md) | Adding and removing an app node, an RDS reader, or a cache replica from the portal — server-derived guards, the clone-and-prove join sequence, and what stays an operator task |
 | [aws/infrastructure_mode.md](aws/infrastructure_mode.md) | `INFRASTRUCTURE_MODE` — the file-only switch that disables portal infrastructure mutations on installations whose AWS estate is applied by external IaC |
