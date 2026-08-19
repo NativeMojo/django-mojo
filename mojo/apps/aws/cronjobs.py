@@ -12,6 +12,7 @@ from mojo.helpers.settings import settings
 
 
 VERSION_DRIFT_JOB = "mojo.apps.aws.asyncjobs.check_version_drift"
+INFRA_DRIFT_JOB = "mojo.apps.aws.asyncjobs.check_infra_drift"
 
 
 def _setting(name, default=None):
@@ -38,3 +39,19 @@ def check_version_drift(force=False, verbose=False, now=None):
     if not _setting("AWS_VERSION_DRIFT_ENABLED", False):
         return
     jobs.publish(func=VERSION_DRIFT_JOB, channel="cleanup", payload={})
+
+
+# Daily at 07:20 — offset from the version-drift scan above so the two AWS
+# reads never share a scheduler tick.
+#
+# The body is a settings read plus a publish and nothing else, deliberately:
+# run_scheduled_functions wraps the WHOLE loop in one try with a re-raise, so
+# anything that raises here aborts every other scheduled function on this tick,
+# fleet-wide. The AWS calls belong in the job, where a failure costs one job.
+@schedule(minutes="20", hours="7")
+def check_infra_drift(force=False, verbose=False, now=None):
+    # Read inside the function, never at import: a module-level read is frozen
+    # at process start and cannot be exercised by a test.
+    if not _setting("AWS_INFRA_DRIFT_ENABLED", False):
+        return
+    jobs.publish(func=INFRA_DRIFT_JOB, channel="cleanup", payload={})

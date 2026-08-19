@@ -364,6 +364,40 @@ class RuleSet(models.Model, MojoModel):
         )
 
     @classmethod
+    def ensure_infra_drift_rules(cls):
+        """Create the opt-in fleet-drift policy.
+
+        The category is `infra:drift`, NOT the event's
+        `system:health:infra_drift` — a RuleSet inside the `system:health:`
+        namespace would satisfy the incident cronjob's health-defaults
+        bootstrap guard and suppress the real health rules. Events reach this
+        RuleSet through their `scope`, exactly like the version-drift policy.
+
+        NOTIFY ONLY, no `ticket://`. Drift is a reconciliation the operator
+        does in System Setup in a minute, and on an externally-managed estate
+        it is expected state that will recur until someone records the node —
+        a ticket per run would be a board full of the same two lines.
+
+        Never added to ensure_default_rules(): like ensure_aws_version_rules it
+        stays opt-in so non-AWS deployments never get it.
+        """
+        from mojo.apps.aws.services.infra_drift import RULESET_CATEGORY
+        return cls._create_ruleset(
+            category=RULESET_CATEGORY,
+            name="Health - Infrastructure Drift",
+            priority=5,
+            match_by=MatchBy.ALL,
+            bundle_by=BundleBy.NONE,
+            handler="notify://perm@manage_security",
+            rules=[
+                # Level 4 is "a read did not answer" — worth the health-strip
+                # row, not worth waking anyone. Only real drift notifies.
+                {"name": "Level >= 5", "field_name": "level",
+                 "comparator": ">=", "value": "5", "value_type": "int"},
+            ],
+        )
+
+    @classmethod
     def ensure_catchall_rules(cls):
         """
         Create a catch-all RuleSet that matches any event without a specific ruleset.

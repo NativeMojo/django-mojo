@@ -1,7 +1,9 @@
 """Async AWS maintenance jobs."""
 
+import textwrap
 from urllib.parse import urlparse
 
+from mojo.apps.aws.services import infra_drift
 from mojo.apps.aws.services import version_drift
 from mojo.apps.aws.services.aws_check import _safe_slug
 from mojo.apps.incident import reporter
@@ -67,6 +69,119 @@ def _details(report):
         for warning in warnings:
             lines.append(f"- {warning.get('message')}")
     return "\n".join(lines)
+
+
+# ── fleet drift (mojo.apps.aws.services.infra_drift) ────────────────────────
+#
+# The prose below is the deliverable, not decoration: this event is read by an
+# operator on the health strip with no other context, so every finding says what
+# it is, who it costs something, and what a person should do — and says plainly
+# that nothing here changed AWS.
+
+WRAP = 78
+
+
+def _wrap(text, indent="  ", bullet=False):
+    """Fill to a readable width without ever splitting an identifier.
+
+    `break_on_hyphens` off is load-bearing: target-group names, node ids and
+    instance ids are all hyphenated, and a wrap inside one turns a value the
+    operator is about to copy into two half-values.
+    """
+    return textwrap.fill(
+        " ".join(str(text or "").split()), width=WRAP,
+        initial_indent="- " if bullet else indent, subsequent_indent=indent,
+        break_on_hyphens=False, break_long_words=False)
+
+
+def _infra_title(report):
+    findings = report.get("findings") or []
+    if not findings:
+        return "The fleet drift check could not read all of AWS"
+    serving = [row for row in findings if row.get("reason") != infra_drift.REASON_UNSERVING]
+    if not serving:
+        return f"{len(findings)} recorded node(s) are receiving no traffic"
+    capacity_added = [row for row in serving
+                      if row.get("reason") == infra_drift.REASON_CAPACITY_ADDED]
+    count = len(serving)
+    if not capacity_added:
+        return (f"{count} node(s) are serving traffic but are not in the "
+                f"portal's recorded fleet")
+    if len(capacity_added) == count:
+        return (f"{count} node(s) the portal added are missing from the "
+                f"recorded fleet")
+    return f"{count} node(s) are serving traffic outside the portal's recorded fleet"
+
+
+def _infra_details(report):
+    """Operator-facing prose. Rendered as-is by the health strip."""
+    external = report.get("mode") == "external"
+    lines = [
+        _wrap(f"Fleet drift in {report.get('region')}: what is actually serving "
+              f"traffic, compared with the fleet recorded in "
+              f"EDGE_EXPECTED_TOPOLOGY.", indent=""),
+        _wrap("Infrastructure mode: external (your infrastructure team's pipeline "
+              "owns these changes; the portal only observes)." if external else
+              "Infrastructure mode: managed (this portal owns these changes).",
+              indent=""),
+    ]
+    for finding in report.get("findings") or []:
+        lines.append("")
+        lines.append(_wrap(finding.get("note"), bullet=True))
+        who = infra_drift.WHO_IS_AFFECTED.get(finding.get("reason"))
+        if who:
+            lines.append(_wrap(who))
+        lines.append(_wrap(finding.get("remediation")))
+    warnings = report.get("warnings") or []
+    if warnings:
+        lines.append("")
+        lines.append("Some AWS reads did not complete:")
+        for warning in warnings:
+            lines.append(_wrap(warning.get("message"), bullet=True))
+    return "\n".join(lines)
+
+
+def check_infra_drift(job):
+    """Compare the serving fleet with the recorded one; file at most ONE event.
+
+    No level-1 "everything matches" liveness event, for the same reason
+    check_version_drift files none: the catch-all RuleSet matches Level >= 1
+    with no handler, so a liveness event would manufacture a permanent Incident
+    on every run.
+    """
+    report = infra_drift.scan()
+    if report.get("status") != "ok":
+        message = f"Fleet drift scan skipped ({report.get('status')}): {report.get('reason')}"
+        logger.warning(message)
+        job.add_log(message)
+        return
+
+    findings = report.get("findings") or []
+    warnings = report.get("warnings") or []
+    level = int(report.get("level") or 1)
+    if level <= 1:
+        job.add_log("The serving fleet matches the recorded fleet; no event filed")
+        return
+
+    reporter.report_event(
+        _infra_details(report),
+        title=_infra_title(report),
+        # The EVENT category keeps the health-strip row; the RuleSet is matched
+        # through `scope`, which is deliberately outside system:health:.
+        category=infra_drift.CATEGORY,
+        level=level,
+        scope=infra_drift.RULESET_CATEGORY,
+        hostname=_deployment_slug(),
+        findings=findings,
+        warnings=warnings,
+        region=report.get("region"),
+        infrastructure_mode=report.get("mode"),
+        drift_schema_version=report.get("schema_version"),
+        group=None,
+    )
+    job.add_log(
+        f"Filed fleet drift event at level {level} "
+        f"({len(findings)} findings, {len(warnings)} warnings)")
 
 
 def capacity_operation(job):
