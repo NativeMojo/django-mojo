@@ -30,6 +30,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | [aws/s3.md](aws/s3.md) | Bounded S3 inventory, verified public/private posture, private creation, and confirmed version-aware emptying |
 | [aws/version_drift.md](aws/version_drift.md) | Daily RDS/Aurora and ElastiCache major-version drift inventory, support deadlines, and the opt-in ticket/board escalation |
 | [aws/maintenance.md](aws/maintenance.md) | Applying a pending RDS/ElastiCache engine upgrade and the django-mojo framework update — server-derived targets, single flight, and the permission AND |
+| [aws/infrastructure_mode.md](aws/infrastructure_mode.md) | `INFRASTRUCTURE_MODE` — the file-only switch that disables portal infrastructure mutations on installations whose AWS estate is applied by external IaC |
 | [dnsman/](dnsman/README.md) | Domains, DNS records across providers, WHOIS/privacy, and centrally-issued TLS certificates |
 | [edge/](edge/README.md) | nginx vhosts as structured rows, and the node-side installer that lands certs + vhosts as one validated generation |
 | [jobs/](jobs/README.md) | Async job queue — publishing, scheduling, retries, webhooks, broadcasting, monitoring |

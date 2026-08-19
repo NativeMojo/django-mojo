@@ -145,6 +145,28 @@ credentials, signed URLs, and request parameters.
 | `provider_denied` | 403 | IAM refused; `data.failure.iam_action` names what to grant |
 | `provider_unavailable` | 503 | Retryable provider failure |
 | `provider_error` | 502 | Anything else from the provider |
+| `infrastructure_external` | 403 | `INFRASTRUCTURE_MODE` is `external` — see below |
+
+## Infrastructure mode
+
+Before anything else, the apply asks whether this installation's infrastructure
+is the portal's to change at all. `INFRASTRUCTURE_MODE = "external"` says it is
+not, and the apply answers 403 `infrastructure_external`.
+
+That check is the **first statement in the endpoint body** — ahead of
+`_require_manage_tier`, ahead of body parsing. It is a property of the
+installation, not of the caller, so a caller who is also missing the platform
+tier must be told about the mode rather than about their grants: no additional
+grant would change the answer.
+
+`apply_upgrade` carries the same refusal as a service-layer backstop, raising
+`MaintenanceError(..., "infrastructure_external", 403)` before it scans or
+dispatches. That path exists for non-REST callers only; reaching it means the
+REST gate was bypassed.
+
+The framework leg is gated identically. Full contract, including what is
+deliberately **not** gated and the `EDGE_FRAMEWORK_VERSION` instruction for
+external installations: [Infrastructure mode](infrastructure_mode.md).
 
 ## Permissions
 
@@ -193,10 +215,14 @@ The same page also updates django-mojo itself, through
   `framework_version.status()`. There is one PyPI check in this codebase and
   this is not a second one. `blocked_reason` is `update_unavailable`,
   `requires_superuser` (a pin is set and the caller is not a literal
-  superuser), or `no_converged_deployment`.
+  superuser), `no_converged_deployment`, or `infrastructure_external` — which
+  overrides the other three, because the endpoint would refuse whatever the
+  version facts say. The version facts themselves stay truthful.
 - `apply_framework_update(request, version)` — **clears** any pin via
   `system_settings.set_value(user, FRAMEWORK_VERSION_KEY, "")`, then
-  `platform_deploy.same_sha_retry(last_converged_deployment())`.
+  `platform_deploy.same_sha_retry(last_converged_deployment())`. Refuses first
+  when `INFRASTRUCTURE_MODE` is `external` (the service-layer backstop; the
+  endpoint has already answered HTTP for ordinary callers).
 
 Writing the requested version *into* the pin would look like it worked and
 would silently freeze the fleet at today's release — invisible until the next

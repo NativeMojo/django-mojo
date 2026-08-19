@@ -163,12 +163,15 @@ Bootstrap returns both the stable flat `capabilities` object and a namespaced
 
 ```json
 {
-  "capabilities": {"people": true, "network": true, "settings": true},
+  "capabilities": {"people": true, "network": true, "settings": true,
+                   "infrastructure_managed": true},
+  "infrastructure": {"mode": "managed", "managed": true},
   "features": {
     "people": {"id": "people", "enabled": true,
                "capabilities": {"users": true, "groups": true}},
     "platform": {"id": "platform", "enabled": true,
-                 "capabilities": {"setup": true}},
+                 "capabilities": {"setup": true,
+                                  "infrastructure_managed": true}},
     "advanced": {"id": "advanced", "enabled": true,
                  "capabilities": {"view": true, "manage": true}},
     "settings": {"id": "settings", "enabled": true,
@@ -186,6 +189,16 @@ Unknown namespaces are not loaded. Malformed server provider output disables
 that namespace. The browser registry likewise imports a fixed set of local
 descriptors; no URL, package name, or module path comes from user or deployment
 settings.
+
+`infrastructure` and `infrastructure_managed` describe the **installation**, not
+the caller: whether this portal is the thing that changes AWS resources here, or
+whether an external IaC pipeline is. `infrastructure_managed` is mirrored into
+the `platform` and `webapps` lanes (the mode *string* never rides in a feature —
+feature capabilities are named booleans only). Two client rules: a **missing**
+flag means managed, so test `!== false` rather than truthiness; and never derive
+lane visibility from it, since it is `true` on every managed installation. The
+gated endpoints and the 403 body are in
+[aws/infrastructure_mode](../aws/infrastructure_mode.md).
 
 Dashboard consumes `GET /api/account/admin/dashboard`, never Setup readiness.
 It is a status page: one availability sentence that turns red only when a

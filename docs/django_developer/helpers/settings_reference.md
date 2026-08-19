@@ -661,6 +661,26 @@ restart. See
 
 - `INFO_KEY`
 
+### INFRASTRUCTURE
+
+- `INFRASTRUCTURE_MODE` — **file-only** (`settings.get_static`). One of
+  `"managed"` (default; unset and `""` mean this) or `"external"`. Says whether
+  this installation's AWS estate is the portal's to mutate. In `external` mode
+  the two mutating controls — `POST /api/aws/maintenance/apply` and
+  `POST /api/account/admin/platform/framework/update` — answer 403
+  `infrastructure_external` at both the REST and service layers, and the
+  framework overview reports `blocked_reason: "infrastructure_external"`. Reads
+  are unaffected. An unrecognized value, a non-string, or a settings read that
+  raises is treated as `external` and logged — a typo in a switch whose job is
+  to refuse must not disable the refusal. File-only because a DB/Redis-backed
+  `Setting` row is writable through the generic settings REST plane, and a
+  remotely-writable mode would let settings-write access silently re-arm every
+  mutation this switch exists to disable. **An `external` installation should
+  also set `EDGE_FRAMEWORK_VERSION`** to `hold` or an explicit version: deploy
+  retry is deliberately not gated, and with an unset pin a retry installs the
+  newest published django-mojo. See
+  [Infrastructure mode](../aws/infrastructure_mode.md).
+
 ### INSTALLED
 
 - `INSTALLED_APPS`

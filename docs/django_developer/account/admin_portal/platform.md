@@ -143,13 +143,24 @@ endpoints with the same typed-echo contract — one mechanism, two doorways):
 
 - `GET /api/account/admin/platform/framework` (`view_platform`,
   `manage_platform`, `admin`) reports installed vs published, the pin, and a
-  single `blocked_reason` — `update_unavailable`, `requires_superuser`, or
-  `no_converged_deployment`.
+  single `blocked_reason` — `update_unavailable`, `requires_superuser`,
+  `no_converged_deployment`, or `infrastructure_external`. **The read is never
+  gated**, in any mode: what runs here and what is published are facts every
+  surface needs.
 - `POST /api/account/admin/platform/framework/update` (`manage_platform`,
   `admin`, plus key denial and 600-second fresh auth) **clears** any pin and
   redeploys the last converged commit. It never writes a version into the pin:
   that would freeze the fleet at today's release instead of updating it, and
   the mistake would stay invisible until the next release.
+
+  It is **disabled outright** when `INFRASTRUCTURE_MODE` is `external` — 403
+  `infrastructure_external`, refused as the first statement in the endpoint
+  body, before the caller's grants and before the offered-version re-check,
+  with a matching service-layer backstop in `apply_framework_update` for
+  non-REST callers. On such an installation the fleet's django-mojo version is
+  the IaC pipeline's to change. See
+  [aws/infrastructure_mode.md](../../aws/infrastructure_mode.md), which also
+  explains why an external installation must pin `EDGE_FRAMEWORK_VERSION`.
 
 `platform_deploy.last_converged_deployment()` is the row-returning sibling of
 `last_converged_framework()` — converged, because that status is the
