@@ -8,6 +8,54 @@ def get_from_number():
     return settings.get('TWILIO_NUMBER')
 
 
+def resolve_credentials(config, from_number=None):
+    """Resolve the (from_number, account_sid, auth_token) triple for a send.
+
+    Anchored on the credential pair (maestro #2189, D2) — the mix that breaks
+    is a foreign number sent with the default account's credentials (Twilio
+    21606), so the pair decides who owns the whole triple:
+
+    * config supplies BOTH credentials -> the config owns the triple; the
+      number must also come from the config (or the caller's explicit
+      from_number), else config_error.
+    * config supplies NEITHER credential -> settings own the credentials
+      (returned as None so send_sms fills them); the number falls back
+      caller -> config.twilio_from_number -> settings.TWILIO_NUMBER.
+    * config supplies EXACTLY ONE credential -> config_error. Never mixed.
+
+    Returns an objict with from_number/account_sid/auth_token and
+    error/error_code (both None on success).
+    """
+    account_sid = config.get_twilio_account_sid() if config else ''
+    auth_token = config.get_twilio_auth_token() if config else ''
+    if bool(account_sid) != bool(auth_token):
+        return objict(
+            from_number=None, account_sid=None, auth_token=None,
+            error_code='config_error',
+            error='Twilio config supplies only half a credential pair — set '
+                  'both twilio_account_sid and twilio_auth_token, or neither')
+    if account_sid:
+        number = from_number or config.twilio_from_number
+        if not number or not isinstance(number, str):
+            return objict(
+                from_number=None, account_sid=None, auth_token=None,
+                error_code='config_error',
+                error='Twilio config supplies credentials but no sender — '
+                      'set PhoneConfig.twilio_from_number')
+        return objict(from_number=number, account_sid=account_sid,
+                      auth_token=auth_token, error=None, error_code=None)
+    number = from_number or (config.twilio_from_number if config else None) \
+        or get_from_number()
+    if not number or not isinstance(number, str):
+        return objict(
+            from_number=None, account_sid=None, auth_token=None,
+            error_code='config_error',
+            error='No from_number configured (set '
+                  'PhoneConfig.twilio_from_number or TWILIO_NUMBER in settings)')
+    return objict(from_number=number, account_sid=None, auth_token=None,
+                  error=None, error_code=None)
+
+
 def lookup(phone_number):
     try:
         resp = _lookup(phone_number, settings.get('TWILIO_ACCOUNT_SID'), settings.get('TWILIO_AUTH_TOKEN'))
