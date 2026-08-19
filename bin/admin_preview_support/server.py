@@ -924,7 +924,7 @@ def main():
     parser.add_argument("--key-state", choices=("missing", "active", "rotated", "revoked"), default="active")
     parser.add_argument("--setup-state", choices=("idle", "choice", "delay", "error", "fresh", "ambiguous"), default="idle")
     parser.add_argument("--activity-state", choices=("full", "empty", "unavailable"), default="full")
-    parser.add_argument("--dashboard-state", choices=("healthy", "degraded", "denied", "unknown"), default="healthy")
+    parser.add_argument("--dashboard-state", choices=("healthy", "degraded", "down", "denied", "unknown"), default="healthy")
     parser.add_argument("--onboarding-state", choices=("idle", "address", "github", "verify", "complete", "lost_key", "new_group"), default="idle")
     parser.add_argument("--settings-state", choices=("normal", "duplicate", "invalid", "delay", "error", "fresh"), default="normal")
     parser.add_argument("--upstream", help="Public HTTPS django-mojo origin for live QA")

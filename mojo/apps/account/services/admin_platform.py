@@ -507,7 +507,7 @@ def _dashboard_cache():
         return {"_collector_status": "unhealthy",
                 "_collector_reason": "cache_unreachable", **base}
     data = {"_collector_status": "healthy", "engine": "Redis", "version": None,
-            "memory_used": None, "drift": None, **base}
+            "memory_used": None, **base}
     try:
         # Plain .info(): on RedisCluster redis-py routes a section-less INFO to
         # the default node, while a named section fans out to every node.
@@ -515,11 +515,6 @@ def _dashboard_cache():
             info = redis.info()
         data["version"] = info.get("redis_version")
         data["memory_used"] = info.get("used_memory_human")
-    except Exception:
-        pass
-    try:
-        data["drift"] = _version_drift_finding(
-            ("elasticache",), data.get("version"))
     except Exception:
         pass
     return data
@@ -552,6 +547,16 @@ def _dashboard_certificates():
             **data}
 
 
+def _newest_drift_event():
+    """The newest managed-engine drift event still inside the freshness window."""
+    from mojo.apps.aws.services import version_drift
+    from mojo.apps.incident.models import Event
+    return Event.objects.filter(
+        category=version_drift.CATEGORY,
+        created__gte=timezone.now() - VERSION_DRIFT_MAX_AGE).order_by(
+            "-created").values("metadata").first()
+
+
 def _version_drift_finding(kinds, current_version=None):
     """The newest still-relevant managed-engine upgrade finding, or None.
 
@@ -560,12 +565,7 @@ def _version_drift_finding(kinds, current_version=None):
     finding whose ``current_version`` no longer matches the version the engine
     actually reports is about a database that has already been upgraded.
     """
-    from mojo.apps.aws.services import version_drift
-    from mojo.apps.incident.models import Event
-    row = Event.objects.filter(
-        category=version_drift.CATEGORY,
-        created__gte=timezone.now() - VERSION_DRIFT_MAX_AGE).order_by(
-            "-created").values("metadata").first()
+    row = _newest_drift_event()
     findings = (row or {}).get("metadata")
     findings = findings.get("findings") if isinstance(findings, dict) else None
     if not isinstance(findings, list):

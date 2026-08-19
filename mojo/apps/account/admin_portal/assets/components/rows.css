@@ -1,0 +1,58 @@
+/* Portal-wide aligned rows: a status page reads down a column, not across a
+   grid of cards. Only theme tokens already defined in admin.css are used. */
+
+.row-page { display: grid; gap: 28px; padding: 32px; }
+
+.row-section { display: grid; gap: 6px; }
+.row-section-label {
+  margin: 0; color: var(--muted); font-size: 10px; font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase;
+}
+.row-list { display: grid; }
+
+.status-row {
+  display: grid; grid-template-columns: 7px 130px minmax(0, 1fr) auto;
+  align-items: baseline; gap: 12px; padding: 10px 0;
+  border-bottom: 1px solid var(--line); font-size: 12px;
+}
+.status-row:last-child { border-bottom: 0; }
+.status-row > .status-dot { align-self: center; margin-top: 0; }
+
+.row-name { min-width: 0; font-weight: 600; }
+.row-value { min-width: 0; color: var(--muted); overflow-wrap: anywhere; }
+.row-right {
+  display: flex; align-items: baseline; justify-content: flex-end; gap: 10px;
+  min-width: 0; text-align: right;
+}
+.row-detail { color: var(--muted); overflow-wrap: anywhere; }
+.row-detail.warning { color: var(--warning); }
+.row-detail.danger { color: var(--danger); }
+
+.row-link { color: var(--accent); text-decoration: none; white-space: nowrap; }
+.row-link:hover { text-decoration: underline; }
+
+.status-headline-block { display: grid; gap: 4px; }
+.status-headline { display: flex; align-items: center; gap: 10px; }
+.status-headline > .status-dot { margin-top: 0; }
+.status-headline strong {
+  font-size: clamp(18px, 2.4vw, 24px); letter-spacing: -.01em;
+}
+.status-sub { margin: 0; padding-left: 17px; color: var(--muted); font-size: 12px; }
+
+.row-asof {
+  display: flex; align-items: center; gap: 6px; margin-left: auto;
+  color: var(--muted); font-size: 11px; white-space: nowrap;
+}
+.row-refresh {
+  padding: 0 2px; border: 0; background: transparent; color: var(--muted);
+  cursor: pointer; font-size: 13px; line-height: 1;
+}
+.row-refresh:hover { color: var(--text); }
+
+@media (max-width: 600px) {
+  .row-page { gap: 22px; padding: 18px 14px; }
+  .status-row { grid-template-columns: 7px minmax(0, 1fr) auto; row-gap: 3px; }
+  .status-row > .row-name { grid-column: 2 / -1; }
+  .status-row > .row-value { grid-column: 2; }
+  .status-row > .row-right { grid-column: 3; }
+}
