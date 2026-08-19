@@ -317,9 +317,10 @@ def last_converged_deployment():
 
 
 def same_sha_retry(row, actor, created_by=None, idempotency_key=None):
-    return create(
+    deployment, _replayed = create(
         row.sha, actor=actor, source="admin_retry", created_by=created_by,
         idempotency_key=idempotency_key, retry_of=row)
+    return deployment
 
 
 def proof_matches(row, proof):

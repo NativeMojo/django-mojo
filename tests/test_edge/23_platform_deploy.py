@@ -740,3 +740,20 @@ def test_admin_graph_evidence_gated_at_boundary(opts):
         rendered = row.to_dict(graph=graph)
         assert "stderr_tail" not in str(rendered), \
             f"graph={graph} must fall back to the evidence-free default"
+
+
+@th.django_unit_test("same_sha_retry returns the deployment row, not create()'s tuple")
+def test_same_sha_retry_returns_a_row(opts):
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import platform_deploy
+    original, _ = platform_deploy.create(
+        SHA, source="test", idempotency_key="retry-origin")
+    retried = platform_deploy.same_sha_retry(
+        original, actor="framework-update:test", idempotency_key="retry-again")
+    assert isinstance(retried, PlatformDeployment), \
+        (f"same_sha_retry returned {type(retried).__name__}, not a "
+         "PlatformDeployment — the framework-update endpoint reads .pk off "
+         "this and 500s on a tuple")
+    assert retried.pk != original.pk, "the retry did not create a new attempt"
+    assert retried.retry_of_id == original.pk, \
+        "the retry does not reference the row it retried"
