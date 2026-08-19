@@ -125,8 +125,11 @@ never decrypted or requested from Redis and returns only
 `{"configured":true}`; a secret BASE_URL leaves Setup incomplete. A duplicate
 is fail-closed, not a random first-row winner. Dynamic rows resolve through
 Redis/database before deployment/default; protected rows use their dedicated
-database owner; static rows remain deployment-only and only flag an ignored
-database shadow; AUTH_CONFIG is merged; posture rows are computed.
+database owner, except `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS`, which the runtime
+also reads from the deployment file and which therefore reports
+`deployment` when it is configured there with no database row; static rows
+remain deployment-only and only flag an ignored database shadow; AUTH_CONFIG is
+merged; posture rows are computed.
 
 Catalog mutations accept only:
 

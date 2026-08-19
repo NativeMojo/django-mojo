@@ -522,7 +522,15 @@ The secure settings API is intended for admin portals and configuration consoles
 `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS`, and `EDGE_EXPECTED_TOPOLOGY` are protected
 system keys. Generic settings create/update/rename/delete requests refuse their
 rows in every scope for every caller, including superusers. Configure them
-through their dedicated owner. The curated
+through their dedicated owner.
+
+`AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` is the one protected key the runtime also
+reads from the deployment file, so the catalog reports
+`source: "deployment"` for it when it is configured there with no database row
+behind it. The other protected keys stay database-only: a deployment-file value
+for them is never effective and is never reported.
+
+The curated
 [Admin Settings API](admin_portal/settings.md) adds global-row-only protection
 for its five allowlisted overrides, checks both original and target scope during
 moves, and preserves the generic endpoint's supported group-scoped rows.

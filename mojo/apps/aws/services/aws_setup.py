@@ -17,6 +17,7 @@ from mojo.apps.aws.services.aws_check import (
     _alarm_name, _cors_supports_direct_upload, _direct_upload_cors_rule,
 )
 from mojo.apps.aws.services.email_templates import install_missing, shipped_status
+from mojo.helpers import logit
 from mojo.helpers.aws.client import get_client
 from mojo.helpers.aws.provider_call import ProviderCallError, ProviderCaller
 from mojo.helpers.settings import settings
@@ -862,9 +863,16 @@ class AWSSetupService:
             if verified_policy != desired_policy:
                 raise system_readiness.DefinitiveSetupFailure(
                     "SNS did not confirm the safe operations topic policy")
-        existing_allowlist = system_settings.get_value(system_settings.MONITORING_TOPICS, []) or []
-        system_settings.set_value(actor, system_settings.MONITORING_TOPICS,
-                                  sorted(set(existing_allowlist + [topic_arn])))
+        # Merge across BOTH configuration planes. A plain read-append-write
+        # here reads only the database row, so an ARN configured in
+        # var/django.conf with no row behind it would be dropped from the
+        # effective allowlist the SNS receiver honors.
+        allowlist, recovered = system_settings.merge_protected_list(
+            actor, system_settings.MONITORING_TOPICS, [topic_arn])
+        if recovered:
+            logit.warning(
+                "System Setup restored deployment-configured CloudWatch alarm "
+                f"topics missing from the stored allowlist: {recovered}")
         base_url = system_settings.get_value(system_settings.BASE_URL)
         endpoint = base_url.rstrip("/") + "/api/aws/cloudwatch/sns/alarm"
         subscriptions = self._list_paginated(
@@ -921,7 +929,11 @@ class AWSSetupService:
                         AlarmName=probe_name, StateValue=state,
                         StateReason="django-mojo System Setup delivery verification"),
                     "cloudwatch:SetAlarmState", mutation=True)
-        return {"topic_arn": topic_arn, "endpoint": endpoint, "probe_alarm": probe_name}
+        # ``allowlist``/``recovered`` are groundwork: today fix_monitoring
+        # discards this dict and _execute_reconcile strips every key but
+        # ``status``, so neither reaches an operator yet.
+        return {"topic_arn": topic_arn, "endpoint": endpoint, "probe_alarm": probe_name,
+                "allowlist": allowlist, "recovered": recovered}
 
     def monitoring_proven(self, challenge, cutoff):
         identity = _identity()

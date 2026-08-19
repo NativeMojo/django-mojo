@@ -802,6 +802,195 @@ def test_monitoring_reconcile_is_repeatable_and_persists_protected_allowlist(opt
 
 
 @th.django_unit_test()
+def test_monitoring_reconcile_merges_a_file_configured_allowlist_entry(opts):
+    """Fix must not orphan an alarm topic that lives only in ``django.conf``.
+
+    ``settings.get`` prefers a protected database row's whole value over the
+    deployment file, and the SNS receiver reads the allowlist that way.  So a
+    Fix that writes a row holding only the portal's own ARN silently removes a
+    deployment-configured topic from the effective allowlist, and the receiver
+    starts 403ing its deliveries while the alarms keep billing.
+
+    The deployment plane is simulated through ``system_settings._static_value``
+    on purpose: mutating ``django.conf.settings`` is process-global, and test
+    modules run as threads in one process, so a concurrent module would see the
+    foreign ARN.
+    """
+    import base64
+    from cryptography.hazmat.primitives.asymmetric import rsa, padding
+    from cryptography.hazmat.primitives import hashes
+    from django.test import RequestFactory
+    from django.utils import timezone
+    from mojo.apps.account.services import system_settings
+    from mojo.apps.aws.rest.sns import on_cloudwatch_alarm
+    from mojo.apps.aws.services import cloudwatch_alarms, sns as sns_service
+    from mojo.apps.aws.services.aws_setup import AWSSetupService
+    from mojo.helpers.settings import settings
+
+    actor = _setup_admin_identity("aws-setup-merge@test.com")
+    identity = system_settings.read_installation_identity()
+    portal_topic = (
+        f"arn:aws:sns:us-east-1:123456789012:django-mojo-{identity['slug']}-operations")
+    # The tofu django_conf_fragment emits a bare quoted string, not a JSON list.
+    file_topic = "arn:aws:sns:us-east-1:123456789012:deployment-configured-operations"
+    foreign_topic = "arn:aws:sns:us-east-1:123456789012:never-allowlisted"
+
+    sns = mock.Mock()
+    sns.list_topics.return_value = {"Topics": [{"TopicArn": portal_topic}]}
+    expected_tags = [
+        {"Key": "managed-by", "Value": "django-mojo"},
+        {"Key": "purpose", "Value": "cloudwatch-incidents"},
+        {"Key": "deployment", "Value": identity["slug"]},
+        {"Key": "django-mojo-installation", "Value": identity["uuid"]},
+    ]
+    sns.list_tags_for_resource.return_value = {"Tags": expected_tags}
+    topic_policy = {"Version": "2012-10-17", "Statement": []}
+    sns.get_topic_attributes.side_effect = lambda **kwargs: {
+        "Attributes": {"Policy": __import__("json").dumps(topic_policy)}}
+
+    def set_policy(**kwargs):
+        topic_policy.clear()
+        topic_policy.update(__import__("json").loads(kwargs["AttributeValue"]))
+        return {}
+
+    sns.set_topic_attributes.side_effect = set_policy
+    subscriptions = []
+    sns.list_subscriptions_by_topic.side_effect = lambda **kwargs: {
+        "Subscriptions": list(subscriptions)}
+
+    def subscribe(**kwargs):
+        subscriptions.append({"Protocol": kwargs["Protocol"], "Endpoint": kwargs["Endpoint"],
+                              "SubscriptionArn": "arn:aws:sns:subscription/merge"})
+        return {"SubscriptionArn": "arn:aws:sns:subscription/merge"}
+
+    sns.subscribe.side_effect = subscribe
+    cloudwatch = mock.Mock()
+    cloudwatch.list_metrics.return_value = {"Metrics": []}
+    alarms = {}
+    cloudwatch.describe_alarms.side_effect = lambda **kwargs: {"MetricAlarms": [
+        alarms[name] for name in kwargs.get("AlarmNames", []) if name in alarms]}
+
+    def put_alarm(**kwargs):
+        alarm = {key: value for key, value in kwargs.items() if key != "Tags"}
+        alarm.update({
+            "AlarmArn": f"arn:aws:cloudwatch:us-east-1:123456789012:alarm:{kwargs['AlarmName']}",
+            "StateValue": alarms.get(kwargs["AlarmName"], {}).get("StateValue", "OK"),
+        })
+        alarms[kwargs["AlarmName"]] = alarm
+
+    def set_state(**kwargs):
+        alarms[kwargs["AlarmName"]]["StateValue"] = kwargs["StateValue"]
+        return {}
+
+    cloudwatch.put_metric_alarm.side_effect = put_alarm
+    cloudwatch.set_alarm_state.side_effect = set_state
+    cloudwatch.list_tags_for_resource.return_value = {"Tags": expected_tags}
+    discovery = _discovery_clients()
+    service = AWSSetupService(clients={
+        "sns": sns, "cloudwatch": cloudwatch, "sts": _setup_sts(), **discovery})
+    challenge = "c" * 32
+    cutoff = timezone.now()
+
+    deployment = {"value": file_topic}
+
+    def _deployment_static(key, default=None, kind=None):
+        # Only the simulated key is intercepted; every other read stays real so
+        # a concurrently running test module is unaffected by this patch.
+        if key == system_settings.MONITORING_TOPICS:
+            return deployment["value"]
+        return settings.get_static(key, default, kind=kind)
+
+    class Certificate:
+        def __init__(self, public_key):
+            self._public_key = public_key
+
+        def public_key(self):
+            return self._public_key
+
+    def _signed(message_id, topic, key):
+        envelope = {
+            "Type": "Notification",
+            "MessageId": message_id,
+            "TopicArn": topic,
+            "Message": __import__("json").dumps({
+                "AlarmName": "merge-probe",
+                "AlarmArn": "arn:aws:cloudwatch:us-east-1:123456789012:alarm:merge-probe",
+                "AWSAccountId": "123456789012",
+                "NewStateValue": "ALARM",
+                "OldStateValue": "OK",
+                "NewStateReason": "state changed to ALARM",
+                "StateChangeTime": timezone.now().isoformat(),
+                "Region": "US East (N. Virginia)",
+                "Trigger": {"Namespace": "AWS/ApplicationELB",
+                            "MetricName": "HTTPCode_Target_5XX_Count", "Dimensions": []},
+            }),
+            "Timestamp": timezone.now().isoformat(),
+            "SignatureVersion": "2",
+            "SigningCertURL": ("https://sns.us-east-1.amazonaws.com/"
+                               "SimpleNotificationService-test.pem"),
+            # _canonical requires the field to exist before it is replaced.
+            "Signature": base64.b64encode(b"unsigned").decode("ascii"),
+        }
+        envelope["Signature"] = base64.b64encode(
+            key.sign(sns_service._canonical(envelope), padding.PKCS1v15(),
+                     hashes.SHA256())).decode("ascii")
+        return RequestFactory().generic(
+            "POST", "/api/aws/cloudwatch/sns/alarm",
+            data=__import__("json").dumps(envelope), content_type="text/plain",
+            HTTP_X_AMZ_SNS_MESSAGE_TYPE="Notification",
+            HTTP_X_AMZ_SNS_MESSAGE_ID=message_id,
+            HTTP_X_AMZ_SNS_TOPIC_ARN=topic,
+        )
+
+    with mock.patch.object(system_settings, "_static_value", _deployment_static):
+        assert system_settings.get_value(system_settings.MONITORING_TOPICS) is None, \
+            "The precondition is an installation with no protected allowlist row at all"
+        assert system_settings._static_value(
+            system_settings.MONITORING_TOPICS, [], kind="list") == file_topic, \
+            "The precondition is an allowlist configured only in the deployment file"
+
+        service.reconcile_monitoring(actor, challenge, cutoff)
+
+        effective = settings.get(system_settings.MONITORING_TOPICS, [], kind="list")
+        assert sorted(effective) == sorted([file_topic, portal_topic]), \
+            ("Fix must merge the deployment-configured topic into the allowlist "
+             f"rather than shadowing it: {effective}")
+
+        signing_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        certificate = Certificate(signing_key.public_key())
+        for topic in (file_topic, portal_topic):
+            request = _signed(f"merge-{topic.rsplit(':', 1)[-1]}", topic, signing_key)
+            with mock.patch.object(sns_service, "_certificate", return_value=certificate), \
+                    mock.patch.object(cloudwatch_alarms, "process_notification",
+                                      return_value={"accepted": True}) as processed:
+                response = on_cloudwatch_alarm(request)
+            assert response.status_code == 200 and processed.called, \
+                (f"The alarm receiver must accept the merged topic {topic}: "
+                 f"{response.status_code}")
+        denied_request = _signed("merge-foreign", foreign_topic, signing_key)
+        with mock.patch.object(sns_service, "_certificate") as never_read:
+            denied = on_cloudwatch_alarm(denied_request)
+        assert denied.status_code == 403 and not never_read.called, \
+            "A topic in neither plane must still fail closed before certificate I/O"
+
+        # Recovery: an installation already shadowed by an earlier Fix must heal
+        # on the next one, not stay broken forever.
+        system_settings.set_value(
+            actor, system_settings.MONITORING_TOPICS, [portal_topic])
+        service.reconcile_monitoring(actor, challenge, cutoff)
+        recovered = system_settings.get_value(system_settings.MONITORING_TOPICS) or []
+        assert sorted(recovered) == sorted([file_topic, portal_topic]), \
+            f"Rerunning Fix must recover an already-superseded deployment topic: {recovered}"
+
+        # A typo in an operator's conf file must not fail the whole Fix.
+        deployment["value"] = "not-an-arn"
+        system_settings.set_value(actor, system_settings.MONITORING_TOPICS, [])
+        service.reconcile_monitoring(actor, challenge, cutoff)
+        assert system_settings.get_value(system_settings.MONITORING_TOPICS) == [portal_topic], \
+            "A malformed deployment entry must be dropped, not abort Fix or be persisted"
+
+
+@th.django_unit_test()
 def test_monitoring_proof_requires_delivery_after_this_operation(opts):
     from django.utils import timezone
     from mojo.apps.account.models import SystemSetupOperation
