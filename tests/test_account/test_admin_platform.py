@@ -1,5 +1,6 @@
 """Admin Platform/Advanced permission, settings, and packaging boundaries."""
 
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -7,6 +8,23 @@ from testit import helpers as th
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@contextmanager
+def _override_setting(name, value):
+    """In-process Django settings override (th.server_settings only affects the
+    separate server process; override_settings is banned by testing rules)."""
+    import django.conf
+    sentinel = object()
+    original = getattr(django.conf.settings, name, sentinel)
+    setattr(django.conf.settings, name, value)
+    try:
+        yield
+    finally:
+        if original is sentinel:
+            delattr(django.conf.settings, name)
+        else:
+            setattr(django.conf.settings, name, original)
 
 
 @th.django_unit_setup()
@@ -1127,3 +1145,91 @@ def test_framework_update_decorators(opts):
         "the framework update does not require fresh auth"
     assert getattr(func, "_mojo_fresh_auth_seconds", None) == 600, \
         "the framework update does not pin its fresh-auth window"
+
+
+# ── INFRASTRUCTURE_MODE ─────────────────────────────────────────────────────
+
+@th.django_unit_test("an external installation refuses the framework update with a named 403")
+def test_framework_update_refused_in_external_mode(opts):
+    import json
+    import inspect
+    from objict import objict
+    from mojo.helpers import infrastructure
+    from mojo.apps.account.models import User
+    from mojo.apps.account.rest import admin_platform as views
+    from mojo.apps.account.services import admin_platform
+
+    root = User.objects.get(pk=opts.platform_root)
+    view = inspect.unwrap(views.on_admin_platform_framework_update)
+    request = mock.Mock(user=root, META={},
+                        DATA=objict(version="1.13.0", confirm_version="1.13.0"))
+    with _override_setting("INFRASTRUCTURE_MODE", "external"):
+        with mock.patch.object(admin_platform, "apply_framework_update") as applied:
+            response = view(request)
+        assert applied.call_count == 0, \
+            "an external installation still reached the framework update service"
+    assert response.status_code == 403, \
+        f"the refusal is not a 403: {response.status_code}"
+    payload = json.loads(response.content.decode())
+    assert payload["error_code"] == infrastructure.ERROR_CODE, \
+        f"the refusal does not carry its documented code: {payload}"
+    assert payload["data"] == {"mode": "external", "setting": "INFRASTRUCTURE_MODE"}, \
+        f"the refusal does not name the mode and the setting: {payload}"
+
+
+@th.django_unit_test("the framework update service refuses an external installation on its own")
+def test_framework_update_service_backstop(opts):
+    from mojo import errors as me
+    from mojo.apps.account.models import Setting, User
+    from mojo.apps.account.services import admin_platform, system_settings
+    from mojo.apps.edge.services import deploy, platform_deploy
+    from mojo.apps.edge.settings_validators import FRAMEWORK_VERSION_KEY
+
+    root = User.objects.get(pk=opts.platform_root)
+    Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
+    request = mock.Mock(user=root, META={})
+    try:
+        system_settings.set_value(root, FRAMEWORK_VERSION_KEY, "1.12.0")
+        with _override_setting("INFRASTRUCTURE_MODE", "external"):
+            with mock.patch.object(platform_deploy, "last_converged_deployment",
+                                   return_value=mock.Mock(pk="row", sha="d" * 40)), \
+                    mock.patch.object(platform_deploy, "same_sha_retry") as retry, \
+                    mock.patch.object(admin_platform, "audit_after_commit"):
+                with th.assert_raises(me.PermissionDeniedException):
+                    admin_platform.apply_framework_update(request, "1.13.0")
+                assert retry.call_count == 0, \
+                    "the refused update still queued a deployment"
+        assert deploy.framework_version_pin() == "1.12.0", \
+            "the refused update still cleared the fleet's version pin"
+    finally:
+        Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
+
+
+@th.django_unit_test("external mode blocks the overview's update without hiding the version facts")
+def test_framework_overview_blocked_reason_external(opts):
+    from mojo.apps.account.services import admin_platform
+    from mojo.apps.edge.services import framework_version, platform_deploy
+
+    root = mock.Mock(is_superuser=True)
+    row = mock.Mock(pk="row")
+    with mock.patch.object(framework_version, "status",
+                           return_value=_framework_status()), \
+            mock.patch.object(platform_deploy, "last_converged_deployment",
+                              return_value=row):
+        managed = admin_platform.framework_overview(_framework_request(root))
+        with _override_setting("INFRASTRUCTURE_MODE", "external"):
+            external = admin_platform.framework_overview(_framework_request(root))
+
+    assert managed["can_update"] is True and managed["blocked_reason"] is None, \
+        f"the managed control case is not offering an update: {managed}"
+    assert external["can_update"] is False, \
+        "an external installation still offered a framework update"
+    assert external["blocked_reason"] == "infrastructure_external", \
+        f"the block is not named as the mode: {external['blocked_reason']}"
+    # The read itself is never gated: the facts a page reports must stay true.
+    assert external["installed"] == "1.12.3" and external["latest"] == "1.13.0", \
+        f"external mode hid the version facts: {external}"
+    assert external["pin"] == {"mode": "latest", "value": None}, \
+        f"external mode hid the pin: {external['pin']}"
+    assert external["update_available"] is True, \
+        "external mode pretended nothing newer is published"
