@@ -8,16 +8,17 @@ from django.http import HttpResponse, HttpResponseRedirect
 
 import mojo
 from mojo import decorators as md
-from mojo.apps.account.services import admin_assets, admin_features, admin_portal
+from mojo.apps.account.services import admin_assets, admin_features
+from mojo.apps.account.services import admin_portal as admin_portal_service
 from mojo.apps.account.services import system_settings, webapp_authority
 from mojo.helpers import infrastructure
 from mojo.helpers.response import JsonResponse
 
 
-_ADMIN_ROOT = f"/{admin_portal.ADMIN_PATH}"
-_ADMIN_ROOT_SLASH = f"/{admin_portal.ADMIN_PATH}/"
-_ADMIN_ASSET = f"/{admin_portal.ADMIN_PATH}/<path:asset>"
-_ADMIN_SESSION = f"/{admin_portal.ADMIN_PATH}/_session"
+_ADMIN_ROOT = f"/{admin_portal_service.ADMIN_PATH}"
+_ADMIN_ROOT_SLASH = f"/{admin_portal_service.ADMIN_PATH}/"
+_ADMIN_ASSET = f"/{admin_portal_service.ADMIN_PATH}/<path:asset>"
+_ADMIN_SESSION = f"/{admin_portal_service.ADMIN_PATH}/_session"
 
 
 def _headers(response, *, csp=None):
@@ -88,7 +89,7 @@ def _not_found():
 def on_admin_root(request):
     if request.path.rstrip("/") == _ADMIN_ROOT and not request.path.endswith("/"):
         return _headers(HttpResponseRedirect(_ADMIN_ROOT_SLASH))
-    if admin_portal.validate(request) is None:
+    if admin_portal_service.validate(request) is None:
         return _gate()
     return _private_file("index.html")
 
@@ -96,7 +97,7 @@ def on_admin_root(request):
 @md.GET(_ADMIN_ASSET)
 @md.public_endpoint("Admin assets return 404 without a valid source session")
 def on_admin_asset(request, asset=None):
-    if admin_portal.validate(request) is None:
+    if admin_portal_service.validate(request) is None:
         return _not_found()
     return _private_file(asset or "")
 
@@ -105,20 +106,20 @@ def on_admin_asset(request, asset=None):
 @md.denies_key_backed_session()
 @md.requires_global_perms("view_admin", "manage_users", "manage_settings", "admin")
 def on_admin_session(request):
-    session_id = admin_portal.issue(request)
+    session_id = admin_portal_service.issue(request)
     if session_id is None:
         return JsonResponse({"status": False, "error": "interactive JWT required"}, status=401)
     response = JsonResponse({"status": True, "data": {"path": _ADMIN_ROOT_SLASH}})
-    admin_portal.set_cookie(response, session_id)
+    admin_portal_service.set_cookie(response, session_id)
     return _headers(response)
 
 
 @md.DELETE(_ADMIN_SESSION)
 @md.public_endpoint("Revokes only the caller's path-scoped Admin source session")
 def on_admin_session_revoke(request):
-    admin_portal.revoke(request)
+    admin_portal_service.revoke(request)
     response = JsonResponse({"status": True})
-    admin_portal.delete_cookie(response)
+    admin_portal_service.delete_cookie(response)
     return _headers(response)
 
 
