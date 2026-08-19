@@ -359,6 +359,91 @@ def test_settings_preview_states(opts):
         "Settings preview events can retain submitted values"
 
 
+@th.django_unit_test("preview renders every merged Deployments state deterministically")
+def test_deployments_preview_states(opts):
+    from urllib.parse import urlparse
+
+    server = _server()
+    source = (ROOT / "bin/admin_preview_support/server.py").read_text()
+    gallery = (ROOT / "bin/admin_preview_support/gallery.py").read_text()
+
+    assert "--deployments-state" in source and \
+        "deployments_state=args.deployments_state" in source, \
+        "the preview cannot select a deployments scenario"
+    assert "deployments_state" in gallery, \
+        "gallery reset does not thread the deployments scenario to providers"
+
+    fixtures = {"webapps": server.WEBAPPS,
+                "webapp_onboarding": server.webapp_onboarding_operation,
+                "setup_choice": lambda: None}
+    # (API attempt status or None, app rows, rows with no address)
+    expected = {
+        "mixed": ("partial", 2, 1),
+        "converged": ("converged", 2, 0),
+        "failed": ("failed", 2, 0),
+        "empty": (None, 0, 0),
+    }
+    for state, (api_status, app_count, missing) in expected.items():
+        class Handler:
+            pass
+
+        server.webapps.reset(Handler, fixtures, deployments_state=state)
+        server.platform.reset(Handler, fixtures, deployments_state=state)
+
+        code, body = server.webapps.get(
+            Handler, urlparse("/api/edge/webapp/summaries"))
+        assert code == 200, f"{state}: summaries answered {code}"
+        assert body["schema_version"] == 1 and body["limit"] == 50, \
+            f"{state}: the summaries envelope drifted: {body.keys()}"
+        assert len(body["items"]) == app_count, \
+            f"{state}: expected {app_count} app rows, got {len(body['items'])}"
+        assert sum(1 for row in body["items"] if row["address"] is None) == missing, \
+            f"{state}: expected {missing} no-address rows"
+
+        code, report = server.platform.get(Handler, urlparse(
+            "/api/account/admin/platform?sections=deployments,api"))
+        assert code == 200, f"{state}: platform overview answered {code}"
+        attempts = report["sections"]["deployments"]["data"]["items"]
+        if api_status is None:
+            assert attempts == [], f"{state}: expected no attempts, got {attempts}"
+        else:
+            assert attempts[0]["status"] == api_status, \
+                f"{state}: expected API status {api_status}, got {attempts[0]['status']}"
+
+    # The mixed state proves row truncation with a real 40-char release id,
+    # and the failed state pairs a failed deploy with an expired certificate.
+    class Mixed:
+        pass
+
+    server.webapps.reset(Mixed, fixtures, deployments_state="mixed")
+    body = server.webapps.get(Mixed, urlparse("/api/edge/webapp/summaries"))[1]
+    green = body["items"][0]
+    assert len(green["current_release"]["version"]) == 40, \
+        "the mixed fixture cannot prove the 40-char id is demoted on the row"
+    assert green["address"]["certificate"]["status"] == "active", \
+        "the mixed fixture lost its valid-certificate state"
+
+    class Failed:
+        pass
+
+    server.webapps.reset(Failed, fixtures, deployments_state="failed")
+    body = server.webapps.get(Failed, urlparse("/api/edge/webapp/summaries"))[1]
+    broken = body["items"][0]
+    assert broken["latest_deployment"]["status"] == "failed", \
+        "the failed fixture has no failed latest deployment"
+    assert broken["address"]["certificate"]["not_after"] < "2026-08-18", \
+        "the failed fixture's certificate is not expired"
+
+    # The per-app drill-in summary carries the additive certificate fact.
+    class Drill:
+        pass
+
+    server.webapps.reset(Drill, fixtures)
+    summary = server.webapps.get(Drill, urlparse("/api/edge/webapp/summary"))[1]
+    assert summary["address"]["certificate"]["status"] == "active", \
+        "the drill-in summary fixture omitted address.certificate"
+
+
 @th.django_unit_test("preview renders every Maintenance state deterministically")
 def test_maintenance_preview_states(opts):
     from urllib.parse import urlparse

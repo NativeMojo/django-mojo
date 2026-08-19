@@ -40,16 +40,31 @@ def describe(capabilities):
     return {"id": NAME, "enabled": any(values.values()), "capabilities": values}
 
 
-def reset(handler, fixtures, *, setup_state="idle", metrics_state="live", **options):
+def reset(handler, fixtures, *, setup_state="idle", metrics_state="live",
+          deployments_state="mixed", **options):
     handler.setup_operation = fixtures["setup_choice"]() if setup_state == "choice" else None
     handler.metrics_state = metrics_state
-    handler.platform_deployments = [{
+    handler.deployments_state = deployments_state
+    base = {
         "id": "18180000-0000-4000-8000-000000000001", "sha": "8" * 40,
         "status": "partial", "framework_version": "1.9.0", "source": "github",
         "actor": "github:release-bot", "frozen_roster": ["edge-a-engine", "edge-b-engine"],
         "node_evidence": [{"runner": "edge-a-engine", "state": "proven"}],
         "transitions": [], "links": {}, "detail": {}, "created": "2026-08-10T17:00:00Z",
-    }]
+    }
+    if deployments_state == "empty":
+        handler.platform_deployments = []
+    elif deployments_state == "converged":
+        handler.platform_deployments = [{
+            **base, "status": "converged", "finished": "2026-08-10T17:05:00Z",
+            "node_evidence": [{"runner": "edge-a-engine", "state": "proven"},
+                              {"runner": "edge-b-engine", "state": "proven"}]}]
+    elif deployments_state == "failed":
+        handler.platform_deployments = [{
+            **base, "status": "failed", "finished": "2026-08-10T17:04:00Z"}]
+    else:
+        # mixed: one in-flight partial attempt — the previous default fixture.
+        handler.platform_deployments = [dict(base)]
 
 
 def _metrics_labels(granularity, count):
@@ -160,6 +175,8 @@ def _platform(handler):
 
 # One switch per served path. Sibling Platform routes register here rather than
 # growing a chain of early returns at the top of the function.
+# The overview accepts and ignores the merged lane's ?sections= narrowing —
+# fixtures are cheap; the parameter exists for the real server.
 ROUTES = {
     "/api/account/admin/platform": lambda handler, parsed: _platform(handler),
     "/api/aws/cloudwatch/resources": lambda handler, parsed: _cloudwatch_resources(handler),

@@ -21,9 +21,11 @@ def describe(capabilities):
             "contracts": {"onboarding": 1, "summary": 1}}
 
 
-def reset(handler, fixtures, *, key_state="active", onboarding_state="idle", **options):
+def reset(handler, fixtures, *, key_state="active", onboarding_state="idle",
+          deployments_state="mixed", **options):
     handler.key_state = key_state
     handler.onboarding_state = onboarding_state
+    handler.deployments_state = deployments_state
     handler.onboarding_receipts = {}
     handler.webapps = [dict(row) for row in fixtures["webapps"]]
     handler.webapp_onboarding_factory = fixtures["webapp_onboarding"]
@@ -75,7 +77,8 @@ def _summary():
                    "deployment_ref": "main", "build_output": "dist"},
         "address": {"hostname": "portal.nativemojo.com",
                     "https_origin": "https://portal.nativemojo.com",
-                    "domain": {"id": 11, "name": KNOWN_DOMAIN, "provider": "route53"}},
+                    "domain": {"id": 11, "name": KNOWN_DOMAIN, "provider": "route53"},
+                    "certificate": {"status": "active", "not_after": "2030-01-16T08:00:00Z"}},
         "current_release": {"id": 8, "version": "2026.08.10", "status": "live",
                             "created": "2026-08-10T18:00:00Z"},
         "latest_deployment": {"id": 501, "status": "live",
@@ -83,6 +86,57 @@ def _summary():
         "onboarding": {"status": "succeeded", "cursor": "complete", "evidence": {}},
         "deployment_key": {"linked": True, "active": True},
     }
+
+
+# A real release id is the 40-character workflow sha — the fixture proves the
+# row demotes it to a 10-character muted mono detail.
+FORTY_CHAR_VERSION = "3f9c2d1e8a" * 4
+ACTIVE_CERT = {"status": "active", "not_after": "2030-01-16T08:00:00Z"}
+EXPIRED_CERT = {"status": "active", "not_after": "2026-08-01T08:00:00Z"}
+
+
+def _summary_item(app_id, slug, display_name, *, hostname=None, certificate=None,
+                  release=None, deployment=None, ref="main"):
+    return {
+        "webapp": {"id": app_id, "slug": slug, "display_name": display_name,
+                   "environment": "production", "deployment_ref": ref},
+        "address": ({"hostname": hostname, "certificate": certificate}
+                    if hostname else None),
+        "current_release": release,
+        "latest_deployment": deployment,
+    }
+
+
+def _summaries(state):
+    """Deterministic merged-lane app rows, keyed by --deployments-state."""
+    live_release = {"id": 8, "version": FORTY_CHAR_VERSION, "status": "live",
+                    "created": "2026-08-10T18:00:00Z"}
+    live_deploy = {"id": 501, "status": "live", "created": "2026-08-10T18:00:00Z",
+                   "finished": "2026-08-10T18:02:00Z"}
+    failed_deploy = {"id": 502, "status": "failed", "created": "2026-08-12T09:00:00Z",
+                     "finished": "2026-08-12T09:01:00Z"}
+    docs_release = {"id": 9, "version": "2026.08.11", "status": "live",
+                    "created": "2026-08-11T18:00:00Z"}
+    docs_deploy = {"id": 503, "status": "live", "created": "2026-08-11T18:00:00Z",
+                   "finished": "2026-08-11T18:01:30Z"}
+    portal_green = _summary_item(
+        42, "customer-portal", "Customer Portal", hostname="portal.nativemojo.com",
+        certificate=dict(ACTIVE_CERT), release=live_release, deployment=live_deploy)
+    docs_bare = _summary_item(54, "docs", "Documentation")
+    docs_green = _summary_item(
+        54, "docs", "Documentation", hostname="docs.nativemojo.com",
+        certificate=dict(ACTIVE_CERT), release=docs_release, deployment=docs_deploy)
+    portal_failed = _summary_item(
+        42, "customer-portal", "Customer Portal", hostname="portal.nativemojo.com",
+        certificate=dict(EXPIRED_CERT), release=live_release, deployment=failed_deploy)
+    items = {
+        "mixed": [portal_green, docs_bare],
+        "converged": [portal_green, docs_green],
+        "failed": [portal_failed, docs_green],
+        "empty": [],
+    }.get(state, [portal_green, docs_bare])
+    return {"schema_version": 1, "items": items, "count": len(items),
+            "limit": 50, "truncated": False}
 
 
 def _deployments():
@@ -117,6 +171,8 @@ def get(handler, parsed):
         if receipt is None:
             return 404, {"error": "WebApp onboarding operation not found"}
         return 200, receipt
+    if path == "/api/edge/webapp/summaries":
+        return 200, _summaries(getattr(handler, "deployments_state", "mixed"))
     if path == "/api/edge/webapp/summary":
         return 200, _summary()
     if path == "/api/edge/webapp/deployment":
