@@ -120,6 +120,7 @@ Categories are hierarchical strings using `:` as separator. The rule engine matc
 | `system:health:memory` | Health | Memory threshold exceeded |
 | `system:health:disk` | Health | Disk threshold exceeded |
 | `system:health:aws_versions` | Health | AWS managed-service major version drift (opt-in) |
+| `system:health:infra_drift` | Health | Fleet drift — serving nodes vs. the recorded topology (opt-in) |
 | `api_error` | App | Application error (default category) |
 | `invalid_password` | Auth | Wrong password for known user |
 | `totp:login_failed` | Auth | TOTP MFA failure |
@@ -811,11 +812,17 @@ The health monitoring system runs every 3 minutes (when enabled) and reports inf
 | Memory usage | `system:health:memory` | 8 | > `HEALTH_MEM_CRIT` (default 90%) |
 | Disk usage | `system:health:disk` | 8 | > `HEALTH_DISK_CRIT` (default 85%) |
 
-A seventh health category, `system:health:aws_versions`, is filed by a separate
-opt-in daily job rather than by `check_system_health` — see
-[AWS version drift](../aws/version_drift.md). It appears on the same
-`/api/incident/health/summary` strip, at level 4 (inventory incomplete), 5
-(major upgrade available), 8 (support deadline near) or 10 (deadline passed).
+Two further health categories are filed by separate opt-in daily jobs rather
+than by `check_system_health`, and appear on the same
+`/api/incident/health/summary` strip:
+
+- `system:health:aws_versions` — see [AWS version drift](../aws/version_drift.md).
+  Level 4 (inventory incomplete), 5 (major upgrade available), 8 (support
+  deadline near) or 10 (deadline passed).
+- `system:health:infra_drift` — see [fleet drift](../aws/infra_drift.md). Level 4
+  (an AWS read did not answer) or 5 (a serving node is not in the recorded
+  topology, or a recorded node is serving nothing). Never higher; a matching
+  fleet files nothing at all.
 
 ### Enable Health Monitoring
 
@@ -973,13 +980,18 @@ Every blocking rule a legitimate user could trip carries a `trigger_count`, so o
 | Scheduler Missing | `system:health:scheduler` | level >= 10 | `notify://perm@manage_security,ticket://?priority=9` | NONE, 60min |
 | TCP Overload | `system:health:tcp` | level >= 8 | `notify://perm@manage_security` | HOSTNAME, 30min |
 | AWS Version Drift | `aws:versions` (matched by event **scope**) | level >= 5 | `notify://perm@manage_security,ticket://?priority=8&category=aws-version-drift&maestro=1` | NONE |
+| Infrastructure Drift | `infra:drift` (matched by event **scope**) | level >= 5 | `notify://perm@manage_security` | NONE |
 
-`ensure_health_rules()` creates the first three. The AWS one is opt-in
-(`RuleSet.ensure_aws_version_rules()` or `aws-check --apply --section rules`)
-and deliberately sits on `aws:versions` rather than inside the
-`system:health:` namespace, so it can never satisfy the health-defaults
-bootstrap guard in `mojo/apps/incident/cronjobs.py` and suppress the three
-above.
+`ensure_health_rules()` creates the first three. The two AWS ones are opt-in
+(`RuleSet.ensure_aws_version_rules()` / `RuleSet.ensure_infra_drift_rules()`, or
+`aws-check --apply --section rules`) and deliberately sit on `aws:versions` and
+`infra:drift` rather than inside the `system:health:` namespace, so neither can
+satisfy the health-defaults bootstrap guard in
+`mojo/apps/incident/cronjobs.py` and suppress the three above.
+
+Infrastructure Drift is **notify only** — no `ticket://`. Drift is a one-minute
+reconciliation in System Setup, and on an externally-managed estate it recurs
+until someone records the node.
 
 Health rules **never** use `block://` — infrastructure issues should not block IPs.
 

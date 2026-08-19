@@ -130,7 +130,7 @@ remediation/changed items:
 | `email` | SES identity/DKIM/topics/receiving readiness, non-blocking sandbox warning, outbound Mailbox and shipped templates |
 | `monitoring` | owned SNS topic, exact protected/static allowlist, HTTPS subscription, owned alarms and receiver receipt |
 | `dns` | dnsman ACME directory/account, delegation states, certificate expiry; under `--apply`, bootstraps one domain |
-| `rules` | opt-in create-only CloudWatch and version-drift incident policies |
+| `rules` | opt-in create-only CloudWatch, version-drift and fleet-drift incident policies |
 | `versions` | **opt-in** managed-service major version drift (RDS/Aurora, ElastiCache) — never part of a default run, and never reports FAIL |
 
 ### System S3 direct uploads
@@ -308,6 +308,11 @@ It does **not** sit behind the `monitoring_ready` / `delivery_seen` gate above:
 that gate exists because CloudWatch alarms need a confirmed SNS receiver,
 whereas version-drift events are generated in-process. See
 [version_drift.md](version_drift.md).
+
+A **third** opt-in RuleSet, `Health - Infrastructure Drift` in category
+`infra:drift`, is reported and can be created the same way. Its handler is
+`notify://perm@manage_security` — notify only, no ticket. It is outside the
+receiver gate for the same reason. See [infra_drift.md](infra_drift.md).
 
 ## The `dns` section
 
