@@ -25,8 +25,13 @@ export function featureForRoute(route, ctx) {
   return candidate?.enabled(ctx) ? candidate : dashboard;
 }
 
+// Entries keep DESCRIPTORS order by default; an entry may declare a numeric
+// `order` to sit later in the sidebar than the feature it belongs to. Array
+// sort is stable, so everything unordered stays exactly where it was.
 export function navigationFor(ctx) {
-  return DESCRIPTORS.filter((feature) => feature.enabled(ctx)).flatMap((feature) => feature.navigation(ctx));
+  return DESCRIPTORS.filter((feature) => feature.enabled(ctx))
+    .flatMap((feature) => feature.navigation(ctx))
+    .sort((left, right) => (left.order || 0) - (right.order || 0));
 }
 
 export function installFeatureStyles(ctx) {

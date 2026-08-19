@@ -3,8 +3,22 @@ import {activityHref, routeHref} from '../../components/routes.js';
 import {rowSection, statusHeadline, statusRow} from '../../components/rows.js';
 import {featureDescriptors} from '../registry.js';
 import {errorState, loadingState} from '../../components/views.js';
+import {
+  detailLink, openApiInspector, openFleetInspector, openSecurityInspector,
+  openSourceInspector, wireAction,
+} from './inspectors.js';
 
 const HEADLINE_TONE = {ok: 'ok', down: 'danger', unknown: 'muted'};
+
+// Plain words for a failing node check. The row never counts checks — "3 of 5
+// passing" tells an operator to go count, not what is wrong.
+const SANITY_COPY = {
+  'django apps': 'the app registry did not load',
+  'database': 'the database did not answer',
+  'migrations': 'database migrations are not applied',
+  'redis': 'Redis did not answer',
+  'local request': 'this node did not answer its own API',
+};
 
 function tone(source) {
   const status = source?.status || 'unknown';
@@ -38,6 +52,16 @@ function section(label, entries) {
     : entry.build(entry.source)));
 }
 
+// One affordance rule for every drill-in: Details takes the row's action slot,
+// unless the row already spends that slot on a cross-page link — then it rides
+// in the detail slot instead. No row loses a destination it has today.
+function detailsRow(spec, open) {
+  if (spec.action) {
+    return statusRow({...spec, detailNode: spec.detailNode || detailLink('Details', open)});
+  }
+  return wireAction(statusRow({...spec, action: {label: 'Details', href: '#'}}), open);
+}
+
 // The maintenance destination ships separately. Linking to a route the shell
 // cannot resolve would send the operator to a silent fallback, so the link
 // exists only once the feature is registered.
@@ -58,15 +82,37 @@ function loadBalancerRow(source) {
     detailNode = h('span', {class: 'row-detail warning',
       text: 'no elastic IP — the address changes if it is replaced'});
   }
-  return statusRow({tone: tone(source), name: 'Load balancer', value, detailNode});
+  return detailsRow({tone: tone(source), name: 'Load balancer', value, detailNode},
+    () => openSourceInspector({
+      title: 'Load balancer', source,
+      facts: [
+        ['Balancer', data.balancer?.name],
+        ['Type', [data.balancer?.type, data.balancer?.scheme].filter(Boolean).join(' · ')],
+        ['State', data.balancer?.state],
+        ['Targets', `${data.healthy || 0} of ${data.registered || 0} healthy`],
+        ['Elastic IPs', ips.join(', ') || 'none allocated'],
+      ],
+    }));
 }
 
-function computeRow(source) {
+function computeRow(source, ctx) {
   const data = source.data || {};
   const names = (data.instances || []).map((row) => row.name).filter(Boolean);
   const value = data.total ? `${data.up || 0} / ${data.total} up` : 'None running';
-  return statusRow({tone: tone(source), name: 'EC2', value,
-    detail: names.slice(0, 4).join(', ')});
+  return detailsRow(
+    {tone: tone(source), name: 'EC2', value, detail: names.slice(0, 4).join(', ')},
+    () => openFleetInspector(ctx, source));
+}
+
+function databaseFacts(data) {
+  return [
+    ['Engine', [data.engine, data.version].filter(Boolean).join(' ')],
+    ['Vendor', data.vendor],
+    ['Reachable', data.reachable ? 'yes' : 'no'],
+    ['Upgrade available', data.drift?.available_major],
+    ['Upgrade deadline', data.drift?.deadline ? formatDate(data.drift.deadline) : null],
+    ['Note', data.drift?.note],
+  ];
 }
 
 function databaseRow(source) {
@@ -74,13 +120,15 @@ function databaseRow(source) {
   const engine = [data.engine, data.version].filter(Boolean).join(' ');
   const value = source.status === 'unhealthy' ? 'Unreachable'
     : ['Available', engine].filter(Boolean).join(' · ');
+  const open = () => openSourceInspector({
+    title: 'RDS', source, facts: databaseFacts(data)});
   const upgrade = data.drift?.available_major;
-  if (!upgrade) return statusRow({tone: tone(source), name: 'RDS', value});
+  if (!upgrade) return detailsRow({tone: tone(source), name: 'RDS', value}, open);
   const label = `${upgrade} available`;
   const href = maintenanceHref();
-  return statusRow({tone: 'warn', name: 'RDS', value,
+  return detailsRow({tone: 'warn', name: 'RDS', value,
     action: href ? {label, href} : null,
-    detail: href ? '' : label, detailTone: 'warning'});
+    detail: href ? '' : label, detailTone: 'warning'}, open);
 }
 
 function cacheRow(source) {
@@ -88,63 +136,130 @@ function cacheRow(source) {
   const engine = [data.engine, data.version].filter(Boolean).join(' ');
   const value = source.status === 'unhealthy' ? 'Unreachable'
     : ['Available', engine].filter(Boolean).join(' · ');
-  return statusRow({tone: tone(source), name: 'Elasticache', value,
-    detail: data.memory_used ? `${data.memory_used} used` : ''});
+  return detailsRow({tone: tone(source), name: 'Elasticache', value,
+    detail: data.memory_used ? `${data.memory_used} used` : ''},
+  () => openSourceInspector({title: 'Elasticache', source, facts: [
+    ['Engine', [data.engine, data.version].filter(Boolean).join(' ')],
+    ['Reachable', data.reachable ? 'yes' : 'no'],
+    ['Memory used', data.memory_used],
+  ]}));
 }
 
 function certificatesRow(source, ctx) {
   const data = source.data || {};
+  // The renewal date moved into the drill-in: the row's detail slot now
+  // carries Details, and a date nobody has to act on is not a headline.
+  const open = () => openSourceInspector({title: 'SSL certificates', source, facts: [
+    ['Managed certificates', data.total],
+    ['Active', data.active],
+    ['Not valid', data.failing],
+    ['Expiring within 30 days', data.expiring_within_30_days],
+    ['Next renewal', data.soonest_renew
+      ? `${formatDate(data.soonest_renew)}${data.soonest_renew_name ? ` · ${data.soonest_renew_name}` : ''}`
+      : null],
+    ['Soonest expiry', data.soonest_expiry ? formatDate(data.soonest_expiry) : null],
+  ]});
   if (source.status === 'unconfigured' || !data.total) {
-    return statusRow({tone: 'muted', name: 'SSL certs', value: 'Not managed here'});
+    return detailsRow({tone: 'muted', name: 'SSL certs', value: 'Not managed here'}, open);
   }
   const href = ctx.capabilities.network ? routeHref('certificates') : null;
-  return statusRow({
+  return detailsRow({
     tone: tone(source), name: 'SSL certs',
     value: data.failing ? `${data.failing} not valid` : 'All valid',
-    detail: data.soonest_renew ? `renews ${formatDate(data.soonest_renew)}` : '',
-    action: href ? {label: 'Certificates', href} : null});
+    action: href ? {label: 'Certificates', href} : null}, open);
 }
 
-function publicApiRow(source, ctx) {
+// The first failing node check, in plain words. Never a count: the row says
+// what is broken, and the drill-in lists every check.
+function sanityFailure(sanitySource) {
+  const checks = sanitySource?.data?.checks;
+  if (!Array.isArray(checks) || !checks.length) return null;
+  const failing = checks.filter((row) => !row.ok);
+  if (!failing.length) return null;
+  const first = SANITY_COPY[failing[0].name] || failing[0].name;
+  return failing.length > 1 ? `${first} · +${failing.length - 1} more` : first;
+}
+
+function publicApiRow(source, ctx, sanitySource) {
   const data = source.data || {};
+  const open = () => openApiInspector(source, sanitySource);
   if (source.status === 'unconfigured' || !data.configured) {
     const href = ctx.capabilities.setup
       ? routeHref('setup', {focus: 'django.base_url', return: routeHref('dashboard')})
       : null;
-    return statusRow({tone: 'muted', name: 'Public API', value: 'Not configured',
-      action: href ? {label: 'Set it up', href} : null});
+    return detailsRow({tone: 'muted', name: 'Public API', value: 'Not configured',
+      action: href ? {label: 'Set it up', href} : null}, open);
   }
   const probed = data.probe?.version || '';
   const node = data.node_version || '';
   if (source.status === 'unhealthy') {
-    return statusRow({tone: 'danger', name: 'Public API',
+    return detailsRow({tone: 'danger', name: 'Public API',
       value: probed || 'Unreachable', mono: Boolean(probed),
-      detail: 'the public address did not answer', detailTone: 'danger'});
+      detail: 'the public address did not answer', detailTone: 'danger'}, open);
   }
+  // A node that cannot pass its own checks is the more urgent fact, so it
+  // takes the detail slot from the version comparison.
+  const failure = sanityFailure(sanitySource);
   const mismatch = Boolean(probed && node && probed !== node);
-  return statusRow({tone: mismatch ? 'warn' : tone(source), name: 'Public API',
-    value: probed || 'Reachable', mono: Boolean(probed),
-    detail: mismatch ? `this node reports ${node}` : (probed && node ? 'up to date' : ''),
-    detailTone: mismatch ? 'warning' : ''});
+  const detail = failure || (mismatch ? `this node reports ${node}`
+    : (probed && node ? 'up to date' : ''));
+  return detailsRow({tone: failure || mismatch ? 'warn' : tone(source), name: 'Public API',
+    value: probed || 'Reachable', mono: Boolean(probed), detail,
+    detailTone: failure || mismatch ? 'warning' : ''}, open);
+}
+
+function jobsRow(source) {
+  const data = source.data || {};
+  const counts = data.jobs || {};
+  const open = () => openSourceInspector({title: 'Jobs', source, facts: [
+    ['Scheduler', data.scheduler_active ? 'running' : 'not running'],
+    ['Pending', counts.pending],
+    ['Running', counts.running],
+    ['Failed in the last hour', data.failed_recent],
+    ['Failed all time', counts.failed],
+  ]});
+  if (!data.jobs) {
+    // No counts came back — a timed-out or failed collector. Zero pending jobs
+    // is a green queue; missing evidence is not, and must not read like one.
+    return detailsRow({tone: 'muted', name: 'Jobs', value: 'No evidence',
+      detail: String(source.reason || source.status || '').replaceAll('_', ' ')}, open);
+  }
+  const value = `${counts.pending || 0} pending · ${counts.running || 0} running`;
+  if (!data.scheduler_active) {
+    return detailsRow({tone: 'warn', name: 'Jobs', value,
+      detail: 'scheduler is not running', detailTone: 'warning'}, open);
+  }
+  if (data.failed_recent) {
+    return detailsRow({tone: 'warn', name: 'Jobs', value,
+      detail: `${data.failed_recent} failed in the last hour`, detailTone: 'warning'}, open);
+  }
+  return detailsRow({tone: 'ok', name: 'Jobs', value, detail: 'scheduler active'}, open);
 }
 
 function frameworkRow(source) {
   const data = source.data || {};
   const installed = data.installed || '—';
+  const open = () => openSourceInspector({title: 'django-mojo', source, facts: [
+    ['Installed', installed, true],
+    ['Latest published', data.latest, true],
+    ['Checked', data.checked_at ? formatDate(data.checked_at) : null],
+    ['Source', data.source],
+    ['Update policy', data.pin?.mode],
+  ]});
   if (data.update_available && data.latest) {
     const label = `Update to ${data.latest}`;
     const href = maintenanceHref();
-    return statusRow({tone: 'warn', name: 'django-mojo', value: installed, mono: true,
+    return detailsRow({tone: 'warn', name: 'django-mojo', value: installed, mono: true,
       action: href ? {label, href} : null,
-      detail: href ? '' : label, detailTone: 'warning'});
+      detail: href ? '' : label, detailTone: 'warning'}, open);
   }
   const held = data.pin?.mode && data.pin.mode !== 'latest';
   const behind = Boolean(data.latest && data.latest !== installed);
-  return statusRow({tone: tone(source), name: 'django-mojo', value: installed, mono: true,
-    detail: held && behind ? `${data.latest} available · pinned` : ''});
+  return detailsRow({tone: tone(source), name: 'django-mojo', value: installed, mono: true,
+    detail: held && behind ? `${data.latest} available · pinned` : ''}, open);
 }
 
-function incidentsRow(source) {
+function incidentsRow(source, ctx) {
   const data = source.data || {};
   const open = data.open || 0;
   const age = data.oldest_age_days;
@@ -152,7 +267,12 @@ function incidentsRow(source) {
     ? [`${open} open`, age == null ? null : `oldest ${age} day${age === 1 ? '' : 's'}`]
       .filter(Boolean).join(' · ')
     : 'None open';
+  // Security posture is its own permission tier and never rides in the
+  // Dashboard payload — the drill-in fetches it, and only for callers the
+  // platform-security tier would accept.
+  const security = ctx.features?.platform?.capabilities?.security === true;
   return statusRow({tone: open ? 'warn' : 'ok', name: 'Incidents', value,
+    detailNode: security ? detailLink('Details', () => openSecurityInspector(ctx)) : null,
     action: open ? {label: 'Review', href: activityHref('incidents')} : null});
 }
 
@@ -191,19 +311,22 @@ export async function dashboardPage(ctx) {
         }),
         section('Infrastructure', [
           {name: 'Load balancer', source: sources.load_balancer, build: loadBalancerRow},
-          {name: 'EC2', source: sources.compute, build: computeRow},
+          {name: 'EC2', source: sources.compute,
+            build: (source) => computeRow(source, ctx)},
           {name: 'RDS', source: sources.database, build: databaseRow},
           {name: 'Elasticache', source: sources.cache, build: cacheRow},
           {name: 'SSL certs', source: sources.certificates,
             build: (source) => certificatesRow(source, ctx)},
+          {name: 'Jobs', source: sources.jobs, build: jobsRow},
         ]),
         section('Software', [
           {name: 'Public API', source: sources.public_api,
-            build: (source) => publicApiRow(source, ctx)},
+            build: (source) => publicApiRow(source, ctx, sources.sanity)},
           {name: 'django-mojo', source: sources.framework, build: frameworkRow},
         ]),
         section('Needs attention', [
-          {name: 'Incidents', source: sources.incidents, build: incidentsRow},
+          {name: 'Incidents', source: sources.incidents,
+            build: (source) => incidentsRow(source, ctx)},
           {name: 'Deployment', source: sources.last_deployment, build: deploymentRow},
           // A ticket queue at zero is not news; the row is absent, not green.
           {name: 'Tickets',

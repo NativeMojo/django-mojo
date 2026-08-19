@@ -753,27 +753,3 @@ export async function networkPage(ctx, route) {
   if (route === 'vhosts') return vhostsPage(ctx);
   return routesPage(ctx);
 }
-
-export async function advancedControlPage(ctx) {
-  const root = h('div', {class: 'page'});
-  async function render() {
-    const report = await api('/api/account/admin/advanced');
-    const sections = report.sections || {};
-    const evidencePanels = Object.entries(sections).map(([name, section]) =>
-      h('section', {class: 'panel'},
-        h('div', {class: 'panel-heading'},
-          h('div', {},
-            h('h2', {text: name.replaceAll('_', ' ')}),
-            h('p', {text: section.reason || section.observed_at})),
-          badge(section.status, statusTone(section.status))),
-        h('pre', {
-          class: 'evidence-json',
-          text: JSON.stringify(section.data || {}, null, 2),
-        })));
-    root.replaceChildren(pageHeader('Advanced operations', 'Advanced', 'Read-only hosting, AWS inventory, and bounded network posture for expert troubleshooting.', [
-      h('button', {class: 'button ghost', onclick: render}, icon('refresh'), 'Refresh evidence'),
-    ]), h('div', {class: 'advanced-evidence-grid'}, ...evidencePanels));
-  }
-  try { await render(); } catch (error) { root.replaceChildren(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
-  return root;
-}
