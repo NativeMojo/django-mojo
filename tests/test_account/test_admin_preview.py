@@ -357,3 +357,92 @@ def test_settings_preview_states(opts):
         "Settings preview cannot render set/clear outcomes"
     assert 'path == "/api/account/admin/settings"' in server and 'key == "value"' in server, \
         "Settings preview events can retain submitted values"
+
+
+@th.django_unit_test("preview renders every Maintenance state deterministically")
+def test_maintenance_preview_states(opts):
+    from urllib.parse import urlparse
+
+    server = _server()
+    source = (ROOT / "bin/admin_preview_support/server.py").read_text()
+    gallery = (ROOT / "bin/admin_preview_support/gallery.py").read_text()
+    provider = server.maintenance
+
+    assert "--maintenance-state" in source and "maintenance_state=args.maintenance_state" in source, \
+        "the preview cannot select a maintenance scenario"
+    assert "RESET_ONLY" in gallery and "maintenance" in gallery, \
+        "the maintenance provider is never reset between scenarios"
+    # It serves pages but publishes no lane; the platform mirror owns the lane.
+    assert "maintenance" not in server.bootstrap([])["features"], \
+        "the preview bootstrap invented a feature the portal registry has never heard of"
+    assert server.bootstrap([])["features"]["platform"]["capabilities"]["maintenance"] is True, \
+        "the preview bootstrap never enables the Maintenance lane"
+
+    # (status, finding count, warning count, scheduled, can_update, blocked)
+    expected = {
+        "findings": ("ok", 3, 0, True, True, None),
+        "denied": ("ok", 2, 1, True, True, None),
+        "in_flight": ("ok", 3, 0, True, True, None),
+        "unavailable": ("unavailable", 0, 0, True, True, None),
+        "framework_pinned": ("ok", 0, 0, True, True, None),
+        "framework_none": ("ok", 0, 0, True, False, "no_converged_deployment"),
+        "clear": ("ok", 0, 0, False, False, "update_unavailable"),
+    }
+    for state, (status, findings, warnings, scheduled, can_update, blocked) in expected.items():
+        class Handler:
+            pass
+
+        provider.reset(Handler, {}, maintenance_state=state)
+        code, report = provider.get(Handler, urlparse("/api/aws/maintenance/versions"))
+        assert code == 200, f"{state}: versions answered {code}"
+        assert report["status"] == status, \
+            f"{state}: expected status={status}, got {report['status']}"
+        assert len(report["findings"]) == findings, \
+            f"{state}: expected {findings} findings, got {len(report['findings'])}"
+        assert len(report["warnings"]) == warnings, \
+            f"{state}: expected {warnings} warnings, got {report['warnings']}"
+        assert report["scheduled"] is scheduled, \
+            f"{state}: expected scheduled={scheduled}, got {report['scheduled']}"
+
+        code, overview = provider.get(
+            Handler, urlparse("/api/account/admin/platform/framework"))
+        assert code == 200, f"{state}: framework answered {code}"
+        assert overview["can_update"] is can_update, \
+            f"{state}: expected can_update={can_update}, got {overview['can_update']}"
+        assert overview["blocked_reason"] == blocked, \
+            f"{state}: expected blocked={blocked!r}, got {overview['blocked_reason']!r}"
+
+    # A denied IAM read must name the exact action an operator has to grant.
+    class Denied:
+        pass
+
+    provider.reset(Denied, {}, maintenance_state="denied")
+    _, report = provider.get(Denied, urlparse("/api/aws/maintenance/versions"))
+    assert report["warnings"][0]["iam_action"] == "elasticache:DescribeCacheClusters", \
+        f"the denied fixture does not name the missing IAM action: {report['warnings']}"
+    assert not any(row["kind"] == "elasticache" for row in report["findings"]), \
+        "a denied describe still produced cache findings, hiding the denial"
+
+    # An applied upgrade must be visibly in flight, then settle honestly. The
+    # 'stalled' state is the one that proves a settled resource on its OLD
+    # version is reported as a failure rather than a success.
+    for state, upgraded in (("findings", True), ("stalled", False)):
+        class Applying:
+            pass
+
+        provider.reset(Applying, {}, maintenance_state=state)
+        code, body = provider.post(Applying, "/api/aws/maintenance/apply", {
+            "kind": "rds-instance", "resource": "mojo-prod-postgres",
+            "target_version": "16.4", "confirm_resource": "mojo-prod-postgres",
+            "apply_immediately": False})
+        assert code == 200 and body["requested"] is True, \
+            f"{state}: the apply fixture did not accept the request: {body}"
+        path = "/api/aws/maintenance/status?kind=rds-instance&resource=mojo-prod-postgres&target_version=16.4"
+        first = provider.get(Applying, urlparse(path))[1]
+        assert first["settled"] is False and first["pending_version"] == "16.4", \
+            f"{state}: the first poll does not show work in flight: {first}"
+        provider.get(Applying, urlparse(path))
+        final = provider.get(Applying, urlparse(path))[1]
+        assert final["settled"] is True, f"{state}: the upgrade never settled: {final}"
+        assert final["upgraded"] is upgraded, \
+            f"{state}: expected upgraded={upgraded}, got {final}"

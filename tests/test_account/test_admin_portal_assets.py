@@ -25,7 +25,7 @@ def test_modular_shell_contract(opts):
         assert f"./{name}/feature.js" in registry
     assert "[dashboard, webapps, advanced, people, activity, platform, settings]" in registry, \
         "primary navigation does not follow the approved operator journey"
-    assert "routes: ['platform', 'deployments', 'setup', 'metrics']" in platform
+    assert "routes: ['platform', 'deployments', 'setup', 'metrics', 'maintenance']" in platform
     assert "setupPage(ctx, signal)" in platform and "platformPage(ctx, route)" in platform
     assert "const ROUTES = ['advanced', 'domains', 'credentials', 'dns', 'certificates'" in advanced
     assert "route: 'domains'" in advanced and "label: 'Domains & DNS'" in advanced, \
@@ -137,6 +137,59 @@ def test_metrics_asset_contract(opts):
     assert "capabilities.metrics" in feature and "route: 'metrics'" in feature, \
         "the Metrics sidebar entry is not gated on its capability"
     assert "chart:" in core, "the chart icon is missing from the shared catalog"
+
+
+@th.django_unit_test("the Maintenance lane is capability-gated, confirmed, and honest about success")
+def test_maintenance_asset_contract(opts):
+    from mojo.apps.account.services import admin_assets
+
+    maintenance = (ASSETS / "features/platform/maintenance.js").read_text()
+    feature = (ASSETS / "features/platform/feature.js").read_text()
+    core = (ASSETS / "core.js").read_text()
+    assets = admin_assets.load_manifest()
+
+    assert "assets/features/platform/maintenance.js" in assets, \
+        "maintenance.js is not a declared package asset"
+    for endpoint in ("/api/aws/maintenance/versions", "/api/aws/maintenance/status",
+                     "/api/aws/maintenance/apply",
+                     "/api/account/admin/platform/framework"):
+        assert endpoint in maintenance, f"the Maintenance page never calls {endpoint}"
+
+    assert "ctx.features?.platform?.capabilities?.maintenance" in maintenance, \
+        "the Maintenance page reads a raw capability instead of its feature lane"
+    assert "capabilities.maintenance" in feature and "route: 'maintenance'" in feature, \
+        "the Maintenance sidebar entry is not gated on its capability"
+    assert "refresh:" in core, "the refresh icon is missing from the shared catalog"
+
+    # A browser confirm() cannot carry the apply window or the typed echo, and
+    # cannot be styled as the destructive action it is.
+    assert "openModal" in maintenance, \
+        "the Maintenance page does not build its confirmation on the portal modal"
+    assert "window.confirm" not in maintenance, \
+        "the Maintenance page uses a browser confirm instead of the portal modal"
+    assert "confirm_resource" in maintenance and "confirm_version" in maintenance, \
+        "the typed confirmation is never sent to the server"
+    assert "apply_immediately: choice.apply_immediately" in maintenance, \
+        "the apply window is not sent as an explicit operator choice"
+
+    # The poll must stop when the page goes away, and must never call an
+    # unchanged engine version a success.
+    assert "signal?.aborted" in maintenance and "signal?.addEventListener('abort'" in maintenance, \
+        "the status poll is not abort-aware and would outlive the page"
+    assert "POLL_INTERVAL = 10000" in maintenance and "POLL_LIMIT = 180" in maintenance, \
+        "the poll cadence or its 30-minute ceiling changed silently"
+    assert "live.upgraded" in maintenance, \
+        "the poll reports on status instead of the engine version"
+    assert "the engine version is unchanged — the upgrade did not take effect" in maintenance, \
+        "a settled-but-unchanged resource is not called out"
+    assert "innerHTML" not in maintenance, \
+        "the Maintenance page writes markup — identifiers come from AWS"
+
+    for reason in ("no_converged_deployment", "requires_superuser", "update_unavailable"):
+        assert reason in maintenance, \
+            f"the Maintenance page cannot explain the {reason} block"
+    assert "routeHref('deployments')" in maintenance, \
+        "the framework update never hands the operator to Deployments"
 
 
 @th.django_unit_test("shared relationship controls preserve paged REST envelopes")

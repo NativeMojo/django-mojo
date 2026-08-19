@@ -35,6 +35,13 @@ GLOBAL_ENDPOINTS = [
     # but share the identical file-wide guard)
     ("GET", "/api/aws/cloudwatch/resources"),
     ("GET", "/api/aws/s3/bucket"),
+    # maintenance: reads plus the apply. The apply is destructive only AFTER
+    # the decorator, which denies first, so sweeping it costs nothing.
+    ("GET", "/api/aws/maintenance/versions"),
+    ("GET", "/api/aws/maintenance/status?kind=rds-instance&resource=x"),
+    ("POST", "/api/aws/maintenance/apply"),
+    ("GET", "/api/account/admin/platform/framework"),
+    ("POST", "/api/account/admin/platform/framework/update"),
     # account admin (cross-tenant)
     ("GET", "/api/auth/manage/throttle"),
     ("POST", "/api/auth/manage/clear_rate_limit"),
@@ -127,5 +134,35 @@ def test_superuser_authorizes(opts):
         resp = opts.client.get("/api/geo/rules")
         assert resp.status_code == 200, \
             f"superuser must pass a global gate, got {resp.status_code}: {opts.client.last_response.body}"
+    finally:
+        opts.client.logout()
+
+
+# Every route the sweep above added for the Maintenance lane. The sweep skips a
+# 404 (some apps are absent from a given testproject), which would silently pass
+# an endpoint that was never registered at all — exactly the regression an
+# unimported rest module produces. These prove the paths resolve.
+REGISTERED_ENDPOINTS = [
+    ("GET", "/api/aws/maintenance/versions"),
+    ("GET", "/api/aws/maintenance/status?kind=rds-instance&resource=x"),
+    ("POST", "/api/aws/maintenance/apply"),
+    ("GET", "/api/account/admin/platform/framework"),
+    ("POST", "/api/account/admin/platform/framework/update"),
+]
+
+
+@th.django_unit_test("escalation: the swept maintenance routes are actually registered")
+def test_swept_endpoints_are_registered(opts):
+    _, semail, spass = make_user(is_superuser=True)
+    login(opts, semail, spass)
+    try:
+        for method, path in REGISTERED_ENDPOINTS:
+            if method == "POST":
+                resp = opts.client.post(path, {})
+            else:
+                resp = opts.client.get(path)
+            assert resp.status_code != 404, \
+                (f"{method} {path} is not registered — the sweep's 404-skip would "
+                 f"have passed it without ever testing the guard")
     finally:
         opts.client.logout()

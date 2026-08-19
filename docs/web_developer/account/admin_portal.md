@@ -415,6 +415,8 @@ This prevents non-admin users from escalating their own access.
 | Secure settings | `GET/POST /api/settings`, `DELETE /api/settings/<id>` | `groups` |
 | System Setup | `/api/account/admin/setup/*` | Literal active superuser only |
 | Platform evidence/deploy recovery | `/api/account/admin/platform`, `/api/account/admin/platform/deploy/*` | Dedicated global Platform grants; writes require fresh non-key auth |
+| Framework version / update | `/api/account/admin/platform/framework[/update]` | `view_platform` to read; `manage_platform` or `admin` to update, fresh non-key auth. Clearing a pin is literal-superuser only |
+| Managed-service maintenance | `/api/aws/maintenance/versions`, `/api/aws/maintenance/status`, `/api/aws/maintenance/apply` | `manage_aws` to read; the apply needs `manage_aws` **and** superuser / `manage_platform` / `admin`, fresh non-key auth. See [aws/maintenance](../aws/maintenance.md) |
 | Advanced evidence/settings | `/api/account/admin/advanced`, `/api/account/admin/advanced/settings` | Dedicated global Advanced grants; settings additionally require literal superuser |
 | Security dashboard | `GET /api/incident/incident`, `GET /api/incident/event` | `security` |
 | Firewall / IP blocks | `GET/POST /api/incident/ipset` — see [IPSet Bulk Blocking](../security/README.md#ipset-bulk-blocking) | `security` |

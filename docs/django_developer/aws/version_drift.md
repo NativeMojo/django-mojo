@@ -24,10 +24,16 @@ upgrade three times.
 
 ## What is deliberately NOT done
 
-- **No autonomous apply.** Nothing here ever calls `ModifyDBCluster`,
+- **No autonomous apply.** Nothing *here* ever calls `ModifyDBCluster`,
   `ModifyDBInstance` or `ModifyReplicationGroup`. A major version upgrade is a
   planned, tested change with downtime; the scanner's whole job is to make sure
   a human decides it on time rather than late.
+
+  Since the Admin Maintenance view shipped, an operator **can** apply one of
+  these findings from the portal — see [maintenance.md](maintenance.md). That
+  path is still not autonomous: it runs only on an explicit request, behind a
+  typed confirmation, a stated apply window, and a permission tier the scanner
+  does not have. The scanner remains read-only and never triggers it.
 - **No ElastiCache end-of-life dates.** The ElastiCache service model exposes
   no lifecycle or deprecation member anywhere. Those findings carry
   `deadline: null` and say so in their note. A hardcoded EOL table would be a

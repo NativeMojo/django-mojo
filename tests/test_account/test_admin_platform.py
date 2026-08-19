@@ -241,7 +241,12 @@ def test_platform_feature_package(opts):
     preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
     assert "deployments" in platform and "platformPage" in platform
     assert "advancedControlPage" in advanced and "domains" in advanced
-    assert "features import activity, advanced, platform" in preview
+    # Named individually rather than as one contiguous string: the import list
+    # is alphabetical, so a new sibling provider used to break this assertion
+    # without breaking anything it was protecting.
+    for provider in ("activity", "advanced", "platform", "maintenance"):
+        assert f"from .features import" in preview and provider in preview, \
+            f"the preview server does not import the {provider} provider"
 
 
 @th.django_unit_test("all platform writes declare key denial and fixed fresh auth")
@@ -662,3 +667,208 @@ def test_compute_never_unhealthy_without_target_evidence(opts):
     filters = helper.ec2.describe_instances.call_args.kwargs["Filters"]
     th.assert_eq(filters, [{"Name": "instance-state-name", "Values": ["running"]}],
                  f"the fallback counted stopped instances too: {filters!r}")
+
+
+def _framework_request(user):
+    """A request whose user is exactly the given superuser flag."""
+    return mock.Mock(user=user, META={})
+
+
+def _framework_status(installed="1.12.3", latest="1.13.0", pin=None,
+                      update_available=None):
+    pin = pin or {"mode": "latest", "value": None}
+    if update_available is None:
+        update_available = bool(latest and pin["mode"] == "latest" and latest != installed)
+    return {"installed": installed, "latest": latest,
+            "update_available": update_available, "checked_at": "2026-08-18T00:00:00Z",
+            "source": "pypi", "pin": pin}
+
+
+@th.django_unit_test("the framework overview names the one thing blocking an update")
+def test_framework_overview_blocked_reasons(opts):
+    from mojo.apps.account.services import admin_platform
+    from mojo.apps.edge.services import framework_version, platform_deploy
+
+    root = mock.Mock(is_superuser=True)
+    plain = mock.Mock(is_superuser=False)
+    plain.has_permission.return_value = True
+
+    with mock.patch.object(framework_version, "status",
+                           return_value=_framework_status()), \
+            mock.patch.object(platform_deploy, "last_converged_deployment",
+                              return_value=None):
+        blocked = admin_platform.framework_overview(_framework_request(root))
+    assert blocked["can_update"] is False, "an unconverged fleet offered an update"
+    assert blocked["blocked_reason"] == "no_converged_deployment", \
+        f"the block is not named correctly: {blocked['blocked_reason']}"
+
+    row = mock.Mock(pk="row")
+    with mock.patch.object(framework_version, "status",
+                           return_value=_framework_status()), \
+            mock.patch.object(platform_deploy, "last_converged_deployment",
+                              return_value=row):
+        ready = admin_platform.framework_overview(_framework_request(root))
+    assert ready["can_update"] is True and ready["blocked_reason"] is None, \
+        f"a converged fleet with a newer release was still blocked: {ready}"
+    assert ready["latest"] == "1.13.0" and ready["installed"] == "1.12.3", \
+        f"the overview does not report both versions: {ready}"
+
+    # A pin is clearable, but only by a literal superuser — so a non-superuser
+    # is told that, rather than offered a control that would be refused.
+    pinned = _framework_status(pin={"mode": "pinned", "value": "1.12.0"})
+    with mock.patch.object(framework_version, "status", return_value=pinned), \
+            mock.patch.object(platform_deploy, "last_converged_deployment",
+                              return_value=row):
+        refused = admin_platform.framework_overview(_framework_request(plain))
+        allowed = admin_platform.framework_overview(_framework_request(root))
+    assert refused["blocked_reason"] == "requires_superuser", \
+        f"a pinned fleet did not name the superuser requirement: {refused}"
+    assert allowed["can_update"] is True, \
+        f"a superuser was refused the pin clear-and-update: {allowed}"
+
+    # Nothing newer published is not a block worth explaining twice.
+    current = _framework_status(latest="1.12.3")
+    with mock.patch.object(framework_version, "status", return_value=current), \
+            mock.patch.object(platform_deploy, "last_converged_deployment",
+                              return_value=row):
+        level = admin_platform.framework_overview(_framework_request(root))
+    assert level["blocked_reason"] == "update_unavailable", \
+        f"an up-to-date fleet reported {level['blocked_reason']}"
+
+
+@th.django_unit_test("a framework update CLEARS the pin and redeploys the converged commit")
+def test_framework_update_clears_pin_and_redeploys(opts):
+    from mojo.apps.account.models import Setting, User
+    from mojo.apps.account.services import admin_platform
+    from mojo.apps.edge.services import deploy, platform_deploy
+    from mojo.apps.edge.settings_validators import FRAMEWORK_VERSION_KEY
+
+    root = User.objects.get(pk=opts.platform_root)
+    Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
+    request = mock.Mock(user=root, META={})
+    row = mock.Mock(pk="converged-row", sha="a" * 40)
+    made = mock.Mock(pk="new-row")
+    try:
+        from mojo.apps.account.services import system_settings
+        system_settings.set_value(root, FRAMEWORK_VERSION_KEY, "1.12.0")
+        with mock.patch.object(platform_deploy, "last_converged_deployment",
+                               return_value=row), \
+                mock.patch.object(platform_deploy, "same_sha_retry",
+                                  return_value=made) as retry, \
+                mock.patch.object(platform_deploy, "serialize", return_value={"id": "new-row"}), \
+                mock.patch.object(admin_platform, "audit_after_commit") as audit:
+            result = admin_platform.apply_framework_update(request, "1.13.0")
+
+        assert deploy.framework_version_pin() == "", \
+            "the pin survived the update, so the fleet would reinstall the old version"
+        assert not Setting.objects.filter(
+            key=FRAMEWORK_VERSION_KEY).exclude(value="").exists(), \
+            "a version was written INTO the pin instead of clearing it"
+        assert retry.call_count == 1, f"the converged commit was not redeployed ({retry.call_count})"
+        assert retry.call_args[0][0] is row, \
+            "the redeploy did not use the last converged deployment row"
+        assert retry.call_args.kwargs["created_by"] is root, \
+            "the redeploy is not attributed to the operator who asked for it"
+        assert result["cleared_pin"] == "1.12.0" and result["version"] == "1.13.0", \
+            f"the result does not report the transition: {result}"
+
+        actions = [call[0][1] for call in audit.call_args_list]
+        assert "framework_pin" in actions and "framework_update" in actions, \
+            f"the pin clear and the update were not both audited: {actions}"
+        target = [call[0][2] for call in audit.call_args_list
+                  if call[0][1] == "framework_update"][0]
+        assert "1.13.0" in str(target), \
+            f"the audit target does not carry the version: {target!r}"
+    finally:
+        Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
+
+
+@th.django_unit_test("an unpinned framework update never touches protected settings")
+def test_framework_update_leaves_an_unpinned_fleet_alone(opts):
+    from mojo.apps.account.models import Setting, User
+    from mojo.apps.account.services import admin_platform, system_settings
+    from mojo.apps.edge.services import platform_deploy
+    from mojo.apps.edge.settings_validators import FRAMEWORK_VERSION_KEY
+
+    root = User.objects.get(pk=opts.platform_root)
+    Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
+    request = mock.Mock(user=root, META={})
+    row = mock.Mock(pk="converged-row", sha="b" * 40)
+    try:
+        with mock.patch.object(platform_deploy, "last_converged_deployment",
+                               return_value=row), \
+                mock.patch.object(platform_deploy, "same_sha_retry",
+                                  return_value=mock.Mock(pk="new-row")), \
+                mock.patch.object(platform_deploy, "serialize", return_value={}), \
+                mock.patch.object(system_settings, "set_value") as writer, \
+                mock.patch.object(admin_platform, "audit_after_commit"):
+            result = admin_platform.apply_framework_update(request, "1.13.0")
+        assert writer.call_count == 0, \
+            "an unpinned fleet still wrote a protected setting"
+        assert result["cleared_pin"] is None, \
+            f"an unpinned fleet reported clearing a pin: {result}"
+    finally:
+        Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
+
+
+@th.django_unit_test("a fleet that never converged refuses the update instead of guessing")
+def test_framework_update_requires_a_converged_commit(opts):
+    from mojo import errors as me
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import admin_platform
+    from mojo.apps.edge.services import platform_deploy
+
+    root = User.objects.get(pk=opts.platform_root)
+    request = mock.Mock(user=root, META={})
+    with mock.patch.object(platform_deploy, "last_converged_deployment",
+                           return_value=None), \
+            mock.patch.object(platform_deploy, "same_sha_retry") as retry, \
+            mock.patch.object(admin_platform, "audit_after_commit"):
+        try:
+            admin_platform.apply_framework_update(request, "1.13.0")
+            raise AssertionError("an unconverged fleet was redeployed anyway")
+        except me.ValueException as err:
+            assert err.status == 409, f"the refusal is not a 409: {err.status}"
+    assert retry.call_count == 0, "a refused update still queued a deployment"
+
+
+@th.django_unit_test("a non-superuser cannot clear the pin through the update path")
+def test_framework_update_pin_clear_is_superuser_only(opts):
+    from mojo import errors as me
+    from mojo.apps.account.models import Setting, User
+    from mojo.apps.account.services import admin_platform, system_settings
+    from mojo.apps.edge.services import platform_deploy
+    from mojo.apps.edge.settings_validators import FRAMEWORK_VERSION_KEY
+
+    root = User.objects.get(pk=opts.platform_root)
+    user = User.objects.get(pk=opts.platform_user)
+    Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
+    try:
+        system_settings.set_value(root, FRAMEWORK_VERSION_KEY, "1.12.0")
+        request = mock.Mock(user=user, META={})
+        with mock.patch.object(platform_deploy, "last_converged_deployment",
+                               return_value=mock.Mock(pk="row", sha="c" * 40)), \
+                mock.patch.object(platform_deploy, "same_sha_retry") as retry, \
+                mock.patch.object(admin_platform, "audit_after_commit"):
+            with th.assert_raises(me.PermissionDeniedException):
+                admin_platform.apply_framework_update(request, "1.13.0")
+        assert retry.call_count == 0, \
+            "the refused pin clear still queued a deployment"
+        from mojo.apps.edge.services import deploy
+        assert deploy.framework_version_pin() == "1.12.0", \
+            "the pin was cleared by a caller the writer should have refused"
+    finally:
+        Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
+
+
+@th.django_unit_test("the framework update endpoint declares key denial and fixed fresh auth")
+def test_framework_update_decorators(opts):
+    from mojo.apps.account.rest import admin_platform as views
+
+    func = views.on_admin_platform_framework_update
+    assert getattr(func, "_mojo_denies_key_backed_session", False), \
+        "the framework update accepts key-backed sessions"
+    assert getattr(func, "_mojo_requires_fresh_auth", False), \
+        "the framework update does not require fresh auth"
+    assert getattr(func, "_mojo_fresh_auth_seconds", None) == 600, \
+        "the framework update does not pin its fresh-auth window"
