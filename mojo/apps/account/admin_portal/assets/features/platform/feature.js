@@ -4,14 +4,16 @@ import {maintenancePage} from './maintenance.js';
 import {permissionDeniedState} from '../../components/views.js';
 
 export default {
-  id: 'platform', routes: ['platform', 'deployments', 'setup', 'metrics', 'maintenance'], style: 'assets/features/platform/styles.css',
+  // Deploy history lives in the merged Deployments lane (the webapps
+  // feature); Platform is health evidence plus System Setup.
+  id: 'platform', routes: ['platform', 'setup', 'metrics', 'maintenance'], style: 'assets/features/platform/styles.css',
   enabled: (ctx) => ctx.features?.platform?.enabled === true,
   navigation: (ctx) => {
     const capabilities = ctx.features?.platform?.capabilities || {};
     const entries = [];
     if (capabilities.view || capabilities.manage || capabilities.setup ||
         capabilities.security || capabilities.advanced) {
-      entries.push({route: 'platform', matches: ['platform', 'deployments', 'setup'], label: 'Platform', icon: 'server', section: 'Control plane'});
+      entries.push({route: 'platform', matches: ['platform', 'setup'], label: 'Platform', icon: 'server', section: 'Control plane'});
     }
     if (capabilities.metrics) {
       entries.push({route: 'metrics', label: 'Metrics', icon: 'chart', section: 'Control plane'});
@@ -21,7 +23,7 @@ export default {
     }
     return entries;
   },
-  title: (route) => ({platform: 'Platform', deployments: 'Deployments', setup: 'System Setup', metrics: 'Metrics', maintenance: 'Maintenance'}[route] || 'Platform'),
+  title: (route) => ({platform: 'Platform', setup: 'System Setup', metrics: 'Metrics', maintenance: 'Maintenance'}[route] || 'Platform'),
   render: ({ctx, route, signal}) => route === 'metrics'
     ? metricsPage(ctx, signal)
     : route === 'maintenance'

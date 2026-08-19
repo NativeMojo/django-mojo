@@ -46,7 +46,8 @@ def bootstrap(groups, membership_groups=None, can_create_webapp_group=True):
 def reset(handler, fixtures, *, key_state="active", setup_state="idle",
           activity_state="full", onboarding_state="idle",
           dashboard_state="healthy", settings_state="normal",
-          metrics_state="live", maintenance_state="findings"):
+          metrics_state="live", maintenance_state="findings",
+          deployments_state="mixed"):
     """Reset every stateful provider so scenarios never leak across runs."""
     for provider in PROVIDERS + RESET_ONLY:
         provider.reset(handler, fixtures, key_state=key_state,
@@ -56,4 +57,5 @@ def reset(handler, fixtures, *, key_state="active", setup_state="idle",
                        onboarding_state=onboarding_state,
                        settings_state=settings_state,
                        metrics_state=metrics_state,
-                       maintenance_state=maintenance_state)
+                       maintenance_state=maintenance_state,
+                       deployments_state=deployments_state)

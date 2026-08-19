@@ -133,7 +133,10 @@ def _framework(handler):
         "installed": FRAMEWORK_INSTALLED,
         "latest": FRAMEWORK_INSTALLED if state == "clear" else FRAMEWORK_LATEST,
         "checked_at": "2026-08-18T17:55:00Z", "source": "pypi",
-        "update_available": state != "clear",
+        # framework_version.status() is pin-aware: a pinned fleet is never
+        # offered an update even when PyPI is ahead, so the fixture must not
+        # model update_available=true alongside a pin.
+        "update_available": state not in ("clear", "framework_pinned"),
         "pin": pin, "can_update": blocked is None, "blocked_reason": blocked,
     }
 

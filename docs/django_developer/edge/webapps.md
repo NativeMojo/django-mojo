@@ -215,7 +215,7 @@ to the configured deployment branch is the authorization event.
 
 ### Durable onboarding
 
-Admin → WebApps drives a resumable four-step operation: **WebApp → Domain &
+Admin → Deployments drives a resumable four-step operation: **WebApp → Domain &
 DNS → GitHub → Go live**. The first screen collects only application identity;
 repository and build settings wait until the GitHub step. At Domain & DNS the
 operator selects a managed domain or buys a new one, and can open the permanent
@@ -339,10 +339,25 @@ hostname, redirects are not followed, and timeout/body size are bounded.
 The frozen item-1818 handoff is
 `GET /api/edge/webapp/summary?webapp=<id>`, `schema_version: 1`. It is
 group-scoped and secret-free. Existing v1 meanings cannot change — but v1 is
-**additive**, and item 2099 added `address.domain` (id/name/provider; this also
+**additive**: item 2099 added `address.domain` (id/name/provider; this also
 fixed the portal's dead "Open domain" link), top-level `current_release`, and
 `latest_deployment`, so a management view can answer "is my app live and serving
-X?" in one call.
+X?" in one call; item 2158 added `address.certificate` (`status`, `not_after`;
+null only when there is no vhost — `Vhost.certificate` is a non-null FK) so the
+same view answers "is SSL healthy?".
+
+For lists there is `GET /api/edge/webapp/summaries` (no parameters; human-only,
+key-backed sessions refused): a bounded slim projection — one item per app the
+caller may list, each a strict subset of summary v1 (`webapp` identity with
+`deployment_ref`, `address` with `certificate`, `current_release`,
+`latest_deployment`) — in a `{schema_version: 1, items, count, limit: 50,
+truncated}` envelope, ordered by slug. It costs a flat two queries plus the
+count (select_related rows and one Postgres `DISTINCT ON` latest-deployment
+batch) where per-app `summary_for()` would be ~4 queries each. Visibility is
+exactly the REST list's: the `VIEW_PERMS` global/group branches **and** the
+unconditional `request.group` intersection, so a caller-supplied `?group=`
+confines rather than widens. The merged Admin Deployments lane is its consumer;
+onboarding, key, and probe facts stay in the per-app summary.
 
 ### First-deploy bootstrap
 
@@ -373,8 +388,8 @@ python manage.py webapp_bootstrap \
 Pipe that stdout into `gh secret set` in the same way. The command writes the
 created `MOJO_WEBAPP_ID` to stderr so it remains visible while stdout carries
 only the token. It refuses to replace an existing key unless `--rotate` is
-explicit. Normal later rotation belongs in **Admin → WebApps → Manage key** in
-the built-in Admin portal.
+explicit. Normal later rotation belongs in **Admin → Deployments → Manage
+key** in the built-in Admin portal.
 
 The onboarding flow supersedes this manual bootstrap for new sites. The command
 remains for recovery and pre-Admin installations.

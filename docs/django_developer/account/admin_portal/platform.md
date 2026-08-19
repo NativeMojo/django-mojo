@@ -1,14 +1,18 @@
 # Platform and Advanced Admin controls
 
 The built-in Admin separates platform operations into two feature-owned lanes.
-**Platform** owns public API and local sanity proof, deployment history, fleet,
+**Platform** owns public API and local sanity proof, fleet,
 jobs/scheduler, database, Redis, certificate/security evidence, the public
 WebApp summary contract, System Setup, and CloudWatch Metrics. **Advanced** owns hosting inventory,
 bounded opt-in AWS inventory and raw network controls. Ongoing configuration
 has one first-class [Settings](settings.md) home. Platform
 is an operational evidence surface, not another directory: ongoing Domains &
-DNS and WebApp work stays in those first-class destinations, while Advanced is
-one expert-diagnostics link rather than an expanded resource menu.
+DNS and web-app work stays in those first-class destinations, while Advanced is
+one expert-diagnostics link rather than an expanded resource menu. The
+deployment journal's **browser surface** — the attempt list, its drill-in, and
+the same-SHA recovery controls — renders in the merged Deployments lane
+(`#/deployments`, the `webapps` feature); the backend evidence and action
+contracts below are unchanged and remain this page's subject.
 
 ## Deployment journal
 
@@ -41,6 +45,13 @@ bounded `data` object. Stable states include `healthy`, `unhealthy`,
 and provider responses are never returned, and permission is checked before a
 collector runs.
 
+The platform overview accepts an optional `?sections=` comma-separated
+allowlist naming which sections to collect (the merged Deployments lane calls
+`?sections=deployments,api`). It narrows work, never authority: each named
+section keeps its own permission tuple, unknown names are ignored, and an
+absent or empty parameter collects the full roster exactly as before. A
+parameter naming no known section collects nothing.
+
 The API probe pins public DNS to a global address, follows no redirects, caps
 the response body, and reports latency, HTTP status, and version. Local sanity
 reports migration status and the bounded local-target source:
@@ -55,15 +66,16 @@ AWS inventory is file-opt-in, uses bounded SDK
 timeouts and one capped page per service, omits endpoints/IPs, and never creates
 EC2, RDS, or ElastiCache resources.
 
-The WebApp lane consumes only `webapp_onboarding.summary_for()` schema version
-1 and redacted onboarding evidence, then independently probes each configured
-HTTPS origin with the existing DNS-pinned, no-redirect public probe. The
-collector is capped at 24 applications, four workers, 1.5 seconds per probe,
-and a 2.5-second collector deadline. Each result carries `observed_at` and
-`stale_after`; timeout, unsafe, missing, and unknown evidence never becomes
-green. Current public health, configured origin, historical onboarding state,
-and deployment-key state are separate axes, so `not_started` history does not
-claim a currently healthy site is down. Registrar-versus-DNS provider evidence
+The `webapps` evidence section consumes only `webapp_onboarding.summary_for()`
+schema version 1 and redacted onboarding evidence, then independently probes
+each configured HTTPS origin with the existing DNS-pinned, no-redirect public
+probe. The collector is capped at 24 applications, four workers, 1.5 seconds
+per probe, and a 2.5-second collector deadline. Each result carries
+`observed_at` and `stale_after`; timeout, unsafe, missing, and unknown
+evidence never becomes green. Current public health, configured origin,
+historical onboarding state, and deployment-key state are separate axes, so
+`not_started` history does not claim a currently healthy site is down.
+Registrar-versus-DNS provider evidence
 comes from the durable onboarding operation. No deployment key or provider
 secret enters the Platform response.
 
@@ -77,8 +89,9 @@ and group-token sessions, and require authentication no older than 600 seconds.
 Typed AUTH_CONFIG/topology owner writes additionally re-read an active literal
 `account.User` superuser.
 
-The feature owns five routes: `platform`, `deployments`, `setup`, `metrics`,
-and `maintenance`. The first three follow the grants above; the last two are
+The feature owns four routes: `platform`, `setup`, `metrics`, and
+`maintenance` (the `deployments` route belongs to the merged Deployments
+lane). The first two follow the grants above; the last two are
 gated separately on `manage_aws`, published as
 `features.platform.capabilities.metrics` and
 `features.platform.capabilities.maintenance` and enforced on `/api/aws/*` by
@@ -97,7 +110,8 @@ is the grant that reads CloudWatch charts; it is not the grant that reboots the
 production database.
 
 The same page owns the framework update, on the platform grants rather than the
-AWS one:
+AWS one (the Deployments lane's django-mojo row surfaces the same two
+endpoints with the same typed-echo contract — one mechanism, two doorways):
 
 - `GET /api/account/admin/platform/framework` (`view_platform`,
   `manage_platform`, `admin`) reports installed vs published, the pin, and a

@@ -58,14 +58,19 @@ stylesheet, title, capability check, and one
 exactly one DOM `Node`; an optional `node.dispose()` releases feature-local
 listeners or work.
 
-Primary navigation is Dashboard, Web Apps, Domains & DNS, People, Activity,
+Primary navigation is Dashboard, Deployments, Domains & DNS, People, Activity,
 Platform, Metrics, and Settings. A feature contributes as many sidebar entries
 as its own capabilities allow, so the entry count is not the feature count:
-Domains & DNS is a permission-gated Advanced entry and stays beside Web Apps
+Domains & DNS is a permission-gated Advanced entry and stays beside Deployments
 because domains and public records are ongoing application controls, and Metrics
-is a Platform entry shown only with the `manage_aws` grant. Platform
-contains deployments, literal-superuser System Setup, and one link to Advanced
-expert diagnostics; it does not duplicate a resource directory. See
+is a Platform entry shown only with the `manage_aws` grant. Deployments (the
+`webapps` feature — the id is unchanged, only its routes and label) is the one
+place for everything running on the fleet: the API service and django-mojo
+framework rows on top, one row per web app below. It owns the `deployments`
+and legacy `webapps` routes; `#/webapps` canonicalizes to `#/deployments`.
+Platform contains health evidence, literal-superuser System Setup, and one
+link to Advanced expert diagnostics; deployment history and its same-SHA
+recovery live in the Deployments lane. See
 [Dashboard integration](admin_portal/dashboard.md) for the permissioned source
 matrix and canonical cross-feature route state.
 
@@ -75,7 +80,7 @@ is validated as named boolean capabilities. An exception or malformed provider
 disables only that feature and logs its exception class, never request data or
 secrets.
 
-WebApps uses two additive bootstrap fields instead of the shared membership
+Deployments uses two additive bootstrap fields instead of the shared membership
 list: `webapp_groups` is the case-insensitively sorted set of effectively active
 groups the caller may manage, each row includes `can_manage_dns`, and
 `can_create_webapp_group` says whether the wizard may offer **Create New
@@ -87,6 +92,18 @@ may instead be supplied by an exact or inherited GroupMember grant. A
 non-superuser creating a group additionally needs global `manage_groups` or
 `groups`. Superusers pass all of these checks. Admin admission, emitted UI
 capabilities, and literal `permissions.admin` are not backend authority.
+
+The merged Deployments list reads `GET /api/edge/webapp/summaries` — a bounded
+(50-row) slim projection of summary v1 (webapp identity, address +
+certificate, current release, latest deployment) at flat query cost, scoped to
+exactly the rows the caller's `GET /api/edge/webapp` list would return
+(including the unconditional `request.group` intersection). The full
+`webapp/summary` stays the per-app drill-in contract, and its `address` block
+now additively carries `certificate` (`status`, `not_after`). The lane's API
+section reads `GET /api/account/admin/platform?sections=deployments,api` and
+`GET /api/account/admin/platform/framework`; its update and hold controls call
+the existing framework-update and advanced-settings `framework_pin` writers —
+one mechanism, surfaced where the operator looks.
 
 The wizard defaults to the nonnumeric Create New Group sentinel only when that
 flag is true; otherwise it selects the first eligible existing group and never
@@ -123,9 +140,10 @@ built in and stored only in browser local storage. The responsive shell keeps
 keyboard-visible controls, traps focus in modals, restores focus on close, and
 uses text nodes for API data; only the fixed local SVG icon catalog uses HTML.
 
-The Platform feature owns API/service health, UUID-addressed deployment
-history and recovery, fleet/certificate/security evidence, and the System
-Setup/readiness journey. Its private
+The Platform feature owns API/service health, fleet/certificate/security
+evidence, and the System Setup/readiness journey. UUID-addressed deployment
+history and its recovery controls render in the Deployments lane; Platform's
+health grid keeps summarizing the evidence. Its private
 `assets/features/platform/page.js` module renders the normalized readiness
 report, durable step progress, typed
 late choices, cancellation, and bounded live log. See
@@ -198,6 +216,10 @@ states (`down` proves a failure and reddens the headline; `degraded` is amber
 evidence with availability still green),
 `--metrics-state live|empty|unconfigured|denied|partial` for the CloudWatch
 Metrics page (`partial` keeps EC2 and ElastiCache live while RDS degrades),
+`--deployments-state mixed|converged|failed|empty` for the merged Deployments
+lane (`mixed` pairs an in-flight API attempt with one green app and one
+no-address app; `failed` pairs a failed deploy with an expired certificate;
+framework behind/pinned states come from `--maintenance-state`),
 and `--port` when parallel work needs isolation. Every launch resets mutable
 provider state before serving.
 

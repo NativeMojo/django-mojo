@@ -10,7 +10,8 @@ not hand anyone your passwords. The wizard does the technical parts; you make a
 few plain choices and, if your web address lives somewhere else, copy a line or
 two into that place.
 
-You reach the wizard in the built-in Admin portal under **Web Apps → Add**. For
+You reach the wizard in the built-in Admin portal under **Deployments → New web
+app**. For
 the reference on the portal itself, see
 [Admin Portal API Guide](../account/admin_portal.md). If you would rather wire
 this into your own build pipeline instead of using GitHub, the deploy contract
@@ -177,8 +178,12 @@ That's it. You went from an address you had in mind to a working, secured site.
 
 ## Managing your app afterward
 
-Open any app from **Web Apps** and you get one management screen, organized into
+Open any app from **Deployments** and you get one management screen, organized
+into
 a few tabs. Every action explains itself in plain words before it does anything.
+The same page also shows what the platform itself is running — the API service
+and the django-mojo framework — to operators with platform access; your app
+rows sit right below them.
 
 - **Overview.** Your address, whether it's healthy (reachable right now), and
   which build is currently live. This is your "is everything okay?" glance. You

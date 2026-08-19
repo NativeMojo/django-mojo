@@ -12,13 +12,40 @@ ADMIN_PASSWORD = "Admin_portal_webapps_pw_99"
 MEMBERSHIP_FREE_GROUP = "Membership-free WebApp owner"
 SCOPED_EMAIL = "admin_portal_webapps_scoped@test.com"
 SCOPED_PASSWORD = "Admin_portal_webapps_scoped_pw_99"
+VIEWER_EMAIL = "admin_portal_webapps_viewer@test.com"
+VIEWER_PASSWORD = "Admin_portal_webapps_viewer_pw_99"
+SUMMARIES_DOMAIN = "admin-portal-summaries.example"
+SUMMARIES_BUCKET = "edge-test-releases"
+
+
+def _reset_scoped_permissions():
+    """Pin the scoped fixture user's global grants to view_admin only.
+
+    Another test in this module deliberately walks the user through global
+    permission cases; calling this first makes summary-scope tests
+    order-independent.
+    """
+    from mojo.apps.account.models import User
+
+    user = User.objects.get(email=SCOPED_EMAIL)
+    user.permissions = {"view_admin": True}
+    user.save(update_fields=["permissions", "modified"])
 
 
 @th.django_unit_setup()
 def setup_admin_portal_webapps(opts):
-    from mojo.apps.account.models import Group, User
+    from datetime import timedelta
 
-    User.objects.filter(email__in=[ADMIN_EMAIL, SCOPED_EMAIL]).delete()
+    from django.utils import timezone
+    from mojo.apps.account.models import Group, User
+    from mojo.apps.dnsman.models import Certificate, Domain
+    from mojo.apps.edge.models import Vhost, WebApp
+
+    User.objects.filter(email__in=[ADMIN_EMAIL, SCOPED_EMAIL, VIEWER_EMAIL]).delete()
+    WebApp.objects.filter(slug__startswith="summaries-").delete()
+    Vhost.objects.filter(domain__name=SUMMARIES_DOMAIN).delete()
+    Certificate.objects.filter(domain__name=SUMMARIES_DOMAIN).delete()
+    Domain.objects.filter(name=SUMMARIES_DOMAIN).delete()
     Group.objects.filter(name__startswith="WebApp authority ").delete()
     Group.objects.filter(name=MEMBERSHIP_FREE_GROUP).delete()
     user = User.objects.create_user(username=ADMIN_EMAIL, email=ADMIN_EMAIL,
@@ -59,6 +86,51 @@ def setup_admin_portal_webapps(opts):
     opts.scoped_group_ids = [child.pk, parent.pk]
     opts.partial_group_id = partial.pk
     opts.dark_group_ids = [dark_parent.pk, dark_child.pk]
+
+    viewer = User.objects.create_user(
+        username=VIEWER_EMAIL, email=VIEWER_EMAIL, password=VIEWER_PASSWORD)
+    viewer.is_active = True
+    viewer.is_email_verified = True
+    viewer.requires_mfa = False
+    viewer.permissions = {"view_admin": True}
+    viewer.save()
+
+    # Summaries fixtures: one vhost-backed app and one bare app inside the
+    # scoped member's authority, one app in a group they cannot see.
+    # No EDGE_RELEASE_BUCKETS write: the bucket allowlist is only read by
+    # validate_web_app (mocked below), and replacing that global Setting
+    # mid-run yanks other modules' declared buckets out from under edge's
+    # pool convergence when test_edge runs concurrently.
+    domain = Domain.objects.create(
+        name=SUMMARIES_DOMAIN, group=parent, provider="godaddy",
+        status="active", verified=True)
+    certificate = Certificate.objects.create(
+        domain=domain, common_name=f"portal.{SUMMARIES_DOMAIN}",
+        sans=[SUMMARIES_DOMAIN, f"*.{SUMMARIES_DOMAIN}"], status="active",
+        not_after=timezone.now() + timedelta(days=60))
+    # is_enabled=False keeps this fixture out of edge's desired-state and
+    # hosted-auth convergence, which iterate every ENABLED vhost fleet-wide;
+    # the summaries endpoint and drill-in read the vhost/certificate FKs
+    # regardless of the serving flag.
+    vhost = Vhost.objects.create(
+        domain=domain, certificate=certificate, label="portal", kind="site",
+        is_enabled=False)
+    with mock.patch("mojo.apps.edge.validators.validate_web_app"):
+        fixtures = {}
+        for slug, owner, linked in (
+                ("summaries-green", parent, vhost),
+                ("summaries-bare", child, None),
+                ("summaries-foreign", group, None)):
+            site = WebApp(group=owner, slug=slug, vhost=linked,
+                          bucket=SUMMARIES_BUCKET, prefix="pending")
+            site.save()
+            site.prefix = site.storage_prefix()
+            site.save()
+            fixtures[slug] = site.pk
+    opts.summaries_green = fixtures["summaries-green"]
+    opts.summaries_bare = fixtures["summaries-bare"]
+    opts.summaries_foreign = fixtures["summaries-foreign"]
+    opts.summaries_hostname = vhost.server_name
 
 
 @th.django_unit_test("membership-free superuser can choose every active WebApp group")
@@ -165,6 +237,115 @@ def test_webapp_authority_rejects_frontend_admin_and_partial_grants(opts):
         user=user, api_key=object(), group_token=None, is_authenticated=True)
     assert webapp_authority.is_interactive_request(machine) is False, \
         "an override-user API key session passed the interactive authority gate"
+
+
+@th.django_unit_test("webapp summaries mirror the REST list scope and serve the slim row shape")
+def test_webapp_summaries_scope_and_shape(opts):
+    _reset_scoped_permissions()
+    assert opts.client.login(SCOPED_EMAIL, SCOPED_PASSWORD), \
+        "scoped WebApp administrator could not authenticate"
+    try:
+        response = opts.client.get("/api/edge/webapp/summaries")
+        assert response.status_code == 200, \
+            f"scoped summaries read failed: {response.json}"
+        data = response.json.get("data") or {}
+        assert data.get("schema_version") == 1, \
+            f"summaries lost their schema version: {data.get('schema_version')}"
+        assert data.get("limit") == 50 and data.get("truncated") is False, \
+            f"summaries envelope bounds are wrong: {data}"
+        items = data.get("items") or []
+        assert data.get("count") == len(items), \
+            "the summaries count does not match its items"
+        ids = {row["webapp"]["id"] for row in items}
+        listed = opts.client.get("/api/edge/webapp?size=50")
+        assert listed.status_code == 200, \
+            f"the scoped REST list read failed: {listed.json}"
+        rows = listed.json.get("data") or listed.json.get("results") or []
+        assert ids == {row["id"] for row in rows}, \
+            "summaries and the REST list disagree about which apps this caller may see"
+        assert opts.summaries_foreign not in ids, \
+            "a scoped caller received another tenant's app"
+
+        green = next(row for row in items
+                     if row["webapp"]["id"] == opts.summaries_green)
+        assert green["address"]["hostname"] == opts.summaries_hostname, \
+            f"the vhost-backed app lost its address: {green['address']}"
+        assert green["address"]["certificate"]["status"] == "active", \
+            f"the vhost-backed app lost its certificate state: {green['address']}"
+        assert green["address"]["certificate"]["not_after"], \
+            "the certificate expiry did not serialize"
+        assert green["webapp"]["slug"] == "summaries-green", \
+            "the slim webapp identity block is wrong"
+        bare = next(row for row in items
+                    if row["webapp"]["id"] == opts.summaries_bare)
+        assert bare["address"] is None, \
+            "an addressless app must publish no address"
+        assert bare["current_release"] is None and bare["latest_deployment"] is None, \
+            "an app with no deploys invented release facts"
+        for key in ("deployment_key", "onboarding"):
+            assert key not in green, \
+                f"the slim projection grew {key!r}, which belongs to the drill-in summary"
+    finally:
+        opts.client.logout()
+
+    assert opts.client.login(ADMIN_EMAIL, ADMIN_PASSWORD), \
+        "superuser could not authenticate for the cross-group read"
+    try:
+        for group_id, expected in (
+                (opts.scoped_group_ids[1], opts.summaries_green),
+                (opts.membership_free_group_id, opts.summaries_foreign)):
+            scoped = opts.client.get(f"/api/edge/webapp/summaries?group={group_id}")
+            assert scoped.status_code == 200, \
+                f"superuser summaries read failed for group {group_id}: {scoped.json}"
+            got = {row["webapp"]["id"]
+                   for row in (scoped.json.get("data") or {}).get("items") or []}
+            assert expected in got, \
+                f"the superuser could not read group {group_id}'s rows: {got}"
+    finally:
+        opts.client.logout()
+
+
+@th.django_unit_test("a caller-supplied group always intersects webapp summaries")
+def test_webapp_summaries_group_param_scoped(opts):
+    _reset_scoped_permissions()
+    assert opts.client.login(SCOPED_EMAIL, SCOPED_PASSWORD), \
+        "scoped WebApp administrator could not authenticate"
+    try:
+        parent_id = opts.scoped_group_ids[1]
+        own = opts.client.get(f"/api/edge/webapp/summaries?group={parent_id}")
+        assert own.status_code == 200, \
+            f"a member-scoped group read failed: {own.json}"
+        ids = {row["webapp"]["id"]
+               for row in (own.json.get("data") or {}).get("items") or []}
+        assert ids == {opts.summaries_green}, \
+            f"the group intersection did not confine rows to the named tenant: {ids}"
+
+        foreign = opts.client.get(
+            f"/api/edge/webapp/summaries?group={opts.membership_free_group_id}")
+        assert foreign.status_code == 200, \
+            f"a foreign group id must not change the response shape: {foreign.json}"
+        leaked = (foreign.json.get("data") or {}).get("items")
+        assert leaked == [], \
+            f"a member-scoped caller read another tenant's rows via ?group=: {leaked}"
+    finally:
+        opts.client.logout()
+
+
+@th.django_unit_test("webapp summaries refuse callers without webapp visibility")
+def test_webapp_summaries_requires_authority(opts):
+    from mojo.apps.edge.rest import webapp_onboarding as views
+
+    assert getattr(views.on_webapp_summaries,
+                   "_mojo_denies_key_backed_session", False), \
+        "the summaries endpoint accepts key-backed sessions"
+    assert opts.client.login(VIEWER_EMAIL, VIEWER_PASSWORD), \
+        "the view_admin-only fixture could not authenticate"
+    try:
+        refused = opts.client.get("/api/edge/webapp/summaries")
+        assert refused.status_code in (401, 403), \
+            f"view_admin alone read the fleet's webapps: {refused.json}"
+    finally:
+        opts.client.logout()
 
 
 @th.django_unit_test("authenticated portal covers missing active rotated and revoked deploy keys")

@@ -1,13 +1,19 @@
-// Web apps: the list, and one management view per app. Onboarding lives in
-// wizard.js. Day-2 here is plain-language: what's live, deploy history with
-// one-click rollback, the deploy key, the setup instructions again, and a
-// clearly separated danger area. No framework words in the primary copy.
-import {api, apiOnce, badge, formatDate, h, icon, listData, pageHeader, statusTone, TableView} from '../../core.js';
+// Deployments: one page for everything running on the fleet — the API
+// service and the django-mojo framework on top (platform-gated, built in
+// api.js), one row per web app below. Onboarding lives in wizard.js; the
+// per-app management inspector (openManage) stays here with its five tabs.
+// No framework words in the primary copy.
+import {api, badge, formatDate, h, icon, listData, pageHeader, statusTone, TableView} from '../../core.js';
 import {modelHeader} from '../../components/model.js';
 import {confirmAction, openInspector, openModal} from '../../components/overlays.js';
-import {activityHref, decodeRouteState, returnLocation} from '../../components/routes.js';
-import {sectionTabs} from '../../components/views.js';
+import {activityHref, decodeRouteState, returnLocation, routeHref} from '../../components/routes.js';
+import {rowSection, statusHeadline, statusRow} from '../../components/rows.js';
+import {emptyState, errorState, sectionTabs} from '../../components/views.js';
 import {hasPendingWizard, resumeWizard, startChangeAddress, startWizard} from './wizard.js';
+import {
+  FRAMEWORK_PATH, PLATFORM_SECTIONS_PATH, apiServiceRow, applyFrameworkUpdate,
+  frameworkRow, openApiInspector, openFrameworkInspector,
+} from './api.js';
 
 const MANAGE_SECTIONS = [
   ['overview', 'Overview'], ['deploys', 'Deploys'],
@@ -102,15 +108,30 @@ function workflowPanel(webapp) {
   return panel;
 }
 
+// Both the row-level "Set address" and the Danger tab's "Change address" run
+// the same wizard flow, seeded from the full record.
+async function changeAddressFor(ctx, app, reload) {
+  const full = await api(`/api/edge/webapp/${encodeURIComponent(app.id)}`);
+  startChangeAddress(ctx, reload, {
+    group_id: full.group?.id, slug: full.slug, display_name: full.display_name,
+    environment: full.environment, bucket: full.bucket, github_repository: full.github_repository,
+    deployment_ref: full.deployment_ref, build_output: full.build_output,
+  });
+}
+
 async function manageSection(ctx, app, summary, section, body, reload) {
   const manage = ctx.capabilities.manage_webapps;
   const address = summary.address || {};
   if (section === 'overview') {
     const healthValue = h('span', {class: 'muted', text: 'Checking…'});
+    const certificate = address.certificate;
     body.replaceChildren(detailGrid([
       ['Address', address.hostname ? h('div', {class: 'address-cell'}, h('code', {text: address.hostname}),
-        httpsLink(address.https_origin) ? h('a', {class: 'button ghost compact', href: httpsLink(address.https_origin), target: '_blank', rel: 'noopener'}, 'Open') : null) : 'Not set up yet'],
+        httpsLink(address.https_origin) ? h('a', {class: 'button ghost compact', href: httpsLink(address.https_origin), target: '_blank', rel: 'noopener'}, 'Open') : null) : 'No address yet'],
       ['Working right now', healthValue],
+      ['SSL', certificate
+        ? `${certificate.status}${certificate.not_after ? ` · renews or expires ${formatDate(certificate.not_after)}` : ''}`
+        : address.hostname ? 'No certificate on record' : 'Needs an address first'],
       ['Live version', summary.current_release ? `${summary.current_release.version || summary.current_release.id} · ${summary.current_release.status}` : 'No deploys yet'],
       ['Environment', summary.webapp?.environment],
       ['Repository', summary.webapp?.repository || 'Not connected'],
@@ -171,14 +192,7 @@ async function manageSection(ctx, app, summary, section, body, reload) {
   }
   // danger
   if (!manage) { body.replaceChildren(h('p', {class: 'muted', text: 'You don’t have permission to change this app.'})); return; }
-  const changeAddress = h('button', {class: 'button', onclick: async () => {
-    const full = await api(`/api/edge/webapp/${encodeURIComponent(app.id)}`);
-    startChangeAddress(ctx, reload, {
-      group_id: full.group?.id, slug: full.slug, display_name: full.display_name,
-      environment: full.environment, bucket: full.bucket, github_repository: full.github_repository,
-      deployment_ref: full.deployment_ref, build_output: full.build_output,
-    });
-  }}, icon('globe'), 'Change address');
+  const changeAddress = h('button', {class: 'button', onclick: () => changeAddressFor(ctx, app, reload)}, icon('globe'), 'Change address');
   const takeOffline = address.hostname ? h('button', {class: 'button', onclick: () => {
     confirmAction({title: `Take ${app.slug} offline?`, danger: true, confirmLabel: 'Take offline', requireReason: true, reasonLabel: 'Why?',
       copy: 'Visitors will stop reaching your app. The app and its versions are kept — you can put it back on an address later.'}).then(async (answer) => {
@@ -241,28 +255,206 @@ function resumeBanner(ctx, reloadApps) {
     h('button', {class: 'button primary', onclick: () => resumeWizard(ctx, reloadApps)}, 'Resume setup')));
 }
 
-export async function webappsPage(ctx) {
-  const root = h('div', {class: 'page'}); let linkedInspectorOpened = false;
-  async function render() {
-    root.replaceChildren(pageHeader('Deployments', 'Web apps', 'Put a web app online at your own address, then manage it here.', [
-      ctx.capabilities.manage_webapps ? h('button', {class: 'button primary', onclick: () => startWizard(ctx, render)}, icon('plus'), 'New web app') : null,
-    ].filter(Boolean)));
-    if (hasPendingWizard()) root.append(resumeBanner(ctx, render));
-    const panel = h('section', {class: 'panel'}, h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: 'Your apps'}), h('p', {text: 'Select an app to see its address, deploys, and settings.'}))));
-    root.append(panel);
-    try {
-      const rows = listData(await api('/api/edge/webapp'));
-      panel.append(new TableView({columns: [
-        {label: 'App', render: (r) => h('div', {}, h('strong', {text: r.display_name || r.slug}), h('small', {class: 'mono', text: `#${r.id}`}))},
-        {label: 'Address', render: (r) => r.vhost?.server_name ? h('code', {text: r.vhost.server_name}) : h('span', {class: 'muted', text: 'Not set up yet'})},
-        {label: 'Live version', render: (r) => r.current_release ? badge(r.current_release.version || r.current_release.id, 'success') : badge('No deploys yet')},
-        {label: 'Created', render: (r) => formatDate(r.created)},
-        {label: '', render: () => icon('chevron')},
-      ], rows, empty: 'No web apps yet. Choose “New web app” to put your first one online.', onSelect: (row) => openManage(ctx, row, render)}).render());
-      const inspector = decodeRouteState().state.inspector;
-      const linked = inspector && rows.find((row) => String(row.id) === String(inspector));
-      if (linked && !linkedInspectorOpened) { linkedInspectorOpened = true; await openManage(ctx, linked, render); }
-    } catch (error) { panel.append(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
+// ---------------------------------------------------------------------------
+// merged list page
+// ---------------------------------------------------------------------------
+
+// The address is the health story. SSL states map to plain words; the row is
+// green only when the app has an address, a live release, and a valid cert.
+function certState(certificate) {
+  if (!certificate) return {label: 'SSL not issued yet', tone: 'warn'};
+  const expired = certificate.not_after && new Date(certificate.not_after) < new Date();
+  if (certificate.status === 'active' && !expired) return {label: 'SSL valid', tone: 'ok'};
+  if (certificate.status === 'active') return {label: 'SSL expired', tone: 'danger'};
+  if (['pending', 'issuing'].includes(certificate.status)) return {label: 'SSL issuing', tone: 'warn'};
+  return {label: `SSL ${certificate.status}`, tone: 'danger'};
+}
+
+function wireRowAction(row, run) {
+  const link = row.querySelector('.row-link');
+  if (link) {
+    link.addEventListener('click', (event) => { event.preventDefault(); run(); });
   }
-  await render(); return root;
+  return row;
+}
+
+function webappRow(ctx, item, {onOpen, onSetAddress}) {
+  const app = item.webapp || {};
+  const name = app.display_name || app.slug || `#${app.id}`;
+  const address = item.address;
+  const release = item.current_release;
+  const deployment = item.latest_deployment;
+  if (!address) {
+    return wireRowAction(statusRow({tone: 'warn', name,
+      value: 'No address yet — not reachable',
+      action: ctx.capabilities.manage_webapps
+        ? {label: 'Set address', href: '#'} : {label: 'Open', href: '#'}}),
+    ctx.capabilities.manage_webapps ? onSetAddress : onOpen);
+  }
+  if (!release) {
+    return wireRowAction(statusRow({tone: 'warn', name,
+      value: `${address.hostname} · No deploys yet — push to ${app.deployment_ref || 'main'} to go live`,
+      action: {label: 'Open', href: '#'}}), onOpen);
+  }
+  const ssl = certState(address.certificate);
+  const deployedAt = formatDate(deployment?.finished || release.created);
+  let tone = ssl.tone;
+  let value = `${address.hostname} · ${ssl.label} · deployed ${deployedAt}`;
+  if (deployment && deployment.status === 'failed') {
+    tone = 'danger';
+    value = `${address.hostname} · ${ssl.label} · last deploy failed ${formatDate(deployment.created)}`;
+  }
+  const version = release.version || String(release.id);
+  return wireRowAction(statusRow({tone, name, value,
+    detailNode: h('span', {class: 'row-detail mono', text: String(version).slice(0, 10)}),
+    action: {label: 'Open', href: '#'}}), onOpen);
+}
+
+export async function deploymentsPage(ctx, route = 'deployments', navigate = null, signal = null) {
+  // The lane owns both routes; #/webapps canonicalizes to #/deployments with
+  // its query state intact. replaceState fires no hashchange, so this render
+  // is the only one.
+  if (route === 'webapps') {
+    history.replaceState({}, '', routeHref('deployments', decodeRouteState().state));
+  }
+  const wantPlatform = ctx.features?.platform?.capabilities?.view === true;
+  const wantApps = ctx.features?.webapps?.enabled === true;
+  const root = h('div', {class: 'page'});
+  const state = {
+    report: null, reportError: null,
+    framework: null,
+    apps: null, appsError: null,
+    observedAt: null,
+  };
+  let linkedInspectorOpened = false;
+
+  async function load(refresh = false) {
+    const reads = [];
+    if (wantPlatform) {
+      reads.push(api(PLATFORM_SECTIONS_PATH, {signal})
+        .then((value) => { state.report = value; state.reportError = null; })
+        .catch((error) => { if (error?.name !== 'AbortError') { state.report = null; state.reportError = error; } }));
+      reads.push(api(`${FRAMEWORK_PATH}${refresh ? '?refresh=1' : ''}`, {signal})
+        .then((value) => { state.framework = value; })
+        .catch(() => { state.framework = null; }));
+    }
+    if (wantApps) {
+      reads.push(api('/api/edge/webapp/summaries', {signal})
+        .then((value) => { state.apps = value; state.appsError = null; })
+        .catch((error) => { if (error?.name !== 'AbortError') { state.apps = null; state.appsError = error; } }));
+    }
+    await Promise.all(reads);
+    // The framework GET carries no `resolved`; the deployments section's pin
+    // block does. Merge it so the held row can say what it resolves to.
+    if (state.framework && state.report) {
+      state.framework.resolved_pin =
+        state.report.sections?.deployments?.data?.framework_pin?.resolved || null;
+    }
+    state.observedAt = new Date().toISOString();
+    paint();
+  }
+
+  // Every callback that finishes work re-renders THROUGH a refetch — the old
+  // page's render() did both, and the wizard/inspector callbacks rely on it.
+  const render = () => load();
+
+  function deploymentsSection() {
+    return state.report?.sections?.deployments || null;
+  }
+
+  function apiRows() {
+    if (!wantPlatform) return [];
+    if (state.reportError) return [];
+    const rows = [
+      apiServiceRow(ctx, deploymentsSection(), {
+        onOpen: () => openApiInspector(ctx, deploymentsSection(), render),
+      }),
+      frameworkRow(ctx, state.framework, {
+        onOpen: () => openFrameworkInspector(ctx, state.framework, render),
+        onUpdate: () => applyFrameworkUpdate(ctx, state.framework, render),
+      }),
+    ];
+    return rows.filter(Boolean);
+  }
+
+  function appRows() {
+    const items = state.apps?.items || [];
+    return items.map((item) => webappRow(ctx, item, {
+      onOpen: () => openManage(ctx, item.webapp, render),
+      onSetAddress: () => changeAddressFor(ctx, item.webapp, render),
+    }));
+  }
+
+  function headline(apiRowNodes, appRowNodes) {
+    const tones = [...apiRowNodes, ...appRowNodes]
+      .map((row) => row.dataset?.tone).filter(Boolean);
+    const truncated = state.apps?.truncated === true;
+    let tone = 'ok';
+    let message = 'Everything running is current';
+    if (!tones.length) {
+      tone = 'muted'; message = 'Nothing is deployed yet';
+    } else if (tones.includes('danger')) {
+      tone = 'danger'; message = 'Something on the fleet needs attention';
+    } else if (tones.includes('warn')) {
+      tone = 'warn'; message = 'Some of the fleet needs attention';
+    }
+    return statusHeadline({tone, message,
+      sub: truncated ? `Showing the first ${state.apps.limit} apps by name — the fleet has more.` : '',
+      observedAt: state.observedAt,
+      onRefresh: () => load(true)});
+  }
+
+  function paint() {
+    const apiRowNodes = apiRows();
+    const appRowNodes = appRows();
+    const children = [
+      pageHeader('Control plane', 'Deployments', 'Everything running on your fleet, and what version it’s at.', [
+        ctx.capabilities.manage_webapps ? h('button', {class: 'button primary', onclick: () => startWizard(ctx, render)}, icon('plus'), 'New web app') : null,
+      ].filter(Boolean)),
+      hasPendingWizard() ? resumeBanner(ctx, render) : null,
+      headline(apiRowNodes, appRowNodes),
+      // Sections fail independently: a platform outage never hides the web
+      // apps, and vice versa.
+      state.reportError ? h('section', {class: 'row-section'},
+        h('h2', {class: 'row-section-label', text: 'API'}),
+        errorState(state.reportError, () => load())) : rowSection('API', apiRowNodes),
+      state.appsError ? h('section', {class: 'row-section'},
+        h('h2', {class: 'row-section-label', text: 'Web apps'}),
+        errorState(state.appsError, () => load())) : null,
+      wantApps && !state.appsError && state.apps && !appRowNodes.length
+        ? h('section', {class: 'row-section'},
+          h('h2', {class: 'row-section-label', text: 'Web apps'}),
+          emptyState('No web apps yet', 'Choose “New web app” to put your first one online.'))
+        : rowSection('Web apps', appRowNodes),
+    ].filter(Boolean);
+    root.replaceChildren(h('div', {class: 'row-page deployments-body'}, ...children));
+    openLinkedInspector();
+  }
+
+  // Legacy deep links type-dispatch: WebApp pks are ints, PlatformDeployment
+  // pks are UUIDs, so `inspector` resolves without collision; the reserved
+  // `webapp`/`deployment` keys address each drill-in directly.
+  function openLinkedInspector() {
+    if (linkedInspectorOpened) return;
+    const routeState = decodeRouteState().state;
+    const webappKey = routeState.webapp
+      || (/^\d+$/.test(String(routeState.inspector || '')) ? routeState.inspector : null);
+    const deployKey = routeState.deployment
+      || (routeState.inspector && !/^\d+$/.test(String(routeState.inspector)) ? routeState.inspector : null);
+    if (webappKey && state.apps) {
+      const linked = (state.apps.items || []).find((item) => String(item.webapp?.id) === String(webappKey));
+      if (linked) {
+        linkedInspectorOpened = true;
+        openManage(ctx, linked.webapp, render);
+      }
+      return;
+    }
+    if (deployKey && state.report) {
+      linkedInspectorOpened = true;
+      openApiInspector(ctx, deploymentsSection(), render);
+    }
+  }
+
+  await load();
+  return root;
 }
