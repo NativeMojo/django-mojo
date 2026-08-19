@@ -1,5 +1,6 @@
 """Curated Admin Settings catalog, writer, and feature contracts."""
 
+from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
 
@@ -15,8 +16,36 @@ FLEET_PROVIDER_KEYS = (
     "GEOIP_PRIMARY_PROVIDER", "GEOIP_FALLBACK_PROVIDER",
     "GEOIP_ADDITIONAL_PROVIDERS", "GEOIP_MOJO_PROVIDER_URL",
     "GEOIP_MOJO_SYNC_ENABLED", "GEOIP_API_KEY_MOJO",
-    "ADMIN_PROVIDER_SETUP_REVISION",
+    "ADMIN_PROVIDER_SETUP_REVISION", "ADMIN_PROVIDER_VERIFY_STATE",
 )
+FLEET_STATIC = {
+    "ADMIN_FLEET_CONFIG_BUCKET": "config-bucket",
+    "ADMIN_FLEET_CONFIG_PREFIX": "config/prod",
+    "ADMIN_FLEET_CONFIG_FILENAME": "django.override.json",
+    "ADMIN_FLEET_CONFIG_KMS_KEY_ID": "alias/config",
+    "ADMIN_FLEET_CONFIG_RESTART_ENABLED": True,
+}
+SETTINGS_ASSETS = (
+    "mojo/apps/account/admin_portal/assets/features/settings/page.js",
+    "mojo/apps/account/admin_portal/assets/features/settings/language.js",
+    "mojo/apps/account/admin_portal/assets/features/settings/panels.js",
+)
+
+
+def _fleet_static(provider_setup):
+    """Deployment settings under which fleet publishing is fully available."""
+    return {**FLEET_STATIC,
+            "ADMIN_FLEET_CONFIG_ALLOWED_KEYS": list(provider_setup.FLEET_KEYS)}
+
+
+def _geoip_payload(provider_setup, **overrides):
+    values = dict(provider_setup.config_override.DEFAULTS)
+    return {"geoip": {**values, "GEOIP_API_KEY_MOJO": None, **overrides}}
+
+
+def _sms_payload(**overrides):
+    return {"sms": {"remote_url": "https://sms.example.com", "api_key": None,
+                    **overrides}}
 
 
 @th.django_unit_setup()
@@ -77,6 +106,20 @@ def test_settings_registry_contract(opts):
         f"the framework hold must stay owner-written and protected: {hold!r}"
     assert "hold" in hold.constraints, \
         f"the catalog must tell an operator what it accepts: {hold.constraints!r}"
+    # The browser cannot derive either of these from a value, so the app owns
+    # them: what an integer counts, and what absence actually means.
+    assert hold.unset_meaning, \
+        "an unset framework hold does not say what the fleet installs instead"
+    assert rows["DNSMAN_CERT_RENEW_DAYS"].unit == "days", \
+        f"a renewal window is a bare number without its unit: {rows['DNSMAN_CERT_RENEW_DAYS']!r}"
+    assert rows["DNSMAN_ACME_CONTACT_EMAIL"].unset_meaning, \
+        "an absent ACME contact does not say what nobody is being warned about"
+    for key in ("INCIDENT_EMAIL_FROM", "AWS_MONITORING_NAME",
+                "AWS_CLOUDWATCH_ALARM_TOPIC_ARNS", "SYSTEM_SETUP_LOCAL_API_URL"):
+        assert rows[key].unset_meaning, \
+            f"{key} leaves an operator to guess what unset does"
+    assert not rows["KMS_KEY_ID"].unset_meaning, \
+        "a missing encryption key must not be described reassuringly"
     descriptor = rows["ALLOW_EMAIL_CHANGE"]
     assert admin_settings.register_descriptor(descriptor) == descriptor, \
         "an identical app-owned registration was not idempotent"
@@ -313,6 +356,7 @@ def test_settings_feature_assets(opts):
     assets = admin_assets.load_manifest()
     required = {
         "assets/features/settings/feature.js", "assets/features/settings/page.js",
+        "assets/features/settings/panels.js", "assets/features/settings/language.js",
         "assets/features/settings/styles.css",
     }
     assert required <= set(assets), "the private Settings feature package is incomplete"
@@ -320,11 +364,22 @@ def test_settings_feature_assets(opts):
         "the server fixed feature roster omitted Settings"
     registry = (ROOT / "mojo/apps/account/admin_portal/assets/features/registry.js").read_text()
     page = (ROOT / "mojo/apps/account/admin_portal/assets/features/settings/page.js").read_text()
+    panels = (ROOT / "mojo/apps/account/admin_portal/assets/features/settings/panels.js").read_text()
     advanced = (ROOT / "mojo/apps/account/admin_portal/assets/features/advanced/page.js").read_text()
     assert "[dashboard, webapps, advanced, people, activity, platform, settings]" in registry, \
         "the sidebar feature order is not Dashboard/Web Apps/Domains/People/Activity/Platform/Settings"
-    for contract in ("Technical details", "Search settings", "openBusy", "apiOnce", "Clear database override", "settings-token-editor", "Mojo GeoIP and SMS", "configure_providers"):
-        assert contract in page, f"Settings UX omitted {contract}"
+    for contract in ("Search settings", "openBusy", "apiOnce", "configure_providers",
+                     "rowSection", "statusRow", "How this platform is configured.",
+                     "focus: 'geoip'"):
+        assert contract in page, f"the Settings list omitted {contract}"
+    for contract in ("Technical details", "settings-token-editor", "topic",
+                     "expected_revision"):
+        assert contract in panels, f"the Settings panels omitted {contract}"
+    # The one combined provider modal is what this feature replaced; if the
+    # string comes back, so has the "fix SMS by reading GeoIP" page.
+    for gone in ("Mojo GeoIP and SMS", "openModal"):
+        assert gone not in page and gone not in panels, \
+            f"Settings still carries the combined provider modal: {gone}"
     assert "Expected edge nodes (comma-separated)" not in advanced and "Typed settings" not in advanced, \
         "Advanced still owns the duplicated settings form"
 
@@ -346,37 +401,27 @@ def test_provider_setup_publisher_contract(opts):
     actor.is_superuser = True
     actor.save(update_fields=["is_superuser"])
     s3 = mock.Mock()
-    static = {
-        "ADMIN_FLEET_CONFIG_BUCKET": "config-bucket",
-        "ADMIN_FLEET_CONFIG_PREFIX": "config/prod",
-        "ADMIN_FLEET_CONFIG_FILENAME": "django.override.json",
-        "ADMIN_FLEET_CONFIG_KMS_KEY_ID": "alias/config",
-        "ADMIN_FLEET_CONFIG_ALLOWED_KEYS": list(provider_setup.FLEET_KEYS),
-        "ADMIN_FLEET_CONFIG_RESTART_ENABLED": True,
-    }
-    payload = {"geoip": {
-        "GEOIP_PRIMARY_PROVIDER": "mojo",
-        "GEOIP_FALLBACK_PROVIDER": "ipinfo",
-        "GEOIP_ADDITIONAL_PROVIDERS": [],
-        "GEOIP_MOJO_PROVIDER_URL": "https://api.mojoverify.com",
-        "GEOIP_MOJO_SYNC_ENABLED": False,
-        "GEOIP_API_KEY_MOJO": None,
-    }, "sms": {"remote_url": "https://sms.example.com", "api_key": None}}
+    static = _fleet_static(provider_setup)
+    payload = _geoip_payload(provider_setup)
 
     s3.put_object.return_value = {"VersionId": "version-1"}
-    verified = {"geoip": {"success": True}, "sms": {"success": True}}
+    verified = ({"geoip": {"success": True}}, False)
     with mock.patch.object(provider_setup, "_s3_client", return_value=s3), \
             mock.patch.object(provider_setup, "_published", return_value=None), \
             mock.patch.object(provider_setup, "_test_provider_credentials", return_value=verified), \
-            mock.patch.object(provider_setup, "_save_database") as save_database, \
+            mock.patch.object(provider_setup, "_save_geoip_secret") as save_secret, \
+            mock.patch.object(provider_setup, "_save_sms_config") as save_sms, \
             mock.patch.object(provider_setup, "_configuration_revision", return_value=None), \
             mock.patch.object(provider_setup, "_write_configuration_revision") as write_revision, \
+            mock.patch.object(provider_setup, "_write_verify_state") as write_verify, \
             mock.patch.object(provider_setup, "_audit"), \
             mock.patch.object(provider_setup, "_static", side_effect=lambda key, default=None: static.get(key, default)):
-        result = provider_setup.apply(actor, payload)
+        result = provider_setup.apply(actor, "geoip", payload)
 
     assert result["published"] is True and result["pending_restart"] is True, \
         f"provider setup did not report a pending fleet publish: {result!r}"
+    assert result["topic"] == "geoip", \
+        f"a provider result must name the topic it wrote: {result!r}"
     kwargs = s3.put_object.call_args.kwargs
     assert kwargs["Bucket"] == "config-bucket" and kwargs["Key"] == "config/prod/django.override.json", \
         f"provider setup published to the wrong canonical object: {kwargs!r}"
@@ -387,8 +432,12 @@ def test_provider_setup_publisher_contract(opts):
     body = kwargs["Body"].decode("utf-8")
     assert "GEOIP_API_KEY_MOJO" not in body and "sms.example.com" not in body, \
         "a database credential or SMS configuration leaked into the fleet object"
-    assert save_database.call_count == 1, "validated database settings were not saved"
+    assert save_secret.call_count == 1, "validated database settings were not saved"
+    assert not save_sms.called, \
+        "a GeoIP publication rewrote the unrelated SMS provider row"
     assert write_revision.call_count == 1, "the provider edit revision was not advanced"
+    assert write_verify.call_args.args[0] == "geoip", \
+        "a successful publish did not record the stored GeoIP verification"
 
 
 @th.django_unit_test("provider publication is conditional and skips an unchanged override")
@@ -401,30 +450,23 @@ def test_provider_setup_concurrency_and_noop(opts):
     actor.save(update_fields=["is_superuser"])
     Setting.objects.filter(
         key=provider_setup.SETUP_REVISION_KEY, group=None).delete()
-    static = {
-        "ADMIN_FLEET_CONFIG_BUCKET": "config-bucket",
-        "ADMIN_FLEET_CONFIG_PREFIX": "config/prod",
-        "ADMIN_FLEET_CONFIG_FILENAME": "django.override.json",
-        "ADMIN_FLEET_CONFIG_KMS_KEY_ID": "alias/config",
-        "ADMIN_FLEET_CONFIG_ALLOWED_KEYS": list(provider_setup.FLEET_KEYS),
-        "ADMIN_FLEET_CONFIG_RESTART_ENABLED": True,
-    }
+    static = _fleet_static(provider_setup)
     values = dict(provider_setup.config_override.DEFAULTS)
     payload = {"expected_revision": "c" * 32,
-               "geoip": {**values, "GEOIP_API_KEY_MOJO": None},
-               "sms": {"remote_url": "https://sms.example.com", "api_key": None}}
+               **_geoip_payload(provider_setup)}
     current = {"document": {"settings": values, "revision": "c" * 32},
                "etag": '"etag-current"', "version_id": "version-current"}
     s3 = mock.Mock()
-    verified = {"geoip": {"success": True}, "sms": {"success": True}}
+    verified = ({"geoip": {"success": True}}, False)
 
     with mock.patch.object(provider_setup, "_static", side_effect=lambda key, default=None: static.get(key, default)), \
             mock.patch.object(provider_setup, "_s3_client", return_value=s3), \
             mock.patch.object(provider_setup, "_published", return_value=current), \
             mock.patch.object(provider_setup, "_test_provider_credentials", return_value=verified), \
-            mock.patch.object(provider_setup, "_save_database") as save_database, \
+            mock.patch.object(provider_setup, "_save_geoip_secret") as save_database, \
+            mock.patch.object(provider_setup, "_write_verify_state"), \
             mock.patch.object(provider_setup, "_audit"):
-        result = provider_setup.apply(actor, payload)
+        result = provider_setup.apply(actor, "geoip", payload)
 
     assert result["unchanged"] is True and not s3.put_object.called, \
         "an unchanged provider patch uploaded a new revision"
@@ -437,10 +479,11 @@ def test_provider_setup_concurrency_and_noop(opts):
             mock.patch.object(provider_setup, "_s3_client", return_value=s3), \
             mock.patch.object(provider_setup, "_published", return_value=current), \
             mock.patch.object(provider_setup, "_test_provider_credentials", return_value=verified), \
-            mock.patch.object(provider_setup, "_save_database") as stale_save, \
+            mock.patch.object(provider_setup, "_save_geoip_secret") as stale_save, \
+            mock.patch.object(provider_setup, "_write_verify_state"), \
             mock.patch.object(provider_setup, "_audit"), \
             th.assert_raises(me.ValueException):
-        provider_setup.apply(actor, payload)
+        provider_setup.apply(actor, "geoip", payload)
     assert not stale_save.called, "a stale database-only provider form was applied"
     payload["expected_revision"] = result["revision"]
     external = {**current, "document": {
@@ -449,10 +492,11 @@ def test_provider_setup_concurrency_and_noop(opts):
             mock.patch.object(provider_setup, "_s3_client", return_value=s3), \
             mock.patch.object(provider_setup, "_published", return_value=external), \
             mock.patch.object(provider_setup, "_test_provider_credentials", return_value=verified), \
-            mock.patch.object(provider_setup, "_save_database") as external_save, \
+            mock.patch.object(provider_setup, "_save_geoip_secret") as external_save, \
+            mock.patch.object(provider_setup, "_write_verify_state"), \
             mock.patch.object(provider_setup, "_audit"), \
             th.assert_raises(me.ValueException):
-        provider_setup.apply(actor, payload)
+        provider_setup.apply(actor, "geoip", payload)
     assert not external_save.called, "a stale form overwrote an external S3 revision"
     changed = {**current, "document": {
         **current["document"],
@@ -464,9 +508,10 @@ def test_provider_setup_concurrency_and_noop(opts):
             mock.patch.object(provider_setup, "_s3_client", return_value=s3), \
             mock.patch.object(provider_setup, "_published", return_value=changed), \
             mock.patch.object(provider_setup, "_test_provider_credentials", return_value=verified), \
-            mock.patch.object(provider_setup, "_save_database"), \
+            mock.patch.object(provider_setup, "_save_geoip_secret"), \
+            mock.patch.object(provider_setup, "_write_verify_state"), \
             mock.patch.object(provider_setup, "_audit"):
-        updated = provider_setup.apply(actor, payload)
+        updated = provider_setup.apply(actor, "geoip", payload)
     assert updated["published"] is True and \
         s3.put_object.call_args.kwargs["IfMatch"] == '"etag-current"', \
         "an existing override was not protected by its current ETag"
@@ -535,8 +580,9 @@ def test_provider_setup_selects_system_sms(opts):
         "clear_api_key": False, "test_mode": True,
     }
 
-    with mock.patch.object(provider_setup, "_write_secret"):
-        provider_setup._save_database(None, False, sms)
+    # The split writer owns one topic and nothing else: no secret write is
+    # mocked out here because the SMS path never reaches one.
+    provider_setup._save_sms_config(sms)
 
     active.refresh_from_db()
     inactive.refresh_from_db()
@@ -547,3 +593,279 @@ def test_provider_setup_selects_system_sms(opts):
     assert active.is_active and not inactive.is_active, \
         "provider setup left an ambiguous active system default"
     PhoneConfig.objects.filter(pk__in=(active.pk, inactive.pk)).delete()
+
+
+@th.django_unit_test("one provider topic saves and fails without touching the other")
+def test_provider_setup_topic_isolation(opts):
+    from mojo import errors as me
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import provider_setup
+
+    actor = User.objects.get(pk=opts.settings_admin)
+    actor.is_superuser = True
+    actor.save(update_fields=["is_superuser"])
+    static = _fleet_static(provider_setup)
+    s3 = mock.Mock()
+
+    def credentials(topic, section):
+        if topic == "geoip":
+            return {"geoip": {"success": False, "code": "http_401",
+                              "message": "api.mojoverify.com rejected the API key"}}, False
+        return {"sms": {"success": True, "code": None,
+                        "message": "Connection verified"}}, False
+
+    def fleet_patches(stack):
+        for patcher in (
+                mock.patch.object(provider_setup, "_static", side_effect=lambda key, default=None: static.get(key, default)),
+                mock.patch.object(provider_setup, "_s3_client", return_value=s3),
+                mock.patch.object(provider_setup, "_published", return_value=None),
+                mock.patch.object(provider_setup, "_test_provider_credentials", side_effect=credentials),
+                mock.patch.object(provider_setup, "_configuration_revision", return_value=None),
+                mock.patch.object(provider_setup, "_write_configuration_revision"),
+                mock.patch.object(provider_setup, "_write_verify_state"),
+                mock.patch.object(provider_setup, "_audit")):
+            stack.enter_context(patcher)
+
+    # A rejected GeoIP key is the exact situation the old combined form turned
+    # into "you cannot save SMS either".
+    with ExitStack() as stack:
+        geo_write = stack.enter_context(
+            mock.patch.object(provider_setup, "_save_geoip_secret"))
+        sms_write = stack.enter_context(
+            mock.patch.object(provider_setup, "_save_sms_config"))
+        fleet_patches(stack)
+        with th.assert_raises(me.ValueException):
+            provider_setup.apply(actor, "geoip", _geoip_payload(provider_setup))
+        assert not geo_write.called and not sms_write.called, \
+            "a rejected GeoIP credential still wrote provider configuration"
+        result = provider_setup.apply(actor, "sms", _sms_payload())
+        assert result["topic"] == "sms", \
+            f"an SMS save was blocked by the failing GeoIP credential: {result!r}"
+        assert sms_write.call_count == 1 and not geo_write.called, \
+            "the SMS save wrote the wrong topic's storage"
+        assert not s3.put_object.called, \
+            "an SMS save published the fleet configuration document"
+        # A payload carrying the untouched topic is a rejection, not an ignored
+        # extra: the browser must not believe it saved something this skipped.
+        with th.assert_raises(me.ValueException):
+            provider_setup.apply(
+                actor, "sms", {**_sms_payload(), **_geoip_payload(provider_setup)})
+
+    # An installation with no fleet publishing plane at all still saves SMS,
+    # and never even builds an S3 client to do it.
+    bare = {}
+    with mock.patch.object(provider_setup, "_static", side_effect=lambda key, default=None: bare.get(key, default)), \
+            mock.patch.object(provider_setup, "_s3_client") as client, \
+            mock.patch.object(provider_setup, "_test_provider_credentials", side_effect=credentials), \
+            mock.patch.object(provider_setup, "_configuration_revision", return_value=None), \
+            mock.patch.object(provider_setup, "_write_configuration_revision"), \
+            mock.patch.object(provider_setup, "_write_verify_state"), \
+            mock.patch.object(provider_setup, "_save_sms_config") as offline_write, \
+            mock.patch.object(provider_setup, "_audit"):
+        offline = provider_setup.apply(actor, "sms", _sms_payload())
+        with th.assert_raises(me.ValueException):
+            provider_setup.apply(actor, "geoip", _geoip_payload(provider_setup))
+    assert offline["topic"] == "sms" and offline_write.call_count == 1, \
+        f"SMS could not be saved without a fleet publishing plane: {offline!r}"
+    assert not client.called, \
+        "an SMS save built an S3 client on an installation with no AWS config"
+
+
+@th.django_unit_test("a stored key is identified by four characters and never returned")
+def test_provider_setup_key_hint_contract(opts):
+    import json
+    from mojo.apps.account.models import Setting
+    from mojo.apps.account.services import provider_setup
+
+    for value in ("", None, 12345678, "short", "1234567"):
+        assert provider_setup._key_hint(value) == "", \
+            f"a value too short to hint safely produced one: {value!r}"
+    assert provider_setup._key_hint("12345678") == "5678", \
+        "an eight-character key did not produce its last four characters"
+    secret = "mojo_live_key_0123456789abcdef"
+    assert provider_setup._key_hint(secret) == secret[-4:] and \
+        len(provider_setup._key_hint(secret)) == 4, \
+        "the hint is not exactly the last four characters"
+    assert not secret.startswith(provider_setup._key_hint(secret)), \
+        "the hint is a prefix, which is the half of a key conventions publish"
+
+    Setting.objects.filter(key="GEOIP_API_KEY_MOJO", group=None).delete()
+    with mock.patch.object(Setting, "_redis", return_value=None):
+        provider_setup._write_secret("GEOIP_API_KEY_MOJO", secret, False)
+        report = provider_setup.state(include_remote=False)
+    encoded = json.dumps(report)
+    assert secret not in encoded, "the provider state returned a stored credential"
+    assert report["geoip"]["GEOIP_API_KEY_MOJO_HINT"] == secret[-4:], \
+        f"the stored GeoIP key produced no hint: {report['geoip']!r}"
+    assert report["geoip"]["GEOIP_API_KEY_MOJO_CONFIGURED"] is True, \
+        "a stored GeoIP key stopped reporting that it exists"
+    assert "api_key_hint" in report["sms"], \
+        f"the SMS section lost its key hint: {report['sms']!r}"
+    assert report["geoip_providers"], \
+        "the provider picker has no known providers to offer"
+    Setting.objects.filter(key="GEOIP_API_KEY_MOJO", group=None).delete()
+
+
+@th.django_unit_test("verify state records only the stored provider configuration")
+def test_provider_setup_verify_state_persistence(opts):
+    from mojo import errors as me
+    from mojo.apps.account.models import Setting, User
+    from mojo.apps.account.services import admin_settings, provider_setup
+
+    key = provider_setup.VERIFY_STATE_KEY
+    assert admin_settings.is_catalog_protected(key) is True, \
+        "the verification record is writable through the generic settings API"
+    Setting.objects.filter(key=key, group=None).delete()
+
+    actor = User.objects.get(pk=opts.settings_admin)
+    actor.is_superuser = True
+    actor.save(update_fields=["is_superuser"])
+    ok = {"success": True, "code": None, "message": "Connection verified"}
+    bad = {"success": False, "code": "http_401",
+           "message": "api.mojoverify.com rejected the API key"}
+
+    provider_setup._write_verify_state("geoip", ok)
+    provider_setup._write_verify_state("sms", ok)
+    seeded = provider_setup._read_verify_state()
+    assert seeded["geoip"]["ok"] is True and seeded["sms"]["ok"] is True, \
+        f"the verification record did not persist both topics: {seeded!r}"
+
+    row = Setting.objects.get(key=key, group=None)
+    row.value = "{}"
+    with th.assert_raises(me.PermissionDeniedException):
+        row.save()
+
+    # A draft nobody saved is not an observation of the installation.
+    with mock.patch.object(provider_setup, "_test_provider_credentials",
+                           return_value=({"sms": bad}, False)):
+        provider_setup.test(actor, "sms", _sms_payload(api_key="typed-replacement"))
+    assert provider_setup._read_verify_state()["sms"]["ok"] is True, \
+        "a draft credential test overwrote the stored configuration's state"
+
+    # Testing what is already stored is.
+    with mock.patch.object(provider_setup, "_test_provider_credentials",
+                           return_value=({"sms": bad}, True)):
+        provider_setup.test(actor, "sms", _sms_payload())
+    after = provider_setup._read_verify_state()
+    assert after["sms"]["ok"] is False and after["sms"]["code"] == "http_401", \
+        f"testing the stored SMS credential did not record its failure: {after!r}"
+    assert after["geoip"]["ok"] is True, \
+        "an SMS observation rewrote the unrelated GeoIP topic"
+
+    static = _fleet_static(provider_setup)
+    # A rejected candidate was never stored, so nothing about it is recorded.
+    with mock.patch.object(provider_setup, "_static", side_effect=lambda name, default=None: static.get(name, default)), \
+            mock.patch.object(provider_setup, "_s3_client", return_value=mock.Mock()), \
+            mock.patch.object(provider_setup, "_published", return_value=None), \
+            mock.patch.object(provider_setup, "_test_provider_credentials",
+                              return_value=({"geoip": bad}, False)), \
+            mock.patch.object(provider_setup, "_audit"), \
+            th.assert_raises(me.ValueException):
+        provider_setup.apply(actor, "geoip", _geoip_payload(provider_setup))
+    assert provider_setup._read_verify_state()["geoip"]["ok"] is True, \
+        "a failed publish recorded a configuration the installation never stored"
+
+    with mock.patch.object(provider_setup, "_static", side_effect=lambda name, default=None: static.get(name, default)), \
+            mock.patch.object(provider_setup, "_test_provider_credentials",
+                              return_value=({"sms": ok}, False)), \
+            mock.patch.object(provider_setup, "_published", return_value=None), \
+            mock.patch.object(provider_setup, "_configuration_revision", return_value=None), \
+            mock.patch.object(provider_setup, "_write_configuration_revision"), \
+            mock.patch.object(provider_setup, "_save_sms_config"), \
+            mock.patch.object(provider_setup, "_audit"):
+        provider_setup.apply(actor, "sms", _sms_payload())
+    saved = provider_setup._read_verify_state()
+    assert saved["sms"]["ok"] is True, \
+        f"a successful SMS save did not record its verification: {saved!r}"
+    stored = Setting.objects.get(key=key, group=None)
+    assert not stored.is_secret and "typed-replacement" not in str(stored.value), \
+        f"the verification record retained credential material: {stored.value!r}"
+    Setting.objects.filter(key=key, group=None).delete()
+
+
+@th.django_unit_test("a failed credential names the host, never the key")
+def test_provider_setup_diagnoses_host(opts):
+    from mojo.apps.account.services import provider_setup
+    from mojo.apps.phonehub.services import mojo_provider
+
+    secret = "mojo_live_key_0123456789abcdef"
+    responses = [
+        mock.Mock(ok=False, code="http_401", permissions=None),
+        mock.Mock(ok=False, code="timeout", permissions=None),
+        mock.Mock(ok=True, permissions={}),
+    ]
+    with mock.patch.object(mojo_provider, "verify_credentials", side_effect=responses):
+        rejected = provider_setup._credential_result(
+            "https://api.mojoverify.com", secret, ())
+        timed_out = provider_setup._credential_result(
+            "https://api.mojoverify.com", secret, ())
+        unpermitted = provider_setup._credential_result(
+            "https://sms.example.com", secret, ("send_sms",))
+    assert "api.mojoverify.com" in rejected["message"] and \
+        "rejected" in rejected["message"], \
+        f"a rejected key does not say who rejected it: {rejected!r}"
+    assert "api.mojoverify.com" in timed_out["message"], \
+        f"a timeout does not name the host that did not answer: {timed_out!r}"
+    assert "sms.example.com" in unpermitted["message"] and \
+        "send_sms" in unpermitted["message"], \
+        f"a permission failure does not say what is missing: {unpermitted!r}"
+    for result in (rejected, timed_out, unpermitted):
+        assert secret not in result["message"] and secret[-4:] not in result["message"], \
+            f"a diagnosis leaked credential material: {result!r}"
+
+
+@th.django_unit_test("provider mutations name their topic behind an unchanged gate")
+def test_settings_rest_topic_contract(opts):
+    from mojo import errors as me
+    from mojo.apps.account.models import User
+    from mojo.apps.account.rest import admin_settings as views
+    from mojo.apps.account.services import provider_setup
+
+    func = views.on_admin_settings_mutate
+    assert getattr(func, "_mojo_denies_key_backed_session", False), \
+        "Settings mutation accepts a key-backed session"
+    assert getattr(func, "_mojo_requires_fresh_auth", False) is True, \
+        "Settings mutation lacks recent interactive authentication"
+    assert getattr(func, "_mojo_fresh_auth_seconds", None) == 600, \
+        "Settings recent-authentication window is not 600 seconds"
+    source = (ROOT / "mojo/apps/account/rest/admin_settings.py").read_text()
+    assert '{"action", "topic", "providers"}' in source, \
+        "the provider branch does not require an explicit topic"
+    assert "provider_setup.TOPICS" in source, \
+        "the REST boundary invents its own topic list"
+    assert "system_setup.request_origin(request)" in source and \
+        "system_setup.require_request_admin(request)" in source, \
+        "provider secret/fleet mutations lack the literal-superuser same-Origin gate"
+
+    actor = User.objects.get(pk=opts.settings_admin)
+    actor.is_superuser = True
+    actor.save(update_fields=["is_superuser"])
+    for topic in (None, "", "GEOIP", "both", "providers"):
+        with th.assert_raises(me.ValueException):
+            provider_setup.test(actor, topic, _sms_payload())
+        with th.assert_raises(me.ValueException):
+            provider_setup.apply(actor, topic, _sms_payload())
+
+
+@th.django_unit_test("Settings speaks plainly and guards before it formats")
+def test_settings_plain_language_contract(opts):
+    sources = {name: (ROOT / name).read_text() for name in SETTINGS_ASSETS}
+    for name, source in sources.items():
+        for banned in ("Configured", "Not configured", "None configured", "Open owner"):
+            assert banned not in source, \
+                f"{name} still reports that a value exists instead of what it does: {banned}"
+    page = sources[SETTINGS_ASSETS[0]]
+    assert "badge(" not in page, \
+        "a settings row still spends a badge on provenance"
+    assert "settings-grid" not in page and "settings-card" not in page, \
+        "the settings card grid survived the row rewrite"
+
+    language = sources[SETTINGS_ASSETS[1]]
+    dispatch = language.index("SENTENCE[row.key]")
+    for guard in ("Conflicting values saved", "Could not be read", "row.unset_meaning"):
+        assert 0 < language.index(guard) < dispatch, \
+            f"the {guard!r} guard runs after a formatter could narrate the value"
+    for phrase in ("Not set — ", " before expiry", "registration open",
+                   "HTTPS redirect ", "templates ready", "No fleet expected yet",
+                   "DNSMAN_CERT_RENEW_DAYS", "EMAIL_DELIVERY_POSTURE"):
+        assert phrase in language, f"the plain-language registry lost {phrase!r}"

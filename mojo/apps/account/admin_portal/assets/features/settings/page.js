@@ -1,10 +1,10 @@
 // Settings reads like a status page: one row per thing, one plain sentence
 // each, one level down for anything you can change.
 //
-// The card grid this replaced showed a key, a badge, and the word "Configured"
-// — three pieces of provenance and no answer to "what is this platform doing?".
-// Everything technical still exists; it moved into the row's own panel, which
-// is also where every editor now lives.
+// The card grid this replaced showed a key, a provenance badge, and one word
+// meaning "a value exists" — three facts about storage and no answer to "what
+// is this platform doing?". Everything technical still exists; it moved into
+// the row's own panel, which is also where every editor now lives.
 
 import {api, apiOnce, h, icon, pageHeader} from '../../core.js';
 import {confirmAction, openBusy} from '../../components/overlays.js';

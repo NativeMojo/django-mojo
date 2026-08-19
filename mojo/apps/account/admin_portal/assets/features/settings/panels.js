@@ -1,8 +1,8 @@
 // One topic at a time.
 //
-// The old page put every provider field behind a single "Mojo GeoIP and SMS"
-// modal, so an operator fixing SMS had to look at GeoIP and a failing GeoIP
-// key blocked an SMS save. Each panel here owns exactly one topic, saves
+// The old page put every provider field behind one combined modal, so an
+// operator fixing text messaging had to look at GeoIP, and a failing GeoIP key
+// blocked an SMS save outright. Each panel here owns exactly one topic, saves
 // alone, and fails alone. Technical detail lives down here too: the list is
 // for reading, a panel is for changing one thing.
 

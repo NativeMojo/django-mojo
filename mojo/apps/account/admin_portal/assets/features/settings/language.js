@@ -1,10 +1,10 @@
 // Plain language for one settings row.
 //
-// The old page had a single formatter that turned every value into
-// "Configured" / "Not configured" / "Enabled" / "Disabled". Those words say
-// that a value exists; they never say what the platform does because of it.
-// Everything here answers the reader's actual question instead: what is
-// happening right now, in a sentence they could say out loud.
+// The old page had a single formatter that collapsed every value into one of
+// four storage words. Those words say that a value exists; they never say what
+// the platform does because of it. Everything here answers the reader's actual
+// question instead: what is happening right now, in a sentence they could say
+// out loud.
 //
 // The app owns two facts a browser cannot derive from a value: what an integer
 // counts (`unit`) and what absence means (`unset_meaning`). Both arrive on the
