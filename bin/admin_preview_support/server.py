@@ -927,6 +927,7 @@ def main():
     parser.add_argument("--dashboard-state", choices=("healthy", "degraded", "down", "denied", "unknown"), default="healthy")
     parser.add_argument("--onboarding-state", choices=("idle", "address", "github", "verify", "complete", "lost_key", "new_group"), default="idle")
     parser.add_argument("--settings-state", choices=("normal", "duplicate", "invalid", "delay", "error", "fresh"), default="normal")
+    parser.add_argument("--metrics-state", choices=("live", "empty", "unconfigured", "denied", "partial"), default="live")
     parser.add_argument("--upstream", help="Public HTTPS django-mojo origin for live QA")
     args = parser.parse_args()
     upstream = None
@@ -948,7 +949,8 @@ def main():
        activity_state=args.activity_state,
        dashboard_state=args.dashboard_state,
        onboarding_state=args.onboarding_state,
-       settings_state=args.settings_state)
+       settings_state=args.settings_state,
+       metrics_state=args.metrics_state)
     PreviewHandler.upstream = upstream
     PreviewHandler.setup_behavior = args.setup_state
     PreviewHandler.preview_port = args.port

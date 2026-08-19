@@ -314,6 +314,39 @@ The `resources` endpoint now includes a `slug` field on every entry — the same
 friendly name that will appear in chart labels. Use this `slug` value (not the
 raw `id`) when targeting a specific instance via `fetch`'s `slugs` parameter.
 
+### Degradation envelope
+
+`mojo/apps/aws/rest/cloudwatch.py` is the only layer that classifies provider
+failures; the helper's behaviour is unchanged. A missing credential, a refused
+IAM identity, or an unreachable endpoint is an ordinary state for a read
+endpoint, so **both endpoints answer 200** with a reason code instead of the
+unhandled 500 they used to raise. `mojo.helpers.aws.provider_call.map_error`
+does the classification and the codes are that module's vocabulary verbatim:
+`credentials_unavailable`, `denied`, `network_unavailable`, `service_error`.
+
+Anything that is **not** a botocore exception is not a provider failure: it
+propagates and still returns 500. The discriminator is the exception type, so a
+`TypeError` in mojo's own code can never masquerade as an AWS outage.
+
+- `resources` reads the three services in separate `try` blocks. A failed
+  service contributes `[]` plus an entry in `degraded`; `available` is false
+  only when all three failed, and `reason` then carries the single cause.
+- `fetch` puts `available` and `reason` **inside** `data`, next to the series,
+  because the Admin portal's `api()` helper returns `payload.data ?? payload`
+  and would drop a top-level sibling. Parameter validation still raises a 400.
+
+The endpoint builds its helper with `max_attempts=1`, passed through
+`get_client` rather than by changing `CloudWatchHelper`: botocore's default
+three retries turn an unreachable endpoint into a multi-second wait for a page
+whose only job is to report that AWS is not answering.
+
+Only `ProviderCallError.detail()` is logged (to `aws.log`). Raw botocore text is
+never logged or returned — it can contain credentials, signed URLs, and request
+parameters.
+
+The Admin portal's Metrics page is the first consumer; see
+[Admin Metrics](../account/admin_portal/metrics.md).
+
 See the [web developer reference](../../web_developer/aws/cloudwatch.md) for full
 request/response documentation.
 

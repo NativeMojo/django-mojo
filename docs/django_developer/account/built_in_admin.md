@@ -59,8 +59,11 @@ exactly one DOM `Node`; an optional `node.dispose()` releases feature-local
 listeners or work.
 
 Primary navigation is Dashboard, Web Apps, Domains & DNS, People, Activity,
-Platform, and Settings. Domains & DNS is permission-gated and stays beside Web Apps
-because domains and public records are ongoing application controls. Platform
+Platform, Metrics, and Settings. A feature contributes as many sidebar entries
+as its own capabilities allow, so the entry count is not the feature count:
+Domains & DNS is a permission-gated Advanced entry and stays beside Web Apps
+because domains and public records are ongoing application controls, and Metrics
+is a Platform entry shown only with the `manage_aws` grant. Platform
 contains deployments, literal-superuser System Setup, and one link to Advanced
 expert diagnostics; it does not duplicate a resource directory. See
 [Dashboard integration](admin_portal/dashboard.md) for the permissioned source
@@ -129,6 +132,11 @@ late choices, cancellation, and bounded live log. See
 [System Setup and Readiness](system_setup.md) for the service and security
 contracts.
 
+Platform also owns the `metrics` route — CloudWatch line charts for EC2, RDS,
+and ElastiCache, gated on `manage_aws` and rendered by
+`assets/features/platform/metrics.js` and `chart.js`. See
+[Admin Metrics](admin_portal/metrics.md).
+
 See [Platform and Advanced Admin controls](admin_portal/platform.md) for the
 dedicated permissions and bounded evidence contract.
 
@@ -188,6 +196,8 @@ its busy/error/440/lost-response states,
 `--dashboard-state healthy|degraded|down|denied|unknown` for Dashboard source
 states (`down` proves a failure and reddens the headline; `degraded` is amber
 evidence with availability still green),
+`--metrics-state live|empty|unconfigured|denied|partial` for the CloudWatch
+Metrics page (`partial` keeps EC2 and ElastiCache live while RDS degrades),
 and `--port` when parallel work needs isolation. Every launch resets mutable
 provider state before serving.
 

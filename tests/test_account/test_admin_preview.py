@@ -225,6 +225,74 @@ def test_platform_preview_truth_axes(opts):
         "preview cannot exercise compatibility filtering for legacy local-listener noise"
 
 
+@th.django_unit_test("preview renders every CloudWatch metrics state deterministically")
+def test_metrics_preview_states(opts):
+    from urllib.parse import urlparse
+
+    server = _server()
+    source = (ROOT / "bin/admin_preview_support/server.py").read_text()
+    gallery = (ROOT / "bin/admin_preview_support/gallery.py").read_text()
+    provider = server.platform
+
+    assert "--metrics-state" in source and "metrics_state=args.metrics_state" in source, \
+        "the preview cannot select a metrics scenario"
+    assert "manage_aws" in gallery and "metrics_state" in gallery, \
+        "the deterministic bootstrap omits the AWS grant or the metrics scenario"
+    assert server.bootstrap([])["features"]["platform"]["capabilities"]["metrics"] is True, \
+        "the preview bootstrap never enables the Metrics lane"
+
+    expected = {
+        "live": (True, None, 2, 1),
+        "empty": (True, None, 2, 1),
+        "unconfigured": (False, "credentials_unavailable", 0, 0),
+        "denied": (False, "denied", 0, 0),
+        "partial": (True, None, 2, 0),
+    }
+    for state, (available, reason, ec2_count, rds_count) in expected.items():
+        class Handler:
+            pass
+
+        provider.reset(Handler, {"setup_choice": lambda: None}, metrics_state=state)
+        status, resources = provider.get(
+            Handler, urlparse("/api/aws/cloudwatch/resources"))
+        assert status == 200, f"{state}: resources answered {status}"
+        assert resources["available"] is available, \
+            f"{state}: expected available={available}, got {resources['available']}"
+        assert resources["reason"] == reason, \
+            f"{state}: expected reason={reason!r}, got {resources['reason']!r}"
+        assert len(resources["ec2"]) == ec2_count and len(resources["rds"]) == rds_count, \
+            f"{state}: expected {ec2_count} EC2 / {rds_count} RDS, got {resources}"
+
+        # Providers answer with the body the browser sees after api() unwraps
+        # the envelope, so the availability flags sit at this level.
+        _, data = provider.get(Handler, urlparse(
+            "/api/aws/cloudwatch/fetch?account=ec2&category=cpu&granularity=hours"))
+        assert data["available"] is available, \
+            f"{state}: fetch availability disagrees with the resource listing"
+        if available:
+            assert len(data["labels"]) == 24, \
+                f"{state}: hourly fetch did not produce 24 buckets: {len(data['labels'])}"
+            values = list(data["data"].values())
+            assert values and all(len(row) == 24 for row in values), \
+                f"{state}: a series does not line up with its labels: {data}"
+            has_signal = any(any(point for point in row) for row in values)
+            assert has_signal is (state != "empty"), \
+                f"{state}: the all-zero fixture and the live fixture are indistinguishable"
+
+    # Partial means one service is out, not the whole page.
+    class Partial:
+        pass
+
+    provider.reset(Partial, {"setup_choice": lambda: None}, metrics_state="partial")
+    _, resources = provider.get(Partial, urlparse("/api/aws/cloudwatch/resources"))
+    assert resources["degraded"] == {"rds": "service_error"}, \
+        f"the partial fixture does not name the single failed service: {resources['degraded']}"
+    _, rds = provider.get(Partial, urlparse(
+        "/api/aws/cloudwatch/fetch?account=rds&category=cpu&granularity=hours"))
+    assert rds["available"] is False and rds["reason"] == "service_error", \
+        f"the degraded service still charts: {rds}"
+
+
 @th.django_unit_test("preview recovers committed new-group response loss after reload")
 def test_webapp_new_group_preview_contract(opts):
     from urllib.parse import urlparse

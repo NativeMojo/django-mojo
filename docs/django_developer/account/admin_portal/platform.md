@@ -3,7 +3,7 @@
 The built-in Admin separates platform operations into two feature-owned lanes.
 **Platform** owns public API and local sanity proof, deployment history, fleet,
 jobs/scheduler, database, Redis, certificate/security evidence, the public
-WebApp summary contract, and System Setup. **Advanced** owns hosting inventory,
+WebApp summary contract, System Setup, and CloudWatch Metrics. **Advanced** owns hosting inventory,
 bounded opt-in AWS inventory and raw network controls. Ongoing configuration
 has one first-class [Settings](settings.md) home. Platform
 is an operational evidence surface, not another directory: ongoing Domains &
@@ -76,6 +76,14 @@ passes. Writes require `manage_platform` or `manage_advanced`, reject API-key
 and group-token sessions, and require authentication no older than 600 seconds.
 Typed AUTH_CONFIG/topology owner writes additionally re-read an active literal
 `account.User` superuser.
+
+The feature owns four routes: `platform`, `deployments`, `setup`, and
+`metrics`. The first three follow the grants above; `metrics` is gated
+separately on `manage_aws`, published as
+`features.platform.capabilities.metrics` and enforced on
+`/api/aws/cloudwatch/*` by `@md.requires_global_perms("manage_aws")`. An
+operator holding only `manage_aws` therefore sees the Metrics sidebar entry and
+nothing else in this lane. See [Admin Metrics](metrics.md).
 
 `AUTH_CONFIG` and `EDGE_EXPECTED_TOPOLOGY` are protected from generic global
 Setting create, update, rename, and delete. Their compatibility writer merges appearance,
