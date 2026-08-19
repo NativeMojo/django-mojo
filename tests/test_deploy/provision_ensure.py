@@ -926,7 +926,11 @@ def test_nodes_launch_request_shape(opts):
         ami_id="ami-0base", public_subnet_ids=["subnet-0pub1"],
         node_sg_id="sg-0node",
         instance_profile_name=names["instance_profile"],
-        key_pair_name=names["key_pair"])
+        key_pair_name=names["key_pair"],
+        # A node is not launched until the stage-1 payload it boots from is
+        # published — see provision_nodes_userdata.py for the refusal.
+        bootstrap_payload={"bucket": names["config_bucket"],
+                           "version": "0.0.0-test"})
 
     client, stubber = _stub("ec2")
     stubber.add_response(

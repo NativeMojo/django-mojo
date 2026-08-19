@@ -66,12 +66,23 @@ def test_certbot_sync_harness(opts):
 
 
 @th.django_unit_test()
+def test_stage1_sh_harness(opts):
+    """The packaged stage1.sh, in the order that makes it correct: untar before
+    bootstrap, the version pin after it, var/profile before config_sync, the
+    CloudWatch agent configured and enabled before the restart, and a re-run
+    that skips an already-installed agent."""
+    _assert_harness_green(_run_harness("test_stage1_sh.sh"),
+                          "test_stage1_sh.sh")
+
+
+@th.django_unit_test()
 def test_packaged_scripts_parse(opts):
-    """`bash -n` on both packaged scripts — the cheapest possible gate against
+    """`bash -n` on every packaged script — the cheapest possible gate against
     shipping a wheel whose deploy scripts do not even parse."""
     root = _repo_root()
     for rel in ("mojo/deploy/scripts/update.sh",
-                "mojo/deploy/scripts/post_deploy.sh"):
+                "mojo/deploy/scripts/post_deploy.sh",
+                "mojo/deploy/scripts/stage1.sh"):
         path = os.path.join(root, rel)
         th.assert_true(os.path.isfile(path),
                        f"{rel} must ship inside the package")
