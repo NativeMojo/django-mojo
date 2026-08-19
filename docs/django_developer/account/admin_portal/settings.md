@@ -16,7 +16,19 @@ Optional applications simply omit their section when absent.
 
 Every descriptor declares its stable key, category, friendly description,
 type, constraints, default, resolver, raw/effective semantics, sensitivity,
-scope, writability, owner, and change behavior. The fixed category order is
+scope, writability, owner, and change behavior. Two further fields exist
+because the browser cannot derive them from a value:
+
+| Field | Meaning | Example |
+|---|---|---|
+| `unit` | What an integer counts | `DNSMAN_CERT_RENEW_DAYS` → `"days"` |
+| `unset_meaning` | What the platform does while the value is absent | `EDGE_FRAMEWORK_VERSION` → `"installs the newest published release"` |
+
+Both default to `""`. **The registering application owns them**, because only
+it knows what its own absence does; the Admin never invents either. Stamp
+`unset_meaning` only where absence is a legitimate, understood state — an
+unset `KMS_KEY_ID` deliberately carries none, because a missing encryption key
+must not be described reassuringly. The fixed category order is
 General, Sign-in & registration, Users, Email, Domains & DNS, Edge & Web Apps,
 and Security & operations; categories owned by absent optional applications
 are omitted. Provenance follows the real
@@ -62,25 +74,100 @@ change, rename, move, or delete a catalog-owned global row. Existing
 group-scoped rows remain compatible; a move across the global boundary checks
 both original and target key/scope.
 
-Literal superusers also receive a dedicated **Mojo providers** setup panel.
-It publishes the five static GeoIP provider values through the canonical
-S3/config-sync override plane, stores `GEOIP_API_KEY_MOJO` as an encrypted
-global `Setting`, and creates or converts the active system `PhoneConfig` to
-the Mojo remote provider. The API-key inputs are configured-only: blank means
-preserve and Clear is explicit. Static GeoIP keys are protected from generic
-database writes because their import-time consumers ignore DB rows.
-The same-origin, fresh interactive form can test both supplied/preserved keys
-without sending an SMS, then applies encrypted DB/model writes before the
-conditional S3 publication. If publication loses an ETag race or AWS refuses
-the write, the surrounding database transaction rolls back and the response
-fails without claiming a fleet change. An unchanged static patch does not
-create a new S3 revision, but every successful provider edit advances a
-database configuration revision so a stale form cannot overwrite a
-credential-only or SMS-only edit.
+### Provider setup is addressed by topic
 
-The panel reports the provider edit revision, the published S3 revision, and
-the revision loaded by the node serving the request. The edit revision guards
-all provider fields; a published/loaded mismatch means the normal
+Literal superusers also receive provider setup, and every call to
+`provider_setup.test()` / `provider_setup.apply()` names exactly one **topic**.
+`TOPICS` is `("geoip", "sms")`; there is no default, and a payload carrying the
+other topic's section is refused rather than ignored.
+
+| Topic | Owns | Fleet precondition | S3 |
+|---|---|---|---|
+| `geoip` | The five static GeoIP values (S3 document) and the encrypted `GEOIP_API_KEY_MOJO` `Setting` row | Required | Conditional `put_object` |
+| `sms` | The active system `PhoneConfig` row only | **None** | Never written |
+
+The split is the point. A rejected GeoIP credential used to block an SMS save
+outright, and SMS was unreachable on an installation that never publishes fleet
+configuration; now each topic saves and fails alone. GeoIP never touches
+`PhoneConfig`, and SMS never publishes the fleet document.
+
+SMS still performs the same guarded read-only `_published()` fetch `state()`
+performs, because the single `expected_revision` token binds
+`(edit_revision, published_revision)` — skipping the read would fail every SMS
+save on an installation with published fleet config. Where `state()` may
+degrade to `remote_error` and a `None` revision, the writer must not: an
+unreadable document fails the save closed with the existing
+"Provider configuration changed; reload before publishing" vocabulary, because
+a silently absent published revision would let a stale token compare equal. The
+S3 client is built only inside the branches that need one, so an AWS-less
+installation can save SMS without constructing it at all.
+
+**The token is deliberately not split per topic.** One installation-wide edit
+revision means a GeoIP publication invalidates an open SMS form and vice versa.
+That is the conservative choice: two tokens would let two operators each hold a
+form that looks current while the other's write lands.
+
+Both topics keep `transaction.atomic()`, the installation-wide
+`User.objects.select_for_update()` lock, a re-read locked `_superuser`,
+`_write_configuration_revision`, and `_audit` on success **and** failure with
+`topic=` in the message.
+
+The API-key inputs are configured-only: blank means preserve and Clear is
+explicit. Static GeoIP keys are protected from generic database writes because
+their import-time consumers ignore DB rows. The same-origin, fresh interactive
+form can test a supplied or preserved key without sending an SMS, then applies
+encrypted DB/model writes before the conditional S3 publication. If publication
+loses an ETag race or AWS refuses the write, the surrounding database
+transaction rolls back and the response fails without claiming a fleet change.
+An unchanged static patch does not create a new S3 revision, but every
+successful provider edit advances the database configuration revision so a
+stale form cannot overwrite a credential-only or SMS-only edit.
+
+### Stored-key hints
+
+`state()` returns `GEOIP_API_KEY_MOJO_HINT` and `sms.api_key_hint`: the **last
+four characters** of the stored key, or `""` for anything shorter than eight
+characters and for an absent key. Four trailing characters of a long credential
+identify which key is installed without narrowing a guess. Never a prefix
+(provider keys are prefixed by convention), never a length, and never the value
+itself. The GeoIP hint costs one bounded row fetch and one decrypt inside
+`state()`, sliced immediately and never logged. The whole surface is
+superuser-only, exactly like the rest of `provider_setup`.
+
+### Persisted verification state
+
+`ADMIN_PROVIDER_VERIFY_STATE` is one non-secret global `account.Setting` row
+holding `{"geoip": {ok, code, message, at}, "sms": {…}}`, returned by `state()`
+as `verify_state`. It exists so a failing integration is visible on the
+settings list without an outbound call on every page load.
+
+**It records the STORED configuration only.** The write rules are the whole
+contract:
+
+- `apply()` **success** records its topic — the verified candidate is now what
+  the installation is running.
+- `apply()` **failure** records nothing. The rejected candidate was never
+  stored, so recording it would make the list describe a configuration that
+  does not exist.
+- `test()` records **only** when the tested credential came from storage: no
+  replacement key typed, not a clear request, and the tested URL (and, for
+  GeoIP, the sync flag) matching the effective stored one. That single decision
+  is made at the existing `api_key or _stored_*_key` fallback point and returned
+  alongside the results, so there is one place to get it right.
+- A draft test returns its results and persists nothing.
+
+The key is in `FLEET_PROVIDER_KEYS`, so `is_catalog_protected()` is true and
+`Setting.save`/`set`/`remove` and the REST surface all refuse it. The writer
+therefore mirrors `_write_configuration_revision`: a queryset `.update()` with
+`bulk_create` fallback, inside `transaction.atomic()` holding the same
+installation lock. Reads tolerate the duplicate `(key, NULL)` rows PostgreSQL
+still permits — the oldest row wins rather than the read failing. The blob
+stores a host-bearing message from a fixed vocabulary and never a key,
+credential, request body, or exception repr.
+
+The GeoIP panel reports the provider edit revision, the published S3 revision,
+and the revision loaded by the node serving the request. The edit revision
+guards all provider fields; a published/loaded mismatch means the normal
 config-sync/restart cycle is pending, not that every node has restarted. Publishing requires
 the S3 location, KMS key, application allowlist, and the independent node
 bootstrap delegation documented in [Node deployment tooling](../../deploy/README.md#admin-fleet-overrides).
@@ -128,13 +215,78 @@ that legacy surface.
 
 ## Browser contract
 
-Settings is first-class navigation after Platform. The default is compact
-search, optional category chips, and summary cards. Each card shows friendly
-name, effective status/value, source, and at most one primary action. Exact
-keys, provenance, semantics, and constraints stay under closed Technical
-details. One editor opens at a time and becomes a bottom sheet on narrow
-screens. Fleet topology uses explicit node/pool tokens, never comma-separated
-text.
+Settings is first-class navigation after Platform, and it reads like a status
+page: one row per thing, one plain sentence each, one level down for anything
+you can change. It is built on the shared row components in
+`assets/components/rows.js` (`rowSection`, `statusRow`, `rowLink`) — the feature
+consumes them and never forks them.
+
+### Rows say what the platform does
+
+`features/settings/language.js` owns every sentence. The old page had one
+formatter that collapsed each value into a storage word; those words say a
+value exists and never say what happens because of it. Rows now read
+"30 days before expiry", "Users cannot change their own email address",
+"HTTPS redirect on · secure cookies on · HSTS off", "SES · sender verified ·
+3 templates missing".
+
+`sentence(row)` runs three guards **before** any per-key formatter, and that
+order is the contract — a value the server refused to resolve has no meaning
+for a formatter to narrate:
+
+1. `duplicate_override` → "Conflicting values saved — clear one"
+2. `source === 'invalid'` → "Could not be read"
+3. unset → `unset_meaning ? "Not set — <meaning>" : "Not set"`
+
+Only then does the per-key registry run (in a `try` that degrades to the
+generic formatter), and only then the generic fallback: integer plus `unit`,
+boolean, list joined, `configured_only` as "Set". Provenance left the list
+entirely except for one word: a value nobody chose shows a muted `· default`,
+because that reads differently from the same value someone set. The dot carries
+colour only for a failing verification, a pending restart, a duplicate, or an
+unreadable value; a healthy row is plain.
+
+`actionFor(row)` gives a row at most one thing to do, and a pointer when there
+is nothing: Clear conflicts, Edit/Set into the setting's own panel, a muted
+"managed by *owner* →" link where an owner route exists, muted "managed by
+deployment" with no link for file-only rows, and nothing at all for immutable
+identity. Whole rows are links to their own panel; controls inside a row are
+not.
+
+### Integrations, and what a non-superuser sees
+
+The list leads with a synthesised **Integrations** group: GeoIP (collapsing all
+six `GEOIP_*` descriptors into one row, with a hidden search corpus of their
+keys and labels), text messaging (built entirely from `provider_setup.sms`),
+and the two Email rows lifted out of their own category — which therefore
+disappears rather than showing one orphan. Category chips derive from the groups
+that actually rendered, so there are no empty groups and no dead chips.
+
+A reader without `provider_setup` (i.e. not a superuser) sees neither
+integration row. The six `GEOIP_*` descriptors then fall back to individual
+read-only rows in Security & operations with their ownership pointers, so
+nothing silently vanishes with the collapsed row.
+
+### One topic at a time
+
+Editors live in `features/settings/panels.js`, routed by
+`#/settings?focus=<topic-or-key>`: `geoip`, `sms`, `auth`, `topology`, or any
+catalog key. An unknown or unavailable focus renders the list rather than an
+error. Drill-in links carry `search` and `category`, so returning restores the
+filter, and every entry re-fetches — a panel always opens against a fresh
+`expected_revision` rather than one the list cached.
+
+Every catalog row has a panel, including rows nobody can change: that is where
+provenance, semantics, constraints, and Technical details now live, along with
+"Reset to default" and "Clear conflicts". Fleet topology still uses explicit
+node/pool tokens, never comma-separated text.
+
+A stored key renders as a state row — "Key set · ····9f2c" with **Replace** and
+**Remove** — instead of a password box meaning "leave blank to keep". Replace
+swaps in one password input; Remove confirms inline on the row itself, and a
+reload abandons the confirm. A failed test attaches to the field it concerns:
+`http_401`/`http_403`/`insufficient_permission` to the key, `timeout`/
+`http_404`/`connection_failed` to the URL, anything else to the panel.
 
 Database overrides have typed dirty/save/clear states. Owner-managed and
 deployment-only rows never look generically editable. Missing Setup produces
@@ -143,4 +295,9 @@ skeleton, fullscreen busy lease, explicit feedback, and HTTP 440 recent-auth
 prompt; the operator selects the mutation again after reauthentication.
 
 Deterministic preview states are available with `bin/admin_preview
---settings-state normal|duplicate|invalid|delay|error|fresh`.
+--settings-state normal|duplicate|invalid|provider_failed|unset|restricted|delay|error|fresh`.
+The three newest are the ones that only exist with provider status:
+`provider_failed` (a red integration row carrying a host-bearing diagnosis and
+a Fix link, with the other topic unaffected), `unset` (no stored keys, no
+version hold), and `restricted` (no `provider_setup` at all — the non-superuser
+fallback above).
