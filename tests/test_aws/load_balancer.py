@@ -206,3 +206,66 @@ def test_instance_names_single_call(opts):
     called = clients["ec2"].describe_instances.call_args.kwargs["InstanceIds"]
     th.assert_eq(called, ["i-00", "i-01"],
                  f"a non-instance id was passed to EC2: {called!r}")
+
+
+# ── module-level mutations ──────────────────────────────────────────────────
+
+@th.django_unit_test("a failed deregister NEVER claims nothing happened")
+def test_failed_deregister_reports_mutation_state(opts):
+    from mojo.helpers.aws import elbv2
+    from mojo.helpers.aws.provider_call import ProviderCallError
+
+    # ProviderClient derives "is this a mutation?" from the method-name prefix,
+    # and neither register_ nor deregister_ is one of its prefixes. Left to
+    # inference, this failure would report mutation_state="none" — "AWS did not
+    # start draining your node" — when AWS may well have. That is the one
+    # question that matters before deciding whether to retry.
+    client = mock.Mock()
+    client.deregister_targets.side_effect = DENIAL
+    with th.assert_raises(ProviderCallError) as caught:
+        elbv2.deregister_target(GROUP_ARN, "i-00", client=client)
+    detail = caught.exception.detail()
+    th.assert_true(detail["mutation_state"] != "none",
+                   f"a failed deregister claimed nothing happened: {detail!r}")
+    th.assert_eq(detail["mutation_state"], "attempted",
+                 f"a non-retryable denial is 'attempted': {detail!r}")
+    th.assert_eq(detail.get("iam_action"),
+                 "elasticloadbalancing:DeregisterTargets",
+                 f"the refused grant was not named: {detail!r}")
+    rendered = str(detail)
+    for secret in ("assumed-role", "i-secret", "is not authorized"):
+        th.assert_true(secret not in rendered,
+                       f"raw provider text {secret!r} reached the failure detail")
+
+    # The register twin behaves the same way, for the same reason.
+    client = mock.Mock()
+    client.register_targets.side_effect = DENIAL
+    with th.assert_raises(ProviderCallError) as caught:
+        elbv2.register_target(GROUP_ARN, "i-00", 443, client=client)
+    th.assert_true(caught.exception.detail()["mutation_state"] != "none",
+                   "a failed register claimed nothing happened")
+
+
+@th.django_unit_test("a drain poll reads target health without a Targets filter")
+def test_target_health_never_filters_provider_side(opts):
+    from mojo.helpers.aws import elbv2
+
+    # AWS raises InvalidTarget for a target that is not registered — which is
+    # exactly the answer a drain poll is waiting for. Filtering in process is
+    # what lets "it is gone" be a value instead of an exception.
+    client = mock.Mock()
+    client.describe_target_health.return_value = {"TargetHealthDescriptions": [
+        {"Target": {"Id": "i-00", "Port": 443}, "TargetHealth": {"State": "healthy"}},
+        {"Target": {"Id": "i-01", "Port": 443}, "TargetHealth": {"State": "draining"}},
+    ]}
+    rows = elbv2.target_health(GROUP_ARN, "i-01", client=client)
+    kwargs = client.describe_target_health.call_args.kwargs
+    th.assert_eq(list(kwargs), ["TargetGroupArn"],
+                 f"the drain poll filtered provider-side: {kwargs!r}")
+    th.assert_eq([row["id"] for row in rows], ["i-01"],
+                 f"the in-process narrowing returned the wrong rows: {rows!r}")
+    th.assert_true(not elbv2.drained(rows),
+                   "a draining target was reported as drained")
+    th.assert_true(elbv2.drained(elbv2.target_health(
+        GROUP_ARN, "i-99", client=client)),
+        "a target absent from the group is drained")

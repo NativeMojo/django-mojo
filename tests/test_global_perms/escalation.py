@@ -40,6 +40,11 @@ GLOBAL_ENDPOINTS = [
     ("GET", "/api/aws/maintenance/versions"),
     ("GET", "/api/aws/maintenance/status?kind=rds-instance&resource=x"),
     ("POST", "/api/aws/maintenance/apply"),
+    # capacity: the reads plus the apply. The apply creates and destroys
+    # infrastructure, but only AFTER the decorator, which denies first.
+    ("GET", "/api/aws/capacity"),
+    ("GET", "/api/aws/capacity/status?operation=x"),
+    ("POST", "/api/aws/capacity/apply"),
     ("GET", "/api/account/admin/platform/framework"),
     ("POST", "/api/account/admin/platform/framework/update"),
     # account admin (cross-tenant)
@@ -146,6 +151,12 @@ REGISTERED_ENDPOINTS = [
     ("GET", "/api/aws/maintenance/versions"),
     ("GET", "/api/aws/maintenance/status?kind=rds-instance&resource=x"),
     ("POST", "/api/aws/maintenance/apply"),
+    ("GET", "/api/aws/capacity"),
+    # /api/aws/capacity/status is deliberately absent: an unknown operation id
+    # is a legitimate 404 there, so the "not 404" form cannot tell a missing
+    # route from a correct answer. tests/test_aws/capacity.py proves that route
+    # resolves by reading its error_code.
+    ("POST", "/api/aws/capacity/apply"),
     ("GET", "/api/account/admin/platform/framework"),
     ("POST", "/api/account/admin/platform/framework/update"),
 ]
