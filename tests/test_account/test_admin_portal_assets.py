@@ -25,7 +25,7 @@ def test_modular_shell_contract(opts):
         assert f"./{name}/feature.js" in registry
     assert "[dashboard, webapps, advanced, people, activity, platform, settings]" in registry, \
         "primary navigation does not follow the approved operator journey"
-    assert "routes: ['platform', 'deployments', 'setup']" in platform
+    assert "routes: ['platform', 'deployments', 'setup', 'metrics']" in platform
     assert "setupPage(ctx, signal)" in platform and "platformPage(ctx, route)" in platform
     assert "const ROUTES = ['advanced', 'domains', 'credentials', 'dns', 'certificates'" in advanced
     assert "route: 'domains'" in advanced and "label: 'Domains & DNS'" in advanced, \
@@ -85,6 +85,58 @@ def test_row_component_contract(opts):
             f"the rebuilt Dashboard still carries {jargon!r}"
     assert '"down"' in preview or "'down'" in preview, \
         "the visual preview cannot render a proven outage"
+
+
+@th.django_unit_test("the Metrics lane is capability-gated, degradation-aware, and markup-free")
+def test_metrics_asset_contract(opts):
+    from mojo.apps.account.services import admin_assets
+
+    metrics = (ASSETS / "features/platform/metrics.js").read_text()
+    chart = (ASSETS / "features/platform/chart.js").read_text()
+    feature = (ASSETS / "features/platform/feature.js").read_text()
+    styles = (ASSETS / "features/platform/styles.css").read_text()
+    core = (ASSETS / "core.js").read_text()
+    assets = admin_assets.load_manifest()
+
+    for asset in ("assets/features/platform/metrics.js",
+                  "assets/features/platform/chart.js"):
+        assert asset in assets, f"{asset} is not a declared package asset"
+
+    for endpoint in ("/api/aws/cloudwatch/resources", "/api/aws/cloudwatch/fetch"):
+        assert endpoint in metrics, f"the Metrics page never calls {endpoint}"
+    assert "ctx.features?.platform?.capabilities?.metrics" in metrics, \
+        "the Metrics page reads a raw capability instead of its feature lane"
+    assert "dt_start" in metrics and "toISOString()" in metrics, \
+        "the Metrics page does not send an explicit ISO time range"
+    for reason in ("credentials_unavailable", "denied", "network_unavailable",
+                   "service_error"):
+        assert reason in metrics, f"the Metrics page cannot explain {reason}"
+    assert "signal: local.signal" in metrics or "{signal: local.signal}" in metrics, \
+        "the metric fetch is not abortable"
+
+    assert "document.createElementNS" in chart, \
+        "the chart does not build real SVG nodes"
+    assert "innerHTML" not in chart, \
+        "the chart writes markup — series names come from attacker-influenceable Name tags"
+    assert "innerHTML" not in metrics, \
+        "the Metrics page writes markup instead of textContent"
+    assert "polyline" in chart and "fill: 'none'" in chart, \
+        "the chart does not draw an unfilled line per series"
+    assert "pointermove" in chart and "removeEventListener" in chart, \
+        "the chart guide line leaks its listeners"
+    assert "No non-zero datapoints in this range" in chart, \
+        "an all-zero range is not called out"
+
+    assert "--chart-1" in styles, "the chart palette is never declared"
+    dark = styles.split('html[data-theme="dark"]', 1)
+    assert len(dark) == 2 and "--chart-1" in dark[1].split("}", 1)[0], \
+        "the chart palette is not redefined for the dark theme"
+    assert "prefers-color-scheme:dark" in styles, \
+        "the chart palette ignores an operator following the system theme"
+
+    assert "capabilities.metrics" in feature and "route: 'metrics'" in feature, \
+        "the Metrics sidebar entry is not gated on its capability"
+    assert "chart:" in core, "the chart icon is missing from the shared catalog"
 
 
 @th.django_unit_test("shared relationship controls preserve paged REST envelopes")

@@ -321,9 +321,11 @@ def test_malformed_forced_password_incident_boundary(opts):
                    "malformed forced-password credential persisted in incident evidence")
 
 
-@th.django_unit_test("private assets use seven primary items and scrub every transient secret")
+@th.django_unit_test("private assets keep the fixed feature order and scrub every transient secret")
 def test_merged_browser_secret_and_route_contract(opts):
     registry = (ROOT / "mojo/apps/account/admin_portal/assets/features/registry.js").read_text()
+    platform_feature = (
+        ROOT / "mojo/apps/account/admin_portal/assets/features/platform/feature.js").read_text()
     routes = (ROOT / "mojo/apps/account/admin_portal/assets/components/routes.js").read_text()
     people = (ROOT / "mojo/apps/account/admin_portal/assets/features/people/page.js").read_text()
     webapps = (ROOT / "mojo/apps/account/admin_portal/assets/features/webapps/page.js").read_text()
@@ -334,7 +336,15 @@ def test_merged_browser_secret_and_route_contract(opts):
     classifier = (ROOT / "mojo/helpers/request.py").read_text()
     th.assert_true(
         "[dashboard, webapps, advanced, people, activity, platform, settings]" in registry,
-        "feature order does not match the seven-item product navigation")
+        "feature order does not match the approved product navigation")
+    # The sidebar is no longer one entry per feature: a feature contributes as
+    # many entries as its own capabilities allow, and Platform contributes
+    # Metrics on top of its own entry when the AWS grant is present.
+    th.assert_true(
+        "label: 'Platform'" in platform_feature
+        and "label: 'Metrics'" in platform_feature
+        and "capabilities.metrics" in platform_feature,
+        "Platform no longer contributes its capability-gated Metrics entry")
     th.assert_true(
         "route: 'domains'" in advanced_feature
         and "label: 'Domains & DNS'" in advanced_feature
