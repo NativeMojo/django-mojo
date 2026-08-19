@@ -931,9 +931,13 @@ class AWSSetupService:
                         AlarmName=probe_name, StateValue=state,
                         StateReason="django-mojo System Setup delivery verification"),
                     "cloudwatch:SetAlarmState", mutation=True)
-        # ``allowlist``/``recovered`` are groundwork: today fix_monitoring
-        # discards this dict and _execute_reconcile strips every key but
-        # ``status``, so neither reaches an operator yet.
+        # ``allowlist``/``recovered`` are returned for the caller and for the
+        # record; ``merge_protected_list`` already logs a recovery at warning
+        # level. Surfacing them to an operator was assessed on #2165 and
+        # declined: fix_monitoring discards this dict and _execute_reconcile
+        # strips every key but ``status``, so reaching one would mean widening
+        # the section-reconciler contract for every setup section — to announce
+        # a condition that is already repaired by the time the notice fires.
         return {"topic_arn": topic_arn, "endpoint": endpoint, "probe_alarm": probe_name,
                 "allowlist": allowlist, "recovered": recovered}
 
