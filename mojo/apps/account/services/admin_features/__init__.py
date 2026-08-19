@@ -7,7 +7,7 @@ from mojo.helpers import logit
 
 FEATURE_NAMES = (
     "dashboard", "people", "webapps", "activity", "platform", "advanced",
-    "settings")
+    "settings", "sms", "email")
 
 
 def _disabled(name):

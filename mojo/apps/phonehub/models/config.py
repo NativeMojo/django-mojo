@@ -1,4 +1,5 @@
 from django.db import models
+from mojo.helpers import logit
 from mojo.models import MojoModel, MojoSecrets
 
 
@@ -213,10 +214,29 @@ class PhoneConfig(MojoSecrets, MojoModel):
             }
 
     def _test_twilio(self):
-        """Test Twilio configuration."""
+        """Test the exact credential pair SMS.send() would use.
+
+        Mirrors the send-time resolution (D2/D3, maestro #2189): both stored
+        credentials -> the config's pair is validated; neither -> the settings
+        pair is validated; exactly one -> missing_credentials, never mixed.
+        Provider exception text never reaches the result — it is logged and
+        replaced by a stable error code.
+        """
+        from mojo.helpers.settings import settings
+
         account_sid = self.get_twilio_account_sid()
         auth_token = self.get_twilio_auth_token()
-
+        if bool(account_sid) != bool(auth_token):
+            return {
+                'success': False,
+                'message': 'Twilio config supplies only half a credential pair',
+                'error': 'missing_credentials'
+            }
+        credential_source = 'config'
+        if not account_sid:
+            account_sid = settings.get('TWILIO_ACCOUNT_SID')
+            auth_token = settings.get('TWILIO_AUTH_TOKEN')
+            credential_source = 'settings'
         if not account_sid or not auth_token:
             return {
                 'success': False,
@@ -234,6 +254,7 @@ class PhoneConfig(MojoSecrets, MojoModel):
             return {
                 'success': True,
                 'message': 'Twilio credentials valid',
+                'credential_source': credential_source,
                 'account_status': account.status,
                 'account_friendly_name': account.friendly_name
             }
@@ -244,11 +265,11 @@ class PhoneConfig(MojoSecrets, MojoModel):
                 'error': 'missing_library'
             }
         except Exception as e:
+            logit.error(f"Twilio connection test failed for PhoneConfig {self.pk}: {e}")
             return {
                 'success': False,
-                'message': f'Twilio test failed: {str(e)}',
-                'error': 'connection_failed',
-                'details': str(e)
+                'message': 'Twilio could not be reached or rejected the credentials',
+                'error': 'connection_failed'
             }
 
     def _test_aws(self):
@@ -290,18 +311,18 @@ class PhoneConfig(MojoSecrets, MojoModel):
                 'error': 'missing_library'
             }
         except (ClientError, NoCredentialsError) as e:
+            logit.error(f"AWS SNS connection test failed for PhoneConfig {self.pk}: {e}")
             return {
                 'success': False,
-                'message': f'AWS test failed: {str(e)}',
-                'error': 'connection_failed',
-                'details': str(e)
+                'message': 'AWS SNS could not be reached or rejected the credentials',
+                'error': 'connection_failed'
             }
         except Exception as e:
+            logit.error(f"AWS SNS connection test failed for PhoneConfig {self.pk}: {e}")
             return {
                 'success': False,
-                'message': f'AWS test failed: {str(e)}',
-                'error': 'connection_failed',
-                'details': str(e)
+                'message': 'AWS SNS could not be reached or rejected the credentials',
+                'error': 'connection_failed'
             }
 
     def _test_mojo(self):

@@ -131,14 +131,22 @@ class Mailbox(models.Model, MojoModel):
 
     def on_rest_saved(self, changed_fields, created):
         """Handle default field uniqueness after REST save"""
+        from mojo.apps.aws.services import mailbox_defaults
+        from mojo.apps.account.services.admin_platform import audit_after_commit
 
-        # Clear other system defaults if this was just set as system default
-        if 'is_system_default' in changed_fields and self.is_system_default:
-            Mailbox.objects.exclude(pk=self.pk).update(is_system_default=False)
+        system_changed = 'is_system_default' in changed_fields
+        domain_changed = 'is_domain_default' in changed_fields
 
-        # Clear other domain defaults if this was just set as domain default
-        if 'is_domain_default' in changed_fields and self.is_domain_default:
-            Mailbox.objects.filter(domain=self.domain).exclude(pk=self.pk).update(is_domain_default=False)
+        # The locked helper is the one writer for the default invariants.
+        if system_changed and self.is_system_default:
+            mailbox_defaults.claim_system_default(self)
+        if domain_changed and self.is_domain_default:
+            mailbox_defaults.claim_domain_default(self)
+
+        # Changing which mailbox the system sends as is an admin-visible act;
+        # active_user is the REAL actor behind this REST save.
+        if system_changed or domain_changed:
+            audit_after_commit(self.active_user, "mailbox_default", self.email)
 
         super().on_rest_saved(changed_fields, created)
 

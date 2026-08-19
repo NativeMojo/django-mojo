@@ -10,6 +10,11 @@ Usage:
     python manage.py create_user --email admin@example.com --superuser
     python manage.py create_user --phone +15551234567 --first-name Ada --last-name Lovelace
     python manage.py create_user --email ops@example.com --staff --permission manage_users --permission users
+    python manage.py create_user --email admin@example.com --superuser --login-link
+
+`--login-link` is the non-interactive bootstrap path: it needs no password
+source at all, which is what makes it usable over SSH from a provisioning run
+where there is no terminal to type one at.
 """
 
 import os
@@ -36,6 +41,10 @@ class Command(BaseCommand):
             help='Password (visible in shell history / process list — prefer --password-env).')
         parser.add_argument('--password-env', default=None,
             help='Name of an environment variable to read the password from.')
+        parser.add_argument('--login-link', action='store_true',
+            help='Do not choose a password. Set an unguessable one, discard it, and print a '
+                 'single-use password-reset link the new user opens to pick their own. '
+                 'Requires --email; cannot be combined with --password/--password-env.')
         parser.add_argument('--staff', action='store_true', help='Grant is_staff.')
         parser.add_argument('--superuser', action='store_true',
             help='Grant is_superuser (implies --staff; the only true full-access grant).')
@@ -51,6 +60,20 @@ class Command(BaseCommand):
         phone = (options['phone'] or '').strip() or None
         if not email and not phone:
             raise CommandError("Provide --email and/or --phone.")
+
+        if options['login_link']:
+            # Mutually exclusive rather than "last one wins": a run that was
+            # given a password AND asked for a link has two different intents
+            # in it, and silently honouring one of them is how an operator ends
+            # up believing an account has a password it does not.
+            if options['password'] or options['password_env']:
+                raise CommandError(
+                    "--login-link sets no password of its own, so it cannot be "
+                    "combined with --password or --password-env. Pick one.")
+            if not email:
+                raise CommandError(
+                    "--login-link prints a password-reset link, which is "
+                    "addressed to an account by email. Add --email.")
 
         if email and User.objects.filter(email=email).exists():
             raise CommandError(f"A user with email '{email}' already exists.")
@@ -127,8 +150,53 @@ class Command(BaseCommand):
         ))
         if options['permissions']:
             self.stdout.write(f"Permissions granted: {', '.join(options['permissions'])}")
+        if options['login_link']:
+            self._print_login_link(user)
+
+    def _print_login_link(self, user):
+        """A single-use password-reset link for an account nobody has a password to.
+
+        This is how the FIRST admin of a freshly provisioned environment gets in:
+        the password set above was random and was never shown to anyone, so the
+        link is the only way through — and because it is a reset token, the
+        operator ends up choosing their own password rather than being handed
+        one that lived in a terminal scrollback.
+        """
+        from mojo.apps.account.utils.tokens import generate_password_reset_token
+        from mojo.apps.account.utils.webapp_url import build_token_url
+
+        token = generate_password_reset_token(user)
+        url = build_token_url("password_reset", token, user=user)
+
+        # A relative or empty BASE_URL yields something like "/auth?flow=..." —
+        # not a link anyone can open, and worse, one that LOOKS like a link.
+        # Print the raw token instead and say what is missing.
+        if not str(url).lower().startswith(("http://", "https://")):
+            self.stderr.write(self.style.WARNING(
+                "BASE_URL (or WEBAPP_BASE_URL) is unset or relative, so no "
+                "absolute login link can be built. Set it and re-issue, or "
+                "paste this token into the reset form by hand:"))
+            self.stdout.write(token)
+            return
+
+        # Deliberately unstyled: this line is meant to be copied, and an
+        # ANSI-wrapped URL breaks that everywhere it is pasted.
+        self.stdout.write(f"Login link: {url}")
+        self.stdout.write(
+            "This link is single use and expires in one hour. It sets the "
+            "account's password; it does not reveal one.")
 
     def _resolve_password(self, options):
+        if options['login_link']:
+            # The same generator and strength check the portal's
+            # "issue a temporary password" admin action uses
+            # (mojo/apps/account/services/admin_passwords.py). The value is
+            # generated, set, and discarded unread — nothing prints it, and the
+            # reset link below is the only way into the account.
+            from mojo.helpers import crypto
+
+            return crypto.random_string(18, True, True, True)
+
         if options['password']:
             self.stderr.write(self.style.WARNING(
                 "--password is visible in shell history and process list; "

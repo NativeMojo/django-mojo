@@ -8,3 +8,4 @@ from .templates import *
 from .cloudwatch import *
 from .maintenance import *
 from .capacity import *
+from .email_admin import *

@@ -173,6 +173,32 @@ event's metadata (`findings`, each with `resource_id`, `engine`,
 `days_remaining`), so a UI can render the per-resource detail without a
 second call.
 
+A second opt-in category can appear here on AWS deployments:
+`system:health:infra_drift`, filed at most once a day when what is actually
+serving traffic differs from the fleet recorded in `EDGE_EXPECTED_TOPOLOGY`.
+Its `level` is 4 (an AWS read did not answer, so the comparison is incomplete)
+or 5 (drift found — a serving node that is not recorded, or a recorded node
+that is serving nothing). It never goes higher, and a matching fleet files no
+event at all.
+
+`details` on this row is **operator-facing prose written for a human** — each
+finding names what it is, who it affects, and what a person should do, and says
+explicitly that nothing was changed in AWS. **Render it as-is** (preserve the
+line breaks); do not re-summarize it. The structured rows are in the event's
+metadata (`findings`, each with `instance_id`, `name`, `private_hostname`,
+`instance_state`, `target_groups`, `added_by_capacity`, `reason`,
+`suggested_node_id`, `note` and `remediation`) for a UI that wants to build its
+own table.
+
+`reason` is one of `unrecorded_node`, `capacity_added_not_recorded` (the portal
+added the node and the topology record was not updated) or `node_unserving` (the
+reverse direction — a recorded node behind no target group). `suggested_node_id`
+is a hint, not an authority: prefer `private_hostname` when it is set.
+
+**No endpoint or response shape changes for this feature.** It is a new category
+on the existing health-summary payload and nothing else — no new URL, no new
+field, no permission change.
+
 **Optional `?prefix=` param** — defaults to `system:health:`. Pass a different prefix to query other namespaced category roots:
 
 ```
@@ -410,6 +436,7 @@ These are the built-in detection sources. Your app can add custom events via the
 | OSSEC alerts | `ossec` | varies | OS-level threats |
 | System health | `system:health:{type}` | 5-10 | Infrastructure issues |
 | AWS version drift | `system:health:aws_versions` | 4-10 | Managed service on a major version losing support |
+| Fleet drift | `system:health:infra_drift` | 4-5 | A serving node is not in the recorded topology, or a recorded node is serving nothing |
 
 ### Legacy OSSEC receiver authentication
 

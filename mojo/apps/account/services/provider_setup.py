@@ -423,8 +423,29 @@ def _save_geoip_secret(geoip):
     _write_secret("GEOIP_API_KEY_MOJO", geoip["api_key"], geoip["clear_api_key"])
 
 
-def _save_sms_config(sms):
+def save_system_config(provider, name, remote_url=None, api_key=None,
+                       clear_api_key=False, test_mode=False,
+                       twilio_from_number=None, twilio_account_sid=None,
+                       twilio_auth_token=None, clear_twilio_credentials=False,
+                       aws_region=None, aws_sender_id=None,
+                       aws_access_key_id=None, aws_secret_access_key=None,
+                       clear_aws_credentials=False, bump_revision=True):
+    """Parameterized writer for the system PhoneConfig row (D5, maestro #2189).
+
+    Extracted verbatim from the Settings-page SMS writer: same row-selection
+    precedence (first active system row, else first provider="mojo" row, else
+    create), same deactivate-other-active-rows update, same select_for_update.
+    ``_save_sms_config`` keeps the Settings page byte-identical by always
+    passing provider="mojo" / name="Mojo Remote SMS".
+
+    ``bump_revision`` (default True) writes a fresh edit revision inside the
+    same transaction so any concurrently open editor's ``expected_revision``
+    fails instead of silently clobbering. ``apply()`` alone passes False — it
+    writes its own revision, bound to the published S3 document, immediately
+    after. Returns ``(row, revision)`` with revision None when not bumped.
+    """
     from mojo.apps.phonehub.models import PhoneConfig
+    revision = None
     with transaction.atomic():
         system_rows = list(PhoneConfig.objects.select_for_update().filter(
             group=None).order_by("pk"))
@@ -433,20 +454,113 @@ def _save_sms_config(sms):
             row = next((item for item in system_rows if item.provider == "mojo"), None)
         if row is None:
             row = PhoneConfig(
-                group=None, provider="mojo", name="Mojo Remote SMS", is_active=True)
+                group=None, provider=provider, name=name, is_active=True)
         else:
             PhoneConfig.objects.filter(
                 group=None, is_active=True).exclude(pk=row.pk).update(is_active=False)
-            row.provider = "mojo"
-            row.name = "Mojo Remote SMS"
-        row.mojo_remote_url = sms["remote_url"]
-        row.test_mode = sms["test_mode"]
+            row.provider = provider
+            row.name = name
+        row.test_mode = test_mode
         row.is_active = True
-        if sms["clear_api_key"]:
-            row.set_mojo_api_key(None)
-        elif sms["api_key"] not in (None, ""):
-            row.set_mojo_api_key(sms["api_key"])
+        if provider == "mojo":
+            row.mojo_remote_url = remote_url
+            if clear_api_key:
+                row.set_mojo_api_key(None)
+            elif api_key not in (None, ""):
+                row.set_mojo_api_key(api_key)
+        elif provider == "twilio":
+            row.twilio_from_number = twilio_from_number
+            if clear_twilio_credentials:
+                row.set_secret("twilio_account_sid", None)
+                row.set_secret("twilio_auth_token", None)
+            elif twilio_account_sid and twilio_auth_token:
+                row.set_twilio_credentials(twilio_account_sid, twilio_auth_token)
+        elif provider == "aws":
+            if aws_region:
+                row.aws_region = aws_region
+            row.aws_sender_id = aws_sender_id
+            if clear_aws_credentials:
+                row.set_secret("aws_access_key_id", None)
+                row.set_secret("aws_secret_access_key", None)
+            elif aws_access_key_id and aws_secret_access_key:
+                row.set_aws_credentials(aws_access_key_id, aws_secret_access_key)
+        else:
+            raise merrors.ValueException("Unknown SMS provider")
         row.save()
+        if bump_revision:
+            revision = uuid.uuid4().hex
+            _write_configuration_revision(revision)
+    return row, revision
+
+
+def _save_sms_config(sms):
+    # The Settings page's contract is unchanged by the refactor: always the
+    # mojo provider under its fixed name, and no revision bump here because
+    # apply() writes its own S3-bound revision in the same transaction.
+    save_system_config(
+        "mojo", "Mojo Remote SMS", remote_url=sms["remote_url"],
+        api_key=sms["api_key"], clear_api_key=sms["clear_api_key"],
+        test_mode=sms["test_mode"], bump_revision=False)
+
+
+def sms_verify_state():
+    """The persisted verification state of the stored SMS configuration."""
+    return _read_verify_state().get("sms")
+
+
+def sms_revision_token():
+    """The edit token a Messaging-page save must echo back.
+
+    Same (edit_revision, published_revision) binding state() and apply() use.
+    Raises when the published document exists but cannot be read — a writer
+    caller must fail closed; a reader should catch and degrade.
+    """
+    allowed = _allowed_keys()
+    bucket, key = _location()
+    current = _token_document("sms", bucket, key, allowed, None)
+    published_revision = current["document"]["revision"] if current else None
+    return _configuration_token(_configuration_revision(), published_revision)
+
+
+def save_messaging_system_config(actor, *, provider, name, expected_revision,
+                                 verify_result, **fields):
+    """Write the system PhoneConfig row with the full Settings safeguard stack.
+
+    The Messaging-page counterpart of apply()'s SMS topic: installation lock,
+    live superuser re-check under that lock, revision-token compare,
+    unconditional revision bump, audit event, and the verified result recorded
+    as the stored row's state. Credential VERIFICATION happens in the caller
+    (phonehub.services.admin_sms.save_config) before this runs — this function
+    trusts ``verify_result`` only as the record of that check, never as a gate
+    it can skip: callers must refuse before calling when verification failed.
+    """
+    actor = _superuser(actor)
+    allowed = _allowed_keys()
+    bucket, key = _location()
+    old_revision = revision = None
+    row = None
+    try:
+        with transaction.atomic():
+            from mojo.apps.account.models import User
+            User.objects.select_for_update().order_by("pk").first()
+            actor = _superuser(actor, lock=True)
+            current = _token_document("sms", bucket, key, allowed, None)
+            published_revision = (current["document"]["revision"]
+                                  if current else None)
+            old_revision = _configuration_token(
+                _configuration_revision(lock=True), published_revision)
+            if expected_revision != old_revision:
+                raise merrors.ValueException(
+                    "Provider configuration changed; reload before publishing")
+            row, revision = save_system_config(provider, name, **fields)
+            _write_verify_state("sms", verify_result)
+    except Exception as error:
+        _audit(actor, "failed", revision, old_revision=old_revision,
+               error=error, topic="sms")
+        raise
+    _audit(actor, "saved", revision, old_revision=old_revision, topic="sms")
+    return {"saved": True, "topic": "sms", "provider": provider,
+            "config_id": row.pk, "revision": revision}
 
 
 def _loaded_geoip_url():

@@ -472,3 +472,24 @@ the backend note in `docs/django_developer/security/csp.md`.
 
 After passing, an HttpOnly `mbp` pass cookie is set (24h TTL). Subsequent
 visits skip the challenge.
+
+### A `pr:` reset link works on the first click
+
+A password-reset link opened by someone with no session hits the challenge
+page before `/auth`, and the redirect that follows drops the `token` query
+parameter. The challenge page stashes a `pr:` token in
+`sessionStorage["mat_reset_token"]` before redirecting, and `/auth` reads it
+back — so the visitor lands directly on "set your new password" rather than on
+a sign-in form.
+
+What this means for you:
+
+- **Do not assume `?token=` is still on the URL** when `/auth` loads. It may
+  have arrived through `sessionStorage` instead, and `/auth` clears it from the
+  address bar even when it did not.
+- The hand-off is **per tab**, and that is fine: opening the link in a new tab
+  simply runs the challenge page again there, which stashes the token again.
+  What does not survive is a tab where `sessionStorage` is unavailable — some
+  private-browsing configurations — and there the link needs a second click.
+- Nothing about this changes the token itself or any API call: the reset is
+  still submitted the same way, with the same `pr:` token.

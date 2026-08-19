@@ -274,7 +274,10 @@ The AWS user or role configured in your project needs:
 No additional Django settings are needed for metric reads — the CloudWatch
 helper reuses `AWS_KEY`, `AWS_SECRET`, and `AWS_REGION` already configured for
 SES and S3. Alarm delivery requires the deployment to set
-`AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` to the exact accepted SNS topic ARN(s).
+`AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` to the exact accepted SNS topic ARN(s). The
+effective allowlist is the **union** of the deployment file value and the
+protected value Admin System Setup persists, so configuring a topic in either
+place is enough and Setup never removes a file-configured one.
 
 ---
 
@@ -318,8 +321,10 @@ allowlist.
 
 **Authentication/permission:** no User session or Django permission is used.
 Authorization consists of the SNS signature, strict AWS certificate URL, and
-an exact `TopicArn` match in `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS`. A missing or
-empty allowlist denies all delivery. Deployments should use a dedicated topic
+an exact `TopicArn` match in `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` — the union of
+the deployment file value and the protected value System Setup persists. A
+missing or empty allowlist denies all delivery. Deployments should use a
+dedicated topic
 whose AWS policy restricts `sns:Publish` to the intended CloudWatch alarm
 sources/accounts; an SNS signature alone does not prove that CloudWatch authored
 the inner message.

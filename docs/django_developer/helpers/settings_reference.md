@@ -243,9 +243,12 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
   Advanced API into one bounded EC2, RDS, and ElastiCache inventory page.
   When false the section reports `unconfigured`. It never creates or mutates
   resources and omits network endpoints and IP addresses.
-- `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` — **file-only**
-  (`settings.get_static`, `kind="list"`), default `[]`. Exact SNS topic ARN
+- `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` — **protected, DB-backed with a file
+  fallback** (`settings.get`, `kind="list"`), default `[]`. Exact SNS topic ARN
   allowlist for `/api/aws/cloudwatch/sns/alarm`; missing/empty denies all.
+  A protected `Setting` row wins over `django.conf` as a whole value, so System
+  Setup merges both planes when it reconciles monitoring — see
+  [settings.md](settings.md#protected-settings-live-on-two-planes).
 - `AWS_GUARDDUTY_FINDING_TOPIC_ARNS` — **file-only**
   (`settings.get_static`, `kind="list"`), default `[]`. Exact SNS topic ARN
   allowlist for `/api/aws/guardduty/sns/finding`; missing/empty denies all.
@@ -282,6 +285,12 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
   default `False`. Arms the daily managed-service version drift scan
   (`mojo.apps.aws.cronjobs.check_version_drift`). Read inside the cron
   function, so it is not frozen at import.
+- `AWS_INFRA_DRIFT_ENABLED` — **file-only** (`settings.get_static`), bool,
+  default `False`. Arms the daily fleet drift scan
+  (`mojo.apps.aws.cronjobs.check_infra_drift`, 07:20), which compares the
+  instances actually serving traffic against the nodes recorded in
+  `EDGE_EXPECTED_TOPOLOGY`. Read inside the cron function, so it is not frozen
+  at import. See [../aws/infra_drift.md](../aws/infra_drift.md).
 - `AWS_VERSION_DRIFT_DEADLINE_DAYS` — **file-only**, int, default `180`. A
   published standard-support end date this close (or closer) raises the drift
   event to level 8; an already-past date is level 10. See

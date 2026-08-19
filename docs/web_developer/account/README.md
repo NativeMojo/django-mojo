@@ -39,6 +39,7 @@
 - [Admin Dashboard API](admin_portal/dashboard.md) — Permission-separated health and attention sources, status semantics, and cross-feature links
 - [Admin Settings API](admin_portal/settings.md) — Curated effective configuration, typed overrides, ownership, and provenance
 - [Admin Metrics API](admin_portal/metrics.md) — CloudWatch charts for EC2/RDS/ElastiCache: controls, range/granularity matrix, deep links, and degraded responses
+- [Admin Messaging SMS API](admin_portal/messaging_sms.md) — System SMS provider management, superuser-gated saves, diagnosed connection tests, and test sends
 - [System Setup API](system_setup.md) — Superuser-only readiness, durable Fix Setup operations, late choices, resume, Origin binding, and protected settings
 - [System Setup and platform evidence APIs](admin_portal/platform.md) — Global health read through `?sections=`, UUID deployment recovery, and bounded inventory
 - [API Keys](api_keys.md) — Long-lived tokens for programmatic access

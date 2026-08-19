@@ -16,6 +16,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from mojo import errors as merrors
+from mojo.helpers import logit
 from mojo.helpers.settings import settings
 
 
@@ -243,6 +244,92 @@ def set_value(actor, key, value):
     return normalized
 
 
+# The protected keys whose value is a list AND is also read through the
+# deployment-file plane. Only these may be merged by merge_protected_list.
+MERGEABLE_LIST_KEYS = frozenset({MONITORING_TOPICS})
+
+
+def _coerce_list(value):
+    """Normalize either plane's stored shape into a list of clean strings."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        # A deployment file may hold a bare quoted string (the shape the tofu
+        # django_conf_fragment emits) or a comma-separated list.
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _valid_items(key, items):
+    """Split candidates by the registered validator into (kept, dropped).
+
+    Deliberately never raises: a typo in an operator's ``django.conf`` must not
+    fail the whole reconciliation. The bad entry is dropped and reported.
+    """
+    validator = _PROTECTED.get(key)
+    kept = []
+    dropped = []
+    for item in items:
+        if item in kept or item in dropped:
+            continue
+        if validator is None:
+            kept.append(item)
+            continue
+        try:
+            cleaned = validator(key, [item])
+        except Exception:
+            dropped.append(item)
+            continue
+        if isinstance(cleaned, list) and len(cleaned) == 1 and cleaned[0]:
+            kept.append(cleaned[0])
+        else:
+            dropped.append(item)
+    return kept, dropped
+
+
+def merge_protected_list(actor, key, additions):
+    """Union a protected LIST setting across both planes, then persist it.
+
+    Protected settings live on two planes. ``settings.get`` — which the runtime
+    readers use — prefers a database row's *whole* value over the deployment
+    file, while :func:`get_value` reads the database only. So a caller that
+    reads with :func:`get_value`, appends, and writes back silently orphans a
+    value that was configured in ``var/django.conf`` with no row behind it.
+    This merges both planes so a file-configured entry survives, and so an
+    installation already shadowed by an earlier write heals on the next one.
+
+    Union-always is safe because nothing in the codebase can shrink one of
+    these lists: every other write path refuses a protected key.
+
+    Scope is deliberately narrow. ``validator(key, [item])`` is only meaningful
+    for a list-valued protected setting, so this is NOT a general protected
+    setting merge — see :data:`MERGEABLE_LIST_KEYS`.
+
+    Returns ``(merged_value, recovered)``, where ``recovered`` names the
+    deployment-file entries the stored row was missing.
+    """
+    if key not in MERGEABLE_LIST_KEYS:
+        raise merrors.ValueException(
+            f"{key} is not a mergeable protected list setting")
+    # get_value, not settings.get: a stale Redis entry must never drive a write.
+    # set_value pushes to cache on commit, so the cache is a subset of the row.
+    stored = _coerce_list(get_value(key, None))
+    deployed = _coerce_list(_static_value(key, [], kind="list"))
+    kept, dropped = _valid_items(key, stored + deployed + _coerce_list(additions))
+    if dropped:
+        # One pre-formatted string: logit's module-level helpers forward *args
+        # straight to logging, where a second positional becomes a format
+        # argument and the whole record is dropped.
+        logit.warning(
+            f"{key}: dropped invalid allowlist entries {sorted(set(dropped))}")
+    merged = sorted(set(kept))
+    recovered = sorted((set(deployed) & set(kept)) - set(stored))
+    set_value(actor, key, merged)
+    return merged, recovered
+
+
 AUTH_SAFE_PATHS = {
     "theme.app_title", "theme.auth_provider_name", "theme.logo_url",
     "theme.favicon_url", "theme.hero_image_url", "theme.hero_image_url_light",
@@ -311,9 +398,13 @@ def _validate_identity_pair(current_uuid, current_slug):
     return {"uuid": identity, "slug": slug}
 
 
-def _static_value(key, default=None):
-    """Read static configuration through a module-local test seam."""
-    return settings.get_static(key, default)
+def _static_value(key, default=None, kind=None):
+    """Read static configuration through a module-local test seam.
+
+    The seam is module-local on purpose: patching ``django.conf.settings``
+    instead is process-global, and test modules run as threads in one process.
+    """
+    return settings.get_static(key, default, kind=kind)
 
 
 def _initialize_identity(actor):

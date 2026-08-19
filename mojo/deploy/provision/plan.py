@@ -135,9 +135,23 @@ STEPS = (
     Step("stage1_payload", storage.ensure_stage1_payload,
          ("secrets", "db", "cache"),
          description="the endpoints a booting node reads"),
+    # The scripts and the application tarball a booting node downloads. It
+    # depends only on the bucket, so a not-yet-published version pin or a
+    # broken worktree is discovered on the FIRST run — before Aurora exists,
+    # let alone a node.
+    #
+    # Enabled by `project_root`, which is where `git archive HEAD` is taken
+    # from. Only the CLI sets it, because only the CLI is standing in the
+    # project; a caller that is not — the portal, a test — has nothing to
+    # archive, and `nodes` refuses to launch rather than starting an instance
+    # with no payload to boot from.
+    Step("bootstrap_payload", storage.ensure_bootstrap_payload,
+         ("config_bucket",),
+         enabled=lambda spec: bool(getattr(spec, "project_root", None)),
+         description="stage1.sh, the app tarball, the agent config"),
     Step("nodes", nodes.ensure_nodes,
          ("network", "security_groups", "key_pair", "node_role",
-          "stage1_payload"),
+          "stage1_payload", "bootstrap_payload"),
          description="the EC2 instances"),
     Step("balancer", balancer.ensure_balancer, ("network", "nodes"),
          enabled=spec_module.wants_balancer,

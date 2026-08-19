@@ -61,7 +61,7 @@ ingestion is configured separately with the exact-topic allowlist below.
 | `AWS_KEY` | — | AWS access key ID |
 | `AWS_SECRET` | — | AWS secret access key |
 | `AWS_REGION` | `us-east-1` | AWS region for all CloudWatch calls |
-| `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` | `[]` | Exact SNS topic ARN allowlist. System Setup persists the protected runtime value; file configuration is the fallback. Empty denies all topics. |
+| `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS` | `[]` | Exact SNS topic ARN allowlist. System Setup persists the protected runtime value; file configuration is the fallback, and Fix **merges** it rather than superseding it. Empty denies all topics. |
 
 ---
 
@@ -410,6 +410,15 @@ Prefer Admin System Setup, which persists `AWS_CLOUDWATCH_ALARM_TOPIC_ARNS`
 through the superuser-only protected writer. File configuration remains
 supported for externally managed deployments; restart application processes
 after changing that fallback. SNS envelopes are limited to 300 KiB.
+
+**Fix merges, it does not supersede.** A protected `Setting` row wins over
+`django.conf` as a whole value, so System Setup's monitoring reconciliation
+unions both planes before writing: a file-configured ARN stays in the effective
+allowlist alongside the topic Setup owns. An installation whose file ARN was
+already dropped by an earlier Fix recovers it the next time Fix runs. A
+malformed file entry is dropped with a warning rather than failing the
+operation. See
+[helpers/settings.md](../helpers/settings.md#protected-settings-live-on-two-planes).
 
 There is a sibling receiver for GuardDuty findings at
 `POST /api/aws/guardduty/sns/finding` (see

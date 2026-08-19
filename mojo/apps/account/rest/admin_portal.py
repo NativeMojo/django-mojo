@@ -170,6 +170,9 @@ def on_admin_bootstrap(request):
             can_manage_webapps),
         "manage_webapps": can_manage_webapps,
         "manage_aws": has(["manage_aws"]),
+        # The one email tier — no read-only email permission exists anywhere
+        # in this repo, and this surface does not invent one.
+        "email": has(["manage_aws", "comms", "admin"]),
         "view_platform": has(["view_platform", "manage_platform", "admin"]),
         "manage_platform": has(["manage_platform", "admin"]),
         "view_platform_security": has([
@@ -182,6 +185,12 @@ def on_admin_bootstrap(request):
             "view_advanced_security", "manage_advanced", "admin"]),
         "view_advanced_settings": has([
             "view_advanced_settings", "manage_advanced", "admin"]),
+        "messaging_sms": has([
+            "manage_phone_config", "manage_groups", "comms", "admin"]),
+        # System-row writes are refused below superuser, so that predicate is
+        # the only honest source — the page disables the editor instead of
+        # offering a control that 403s.
+        "messaging_sms_system_write": bool(request.user.is_superuser),
         "settings": any(exact(key) for key in (
             "manage_settings", "view_advanced_settings", "manage_advanced", "admin")),
         "catalog_write": exact("manage_settings") or exact("admin"),

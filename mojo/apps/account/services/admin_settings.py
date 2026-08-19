@@ -69,6 +69,11 @@ class Descriptor:
     # legitimate, understood state, never as reassurance about a missing secret.
     unit: str = ""
     unset_meaning: str = ""
+    # Protected keys are database-owned, but a few are ALSO read through the
+    # deployment-file plane, so they can be live with no database row at all.
+    # Only those descriptors opt in: for the rest a file value is never
+    # effective, and reporting one would be the same lie inverted.
+    deployment_fallback: bool = False
 
 
 _REGISTRY = {}
@@ -145,9 +150,13 @@ def _static_state(descriptor, rows):
 def _protected_state(descriptor, rows):
     from mojo.apps.account.services import system_settings
     value = system_settings.get_value(descriptor.key, descriptor.default)
+    source = "database" if rows else "default"
+    if not rows and descriptor.deployment_fallback:
+        deployed = settings.get_static(descriptor.key, descriptor.default)
+        if deployed != descriptor.default:
+            value, source = deployed, "deployment"
     if descriptor.sensitivity == "configured_only":
         value = {"configured": bool(value)}
-    source = "database" if rows else "default"
     return value, source, False
 
 
@@ -182,16 +191,10 @@ def _posture_state(descriptor, rows):
 
 
 def _email_posture_state(descriptor, rows):
-    from mojo.apps.aws.models import Mailbox
-    from mojo.apps.aws.services.email_templates import shipped_status
-    defaults = Mailbox.objects.filter(is_system_default=True, allow_outbound=True).count()
-    template_status = shipped_status()
-    return {
-        "default_sender_configured": defaults == 1,
-        "default_sender_conflict": defaults > 1,
-        "templates_installed": len(template_status["missing"]) == 0,
-        "missing_template_count": len(template_status["missing"]),
-    }, "computed", False
+    # One source of truth: the admin email service owns this computation and
+    # the Dashboard/summary reuse it. The dict must stay byte-identical.
+    from mojo.apps.aws.services.email_admin import email_posture
+    return email_posture(), "computed", False
 
 
 def _resolve(descriptor, rows=None, cached=_NO_CACHE):
@@ -478,7 +481,8 @@ def register_core_descriptors():
                    "CloudWatch alarm delivery configuration.", "configured",
                    resolver="protected", sensitivity="configured_only", writable="owner",
                    owner="System Setup", change_behavior="setup", owner_route="setup?focus=aws_monitoring",
-                   unset_meaning="CloudWatch alarms are not delivered anywhere"),
+                   unset_meaning="CloudWatch alarms are not delivered anywhere",
+                   deployment_fallback=True),
         Descriptor("SECURE_POSTURE", "Django HTTPS posture", "Security & operations",
                    "Secure redirect, cookie, and HSTS deployment controls.", "object",
                    resolver="posture", writable="none", owner="Deployment settings",

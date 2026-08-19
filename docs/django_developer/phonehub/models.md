@@ -149,6 +149,26 @@ sms = SMS.send(
 )
 ```
 
+#### Twilio sender/credential resolution
+
+For `twilio`/`aws` provider configs (and when no config exists), the sender
+and Twilio credentials resolve **atomically, anchored on the config's stored
+credential pair** (`twilio.resolve_credentials(config, from_number)`):
+
+| Config stores | Resolution |
+|---|---|
+| **both** `twilio_account_sid` and `twilio_auth_token` | the config owns the whole triple — the number comes from the caller's `from_number` or `config.twilio_from_number`, else the send fails `config_error` |
+| **neither** credential | settings own the credentials (`TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN`); number falls back caller → `config.twilio_from_number` → `TWILIO_NUMBER` |
+| **exactly one** credential | the send fails `config_error` with no provider call — a foreign number is never mixed with the default account's keys (Twilio 21606) |
+
+`PhoneConfig._test_twilio()` validates the same pair this resolution would
+send with, so a passing connection test vouches for the pair production uses.
+
+> **Upgrade note:** before this resolution existed, `twilio_from_number` and
+> config-stored Twilio credentials were dead — sends always used
+> `settings.TWILIO_NUMBER` and settings credentials. An installation with
+> those fields populated changes sending behavior on upgrade.
+
 #### Status helpers
 
 ```python
@@ -182,13 +202,13 @@ Inherits from `MojoSecrets, MojoModel`. Credentials are stored encrypted in a si
 | `name` | CharField(100) | Config name |
 | `is_active` | BooleanField | Whether this config is active |
 | `provider` | CharField | `"twilio"` (default), `"aws"`, or `"mojo"` |
-| `twilio_from_number` | CharField(20) | Default Twilio sender number |
+| `twilio_from_number` | CharField(20) | Twilio sender number — used by `SMS.send()` (see "Twilio sender/credential resolution" below) |
 | `aws_region` | CharField(20) | AWS region (default `"us-east-1"`) |
 | `aws_sender_id` | CharField(11) | AWS SNS sender ID (max 11 chars) |
 | `mojo_remote_url` | CharField(255) | Base URL of the remote django-mojo SMS provider (e.g. `https://sms.example.com`). Trailing slash stripped on save. |
 | `lookup_enabled` | BooleanField | Whether to perform carrier lookups |
 | `lookup_cache_days` | IntegerField | Days before re-lookup (default 90) |
-| `test_mode` | BooleanField | Prevent sending real SMS when True |
+| `test_mode` | BooleanField | Short-circuits `test_connection()` only. **`SMS.send()` does not read it** — a test-mode config still sends real messages |
 | `created` | DateTimeField | Auto-set on create |
 | `modified` | DateTimeField | Auto-set on update |
 

@@ -126,6 +126,40 @@ entirely and reads **only** the Django settings file (same `kind=` coercion as
 If a setting is meant to be admin-tunable at runtime, use `settings.get()` and
 register a validator (see below) instead of reaching for `get_static()`.
 
+## Protected Settings Live on Two Planes
+
+A *protected* setting (see
+[System Setup](../account/system_setup.md#protected-system-settings)) can be
+configured in two independent places, and the two behave differently depending
+on which reader you use:
+
+| Reader | Reads | Used by |
+|---|---|---|
+| `settings.get(key, ..., kind=...)` | database row → **whole value** wins, otherwise the `django.conf` file | runtime consumers, e.g. the SNS alarm receiver |
+| `system_settings.get_value(key, default)` | `Setting.get_from_db` **only** | System Setup and the Admin catalog |
+
+That asymmetry has one sharp edge. A database row does not *merge* with the
+file value, it **replaces** it. So code that reads with `get_value`, appends
+its own entry, and writes the result back turns a file-configured value into a
+row that no longer contains it — and because `settings.get` now prefers the
+row, the file entry silently leaves the effective value. Nothing errors; the
+setting just quietly gets smaller.
+
+**Any code that merges into a protected LIST setting must use
+`system_settings.merge_protected_list(actor, key, additions)`**, which unions
+the database row, the `django.conf` value, and the additions, drops entries the
+registered validator rejects (never raising — an operator's typo must not fail
+the whole reconciliation), and persists the result through `set_value`. It
+returns `(merged_value, recovered)`, where `recovered` names the file entries
+the row was missing, so an installation already shadowed by an earlier write
+heals on the next run rather than staying broken forever.
+
+Its scope is deliberately narrow: only keys in
+`system_settings.MERGEABLE_LIST_KEYS` (today just
+`AWS_CLOUDWATCH_ALARM_TOPIC_ARNS`) are accepted. It validates one candidate at
+a time, which is meaningful only for a list-valued key — it is **not** a
+general protected-setting merge.
+
 ## Write-Time Validation (Registered Keys)
 
 Enforcement-bearing DB settings should be **validated at write time** so

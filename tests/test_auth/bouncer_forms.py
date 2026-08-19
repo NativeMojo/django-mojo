@@ -1286,3 +1286,87 @@ def test_shipped_templates_raw_text_interpolations_are_safe(opts):
         f"shipped templates; saw {total_required}. If sites were genuinely "
         f"removed, lower this floor deliberately; if the slice broke, fix the "
         f"extraction.")
+
+
+# ---------------------------------------------------------------------------
+# The cold click: a pr: token surviving the bouncer challenge
+# ---------------------------------------------------------------------------
+#
+# A password-reset link handed to somebody with no session lands on the
+# challenge page FIRST, and the challenge redirects to the login page without
+# the `token` query parameter — the server's forwarding allowlist does not
+# carry it, deliberately, and this fix does not add it. So the token has to
+# make the hop through sessionStorage: same origin, same tab, which is exactly
+# what the challenge's redirect is.
+#
+# This was a live bug, not just a gap in the new provisioning flow: the
+# existing admin "send reset link" action is broken by the same mechanism for
+# any recipient without a session cookie, and both are fixed by the same two
+# template changes. Asserted against the RENDERED templates, the way every
+# other JS contract in this file is, because the handlers are JavaScript.
+
+@th.django_unit_test("the bouncer challenge stashes a pr: token before it redirects")
+def test_challenge_preserves_reset_token(opts):
+    import objict
+    from django.test import RequestFactory
+    from mojo.apps.account.rest.bouncer.views import _serve_challenge
+
+    request = RequestFactory().get('/auth?flow=password_reset&token=pr:abc')
+    request.DATA = objict.objict()
+    html = _serve_challenge(request, group=opts.group).content.decode('utf-8')
+
+    assert_true('sessionStorage.setItem(\'mat_reset_token\'' in html
+                or 'sessionStorage.setItem("mat_reset_token"' in html,
+                "the challenge page must stash a pr: token before its redirect "
+                "— without it the printed/emailed reset link fails its FIRST "
+                "click for every visitor who is not already signed in")
+    assert_true("window.location.search" in html,
+                "the token has to be read from the URL the visitor arrived on")
+    assert_true("'pr:'" in html or '"pr:"' in html,
+                "only password-reset tokens are stashed — nothing else in a "
+                "query string should end up in storage")
+
+    # Anchor on the redirect STATEMENT, not the first mention of the config
+    # key — the stash's own explanatory comment names CFG.redirectUrl and sits
+    # above the setItem, which is exactly where a comment belongs.
+    stash = html.index("mat_reset_token")
+    redirect = html.index("window.location.href = CFG.redirectUrl")
+    assert_true(stash < redirect,
+                f"the stash must happen BEFORE the redirect that loses the "
+                f"query string (stash at {stash}, redirect at {redirect})")
+
+
+@th.django_unit_test("login.html reaches its setPassword view from the stashed token")
+def test_login_reads_the_stashed_reset_token(opts):
+    html = _render('account/login.html', group=opts.group)
+
+    assert_true('sessionStorage.getItem("mat_reset_token")' in html,
+                "login.html must read the token the challenge stashed")
+
+    # The fallback read further down (the reset submit handler) has always been
+    # there; what was missing is a branch that ACTUALLY REACHES the password
+    # view when the token is not in the URL. Without it the visitor lands on a
+    # sign-in form holding a valid token nothing ever looks at.
+    marker = 'else if (sessionStorage.getItem("mat_reset_token"))'
+    assert_true(marker in html,
+                f"login.html must fall back to the stashed token when the URL "
+                f"carries none — expected `{marker}` at the token-detection "
+                f"point")
+
+    branch = html.index(marker)
+    view = html.index('showView("setPassword")', branch)
+    assert_true(view - branch < 900,
+                "the fallback branch must open the set-password view, or the "
+                "token is read and then nothing happens with it")
+
+
+@th.django_unit_test("the cold-click fix touches no server-side auth route")
+def test_cold_click_fix_is_template_only(opts):
+    import inspect
+    from mojo.apps.account.rest.bouncer import views
+
+    source = inspect.getsource(views)
+    assert_true("mat_reset_token" not in source,
+                "the fix is template-side by design: no auth route, no "
+                "forwarding allowlist entry, and no token added to any query "
+                "string the server emits")

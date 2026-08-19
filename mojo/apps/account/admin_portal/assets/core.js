@@ -26,6 +26,8 @@ const SVG = {
   trash: '<path d="M4 7h16M9 7V4h6v3m3 0-1 14H7L6 7m4 4v6m4-6v6"/>',
   activity: '<path d="M3 12h4l2-6 4 12 2-6h6"/>',
   chart: '<path d="M4 3v16a2 2 0 0 0 2 2h15"/><path d="m8 15 3.5-4.5 3 2.2L20 6"/>',
+  phone: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
 };
 
 export function icon(name, label = '') {
