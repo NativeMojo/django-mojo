@@ -603,7 +603,9 @@ class PreviewHandler(BaseHTTPRequestHandler):
             return self._send("window.MojoAuth={init:function(){},getAuthHeader:function(){return 'Bearer preview';},getRefreshToken:function(){return null;},logout:function(){}};", "application/javascript; charset=utf-8")
         if path == "/api/account/admin/bootstrap":
             memberships = [] if self.onboarding_state == "new_group" else None
-            return self._send(bootstrap(self.groups, membership_groups=memberships))
+            return self._send(bootstrap(
+                self.groups, membership_groups=memberships,
+                infrastructure_mode=getattr(self, "infrastructure_mode", "managed")))
         activity_response = activity.get(self, parsed)
         if activity_response is not None:
             status, payload = activity_response
@@ -930,6 +932,7 @@ def main():
     parser.add_argument("--metrics-state", choices=("live", "empty", "unconfigured", "denied", "partial"), default="live")
     parser.add_argument("--maintenance-state", choices=("findings", "denied", "in_flight", "stalled", "unavailable", "framework_pinned", "framework_none", "clear"), default="findings")
     parser.add_argument("--deployments-state", choices=("mixed", "converged", "failed", "empty"), default="mixed")
+    parser.add_argument("--infrastructure-mode", choices=("managed", "external"), default="managed")
     parser.add_argument("--upstream", help="Public HTTPS django-mojo origin for live QA")
     args = parser.parse_args()
     upstream = None
@@ -954,7 +957,8 @@ def main():
        settings_state=args.settings_state,
        metrics_state=args.metrics_state,
        maintenance_state=args.maintenance_state,
-       deployments_state=args.deployments_state)
+       deployments_state=args.deployments_state,
+       infrastructure_mode=args.infrastructure_mode)
     PreviewHandler.upstream = upstream
     PreviewHandler.setup_behavior = args.setup_state
     PreviewHandler.preview_port = args.port

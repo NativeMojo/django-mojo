@@ -83,6 +83,16 @@ function readinessStrip(report) {
     ...['pass', 'warn', 'fail', 'pending'].map((key) => h('div', {class: 'readiness-stat'}, h('strong', {text: String(summary[key] || 0)}), h('span', {text: key}))));
 }
 
+// Whose AWS estate this is, stated once at the top of the page an operator
+// opens to change the installation. A missing `infrastructure` key is an older
+// server that predates the switch, and that is a managed install.
+function infrastructureNote(ctx) {
+  const managed = ctx?.infrastructure?.managed !== false;
+  return h('p', {class: 'infrastructure-note', text: managed
+    ? 'Infrastructure: managed by this portal'
+    : 'Infrastructure: external — AWS resources are managed by your infrastructure team\'s IaC, and this portal does not change them.'});
+}
+
 async function suggestedBaseUrl(signal) {
   if (window.location.protocol === 'https:') return window.location.origin;
   if (!['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname)) return '';
@@ -293,6 +303,7 @@ export async function setupPage(ctx, signal = null) {
         h('button', {class: 'button ghost', disabled: activeAction || driving, onclick: () => actions.create('check')}, icon('refresh'), 'Run all checks'),
         h('button', {class: 'button primary', disabled: activeAction || driving || (operation && !TERMINAL.has(operation.status)), onclick: () => actions.create('fix')}, icon('settings'), 'Fix all'),
       ]),
+      infrastructureNote(ctx),
       actionError ? errorState(actionError) : null,
       report ? readinessStrip(report) : null,
       operation ? operationView(operation, actions, suggestions) : null,

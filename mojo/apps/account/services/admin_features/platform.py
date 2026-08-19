@@ -23,5 +23,11 @@ def describe(request, capabilities):
         # second gate lives on the endpoint, not on whether the page is offered.
         "maintenance": bool(capabilities.get("manage_aws")),
     }
-    return {"id": "platform", "enabled": any(values.values()),
-            "capabilities": values}
+    # `enabled` is computed FIRST, from the authority values only. The
+    # infrastructure flag is a fact about the installation, true on every
+    # managed install, so folding it into `any(...)` would light the Platform
+    # lane for a caller holding none of the grants above.
+    enabled = any(values.values())
+    values["infrastructure_managed"] = bool(
+        capabilities.get("infrastructure_managed"))
+    return {"id": "platform", "enabled": enabled, "capabilities": values}

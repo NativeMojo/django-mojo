@@ -12,7 +12,11 @@ PROVIDERS = (dashboard, people, webapps, activity, platform, advanced, settings)
 RESET_ONLY = (maintenance,)
 
 
-def bootstrap(groups, membership_groups=None, can_create_webapp_group=True):
+def bootstrap(groups, membership_groups=None, can_create_webapp_group=True,
+              infrastructure_mode="managed"):
+    # Default managed so every existing caller — the tests included — keeps the
+    # payload it had. The key is ALWAYS present because the feature providers
+    # index it directly.
     capabilities = {
         # The readiness fixture deliberately fails django.base_url, so the
         # honest bootstrap state is "System Setup wants attention".
@@ -30,6 +34,7 @@ def bootstrap(groups, membership_groups=None, can_create_webapp_group=True):
         "view_advanced_security": True, "view_advanced_settings": True,
         "settings": True, "catalog_write": True,
         "settings_owner_display": True, "settings_owner_edit": True,
+        "infrastructure_managed": infrastructure_mode == "managed",
     }
     return {
         "version": "1.9.0", "admin_path": "/",
@@ -40,6 +45,8 @@ def bootstrap(groups, membership_groups=None, can_create_webapp_group=True):
                  "username": "ian@example.com", "email": "ian@example.com",
                  "is_superuser": True},
         "capabilities": capabilities,
+        "infrastructure": {"mode": infrastructure_mode,
+                           "managed": infrastructure_mode == "managed"},
         "features": {provider.NAME: provider.describe(capabilities)
                      for provider in PROVIDERS},
     }
@@ -49,8 +56,11 @@ def reset(handler, fixtures, *, key_state="active", setup_state="idle",
           activity_state="full", onboarding_state="idle",
           dashboard_state="healthy", settings_state="normal",
           metrics_state="live", maintenance_state="findings",
-          deployments_state="mixed"):
+          deployments_state="mixed", infrastructure_mode="managed"):
     """Reset every stateful provider so scenarios never leak across runs."""
+    # An installation-wide property rather than a provider scenario, so it is
+    # stamped on the handler here instead of being threaded through resets.
+    handler.infrastructure_mode = infrastructure_mode
     for provider in PROVIDERS + RESET_ONLY:
         provider.reset(handler, fixtures, key_state=key_state,
                        setup_state=setup_state,

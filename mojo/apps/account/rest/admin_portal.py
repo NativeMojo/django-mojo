@@ -10,6 +10,7 @@ import mojo
 from mojo import decorators as md
 from mojo.apps.account.services import admin_assets, admin_features, admin_portal
 from mojo.apps.account.services import system_settings, webapp_authority
+from mojo.helpers import infrastructure
 from mojo.helpers.response import JsonResponse
 
 
@@ -137,6 +138,11 @@ def on_admin_bootstrap(request):
     can_manage_webapps = bool(webapp_groups or can_create_webapp_group)
     permissions = request.user.permissions if isinstance(request.user.permissions, dict) else {}
     exact = lambda key: bool(request.user.is_superuser or permissions.get(key) is True)
+    # A property of the INSTALLATION, not of this caller. It rides in
+    # capabilities as a plain bool so feature providers can pass it on (the
+    # provider contract accepts named booleans only), and as its own top-level
+    # key so a page can name the mode in words without re-deriving it.
+    mode = infrastructure.infrastructure_mode()
     capabilities = {
         "setup": bool(request.user.is_superuser),
         # System Setup left the primary page grid, so the one unmissable
@@ -183,6 +189,7 @@ def on_admin_bootstrap(request):
         # Owner-tier writes are refused by system_settings unless the actor is a
         # live literal superuser, so that predicate is the only honest source.
         "settings_owner_edit": system_settings.can_system_admin(request.user),
+        "infrastructure_managed": mode == infrastructure.MANAGED,
     }
     return {
         "version": mojo.__version__,
@@ -201,5 +208,7 @@ def on_admin_bootstrap(request):
         ],
         "can_create_webapp_group": can_create_webapp_group,
         "capabilities": capabilities,
+        "infrastructure": {"mode": mode,
+                           "managed": mode == infrastructure.MANAGED},
         "features": admin_features.bootstrap_features(request, capabilities),
     }
