@@ -6,6 +6,7 @@ PhoneHub provides phone number normalization, carrier lookup, SMS sending, and i
 
 - [models.md](models.md) — PhoneNumber, SMS, PhoneConfig
 - [rest.md](rest.md) — All REST endpoints
+- [admin_sms.md](admin_sms.md) — Admin portal SMS management: system-row superuser gate, verified saves, diagnosed connection tests
 
 ## Quick Usage
 
