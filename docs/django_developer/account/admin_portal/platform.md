@@ -1,16 +1,35 @@
-# Platform and Advanced Admin controls
+# System Setup and platform evidence
 
-The built-in Admin separates platform operations into two feature-owned lanes.
-**Platform** owns public API and local sanity proof, fleet,
-jobs/scheduler, database, Redis, certificate/security evidence, the public
-WebApp summary contract, System Setup, and CloudWatch Metrics. **Advanced** owns hosting inventory,
-bounded opt-in AWS inventory and raw network controls. Ongoing configuration
-has one first-class [Settings](settings.md) home. Platform
-is an operational evidence surface, not another directory: ongoing Domains &
-DNS and web-app work stays in those first-class destinations, while Advanced is
-one expert-diagnostics link rather than an expanded resource menu. The
-deployment journal's **browser surface** — the attempt list, its drill-in, and
-the same-SHA recovery controls — renders in the merged Deployments lane
+`GET /api/account/admin/platform` is the bounded evidence endpoint for public
+API and local sanity proof, fleet, jobs/scheduler, database, Redis,
+certificate/security evidence, the deployment journal, and the public WebApp
+summary contract. `GET /api/account/admin/advanced` is the same for hosting
+inventory, bounded opt-in AWS inventory, and network posture. Ongoing
+configuration has one first-class [Settings](settings.md) home.
+
+**Neither endpoint has a page of its own any more.** The Platform health grid
+and the Advanced diagnostics page were dissolved: their evidence is summarized
+on the Dashboard rows, and the raw payload sits behind each row's Details
+drill-in. What the `platform` feature still owns is work an operator starts on
+purpose — three routes, `setup`, `metrics` and `maintenance` — and `advanced`
+owns the first-class Domains & DNS destination plus the raw hosting routes.
+
+Consequently `platform_overview` is consumed **only through `?sections=`**:
+
+| Caller | Request |
+|---|---|
+| Deployments lane (`webapps` feature) | `?sections=deployments,api` |
+| Dashboard EC2 drill-in | `?sections=fleet` |
+| Dashboard Incidents drill-in | `?sections=security` |
+
+`advanced_overview()` and `GET /api/account/admin/advanced` are **unchanged and
+still served** — they simply have no portal caller now. Stated plainly:
+`view_advanced`, `view_advanced_inventory`, and `view_advanced_security` grant
+API access with no browser surface behind them, and `registrar_vs_dns` (inside
+`webapps.data`) is API-only pending the Domains & DNS review.
+
+The deployment journal's **browser surface** — the attempt list, its drill-in,
+and the same-SHA recovery controls — renders in the merged Deployments lane
 (`#/deployments`, the `webapps` feature); the backend evidence and action
 contracts below are unchanged and remain this page's subject.
 
@@ -46,8 +65,8 @@ and provider responses are never returned, and permission is checked before a
 collector runs.
 
 The platform overview accepts an optional `?sections=` comma-separated
-allowlist naming which sections to collect (the merged Deployments lane calls
-`?sections=deployments,api`). It narrows work, never authority: each named
+allowlist naming which sections to collect — now the only way it is called
+(see the caller table above). It narrows work, never authority: each named
 section keeps its own permission tuple, unknown names are ignored, and an
 absent or empty parameter collects the full roster exactly as before. A
 parameter naming no known section collects nothing.
@@ -56,8 +75,11 @@ The API probe pins public DNS to a global address, follows no redirects, caps
 the response body, and reports latency, HTTP status, and version. Local sanity
 reports migration status and the bounded local-target source:
 `configured_static`, `request_server_port`, or `default_80`. The report never
-returns the raw deployment setting. Jobs evidence distinguishes edge runner heartbeats
-from scheduler leadership. Security evidence distinguishes absent/stale cron
+returns the raw deployment setting. `sanity.check_redis` accepts an optional
+`redis_client` in its options (an additive seam beside `check_migrations`'s
+`migration_executor_cls`) so a caller on a response budget can inject a bounded
+client; called without one it uses `get_client()` exactly as before. Jobs
+evidence distinguishes edge runner heartbeats from scheduler leadership. Security evidence distinguishes absent/stale cron
 heartbeats and monitoring-delivery proof from healthy evidence, names disabled
 HTTPS redirect/secure-cookie/HSTS controls as boolean posture, and includes a
 capped open-incident roster. Ignored, resolved, and closed incidents are
@@ -89,15 +111,21 @@ and group-token sessions, and require authentication no older than 600 seconds.
 Typed AUTH_CONFIG/topology owner writes additionally re-read an active literal
 `account.User` superuser.
 
-The feature owns four routes: `platform`, `setup`, `metrics`, and
-`maintenance` (the `deployments` route belongs to the merged Deployments
-lane). The first two follow the grants above; the last two are
-gated separately on `manage_aws`, published as
-`features.platform.capabilities.metrics` and
+The feature owns three routes: `setup`, `metrics`, and `maintenance` (the
+dissolved `platform` route is gone; `deployments` belongs to the merged
+Deployments lane). `setup` requires an active literal superuser, published as
+`features.platform.capabilities.setup`. The other two are gated separately on
+`manage_aws`, published as `features.platform.capabilities.metrics` and
 `features.platform.capabilities.maintenance` and enforced on `/api/aws/*` by
 `@md.requires_global_perms("manage_aws")`. An operator holding only
 `manage_aws` therefore sees the Metrics and Maintenance sidebar entries and
 nothing else in this lane. See [Admin Metrics](metrics.md).
+
+`features.platform.capabilities.setup_attention` rides alongside `setup`: true
+only for a superuser on an installation with no `BASE_URL`. It badges the
+System Setup sidebar entry, which is the one unmissable reason to open Setup
+now that it is a destination rather than a page-grid card. It is computed in
+`on_admin_bootstrap` and is always `false` when `setup` is false.
 
 ### Maintenance
 

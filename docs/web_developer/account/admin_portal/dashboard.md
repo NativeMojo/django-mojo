@@ -1,12 +1,15 @@
 # Admin Dashboard API
 
-The packaged Admin uses seven primary destinations: Dashboard, Deployments,
-Domains & DNS, People, Activity, Platform, and Settings. Domains & DNS is permission-gated by
-DNS read/manage authority because it is an ongoing application control, not a
-setup-only surface. Deployments is the merged lane for the API service, the
-django-mojo framework, and every web app; literal-superuser System Setup lives
-under Platform; Advanced is one expert-diagnostics destination rather than a
-resource list.
+The packaged Admin's primary destinations are Dashboard, Deployments,
+Domains & DNS, People, Activity, Metrics, Maintenance, Settings, and System
+Setup. Domains & DNS is permission-gated by DNS read/manage authority because
+it is an ongoing application control, not a setup-only surface. Deployments is
+the merged lane for the API service, the django-mojo framework, and every web
+app. Literal-superuser System Setup is its own destination, last in the list.
+
+There is no Platform destination and no Advanced diagnostics destination: the
+evidence they rendered is read from this endpoint's rows, with each row's raw
+payload behind its own drill-in.
 
 `GET /api/account/admin/dashboard` requires the same global source-access grant
 as the built-in Admin (`view_admin`, `manage_users`, `manage_settings`, or `admin`). It then checks
@@ -36,6 +39,9 @@ each source independently before collecting it and returns:
 }
 ```
 
+`jobs` and `sanity` joined `sources` additively; `schema_version` is still `2`.
+A client that ignores an unknown source keeps working unchanged.
+
 Accept `?refresh=1` as the page's refresh control: it bypasses the server's
 60-second provider cache and its cached PyPI version lookup. Every collector
 remains individually bounded, so a refresh costs no more than an ordinary read.
@@ -53,8 +59,9 @@ reads, amber upgrades, and open incidents never do.
 | `unknown` | No source is reporting | `Status unknown — no source is reporting.` |
 
 The availability sources are `load_balancer`, `compute`, `database`, `cache`,
-`certificates`, and `public_api`. `framework`, `last_deployment`, `incidents`,
-and `tickets` are shown as rows but never colour the verdict.
+`certificates`, and `public_api`. `framework`, `last_deployment`, `jobs`,
+`sanity`, `incidents`, and `tickets` are shown as rows but never colour the
+verdict. `jobs` and `sanity` never even arrive as `unhealthy`.
 
 `attention.message` is a separate muted line derived from the open incident
 count. Render it under the headline; do not merge it into the availability
@@ -74,7 +81,7 @@ invoke the System Setup readiness API.
 
 | Source | Read authority |
 |---|---|
-| `load_balancer`, `compute`, `database`, `cache`, `certificates`, `public_api`, `framework`, `last_deployment` | `view_platform`, `manage_platform`, `admin` |
+| `load_balancer`, `compute`, `database`, `cache`, `certificates`, `public_api`, `framework`, `last_deployment`, `jobs`, `sanity` | `view_platform`, `manage_platform`, `admin` |
 | `incidents`, `tickets` | `view_security`, `manage_security`, `security`, `admin` |
 
 Two denials look alike to a client and should render the same muted
@@ -107,15 +114,42 @@ whose every source is denied should collapse to a single Restricted row.
 - `last_deployment.data.items[0]` — `{id, sha, status, created, finished,
   actor}` only. Node evidence and the deploy stderr tail are not exposed here
   for any role; use the Platform deployments endpoint for diagnostics.
+- `jobs.data` — `scheduler_active`, `jobs` (`pending`, `running`, `failed`),
+  and `failed_recent`: jobs that failed in the **last hour**. Colour the row
+  from `scheduler_active` and `failed_recent` only. `jobs.failed` is an
+  all-time ledger and is permanently large on a live queue — show it in the
+  drill-in, never in the row. When `data.jobs` is missing the collector did not
+  answer; say so rather than rendering a green "0 pending".
+- `sanity.data` — `checks` (`[{name, ok}]`), `local_target_source`
+  (`configured_static` / `request_server_port` / `default_80`), and
+  `migration_check`. The `local request` check is already dropped server-side
+  unless the local target was configured explicitly, so render exactly the
+  checks you receive. Annotate the Public API row with the **first failing
+  check in plain words**, plus `· +N more` when several fail; never render a
+  "N of M checks passing" count. An empty or absent `checks` array means no
+  evidence — say that, do not imply the checks passed.
 - `incidents.data` / `tickets.data` — `open`, `oldest_created`,
   `oldest_age_days`. Hide the Tickets row entirely at zero.
+
+`bootstrap.capabilities` additionally carries `setup_attention` (also under
+`features.platform.capabilities`): a boolean, true only for a superuser on an
+installation with no `BASE_URL` configured yet. It is additive — treat a
+missing key as `false` — and it is what badges the System Setup navigation
+entry. `capabilities.setup` still decides whether that entry exists at all.
+
+The packaged portal reads two further slices lazily, when an operator opens a
+drill-in rather than on page load: `GET /api/account/admin/platform?sections=fleet`
+for the edge runner roster behind the EC2 row, and `?sections=security` for the
+secure posture behind the Incidents row. Each is requested only when the
+matching `features.platform.capabilities` flag (`view`, `security`) is true —
+no capability means no request, not a 403.
 
 Packaged cross-links use one canonical hash state for `subject_type`,
 `subject_id`, `subject_model`, `inspector`, Activity filters, bounded `focus`,
 and bounded `return`. Unknown keys are rejected by Activity rather than
 broadening a filtered query. Missing Public API configuration opens Setup on
 `django.base_url`, the incident row opens the Activity incidents tab, and the
-deployment row opens Platform deployments. Upgrade links point at
+deployment row opens the Deployments lane. Upgrade links point at
 `#/maintenance` and must be rendered only when that route is registered.
 Ignored, resolved, and closed incidents never contribute to the open count.
 

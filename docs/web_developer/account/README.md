@@ -40,7 +40,7 @@
 - [Admin Settings API](admin_portal/settings.md) — Curated effective configuration, typed overrides, ownership, and provenance
 - [Admin Metrics API](admin_portal/metrics.md) — CloudWatch charts for EC2/RDS/ElastiCache: controls, range/granularity matrix, deep links, and degraded responses
 - [System Setup API](system_setup.md) — Superuser-only readiness, durable Fix Setup operations, late choices, resume, Origin binding, and protected settings
-- [Platform and Advanced APIs](admin_portal/platform.md) — Global health, UUID deployment recovery, bounded inventory, and expert diagnostics
+- [System Setup and platform evidence APIs](admin_portal/platform.md) — Global health read through `?sections=`, UUID deployment recovery, and bounded inventory
 - [API Keys](api_keys.md) — Long-lived tokens for programmatic access
 - [Webhook Signing](webhook_signing.md) — Per-Group HMAC secret for outbound webhooks, `X-Mojo-Signature` header (operator-configurable), rotation endpoint
 - [Webhook Subscriptions](webhook_subscriptions.md) — CRUD endpoints for managing webhook receivers per Group
