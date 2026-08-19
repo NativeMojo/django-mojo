@@ -41,6 +41,52 @@ def test_modular_shell_contract(opts):
         "Admin logo has no stable sidebar sizing contract"
 
 
+@th.django_unit_test("the shared row layout is packaged, linked, and used by Dashboard")
+def test_row_component_contract(opts):
+    from mojo.apps.account.services import admin_assets
+
+    index = (ROOT / "mojo/apps/account/admin_portal/index.html").read_text()
+    rows = (ASSETS / "components/rows.js").read_text()
+    row_styles = (ASSETS / "components/rows.css").read_text()
+    dashboard = (ASSETS / "features/dashboard/page.js").read_text()
+    preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
+    assets = admin_assets.load_manifest()
+
+    for asset in ("assets/components/rows.js", "assets/components/rows.css"):
+        assert asset in assets, f"{asset} is not a declared package asset"
+    assert '<link rel="stylesheet" href="assets/components/rows.css">' in index, \
+        "the shared row stylesheet is never loaded by the Admin shell"
+
+    for builder in ("export function rowSection", "export function statusRow",
+                    "export function statusHeadline", "export function rowLink"):
+        assert builder in rows, f"rows.js does not expose {builder!r}"
+    assert "valueNode" in rows and "detailNode" in rows and "action" in rows, \
+        "statusRow lost the extension points sibling pages build on"
+    for rule in (".row-page", ".row-section-label", ".status-row", ".row-value",
+                 ".row-detail", ".row-link", ".status-headline", ".status-sub",
+                 ".row-asof"):
+        assert rule in row_styles, f"the shared row stylesheet is missing {rule}"
+    assert "7px 130px minmax(0, 1fr) auto" in row_styles, \
+        "the four-column row grid is not the locked layout"
+    assert "@media (max-width: 600px)" in row_styles, \
+        "the row layout does not collapse on a narrow viewport"
+
+    assert "'../../components/rows.js'" in dashboard, \
+        "Dashboard does not build on the shared row components"
+    assert "statusHeadline(" in dashboard and "rowSection(" in dashboard, \
+        "Dashboard did not adopt the locked status-page structure"
+    assert "featureDescriptors" in dashboard and "'maintenance'" in dashboard, \
+        "the maintenance link is not gated on the route actually existing"
+    assert "refresh=1" in dashboard, \
+        "the refresh control does not bypass the server-side caches"
+    for jargon in ("Current evidence is healthy", "independently permissioned",
+                   "Four answers", "dashboard-source", "dashboard-grid"):
+        assert jargon not in dashboard, \
+            f"the rebuilt Dashboard still carries {jargon!r}"
+    assert '"down"' in preview or "'down'" in preview, \
+        "the visual preview cannot render a proven outage"
+
+
 @th.django_unit_test("shared relationship controls preserve paged REST envelopes")
 def test_relationship_component_contract(opts):
     core = (ASSETS / "core.js").read_text()

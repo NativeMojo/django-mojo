@@ -118,20 +118,28 @@ def test_dashboard_permission_matrix(opts):
     user.has_permission.side_effect = lambda values: False
     request = mock.Mock(user=user)
     with mock.patch.object(admin_platform, "_api") as api, \
+            mock.patch.object(admin_platform, "_load_balancer") as balancer, \
+            mock.patch.object(admin_platform, "_compute") as compute, \
+            mock.patch.object(admin_platform, "_dashboard_database") as database, \
+            mock.patch.object(admin_platform, "_dashboard_cache") as cache, \
+            mock.patch.object(admin_platform, "_dashboard_certificates") as certs, \
+            mock.patch.object(admin_platform, "_framework") as framework, \
             mock.patch.object(admin_platform, "_fleet") as fleet, \
-            mock.patch.object(admin_platform, "_dashboard_webapps") as webapps, \
             mock.patch.object(admin_platform, "_security") as security, \
             mock.patch.object(admin_platform, "_dashboard_deployment") as deployments, \
             mock.patch("mojo.apps.account.services.system_readiness.run") as setup:
         report = admin_platform.dashboard_overview(request)
-    th.assert_eq(report["overall"], "unknown",
-                 "denied sources must not manufacture an overall state")
-    th.assert_eq(report["observable_sources"], 0,
-                 "permission-denied sources are not observable evidence")
+    th.assert_eq(report["availability"]["state"], "unknown",
+                 "denied sources must not manufacture an availability verdict")
+    th.assert_eq(report["availability"]["down"], [],
+                 "a denied source is not proof that anything is down")
+    th.assert_eq(report["attention"]["message"], None,
+                 "a denied incident source must not produce an attention line")
     for name, source in report["sources"].items():
         th.assert_eq(source["status"], "permission_denied",
                      f"{name} must distinguish denial from source failure")
-    for collector in (api, fleet, webapps, security, deployments, setup):
+    for collector in (api, balancer, compute, database, cache, certs, framework,
+                      fleet, security, deployments, setup):
         th.assert_true(not collector.called,
                        "Dashboard issued a forbidden or Setup readiness read")
 
