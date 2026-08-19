@@ -18,7 +18,16 @@ permission wildcard; `User.is_superuser` is the wildcard.
 The GET response has `schema_version`, ordered `sections`, and server-owned
 `entries`. Each entry supplies friendly label, description, type, constraints,
 effective value/status, source, scope, owner, change behavior, and capability
-booleans. Sensitive deployment settings expose only
+booleans, plus two fields the client cannot derive from a value:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `unit` | string | What an integer counts, e.g. `"days"`. `""` when not applicable. |
+| `unset_meaning` | string | What the platform does while the value is absent, e.g. `"installs the newest published release"`. `""` when the server deliberately offers no such sentence — notably for a missing encryption key. |
+
+Render `unset_meaning` only for an absent value, and never invent one: a blank
+string means the server is declining to reassure, not that you should guess.
+Sensitive deployment settings expose only
 `{"configured":true|false}`. Arbitrary Django settings, paths, environment
 names, ignored raw values, provider responses, and exceptions are omitted from
 catalog entries. The superuser-only provider status includes its configured S3
@@ -33,7 +42,15 @@ GeoIP values, the effective system SMS row, and edit/loaded/published revisions.
 When an override has been published, `geoip` reflects that desired document
 even while `pending_restart` is true. `loaded_revision` is only the revision
 loaded by the node serving this request, not proof of whole-fleet convergence.
-Non-superusers receive no provider setup payload. The response shape is:
+Non-superusers receive no provider setup payload. Three fields are new:
+
+| Field | Meaning |
+|---|---|
+| `geoip.GEOIP_API_KEY_MOJO_HINT`, `sms.api_key_hint` | The **last four characters** of the stored key, or `""` for an absent key or one shorter than eight characters. Never a prefix, never a length, never the value. Use it to say "Key set · ····9f2c" instead of a password box meaning "leave blank to keep". |
+| `geoip_providers` | Sorted provider identifiers this installation can dispatch to. A convenience for building a picker — the server's validator remains the authority, so a configured value that is not in the list must still render as selected. |
+| `verify_state` | Per-topic verification of the **stored** configuration: `{ok, code, message, at}` per topic, absent until something has been verified. Use it to mark a failing integration on a list without testing on every page load. A test of an unsaved draft never appears here. |
+
+The response shape is:
 
 ```json
 {
@@ -61,17 +78,33 @@ Non-superusers receive no provider setup payload. The response shape is:
       "GEOIP_ADDITIONAL_PROVIDERS": [],
       "GEOIP_MOJO_PROVIDER_URL": "https://api.mojoverify.com",
       "GEOIP_MOJO_SYNC_ENABLED": false,
-      "GEOIP_API_KEY_MOJO_CONFIGURED": true
+      "GEOIP_API_KEY_MOJO_CONFIGURED": true,
+      "GEOIP_API_KEY_MOJO_HINT": "9f2c"
     },
+    "geoip_providers": ["ip-api", "ipinfo", "ipstack", "maxmind", "mojo"],
     "sms": {
       "configured": true,
       "remote_url": "https://sms.example.com",
       "api_key_configured": true,
+      "api_key_hint": "4d81",
       "test_mode": false
+    },
+    "verify_state": {
+      "geoip": {"ok": false, "code": "http_401",
+                "message": "api.mojoverify.com rejected the API key",
+                "at": "2026-08-18T09:14:00+00:00"},
+      "sms": {"ok": true, "code": null, "message": "Connection verified",
+              "at": "2026-08-18T09:14:00+00:00"}
     }
   }
 }
 ```
+
+`verify_state` is written by the server only for the configuration it actually
+stores: a successful save records its topic, a failed save records nothing, and
+a test records only when the credential and target both came from storage.
+A client cannot cause an entry by testing a draft, so an entry can be trusted to
+describe what the installation is running.
 
 Sources include `database_cache`, `database`, `deployment`, `default`,
 `computed`, merged `database+deployment+defaults`, `invalid`,
@@ -97,11 +130,18 @@ Catalog mutations accept only:
 {"action":"clear","key":"WEBAPP_BASE_URL"}
 ```
 
-The same fresh-auth endpoint accepts the superuser-only provider action:
+The same fresh-auth endpoint accepts the superuser-only provider actions, and
+**every provider request names exactly one `topic`** — `"geoip"` or `"sms"`.
+There is no default: a missing or unrecognized topic is refused. The body must
+be exactly `action`, `topic`, and `providers`, and `providers` must carry only
+that topic's section plus `expected_revision`. Sending the other topic's
+section is an error, not an ignored extra, so a save can never quietly write an
+integration the operator did not open.
 
 ```json
 {
   "action": "configure_providers",
+  "topic": "geoip",
   "providers": {
     "expected_revision": "0123456789abcdef0123456789abcdef",
     "geoip": {
@@ -112,7 +152,17 @@ The same fresh-auth endpoint accepts the superuser-only provider action:
       "GEOIP_MOJO_SYNC_ENABLED": false,
       "GEOIP_API_KEY_MOJO": "optional-new-secret",
       "clear_api_key": false
-    },
+    }
+  }
+}
+```
+
+```json
+{
+  "action": "configure_providers",
+  "topic": "sms",
+  "providers": {
+    "expected_revision": "0123456789abcdef0123456789abcdef",
     "sms": {
       "remote_url": "https://sms.example.com",
       "api_key": "optional-new-secret",
@@ -123,32 +173,65 @@ The same fresh-auth endpoint accepts the superuser-only provider action:
 }
 ```
 
-Use the identical `providers` object with `"action":"test_providers"` for a
-zero-side-effect credential and permission check. Both provider actions require
-a fresh interactive literal-superuser Bearer session and an `Origin` exactly
-matching the Admin request origin. Test returns separate results:
+Use the identical body with `"action":"test_providers"` for a zero-side-effect
+credential and permission check. Both provider actions require a fresh
+interactive literal-superuser Bearer session and an `Origin` exactly matching
+the Admin request origin. `results` carries **one key — the requested topic**:
 
 ```json
-{"tested":true,"success":true,"results":{"geoip":{"success":true,"code":null,"message":"Connection verified"},"sms":{"success":true,"code":null,"message":"Connection verified"}}}
+{"tested":true,"topic":"sms","success":true,"results":{"sms":{"success":true,"code":null,"message":"Connection verified"}}}
 ```
 
-Blank/omitted secret values preserve the encrypted value; clearing requires
-the explicit boolean. After both checks pass, the database secret and system
-`PhoneConfig` are written first. The static fields then publish one KMS-
-encrypted, integrity-marked S3 override using an ETag precondition and return
-its revision/version. `expected_revision` is the current
-`configuration_revision`, which advances for every successful provider edit,
-including DB-only key or SMS changes, and is also bound to the published S3
-revision so an operator restore invalidates an open form. DB/model values take effect without a restart; static
-GeoIP selection takes effect after config sync installs the composed file and
-restarts the service. The DB/model writes share a stable installation-wide
-lock rather than the acting user's row, and roll back if conditional S3
-publication fails. An unchanged static document skips S3 publication while
-still advancing the edit revision.
-The mutation response is:
+A failure names the host that answered, so it can be shown as-is:
 
 ```json
-{"published":true,"unchanged":false,"revision":"0123456789abcdef0123456789abcdef","published_revision":"0123456789abcdef0123456789abcdef","version_id":"s3-version-id","pending_restart":true,"results":{"geoip":{"success":true},"sms":{"success":true}}}
+{"tested":true,"topic":"geoip","success":false,"results":{"geoip":{"success":false,"code":"http_401","message":"api.mojoverify.com rejected the API key"}}}
+```
+
+Attach the message to the field it concerns: `http_401`, `http_403`, and
+`insufficient_permission` are about the key; `timeout`, `http_404`, and
+`connection_failed` are about the URL.
+
+**No stored value is ever returned to a client.** The response carries
+configured flags and four-character hints only; there is no request, parameter,
+or graph that returns `GEOIP_API_KEY_MOJO` or the SMS key. Blank or omitted
+secret values preserve the encrypted value; clearing requires the explicit
+boolean.
+
+What each topic writes differs, and so does what it requires:
+
+- **`geoip`** requires the full fleet publishing plane (object location, all
+  provider delegations, KMS key, config-sync restart). After the check passes it
+  writes the encrypted database secret, then publishes one KMS-encrypted,
+  integrity-marked S3 override under an ETag precondition and returns its
+  revision/version. It never touches the SMS row.
+- **`sms`** has **no fleet precondition** and works on an installation with no
+  publishing plane at all. It writes only the system `PhoneConfig` row and never
+  writes S3 — but it still reads the published document, because
+  `expected_revision` binds both the edit revision and the published revision.
+  `phonehub` is an optional app: on an installation without it, both
+  `test_providers` and `configure_providers` for topic `sms` return `400` with
+  `"Text messaging is not installed on this platform"` before any credential
+  check runs.
+
+`expected_revision` is the current `configuration_revision`, which advances for
+every successful provider edit — including DB-only key or SMS changes — and is
+also bound to the published S3 revision, so an operator restore invalidates an
+open form. It is deliberately **not** split per topic: one token means a GeoIP
+publication invalidates an open SMS form and vice versa, which is the safe
+direction. DB/model values take effect without a restart; static GeoIP selection
+takes effect after config sync installs the composed file and restarts the
+service. The DB/model writes share a stable installation-wide lock rather than
+the acting user's row, and roll back if conditional S3 publication fails. An
+unchanged static document skips S3 publication while still advancing the edit
+revision. Mutation responses name their topic:
+
+```json
+{"published":true,"unchanged":false,"topic":"geoip","revision":"0123456789abcdef0123456789abcdef","published_revision":"0123456789abcdef0123456789abcdef","version_id":"s3-version-id","pending_restart":true,"results":{"geoip":{"success":true}}}
+```
+
+```json
+{"published":false,"unchanged":true,"topic":"sms","revision":"fedcba9876543210fedcba9876543210","published_revision":null,"version_id":null,"pending_restart":false,"results":{"sms":{"success":true}}}
 ```
 
 Set returns the normalized value; Clear returns the number of removed global

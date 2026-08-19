@@ -346,7 +346,10 @@ def test_settings_preview_states(opts):
     server = (ROOT / "bin/admin_preview_support/server.py").read_text()
     provider = (ROOT / "bin/admin_preview_support/features/settings.py").read_text()
     gallery = (ROOT / "bin/admin_preview_support/gallery.py").read_text()
-    for state in ("normal", "duplicate", "invalid", "delay", "error", "fresh"):
+    from urllib.parse import urlparse
+
+    for state in ("normal", "duplicate", "invalid", "provider_failed", "unset",
+                  "restricted", "delay", "error", "fresh"):
         assert f'"{state}"' in server or f'"{state}"' in provider, \
             f"preview cannot render the {state} Settings state"
     for source in ("database", "deployment", "duplicate_override", "invalid"):
@@ -357,6 +360,50 @@ def test_settings_preview_states(opts):
         "Settings preview cannot render set/clear outcomes"
     assert 'path == "/api/account/admin/settings"' in server and 'key == "value"' in server, \
         "Settings preview events can retain submitted values"
+
+    feature = _server().settings
+    for state in ("normal", "provider_failed", "unset", "restricted"):
+        class Handler:
+            pass
+
+        feature.reset(Handler, {}, settings_state=state)
+        code, report = feature.get(Handler, urlparse("/api/account/admin/settings"))
+        assert code == 200, f"{state}: the Settings fixture answered {code}"
+        setup = report.get("provider_setup")
+        if state == "restricted":
+            # The only way to see the non-superuser fallback where the GeoIP
+            # descriptors render as their own rows.
+            assert setup is None, \
+                f"{state}: a non-superuser fixture still returned provider status"
+            continue
+        assert setup is not None, f"{state}: the fixture emitted no provider status"
+        hint = setup["geoip"]["GEOIP_API_KEY_MOJO_HINT"]
+        assert len(hint) == (0 if state == "unset" else 4), \
+            f"{state}: the GeoIP key hint is not four characters: {hint!r}"
+        assert setup["geoip_providers"] and "verify_state" in setup, \
+            f"{state}: the fixture omitted the provider picker or verification"
+        assert "api_key_hint" in setup["sms"], \
+            f"{state}: the SMS section lost its key hint"
+        assert "GEOIP_API_KEY_MOJO" not in setup["geoip"], \
+            f"{state}: the fixture returned a full GeoIP key"
+    class Failed:
+        pass
+
+    feature.reset(Failed, {}, settings_state="provider_failed")
+    _, failing = feature.get(Failed, urlparse("/api/account/admin/settings"))
+    geoip = failing["provider_setup"]["verify_state"]["geoip"]
+    assert geoip["ok"] is False and "mojoverify.com" in geoip["message"], \
+        f"the failing fixture does not diagnose a host: {geoip!r}"
+    status, answer = feature.post(Failed, "/api/account/admin/settings", {
+        "action": "test_providers", "topic": "sms",
+        "providers": {"sms": {"remote_url": "https://sms.example.com"}}})
+    assert status == 200 and answer["results"]["sms"]["success"] is True, \
+        f"a failing GeoIP fixture also failed the unrelated SMS topic: {answer!r}"
+    status, refused = feature.post(Failed, "/api/account/admin/settings", {
+        "action": "test_providers", "topic": "sms",
+        "providers": {"sms": {}, "geoip": {}}})
+    assert status == 400, \
+        f"the fixture accepted a payload carrying the untouched topic: {refused!r}"
 
 
 @th.django_unit_test("preview renders every Maintenance state deterministically")

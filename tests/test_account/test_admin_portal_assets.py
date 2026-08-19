@@ -240,6 +240,7 @@ def test_feature_asset_contracts(opts):
     platform = (ASSETS / "features/platform/page.js").read_text()
     advanced = (ASSETS / "features/advanced/page.js").read_text()
     settings = (ASSETS / "features/settings/page.js").read_text()
+    settings_panels = (ASSETS / "features/settings/panels.js").read_text()
     webapps = (ASSETS / "features/webapps/page.js").read_text()
     core = (ASSETS / "core.js").read_text()
     app = (ASSETS / "app.js").read_text()
@@ -247,8 +248,11 @@ def test_feature_asset_contracts(opts):
 
     assert "result.token" not in platform and "MOJO_DEPLOY_KEY" not in platform
     assert "apiOnce" in advanced and "refresh-required" in advanced
-    assert "'login.methods'" in settings and "'registration.methods'" in settings
-    assert "name === 'password'" in settings and "Save authentication settings" in settings
+    # The sign-in editor moved into its own drill-in panel; the list never
+    # opens a modal any more.
+    assert "'login.methods'" in settings_panels and "'registration.methods'" in settings_panels
+    assert "name === 'password'" in settings_panels and "Save authentication settings" in settings_panels
+    assert "openModal" not in settings, "the Settings list still opens a modal"
     assert "class: 'table-wrap', tabindex: '0', role: 'region'" in core
     assert "['ArrowLeft', 'ArrowRight'].includes(event.key)" in core
     assert "canonicalRecordName" in advanced and "sameRecordSet" in advanced

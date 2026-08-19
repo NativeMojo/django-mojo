@@ -39,16 +39,23 @@ def on_admin_settings(request):
 def on_admin_settings_mutate(request):
     action = request.DATA.get("action")
     if action in ("configure_providers", "test_providers"):
-        if set(request.DATA.keys()) != {"action", "providers"}:
+        if set(request.DATA.keys()) != {"action", "topic", "providers"}:
             raise merrors.ValueException(
-                "Provider setup accepts only action and providers")
+                "Provider setup accepts only action, topic, and providers")
         from mojo.apps.account.services import system_setup
         system_setup.require_request_admin(request)
         system_setup.request_origin(request)
         from mojo.apps.account.services import provider_setup
+        # No default topic: a save addressed to nothing in particular is how a
+        # form ends up writing the integration the operator did not open.
+        topic = request.DATA.get("topic")
+        if topic not in provider_setup.TOPICS:
+            raise merrors.ValueException(
+                "Provider setup requires topic geoip or sms")
+        providers = request.DATA.get("providers")
         if action == "test_providers":
-            return provider_setup.test(request.user, request.DATA.get("providers"))
-        return provider_setup.apply(request.user, request.DATA.get("providers"))
+            return provider_setup.test(request.user, topic, providers)
+        return provider_setup.apply(request.user, topic, providers)
     key = request.DATA.get("key")
     if not isinstance(key, str):
         raise merrors.ValueException("A catalog setting key is required")
