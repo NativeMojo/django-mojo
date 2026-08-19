@@ -6,6 +6,7 @@
 import {api, formatDate, h} from '../../core.js';
 import {openInspector} from '../../components/overlays.js';
 import {errorState} from '../../components/views.js';
+import {capacityPanel} from '../platform/capacity.js';
 
 const FLEET_PATH = '/api/account/admin/platform?sections=fleet';
 const SECURITY_PATH = '/api/account/admin/platform?sections=security';
@@ -85,12 +86,27 @@ function runnerList(rows) {
       ` ${(row.channels || []).join(', ') || 'no channels'} · last heartbeat ${formatDate(row.last_heartbeat)}`}))));
 }
 
+// The capacity panel is the one place in the Dashboard that CHANGES anything,
+// so it loads last, only for callers whose grants the endpoint would also
+// accept, and only when the drill-in is actually open. A caller without the
+// capability sees this inspector exactly as it was before capacity existed.
+function mountCapacity(ctx, slot) {
+  if (ctx?.features?.platform?.capabilities?.capacity !== true) return;
+  slot.replaceChildren(h('p', {class: 'muted small', text: 'Loading capacity…'}));
+  capacityPanel(ctx)
+    .then((panel) => { slot.replaceChildren(panel); })
+    // Only this block fails: the fleet evidence above it was already proven,
+    // and a capacity read that will not answer must not blank the drill-in.
+    .catch((error) => { slot.replaceChildren(errorState(error)); });
+}
+
 // The EC2 row's own evidence renders immediately; the edge runner roster is a
 // second, permissioned read that only platform viewers may make. The caller
 // gates the drill-in too — this guard is the one that has to hold.
 export function openFleetInspector(ctx, computeSource) {
   const data = computeSource?.data || {};
   const slot = h('div', {class: 'dash-slot'});
+  const capacity = h('div', {class: 'dash-slot'});
   const inspector = openSourceInspector({
     title: 'EC2 · instances and edge runners',
     source: computeSource,
@@ -100,9 +116,12 @@ export function openFleetInspector(ctx, computeSource) {
       ['Instances', `${data.up || 0} of ${data.total || 0} healthy`],
     ],
     extra: h('div', {class: 'dash-block'},
-      instanceList(data.instances || []), slot),
+      instanceList(data.instances || []), slot, capacity),
   });
-  if (ctx?.features?.platform?.capabilities?.view !== true) return inspector;
+  if (ctx?.features?.platform?.capabilities?.view !== true) {
+    mountCapacity(ctx, capacity);
+    return inspector;
+  }
   slot.replaceChildren(h('p', {class: 'muted small', text: 'Loading edge runners…'}));
   api(FLEET_PATH).then((report) => {
     const section = report?.sections?.fleet || {};
@@ -120,7 +139,7 @@ export function openFleetInspector(ctx, computeSource) {
   }).catch((error) => {
     // Only this block fails: the instance evidence above it was already proven.
     slot.replaceChildren(errorState(error));
-  });
+  }).finally(() => { mountCapacity(ctx, capacity); });
   return inspector;
 }
 
