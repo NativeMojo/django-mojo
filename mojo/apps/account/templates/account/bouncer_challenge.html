@@ -192,6 +192,25 @@
       tier: {{ render_ctx.challenge_tier }}
     };
 
+    // A password-reset link opened by somebody with no session lands HERE
+    // first, and the challenge redirects to the login page WITHOUT the token —
+    // the server's forwarding allowlist does not carry it, deliberately. So
+    // the token is stashed before the redirect and read back on the other
+    // side; sessionStorage survives a same-origin, same-tab navigation, which
+    // is exactly what CFG.redirectUrl is.
+    //
+    // Without this, an emailed or printed reset link fails its FIRST click for
+    // every recipient who is not already signed in — they land on a login form
+    // with no idea what to do — and only works if they happen to click it a
+    // second time.
+    try {
+      var mbgParams = new URLSearchParams(window.location.search);
+      var mbgToken = mbgParams.get('token');
+      if (mbgToken && mbgToken.indexOf('pr:') === 0) {
+        sessionStorage.setItem('mat_reset_token', mbgToken);
+      }
+    } catch (e) { /* private-mode storage refusal — the link still works on a retry */ }
+
     var bar = document.getElementById('mbg-bar');
     var statusEl = document.getElementById('mbg-status');
     var gate = document.getElementById('mbg-gate');

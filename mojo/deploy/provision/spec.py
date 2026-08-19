@@ -156,6 +156,18 @@ LOG_GROUP_ROOT = "/mojo"
 LOG_GROUP_KINDS = ("nginx", "app", "cloud-init")
 LOG_RETENTION_DAYS = 90
 
+# Everything a booting node reads lives under this one prefix in the config
+# bucket: the endpoints document, the stage-1 script, the application tarball
+# and the CloudWatch agent's configuration. One prefix rather than four means
+# stage 0 carries one string it can build every URL from.
+BOOTSTRAP_PREFIX = "bootstrap"
+
+# The published application config, on the other hand, is per-environment and
+# read by `config_sync` on a timer forever — so it is namespaced by project and
+# environment rather than sharing the boot prefix. This is the value that goes
+# into a node's bootstrap.conf as AWS_CONFIG_PREFIX.
+CONFIG_PREFIX_ROOT = "config"
+
 # Network shape. Fixed rather than configurable: a /16 with four /24s leaves
 # room for a decade of growth, and every extra knob here is another way for two
 # environments to end up unable to peer.
@@ -228,6 +240,11 @@ class Spec:
         # Filled in by `discover.observe`. Present here so the identity policy
         # can be built for a specific account without a second lookup.
         self.account_id = None
+
+        # Where `git archive HEAD` is taken from when the boot payload is
+        # published. Set by the CLI from `--project-root`; None means the
+        # process's working directory.
+        self.project_root = None
 
         # Escape hatches for the two globally-unique names. S3 bucket names are
         # a single worldwide namespace, so a derived name can genuinely already
@@ -314,7 +331,15 @@ def names(spec):
         "instance_profile": f"{base}-node",
         "config_bucket": spec.config_bucket or f"{base}-config",
         "secrets_object": "bootstrap-secrets.json",
-        "stage1_object": "bootstrap/stage1.json",
+        "bootstrap_prefix": BOOTSTRAP_PREFIX,
+        "stage1_object": f"{BOOTSTRAP_PREFIX}/stage1.json",
+        "stage1_script_object": f"{BOOTSTRAP_PREFIX}/stage1.sh",
+        "app_archive_object": f"{BOOTSTRAP_PREFIX}/app.tar.gz",
+        "cloudwatch_object": f"{BOOTSTRAP_PREFIX}/cloudwatch-agent.json",
+        "config_prefix": f"{CONFIG_PREFIX_ROOT}/{spec.project}/{spec.env}",
+        "django_conf_object":
+            f"{CONFIG_PREFIX_ROOT}/{spec.project}/{spec.env}/django.conf",
+        "metrics_namespace": f"mojo/{base}",
         "db_subnet_group": f"{base}-aurora",
         "db_cluster": f"{base}-aurora",
         "db_writer": f"{base}-aurora-writer",

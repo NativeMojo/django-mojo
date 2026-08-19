@@ -396,6 +396,38 @@ Methods rendered are those listed in the resolved auth config's
 - Forgot password (code or link method; auto-routes via SMS when identity is phone)
 - Reset code entry / set new password (from `?token=pr:...`)
 
+#### A reset link survives a cold bouncer challenge
+
+A `pr:` link handed to somebody with **no session** does not land on `/auth`
+first — it lands on the bouncer challenge page, which then redirects to
+`/auth` **without** the `token` query parameter. The server's forwarding
+allowlist does not carry `token`, deliberately: adding it would put a live
+credential into a redirect target the bouncer constructs.
+
+So the token makes the hop through `sessionStorage` instead, which survives a
+same-origin, same-tab navigation — which is exactly what that redirect is:
+
+1. `bouncer_challenge.html` reads `token` from `window.location.search`, and
+   if it starts with `pr:`, stashes it as `sessionStorage["mat_reset_token"]`
+   **before** its redirect.
+2. `login.html`, at its token-detection point, falls back to that key when the
+   URL carries no token: `else if (sessionStorage.getItem("mat_reset_token"))`
+   → open the set-password view.
+
+Both halves are template/JS only. There is **no** auth route change, no new
+forwarding allowlist entry, and no token added to any query string the server
+emits.
+
+**This fixed a live bug, not just a new-feature gap.** Before it, the printed
+or emailed link failed its *first* click for every recipient without a session
+cookie — they landed on a sign-in form holding a perfectly valid token nothing
+ever looked at — and it worked only if they happened to click the link a
+second time. The admin portal's existing "Send reset link" action was broken
+by the same mechanism, and is fixed by the same two template changes.
+
+Overriding either template? Keep both halves, or reset links stop working on
+first click for exactly the visitors who most need them.
+
 **Anti-enumeration UX (SMS view).** `on_sms_login` is deliberately generic — it
 returns the same success response whether or not the phone number has an account,
 and only actually sends a code to a real account. `login.html` reflects this

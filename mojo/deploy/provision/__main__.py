@@ -3,13 +3,21 @@
     python3 -m mojo.deploy.provision init            # eight questions, one file
     python3 -m mojo.deploy.provision apply --dry-run # what it would build, priced
     python3 -m mojo.deploy.provision apply           # build it
+    python3 -m mojo.deploy.provision configure       # config, nodes, HTTPS
+    python3 -m mojo.deploy.provision admin           # first superuser + link
     python3 -m mojo.deploy.provision status          # what is there now
 
-THIS FILE CREATES NOTHING. Every AWS mutation belongs to `plan.apply()`; this is
-prompting, a preview, a confirmation and rendering. That separation is what lets
-the portal offer the same provisioning without reimplementing the gate — and it
-is why `--dry-run` is safe by construction rather than by discipline: on that
-path `plan.apply` is not reached at all, and a test asserts it.
+THIS FILE CREATES NO AWS RESOURCE. Every AWS mutation belongs to `plan.apply()`;
+this is prompting, a preview, a confirmation and rendering. That separation is
+what lets the portal offer the same provisioning without reimplementing the gate
+— and it is why `--dry-run` is safe by construction rather than by discipline:
+on that path `plan.apply` is not reached at all, and a test asserts it.
+
+`configure` and `admin` are the two commands that reach PAST AWS — they publish
+one S3 object and then drive already-running nodes over SSH. They still create
+no infrastructure: a node that does not exist is reported, never launched, and
+`--dry-run` stops both before the first byte is written and before the first
+SSH connection is opened.
 
 A FRESH ACCOUNT TAKES ABOUT THREE RUNS, AND THAT IS THE DESIGN. Aurora and
 ElastiCache take five to fifteen minutes to become usable, and this package
@@ -42,8 +50,9 @@ prompted at import time would fire during that check.
 
 import sys
 
+from mojo.deploy.provision import certificate as certificate_module
 from mojo.deploy.provision import clients as clients_module
-from mojo.deploy.provision import discover, inputs, plan, report
+from mojo.deploy.provision import discover, inputs, plan, remote, render, report
 from mojo.deploy.provision import spec as spec_module
 
 
@@ -125,14 +134,43 @@ def build_parser():
         prog="python3 -m mojo.deploy.provision",
         description="Provision one AWS environment for django-mojo, "
                     "idempotently. Creates and modifies; never deletes.")
-    commands = parser.add_subparsers(dest="command", required=True,
-                                     metavar="{init,apply,status}")
+    commands = parser.add_subparsers(
+        dest="command", required=True,
+        metavar="{init,apply,configure,admin,status}")
     commands.add_parser(
         "init", parents=[shared],
         help="ask the eight questions and write the environment file")
     commands.add_parser(
         "apply", parents=[shared],
         help="show what would change, confirm, then converge")
+    configure = commands.add_parser(
+        "configure", parents=[shared],
+        help="publish django.conf, converge every node over SSH, and finish "
+             "HTTPS on a single-node environment")
+    configure.add_argument(
+        "--skip-certificate", action="store_true",
+        help="converge the nodes but do not touch certbot. For a run where "
+             "DNS has not moved yet")
+    configure.add_argument(
+        "--ssh-user", default=remote.SSH_USER,
+        help=f"the account to reach the nodes as (default: {remote.SSH_USER})")
+    configure.add_argument(
+        "--identity",
+        help="private key to authenticate with, when it is not one your agent "
+             "already holds")
+    admin = commands.add_parser(
+        "admin", parents=[shared],
+        help="create the first superuser and print a single-use login link")
+    admin.add_argument(
+        "--email",
+        help="the account to create (default: the environment file's "
+             "operator_email)")
+    admin.add_argument(
+        "--ssh-user", default=remote.SSH_USER,
+        help=f"the account to reach the node as (default: {remote.SSH_USER})")
+    admin.add_argument(
+        "--identity",
+        help="private key to authenticate with")
     status = commands.add_parser(
         "status", parents=[shared],
         help="observe the account and report, changing nothing")
@@ -163,6 +201,10 @@ def main(argv, console=None):
             return run_init(args, console)
         if args.command == "apply":
             return run_apply(args, console)
+        if args.command == "configure":
+            return run_configure(args, console)
+        if args.command == "admin":
+            return run_admin(args, console)
         return run_status(args, console)
     except KeyboardInterrupt:
         print("\ninterrupted — re-run `apply` to pick up where this stopped; "
@@ -247,7 +289,7 @@ def run_init(args, console):
 
 def run_status(args, console):
     answers = _answers(args)
-    topology = inputs.to_spec(answers, nlb=args.nlb)
+    topology = _topology(args, answers)
     connection = _connect(args, answers, topology, console,
                           announce=not args.json)
 
@@ -314,7 +356,7 @@ def run_apply(args, console):
                     "property of the environment.")
         console.say("!" * 72)
 
-    topology = inputs.to_spec(answers, nlb=args.nlb)
+    topology = _topology(args, answers)
     connection = _connect(args, answers, topology, console)
 
     findings, actions, run = plan.observe(connection, topology)
@@ -347,7 +389,251 @@ def run_apply(args, console):
     return _exit_for(run)
 
 
+# ── configure ───────────────────────────────────────────────────────────────
+
+def run_configure(args, console):
+    """From "the instances are running" to "the portal answers over HTTPS".
+
+    Read-only until it is not: the config is rendered and compared before it is
+    published, and `--dry-run` stops before the first byte is written or the
+    first SSH connection is made.
+    """
+    answers = _answers(args)
+    topology = _topology(args, answers)
+    connection = _connect(args, answers, topology, console)
+
+    findings, _actions, run = plan.observe(connection, topology)
+    if run.blocking:
+        render_findings(findings, console.say)
+        console.say("")
+        console.say("The account could not be read cleanly, so nothing was "
+                    "configured. Fix the above and re-run.")
+        return EXIT_FINDINGS
+
+    conf_findings, conf_actions, conf = render.ensure_config(
+        connection, topology, answers, run.observed, apply=not args.dry_run)
+    render_findings(conf_findings, console.say)
+
+    hosts = _node_hosts(run.observed, topology)
+    if not hosts:
+        console.say("")
+        console.say("No node addresses were resolved, so there is nothing to "
+                    "converge yet. Run `apply` until the nodes exist.")
+        return EXIT_FINDINGS
+
+    if args.dry_run:
+        console.say("")
+        console.say("--dry-run: django.conf was NOT published and no node was "
+                    "touched.")
+        console.say(f"  would converge: {', '.join(hosts)}")
+        if len(hosts) == 1:
+            console.say(f"  would finish HTTPS on {hosts[0]}")
+        else:
+            console.say("")
+            console.say(certificate_module.FLEET_HANDOFF.format(
+                apex=answers.get("apex_domain")))
+        return EXIT_OK
+
+    if not conf.as_dict().get("django_conf"):
+        console.say("")
+        console.say("django.conf was not published, so converging the nodes "
+                    "would install nothing. Fix the above and re-run.")
+        return EXIT_FINDINGS
+
+    console.say("")
+    console.say(f"converging {len(hosts)} node(s) over SSH — this waits for "
+                f"cloud-init, so it can take several minutes")
+    node_findings = remote.converge(
+        hosts, runner_for=lambda host: remote.build_runner(
+            host, user=args.ssh_user, identity=args.identity))
+    render_findings(node_findings, console.say)
+
+    all_findings = list(conf_findings) + list(node_findings)
+    if report.Report(node_findings).is_blocking():
+        _summarize(all_findings, console)
+        return EXIT_FINDINGS
+
+    all_findings.extend(
+        _finish_https(args, answers, topology, hosts, console))
+    all_findings.extend(_add_deploy_key(args, answers, hosts, console))
+
+    _summarize(all_findings, console)
+    return EXIT_FINDINGS if report.Report(all_findings).is_blocking() else EXIT_OK
+
+
+def _finish_https(args, answers, topology, hosts, console):
+    """The certificate, on a single node only.
+
+    A fleet gets the hand-off text instead of an attempt: `certbot --nginx`
+    mutates the vhost in a way that breaks `nginx -t` on any node certbot did
+    not run on, so "try it and see" is not a safe default here.
+    """
+    apex = answers.get("apex_domain")
+    if len(hosts) > 1 or spec_module.wants_balancer(topology):
+        console.say("")
+        console.say(certificate_module.FLEET_HANDOFF.format(apex=apex))
+        return []
+    if args.skip_certificate:
+        console.say("")
+        console.say("--skip-certificate: the node is serving its self-signed "
+                    "placeholder. Re-run without the flag once DNS points here.")
+        return []
+
+    console.say("")
+    console.say(f"finishing HTTPS for {apex}")
+    run = remote.build_runner(hosts[0], user=args.ssh_user,
+                              identity=args.identity)
+    findings = certificate_module.configure_certificate(
+        run, apex, answers.get("operator_email"), expected_ip=hosts[0])
+    render_findings(findings, console.say)
+    return findings
+
+
+def _add_deploy_key(args, answers, hosts, console):
+    """Best effort, and honest about it.
+
+    A failure here is not a failed provision: it costs the operator one paste
+    into a browser, so it prints the key and the URL rather than exiting
+    non-zero.
+    """
+    repo = answers.get("github_repo")
+    if not repo:
+        return []
+    run = remote.build_runner(hosts[0], user=args.ssh_user,
+                              identity=args.identity)
+    rc, pubkey, _ = run("cat /home/ec2-user/.ssh/id_ed25519.pub", timeout=30)
+    if rc != 0 or not pubkey.strip():
+        console.say("")
+        console.say("could not read the node's deploy public key — "
+                    "ec2_bootstrap.sh generates /home/ec2-user/.ssh/id_ed25519")
+        return []
+
+    import subprocess
+
+    title = f"ec2-user@{hosts[0]}"
+    done = subprocess.run(
+        ["gh", "repo", "deploy-key", "add", "/dev/stdin", "--repo", repo,
+         "--title", title],
+        input=pubkey + "\n", capture_output=True, text=True, check=False)
+    console.say("")
+    if done.returncode == 0:
+        console.say(f"added the node's deploy key to {repo} as {title}")
+        return []
+    detail = (done.stderr or "").strip().splitlines()
+    console.say(f"could not add the deploy key to {repo} automatically "
+                f"({detail[-1] if detail else 'is gh installed and logged in?'})")
+    console.say(f"  add it by hand at https://github.com/{repo}/settings/keys")
+    console.say(f"  {pubkey.strip()}")
+    return []
+
+
+def _summarize(findings, console):
+    counts = report.Report(findings).counts()
+    console.say("")
+    console.say("─" * 72)
+    console.say(f"  {counts[report.PASS]} ok · {counts[report.MISSING]} "
+                f"missing · {counts[report.PENDING]} pending · "
+                f"{counts[report.BLIND]} failed")
+
+
+# ── admin ───────────────────────────────────────────────────────────────────
+
+LINK_NOTE = ("This link is SINGLE USE and expires in one hour. Opening it sets "
+             "the password for the account; it does not reveal one.")
+
+
+def run_admin(args, console):
+    """Create the first superuser on node 0 and print its login link."""
+    answers = _answers(args)
+    topology = _topology(args, answers)
+    connection = _connect(args, answers, topology, console)
+
+    _findings, _actions, run = plan.observe(connection, topology)
+    hosts = _node_hosts(run.observed, topology)
+    if not hosts:
+        print("error: no node address was resolved, so there is nowhere to "
+              "create the account. Run `apply` first.", file=sys.stderr)
+        return EXIT_FINDINGS
+
+    email = args.email or answers.get("operator_email")
+    if args.dry_run:
+        console.say(f"--dry-run: would create {email} as a superuser on "
+                    f"{hosts[0]} and print a one-hour login link.")
+        return EXIT_OK
+
+    runner = remote.build_runner(hosts[0], user=args.ssh_user,
+                                 identity=args.identity)
+    rc, out, err = runner(
+        f"cd {remote.PROJ_PATH} && sudo -u ec2-user python3 bin/manage.py "
+        f"create_user --email {email} --superuser --login-link", timeout=300)
+    output = "\n".join(part for part in (out, err) if part)
+
+    if rc != 0 and "already exists" in output:
+        # Not a failure worth a traceback: the account is there, and what the
+        # operator actually wants is another link for it.
+        console.say("")
+        console.say(f"{email} already exists on this environment, so no "
+                    f"account was created.")
+        console.say("  To send that account a fresh link, use the portal's "
+                    "Users section (Send reset link), or on the node:")
+        console.say(f"    sudo -u ec2-user python3 {remote.PROJ_PATH}/bin/"
+                    f"manage.py shell -c \\")
+        console.say("      \"from mojo.apps.account.models import User; "
+                    "from mojo.apps.account.utils import tokens; "
+                    "from mojo.apps.account.utils.webapp_url import "
+                    "build_token_url; "
+                    f"u=User.objects.get(email='{email}'); "
+                    "print(build_token_url('password_reset', "
+                    "tokens.generate_password_reset_token(u), user=u))\"")
+        return EXIT_OK
+    if rc != 0:
+        print(f"error: creating {email} on {hosts[0]} failed:\n{output}",
+              file=sys.stderr)
+        return EXIT_FINDINGS
+
+    console.say("")
+    for line in output.splitlines():
+        console.say(f"  {line}")
+    console.say("")
+    console.say(f"  {LINK_NOTE}")
+    return EXIT_OK
+
+
 # ── shared ──────────────────────────────────────────────────────────────────
+
+def _topology(args, answers):
+    """The spec, plus where `git archive HEAD` is taken from.
+
+    `project_root` is not one of the eight questions and never lands in the
+    committed environment file: it is a property of the machine running the
+    command, not of the environment.
+    """
+    topology = inputs.to_spec(answers, nlb=args.nlb)
+    topology.project_root = args.project_root
+    return topology
+
+
+def _node_hosts(observed, topology):
+    """The addresses to SSH to, node 0 first.
+
+    Elastic IPs where the topology has them; otherwise the instances' own
+    public addresses, which is the shape behind a balancer.
+    """
+    hosts = [address for address in (observed.get("node_addresses") or [])
+             if address]
+    if hosts:
+        return hosts
+    names = spec_module.names(topology)
+    by_name = {}
+    for instance in observed.get("instances") or []:
+        if (instance.get("State") or {}).get("Name") not in ("pending",
+                                                             "running"):
+            continue
+        tags = discover.tags_of(instance)
+        if instance.get("PublicIpAddress"):
+            by_name[tags.get("Name")] = instance.get("PublicIpAddress")
+    return [by_name[name] for name in names["nodes"] if name in by_name]
+
 
 def _answers(args):
     """Load and validate the environment file, or raise EnvFileError."""
