@@ -17,9 +17,12 @@ exists to prevent cannot occur. Every resource that IS adopted by tag is tagged
 in its create call.
 """
 
+import hashlib
 import json
+import os
 import secrets as randomness
 import string
+import subprocess
 
 from mojo.deploy.provision import report
 from mojo.deploy.provision import spec as spec_module
@@ -28,6 +31,23 @@ from mojo.deploy.provision import spec as spec_module
 BUCKET_STEP = "config_bucket"
 SECRETS_STEP = "secrets"
 STAGE1_STEP = "stage1_payload"
+PAYLOAD_STEP = "bootstrap_payload"
+
+# The placeholder the packaged stage1.sh ships with. Substituted here, on the
+# operator's machine, so the node installs the SAME django-mojo release that
+# provisioned its environment rather than whatever PyPI's `latest` is by the
+# time the instance boots.
+VERSION_PLACEHOLDER = "@DJANGO_MOJO_VERSION@"
+
+CLOUDWATCH_PLACEHOLDERS = (
+    ("@LOG_GROUP_NGINX@", "nginx"),
+    ("@LOG_GROUP_APP@", "app"),
+    ("@LOG_GROUP_CLOUD_INIT@", "cloud-init"),
+)
+
+PYPI_PROJECT = "django-mojo"
+PYPI_URL = "https://pypi.org/pypi/%s/%s/json"
+PYPI_TIMEOUT = 10
 
 # RDS rejects '/', '"', '@' and spaces in a master password, and ElastiCache is
 # fussier still. Alphanumerics at this length are well past the point where
@@ -342,6 +362,251 @@ def ensure_stage1_payload(clients, spec, observed, apply=False):
             ServerSideEncryption="AES256"))
     if stored is not None:
         result.set("stage1", dict(wanted))
+    return findings, actions, result
+
+
+# ── the boot payload ────────────────────────────────────────────────────────
+
+def scripts_dir():
+    """Where the packaged node scripts live.
+
+    Resolved by package path, NOT through `mojo.deploy.__main__`'s `LOCATABLE`
+    allowlist. That tuple exists so a project's sudo-executed shim can resolve
+    exactly two scripts and nothing else; stage1.sh is downloaded and run by a
+    booting node, never located by a shim, so widening the allowlist for it
+    would give away the guard for no benefit.
+    """
+    import mojo.deploy
+
+    return os.path.join(
+        os.path.dirname(os.path.abspath(mojo.deploy.__file__)), "scripts")
+
+
+def django_mojo_version():
+    import mojo
+
+    return mojo.__version__
+
+
+def stage1_script(version=None):
+    """The packaged stage1.sh, with the version pin substituted.
+
+    Refuses to hand back an unsubstituted script: the placeholder reaching a
+    node means `pip install django-mojo==@DJANGO_MOJO_VERSION@`, which fails
+    at boot rather than here.
+    """
+    version = version or django_mojo_version()
+    with open(os.path.join(scripts_dir(), "stage1.sh")) as handle:
+        body = handle.read()
+    if VERSION_PLACEHOLDER not in body:
+        raise ValueError(
+            f"the packaged stage1.sh no longer contains {VERSION_PLACEHOLDER} "
+            f"— the version pin would silently stop being applied")
+    return body.replace(VERSION_PLACEHOLDER, version)
+
+
+def cloudwatch_agent_config(spec):
+    """The packaged agent configuration, pointed at THIS environment's groups.
+
+    The names come from `spec.names()` and nowhere else, so the agent, the log
+    groups `observability.py` creates and the IAM grant `identity.py` writes
+    cannot drift apart — a test asserts these three substituted values equal
+    `spec.names()["log_groups"]`.
+    """
+    names = spec_module.names(spec)
+    with open(os.path.join(scripts_dir(), "cloudwatch-agent.json")) as handle:
+        body = handle.read()
+    for placeholder, kind in CLOUDWATCH_PLACEHOLDERS:
+        body = body.replace(placeholder, names["log_groups"][kind])
+    body = body.replace("@METRICS_NAMESPACE@", names["metrics_namespace"])
+    return body
+
+
+def app_archive(project_root="."):
+    """`git archive HEAD` of the project, as bytes, plus any warnings.
+
+    A tarball rather than a clone: a fresh node has no deploy key yet, and the
+    tree it unpacks is exactly the commit the operator provisioned from.
+
+    A DIRTY WORKTREE WARNS AND DOES NOT BLOCK. `git archive HEAD` ships the
+    commit, not the working tree, so uncommitted work simply is not in what the
+    node runs — worth saying out loud, not worth refusing over, and it matches
+    the warn-only treatment a dirty tree already gets elsewhere in this package.
+    """
+    warnings = []
+    root = project_root or "."
+
+    dirty = subprocess.run(["git", "-C", root, "status", "--porcelain"],
+                           capture_output=True, text=True, check=False)
+    if dirty.returncode != 0:
+        raise ValueError(
+            f"{os.path.abspath(root)} is not a git worktree, so there is no "
+            f"HEAD to archive — run `apply` from the project this environment "
+            f"deploys")
+    if dirty.stdout.strip():
+        warnings.append(
+            "the worktree has uncommitted changes — the node receives HEAD, "
+            "not what is on your disk")
+
+    archived = subprocess.run(
+        ["git", "-C", root, "archive", "--format=tar.gz", "HEAD"],
+        capture_output=True, check=False)
+    if archived.returncode != 0:
+        raise ValueError(
+            f"git archive HEAD failed in {os.path.abspath(root)}: "
+            f"{archived.stderr.decode('utf-8', 'replace').strip()}")
+    return archived.stdout, warnings
+
+
+def pypi_has_version(version, timeout=PYPI_TIMEOUT):
+    """Is this exact django-mojo version published? True / False / None.
+
+    None means "could not tell" — offline, proxied, PyPI having a bad day —
+    and is deliberately distinct from False, because refusing to provision on
+    a failed HTTP request would be a network flake standing between an
+    operator and their environment.
+
+    Run BEFORE any instance launches. A pin that does not exist fails at
+    `pip install` on a node that is already running and already billing, and
+    the operator finds out by reading /var/log/mojo-stage1.log over SSH.
+
+    A yanked release still installs from an exact pin (PEP 592), so "published
+    once" is the whole question here.
+    """
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(
+        PYPI_URL % (PYPI_PROJECT, version), method="HEAD")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as answer:
+            return 200 <= answer.status < 300
+    except urllib.error.HTTPError as err:
+        if err.code == 404:
+            return False
+        return None
+    except Exception:
+        return None
+
+
+def published_sha(s3, bucket, key):
+    """The sha256 this package recorded when it last wrote the object."""
+    try:
+        head = s3.head_object(Bucket=bucket, Key=key)
+    except Exception:
+        return None
+    return (head.get("Metadata") or {}).get("sha256")
+
+
+def put_object(s3, bucket, key, body, content_type):
+    """One published object, with its digest in the metadata.
+
+    `config_sync` reads exactly this metadata key to verify what it downloads,
+    and refuses an object it cannot verify when `CONFIG_SYNC_REQUIRE_SHA` is
+    on — so every publisher in this package sets it.
+    """
+    if isinstance(body, str):
+        body = body.encode("utf-8")
+    return s3.put_object(
+        Bucket=bucket, Key=key, Body=body, ContentType=content_type,
+        ServerSideEncryption="AES256",
+        Metadata={"sha256": hashlib.sha256(body).hexdigest()})
+
+
+def ensure_bootstrap_payload(clients, spec, observed, apply=False):
+    """Everything a node downloads at boot, published before any node exists.
+
+    Three objects under the bucket's `bootstrap/` prefix: the substituted
+    stage-1 script, the application tarball and the CloudWatch agent's
+    configuration. `nodes` depends on this step and refuses to launch without
+    it, which is what keeps the ordering honest — an instance that boots before
+    its payload is published spends money doing nothing until someone SSHes in.
+    """
+    findings, actions = [], []
+    result = report.Result()
+    names = spec_module.names(spec)
+    bucket = observed.get("config_bucket") or names["config_bucket"]
+    version = django_mojo_version()
+
+    published = pypi_has_version(version)
+    if published is False:
+        findings.append(report.manual(
+            PAYLOAD_STEP, "payload.version_unpublished",
+            f"django-mojo {version} is not on PyPI, and the node's stage 1 "
+            f"pins exactly that version",
+            "publish this release, or provision from a checkout of one that is "
+            "published — nothing is launched while the pin cannot be installed"))
+        return findings, actions, result
+    if published is None:
+        findings.append(report.existing(
+            PAYLOAD_STEP, "payload.version_unverified",
+            f"could not reach PyPI to confirm django-mojo {version} is "
+            f"published — continuing, but a node will fail at `pip install` if "
+            f"it is not"))
+    else:
+        findings.append(report.existing(
+            PAYLOAD_STEP, "payload.version",
+            f"nodes will pin django-mojo {version}"))
+
+    try:
+        script = stage1_script(version)
+        agent_config = cloudwatch_agent_config(spec)
+        archive, warnings = app_archive(getattr(spec, "project_root", None))
+    except ValueError as err:
+        findings.append(report.manual(
+            PAYLOAD_STEP, "payload.unbuildable",
+            f"the boot payload could not be built: {err}",
+            "fix the above and re-run — no node is launched without it"))
+        return findings, actions, result
+
+    for warning in warnings:
+        findings.append(report.drift(
+            PAYLOAD_STEP, "payload.worktree", warning,
+            "commit the change if the node should have it"))
+
+    objects = (
+        (names["stage1_script_object"], script, "text/x-shellscript"),
+        (names["cloudwatch_object"], agent_config, "application/json"),
+        (names["app_archive_object"], archive, "application/gzip"),
+    )
+
+    s3 = clients.get("s3")
+    stale = []
+    for key, body, _ in objects:
+        payload = body.encode("utf-8") if isinstance(body, str) else body
+        digest = hashlib.sha256(payload).hexdigest()
+        if published_sha(s3, bucket, key) == digest:
+            findings.append(report.existing(
+                PAYLOAD_STEP, "payload.ok", f"s3://{bucket}/{key} is current"))
+            continue
+        stale.append(key)
+        findings.append(report.missing(
+            PAYLOAD_STEP, "payload.stale",
+            f"s3://{bucket}/{key} is missing or out of date",
+            "apply publishes it before any node is launched"))
+        actions.append(report.Action(PAYLOAD_STEP, "write", f"s3://{bucket}/{key}"))
+
+    if not apply:
+        return findings, actions, result
+
+    for key, body, content_type in objects:
+        if key not in stale:
+            continue
+        stored = report.safe(
+            findings, PAYLOAD_STEP, "s3.put_object",
+            lambda k=key, b=body, c=content_type: put_object(
+                s3, bucket, k, b, c))
+        if stored is None:
+            return findings, actions, result
+
+    # Only now may a node be launched. `nodes` reads this key and refuses
+    # without it, so an unpublished payload can never become a running,
+    # billing, half-provisioned instance.
+    result.set("bootstrap_payload", {
+        "bucket": bucket,
+        "version": version,
+        "objects": [key for key, _, _ in objects],
+    })
     return findings, actions, result
 
 

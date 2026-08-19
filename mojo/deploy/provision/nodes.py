@@ -35,18 +35,48 @@ PROFILE_ERROR_MARKERS = ("Invalid IAM Instance Profile",
 
 RUNNING_STATES = ("pending", "running")
 
+# The project root every node script agrees on. Not configurable here: it is
+# baked into the skeleton's ec2_bootstrap.sh, into config_sync's defaults and
+# into check_node's audit, so a fifth opinion would only be a way to disagree.
+PROJ_PATH = "/opt/api"
+
+# EC2's own ceiling on user data, before base64. This script stays FAR under
+# it on purpose — `ec2_bootstrap.sh` alone is ~20KB, which is exactly why the
+# real payload is downloaded rather than embedded. The assertion below is a
+# guard against someone growing this back toward the cliff, not a close call.
+USER_DATA_LIMIT = 16384
+USER_DATA_BUDGET = 4096
+
+# The bootstrap credential contract `check_node.check_config_plane` audits: the
+# app user writes var/django.conf, the web user reads it.
+CONFIG_SYNC_OWNER = "ec2-user:www"
+
 
 def stage0_user_data(spec, hostname):
     """The first thing the box runs, and almost nothing.
 
-    Identity and swap only. The real provisioning payload arrives separately —
-    putting it here would mean an instance's configuration could only ever be
-    changed by replacing the instance, which is exactly the property this
-    topology is arranged to avoid.
+    Identity, swap, `var/bootstrap.conf`, and then it hands over: it downloads
+    the packaged `stage1.sh` from the config bucket and execs it. Everything of
+    any size lives in that script, because user data cannot be edited on a
+    running instance — putting the real payload here would mean a node's
+    provisioning could only ever be changed by replacing the node, which is
+    exactly the property this topology is arranged to avoid. It also does not
+    fit: `ec2_bootstrap.sh` is roughly 20KB against a 16KB ceiling.
+
+    NO CREDENTIALS APPEAR HERE. User data is readable by anything on the box
+    that can reach IMDS, and it is echoed back by `describe-instance-attribute`
+    to anyone with EC2 read access. The node reads S3 with its instance role;
+    `bootstrap.conf` carries endpoints and names only.
     """
-    return "\n".join([
+    names = spec_module.names(spec)
+    bucket = names["config_bucket"]
+    script_uri = f"s3://{bucket}/{names['stage1_script_object']}"
+
+    script = "\n".join([
         "#!/bin/bash",
         "set -euo pipefail",
+        "exec >> /var/log/mojo-stage0.log 2>&1",
+        f"echo \"stage0 $(date -Is) {hostname}\"",
         "",
         f"hostnamectl set-hostname {hostname}",
         f"echo '{hostname}' > /etc/hostname",
@@ -65,10 +95,36 @@ def stage0_user_data(spec, hostname):
         "  echo '/swapfile none swap sw 0 0' >> /etc/fstab",
         "sysctl -w vm.swappiness=10",
         "",
-        f"# project={spec.project} env={spec.env} region={spec.region}",
-        "# stage 1 reads s3://<config bucket>/bootstrap/stage1.json",
+        "# The config plane's own config. install(1) creates it at 0600 and the",
+        "# redirect below truncates rather than recreates, so the mode holds.",
+        f"mkdir -p {PROJ_PATH}/var",
+        f"install -m 0600 /dev/null {PROJ_PATH}/var/bootstrap.conf",
+        f"cat > {PROJ_PATH}/var/bootstrap.conf <<'MOJOCONF'",
+        f"AWS_REGION={spec.region}",
+        f"AWS_CONFIG_BUCKET={bucket}",
+        f"AWS_CONFIG_PREFIX={names['config_prefix']}",
+        f"CONFIG_SYNC_OWNER={CONFIG_SYNC_OWNER}",
+        "CONFIG_SYNC_RESTART=true",
+        "MOJOCONF",
+        "",
+        "# Stage 1. Downloaded with the instance role, never with a key.",
+        f"aws s3 cp --region {spec.region} \\",
+        f"  {script_uri} {PROJ_PATH}/var/stage1.sh",
+        f"chmod 0700 {PROJ_PATH}/var/stage1.sh",
+        f"exec bash {PROJ_PATH}/var/stage1.sh",
         "",
     ])
+
+    if len(script.encode("utf-8")) > USER_DATA_BUDGET:
+        # Refused here rather than by EC2 at launch: a `run_instances` that
+        # fails on user-data size after the network, the roles and the database
+        # already exist is a bill plus a manual cleanup.
+        raise ValueError(
+            f"stage-0 user data is {len(script.encode('utf-8'))} bytes, past "
+            f"this package's own {USER_DATA_BUDGET}-byte budget (EC2's hard "
+            f"limit is {USER_DATA_LIMIT}). Move whatever grew into "
+            f"mojo/deploy/scripts/stage1.sh, which is downloaded, not embedded")
+    return script
 
 
 def _instance_by_name(observed, hostname):
@@ -130,6 +186,17 @@ def ensure_nodes(clients, spec, observed, apply=False):
                 f"{hostname} cannot be launched: the image, the public subnets "
                 f"or the node security group are not resolved yet",
                 "let the network and identity steps run first"))
+            continue
+        if not observed.get("bootstrap_payload"):
+            # An instance whose stage-1 payload is not published boots, bills,
+            # and does nothing until somebody SSHes in to find out why. Not
+            # launching it is strictly better than launching it blind.
+            findings.append(report.missing(
+                STEP, "node.payload",
+                f"{hostname} was not launched: the stage-1 payload is not "
+                f"published yet",
+                "fix what the bootstrap_payload step reported — usually an "
+                "unpublished version pin — and re-run"))
             continue
         launched = _launch(ec2, spec, names, hostname, image_id,
                            subnet_ids[index % len(subnet_ids)], sg_id,
