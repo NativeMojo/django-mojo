@@ -35,7 +35,7 @@ def setup_admin_activity(opts):
     incident = Incident.objects.create(
         category=f"{PREFIX}incident", title="Activity needle incident",
         details="operator evidence", priority=8, group=group_a,
-        metadata={"client_secret": "never-render-raw"},
+        metadata={"client_secret": "raw-visible-to-admins"},
     )
     for index in range(30):
         Event.objects.create(
@@ -43,17 +43,17 @@ def setup_admin_activity(opts):
             title=f"Activity event {index}", details="bounded search evidence",
             level=index % 10, group=group_a if index < 20 else group_b,
             incident=incident if index < 20 else None,
-            metadata={"password": "never-render-raw"},
+            metadata={"password": "raw-visible-to-admins"},
         )
     ticket = Ticket.objects.create(
         category=f"{PREFIX}ticket", title="Activity ticket", description="review",
         group=group_a, user=user, assignee=user, incident=incident,
-        metadata={"api_token": "never-render-raw"},
+        metadata={"api_token": "raw-visible-to-admins"},
     )
     Log.objects.create(
         kind=f"{PREFIX}needle", level="warning", path="/activity/test",
         gid=group_a.pk, uid=user.pk, username=ADMIN,
-        payload='{"password":"never-render-raw"}', log="Activity search needle",
+        payload='{"password":"raw-visible-to-admins"}', log="Activity search needle",
     )
     opts.group_a_id = group_a.pk
     opts.group_b_id = group_b.pk
@@ -173,7 +173,8 @@ def test_activity_browser_contract(opts):
     assert "state.subject_type = ''" not in page, "clearing visible filters must preserve contextual subject scope"
     assert ".activity-filter-panel[hidden]" in styles and "display: none" in styles, "collapsed secondary filters must leave the content flow"
     assert "var(--border)" not in styles and "var(--surface-alt)" not in styles, "Activity styles must use the portal's defined surface tokens"
-    assert "SENSITIVE_KEY" in page and "[redacted]" in page
+    assert "SENSITIVE_KEY" not in page and "[redacted]" not in page, \
+        "the admin evidence display shows values as stored — no key-name redaction; the API already serves these admins the raw metadata"
     assert "depth >= 1000" in page, "the depth guard is stack protection only — it must never reach real evidence (mojosec samples sit at depth 5+)"
     assert "depth >= 5" not in page and "slice(0, 40)" not in page and "slice(0, 80)" not in page, \
         "display caps must be too large for legitimate evidence to hit"

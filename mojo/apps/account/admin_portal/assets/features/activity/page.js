@@ -15,7 +15,6 @@ const QUERY_KEYS = new Set([
   'date_from', 'date_to', 'subject_type', 'subject_id',
   'subject_model', 'inspector', 'return',
 ]);
-const SENSITIVE_KEY = /(password|secret|token|authorization|cookie|credential|api[_-]?key|private[_-]?key)/i;
 const SUBJECT_TYPES = new Set(['incident', 'user', 'group', 'model']);
 
 const MODELS = {
@@ -150,22 +149,22 @@ function activityEnvelope(envelope) {
   };
 }
 
-// Display-shaping only: the API already serves admins the raw metadata, so these
+// Size-bounding only: the API already serves admins the raw metadata, so these
 // caps exist to keep a pathological blob from hanging the renderer — never to
-// withhold evidence. Every cap must be far beyond real data, and every
-// truncation must announce itself.
-function maskEvidence(value, depth = 0) {
+// withhold evidence. Values render exactly as stored; every cap must be far
+// beyond real data, and every truncation must announce itself.
+function boundEvidence(value, depth = 0) {
   if (depth >= 1000) return '[depth limit]';
   if (Array.isArray(value)) {
-    const masked = value.slice(0, 500).map((item) => maskEvidence(item, depth + 1));
-    if (value.length > masked.length) masked.push(`[+${value.length - masked.length} more items]`);
-    return masked;
+    const bounded = value.slice(0, 500).map((item) => boundEvidence(item, depth + 1));
+    if (value.length > bounded.length) bounded.push(`[+${value.length - bounded.length} more items]`);
+    return bounded;
   }
   if (value && typeof value === 'object') {
     const entries = Object.entries(value);
-    const masked = Object.fromEntries(entries.slice(0, 500).map(([key, item]) => [key, SENSITIVE_KEY.test(key) ? '[redacted]' : maskEvidence(item, depth + 1)]));
-    if (entries.length > 500) masked['[truncated]'] = `+${entries.length - 500} more keys`;
-    return masked;
+    const bounded = Object.fromEntries(entries.slice(0, 500).map(([key, item]) => [key, boundEvidence(item, depth + 1)]));
+    if (entries.length > 500) bounded['[truncated]'] = `+${entries.length - 500} more keys`;
+    return bounded;
   }
   if (typeof value === 'string' && value.length > 4000) return `${value.slice(0, 4000)}… [truncated]`;
   return value;
@@ -178,10 +177,10 @@ function parseEvidence(value) {
 
 function evidenceBlock(label, value) {
   const parsed = parseEvidence(value);
-  const safe = maskEvidence(parsed);
-  const text = typeof safe === 'string' ? safe : JSON.stringify(safe, null, 2);
+  const display = boundEvidence(parsed);
+  const text = typeof display === 'string' ? display : JSON.stringify(display, null, 2);
   // Copy hands over the stored value exactly — investigations must never
-  // inherit the display mask.
+  // inherit the display bounds.
   const raw = typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2);
   const copy = h('button', {class: 'button ghost compact', type: 'button', onclick: async (event) => {
     await navigator.clipboard?.writeText(raw); event.currentTarget.textContent = 'Copied';
