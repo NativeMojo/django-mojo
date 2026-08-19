@@ -185,7 +185,9 @@ idle|address|github|verify|complete|lost_key|new_group` for WebApp onboarding
 (the last state has zero memberships and loses the first committed response),
 `--setup-state idle|choice|delay|error|fresh|ambiguous` for resumable Setup and
 its busy/error/440/lost-response states,
-`--dashboard-state healthy|degraded|denied|unknown` for Dashboard source states,
+`--dashboard-state healthy|degraded|down|denied|unknown` for Dashboard source
+states (`down` proves a failure and reddens the headline; `degraded` is amber
+evidence with availability still green),
 and `--port` when parallel work needs isolation. Every launch resets mutable
 provider state before serving.
 

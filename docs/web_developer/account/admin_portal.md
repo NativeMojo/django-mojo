@@ -162,8 +162,11 @@ descriptors; no URL, package name, or module path comes from user or deployment
 settings.
 
 Dashboard consumes `GET /api/account/admin/dashboard`, never Setup readiness.
-Its independently permissioned evidence and status vocabulary are documented
-in the [Dashboard API](admin_portal/dashboard.md).
+It is a status page: one availability sentence that turns red only when a
+source proves a failure, aligned infrastructure/software rows, and an attention
+backlog that stays muted. Its per-source authorities, the schema-2 payload, and
+the availability-vs-attention split are documented in the
+[Dashboard API](admin_portal/dashboard.md).
 
 Feature renderers receive `{ctx, route, navigate, signal}` and return one DOM
 node. Honor the abort signal for fetches and attach a `dispose()` function to
