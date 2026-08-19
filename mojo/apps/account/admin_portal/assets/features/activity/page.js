@@ -183,7 +183,7 @@ function knownReference(row) {
   const name = String(row.model_name || '').toLowerCase();
   const rawId = String(row.model_id || '');
   const destinations = {
-    user: ['users', 'User'], group: ['groups', 'Group'], webapp: ['webapps', 'WebApp'],
+    user: ['users', 'User'], group: ['groups', 'Group'], webapp: ['deployments', 'WebApp'],
     domain: ['domains', 'Domain'], platformdeployment: ['deployments', 'Deployment'],
   };
   if (destinations[name] && /^[A-Za-z0-9._:-]{1,80}$/.test(rawId)) {
