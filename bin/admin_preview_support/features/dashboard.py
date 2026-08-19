@@ -70,6 +70,15 @@ def _healthy_sources():
             "verified": {"ok": True, "code": None,
                          "message": "Connection verified",
                          "at": "2026-08-18T09:14:00+00:00"}}),
+        "email": _source(data={
+            "configured": True, "domains": 3, "sendable_domains": 2,
+            "names": ["inbound.example", "mojo.example", "sandbox.example"],
+            "default_sender": "support@mojo.example",
+            "posture": {"default_sender_configured": True,
+                        "default_sender_conflict": False,
+                        "templates_installed": True,
+                        "missing_template_count": 0},
+            "checked_at": "2026-08-18T09:14:00+00:00"}),
         "last_deployment": _source(data={"items": [{
             "id": "18180000-0000-4000-8000-000000000001", "sha": "8" * 40,
             "status": "converged", "created": NOW, "finished": NOW,

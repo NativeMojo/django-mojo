@@ -1,13 +1,13 @@
 """Foundation gallery and reset coordination for the Admin preview."""
 
 from .features import (
-    activity, advanced, capacity, dashboard, maintenance, people, platform,
-    settings, sms, webapps,
+    activity, advanced, capacity, dashboard, email, maintenance, people,
+    platform, settings, sms, webapps,
 )
 
 
 PROVIDERS = (dashboard, people, webapps, activity, platform, advanced, settings,
-             sms)
+             sms, email)
 # Providers that serve pages but publish no feature lane of their own. They
 # still hold scenario state, so reset must reach them; bootstrap must not,
 # or the shell would learn about a feature its registry has never heard of.
@@ -37,6 +37,7 @@ def bootstrap(groups, membership_groups=None, can_create_webapp_group=True,
         "settings": True, "catalog_write": True,
         "settings_owner_display": True, "settings_owner_edit": True,
         "messaging_sms": True, "messaging_sms_system_write": True,
+        "email": True,
         "infrastructure_managed": infrastructure_mode == "managed",
     }
     return {
@@ -60,7 +61,8 @@ def reset(handler, fixtures, *, key_state="active", setup_state="idle",
           dashboard_state="healthy", settings_state="normal",
           metrics_state="live", maintenance_state="findings",
           deployments_state="mixed", capacity_state="healthy",
-          sms_state="configured", infrastructure_mode="managed"):
+          sms_state="configured", email_state="configured",
+          infrastructure_mode="managed"):
     """Reset every stateful provider so scenarios never leak across runs."""
     # An installation-wide property rather than a provider scenario, so it is
     # stamped on the handler here instead of being threaded through resets.
@@ -76,4 +78,5 @@ def reset(handler, fixtures, *, key_state="active", setup_state="idle",
                        maintenance_state=maintenance_state,
                        deployments_state=deployments_state,
                        capacity_state=capacity_state,
-                       sms_state=sms_state)
+                       sms_state=sms_state,
+                       email_state=email_state)

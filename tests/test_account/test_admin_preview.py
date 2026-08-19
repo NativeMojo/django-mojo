@@ -772,3 +772,67 @@ def test_sms_preview_states(opts):
         {"action": "send_test", "to_number": "+15550001111"})
     assert status == 200 and sent["test_number"] is True, \
         f"a +1555 recipient is not reported as a test number: {sent!r}"
+
+
+@th.django_unit_test("preview serves the Email feature and its mock routes deterministically")
+def test_email_preview_states(opts):
+    from urllib.parse import urlparse
+
+    server = _server()
+    bootstrap = server.bootstrap([])
+    assert bootstrap["capabilities"].get("email") is True, \
+        "the deterministic bootstrap fixed roster omits the email capability"
+    email = bootstrap["features"].get("email")
+    assert email and email["enabled"] is True \
+        and email["capabilities"] == {"view": True, "manage": True}, \
+        f"the preview bootstrap does not publish the Email feature: {email!r}"
+
+    feature = server.email
+
+    class Handler:
+        pass
+
+    feature.reset(Handler, {})
+    code, payload = feature.get(Handler, urlparse("/api/aws/email/summary"))
+    assert code == 200, f"the email summary fixture answered {code}"
+    report = payload["data"]
+    names = {row["name"] for row in report["domains"]}
+    assert {"mojo.example", "sandbox.example", "inbound.example"} <= names, \
+        f"the fixture lost a documented domain scenario: {names}"
+    sandbox = next(row for row in report["domains"]
+                   if row["name"] == "sandbox.example")
+    assert sandbox["can_send"] is False, \
+        "the sandbox-only scenario must not read as sendable"
+    inbound = next(row for row in report["domains"]
+                   if row["name"] == "inbound.example")
+    assert inbound["can_send"] is True and inbound["can_recv"] is False, \
+        "the half-configured receiving scenario changed shape"
+
+    code, payload = feature.get(Handler, urlparse("/api/aws/email/domain/2/audit"))
+    assert code == 200 and payload["data"]["audit_pass"] is False, \
+        "the sandbox domain's audit fixture no longer reports its finding"
+    assert payload["data"]["recommendations"], \
+        "the failing audit fixture carries no plain-words recommendation"
+
+    for from_email, expected in (
+            ("noreply@mojo.example", "outbound_not_allowed"),
+            ("ghost@mojo.example", "mailbox_not_found"),
+            ("test@sandbox.example", "domain_not_verified"),
+            ("", "invalid_request")):
+        code, payload = feature.post(Handler, "/api/aws/email/test", {
+            "from_email": from_email, "to": "you@example.org", "subject": "s"})
+        assert code == 200, f"{expected}: the test-send fixture answered {code}"
+        assert payload["data"]["sent"] is False \
+            and payload["data"]["error_code"] == expected, \
+            f"{expected}: wrong structured error: {payload['data']!r}"
+
+    code, payload = feature.post(Handler, "/api/aws/email/test", {
+        "from_email": "support@mojo.example", "to": "fail@example.org",
+        "subject": "s"})
+    assert code == 200 and payload["data"]["status"] == "failed", \
+        f"the SES-refusal scenario changed shape: {payload['data']!r}"
+
+    code, payload = feature.post(Handler, "/api/aws/email/mailbox-default",
+                                 {"mailbox": 13, "scope": "system"})
+    assert code == 200 and payload["data"]["is_system_default"] is True, \
+        f"the mailbox-default fixture refused a valid claim: {payload!r}"

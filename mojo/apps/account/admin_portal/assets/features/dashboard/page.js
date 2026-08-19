@@ -280,6 +280,25 @@ function smsRow(source) {
     detailNode, action: {label: 'Manage', href: routeHref('messaging-sms')}});
 }
 
+function emailRow(source) {
+  const data = source.data || {};
+  const posture = data.posture || {};
+  const total = data.domains || 0;
+  const value = `${data.sendable_domains || 0} of ${total} domain${total === 1 ? '' : 's'} ready`;
+  let detail = '';
+  let detailNode = null;
+  if (posture.default_sender_conflict) {
+    detailNode = h('span', {class: 'row-detail warning',
+      text: 'more than one mailbox claims the system default'});
+  } else if (data.default_sender) {
+    detail = `sends as ${data.default_sender}`;
+  } else {
+    detailNode = h('span', {class: 'row-detail warning', text: 'no default sender'});
+  }
+  return statusRow({tone: tone(source), name: 'Email', value, detail, detailNode,
+    action: {label: 'Manage', href: routeHref('messaging-email')}});
+}
+
 function incidentsRow(source, ctx) {
   const data = source.data || {};
   const open = data.open || 0;
@@ -348,6 +367,10 @@ export async function dashboardPage(ctx) {
           {name: 'Text messages',
             source: sources.sms?.data?.configured ? sources.sms : null,
             build: smsRow},
+          // Same rule for email: no SES domain means no row, never a red one.
+          {name: 'Email',
+            source: sources.email?.data?.configured ? sources.email : null,
+            build: emailRow},
         ]),
         section('Needs attention', [
           {name: 'Incidents', source: sources.incidents,

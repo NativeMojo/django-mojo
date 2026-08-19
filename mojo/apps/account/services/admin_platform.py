@@ -680,6 +680,20 @@ def _dashboard_sms():
     return data
 
 
+def _dashboard_email():
+    """The system email (SES) row — configuration evidence, not availability.
+
+    Reads only what the last persisted SES audit wrote (``EmailDomain.status``,
+    ``can_send``/``can_recv``) plus the default-sender/templates posture —
+    zero AWS calls. ``configured`` False (no EmailDomain rows) renders as an
+    ABSENT row, never a red one, and the source is deliberately never
+    ``unhealthy`` — a broken email setup is not an outage, which is also why
+    it is not in AVAILABILITY_SOURCES.
+    """
+    from mojo.apps.aws.services import email_admin
+    return email_admin.dashboard_source()
+
+
 def _newest_drift_event():
     """The newest managed-engine drift event still inside the freshness window."""
     from mojo.apps.aws.services import version_drift
@@ -1080,6 +1094,7 @@ def dashboard_overview(request, refresh=False):
         "public_api": (platform, _api),
         "framework": (platform, lambda: _framework(refresh)),
         "sms": (platform, _dashboard_sms),
+        "email": (("manage_aws", "comms", "admin"), _dashboard_email),
         "last_deployment": (platform, _dashboard_deployment),
         "jobs": (platform, _dashboard_jobs),
         "sanity": (platform, _dashboard_sanity),

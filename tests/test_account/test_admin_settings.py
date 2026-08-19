@@ -366,8 +366,8 @@ def test_settings_feature_assets(opts):
     page = (ROOT / "mojo/apps/account/admin_portal/assets/features/settings/page.js").read_text()
     panels = (ROOT / "mojo/apps/account/admin_portal/assets/features/settings/panels.js").read_text()
     advanced = (ROOT / "mojo/apps/account/admin_portal/assets/features/advanced/page.js").read_text()
-    assert "[dashboard, webapps, advanced, people, activity, platform, settings, sms]" in registry, \
-        "the sidebar feature order is not Dashboard/Web Apps/Domains/People/Activity/Platform/Settings/SMS"
+    assert "[dashboard, webapps, advanced, people, activity, platform, settings, sms, email]" in registry, \
+        "the sidebar feature order is not Dashboard/Web Apps/Domains/People/Activity/Platform/Settings/SMS/Email"
     for contract in ("Search settings", "openBusy", "apiOnce", "configure_providers",
                      "rowSection", "statusRow", "How this platform is configured.",
                      "focus: 'geoip'"):

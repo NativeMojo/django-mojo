@@ -170,6 +170,9 @@ def on_admin_bootstrap(request):
             can_manage_webapps),
         "manage_webapps": can_manage_webapps,
         "manage_aws": has(["manage_aws"]),
+        # The one email tier — no read-only email permission exists anywhere
+        # in this repo, and this surface does not invent one.
+        "email": has(["manage_aws", "comms", "admin"]),
         "view_platform": has(["view_platform", "manage_platform", "admin"]),
         "manage_platform": has(["manage_platform", "admin"]),
         "view_platform_security": has([
