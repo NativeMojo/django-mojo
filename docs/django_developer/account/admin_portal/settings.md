@@ -181,6 +181,13 @@ still permits — the oldest row wins rather than the read failing. The blob
 stores a host-bearing message from a fixed vocabulary and never a key,
 credential, request body, or exception repr.
 
+The list treats a verification as current for **seven days**. Past that, the
+entry stops driving tone in either direction — no red dot, no Fix action, no
+undated reassurance — and the row shows a muted "last checked N days ago"
+instead. The stored record is untouched; the cap is presentation, applied in
+the browser where the age is already computed (`verifyIsCurrent` in the
+settings feature's `language.js`).
+
 The GeoIP panel reports the provider edit revision, the published S3 revision,
 and the revision loaded by the node serving the request. The edit revision
 guards all provider fields; a published/loaded mismatch means the normal

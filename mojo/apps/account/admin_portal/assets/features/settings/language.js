@@ -54,6 +54,18 @@ export function agoText(iso) {
   return `checked ${plural(Math.round(hours / 24), 'day')} ago`;
 }
 
+// A verification is a point-in-time fact. After this long it stops driving
+// tone in either direction — stale success must not reassure and stale
+// failure must not alarm; both degrade to a dated "last checked" note.
+export const VERIFY_TONE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function verifyIsCurrent(entry) {
+  if (!entry || !entry.at) return false;
+  const then = new Date(entry.at);
+  if (Number.isNaN(then.valueOf())) return false;
+  return Date.now() - then.valueOf() <= VERIFY_TONE_MAX_AGE_MS;
+}
+
 // Every entry receives a value that is present and meaningful — the guards in
 // sentence() have already handled absent, ambiguous, and unreadable.
 const SENTENCE = {

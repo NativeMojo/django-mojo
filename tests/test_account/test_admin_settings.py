@@ -375,6 +375,15 @@ def test_settings_feature_assets(opts):
     for contract in ("Technical details", "settings-token-editor", "topic",
                      "expected_revision"):
         assert contract in panels, f"the Settings panels omitted {contract}"
+    language = (ROOT / "mojo/apps/account/admin_portal/assets/features/settings/language.js").read_text()
+    for contract in ("VERIFY_TONE_MAX_AGE_MS", "export function verifyIsCurrent"):
+        assert contract in language, \
+            f"the Settings language layer omitted the verify staleness cap: {contract}"
+    # A verification is a point-in-time fact: past the cap it must stop driving
+    # tone (no red dot, no Fix) and read as a dated "last checked" note.
+    for contract in ("verifyIsCurrent(verify)", "last ${ago}"):
+        assert contract in page, \
+            f"the Settings list omitted the verify staleness cap: {contract}"
     # The one combined provider modal is what this feature replaced; if the
     # string comes back, so has the "fix SMS by reading GeoIP" page.
     for gone in ("Mojo GeoIP and SMS", "openModal"):
