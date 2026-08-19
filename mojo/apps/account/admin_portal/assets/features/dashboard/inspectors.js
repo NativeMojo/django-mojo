@@ -106,6 +106,14 @@ export function openFleetInspector(ctx, computeSource) {
   slot.replaceChildren(h('p', {class: 'muted small', text: 'Loading edge runners…'}));
   api(FLEET_PATH).then((report) => {
     const section = report?.sections?.fleet || {};
+    if (!Object.keys(section.data || {}).length) {
+      // An unauthorized/timeout envelope carries no data — absent evidence is
+      // "unavailable", never "no runners have heartbeated".
+      slot.replaceChildren(
+        h('p', {class: 'muted small', text: 'Edge runners unavailable'}),
+        h('p', {class: 'muted small', text: plainReason(section) || 'no evidence'}));
+      return;
+    }
     slot.replaceChildren(
       h('h3', {class: 'dash-subhead', text: `Edge runners · ${section.data?.channel || 'edge'}`}),
       runnerList(section.data?.runners || []));
