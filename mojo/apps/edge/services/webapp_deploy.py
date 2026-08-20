@@ -296,6 +296,41 @@ def orchestrate(deployment_id):
     return "failed"
 
 
+def _alias_warnings(deployment, pending, excluded):
+    """Prove the app's ALIAS addresses softly — never fail the node on one.
+
+    The PRIMARY address is the deployment's contract and keeps its hard proof
+    above. An alias is an extra custom domain: one of them lagging (bytes still
+    landing, a vhost excluded from this generation) is a transient the fleet
+    sweep retries on its own. Failing the node instead would roll the whole
+    release back — and, because the identical check runs during ROLLBACK, one
+    customer domain's transient problem would terminally fail every deploy for
+    that app.
+
+    Reported as named warnings on this node's job result (visible through
+    `target_status`) and logged. They are deliberately NOT written onto
+    `WebAppDeployment.detail`: several nodes write concurrently, and
+    orchestrate overwrites that field with the terminal outcome anyway.
+    """
+    from mojo.apps.edge.models import Vhost
+
+    warnings = []
+    for alias in Vhost.objects.filter(
+            alias_of_id=deployment.webapp_id, is_enabled=True).select_related(
+                "domain").order_by("pk"):
+        if str(alias.pk) in pending:
+            warnings.append(
+                f"{alias.server_name}: release bytes still pending "
+                f"({pending[str(alias.pk)]})")
+        elif alias.pk in excluded:
+            warnings.append(
+                f"{alias.server_name}: excluded from this generation")
+    for warning in warnings:
+        logger.warning(
+            f"edge WebApp deployment {deployment.pk}: alias {warning}")
+    return warnings
+
+
 def install_node(job):
     """Install desired state and prove this deployment's vhost is healthy."""
     from mojo.apps.edge.services import installer
@@ -326,6 +361,7 @@ def install_node(job):
         "generation": installed.get("generation"),
         "changed": bool(installed.get("changed")),
         "rollback": bool(payload.get("rollback")),
+        "alias_warnings": _alias_warnings(deployment, pending, excluded),
     }
     job.metadata["webapp_deployment"] = result
     job.save(update_fields=["metadata", "modified"])

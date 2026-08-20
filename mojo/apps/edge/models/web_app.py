@@ -224,6 +224,15 @@ class WebApp(models.Model, MojoModel):
                     # Vhost.delete() publishes fleet convergence on commit, so
                     # nodes drop the server block without waiting for the sweep.
                     vhost.delete()
+                # Alias addresses die with the app, in this same transaction.
+                # `alias_of` cascades, but a bare cascade deletes the ROWS
+                # without running Vhost.delete() — so nodes would keep serving
+                # every custom domain until the next sweep. One explicit loop,
+                # one convergence publish each.
+                from mojo.apps.edge.models import Vhost
+
+                for alias in Vhost.objects.filter(alias_of=locked):
+                    alias.delete()
                 locked.delete()
             return JsonResponse({"status": "deleted"}, status=200)
         except Exception as err:

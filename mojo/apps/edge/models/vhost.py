@@ -100,6 +100,14 @@ class Vhost(models.Model, MojoModel):
         help_text="redirect only: target HOST (FQDN, validated as a server "
                   "name — never a free URL).")
 
+    alias_of = models.ForeignKey(
+        "edge.WebApp",
+        related_name="alias_vhosts",
+        null=True, blank=True, default=None,
+        on_delete=models.CASCADE,
+        help_text="Set when this vhost is an extra address for a WebApp; the "
+                  "app's primary address stays WebApp.vhost.")
+
     is_enabled = models.BooleanField(default=True, db_index=True)
 
     class Meta:
@@ -151,7 +159,13 @@ class Vhost(models.Model, MojoModel):
         # CREATE path too (mojo/models/rest.py), so pinning it would make a
         # vhost impossible to create over REST at all. Immutability after
         # create is enforced in on_rest_pre_save below instead.
-        NO_SAVE_FIELDS = ["id", "pk", "created", "uuid"]
+        #
+        # `alias_of` IS pinned. An alias address is minted by
+        # `services/webapp_alias.py`, which owns the domain-ownership,
+        # conflict, DNS and certificate gates. A settable field here would let
+        # a `manage_dns` holder graft any vhost they can see onto any WebApp
+        # they can see and skip every one of those checks.
+        NO_SAVE_FIELDS = ["id", "pk", "created", "uuid", "alias_of"]
         GRAPHS = {
             "basic": {
                 "fields": ["id", "kind", "is_enabled"],

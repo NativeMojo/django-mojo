@@ -683,6 +683,54 @@ def validate_blocklist_entry(entry):
     return entry
 
 
+def validate_vhost_alias(vhost):
+    """The invariants an ALIAS vhost carries (`alias_of` set).
+
+    An alias is one more address for a WebApp whose primary address stays on
+    `WebApp.vhost`. Everything a primary is checked for at attach time has to
+    hold here too, because `save()` is the one path no service can skip:
+
+    - it serves an app, so it is a `site`/`site_api` row, never a redirect or a
+      whole-host proxy;
+    - it is an alias XOR a primary — a row that is both would be deleted twice
+      and rendered under two owners;
+    - its domain is owned by the app's group or an ancestor, the SAME rule
+      `validate_web_app` applies to the primary link. A house domain
+      (`group_id` None) is nobody's ancestor, so the platform's own names stay
+      unreachable;
+    - it shares the primary's pool. A different pool means a node fleet that
+      installs the alias but never the release bytes behind it.
+    """
+    if not vhost.alias_of_id:
+        return vhost
+    from mojo.apps.edge.models.vhost import KIND_SITE, KIND_SITE_API
+
+    if vhost.kind not in (KIND_SITE, KIND_SITE_API):
+        raise me.ValueException(
+            f"a WebApp alias address must be a site or site_api vhost, not "
+            f"{vhost.kind}")
+    if vhost.pk:
+        from mojo.apps.edge.models import WebApp
+
+        if WebApp.objects.filter(vhost_id=vhost.pk).exists():
+            raise me.ValueException(
+                "a vhost cannot be both a WebApp's primary address and an "
+                "alias")
+    web_app = vhost.alias_of
+    if not vhost.domain_id:
+        raise me.ValueException("a vhost requires a domain")
+    if not _group_at_or_below(web_app.group, vhost.domain.group_id):
+        raise me.ValueException(
+            "an alias address must use a domain owned by this web app's "
+            "group or a parent of it")
+    primary = web_app.vhost if web_app.vhost_id else None
+    if primary is not None and primary.pk != vhost.pk and primary.pool != vhost.pool:
+        raise me.ValueException(
+            f"an alias address must serve from the app's own pool "
+            f"({primary.pool})")
+    return vhost
+
+
 def validate_vhost(vhost):
     """Whole-row validation for a Vhost. Called from save()."""
     from mojo.apps.edge.models.vhost import (
@@ -770,6 +818,8 @@ def validate_vhost(vhost):
 
     if not vhost.domain_id:
         raise me.ValueException("a vhost requires a domain")
+
+    validate_vhost_alias(vhost)
 
     server_name = server_name_for(vhost.domain.name, vhost.label or "")
     # Checked unconditionally, enabled or not: an unvalidatable name is a

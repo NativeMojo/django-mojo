@@ -142,8 +142,15 @@ def on_webapp_detach_address(request):
 
     The vhost's own `delete()` publishes fleet convergence, so nodes drop the
     server block without waiting for the sweep.
+
+    Every ALIAS address goes too, in the same transaction. "Offline" that left
+    the customer's own domain serving would be the opposite of what was asked,
+    and desired state drops an app's alias rows the moment it has no primary
+    anyway (see `releases.desired_webapps`).
     """
     from django.db import transaction
+
+    from mojo.apps.edge.models import Vhost
 
     web_app = WebApp.get_instance_or_404(request.DATA.get("webapp"))
     WebApp.rest_check_permission_or_raise(
@@ -156,6 +163,8 @@ def on_webapp_detach_address(request):
             locked.save(update_fields=["vhost", "modified"])
             if vhost.kind == "site":
                 vhost.delete()
+        for alias in Vhost.objects.filter(alias_of=locked):
+            alias.delete()
     return dict(webapp=web_app.pk, address=None)
 
 

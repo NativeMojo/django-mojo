@@ -1089,6 +1089,12 @@ def _advance_address(operation):
         if occupant is not None and occupant.pk != operation.web_app_id:
             raise me.PermissionDeniedException(
                 "That address is already used by another app")
+        # An ALIAS address is equally taken — including one belonging to THIS
+        # app. Adopting it as the primary would leave one vhost owned twice
+        # (validate_vhost refuses that outright), so refuse plainly here.
+        if existing_vhost.alias_of_id is not None:
+            raise me.PermissionDeniedException(
+                "That address is already used by another app")
     certificate = None
     if existing_vhost is not None:
         existing_certificate = existing_vhost.certificate
@@ -1357,7 +1363,7 @@ def summary_for(web_app):
     vhost) so the same view can answer "is SSL healthy?" without a second
     read — Vhost.certificate is a non-null FK.
     """
-    from mojo.apps.edge.models import WebAppDeployment
+    from mojo.apps.edge.models import Vhost, WebAppDeployment
     from mojo.apps.edge.services import webapp_keys
 
     operation = WebAppOnboardingOperation.objects.filter(
@@ -1369,6 +1375,16 @@ def summary_for(web_app):
     certificate = vhost.certificate if vhost and vhost.certificate_id else None
     release = web_app.current_release
     deployment = WebAppDeployment.objects.filter(webapp=web_app).first()
+    aliases = [
+        {"hostname": alias.server_name,
+         "certificate": ({
+             "status": alias.certificate.status,
+             "not_after": (alias.certificate.not_after.isoformat()
+                           if alias.certificate.not_after else None),
+         } if alias.certificate_id else None)}
+        for alias in Vhost.objects.filter(alias_of=web_app).select_related(
+            "domain", "certificate").order_by("pk")
+    ]
     return {
         "schema_version": 1,
         "webapp": {
@@ -1389,6 +1405,10 @@ def summary_for(web_app):
                 "not_after": (certificate.not_after.isoformat()
                               if certificate.not_after else None),
             } if certificate else None),
+            # Additive (item 2226): the app's extra custom addresses. Empty
+            # list, never null, so a reader never branches on absence.
+            # schema_version stays 1 — v1 is additive-only.
+            "aliases": aliases,
         },
         "current_release": ({
             "id": release.pk, "version": release.version,

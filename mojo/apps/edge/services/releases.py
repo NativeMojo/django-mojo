@@ -238,6 +238,20 @@ def deploy_verified(release):
     return promote(release.webapp, release)
 
 
+def _webapp_row(vhost_id, web_app):
+    return dict(
+        vhost=vhost_id,
+        slug=web_app.slug,
+        bucket=web_app.bucket,
+        release=dict(
+            id=web_app.current_release_id,
+            version=web_app.current_release.version,
+            prefix=web_app.current_release.storage_prefix(),
+            manifest=web_app.current_release.manifest,
+        ),
+    )
+
+
 def desired_webapps(vhosts):
     """The `webapps` key of the desired-state payload.
 
@@ -245,27 +259,31 @@ def desired_webapps(vhosts):
     by CloudFront (no vhost) is registerable and rollbackable but is not
     something a node installs.
 
+    An app's ALIAS addresses (`Vhost.alias_of`) each get their own row carrying
+    the identical release, so a custom domain serves the same bytes as the
+    primary. They appear only while the app still HAS a primary address: taking
+    a site offline detaches that primary, and an alias row surviving it would
+    leave the custom domain serving content the operator just took down.
+
     Keyed by vhost id because that, not the slug, is what the node turns into a
     filesystem path.
     """
+    from mojo.apps.edge.models import Vhost
+
     vhost_ids = [v.pk for v in vhosts]
-    rows = (
-        WebApp.objects
+    rows = [
+        _webapp_row(row.vhost_id, row)
+        for row in WebApp.objects
         .filter(vhost_id__in=vhost_ids, current_release__isnull=False)
         .select_related("current_release")
-        .order_by("vhost_id")
-    )
-    return [
-        dict(
-            vhost=row.vhost_id,
-            slug=row.slug,
-            bucket=row.bucket,
-            release=dict(
-                id=row.current_release_id,
-                version=row.current_release.version,
-                prefix=row.current_release.storage_prefix(),
-                manifest=row.current_release.manifest,
-            ),
-        )
-        for row in rows
     ]
+    rows.extend(
+        _webapp_row(alias.pk, alias.alias_of)
+        for alias in Vhost.objects
+        .filter(pk__in=vhost_ids, alias_of__isnull=False,
+                alias_of__vhost__isnull=False,
+                alias_of__current_release__isnull=False)
+        .select_related("alias_of__current_release")
+    )
+    rows.sort(key=lambda row: row["vhost"])
+    return rows

@@ -41,6 +41,22 @@ def auth_route_prefixes():
     return tuple(dict.fromkeys(roots + AUTH_SUPPORT_API_PREFIXES))
 
 
+def owning_app(vhost):
+    """The WebApp this vhost serves, or None.
+
+    A vhost belongs to an app one of two ways: it is the app's PRIMARY address
+    (the `web_app` reverse of `WebApp.vhost`) or one of its ALIAS addresses
+    (`Vhost.alias_of`). Both must render the identical auth contract — an alias
+    without it would serve the SPA with no `/auth` route and no honeypots, so
+    logging in on the custom domain would 404 while the platform address worked.
+    """
+    try:
+        return vhost.web_app
+    except ObjectDoesNotExist:
+        pass
+    return vhost.alias_of if vhost.alias_of_id else None
+
+
 def _accessible_upstreams(vhost):
     from mojo.apps.edge.models import Upstream
 
@@ -146,30 +162,36 @@ def reconcile_all(publisher=None):
     records per-app failures and continues so every resolvable row heals.
     """
     from mojo.helpers import logit
-    from mojo.apps.edge.models import WebApp
+    from mojo.apps.edge.models import Vhost
     from mojo.apps.edge.services import convergence
 
-    apps = list(WebApp.objects.exclude(vhost__isnull=True).filter(
-        vhost__is_enabled=True).select_related("vhost__domain").order_by("pk"))
+    # Every serving address of every app — primaries AND aliases. An alias
+    # healed to a different contract than its primary is exactly the split-brain
+    # `owning_app` exists to prevent.
+    vhosts = list(Vhost.objects.filter(
+        Q(web_app__isnull=False) | Q(alias_of__isnull=False),
+        is_enabled=True).select_related(
+            "domain", "alias_of", "web_app").order_by("pk"))
     repaired = 0
     failures = []
-    for web_app in apps:
-        original_kind = web_app.vhost.kind
+    for vhost in vhosts:
+        original_kind = vhost.kind
+        web_app = owning_app(vhost)
         try:
             if publisher is None:
-                _, _, created = reconcile(web_app.vhost)
+                _, _, created = reconcile(vhost)
             else:
                 with convergence.publisher_scope(publisher):
-                    _, _, created = reconcile(web_app.vhost)
+                    _, _, created = reconcile(vhost)
             if created or original_kind != "site_api":
                 repaired += 1
         except Exception as exc:
-            failures.append(web_app.pk)
+            failures.append(web_app.pk if web_app is not None else None)
             logit.error(
-                f"edge: WebApp {web_app.pk} hosted-auth reconciliation "
+                f"edge: WebApp vhost {vhost.pk} hosted-auth reconciliation "
                 f"failed ({type(exc).__name__}: {exc})")
     return {
-        "checked": len(apps),
+        "checked": len(vhosts),
         "repaired": repaired,
         "failed": failures,
     }
@@ -179,9 +201,7 @@ def rendered_contract(vhost, routes=None):
     """Return renderer-owned exact routes for a WebApp auth vhost, if any."""
     if vhost.kind != "site_api":
         return None
-    try:
-        vhost.web_app
-    except ObjectDoesNotExist:
+    if owning_app(vhost) is None:
         return None
     rows = list(routes) if routes is not None else list(vhost.routes.all())
     login_path = _bouncer_path("BOUNCER_LOGIN_PATH", "auth")
