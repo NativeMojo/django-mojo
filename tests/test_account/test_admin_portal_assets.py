@@ -172,6 +172,19 @@ def test_system_setup_nav_contract(opts):
         "the attention badge has no styling contract"
 
 
+@th.django_unit_test("System Setup keeps malformed partial readiness reports usable")
+def test_system_setup_partial_report_contract(opts):
+    platform = (ASSETS / "features/platform/page.js").read_text()
+    assert "Array.isArray(source.sections)" in platform, \
+        "the Setup renderer trusts the readiness sections shape"
+    assert "rawChecks.some((check) => !isReadinessCheck(check))" in platform, \
+        "the Setup renderer trusts malformed legacy check entries"
+    assert "Only part of this readiness report could be shown" in platform, \
+        "the Setup renderer silently drops partial readiness evidence"
+    assert "report?.truncated === true" in platform, \
+        "the Setup renderer ignores server truncation metadata"
+
+
 @th.django_unit_test("the Metrics lane is capability-gated, degradation-aware, and markup-free")
 def test_metrics_asset_contract(opts):
     from mojo.apps.account.services import admin_assets

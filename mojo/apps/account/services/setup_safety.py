@@ -76,18 +76,24 @@ def _safe_string(value):
 
 def sanitize(value, max_bytes=MAX_SERIALIZED_BYTES):
     """Return JSON-safe bounded data with secrets removed independent of key."""
-    budget = {"items": MAX_ITEMS, "bytes": max(256, int(max_bytes) - 4096)}
+    budget = {
+        "items": MAX_ITEMS,
+        "bytes": max(256, int(max_bytes) - 4096),
+        "truncated": False,
+    }
 
     def clean(item, depth=0, sensitive=False):
         if sensitive:
             return REDACTED
         if depth > MAX_DEPTH or budget["items"] <= 0 or budget["bytes"] <= 0:
+            budget["truncated"] = True
             return TRUNCATED
         budget["items"] -= 1
         if isinstance(item, dict):
             output = {}
             for key, child in item.items():
                 if budget["items"] <= 0 or budget["bytes"] <= 0:
+                    budget["truncated"] = True
                     output["truncated"] = True
                     break
                 name = _safe_string(key)[:80]
@@ -98,7 +104,10 @@ def sanitize(value, max_bytes=MAX_SERIALIZED_BYTES):
             output = []
             for child in item:
                 if budget["items"] <= 0 or budget["bytes"] <= 0:
-                    output.append(TRUNCATED)
+                    # A scalar sentinel corrupts typed collections such as
+                    # readiness sections/checks. Omit the remaining entries
+                    # and publish truncation metadata on the root envelope.
+                    budget["truncated"] = True
                     break
                 output.append(clean(child, depth + 1))
             return output
@@ -112,6 +121,8 @@ def sanitize(value, max_bytes=MAX_SERIALIZED_BYTES):
         return clean(str(item), depth + 1)
 
     output = clean(value)
+    if budget["truncated"] and isinstance(output, dict):
+        output["truncated"] = True
     encoded = json.dumps(output, separators=(",", ":"), default=str).encode("utf-8")
     if len(encoded) <= max_bytes:
         return output

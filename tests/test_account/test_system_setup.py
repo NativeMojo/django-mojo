@@ -175,6 +175,40 @@ def test_readiness_schema(opts):
         assert check["explanation"], f"readiness row lacks explanation: {check!r}"
 
 
+@th.django_unit_test("large readiness reports preserve typed arrays when bounded")
+def test_readiness_truncation_preserves_typed_arrays(opts):
+    import json
+    from mojo.apps.account.services import setup_safety, system_readiness
+
+    def large_check(context):
+        return [{
+            "code": f"test.large.{index}",
+            "status": "warn" if index == 0 else "pass",
+            "explanation": f"Readiness evidence row {index}",
+            "remediation": "Inspect the bounded partial report.",
+        } for index in range(64)]
+
+    system_readiness.register_section(
+        "test_large_report", "Large readiness report", large_check, order=999)
+    report = system_readiness.run("test_large_report", {})
+    serialized = json.dumps(report)
+
+    assert report.get("truncated") is True, \
+        f"large readiness report did not announce truncation: {report!r}"
+    assert report["sections"] and all(isinstance(item, dict) for item in report["sections"]), \
+        f"readiness sections contain a scalar sentinel: {report['sections']!r}"
+    for section in report["sections"]:
+        assert section["status"] in system_readiness.STATUSES, \
+            f"truncated readiness section has no supported status: {section!r}"
+        assert all(isinstance(item, dict) for item in section["checks"]), \
+            f"readiness checks contain a scalar sentinel: {section['checks']!r}"
+        assert all(item.get("status") in system_readiness.STATUSES
+                   for item in section["checks"]), \
+            f"truncated readiness check has no supported status: {section['checks']!r}"
+    assert len(serialized.encode("utf-8")) <= setup_safety.MAX_SERIALIZED_BYTES, \
+        f"typed readiness report escaped the byte cap: {len(serialized)}"
+
+
 @th.django_unit_test("fix operation waits for a typed late BASE_URL choice")
 def test_fix_operation_late_choice(opts):
     from mojo.apps.account.models import Setting, SystemSetupOperation, User
@@ -819,6 +853,14 @@ def test_setup_safety_preserves_report_detail_leaves(opts):
         too_deep = {"nested": too_deep}
     assert setup_safety.TRUNCATED in str(setup_safety.sanitize(too_deep)), \
         "the Setup sanitizer no longer bounds genuinely deep structures"
+
+    typed = setup_safety.sanitize({
+        "rows": [{"status": "pass"} for _ in range(setup_safety.MAX_ITEMS)],
+    })
+    assert typed.get("truncated") is True, \
+        f"collection truncation lacks root metadata: {typed!r}"
+    assert all(isinstance(item, dict) for item in typed["rows"]), \
+        f"collection truncation injected a scalar sentinel: {typed['rows']!r}"
 
 
 @th.django_unit_test("step definition version rejects stale choose and advance")

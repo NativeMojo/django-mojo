@@ -277,8 +277,12 @@ depth, item count, string length, and total serialized bytes; recognizes
 credential/token/private-key/JWT/AWS-key and unlabeled high-entropy opaque
 material even under innocent field names; pre-bounds huge strings before
 inspection; and removes URL userinfo and query values, including presigned queries.
-Clients should preserve the response shape but tolerate a `"[truncated]"`
-value or `truncated: true` marker at a bounded collection edge.
+At a bounded collection edge, the remaining entries are omitted and the root
+envelope carries `truncated: true`; typed `sections` and `checks` arrays never
+receive a scalar sentinel. A `"[truncated]"` value can still replace an
+overlong or over-deep scalar leaf. Clients should render the retained rows and
+tell operators that the report is partial. They should also ignore malformed
+section/check entries from older servers rather than failing the whole view.
 
 The framework envelope is included in that bound without consuming ordinary
 scalar check details or choice enum values. Deeper provider-owned structures

@@ -216,6 +216,14 @@ unlabeled high-entropy opaque values; and removes URL userinfo and query values.
 Readiness results and logs use fixed schemas rather than accepting arbitrary
 provider payload fields.
 
+When a collection reaches a bound, the sanitizer omits its remaining entries
+instead of appending a scalar sentinel and sets `truncated: true` on the root
+envelope. The readiness boundary additionally removes any incomplete section or
+check object, so `sections` and `checks` remain typed arrays whose retained rows
+always carry a supported status. The built-in Admin shows the valid subset with
+an explicit partial-report warning; it also applies the same defense to malformed
+responses from older servers.
+
 The depth budget includes the framework envelope without consuming ordinary
 scalar check details or choice enum values; genuinely deeper provider-owned
 structures still truncate. The Admin translates durable internal states into
