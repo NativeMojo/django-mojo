@@ -128,7 +128,11 @@ bash "${PROJ_PATH}/aws/ec2_bootstrap.sh"
 # this is what makes the node run the same release as the CLI that built it.
 
 log "pinning django-mojo==${DJANGO_MOJO_VERSION}"
-pip install --upgrade "django-mojo==${DJANGO_MOJO_VERSION}"
+DJANGO_MOJO_PIP_ARGS=()
+if pip install --help 2>/dev/null | grep -q -- '--refresh-package'; then
+    DJANGO_MOJO_PIP_ARGS+=(--refresh-package=django-mojo)
+fi
+pip install "${DJANGO_MOJO_PIP_ARGS[@]}" --upgrade "django-mojo==${DJANGO_MOJO_VERSION}"
 
 # ── 4. the project ───────────────────────────────────────────────────────────
 

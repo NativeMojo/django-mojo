@@ -217,6 +217,14 @@ class Spec:
         self.balancer = sizes.get("balancer", False)
         self.want_balancer = None
 
+        # Per-node elastic IPs INDEPENDENT of the balancer decision. Without a
+        # balancer every node gets one regardless (the node IS the DNS target);
+        # behind one, nodes default to changing auto-assigned addresses — set
+        # this when providers allowlist caller IPs and the fleet's outbound
+        # must stay fixed. The Admin capacity panel's "Stable outbound IPs"
+        # control is the runtime form of the same policy.
+        self.stable_node_ips = False
+
         # Who may reach :22. Never defaulted to 0.0.0.0/0 — an empty list means
         # SSH is not opened at all, which is a working configuration (Session
         # Manager) and a much better accident than a world-open one.
@@ -553,7 +561,9 @@ def estimate_cost(spec):
         row("load balancer", resolved["balancer"], COST_TABLE["nlb"])
         row("balancer addresses", f"{AZ_COUNT} x elastic IP",
             COST_TABLE["eip"] * AZ_COUNT)
-    else:
+    if not wants_balancer(spec) or spec.stable_node_ips:
+        # Node addresses exist without a balancer (the node is the DNS
+        # target), or behind one when stable_node_ips pins outbound.
         row("node addresses", f"{spec.node_count} x elastic IP",
             COST_TABLE["eip"] * spec.node_count)
 

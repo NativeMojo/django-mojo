@@ -7,12 +7,15 @@ class AppConfig(BaseAppConfig):
 
     def ready(self):
         from mojo.apps.account.services import system_settings
-        from mojo.apps.aws.services import aws_setup, infra_setup
-        from mojo.apps.aws.settings_validators import monitoring_topic_arns
+        from mojo.apps.aws.services import aws_setup, capacity, infra_setup
+        from mojo.apps.aws.settings_validators import (
+            monitoring_topic_arns, stable_outbound_ips)
         from mojo.apps.account.services.admin_settings import Descriptor, register_descriptor
 
         system_settings.register_protected_setting(
             system_settings.MONITORING_TOPICS, monitoring_topic_arns)
+        system_settings.register_protected_setting(
+            capacity.STABLE_EGRESS_SETTING, stable_outbound_ips)
         aws_setup.register_sections()
         # Without this line the aws_infrastructure section does not exist at
         # all — writing the module is not what registers it.

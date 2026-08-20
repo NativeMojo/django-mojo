@@ -1,6 +1,7 @@
 # Capacity actions
 
-Add or remove an app node, an RDS reader, or an ElastiCache replica.
+Add or remove an app node, an RDS reader, or an ElastiCache replica — and
+turn the fleet's stable outbound IPs on or off.
 
 ```
 GET  /api/aws/capacity          the fleet, reader and replica picture
@@ -48,8 +49,9 @@ retry.
       "instances": [
         {"id": "i-0a1b…", "name": "mojo-api-a", "state": "healthy",
          "instance_state": "running", "instance_type": "m6i.large",
-         "zone": "us-east-1a", "healthy": true, "self": true, "primary": true,
-         "added_by_capacity": false, "groups": ["arn:…targetgroup/mojo-api/…"]}
+         "zone": "us-east-1a", "public_ip": "203.0.113.10", "healthy": true,
+         "self": true, "primary": true, "added_by_capacity": false,
+         "stable_ip": true, "groups": ["arn:…targetgroup/mojo-api/…"]}
       ],
       "self": "i-0a1b…",
       "self_check": "matched"
@@ -61,6 +63,23 @@ retry.
        "reader_endpoint": "…cluster-ro-….rds.amazonaws.com",
        "endpoint": "…cluster-….rds.amazonaws.com"}
     ],
+    "egress": {
+      "enabled": true,
+      "available": true,
+      "fleet_available": true,
+      "addresses_available": true,
+      "policy_available": true,
+      "fallback_attached": [],
+      "addresses": ["203.0.113.10", "203.0.113.11"],
+      "attached": [
+        {"instance": "i-0a1b…", "public_ip": "203.0.113.10",
+         "allocation_id": "eipalloc-…", "managed": true}
+      ],
+      "pending_nodes": [],
+      "reserved": [{"allocation_id": "eipalloc-…", "public_ip": "203.0.113.20"}],
+      "to_allocate": 0,
+      "monthly_usd_per_address": 3.6
+    },
     "caches": [
       {"identifier": "mojo-prod-redis", "status": "available", "replica_count": 1,
        "cluster_enabled": false, "automatic_failover_on": true, "multi_az_on": true,
@@ -78,7 +97,9 @@ retry.
       "terminate_node":     {"offered": true,  "blocked_reason": null},
       "add_reader":         {"offered": true,  "blocked_reason": null},
       "remove_reader":      {"offered": false, "blocked_reason": "no_reader"},
-      "set_cache_replicas": {"offered": true,  "blocked_reason": null}
+      "set_cache_replicas": {"offered": true,  "blocked_reason": null},
+      "enable_stable_ips":  {"offered": false, "blocked_reason": "already_enabled"},
+      "disable_stable_ips": {"offered": true,  "blocked_reason": null}
     }
   }
 }
@@ -99,21 +120,48 @@ Three things a client must not re-derive:
 `warnings` carries a degraded section. A section that could not be read comes
 back empty **and** named here — never silently empty.
 
+**`egress` is the stable-outbound-IPs picture.** `addresses` is the canonical
+list an operator hands to providers that allowlist caller IPs — the Elastic IPs
+actually attached to fleet nodes, with unmanaged ones labelled
+(`managed: false`) rather than hidden. `enabled` is the durable policy;
+`pending_nodes` are registered nodes still without an address (re-running
+enable converges exactly those); `reserved` are kept, unattached addresses a
+future enable reuses first. `available` requires BOTH the serving read and the
+addresses read: when either failed, the fleet is **unknown, not empty**, and a
+client must render the list as unavailable — never as an empty allowlist. The
+policy read gets the same honesty: when `policy_available` is false, `enabled`
+is unknown — render "Unknown", never "off" — and both actions come back
+blocked `policy_unavailable`.
+
+**Balancer-less installs** get a read-only answer instead of a dead end: when
+the serving read succeeds but no instance is registered behind any balancer,
+`fallback_attached` lists every Elastic IP attached to an EC2 instance in the
+region — `{instance, instance_name, public_ip, allocation_id, managed}` — so a
+single-node estate still shows the address to give providers. These rows are
+report-only: they never feed the allowlist in `addresses`, never make either
+action available, and the panel renders them "managed outside this portal". Cost
+has a sign worth stating correctly: AWS bills every public IPv4 identically,
+so an ATTACHED stable address replaces the node's auto-assigned-IPv4 charge
+(enable is net ~zero/month), and the additive `monthly_usd_per_address`
+appears at disable, when each kept reservation bills beside the node's new
+auto-assigned address.
+
 ## `POST /api/aws/capacity/apply`
 
 Common fields:
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `action` | string | yes | One of `add_node`, `drain_node`, `terminate_node`, `add_reader`, `remove_reader`, `set_cache_replicas` |
-| `resource` | string | yes, except `add_node` | Instance id, database identifier, or replication-group id |
-| `confirm_resource` | string | yes | Must equal `resource` EXACTLY. For `add_node` (which has no resource) it must be the literal `"add_node"` |
+| `action` | string | yes | One of `add_node`, `drain_node`, `terminate_node`, `add_reader`, `remove_reader`, `set_cache_replicas`, `enable_stable_ips`, `disable_stable_ips` |
+| `resource` | string | yes, except fleet-wide actions | Instance id, database identifier, or replication-group id |
+| `confirm_resource` | string | yes | Must equal `resource` EXACTLY. The fleet-wide actions (`add_node`, `enable_stable_ips`, `disable_stable_ips`) have no resource — for them it is the literal action word |
 
 Per-action fields:
 
 | Action | Extra fields |
 |---|---|
 | `set_cache_replicas` | `count` (integer, **no default**), `apply_immediately` (boolean, **no default**, must be `true`) |
+| `enable_stable_ips` | `assign` (optional object `{instance_id: allocation_id}`) — give a NAMED eligible reservation to a named node instead of letting the server pick. An allocation is eligible only if it is unassociated **and** carries a django-mojo ownership tag; anything else is refused (`address_not_eligible`) before any mutation |
 
 `confirm_resource` is checked **before any provider call**. `count` and
 `apply_immediately` have no defaults: a missing field is a question that was
@@ -136,6 +184,13 @@ never asked, not a "no".
 
 {"action": "set_cache_replicas", "resource": "mojo-prod-redis",
  "confirm_resource": "mojo-prod-redis", "count": 2, "apply_immediately": true}
+
+{"action": "enable_stable_ips", "confirm_resource": "enable_stable_ips"}
+
+{"action": "enable_stable_ips", "confirm_resource": "enable_stable_ips",
+ "assign": {"i-0c3d…": "eipalloc-0123…"}}
+
+{"action": "disable_stable_ips", "confirm_resource": "disable_stable_ips"}
 ```
 
 ### Response
@@ -151,7 +206,7 @@ never asked, not a "no".
     "state": "running",
     "phase": "capturing",
     "phases": ["capturing", "launching", "booting", "converging",
-               "proving", "registering", "settling"],
+               "proving", "addressing", "registering", "settling"],
     "message": "requested",
     "error_code": null,
     "warnings": [],
@@ -183,12 +238,14 @@ minutes.
 
 | Action | Phases |
 |---|---|
-| `add_node` | `capturing` → `launching` → `booting` → `converging` → `proving` → `registering` → `settling` |
+| `add_node` | `capturing` → `launching` → `booting` → `converging` → `proving` → `addressing` → `registering` → `settling` (`addressing` runs only while stable outbound IPs are on) |
 | `drain_node` | `draining` |
 | `terminate_node` | `terminating` |
 | `add_reader` | `creating` → `settling` |
 | `remove_reader` | `deleting` |
 | `set_cache_replicas` | `scaling` → `settling` |
+| `enable_stable_ips` | `planning` → `associating` → `verifying` |
+| `disable_stable_ips` | `detaching` → `verifying` |
 
 Terminal operations report `phase: "complete"`.
 
@@ -216,10 +273,12 @@ operation record instead.
 | `not_a_source` | 409 | `add_reader` was pointed at a replica; point it at the source |
 | `cluster_mode_unsupported` | 409 | Cluster-mode-enabled group; its replica count is a resharding decision |
 | `automatic_failover_requires_replica` | 409 | Failover or Multi-AZ is on, so the group must keep at least one replica |
-| `no_change` | 409 | The group already has that many replicas |
-| `capacity_in_progress` | 409 | Another capacity change holds the single-flight claim. **All adds share one claim** |
+| `no_change` | 409 | The group already has that many replicas — or a disable found nothing to detach |
+| `no_fleet_nodes` | 409 | No node is registered behind a load balancer, so there is nothing to give a stable address to |
+| `address_not_eligible` | 409 | An explicitly assigned allocation is associated, unknown, or carries no django-mojo ownership tag. The remedy (tag it in the console) is in the message |
+| `capacity_in_progress` | 409 | Another capacity change holds the single-flight claim. **All adds share one claim; enable and disable of stable IPs share another** |
 | `cache_unavailable` | 503 | The coordination cache cannot rule out a concurrent change. Retry shortly |
-| `dispatch_failed` | 503 | No job runner accepted the operation. **Nothing was changed** |
+| `dispatch_failed` | 503 | No job runner accepted the operation. **Nothing was changed** — except for the stable-IPs actions, where the durable policy WAS recorded before dispatch; their message says so, and re-running the action converges |
 | `provider_denied` | 403 | AWS refused. `data.failure.iam_action` names the missing grant — and nothing else |
 | `provider_unavailable` | 503 | A retryable AWS failure |
 | `provider_error` | 502 | Any other AWS failure |
@@ -239,6 +298,10 @@ operation record instead.
 | `terminate_timeout` | AWS accepted the termination but the instance has not reached `terminated` |
 | `reader_timeout` / `delete_timeout` | AWS accepted the change but the instance has not settled. It is billable — check the RDS console |
 | `cache_timeout` | The group did not settle at the requested replica count |
+| `address_quota` | AWS's public-IPv4 quota is exhausted (default 5 per region). The message says how many nodes were addressed and how many remain; raise the quota and run the enable again |
+| `address_failed` | An address could not be attached. On `add_node` the clone is running and **deliberately not registered** — a node whose egress nobody allowlisted must not serve |
+| `address_unverified` | The verify re-read did not show the expected associations. Run the action again — both stable-ips operations converge only what is missing |
+| `policy_unreadable` | `add_node` could not read the stable-IPs policy, so the node was **not registered** rather than admitted unaddressed |
 | `operation_failed` | An unexpected error. Re-read `/api/aws/capacity` before retrying |
 
 ### Warning codes (non-fatal, on the operation)
@@ -247,6 +310,7 @@ operation record instead.
 |---|---|
 | `topology_not_updated` | The node is serving, but `EDGE_EXPECTED_TOPOLOGY` could not be extended. The message names the node to add by hand |
 | `convergence_not_triggered` | The node is serving, but the vhost convergence sweep could not be queued. The scheduled sweep will pick it up |
+| `node_not_running` | A registered instance was not running during an enable and was left without a stable address |
 
 ## Two things to tell the operator
 
@@ -264,6 +328,20 @@ failover-off group leaves nothing to fail over to — say so before doing it.
 
 One more, right after an add: fleet readiness reads `pending` until the
 convergence sweep finishes. That is expected, not a fault.
+
+**Enabling stable IPs costs ~nothing; disabling is what bills.** AWS charges
+every public IPv4 the same, attached or not, so an attached Elastic IP just
+replaces the node's auto-assigned-address charge. After a disable, the kept
+reservations bill (~$3.60/month each) ON TOP of the nodes' new auto-assigned
+addresses — say so, and say that releasing them is an AWS-console decision,
+never part of the toggle.
+
+**Disabling can break provider calls immediately, and recovery is not
+instant.** The moment an address detaches, providers that allowlisted it may
+refuse the fleet. Each node then gets a NEW auto-assigned address after a gap
+of up to a few minutes — or no public address at all if its network interface
+was not launched with auto-assign. The completed operation's `message` reports
+each node's post-detach address.
 
 ## Related
 

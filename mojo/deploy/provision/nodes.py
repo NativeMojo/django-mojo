@@ -363,13 +363,16 @@ def _ensure_addresses(ec2, spec, observed, names, instance_ids,
     With an NLB in front, the balancer holds the addresses and the nodes reach
     the internet through the auto-assigned public IPs their subnets hand out.
     Without one, the node IS the address DNS points at, so it needs an elastic
-    IP that survives a stop/start.
+    IP that survives a stop/start. `spec.stable_node_ips` asks for node
+    addresses even behind a balancer — outbound pinned for providers that
+    allowlist caller IPs, while DNS keeps pointing at the NLB (dns.py's
+    balancer branch never reads node_addresses).
 
     An existing elastic IP is adopted ONLY when it already carries this
     project's and environment's tags. An untagged address that happens to be
     unassociated may well be someone else's reservation.
     """
-    if spec_module.wants_balancer(spec):
+    if spec_module.wants_balancer(spec) and not spec.stable_node_ips:
         return []
 
     resolved = []

@@ -61,6 +61,24 @@ function mountShell() {
   app.replaceChildren(sidebar, main);
 }
 
+// Every admin tab said "MOJO Admin", so a row of them was unreadable: you
+// could not tell which page, or which installation, any tab was showing.
+//
+// The instance comes from the hostname because it is the one identifier that
+// is always right and costs nothing — the bootstrap payload carries no site or
+// brand name to use instead. A leading "admin." is dropped: it is constant for
+// this portal, so it only eats the characters a truncated tab can least spare.
+function instanceName() {
+  const host = location.hostname || '';
+  return host.replace(/^admin\./, '') || 'admin';
+}
+
+function setDocumentTitle(pageTitle) {
+  // Page first: with several tabs open on one installation, the page is what
+  // tells them apart, and a browser truncates the end.
+  document.title = pageTitle ? `${pageTitle} · ${instanceName()}` : instanceName();
+}
+
 async function render() {
   if (!context) return;
   const requestedRoute = routeName(); const feature = featureForRoute(requestedRoute, context);
@@ -69,8 +87,11 @@ async function render() {
   const current = ++generation; controller?.abort();
   const renderController = new AbortController(); controller = renderController;
   if (typeof dispose === 'function') { try { dispose(); } finally { dispose = null; } }
-  closeAllOverlays(); refreshNavigation(route); title.textContent = feature.title(route, context);
-  content.replaceChildren(loadingState(`Loading ${feature.title(route, context)}`));
+  closeAllOverlays(); refreshNavigation(route);
+  const pageTitle = feature.title(route, context);
+  title.textContent = pageTitle;
+  setDocumentTitle(pageTitle);
+  content.replaceChildren(loadingState(`Loading ${pageTitle}`));
   const page = await feature.render({ctx: context, route, navigate, signal: renderController.signal});
   if (!(page instanceof Node)) throw new Error(`Admin feature ${feature.id} must render exactly one Node`);
   if (renderController.signal.aborted || current !== generation) { page.dispose?.(); return; }
@@ -90,6 +111,7 @@ function showFatal(error) {
   if (error?.code === 'fresh_auth_required') return;
   controller?.abort(); dispose?.(); closeAllOverlays();
   const adminPath = `/${location.pathname.split('/').filter(Boolean)[0] || 'admin'}/`;
+  setDocumentTitle('Could not load');
   app.replaceChildren(h('div', {class: 'fatal'}, icon('alert'), h('h1', {text: 'Admin could not load'}), h('p', {text: error.message}), h('a', {class: 'button primary', href: `/auth?redirect=${encodeURIComponent(adminPath)}`}, 'Sign in again')));
 }
 

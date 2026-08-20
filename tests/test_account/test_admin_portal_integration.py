@@ -435,7 +435,7 @@ def test_merged_browser_secret_and_route_contract(opts):
                    "People recovered a stored API-key token")
     th.assert_true("data-one-time-secret" in people and "content.replaceChildren()" in people,
                    "People secret modals do not scrub their nodes")
-    th.assert_true("result.token = null" in webapps and "secretField.value = ''" in webapps,
+    th.assert_true("result.token = null" in webapps and "secretField.textContent = ''" in webapps,
                    "WebApp secret modal does not scrub its token")
     th.assert_true("quote.token = null" in advanced and "secretPayload.api_secret = ''" in advanced,
                    "Advanced retains registrar or DNS credential secrets")

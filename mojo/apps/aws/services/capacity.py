@@ -41,6 +41,7 @@ observation of AWS state, and losing the observation loses nothing that
 would matter, and every mutation is AWS-side before the record is written.
 """
 
+import json
 import time
 import uuid
 
@@ -72,23 +73,50 @@ ACTION_TERMINATE_NODE = "terminate_node"
 ACTION_ADD_READER = "add_reader"
 ACTION_REMOVE_READER = "remove_reader"
 ACTION_SET_CACHE_REPLICAS = "set_cache_replicas"
+ACTION_ENABLE_STABLE_IPS = "enable_stable_ips"
+ACTION_DISABLE_STABLE_IPS = "disable_stable_ips"
 ACTIONS = (ACTION_ADD_NODE, ACTION_DRAIN_NODE, ACTION_TERMINATE_NODE,
-           ACTION_ADD_READER, ACTION_REMOVE_READER, ACTION_SET_CACHE_REPLICAS)
+           ACTION_ADD_READER, ACTION_REMOVE_READER, ACTION_SET_CACHE_REPLICAS,
+           ACTION_ENABLE_STABLE_IPS, ACTION_DISABLE_STABLE_IPS)
 
 # Adds serialize on ONE fixed key, never on the resource: two concurrent adds
 # name different resources (or none at all), so a per-resource key would let
 # them both through and race on the same image, the same topology write, and
-# the same convergence. Everything else is genuinely per-resource.
+# the same convergence. The stable-ips pair shares a second fixed key for the
+# same reason — an enable interleaved with a disable is two hands on one
+# switch. Everything else is genuinely per-resource.
 ADD_NODE_CLAIM = "add_node:fleet"
+STABLE_IPS_CLAIM = "stable_ips:fleet"
+
+# The durable policy: one protected system setting (superuser-only writer,
+# stored in the DB, readable from API and job processes on any node), shape
+# {"enabled": bool}. Registered with its validator in mojo.apps.aws.apps.
+STABLE_EGRESS_SETTING = "AWS_STABLE_OUTBOUND_IPS"
+
+# The ownership tag for addresses this feature manages. Mutation is gated on
+# tags, reporting on associations: an EIP is created, renamed, or detached here
+# ONLY if it wears this tag — an untagged address is reported, never touched.
+STABLE_EIP_TAG = "mojo:eip"
+STABLE_EIP_TAG_VALUE = "stable-egress"
+
+# What one public IPv4 costs a month. Keep in agreement with
+# mojo/deploy/provision/spec.py COST_TABLE["eip"]. AWS bills every public IPv4
+# identically, attached or not — so an attached EIP REPLACES the node's
+# auto-assigned-address charge (enable is net ~zero), and the additive cost
+# appears at disable, when a kept reservation bills beside the node's new
+# auto-assigned address.
+EIP_MONTHLY_USD = 3.6
 
 PHASES = {
     ACTION_ADD_NODE: ("capturing", "launching", "booting", "converging",
-                      "proving", "registering", "settling"),
+                      "proving", "addressing", "registering", "settling"),
     ACTION_DRAIN_NODE: ("draining",),
     ACTION_TERMINATE_NODE: ("terminating",),
     ACTION_ADD_READER: ("creating", "settling"),
     ACTION_REMOVE_READER: ("deleting",),
     ACTION_SET_CACHE_REPLICAS: ("scaling", "settling"),
+    ACTION_ENABLE_STABLE_IPS: ("planning", "associating", "verifying"),
+    ACTION_DISABLE_STABLE_IPS: ("detaching", "verifying"),
 }
 
 STATE_RUNNING = "running"
@@ -173,6 +201,8 @@ def _report_key():
 def _claim_key(action, resource):
     if action == ACTION_ADD_NODE:
         return f"{CACHE_PREFIX}:claim:{ADD_NODE_CLAIM}"
+    if action in (ACTION_ENABLE_STABLE_IPS, ACTION_DISABLE_STABLE_IPS):
+        return f"{CACHE_PREFIX}:claim:{STABLE_IPS_CLAIM}"
     return f"{CACHE_PREFIX}:claim:{action}:{resource}"
 
 
@@ -425,6 +455,113 @@ def _node_id_pinned():
     return bool(str(_setting("EDGE_NODE_ID", "") or "").strip())
 
 
+# ── stable outbound addresses ───────────────────────────────────────────────
+
+def _egress_enabled(strict=False):
+    """Is the stable-outbound-ips policy on? Absent or malformed reads False.
+
+    ``strict=True`` lets a broken read RAISE instead. The report may treat
+    "unreadable" as "off" — it is rendering, not acting — but add_node's
+    addressing leg is an admission gate: skipping it because the database
+    blinked would register a node whose egress no provider has allowlisted.
+    (``Setting.get_from_db`` swallows every exception into not-found, which is
+    why the strict path queries the row itself.)
+    """
+    if strict:
+        from mojo.apps.account.models import Setting
+        row = Setting.objects.filter(
+            key=STABLE_EGRESS_SETTING, group=None).first()
+        if row is None:
+            return False
+        value = row.get_value()
+        if isinstance(value, str):
+            value = json.loads(value) if value.strip() else None
+        return isinstance(value, dict) and value.get("enabled") is True
+    from mojo.apps.account.services import system_settings
+    try:
+        value = system_settings.get_value(STABLE_EGRESS_SETTING, None)
+    except Exception:
+        return False
+    return isinstance(value, dict) and value.get("enabled") is True
+
+
+def _egress_policy():
+    """``(enabled, available)`` — the report's form of the policy read.
+
+    The AWS legs publish ``fleet_available``/``addresses_available`` so a
+    failed read renders as unknown; the policy read gets the same honesty. A
+    DB blip must not paint "off" beside attached addresses as if it were a
+    canonical answer.
+    """
+    try:
+        return _egress_enabled(strict=True), True
+    except Exception:
+        logger.warning("capacity: stable-ips policy could not be read")
+        return False, False
+
+
+def _stable_tagged(tags):
+    """Does this feature manage the address? Mutation is gated on this tag."""
+    return (tags or {}).get(STABLE_EIP_TAG) == STABLE_EIP_TAG_VALUE
+
+
+def _django_mojo_tagged(tags):
+    """django-mojo ownership by tag — the adoption and assign-eligibility gate.
+
+    Matches what provision writes on every resource it creates
+    (spec.MANAGED_BY / TAGS). An address carrying neither tag is foreign:
+    reported, never consumed, never renamed, never detached.
+    """
+    tags = tags or {}
+    return tags.get("managed-by") == "django-mojo" or bool(tags.get("mojo:project"))
+
+
+def _fleet_ids(serving):
+    """Every registered instance across every group, deduped, first-seen order."""
+    seen = []
+    for group in serving.get("groups") or []:
+        for target in group.get("targets") or []:
+            identifier = target.get("id")
+            if (identifier and str(identifier).startswith("i-")
+                    and identifier not in seen):
+                seen.append(identifier)
+    return seen
+
+
+def _address_view(fleet_ids, addresses):
+    """One describe_addresses read projected onto one fleet.
+
+    ``unassociated`` requires no association, no instance AND no network
+    interface — an address held by an NLB or a NAT gateway has no instance id
+    but is very much in use, and treating it as reusable would rip an address
+    out of the serving path.
+    """
+    by_instance = {}
+    attached = []
+    unassociated = []
+    for row in addresses or []:
+        instance = row.get("instance_id")
+        if instance and instance in fleet_ids:
+            by_instance[instance] = row
+            attached.append({
+                "instance": instance,
+                "public_ip": row.get("public_ip"),
+                "allocation_id": row.get("allocation_id"),
+                "managed": _stable_tagged(row.get("tags")),
+            })
+        elif (not row.get("association_id") and not instance
+                and not row.get("network_interface_id")):
+            unassociated.append(row)
+    reserved = [{"allocation_id": row.get("allocation_id"),
+                 "public_ip": row.get("public_ip")}
+                for row in unassociated if _stable_tagged(row.get("tags"))]
+    pending = [identifier for identifier in fleet_ids
+               if identifier not in by_instance]
+    return {"by_instance": by_instance, "attached": attached,
+            "unassociated": unassociated, "reserved": reserved,
+            "pending": pending}
+
+
 # ── report ──────────────────────────────────────────────────────────────────
 
 def _node_rows(serving, facts_map, self_id, primary):
@@ -453,6 +590,7 @@ def _node_rows(serving, facts_map, self_id, primary):
                 "instance_state": facts.get("state"),
                 "instance_type": facts.get("instance_type"),
                 "zone": facts.get("availability_zone"),
+                "public_ip": facts.get("public_ip"),
                 "healthy": target.get("state") == "healthy",
                 "self": identifier == self_id,
                 "primary": _is_primary(facts, primary),
@@ -611,6 +749,43 @@ def _offers(envelope):
     cache_block = infrastructure.ERROR_CODE if external else (
         None if envelope.get("caches") else "no_cache_group")
     offer(ACTION_SET_CACHE_REPLICAS, cache_block)
+
+    egress = envelope.get("egress") or {}
+
+    def egress_block():
+        # Order matters: unknown fleet is not an empty fleet, and no failed
+        # read — AWS or policy — may render its answer as canonical.
+        if external:
+            return infrastructure.ERROR_CODE
+        if not egress.get("fleet_available"):
+            return "fleet_unavailable"
+        if not egress.get("addresses_available"):
+            return "addresses_unavailable"
+        if not egress.get("policy_available"):
+            return "policy_unavailable"
+        return None
+
+    enable_block = egress_block()
+    if enable_block is None:
+        if not instances:
+            enable_block = "no_fleet_nodes"
+        elif egress.get("enabled") and not egress.get("pending_nodes"):
+            # Converged. Re-running enable is only offered while something is
+            # left to converge — that re-run IS the retry path after a partial
+            # failure.
+            enable_block = "already_enabled"
+    offer(ACTION_ENABLE_STABLE_IPS, enable_block)
+
+    disable_block = egress_block()
+    if disable_block is None:
+        managed_attached = any(row.get("managed")
+                               for row in egress.get("attached") or [])
+        # Disable stays offered while policy is off but a managed address is
+        # still attached — that is a half-done detach, and re-running disable
+        # is how it finishes.
+        if not egress.get("enabled") and not managed_attached:
+            disable_block = "not_enabled"
+    offer(ACTION_DISABLE_STABLE_IPS, disable_block)
     return offers
 
 
@@ -652,6 +827,15 @@ def _build(elbv2_client=None, ec2_client=None, rds_client=None, cache_client=Non
             "self": self_id,
             "self_check": self_status,
         }
+    addresses = _collect(envelope, "addresses", "ec2:DescribeAddresses",
+                         lambda: ec2_helper.address_map(client=ec2_client))
+    envelope["egress"] = _egress_envelope(serving, addresses)
+    if serving is not None and addresses is not None and not _fleet_ids(serving):
+        envelope["egress"]["fallback_attached"] = _fallback_attached(
+            addresses, envelope, ec2_client=ec2_client)
+    held = {row.get("instance") for row in envelope["egress"]["attached"]}
+    for row in envelope["nodes"]["instances"]:
+        row["stable_ip"] = row["id"] in held
     databases = _collect(envelope, "databases", "rds:DescribeDBClusters",
                          lambda: _database_rows(rds_client=rds_client))
     envelope["databases"] = databases or []
@@ -660,6 +844,76 @@ def _build(elbv2_client=None, ec2_client=None, rds_client=None, cache_client=Non
     envelope["caches"] = caches or []
     envelope["actions"] = _offers(envelope)
     return envelope
+
+
+def _egress_envelope(serving, addresses):
+    """The stable-outbound picture: policy, allowlist, and what is missing.
+
+    ``addresses`` (the canonical vendor allowlist) is what IS attached —
+    association is ground truth for reporting, tags only gate mutation — with
+    unmanaged rows labelled rather than hidden. ``available`` requires BOTH
+    reads: a fleet that could not be read is unknown, not empty, and an empty
+    allowlist rendered as canonical would be a lie in the one place an
+    operator copies from.
+    """
+    fleet_available = serving is not None
+    addresses_available = addresses is not None
+    fleet = _fleet_ids(serving) if fleet_available else []
+    view = _address_view(fleet, addresses) if (
+        fleet_available and addresses_available) else {
+        "attached": [], "reserved": [], "pending": []}
+    enabled, policy_available = _egress_policy()
+    return {
+        "enabled": enabled,
+        "available": fleet_available and addresses_available,
+        "fleet_available": fleet_available,
+        "addresses_available": addresses_available,
+        "policy_available": policy_available,
+        "addresses": sorted({row.get("public_ip")
+                             for row in view["attached"]
+                             if row.get("public_ip")}),
+        "attached": view["attached"],
+        "pending_nodes": list(view["pending"]),
+        "reserved": view["reserved"],
+        "to_allocate": max(0, len(view["pending"]) - len(view["reserved"])),
+        "monthly_usd_per_address": EIP_MONTHLY_USD,
+        # Balancer-less installs: filled by _build from _fallback_attached.
+        # Deliberately a separate key — the offers and both runners read only
+        # the fleet-scoped facts above, so a read-only fallback row can never
+        # make a mutation look available.
+        "fallback_attached": [],
+    }
+
+
+def _fallback_attached(addresses, envelope, ec2_client=None):
+    """Balancer-less installs: what holds a stable address anyway. Read-only.
+
+    With no registered fleet there is nothing for the toggle to manage — but
+    an operator on a single-node install still needs the address vendors must
+    allow, and "no load balancer" must not read as "no stable address".
+    Association to an EC2 INSTANCE is the filter: an address held by a load
+    balancer or a NAT gateway is inbound plumbing, not node egress.
+    """
+    held = [row for row in addresses or [] if row.get("instance_id")]
+    if not held:
+        return []
+    ids = sorted({row["instance_id"] for row in held})
+    facts = _collect(envelope, "instances", "ec2:DescribeInstances",
+                     lambda: ec2_helper.instance_map(
+                         ids, client=ec2_client)) or {}
+    rows = []
+    for row in held:
+        instance = row["instance_id"]
+        rows.append({
+            "instance": instance,
+            "instance_name": (facts.get(instance) or {}).get("name") or instance,
+            "public_ip": row.get("public_ip"),
+            "allocation_id": row.get("allocation_id"),
+            "managed": _stable_tagged(row.get("tags")),
+        })
+    rows.sort(key=lambda row: (str(row.get("instance_name") or ""),
+                               str(row.get("instance") or "")))
+    return rows
 
 
 def report(refresh=False, elbv2_client=None, ec2_client=None, rds_client=None,
@@ -827,6 +1081,8 @@ def apply(actor, action, resource="", **params):
         return _apply_node(actor, action, resource, **params)
     if action in (ACTION_ADD_READER, ACTION_REMOVE_READER):
         return _apply_reader(actor, action, resource, **params)
+    if action in (ACTION_ENABLE_STABLE_IPS, ACTION_DISABLE_STABLE_IPS):
+        return _apply_stable_ips(actor, action, **params)
     return _apply_cache(actor, resource, **params)
 
 
@@ -1037,6 +1293,130 @@ def _apply_cache(actor, resource, count=None, apply_immediately=None,
     return record
 
 
+def _write_policy(actor, enabled):
+    """Persist the desired policy through the only allowed writer.
+
+    Written in the REQUEST thread, before dispatch: the durable intent is
+    recorded by the human-authenticated request (``set_value`` re-proves the
+    live superuser), and the job merely converges it. A failed job then leaves
+    the report showing enabled-but-pending (or disabled-but-attached) with the
+    action still offered as the retry.
+    """
+    from mojo.apps.account.services import system_settings
+    system_settings.set_value(actor, STABLE_EGRESS_SETTING,
+                              {"enabled": bool(enabled)})
+
+
+def _validate_assign(assign, view, fleet):
+    """The operator's explicit address choices, refused unless provably safe."""
+    if not assign:
+        return {}
+    if not isinstance(assign, dict):
+        raise CapacityError(
+            "assign must map instance ids to Elastic IP allocation ids",
+            "invalid_request")
+    unassociated = {str(row.get("allocation_id")): row
+                    for row in view["unassociated"]}
+    cleaned = {}
+    for instance, allocation in assign.items():
+        instance = str(instance or "").strip()
+        allocation = str(allocation or "").strip()
+        if instance not in fleet:
+            raise CapacityError(
+                f"{instance} is not a registered fleet node.",
+                "invalid_request", 409)
+        if instance in view["by_instance"]:
+            raise CapacityError(
+                f"{instance} already holds an Elastic IP — there is nothing "
+                f"to assign to it.", "invalid_request", 409)
+        row = unassociated.get(allocation)
+        if row is None:
+            raise CapacityError(
+                f"{allocation} is not an unassociated Elastic IP in this "
+                f"region.", "address_not_eligible", 409)
+        tags = row.get("tags") or {}
+        if not (_stable_tagged(tags) or _django_mojo_tagged(tags)):
+            raise CapacityError(
+                f"{allocation} carries no django-mojo ownership tag, so this "
+                f"control will not consume it — it may be someone else's "
+                f"reservation. If it is really yours, tag it in the AWS "
+                f"console first (managed-by=django-mojo).",
+                "address_not_eligible", 409)
+        if allocation in cleaned.values():
+            raise CapacityError(
+                f"{allocation} is assigned to more than one node.",
+                "invalid_request")
+        cleaned[instance] = allocation
+    return cleaned
+
+
+def _apply_stable_ips(actor, action, assign=None, elbv2_client=None,
+                      ec2_client=None, **_ignored):
+    """Guards, plan, claim, policy write, dispatch — for the fleet switch."""
+    try:
+        serving = _serving(client=elbv2_client)
+    except ProviderCallError as err:
+        raise _provider_error(
+            err, "AWS did not report the serving tier, so the fleet's "
+                 "addresses cannot be changed safely.") from None
+    fleet = _fleet_ids(serving)
+    try:
+        addresses = ec2_helper.address_map(client=ec2_client)
+    except ProviderCallError as err:
+        raise _provider_error(
+            err, "AWS did not report the region's Elastic IPs, so no address "
+                 "change was planned.") from None
+    view = _address_view(fleet, addresses)
+
+    if action == ACTION_ENABLE_STABLE_IPS:
+        if not fleet:
+            raise CapacityError(
+                "No node is registered behind a load balancer, so there is "
+                "nothing to give a stable address to.",
+                "no_fleet_nodes", 409)
+        assignments = _validate_assign(assign, view, fleet)
+        detail = {
+            "fleet": fleet,
+            "pending": list(view["pending"]),
+            "reserved": [row.get("allocation_id") for row in view["reserved"]],
+            "assign": assignments,
+            "to_allocate": max(0, len(view["pending"]) - len(view["reserved"])),
+        }
+    else:
+        managed = [row for row in view["attached"] if row.get("managed")]
+        if not _egress_enabled() and not managed:
+            raise CapacityError(
+                "Stable outbound IPs are not enabled and no managed address "
+                "is attached — there is nothing to disable.",
+                "no_change", 409)
+        detail = {"fleet": fleet,
+                  "attached": [row.get("allocation_id") for row in managed]}
+
+    claim = _claim(action, "fleet", getattr(actor, "pk", None))
+    try:
+        _write_policy(actor, action == ACTION_ENABLE_STABLE_IPS)
+    except Exception:
+        _release(claim)
+        raise
+    record = _new_operation(action, "fleet", actor, claim, detail)
+    try:
+        _dispatch(record)
+    except CapacityError as err:
+        if err.error_code != "dispatch_failed":
+            raise
+        # The generic dispatch refusal says "nothing was changed" — false
+        # here, because the durable policy flipped a line ago and the add_node
+        # admission gate already honors it. Say what actually happened.
+        state = ("enabled" if action == ACTION_ENABLE_STABLE_IPS
+                 else "disabled")
+        raise CapacityError(
+            f"The stable-outbound-IPs policy IS recorded ({state}), but no "
+            f"job runner accepted the convergence, so no address was "
+            f"attached or detached. Run the action again to converge.",
+            "dispatch_failed", 503) from None
+    return record
+
+
 def _dispatch(record):
     """Hand one recorded operation to a job. A publish failure fails the op."""
     from mojo.apps import jobs
@@ -1107,6 +1487,8 @@ def run_operation(operation_id):
         ACTION_ADD_READER: _run_add_reader,
         ACTION_REMOVE_READER: _run_remove_reader,
         ACTION_SET_CACHE_REPLICAS: _run_set_cache_replicas,
+        ACTION_ENABLE_STABLE_IPS: _run_enable_stable_ips,
+        ACTION_DISABLE_STABLE_IPS: _run_disable_stable_ips,
     }
     runner = runners.get(record.get("action"))
     if runner is None:
@@ -1240,6 +1622,43 @@ def _run_add_node(record):
                      f"It has deliberately NOT been registered behind the "
                      f"balancer — an unproven node must not serve traffic.")
 
+    # ── addressing ─────────────────────────────────────────────────────────
+    # Read the policy through the RAISING path: this is an admission gate, and
+    # a database blip that silently skipped it would register a node whose
+    # egress no provider has allowlisted. Unreadable fails the add instead.
+    try:
+        egress_on = _egress_enabled(strict=True)
+    except Exception:
+        logger.exception("capacity: stable-ips policy could not be read")
+        return _fail(record, "policy_unreadable",
+                     f"The stable-outbound-ips policy could not be read, so "
+                     f"{instance_id} was NOT registered — a node whose egress "
+                     f"nobody allowlisted must not serve provider traffic. It "
+                     f"is running and unregistered; retry, or Terminate it.")
+    if egress_on:
+        _advance(record, "addressing",
+                 "attaching the fleet's stable outbound address")
+        try:
+            view = _address_view([instance_id], ec2_helper.address_map())
+            if view["pending"]:
+                _, stable_ip = _attach_stable_ip(instance_id, node_id, view)
+            else:
+                stable_ip = (view["attached"][0] or {}).get("public_ip")
+        except ProviderCallError as err:
+            code = ("address_quota"
+                    if err.provider_code == "AddressLimitExceeded"
+                    else "address_failed")
+            return _fail(record, code,
+                         f"{instance_id} could not be given a stable outbound "
+                         f"address, so it was NOT registered — a node whose "
+                         f"egress no provider has allowlisted must not serve. "
+                         f"It is running and unregistered; fix what the "
+                         f"failure names, then retry the add or Terminate it.",
+                         failure=err.detail())
+        _advance(record, "addressing", f"stable address {stable_ip} attached",
+                 stable_ip=stable_ip)
+        invalidate()
+
     # ── registering ────────────────────────────────────────────────────────
     groups = detail.get("target_groups") or []
     _advance(record, "registering", "registering the proven node behind the balancer")
@@ -1369,6 +1788,235 @@ def _converge_pools(record):
         _warn(record, "convergence_not_triggered",
               "The node is serving, but the vhost convergence sweep could not "
               "be queued. The scheduled sweep will pick it up.")
+
+
+def _stable_ip_tags(name):
+    return {"Name": str(name or "mojo-node"),
+            STABLE_EIP_TAG: STABLE_EIP_TAG_VALUE,
+            ec2_helper.CREATED_BY_TAG: "admin-capacity"}
+
+
+def _attach_stable_ip(instance_id, name, view, assignments=None):
+    """Give ONE node an Elastic IP: assigned, else reserved, else allocated.
+
+    Mutates ``view['reserved']`` as reservations are consumed so one planning
+    read serves a whole fleet loop. ``Resource.AlreadyAssociated`` (a raced
+    reservation — a concurrent add_node leg, a second admin) is retried ONCE
+    with a fresh allocation; ``AllowReassociation=False`` means the loser of
+    that race errors instead of stealing, which is the point.
+    """
+    allocation = (assignments or {}).get(instance_id)
+    public_ip = None
+    if allocation:
+        row = next((r for r in view["unassociated"]
+                    if r.get("allocation_id") == allocation), None)
+        if row is None:
+            # The named reservation stopped being free between the
+            # request-time check and this fresh read. Never tag what may now
+            # be somebody else's — drop the assignment and fall through.
+            allocation = None
+        else:
+            public_ip = row.get("public_ip")
+            ec2_helper.tag_resources([allocation], _stable_ip_tags(name))
+    if allocation is None:
+        if view["reserved"]:
+            chosen = view["reserved"].pop(0)
+            allocation = chosen.get("allocation_id")
+            public_ip = chosen.get("public_ip")
+            ec2_helper.tag_resources([allocation], _stable_ip_tags(name))
+        else:
+            allocated = ec2_helper.allocate_address(_stable_ip_tags(name))
+            allocation = allocated.get("allocation_id")
+            public_ip = allocated.get("public_ip")
+    try:
+        ec2_helper.associate_address(allocation, instance_id)
+    except ProviderCallError as err:
+        if err.provider_code != "Resource.AlreadyAssociated":
+            raise
+        allocated = ec2_helper.allocate_address(_stable_ip_tags(name))
+        allocation = allocated.get("allocation_id")
+        public_ip = allocated.get("public_ip")
+        ec2_helper.associate_address(allocation, instance_id)
+    return allocation, public_ip
+
+
+def _fail_released(record, err, message):
+    """A provider failure on a stable-ips runner: fail WITHOUT holding the claim.
+
+    The generic handler in ``run_operation`` holds the claim whenever a
+    mutation was attempted, which is right for add_node — a retried add is a
+    second live instance — and wrong here: both stable-ips runners are
+    idempotent by construction (satisfied nodes are skipped, decisions
+    re-derive from fresh reads, and even an allocate whose response was lost
+    left a tagged unassociated address the next planning pass reuses first).
+    Holding would 409 the exact re-run the panel offers as the retry, for the
+    rest of the 90-minute claim TTL.
+    """
+    return _fail(record,
+                 "provider_denied" if err.denied else "provider_error",
+                 message, failure=err.detail())
+
+
+def _run_enable_stable_ips(record):
+    try:
+        return _enable_stable_ips(record)
+    except ProviderCallError as err:
+        return _fail_released(
+            record, err,
+            "AWS refused or could not complete the address change. Fix what "
+            "the failure names and run the enable again — it converges only "
+            "what is still missing.")
+
+
+def _enable_stable_ips(record):
+    serving = _serving()
+    fleet = _fleet_ids(serving)
+    if not fleet:
+        return _fail(record, "no_fleet_nodes",
+                     "No node is registered behind a load balancer any more, "
+                     "so there is nothing to give a stable address to.")
+    facts = ec2_helper.instance_map(fleet)
+    running = [identifier for identifier in fleet
+               if (facts.get(identifier) or {}).get("state") == "running"]
+    for identifier in fleet:
+        if identifier not in running:
+            _warn(record, "node_not_running",
+                  f"{identifier} is registered but not running; it was left "
+                  f"without a stable address.")
+    if not running:
+        return _fail(record, "no_fleet_nodes",
+                     "No registered node is running, so no address was "
+                     "attached.")
+    _advance(record, "planning",
+             f"planning stable addresses for {len(running)} node(s)")
+    view = _address_view(running, ec2_helper.address_map())
+
+    # Adoption is TAG-SCOPED: a node-attached address is claimed for this
+    # feature only when it already carries django-mojo ownership tags (the
+    # pre-balancer provision case). An untagged attached address satisfies the
+    # node — it IS a stable address — but stays foreign: never tagged, never
+    # renamed, never detached by disable.
+    for row in view["attached"]:
+        if row.get("managed"):
+            continue
+        tags = (view["by_instance"].get(row["instance"]) or {}).get("tags")
+        if _django_mojo_tagged(tags):
+            name = (facts.get(row["instance"]) or {}).get("name") or row["instance"]
+            ec2_helper.tag_resources([row["allocation_id"]],
+                                     _stable_ip_tags(name))
+            row["managed"] = True
+
+    assignments = record["detail"].get("assign") or {}
+    view["reserved"] = [row for row in view["reserved"]
+                        if row.get("allocation_id") not in assignments.values()]
+    view["reserved"].sort(key=lambda row: str(row.get("allocation_id")))
+    done = []
+    for instance in list(view["pending"]):
+        name = (facts.get(instance) or {}).get("name") or instance
+        _advance(record, "associating",
+                 f"attaching a stable address to {name}")
+        try:
+            allocation, public_ip = _attach_stable_ip(
+                instance, name, view, assignments)
+        except ProviderCallError as err:
+            if err.provider_code == "AddressLimitExceeded":
+                remaining = [row for row in view["pending"]
+                             if row not in done and row != instance] + [instance]
+                return _fail(
+                    record, "address_quota",
+                    f"AWS refused a new Elastic IP: the account's public IPv4 "
+                    f"quota is exhausted. {len(done)} node(s) were addressed; "
+                    f"{len(remaining)} still need one. Raise the EC2 Elastic "
+                    f"IP quota (default 5 per region) and run the enable "
+                    f"again.", failure=err.detail())
+            raise
+        done.append(instance)
+        _advance(record, "associating",
+                 f"{name} now holds {public_ip}", last_attached=public_ip)
+
+    _advance(record, "verifying",
+             "re-reading AWS to prove every node holds its address")
+    final = _address_view(running, ec2_helper.address_map())
+    if final["pending"]:
+        return _fail(record, "address_unverified",
+                     f"AWS still reports no Elastic IP on: "
+                     f"{', '.join(final['pending'])}. Run the enable again to "
+                     f"converge them.")
+    allowlist = sorted({row.get("public_ip") for row in final["attached"]
+                        if row.get("public_ip")})
+    return _finish(record,
+                   f"Stable outbound IPs are on. Give providers these "
+                   f"addresses: {', '.join(allowlist)}",
+                   addresses=allowlist)
+
+
+def _run_disable_stable_ips(record):
+    try:
+        return _disable_stable_ips(record)
+    except ProviderCallError as err:
+        return _fail_released(
+            record, err,
+            "AWS refused or could not complete the detach. Run the disable "
+            "again — it detaches only what is still attached.")
+
+
+def _disable_stable_ips(record):
+    serving = _serving()
+    fleet = _fleet_ids(serving)
+    expected = record["detail"].get("attached") or []
+    if not fleet and expected:
+        # A successful-but-empty serving read must not launder a detach:
+        # addresses were attached at request time, nothing was touched, and
+        # "off" would be a verified-sounding lie.
+        return _fail(record, "address_unverified",
+                     f"The serving tier now reports no registered node, but "
+                     f"{len(expected)} managed address(es) were attached when "
+                     f"this was requested. Nothing was detached — re-read the "
+                     f"capacity report and run the disable again.")
+    view = _address_view(fleet, ec2_helper.address_map())
+    managed = [row for row in view["attached"] if row.get("managed")]
+    _advance(record, "detaching",
+             f"detaching {len(managed)} stable address(es)")
+    for row in managed:
+        association = (view["by_instance"].get(row["instance"]) or {}).get(
+            "association_id")
+        if not association:
+            continue
+        ec2_helper.disassociate_address(association)
+        _advance(record, "detaching",
+                 f"detached {row.get('public_ip')} from {row['instance']}")
+
+    _advance(record, "verifying", "re-reading AWS to confirm the detach")
+    final = _address_view(fleet, ec2_helper.address_map())
+    still = [row for row in final["attached"] if row.get("managed")]
+    if still:
+        return _fail(record, "address_unverified",
+                     f"AWS still reports managed addresses attached to: "
+                     f"{', '.join(sorted(row['instance'] for row in still))}. "
+                     f"Run the disable again.")
+    facts = ec2_helper.instance_map(fleet)
+    post = "; ".join(
+        f"{(facts.get(identifier) or {}).get('name') or identifier}: "
+        f"{(facts.get(identifier) or {}).get('public_ip') or 'no public address yet'}"
+        for identifier in fleet)
+    outsiders = [row for row in final["attached"] if not row.get("managed")]
+    kept = [row for row in view["reserved"]] + [
+        {"allocation_id": row.get("allocation_id"),
+         "public_ip": row.get("public_ip")} for row in managed]
+    kept_ips = sorted({row.get("public_ip") for row in kept
+                       if row.get("public_ip")})
+    message = (
+        f"Stable outbound IPs are off. Nodes now report: {post or 'none'}. "
+        f"{len(kept_ips)} address(es) stay reserved for re-enable "
+        f"({', '.join(kept_ips)}) and bill ~${EIP_MONTHLY_USD:.2f}/month each "
+        f"on top of the nodes' auto-assigned addresses — release them in the "
+        f"AWS console if you mean to let them go.")
+    if outsiders:
+        message += (
+            f" Still attached outside this control: "
+            f"{', '.join(sorted(str(row.get('public_ip')) for row in outsiders))}.")
+    return _finish(record, message,
+                   reserved=[row.get("allocation_id") for row in kept])
 
 
 def _run_drain_node(record):

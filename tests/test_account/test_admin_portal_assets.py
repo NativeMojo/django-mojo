@@ -527,7 +527,7 @@ def test_webapp_onboarding_asset_contract(opts):
         "the list does not launch or resume the wizard"
     assert "statuses.set(row.id" not in page, \
         "the list still fans out a per-row key_status request (N+1)"
-    assert "result.token = null" in page and "secretField.value = ''" in page, \
+    assert "result.token = null" in page and "secretField.textContent = ''" in page, \
         "the deploy-key reveal does not scrub its one-time value"
 
     # --- merged Deployments list (page.js) ---

@@ -2112,3 +2112,49 @@ def test_cli_falls_back_to_the_ssh_agent_when_the_key_was_imported(opts):
                    f"an imported key pair is not a failure — the operator must "
                    f"be told why no key file is being used rather than watching "
                    f"a silent SSH failure: {console.text()!r}")
+
+
+@th.django_unit_test("stable_node_ips keeps per-node EIPs even behind a balancer")
+def test_nodes_stable_ips_behind_balancer(opts):
+    from mojo.deploy.provision import nodes, report
+    from mojo.deploy.provision import spec as spec_module
+
+    spec = _spec(preset="micro", want_balancer=True, stable_node_ips=True)
+    th.assert_true(spec_module.wants_balancer(spec),
+                   "this test exists for the balancer path; the spec lost it")
+    names = spec_module.names(spec)
+    hostname = names["nodes"][0]
+    observed = _observed(
+        instances=[{"InstanceId": "i-0aaa", "State": {"Name": "running"},
+                    "InstanceType": spec.node_type, "ImageId": "ami-0base",
+                    "Tags": [{"Key": "Name", "Value": hostname}]}],
+        ami_id="ami-0base")
+
+    client, stubber = _stub("ec2")
+    stubber.add_response("allocate_address", {"AllocationId": "eipalloc-mine",
+                                              "PublicIp": "203.0.113.10"})
+    stubber.add_response("associate_address", {"AssociationId": "eipassoc-1"})
+    with stubber:
+        findings, actions, result = nodes.ensure_nodes(
+            _clients(ec2=client), spec, observed, apply=True)
+
+    _assert_no_blind(findings, "every EC2 request must be model-valid")
+    stubber.assert_no_pending_responses()
+    th.assert_eq(result["node_addresses"], ["203.0.113.10"],
+                 "a balancer fleet with stable_node_ips must still hold "
+                 "per-node addresses — that is the whole point of the flag")
+
+    # Without the flag, the balancer path stays address-free as before.
+    plain = _spec(preset="micro", want_balancer=True)
+    client, stubber = _stub("ec2")
+    with stubber:
+        findings, actions, result = nodes.ensure_nodes(
+            _clients(ec2=client), plain, observed, apply=True)
+    stubber.assert_no_pending_responses()
+    th.assert_eq(result["node_addresses"], [],
+                 "a balancer fleet without stable_node_ips must not grow "
+                 "node addresses")
+    address_codes = [f.code for f in findings if f.code.startswith("address.")]
+    th.assert_eq(address_codes, [],
+                 f"the balancer path reported address work it must not do: "
+                 f"{address_codes}")
