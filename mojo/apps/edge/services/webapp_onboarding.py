@@ -315,7 +315,6 @@ def precheck(group, raw_url, group_intent="existing"):
     """
     from urllib.parse import urlsplit
 
-    from mojo.apps.dnsman.models import Domain
     from mojo.apps.dnsman.models.domain import PROVIDER_MOJO
     from mojo.apps.dnsman.services import delegation, naming
     from mojo.apps.edge.models import Vhost
@@ -362,11 +361,16 @@ def precheck(group, raw_url, group_intent="existing"):
     normalized = {"url": f"https://{hostname}", "hostname": hostname,
                   "scheme_note": scheme_note}
 
-    # Longest-suffix match against the group's own domains. A new group has
-    # none, so it always resolves to domain_unknown.
+    # Longest-suffix match against the domains this group may serve under —
+    # its own and its ancestors' (never a sibling's; an unrelated group's
+    # domain stays domain_unknown). A new group has none, so it always
+    # resolves to domain_unknown.
+    from mojo.apps.edge.services import webapp_apps_domain
+
     domain = None
     if group_intent != "new" and group is not None:
-        for candidate_domain in Domain.objects.filter(group=group, status="active"):
+        for candidate_domain in webapp_apps_domain.owned_by_group_or_ancestor(
+                group).filter(status="active"):
             base = candidate_domain.name
             if hostname == base or hostname.endswith(f".{base}"):
                 if domain is None or len(base) > len(domain.name):
@@ -473,12 +477,27 @@ def options(group, group_intent="existing"):
                        "provenance": resolved.provenance}
     except webapp_destination.DestinationUnavailable as err:
         destination_error = str(err)
+    # The workspace's apps domain — where a new app can go live instantly with
+    # no DNS step at all. None plus a plain-language reason otherwise.
+    from mojo.apps.edge.services import webapp_apps_domain
+
+    apps_domain = None
+    apps_domain_error = None
+    resolved_apps_domain = webapp_apps_domain.resolve(group)
+    if resolved_apps_domain is not None:
+        apps_domain = {"id": resolved_apps_domain.pk,
+                       "name": resolved_apps_domain.name,
+                       "provider": resolved_apps_domain.provider}
+    else:
+        apps_domain_error = webapp_apps_domain.no_domain_reason(group)
     return {
         "schema_version": SCHEMA_VERSION,
         "buckets": buckets,
         "environments": ["production", "staging", "preview", "development"],
         "destination": destination,
         "destination_error": destination_error,
+        "apps_domain": apps_domain,
+        "apps_domain_error": apps_domain_error,
         "group_intent": group_intent,
         "github_connected": bool(
             group is not None and
@@ -921,10 +940,15 @@ def _advance_address(operation):
             "choose one subdomain")
     validators.validate_label(label)
 
+    from mojo.apps.edge.services import webapp_apps_domain
+
     domain = None
     if choice.get("domain"):
-        domain = Domain.objects.filter(pk=choice["domain"],
-                                       group=operation.group).first()
+        # Own group or an ancestor of it — a team's child group may serve
+        # under the organization's domain. Never a sibling's or an unrelated
+        # group's, which keep the same non-disclosing refusal.
+        domain = webapp_apps_domain.owned_by_group_or_ancestor(
+            operation.group).filter(pk=choice["domain"]).first()
         if domain is None:
             raise me.PermissionDeniedException("The selected domain is outside this group")
     elif choice.get("purchase"):
@@ -1005,25 +1029,36 @@ def _advance_address(operation):
             and _record_values(row) == [target]
             for row in records)
         if not cnames and not wildcard_covers:
-            state = dict(operation.state or {})
-            intent = dict(state.get("intent") or {})
-            intent["dns"] = {
-                "provider": domain.provider, "type": "CNAME", "name": hostname,
-                "values": [target], "ttl": 300,
-            }
-            state["intent"] = intent
-            _save_state(operation, state, ["domain", "dns_provider"])
-            try:
-                dns.upsert_record(domain, "CNAME", hostname, [target], ttl=300)
-            except Exception:
-                proven = [row for row in dns.list_records(domain)
-                          if str(getattr(row, "name", row.get("name", ""))).rstrip(".") == hostname
-                          and str(getattr(row, "type", row.get("type", ""))).upper() == "CNAME"
-                          and _record_values(row) == [target]]
-                if len(proven) != 1:
-                    raise me.ValueException(
-                        "DNS provider outcome is ambiguous; reconciliation will retry",
-                        code=503, status=503)
+            apps_domain = webapp_apps_domain.resolve(operation.group)
+            if apps_domain is not None and apps_domain.pk == domain.pk:
+                # The workspace's apps domain: instead of one more per-host
+                # record, converge the wildcard coverage (a `*.{domain}` CNAME
+                # plus the apex+wildcard certificate request) so THIS app and
+                # every later one are routed. Idempotent, and the certificate
+                # scan below picks up whatever converge found or requested —
+                # the pass proceeds to cert/vhost work exactly as if the
+                # wildcard had already covered the name.
+                webapp_apps_domain.converge(domain)
+            else:
+                state = dict(operation.state or {})
+                intent = dict(state.get("intent") or {})
+                intent["dns"] = {
+                    "provider": domain.provider, "type": "CNAME", "name": hostname,
+                    "values": [target], "ttl": 300,
+                }
+                state["intent"] = intent
+                _save_state(operation, state, ["domain", "dns_provider"])
+                try:
+                    dns.upsert_record(domain, "CNAME", hostname, [target], ttl=300)
+                except Exception:
+                    proven = [row for row in dns.list_records(domain)
+                              if str(getattr(row, "name", row.get("name", ""))).rstrip(".") == hostname
+                              and str(getattr(row, "type", row.get("type", ""))).upper() == "CNAME"
+                              and _record_values(row) == [target]]
+                    if len(proven) != 1:
+                        raise me.ValueException(
+                            "DNS provider outcome is ambiguous; reconciliation will retry",
+                            code=503, status=503)
 
     from mojo.apps.edge.models import Vhost
     existing_vhost = Vhost.objects.filter(
@@ -1172,6 +1207,18 @@ def _advance_github(operation):
     choice = ((operation.state or {}).get("choices") or {}).get("github") or {}
     profile = (operation.state or {}).get("profile") or {}
     repository = str(choice.get("repository") or profile.get("github_repository") or "").strip()
+    if choice.get("skip") or not repository:
+        # GitHub deploys are optional: an explicit skip, or simply no
+        # repository anywhere, moves straight to verification. The WebApp's
+        # github fields stay untouched so connecting a repo later starts clean.
+        operation.evidence = dict(operation.evidence or {},
+                                  github={"status": "skipped"})
+        operation.cursor = "verify"
+        operation.attempts = 0
+        operation.next_attempt_at = None
+        _activity(operation,
+                  "GitHub deploys skipped; deploy any time from the app's page")
+        return True
     ref_name = str(choice.get("ref") or profile.get("deployment_ref") or "main").strip()
     output = str(choice.get("output") or profile.get("build_output") or "dist").strip()
     validators.validate_github_repository(repository)
@@ -1230,7 +1277,12 @@ def workflow(web_app, api_origin=None):
     user's machine. The old generator told users to run ``python -m
     mojo_webapp``, a module that exists nowhere; this is the real contract.
     """
-    repository = validators.validate_github_repository(web_app.github_repository)
+    # A repository is optional — the yaml is a file the user drops into
+    # whichever repo they later choose, and it only needs ref/output/api-url/
+    # webapp-id. Validate one only when the app actually has one.
+    repository = str(web_app.github_repository or "").strip() or None
+    if repository is not None:
+        repository = validators.validate_github_repository(repository)
     ref_name = validators.validate_deployment_ref(web_app.deployment_ref)
     output = validators.validate_build_output(web_app.build_output)
     origin = str(api_origin or "").strip().rstrip("/") or "https://YOUR-PLATFORM-ORIGIN"

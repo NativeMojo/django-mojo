@@ -1309,3 +1309,330 @@ def test_precheck_external_missing_destination(opts):
     for record in r.get("records") or []:
         assert record.get("value"), \
             f"external precheck offered a record with a blank destination: {r}"
+
+
+# ---------------------------------------------------------------------------
+# GitHub optional (item 2223 phase 1)
+# ---------------------------------------------------------------------------
+@th.django_unit_test("github step skips on request or when no repository exists")
+def test_github_skip_advances_to_verify(opts):
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_onboarding
+
+    for choices in ({"github": {"skip": True}}, {"github": {}}):
+        web_app = make_webapp(opts.group, slug=f"skip{uuid.uuid4().hex[:6]}")
+        op = WebAppOnboardingOperation.objects.create(
+            group=opts.group, actor=opts.actor, web_app=web_app,
+            origin="https://example.com", replay_fingerprint=uuid.uuid4().hex,
+            cursor="github",
+            state={"profile": {"github_repository": ""}, "choices": choices})
+        outcome = webapp_onboarding._advance_github(op)
+        assert outcome is True, \
+            f"a repo-less github step did not continue for {choices}: {outcome}"
+        assert op.cursor == "verify", \
+            f"a repo-less github step did not advance to verify: {op.cursor}"
+        assert op.evidence.get("github", {}).get("status") == "skipped", \
+            f"the skipped github step left the wrong evidence: {op.evidence}"
+        assert op.attempts == 0 and op.next_attempt_at is None, \
+            "the skipped github step retained an error budget"
+        web_app.refresh_from_db()
+        assert web_app.github_repository == "", \
+            "a skipped github step wrote repository state onto the WebApp"
+
+
+@th.django_unit_test("a given repository still runs the full github evidence path")
+def test_github_repo_still_validated(opts):
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_onboarding
+
+    web_app = make_webapp(opts.group, slug=f"ghfull{uuid.uuid4().hex[:6]}")
+    op = WebAppOnboardingOperation.objects.create(
+        group=opts.group, actor=opts.actor, web_app=web_app,
+        origin="https://example.com", replay_fingerprint=uuid.uuid4().hex,
+        cursor="github",
+        state={"profile": {"github_repository": ""},
+               "choices": {"github": {"repository": "NativeMojo/portal"}}})
+    with mock.patch.object(
+            webapp_onboarding, "_github_evidence",
+            return_value={"status": "verified"}) as evidence:
+        outcome = webapp_onboarding._advance_github(op)
+
+    assert outcome is True and op.cursor == "verify", \
+        f"a given repository did not verify and advance: {op.cursor}"
+    evidence.assert_called_once()
+    web_app.refresh_from_db()
+    assert web_app.github_repository == "NativeMojo/portal", \
+        "the verified repository was not recorded on the WebApp"
+    assert op.evidence.get("github", {}).get("status") == "verified", \
+        f"the github evidence was not recorded: {op.evidence}"
+
+
+@th.django_unit_test("workflow renders without a repository and unchanged with one")
+def test_workflow_repository_optional(opts):
+    from mojo.apps.edge.services import webapp_onboarding
+
+    web_app = make_webapp(opts.group, slug=f"wfopt{uuid.uuid4().hex[:6]}")
+    assert web_app.github_repository == "", "fixture unexpectedly set a repository"
+    result = webapp_onboarding.workflow(web_app, "https://api.example.com")
+
+    assert result["repository"] is None, \
+        f"a repo-less workflow did not report repository None: {result['repository']}"
+    assert f'webapp-id: "{web_app.pk}"' in result["yaml"], \
+        "the repo-less workflow lost the webapp id"
+    assert 'api-url: "https://api.example.com"' in result["yaml"], \
+        "the repo-less workflow lost the api origin"
+
+    web_app.github_repository = "NativeMojo/portal"
+    web_app.save(update_fields=["github_repository", "modified"])
+    with_repo = webapp_onboarding.workflow(web_app, "https://api.example.com")
+    assert with_repo["repository"] == "NativeMojo/portal", \
+        "a set repository was not validated and returned unchanged"
+
+
+# ---------------------------------------------------------------------------
+# apps-domain resolver + converge (item 2223 phase 1)
+# ---------------------------------------------------------------------------
+def _fresh_group_tree():
+    """parent -> child, plus an unrelated sibling-of-parent group."""
+    from mojo.apps.account.models import Group
+
+    parent = make_group("edge-appsdom")
+    child = Group.objects.create(
+        name=f"edge-appsdom-child_{uuid.uuid4().hex[:8]}",
+        kind="organization", parent=parent)
+    stranger = make_group("edge-appsdom-stranger")
+    return parent, child, stranger
+
+
+@th.django_unit_test("the apps domain resolves for the group and its descendants only")
+def test_apps_domain_resolver_scope(opts):
+    from mojo.apps.edge.services import webapp_apps_domain
+
+    parent, child, stranger = _fresh_group_tree()
+    domain = make_domain(group=parent, provider="route53")
+
+    with mock.patch(
+            "mojo.apps.edge.services.webapp_apps_domain._base_url",
+            return_value="https://api.unrelated.example"):
+        own = webapp_apps_domain.resolve(parent)
+        inherited = webapp_apps_domain.resolve(child)
+        foreign = webapp_apps_domain.resolve(stranger)
+        reason = webapp_apps_domain.no_domain_reason(stranger)
+
+    assert own is not None and own.pk == domain.pk, \
+        f"the owning group did not resolve its own domain: {own}"
+    assert inherited is not None and inherited.pk == domain.pk, \
+        f"a child group did not inherit its ancestor's domain: {inherited}"
+    assert foreign is None, \
+        f"an unrelated group resolved someone else's domain: {foreign}"
+    assert reason == webapp_apps_domain.NO_DOMAIN_REASON, \
+        f"the no-domain reason was not the plain-language one: {reason}"
+
+
+@th.django_unit_test("the apps domain prefers the BASE_URL suffix and skips unwritable domains")
+def test_apps_domain_resolver_preference(opts):
+    from mojo.apps.edge.services import webapp_apps_domain
+
+    parent, _, _ = _fresh_group_tree()
+    preferred = make_domain(group=parent, provider="route53")
+    make_domain(group=parent, provider="godaddy")
+
+    with mock.patch(
+            "mojo.apps.edge.services.webapp_apps_domain._base_url",
+            return_value=f"https://api.{preferred.name}"):
+        picked = webapp_apps_domain.resolve(parent)
+    assert picked is not None and picked.pk == preferred.pk, \
+        f"the BASE_URL-suffix domain was not preferred: {picked}"
+
+    # Two candidates and no suffix match: no silent guess.
+    with mock.patch(
+            "mojo.apps.edge.services.webapp_apps_domain._base_url",
+            return_value="https://api.unrelated.example"):
+        ambiguous = webapp_apps_domain.resolve(parent)
+        reason = webapp_apps_domain.no_domain_reason(parent)
+    assert ambiguous is None, \
+        f"an ambiguous multi-domain workspace resolved a guess: {ambiguous}"
+    assert reason == webapp_apps_domain.AMBIGUOUS_REASON, \
+        f"the ambiguous case did not carry its own plain reason: {reason}"
+
+    # An external (provider mojo) domain is not writable and never resolves.
+    mojo_only = make_group("edge-appsdom-ext")
+    make_domain(group=mojo_only, provider="mojo")
+    with mock.patch(
+            "mojo.apps.edge.services.webapp_apps_domain._base_url",
+            return_value=""):
+        external = webapp_apps_domain.resolve(mojo_only)
+    assert external is None, \
+        f"an unwritable external domain resolved as the apps domain: {external}"
+
+
+@th.django_unit_test("converge writes wildcard coverage once and is idempotent")
+def test_apps_domain_converge_idempotent(opts):
+    from objict import objict
+
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.edge.services import webapp_apps_domain
+
+    parent, _, _ = _fresh_group_tree()
+    domain = make_domain(group=parent, provider="route53")
+
+    def issue(domain_arg, names=None):
+        return Certificate.objects.create(
+            domain=domain_arg, common_name=domain_arg.name,
+            sans=[domain_arg.name, f"*.{domain_arg.name}"], status="pending")
+
+    def first_pass():
+        with mock.patch("mojo.apps.dnsman.services.dns.list_records",
+                        return_value=[]), \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
+                mock.patch("mojo.apps.dnsman.services.certs.request_certificate",
+                           side_effect=issue) as request:
+            return webapp_apps_domain.converge(domain), upsert, request
+
+    first, upsert, request = with_setting(
+        "EDGE_WEBAPP_CNAME_TARGET", TARGET, first_pass)
+    assert first.record_written is True, \
+        f"an uncovered domain did not get its wildcard record: {first}"
+    assert first.certificate_requested is True and first.certificate, \
+        f"an uncovered domain did not get a certificate request: {first}"
+    upsert.assert_called_once_with(
+        domain, "CNAME", f"*.{domain.name}", [TARGET], ttl=300)
+    request.assert_called_once()
+    assert first.destination == TARGET, \
+        f"converge did not report the serving destination: {first}"
+
+    zone = [objict(type="CNAME", name=f"*.{domain.name}",
+                   record_values=[TARGET], ttl=300)]
+
+    def second_pass():
+        with mock.patch("mojo.apps.dnsman.services.dns.list_records",
+                        return_value=zone), \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
+                mock.patch("mojo.apps.dnsman.services.certs.request_certificate") as request:
+            return webapp_apps_domain.converge(domain), upsert, request
+
+    second, upsert, request = with_setting(
+        "EDGE_WEBAPP_CNAME_TARGET", TARGET, second_pass)
+    assert second.record_written is False and second.certificate_requested is False, \
+        f"a covered domain was converged again: {second}"
+    upsert.assert_not_called()
+    request.assert_not_called()
+
+
+@th.django_unit_test("precheck and the address step accept an ancestor-owned domain")
+def test_ancestor_domain_onboards_end_to_end(opts):
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_onboarding
+
+    declare_pools()
+    parent, child, stranger = _fresh_group_tree()
+    domain = make_domain(group=parent, provider="route53")
+    make_certificate(domain)  # active apex+wildcard: issuance is already done
+
+    # Precheck: the child group sees its ancestor's domain...
+    def run_precheck(group):
+        with mock.patch("mojo.helpers.dns.probe.query_cname",
+                        return_value=mock.Mock(targets=[])), \
+                mock.patch(
+                    "mojo.apps.edge.services.webapp_apps_domain._base_url",
+                    return_value=""):
+            return webapp_onboarding.precheck(group, f"https://app.{domain.name}")
+
+    ready = with_setting(
+        "EDGE_WEBAPP_CNAME_TARGET", TARGET, lambda: run_precheck(child))
+    assert ready["verdict"] == "ready", \
+        f"a child group's precheck did not accept the ancestor's domain: {ready}"
+
+    # ...while an unrelated group still gets the non-disclosing verdict.
+    unknown = with_setting(
+        "EDGE_WEBAPP_CNAME_TARGET", TARGET, lambda: run_precheck(stranger))
+    assert unknown["verdict"] == "domain_unknown", \
+        f"an unrelated group learned about a foreign domain: {unknown}"
+
+    # Address advance: the child onboards under the parent's domain, and the
+    # lazy backstop converges the WILDCARD instead of writing a per-host CNAME.
+    web_app = make_webapp(child, slug=f"anc{uuid.uuid4().hex[:6]}")
+    op = WebAppOnboardingOperation.objects.create(
+        group=child, actor=opts.actor, web_app=web_app,
+        origin="https://example.com", replay_fingerprint=uuid.uuid4().hex,
+        cursor="address",
+        state={"profile": {}, "choices": {
+            "address": {"label": "app", "domain": domain.pk}}})
+
+    def run_advance():
+        with mock.patch("mojo.apps.dnsman.services.dns.list_records",
+                        return_value=[]), \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
+                mock.patch("mojo.apps.dnsman.services.certs.request_certificate") as request, \
+                mock.patch(
+                    "mojo.apps.edge.services.webapp_apps_domain._base_url",
+                    return_value=""):
+            outcome = webapp_onboarding._advance_address(op)
+            return outcome, upsert, request
+
+    outcome, upsert, request = with_setting(
+        "EDGE_WEBAPP_CNAME_TARGET", TARGET, run_advance)
+    assert outcome is True, \
+        f"the ancestor-domain address step did not complete: {outcome}"
+    upsert.assert_called_once_with(
+        domain, "CNAME", f"*.{domain.name}", [TARGET], ttl=300)
+    request.assert_not_called()  # the active wildcard certificate is reused
+    web_app.refresh_from_db()
+    assert web_app.vhost_id is not None, \
+        "the ancestor-domain onboarding produced no serving vhost"
+    assert web_app.vhost.server_name == f"app.{domain.name}", \
+        f"the vhost serves the wrong name: {web_app.vhost.server_name}"
+
+    # A sibling branch choosing the same domain keeps the same refusal.
+    from mojo import errors as me
+    foreign_app = make_webapp(stranger, slug=f"anc{uuid.uuid4().hex[:6]}")
+    foreign_op = WebAppOnboardingOperation.objects.create(
+        group=stranger, actor=opts.actor, web_app=foreign_app,
+        origin="https://example.com", replay_fingerprint=uuid.uuid4().hex,
+        cursor="address",
+        state={"profile": {}, "choices": {
+            "address": {"label": "other", "domain": domain.pk}}})
+    with th.assert_raises(me.PermissionDeniedException):
+        with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET,
+                     lambda: webapp_onboarding._advance_address(foreign_op))
+
+
+@th.django_unit_test("options carries the apps domain or its plain-language reason")
+def test_options_reports_apps_domain(opts):
+    from mojo.apps.edge.services import webapp_apps_domain, webapp_onboarding
+
+    parent, _, _ = _fresh_group_tree()
+    domain = make_domain(group=parent, provider="route53")
+
+    def resolved():
+        with mock.patch(
+                "mojo.apps.edge.services.webapp_apps_domain._base_url",
+                return_value=""), \
+                mock.patch(
+                    "mojo.apps.edge.services.webapp_destination._base_url",
+                    return_value="https://api.stage.example"):
+            return webapp_onboarding.options(parent)
+
+    ok = with_setting("EDGE_WEBAPP_CNAME_TARGET", "", resolved)
+    assert ok["apps_domain"] == {
+        "id": domain.pk, "name": domain.name, "provider": "route53"}, \
+        f"options did not carry the resolved apps domain: {ok['apps_domain']}"
+    assert ok["apps_domain_error"] is None, \
+        f"a resolved apps domain still reported an error: {ok}"
+
+    empty = make_group("edge-appsdom-none")
+
+    def unresolved():
+        with mock.patch(
+                "mojo.apps.edge.services.webapp_apps_domain._base_url",
+                return_value=""), \
+                mock.patch(
+                    "mojo.apps.edge.services.webapp_destination._base_url",
+                    return_value="https://api.stage.example"):
+            return webapp_onboarding.options(empty)
+
+    none = with_setting("EDGE_WEBAPP_CNAME_TARGET", "", unresolved)
+    assert none["apps_domain"] is None, \
+        f"a domain-less group still resolved an apps domain: {none['apps_domain']}"
+    assert none["apps_domain_error"] == webapp_apps_domain.NO_DOMAIN_REASON, \
+        f"the domain-less reason was not the plain-language one: {none}"

@@ -582,6 +582,45 @@ def release_dir(vhost_id, version):
                         "releases", version)
 
 
+def _placeholder_page(server_name):
+    """The page a release-less vhost serves: live, secure, nothing deployed.
+
+    Fully self-contained static HTML — inline styles, no scripts, no external
+    assets — and the only dynamic value (the vhost's server_name) is
+    html-escaped, never trusted as markup.
+    """
+    import html
+
+    name = html.escape(str(server_name or "").strip(), quote=True)
+    heading = name or "This address"
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{heading} is live</title>
+<style>
+body {{ margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+       background: #f5f6f8; color: #1f2933; display: flex; min-height: 100vh;
+       align-items: center; justify-content: center; }}
+main {{ max-width: 26rem; padding: 2rem; text-align: center; }}
+h1 {{ font-size: 1.25rem; margin: 0 0 0.75rem; }}
+p {{ margin: 0.5rem 0; color: #52606d; line-height: 1.5; }}
+.ok {{ color: #14803c; font-weight: 600; }}
+</style>
+</head>
+<body>
+<main>
+<h1>{heading} is live</h1>
+<p class="ok">HTTPS is working.</p>
+<p>Nothing is deployed here yet.</p>
+<p>Deploy your first release from the Admin portal.</p>
+</main>
+</body>
+</html>
+"""
+
+
 def stage_web_roots(generation, vhosts, webapps, fallbacks=None):
     """Point every file-serving vhost's web root at its installed release.
 
@@ -614,9 +653,15 @@ def stage_web_roots(generation, vhosts, webapps, fallbacks=None):
 
         row = by_vhost.get(vhost.pk)
         if row is None:
-            # No release yet. An empty directory makes nginx answer 404 rather
-            # than 500, which is the better of two bad answers.
+            # No release yet. A real directory (never a release symlink) with
+            # one static placeholder page: the address is live and HTTPS
+            # works, which beats both a 404 and a 500, and it tells the owner
+            # what happens next. Written inside the generation, so the same
+            # atomic swap that would replace it with a release also governs it.
             os.makedirs(link, exist_ok=True)
+            with open(os.path.join(link, "index.html"), "w") as handle:
+                handle.write(_placeholder_page(
+                    getattr(vhost, "server_name", "")))
             continue
 
         target = release_dir(vhost.pk, row["release"]["version"])

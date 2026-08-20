@@ -531,3 +531,42 @@ def test_webapp_destination_readiness(opts):
     invalid = with_setting("EDGE_WEBAPP_CNAME_TARGET", "not a hostname", check)
     assert invalid["status"] == "fail", \
         f"a set-but-invalid override was not a hard failure: {invalid}"
+
+
+@th.django_unit_test("apps-domain readiness reports instant go-live or what converging creates")
+def test_apps_domain_readiness(opts):
+    from objict import objict
+
+    from mojo.apps.edge.services import readiness
+
+    domain = make_domain(group=opts.group, provider="route53")
+    make_certificate(domain)  # active apex+wildcard
+    target = "edge-apps-target.example.net"
+    zone = [objict(type="CNAME", name=f"*.{domain.name}",
+                   record_values=[target], ttl=300)]
+
+    def check(records):
+        def run():
+            with mock.patch("mojo.apps.dnsman.services.dns.list_records",
+                            return_value=records), \
+                    mock.patch(
+                        "mojo.apps.edge.services.webapp_apps_domain._base_url",
+                        return_value=f"https://api.{domain.name}"):
+                return readiness.check_apps_domain({})[0]
+        return with_setting("EDGE_WEBAPP_CNAME_TARGET", target, run)
+
+    # Wildcard record + covering certificate in place → pass, naming the domain.
+    row = check(zone)
+    assert row["status"] == "pass", f"a fully covered apps domain was not green: {row}"
+    assert domain.name in row["explanation"] and "instantly" in row["explanation"], \
+        f"the pass row did not state the instant go-live under the domain: {row}"
+
+    # Missing wildcard record → pending, naming what converging will create.
+    pending = check([])
+    assert pending["status"] == "pending", \
+        f"a missing wildcard record was not pending: {pending}"
+    assert f"*.{domain.name}" in pending["explanation"], \
+        f"the pending row did not name the missing record: {pending}"
+    assert "converging will create it" in pending["explanation"], \
+        f"the pending row did not say converging creates it: {pending}"
+    assert pending["remediation"], "the pending apps-domain row had no remediation"

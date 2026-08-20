@@ -398,6 +398,60 @@ def check_webapp_destination(context):
                  "provenance": resolved.provenance})]
 
 
+def check_apps_domain(context):
+    """Whether new web apps go live instantly, with zero per-app DNS work.
+
+    Installation-level statement about the platform's apps domain — the
+    writable domain the platform's own address sits under (or the single
+    writable domain). Pass means the wildcard CNAME and a covering certificate
+    already exist; pending names what is missing and that converging (the
+    first onboarding under it) creates it.
+    """
+    from mojo.apps.edge.services import webapp_apps_domain, webapp_destination
+
+    domain = webapp_apps_domain.installation_domain()
+    if domain is None:
+        return [system_readiness.result(
+            "webapp.apps_domain", "pending",
+            "No domain managed here is ready to host new web apps yet.",
+            "Connect or purchase a domain; onboarding the first app under it "
+            "creates the wildcard DNS record and certificate automatically.")]
+    try:
+        state = webapp_apps_domain.status(domain)
+    except webapp_destination.DestinationUnavailable as err:
+        return [system_readiness.result(
+            "webapp.apps_domain", "pending", str(err),
+            "Set the platform's public address (BASE_URL) in System Setup "
+            "first.", details={"domain": domain.name})]
+    except Exception as exc:
+        return [system_readiness.result(
+            "webapp.apps_domain", "fail",
+            f"Could not read {domain.name}'s DNS records to confirm wildcard "
+            f"coverage ({type(exc).__name__}).",
+            "Verify the domain's DNS credential, then re-run this check.",
+            details={"domain": domain.name})]
+    if state.record and state.certificate:
+        return [system_readiness.result(
+            "webapp.apps_domain", "pass",
+            f"New web apps go live instantly under {domain.name} (wildcard "
+            "DNS + certificate in place).",
+            details={"domain": domain.name, "destination": state.destination})]
+    missing = []
+    if not state.record:
+        missing.append(f"the *.{domain.name} DNS record")
+    if not state.certificate:
+        missing.append("a covering certificate")
+    return [system_readiness.result(
+        "webapp.apps_domain", "pending",
+        f"{domain.name} is missing {' and '.join(missing)}; converging will "
+        "create it. The first app onboarded under this domain does that "
+        "automatically.",
+        "Onboard a web app under this domain, or converge it from Domains.",
+        details={"domain": domain.name, "destination": state.destination,
+                 "record": bool(state.record),
+                 "certificate": bool(state.certificate)})]
+
+
 def register_sections():
     system_readiness.register_section(
         "hosting_dns", "Domains and certificates", check_dns, order=40)
@@ -410,3 +464,5 @@ def register_sections():
     system_readiness.register_section(
         "webapp_destination", "WebApp serving destination",
         check_webapp_destination, order=44)
+    system_readiness.register_section(
+        "apps_domain", "Apps domain", check_apps_domain, order=45)

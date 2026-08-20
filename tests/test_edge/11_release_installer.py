@@ -473,3 +473,67 @@ def test_download_refuses_non_current(opts):
         f"the desired state names the wrong release: {rows[0]['release']}"
     assert rows[0]["release"]["id"] != v2.pk, \
         "a superseded release appeared in the desired state"
+
+
+@th.django_unit_test("a release-less vhost serves a placeholder page, never a blank 404")
+def test_stage_web_roots_placeholder(opts):
+    """No desired release → a real directory with one escaped, self-contained
+    index.html; a vhost WITH a release keeps its symlink and no placeholder."""
+    from types import SimpleNamespace
+
+    from mojo.apps.edge.services import installer, render
+
+    root = tempfile.mkdtemp(prefix="edge-rel-")
+    www = tempfile.mkdtemp(prefix="edge-www-")
+    patches = _patches(root, www)
+    _enter(patches)
+    try:
+        generation = "placeholder"
+        os.makedirs(os.path.join(render.generation_dir(generation), "www"))
+
+        # A hostile server_name must come out escaped, never as markup.
+        hostile = SimpleNamespace(
+            pk=990001, kind="site",
+            server_name='<script>alert("x")</script>.example.com')
+        installer.stage_web_roots(generation, [hostile], [])
+
+        link = render.www_dir(generation, hostile.pk)
+        assert os.path.isdir(link) and not os.path.islink(link), \
+            "the release-less web root is not a plain directory"
+        page = os.path.join(link, "index.html")
+        assert os.path.isfile(page), \
+            "a release-less vhost got no placeholder index.html"
+        with open(page) as handle:
+            body = handle.read()
+        assert "<script>" not in body, \
+            "the placeholder rendered an unescaped server_name as markup"
+        assert "&lt;script&gt;" in body, \
+            "the placeholder did not html-escape the server_name"
+        assert "Deploy your first release from the Admin portal." in body, \
+            "the placeholder does not tell the owner what happens next"
+        assert "HTTPS" in body, \
+            "the placeholder does not confirm HTTPS is working"
+        assert "http://" not in body and "https://" not in body, \
+            "the placeholder references an external asset; it must be self-contained"
+
+        # A vhost WITH a desired release gets the release symlink — no
+        # placeholder written over or beside the release content.
+        target = _stage_release_on_disk(www, opts.vhost.pk, "ph1")
+        webapps = [dict(vhost=opts.vhost.pk, slug="relsite",
+                        bucket=RELEASE_BUCKET,
+                        release=dict(id=1, version="ph1",
+                                     prefix="webapps/1/1/releases/ph1",
+                                     manifest=[]))]
+        installer.stage_web_roots(generation, [opts.vhost], webapps)
+        released = render.www_dir(generation, opts.vhost.pk)
+        assert os.path.islink(released), \
+            "a vhost with a desired release did not get its release symlink"
+        assert os.path.realpath(released) == os.path.realpath(target), \
+            f"the web root points at {os.path.realpath(released)}, not {target}"
+        assert sorted(os.listdir(target)) == ["index.html"], \
+            "staging wrote extra files into the release directory"
+        with open(os.path.join(released, "index.html")) as handle:
+            assert handle.read() == "ph1:index.html", \
+                "the release's own index.html was overwritten by a placeholder"
+    finally:
+        _exit(patches, root, www)
