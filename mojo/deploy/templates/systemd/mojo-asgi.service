@@ -1,5 +1,6 @@
 [Unit]
 Description=Uvicorn ASGI for Django (@PROJ_PATH@) via Unix socket
+Documentation=https://github.com/NativeMojo/django-mojo/blob/main/docs/django_developer/deploy/README.md
 After=network-online.target
 Wants=network-online.target
 

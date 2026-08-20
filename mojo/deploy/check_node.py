@@ -1760,6 +1760,60 @@ def check_jobs(report, run, proj):
         report.info("jobs", "extra-instance lines ignored",
                     extras[0] + " — known cosmetic false positive (jobman "
                     "matches its own pid)")
+    check_job_channels(report, run, proj)
+
+
+# `JOBS_CHANNELS` REPLACES the framework's list rather than extending it, so a
+# project that writes its own drops every channel it does not re-list — and
+# nothing anywhere reports it. The publisher succeeds; the job lands in a
+# stream no runner reads; the feature is simply inert.
+#
+# `edge` is the one that costs a whole afternoon: `platform_deploy.edge_roster()`
+# freezes the runners consuming it, and an empty roster makes every push webhook
+# answer 503 "edge runner roster unavailable". A fleet in that state serves
+# perfectly and takes no deploys. That is what this check exists to catch.
+FRAMEWORK_CHANNELS = (
+    "default", "priority", "cleanup", "incident_handlers", "renditions",
+    "certs", "webhooks", "webhook_fanout", "edge",
+)
+
+# What breaks, per channel, in the words of the person who will read this.
+CHANNEL_COST = {
+    "edge": "push-to-deploy and nginx generation convergence never run",
+    "certs": "dnsman certificate sync never runs",
+    "incident_handlers": "incident handlers never fire",
+    "renditions": "media renditions are never generated",
+    "webhook_fanout": "outbound webhook fan-out never delivers",
+    "cleanup": "scheduled cleanup never runs",
+    "webhooks": "inbound webhook processing never runs",
+}
+
+
+def check_job_channels(report, run, proj):
+    rc, out, err = run(
+        f"cd {q(proj)} && python3 bin/manage.py shell -c "
+        f"'from mojo.apps import jobs; print(\",\".join(jobs.JOB_CHANNELS))' "
+        f"2>/dev/null | tail -1", timeout=60)
+    consumed = [c.strip() for c in (out or "").split(",") if c.strip()]
+    if rc != 0 or not consumed:
+        report.info("jobs", "consume channels",
+                    "could not read jobs.JOB_CHANNELS from this tree")
+        return
+
+    missing = [c for c in FRAMEWORK_CHANNELS if c not in consumed]
+    if not missing:
+        report.passed("jobs", "consume channels",
+                      f"{len(consumed)} channels, framework list complete")
+        return
+
+    cost = "; ".join(CHANNEL_COST.get(c, f"{c} work is never consumed")
+                     for c in missing)
+    say = report.fail if "edge" in missing else report.warn
+    say("jobs", "consume channels incomplete",
+        f"JOBS_CHANNELS omits {', '.join(missing)} — {cost}",
+        "JOBS_CHANNELS replaces the framework's DEFAULT_CHANNELS rather than "
+        "extending it; add the missing names to the project's jobs settings "
+        "and restart the engine")
 
 
 # ---------------------------------------------------------------------------

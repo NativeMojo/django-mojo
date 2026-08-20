@@ -244,10 +244,21 @@ trusted_pip() {
 # across nodes for the seconds a deploy takes, never across time. Bare runs
 # install latest, so releases are never missed. Either way a failure is loud.
 
-log "Installing project dependencies..."
+# A project whose only dependency IS django-mojo legitimately has nothing to
+# pin, and dying on the missing file is a worse failure than the one that check
+# was protecting against: it makes every deploy on such a project fail at this
+# line, after the tree has already moved. The file being absent is a fact about
+# the project; the file being present and unusable is still fatal.
 phase_begin deps
-trusted_pip pip install -r "${PROJ_PATH}/requirements.txt" \
-    || die "dependency install failed — refusing to restart with an incomplete environment"
+if [ -f "${PROJ_PATH}/requirements.txt" ]; then
+    log "Installing project dependencies..."
+    trusted_pip pip install -r "${PROJ_PATH}/requirements.txt" \
+        || die "dependency install failed — refusing to restart with an incomplete environment"
+else
+    log "no requirements.txt — installing the framework only. Export one with \
+\`uv export --no-emit-project --no-hashes\` (excluding django-mojo) if this \
+project has dependencies of its own."
+fi
 phase_end
 
 phase_begin framework

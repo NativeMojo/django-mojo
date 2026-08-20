@@ -1,6 +1,6 @@
 [Unit]
 Description=Poll S3 for application config changes
-# Docs: django-mojo docs/django_developer/deploy/README.md (config_sync)
+Documentation=https://github.com/NativeMojo/django-mojo/blob/main/docs/django_developer/deploy/README.md
 
 [Timer]
 # Boot is handled by config-sync.service ordering (Before=mojo-asgi), so this
