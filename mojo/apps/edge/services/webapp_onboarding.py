@@ -407,9 +407,13 @@ def precheck(group, raw_url, group_intent="existing"):
         domain=domain, label=label, is_enabled=True).first()
     if existing is not None:
         app = getattr(existing, "web_app", None)
+        # The occupying app's slug is workspace-internal detail: disclose it
+        # only when the requesting group itself owns the domain. Through the
+        # ancestor rule the verdict stands, the slug does not.
+        own_domain = group is not None and domain.group_id == group.pk
         return result("taken", normalized=normalized,
                       domain=_domain_summary(domain),
-                      app=app.slug if app is not None else None,
+                      app=app.slug if (app is not None and own_domain) else None,
                       reason="That address is already serving a site")
 
     def destination_or_block():
@@ -968,6 +972,18 @@ def _advance_address(operation):
             return True
     if domain is None or domain.status != "active" or not domain.verified:
         return True
+    if domain.group_id != operation.group_id:
+        # The domain was matched through the ancestor rule. READING it is the
+        # inheritance contract; WRITING to it (the per-host CNAME, the
+        # wildcard converge backstop, certificate requests) requires authority
+        # in the group that owns the domain. Grants inherit downward, so an
+        # organization that grants manage at the parent keeps working; a
+        # child-only grant fails closed before any provider write.
+        if not webapp_authority.can_manage_group_webapps(
+                operation.actor, domain.group):
+            raise me.PermissionDeniedException(
+                f"Managing DNS for {domain.name} requires access in the "
+                "workspace that owns it")
     operation.domain = domain
     operation.dns_provider = domain.provider
 
@@ -1064,6 +1080,15 @@ def _advance_address(operation):
     existing_vhost = Vhost.objects.filter(
         domain=domain, label=label, is_enabled=True).select_related(
             "certificate").first()
+    if existing_vhost is not None:
+        # An enabled vhost already bound to a DIFFERENT WebApp is another
+        # app's live address — refuse plainly here, before any certificate or
+        # repoint work, instead of letting the one-to-one link raise a DB
+        # IntegrityError further down.
+        occupant = getattr(existing_vhost, "web_app", None)
+        if occupant is not None and occupant.pk != operation.web_app_id:
+            raise me.PermissionDeniedException(
+                "That address is already used by another app")
     certificate = None
     if existing_vhost is not None:
         existing_certificate = existing_vhost.certificate

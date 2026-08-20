@@ -884,6 +884,9 @@ def retire_eligibility(domain, now=None):
     from mojo.apps.dnsman.models.certificate import STATUS_ACTIVE
     from mojo.apps.edge.models import Vhost
 
+    from mojo.apps.dnsman.models.certificate import (
+        STATUS_ISSUING, STATUS_PENDING)
+
     now = now or dates.utcnow()
     certificates = list(Certificate.objects.filter(domain=domain))
     candidates = [
@@ -891,14 +894,21 @@ def retire_eligibility(domain, now=None):
         if cert.status == STATUS_ACTIVE
         and not (cert.renew_after and cert.renew_after <= now)]
 
+    # EVERY referencing vhost gates coverage — parked (disabled) rows included:
+    # re-enabling one after retirement would put it on a certificate that
+    # cannot serve its name.
     served = {}
     for vhost in Vhost.objects.filter(
-            certificate__domain=domain,
-            is_enabled=True).select_related("domain"):
+            certificate__domain=domain).select_related("domain"):
         served.setdefault(vhost.certificate_id, []).append(vhost.server_name)
 
     eligibility = {}
     for cert in certificates:
+        if cert.status in (STATUS_PENDING, STATUS_ISSUING):
+            # An in-flight certificate is not retirable — cancel or remove
+            # the attempt instead (mirrors retire_certificate's refusal).
+            eligibility[cert.pk] = None
+            continue
         names = _certificate_names(cert) + served.get(cert.pk, [])
         replacement = None
         for candidate in candidates:
@@ -921,8 +931,14 @@ def retire_certificate(certificate):
     and name the reason in plain language.
     """
     from mojo.apps.dnsman.models import Certificate
-    from mojo.apps.dnsman.models.certificate import STATUS_ACTIVE
+    from mojo.apps.dnsman.models.certificate import (
+        STATUS_ACTIVE, STATUS_ISSUING, STATUS_PENDING)
     from mojo.apps.edge.models import Vhost
+
+    if certificate.status in (STATUS_PENDING, STATUS_ISSUING):
+        raise me.ValueException(
+            "This certificate is still being issued — cancel or remove the "
+            "attempt instead")
 
     now = dates.utcnow()
     required = _certificate_names(certificate)
@@ -945,12 +961,13 @@ def retire_certificate(certificate):
 
     vhosts = list(Vhost.objects.filter(
         certificate=certificate).select_related("domain"))
-    enabled_names = [
-        vhost.server_name for vhost in vhosts if vhost.is_enabled]
+    # EVERY referencing vhost must stay coverable — parked (disabled) rows
+    # included, since they are repointed too and may be re-enabled later.
+    served_names = [vhost.server_name for vhost in vhosts]
     replacement = None
     missing = None
     for candidate in fresh:
-        gaps = [name for name in enabled_names
+        gaps = [name for name in served_names
                 if not _covers_all(candidate, [name])]
         if not gaps:
             replacement = candidate

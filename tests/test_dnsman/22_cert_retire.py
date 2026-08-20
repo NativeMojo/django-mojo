@@ -160,8 +160,9 @@ def test_retire_happy_path(opts):
 
     live = make_vhost(domain, target, label="www", pool=POOL)
     # A parked row keeps its reference too — PROTECT means retirement must
-    # repoint it or the delete cannot happen. Coverage is only gated on
-    # enabled rows, exactly as Vhost.save enforces.
+    # repoint it or the delete cannot happen. Its name also counts toward the
+    # coverage requirement (the wildcard covers it here); the uncoverable
+    # case is pinned below in test_retire_covers_disabled_vhost_names.
     parked = make_vhost(domain, target, label="old", pool=POOL,
                         is_enabled=False)
 
@@ -209,6 +210,75 @@ def test_retire_eligibility_map(opts):
         "a failed attempt with no references must be retirable to the wildcard")
     assert eligibility[wildcard.pk] is None, (
         "nothing covers the wildcard, so it must not be marked retirable")
+
+
+@th.django_unit_test("an in-flight certificate is never retired or offered")
+def test_retire_refuses_in_flight_targets(opts):
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.dnsman.services import certs
+
+    domain = _domain(opts, "inflight", group=opts.group)
+    wildcard = make_certificate(domain, sans=[domain.name, f"*.{domain.name}"])
+    pending = make_certificate(
+        domain, status="pending", common_name=f"www.{domain.name}",
+        sans=[f"www.{domain.name}"])
+    issuing = make_certificate(
+        domain, status="issuing", common_name=f"api.{domain.name}",
+        sans=[f"api.{domain.name}"])
+
+    # The wildcard covers both names, so only the in-flight status can be the
+    # reason these are refused.
+    for target in (pending, issuing):
+        _raises_value(lambda cert=target: certs.retire_certificate(cert),
+                      "still being issued")
+        assert Certificate.objects.filter(pk=target.pk).exists(), (
+            "a refused in-flight retirement must not delete the certificate")
+
+    eligibility = certs.retire_eligibility(domain)
+    assert eligibility[pending.pk] is None, (
+        f"eligibility offered a pending certificate for retirement: "
+        f"{eligibility[pending.pk]}")
+    assert eligibility[issuing.pk] is None, (
+        f"eligibility offered an issuing certificate for retirement: "
+        f"{eligibility[issuing.pk]}")
+    assert eligibility[wildcard.pk] is None, (
+        "nothing covers the wildcard, so it must not be marked retirable")
+
+
+@th.django_unit_test("a disabled vhost's name still gates retirement coverage")
+def test_retire_covers_disabled_vhost_names(opts):
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.dnsman.services import certs
+    from mojo.apps.edge.models import Vhost
+
+    domain = _domain(opts, "parkedgap", group=opts.group)
+    target = make_certificate(
+        domain, common_name=domain.name, sans=[domain.name])
+    # Only candidate: covers the target's whole name set (the apex) but not
+    # the parked vhost's address.
+    make_certificate(domain, common_name=domain.name, sans=[domain.name])
+    # A parked (disabled) row still references the target, is repointed by a
+    # retirement, and may be re-enabled later — so its name must gate coverage
+    # too. Point it at the target past save() validation, same bypass as the
+    # enabled-gap test above.
+    wide = make_certificate(
+        domain, status="revoked", sans=[domain.name, f"*.{domain.name}"])
+    parked = make_vhost(domain, wide, label="legacy", pool=POOL,
+                        is_enabled=False)
+    Vhost.objects.filter(pk=parked.pk).update(certificate=target.pk)
+
+    _raises_value(
+        lambda: certs.retire_certificate(target), f"legacy.{domain.name}")
+    assert Certificate.objects.filter(pk=target.pk).exists(), (
+        "a refused retirement must not delete the target certificate")
+    parked.refresh_from_db()
+    assert parked.certificate_id == target.pk, (
+        "a refused retirement must not repoint the parked vhost")
+
+    eligibility = certs.retire_eligibility(domain)
+    assert eligibility[target.pk] is None, (
+        f"eligibility ignored the parked vhost's uncoverable name: "
+        f"{eligibility[target.pk]}")
 
 
 # ---------------------------------------------------------------------------

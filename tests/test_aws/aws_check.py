@@ -1750,6 +1750,46 @@ def test_release_bucket_cors_apply_merges_one_tight_rule(opts):
 
 
 @th.django_unit_test()
+def test_release_bucket_cors_wildcard_rule_is_not_the_tight_rule(opts):
+    from mojo.apps.fileman.models import FileManager
+    from mojo.apps.aws.services import aws_check
+
+    FileManager.objects.filter(
+        user__isnull=True, group__isnull=True, backend_type=FileManager.AWS_S3,
+    ).delete()
+    s3 = mock.Mock()
+    # A wide-open bucket: every origin, every header. It would let the upload
+    # through, but it is NOT the tight single-origin release rule this
+    # sub-check audits for — it must keep reporting as needing that rule.
+    s3.get_bucket_cors.return_value = {"CORSRules": [{
+        "AllowedOrigins": ["*"],
+        "AllowedMethods": ["PUT", "POST", "HEAD"],
+        "AllowedHeaders": ["*"],
+    }]}
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()), \
+            mock.patch.object(aws_check, "_release_buckets",
+                              return_value=["release-media"]):
+        report = aws_check.AWSCheckRunner(
+            clients={"s3": s3, "sts": _verified_sts()}).run(["s3"])
+    item = next(row for row in report["items"] if row["code"] == "release_bucket.cors")
+    assert item["status"] == "warn", \
+        f"a wildcard-origins bucket must not pass the release sub-check, got {item}"
+    s3.put_bucket_cors.assert_not_called()
+
+    # The header wildcard alone must not satisfy the rule either.
+    assert not aws_check._cors_supports_release_upload(
+        [{"AllowedOrigins": ["https://api.example.com"],
+          "AllowedMethods": ["PUT"], "AllowedHeaders": ["*"]}],
+        "https://api.example.com"), \
+        "wildcard AllowedHeaders satisfied the tight release rule"
+    # And the exact tight rule still does.
+    assert aws_check._cors_supports_release_upload(
+        [aws_check._release_upload_cors_rule("https://api.example.com")],
+        "https://api.example.com"), \
+        "the audit's own tight rule no longer satisfies its check"
+
+
+@th.django_unit_test()
 def test_release_bucket_cors_needs_a_base_url_origin(opts):
     from mojo.apps.fileman.models import FileManager
     from mojo.apps.aws.services import aws_check

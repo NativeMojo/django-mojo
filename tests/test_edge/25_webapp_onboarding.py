@@ -1528,6 +1528,12 @@ def test_ancestor_domain_onboards_end_to_end(opts):
     parent, child, stranger = _fresh_group_tree()
     domain = make_domain(group=parent, provider="route53")
     make_certificate(domain)  # active apex+wildcard: issuance is already done
+    # Writes to an ancestor-owned domain require authority in the OWNING
+    # group. Grants inherit downward, so the organization grants at the
+    # PARENT — which covers this child's onboarding too. (Previously this
+    # test rode on opts.actor, whose grants live in an unrelated group.)
+    parent_actor, _, _, _ = make_group_member(
+        ["manage_webapp", "manage_dns"], group=parent)
 
     # Precheck: the child group sees its ancestor's domain...
     def run_precheck(group):
@@ -1553,7 +1559,7 @@ def test_ancestor_domain_onboards_end_to_end(opts):
     # lazy backstop converges the WILDCARD instead of writing a per-host CNAME.
     web_app = make_webapp(child, slug=f"anc{uuid.uuid4().hex[:6]}")
     op = WebAppOnboardingOperation.objects.create(
-        group=child, actor=opts.actor, web_app=web_app,
+        group=child, actor=parent_actor, web_app=web_app,
         origin="https://example.com", replay_fingerprint=uuid.uuid4().hex,
         cursor="address",
         state={"profile": {}, "choices": {
@@ -1595,6 +1601,154 @@ def test_ancestor_domain_onboards_end_to_end(opts):
     with th.assert_raises(me.PermissionDeniedException):
         with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET,
                      lambda: webapp_onboarding._advance_address(foreign_op))
+
+
+@th.django_unit_test("ancestor-domain writes require authority in the owning workspace")
+def test_ancestor_domain_write_requires_owning_group_authority(opts):
+    from mojo import errors as me
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_onboarding
+
+    declare_pools()
+    parent, child, _ = _fresh_group_tree()
+    domain = make_domain(group=parent, provider="route53")
+    make_certificate(domain)  # active apex+wildcard — no issuance in this test
+
+    # Granted at the CHILD only: reading the ancestor's domain is the
+    # inheritance contract, writing to it is not — grants inherit downward,
+    # never upward.
+    child_actor, _, _, _ = make_group_member(
+        ["manage_webapp", "manage_dns"], group=child)
+    web_app = make_webapp(child, slug=f"upw{uuid.uuid4().hex[:6]}")
+    op = WebAppOnboardingOperation.objects.create(
+        group=child, actor=child_actor, web_app=web_app,
+        origin="https://example.com", replay_fingerprint=uuid.uuid4().hex,
+        cursor="address",
+        state={"profile": {}, "choices": {
+            "address": {"label": "app", "domain": domain.pk}}})
+
+    def run_denied():
+        with mock.patch("mojo.apps.dnsman.services.dns.list_records") as listed, \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
+                mock.patch(
+                    "mojo.apps.edge.services.webapp_apps_domain.converge") as converge:
+            try:
+                webapp_onboarding._advance_address(op)
+                error = None
+            except me.PermissionDeniedException as exc:
+                error = exc
+            return error, listed, upsert, converge
+
+    error, listed, upsert, converge = with_setting(
+        "EDGE_WEBAPP_CNAME_TARGET", TARGET, run_denied)
+    assert error is not None, \
+        "a child-only grant wrote DNS in the ancestor's workspace"
+    assert "workspace that owns it" in str(error), \
+        f"the refusal was not the plain owning-workspace message: {error}"
+    upsert.assert_not_called()  # refused before ANY provider write
+    converge.assert_not_called()
+    listed.assert_not_called()
+    web_app.refresh_from_db()
+    assert web_app.vhost_id is None, \
+        "the refused onboarding still produced a serving vhost"
+
+    # The SAME grant made at the PARENT instead — inherited downward over the
+    # child — lets the identical onboarding proceed exactly as before.
+    parent_actor, _, _, _ = make_group_member(
+        ["manage_webapp", "manage_dns"], group=parent)
+    op.actor = parent_actor
+    op.save(update_fields=["actor", "modified"])
+
+    def run_granted():
+        with mock.patch("mojo.apps.dnsman.services.dns.list_records",
+                        return_value=[]), \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
+                mock.patch("mojo.apps.dnsman.services.certs.request_certificate") as request, \
+                mock.patch(
+                    "mojo.apps.edge.services.webapp_apps_domain._base_url",
+                    return_value=""):
+            outcome = webapp_onboarding._advance_address(op)
+            return outcome, upsert, request
+
+    outcome, upsert, request = with_setting(
+        "EDGE_WEBAPP_CNAME_TARGET", TARGET, run_granted)
+    assert outcome is True, \
+        f"a parent-level grant did not complete the ancestor address step: {outcome}"
+    upsert.assert_called_once_with(
+        domain, "CNAME", f"*.{domain.name}", [TARGET], ttl=300)
+    request.assert_not_called()  # the active wildcard certificate is reused
+    web_app.refresh_from_db()
+    assert web_app.vhost_id is not None, \
+        "the parent-granted onboarding produced no serving vhost"
+
+
+@th.django_unit_test("an address serving another app is refused before any cert work")
+def test_advance_address_refuses_foreign_apps_vhost(opts):
+    from mojo import errors as me
+    from objict import objict
+
+    from mojo.apps.edge.services import webapp_onboarding
+
+    declare_pools()
+    domain = make_domain(group=opts.group, provider="route53")
+    cert = make_certificate(domain)
+    occupied = make_vhost(domain, cert, label="app", kind="site_api")
+    occupant = make_webapp(
+        opts.group, slug=f"occ{uuid.uuid4().hex[:6]}", vhost=occupied)
+    op = _address_operation(opts, domain, label="app",
+                            slug=f"newby{uuid.uuid4().hex[:6]}")
+
+    zone = [objict(type="CNAME", name=f"app.{domain.name}",
+                   record_values=[TARGET], ttl=300)]
+
+    def run():
+        with mock.patch("mojo.apps.dnsman.services.dns.list_records",
+                        return_value=zone), \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
+                mock.patch("mojo.apps.dnsman.services.certs.request_certificate") as request:
+            try:
+                webapp_onboarding._advance_address(op)
+                error = None
+            except me.PermissionDeniedException as exc:
+                error = exc
+            return error, upsert, request
+
+    error, upsert, request = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert error is not None, \
+        "an address bound to another app was adopted instead of refused"
+    assert "already used by another app" in str(error), \
+        f"the refusal was not the plain already-used message: {error}"
+    request.assert_not_called()  # refused before any certificate work
+    occupant.refresh_from_db()
+    assert occupant.vhost_id == occupied.pk, \
+        "the refusal still unlinked the occupying app's address"
+    op.web_app.refresh_from_db()
+    assert op.web_app.vhost_id is None, \
+        "the refused onboarding still adopted another app's vhost"
+
+
+@th.django_unit_test("taken discloses the occupying slug to the owning group only")
+def test_precheck_taken_slug_disclosure(opts):
+    from mojo.apps.edge.services import webapp_onboarding
+
+    declare_pools()
+    parent, child, _ = _fresh_group_tree()
+    domain = make_domain(group=parent, provider="route53")
+    vhost = make_vhost(domain, make_certificate(domain), label="www")
+    occupant = make_webapp(
+        parent, slug=f"tkn{uuid.uuid4().hex[:6]}", vhost=vhost)
+
+    own = webapp_onboarding.precheck(parent, f"https://www.{domain.name}")
+    assert own["verdict"] == "taken", \
+        f"the owning group's occupied address was not reported taken: {own}"
+    assert own["app"] == occupant.slug, \
+        f"the owning group did not see which of its apps holds the address: {own}"
+
+    inherited = webapp_onboarding.precheck(child, f"https://www.{domain.name}")
+    assert inherited["verdict"] == "taken", \
+        f"the ancestor-domain occupied address lost its taken verdict: {inherited}"
+    assert inherited["app"] is None, \
+        f"a child group learned another workspace's app slug: {inherited}"
 
 
 @th.django_unit_test("options carries the apps domain or its plain-language reason")

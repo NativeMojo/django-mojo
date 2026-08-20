@@ -141,20 +141,26 @@ def _release_upload_cors_rule(origin):
 
 
 def _cors_supports_release_upload(cors, origin):
+    """Whether an existing rule IS the tight release rule (or tighter).
+
+    Deliberately does NOT accept wildcards: a rule with ``AllowedOrigins
+    ["*"]`` or ``AllowedHeaders ["*"]`` is a wide-open bucket, not the
+    single-origin release rule this check audits for — it must keep reporting
+    as needing the tight rule, never as pass.
+    """
     required_headers = set(RELEASE_UPLOAD_HEADERS)
     if not isinstance(cors, list):
         return False
     for rule in cors:
         if not isinstance(rule, dict):
             continue
-        allowed_origins = rule.get("AllowedOrigins", [])
-        if "*" not in allowed_origins and origin not in allowed_origins:
+        if origin not in rule.get("AllowedOrigins", []):
             continue
         methods = {str(value).upper() for value in rule.get("AllowedMethods", [])}
         if "PUT" not in methods:
             continue
         headers = {str(value).lower() for value in rule.get("AllowedHeaders", [])}
-        if "*" in headers or required_headers.issubset(headers):
+        if required_headers.issubset(headers):
             return True
     return False
 

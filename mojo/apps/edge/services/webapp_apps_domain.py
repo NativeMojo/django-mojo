@@ -176,7 +176,15 @@ def status(domain):
 
 def converge(domain):
     """Make the domain's wildcard coverage exist. Idempotent: a second call
-    finds everything in place and writes nothing."""
+    finds everything in place and writes nothing.
+
+    Authorization note: converge has no actor context of its own. The
+    onboarding path (``webapp_onboarding._advance_address``) enforces the
+    actor gate before calling it — writes to an ancestor-owned domain require
+    ``webapp_authority.can_manage_group_webapps(actor, domain.group)`` in the
+    DOMAIN-OWNING group. The remaining direct callers (readiness/Setup) carry
+    no actor and sit behind the platform-admin readiness surface.
+    """
     from mojo.apps.dnsman.services import certs, dns
 
     state = status(domain)
