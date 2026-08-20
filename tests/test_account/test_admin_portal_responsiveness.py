@@ -7,6 +7,7 @@ though nothing happened. The shared affordances live in
 attached to a node that actually survives the handler that paints them.
 """
 
+import re
 from pathlib import Path
 
 from testit import helpers as th
@@ -57,20 +58,24 @@ def test_deploys_tab_renders_its_own_states_contract(opts):
         assert copy in page, f"the Deploys tab lost its {copy!r} empty state"
 
 
-# The surfaces actually swept so far: the shared components (phase 1) and the
-# high-traffic feature files (phase 2). The remaining feature files join this
-# set in phase 3; until then they carry their own raw handlers knowingly.
-SWEPT = (
-    "components/actions.js",
-    "components/model.js",
-    "components/rows.js",
-    "components/views.js",
-    "core.js",
-    "features/advanced/page.js",
-    "features/webapps/api.js",
-    "features/webapps/page.js",
-    "features/webapps/wizard.js",
-)
+def swept():
+    """Every JavaScript module in the packaged portal.
+
+    The sweep is finished, so the swept set is no longer a list somebody has to
+    remember to extend — it is the tree. A new feature file is covered the day
+    it is added, which is the whole point of closing the door.
+
+    Filtered to ``*.js`` deliberately. The same tree carries ``mojo-logo.png``,
+    several ``styles.css`` files and eight feature ``manifest.json`` files;
+    ``read_text()`` on the PNG raises ``UnicodeDecodeError``, so an unfiltered
+    walk does not fail this test, it crashes it.
+    """
+    return sorted(ASSETS.rglob("*.js"))
+
+
+def _name(path):
+    return path.relative_to(ASSETS).as_posix()
+
 
 # Handler spellings that hand a promise to an event listener nobody awaits:
 # the click returns, the work runs on, and the screen does not move.
@@ -86,7 +91,10 @@ BANNED = (
 
 EXEMPT_MARKER = "responsiveness-exempt:"
 # A deliberate exemption is rare and reasoned. If this needs raising, the
-# reason belongs in the review, not in a quietly larger number.
+# reason belongs in the review, not in a quietly larger number. The three that
+# exist are named in
+# docs/django_developer/account/admin_portal/responsiveness.md, and the sweep
+# that closed the door tree-wide added none.
 EXEMPT_CAP = 3
 
 
@@ -202,22 +210,115 @@ def test_action_helper_contract(opts):
         "the new pending animations ignore prefers-reduced-motion"
 
 
-@th.django_unit_test("no swept surface hands a promise to an un-awaited listener")
+@th.django_unit_test("no portal asset hands a promise to an un-awaited listener")
 def test_no_raw_async_handlers_contract(opts):
+    modules = swept()
+    # A glob that matched nothing would make every assertion below vacuous.
+    names = {_name(path) for path in modules}
+    assert len(modules) >= 25 and "core.js" in names and "components/actions.js" in names, \
+        f"the asset walk found {len(modules)} JavaScript modules under {ASSETS} — " \
+        f"it is not reaching the portal tree, so this guard proves nothing"
+
     exemptions = 0
-    for name in SWEPT:
-        text = (ASSETS / name).read_text()
+    for path in modules:
+        text = path.read_text()
         exemptions += text.count(EXEMPT_MARKER)
         hits = _unexempted(text)
         assert not hits, (
-            f"{name} still attaches a raw async handler at "
+            f"{_name(path)} still attaches a raw async handler at "
             f"{', '.join(f'line {line}' for line, _ in hits)} — route the work "
             f"through runAction() from components/actions.js, or mark the line "
             f"'// {EXEMPT_MARKER} <reason>' when the await is for human input "
             f"or the control already guards itself")
     assert exemptions <= EXEMPT_CAP, \
-        f"{exemptions} responsiveness exemptions across the swept surfaces " \
+        f"{exemptions} responsiveness exemptions across the portal assets " \
         f"(cap {EXEMPT_CAP}) — exemptions are supposed to be rare and reasoned"
+
+
+@th.django_unit_test("the portal has one action wrapper, and it is the shared one")
+def test_local_action_wrappers_are_retired_contract(opts):
+    shared = ASSETS / "components/actions.js"
+    for path in swept():
+        text = path.read_text()
+        code = _code(text)
+        if path != shared:
+            assert "function runAction" not in code, \
+                f"{_name(path)} defines its own runAction — the timing, the guard " \
+                f"and the 440 handling are the shared helper's job, and a second " \
+                f"copy is a second set of rules nobody will keep in step"
+        # advanced/page.js used to append a bare .error-state div with no
+        # heading, no role and no retry, so repeated failures stacked under
+        # stale content. errorState(error, retry) replaced it.
+        assert "function actionError" not in code, \
+            f"{_name(path)} re-introduces a local error renderer — use " \
+            f"errorState(error, retry) from components/views.js"
+
+    # Every module that reaches for a shared affordance must import it; a
+    # copy-pasted call with no import is a ReferenceError on first click and
+    # nothing in Python notices.
+    for path in swept():
+        text = path.read_text()
+        if path == shared:
+            continue
+        for symbol in ("runAction(", "loadInto(", "copyButton("):
+            if symbol not in text:
+                continue
+            assert re.search(rf"import \{{[^}}]*\b{symbol[:-1]}\b[^}}]*\}} from '[^']*actions\.js'", text), \
+                f"{_name(path)} calls {symbol[:-1]}() without importing it from " \
+                f"components/actions.js"
+
+
+# A handler that hides or closes a container before it awaits has destroyed
+# every node inside it. `menu.hidden = true` and `inspector.close()` are the two
+# spellings in this tree.
+CLOSERS = (".hidden = true", ".close()")
+TARGET = re.compile(r"runAction\(\s*([A-Za-z_$][\w.$]*)")
+
+
+def _doomed_pending_states(text):
+    """runAction calls painting on a node the same handler just removed.
+
+    Two ways that happens: the target IS the container that was closed, or the
+    target is `event.currentTarget` — the clicked control, which lived inside
+    whatever the line above closed. A named target that is not the closed
+    container is fine, and is the fix the placement rule asks for: actionMenu
+    hides `menu` and paints on `button`.
+    """
+    lines = text.splitlines()
+    hits = []
+    for index, line in enumerate(lines):
+        closed = set()
+        for closer in CLOSERS:
+            if closer not in line:
+                continue
+            words = line.split(closer)[0].strip().split()
+            closed.add(words[-1] if words else "")
+        if not closed:
+            continue
+        for ahead in lines[index + 1:index + 4]:
+            match = TARGET.search(ahead)
+            if not match:
+                continue
+            target = match.group(1)
+            if target == "event.currentTarget" or target in closed:
+                hits.append((index + 2, target))
+    return hits
+
+
+@th.django_unit_test("no pending state is pinned to a node its own handler just removed")
+def test_pending_states_are_never_pinned_to_a_closed_container_contract(opts):
+    # The placement rule in its tree-wide form, and the failure mode the phase-1
+    # review called the most likely one: the guard goes green, the docs say it
+    # is enforced, and the portal is no more responsive than before because the
+    # affordance paints into a subtree that is already gone.
+    for path in swept():
+        hits = _doomed_pending_states(path.read_text())
+        assert not hits, (
+            f"{_name(path)} pins a pending state to a node the same handler "
+            f"already removed: "
+            + ", ".join(f"line {line} paints on {target}" for line, target in hits)
+            + " — move the affordance to a surviving ancestor, or make the call "
+              "headless (runAction(null, …, {key, busy})) when nothing survives")
 
 
 @th.django_unit_test("a pending state outlives the render its own action triggers")

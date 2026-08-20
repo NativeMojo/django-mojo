@@ -1,4 +1,5 @@
 import {api, apiOnce, h, icon, pageHeader} from '../../core.js';
+import {runAction} from '../../components/actions.js';
 import {openModal} from '../../components/overlays.js';
 import {decodeRouteState, routeHref} from '../../components/routes.js';
 import {rowSection, statusHeadline, statusRow} from '../../components/rows.js';
@@ -322,13 +323,18 @@ export async function maintenancePage(ctx, signal = null) {
     });
   }
 
+  // † and human-input in one control, exactly as in capacity.js: the typed-echo
+  // confirmation comes first (nothing paints while a human is reading it), and
+  // the moment they confirm, note() replaces this row with its own progress
+  // line. There is no surviving node to pin a pending state to, so the wrapper
+  // is headless and contributes only the guard — one modal per row, per click.
   function upgradeRow(finding) {
     const row = findingRow(finding);
     const link = row.querySelector('.row-link');
     if (link) {
       link.addEventListener('click', (event) => {
         event.preventDefault();
-        applyUpgrade(finding);
+        runAction(null, () => applyUpgrade(finding), {key: link});
       });
     }
     return row;
@@ -359,9 +365,10 @@ export async function maintenancePage(ctx, signal = null) {
       const row = statusRow({tone: 'warn', name: 'django-mojo', value: installed,
         mono: true, detail: pinDetail, detailTone: pinDetail ? 'warning' : '',
         action: {label: `Update to ${framework.latest}`, href: '#'}});
-      row.querySelector('.row-link')?.addEventListener('click', (event) => {
+      const link = row.querySelector('.row-link');
+      link?.addEventListener('click', (event) => {
         event.preventDefault();
-        applyFrameworkUpdate();
+        runAction(null, () => applyFrameworkUpdate(), {key: 'framework-update'});
       });
       return row;
     }

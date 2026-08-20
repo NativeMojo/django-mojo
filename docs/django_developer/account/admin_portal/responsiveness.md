@@ -9,6 +9,11 @@ The shared affordances live in
 `assets/components/actions.js`, are declared in the foundation `manifest.json`,
 and are enforced by `tests/test_account/test_admin_portal_responsiveness.py`.
 
+Every portal surface has been swept, and the guard now walks the whole asset
+tree rather than a list of files somebody has to extend — so this page describes
+what the code does today, not a target. A new feature file is covered the moment
+it is written.
+
 ## The placement rule — read this before choosing a target
 
 **Before putting a pending state on element `E` for handler `H`, ask: does `H`
@@ -163,9 +168,9 @@ carry an affordance, mark the line:
 button.addEventListener('click', async () => {
 ```
 
-`test_no_raw_async_handlers_contract` walks the swept set, honours an exemption
-comment within three lines above the handler, and caps the total number of
-exemptions. There are three today, and the cap is three:
+`test_no_raw_async_handlers_contract` honours an exemption comment within three
+lines above the handler, and caps the total number of exemptions. There are
+three, and the cap is three:
 
 - `components/model.js` `lifecycleControl` — the await is a confirm dialog.
 - `core.js` `FormView` — it already guards correctly. Its disable is
@@ -177,12 +182,31 @@ exemptions. There are three today, and the cap is three:
   replace-the-record-set confirm. The provider write that follows runs behind
   the busy scrim.
 
-The swept set holds the shared surfaces — `components/actions.js`,
-`components/model.js`, `components/rows.js`, `components/views.js`, `core.js` —
-plus the high-traffic feature files: `features/webapps/page.js`,
-`features/webapps/api.js`, `features/webapps/wizard.js`,
-`features/advanced/page.js`. The remaining feature files join it as they are
-swept.
+### The swept set is the tree
+
+The whole portal is swept, so there is no list to keep in step: the guard walks
+`assets/**/*.js` and applies to every module it finds — including one added
+tomorrow. The walk is **filtered to `.js`** on purpose. The same tree carries
+`mojo-logo.png`, several `styles.css` files and eight feature `manifest.json`
+files, and `read_text()` on the PNG raises `UnicodeDecodeError`: an unfiltered
+walk does not fail the test, it crashes it.
+
+Three assertions run over that walk:
+
+| Test | What it holds |
+|---|---|
+| `test_no_raw_async_handlers_contract` | the banned spellings, the exemption comment, the cap. Also asserts the walk found the tree at all — a glob matching nothing would make every other assertion vacuous |
+| `test_pending_states_are_never_pinned_to_a_closed_container_contract` | the placement rule: no `runAction` paints on `event.currentTarget`, or on the very container, within three lines of a `.close()` / `.hidden = true` |
+| `test_local_action_wrappers_are_retired_contract` | one action wrapper in the portal, no local `actionError`, and every module calling `runAction` / `loadInto` / `copyButton` actually imports it |
+
+There is exactly one `runAction`, in `components/actions.js`. The two local
+wrappers the sweep started from are gone: `features/platform/page.js` had its
+own `runAction(title, detail, task)` and `features/advanced/page.js` had an
+`actionError(panel, error, retry)` that appended a bare `.error-state` div.
+Platform's Setup page still owns its **busy scrim** — `drive()` reports progress
+through `busy.update()`, so the handle has to stay where the task can reach it —
+but the guard, the error capture and the 440 rule all come from the shared
+helper now.
 
 ## Choosing between inline and the scrim, in practice
 
@@ -199,11 +223,28 @@ Two details worth copying:
 
 - **Pass an explicit `key` for a headless action.** `runAction(null, …)` with no
   `key` mints a fresh symbol, so two clicks are two runs. A stable string —
-  `` `webapp-rollback:${app.id}` `` — is what makes the guard real.
+  `` `webapp-rollback:${app.id}` `` — is what makes the guard real. A DOM node
+  works as a key too, and is the right one for a per-row trigger.
 - **A panel's skeleton goes into a body node, not the panel.** `loadInto(panel, …)`
   would replace the panel heading and the Refresh button sitting beside it. The
   Domains, Credentials, Upstreams and Vhosts panels each append a plain
-  `<div>` and load into that.
+  `<div>` and load into that; so do the People list and the Group inspector's
+  Members and API Keys tabs.
+
+### When NOT to reach for the guard
+
+`runAction` always guards, and there is one shape where guarding is the wrong
+answer: a control whose work is already **superseded** rather than queued.
+`features/platform/metrics.js` is the case — every dropdown and checkbox calls
+`loadSeries()`, which aborts the previous request through its own
+`AbortController` and drops a stale answer. Wrapping those in `runAction` would
+make the second change return the first's promise, so the chart would keep the
+old selection while the dropdown showed the new one: the control and the screen
+disagreeing, which is the bug this policy exists to remove. They stay unwrapped,
+and the affordance is the skeleton `loadSeries` paints into `chartSlot` — a node
+no repaint there destroys, carrying `role="status"` so it is announced.
+
+The rule of thumb: **guard what queues, do not guard what supersedes.**
 
 ## Styling
 

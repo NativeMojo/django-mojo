@@ -7,6 +7,7 @@
 // for reading, a panel is for changing one thing.
 
 import {h} from '../../core.js';
+import {runAction} from '../../components/actions.js';
 import {routeHref} from '../../components/routes.js';
 import {rowLink} from '../../components/rows.js';
 import {sentence} from './language.js';
@@ -128,17 +129,20 @@ export function technical(row) {
       row.ignored_database_override ? h('div', {}, h('dt', {text: 'Ignored override'}), h('dd', {text: 'A database row exists but this value is deployment-only.'})) : null));
 }
 
+// The signature is unchanged — the three call sites below are untouched — but
+// the body is now the shared wrapper. `runAction` already restores the control
+// and renders nothing on a 440 (the shared client prompted and retried), so
+// that case never reaches onError.
+//
+// A save that succeeds reloads the page underneath this button, so the pending
+// state is deliberately not restored: re-enabling a control that is about to be
+// replaced only re-opens a double-submit window.
 function saveHandler(button, message, run) {
-  return async () => {
-    button.disabled = true; message.textContent = '';
-    try { await run(); }
-    catch (error) {
-      // 440 is handled by the shared client: it prompts, and the operator
-      // chooses the action again. Reporting it here would be noise.
-      if (error?.code !== 'fresh_auth_required') message.textContent = error.message;
-      button.disabled = false;
-    }
-  };
+  return () => runAction(button, async () => { message.textContent = ''; await run(); }, {
+    pendingLabel: 'Saving…',
+    restoreOnSuccess: false,
+    onError: (error) => { message.textContent = error.message; },
+  });
 }
 
 export function geoipPanel(report, actions) {
@@ -221,28 +225,22 @@ export function geoipPanel(report, actions) {
   };
 
   const test = h('button', {class: 'button', type: 'button', disabled: locked}, 'Test connection');
-  const save = async (clearKey) => {
+  // Saving and clearing the key are two different actions on one button, so
+  // they carry two guard keys — a clear must never return a save's promise.
+  const save = (clearKey) => runAction(saveButton, async () => {
     clearErrors(); message.textContent = ''; result.textContent = '';
-    saveButton.disabled = true;
-    try { await actions.configureProviders('geoip', payload(clearKey)); }
-    catch (error) {
-      if (error?.code !== 'fresh_auth_required') message.textContent = error.message;
-      saveButton.disabled = false;
-    }
-  };
+    await actions.configureProviders('geoip', payload(clearKey));
+  }, {key: `geoip-save:${clearKey ? 'clear' : 'write'}`, pendingLabel: 'Saving…',
+    restoreOnSuccess: false, onError: (error) => { message.textContent = error.message; }});
   const saveButton = h('button', {class: 'button primary', type: 'button',
     disabled: locked, onclick: () => save(false)}, 'Save GeoIP');
-  test.addEventListener('click', async () => {
-    test.disabled = true; clearErrors(); message.textContent = ''; result.textContent = '';
-    try {
-      const answer = await actions.testProviders('geoip', payload(false));
-      const item = (answer.results || {}).geoip || {};
-      if (item.success) result.textContent = 'Connection OK';
-      else showFailure(item);
-    } catch (error) {
-      if (error?.code !== 'fresh_auth_required') message.textContent = error.message;
-    } finally { test.disabled = false; }
-  });
+  test.addEventListener('click', () => runAction(test, async () => {
+    clearErrors(); message.textContent = ''; result.textContent = '';
+    const answer = await actions.testProviders('geoip', payload(false));
+    const item = (answer.results || {}).geoip || {};
+    if (item.success) result.textContent = 'Connection OK';
+    else showFailure(item);
+  }, {pendingLabel: 'Testing…', onError: (error) => { message.textContent = error.message; }}));
 
   return panel('GeoIP', 'Where IP intelligence comes from, and the key used to ask for it.',
     h('p', {class: 'settings-note', text: 'These values apply to all servers.'}),
@@ -295,31 +293,23 @@ export function smsPanel(report, actions) {
   });
   const clearErrors = () => Object.values(errors).forEach((node) => { node.textContent = ''; });
   const test = h('button', {class: 'button', type: 'button'}, 'Test connection');
-  const save = async (clearKey) => {
+  const save = (clearKey) => runAction(saveButton, async () => {
     clearErrors(); message.textContent = ''; result.textContent = '';
-    saveButton.disabled = true;
-    try { await actions.configureProviders('sms', payload(clearKey)); }
-    catch (error) {
-      if (error?.code !== 'fresh_auth_required') message.textContent = error.message;
-      saveButton.disabled = false;
-    }
-  };
+    await actions.configureProviders('sms', payload(clearKey));
+  }, {key: `sms-save:${clearKey ? 'clear' : 'write'}`, pendingLabel: 'Saving…',
+    restoreOnSuccess: false, onError: (error) => { message.textContent = error.message; }});
   const saveButton = h('button', {class: 'button primary', type: 'button',
     onclick: () => save(false)}, 'Save SMS');
-  test.addEventListener('click', async () => {
-    test.disabled = true; clearErrors(); message.textContent = ''; result.textContent = '';
-    try {
-      const answer = await actions.testProviders('sms', payload(false));
-      const item = (answer.results || {}).sms || {};
-      if (item.success) result.textContent = 'Connection OK';
-      else {
-        const target = attachError(item, errors);
-        if (target) target.textContent = item.message; else message.textContent = item.message;
-      }
-    } catch (error) {
-      if (error?.code !== 'fresh_auth_required') message.textContent = error.message;
-    } finally { test.disabled = false; }
-  });
+  test.addEventListener('click', () => runAction(test, async () => {
+    clearErrors(); message.textContent = ''; result.textContent = '';
+    const answer = await actions.testProviders('sms', payload(false));
+    const item = (answer.results || {}).sms || {};
+    if (item.success) result.textContent = 'Connection OK';
+    else {
+      const target = attachError(item, errors);
+      if (target) target.textContent = item.message; else message.textContent = item.message;
+    }
+  }, {pendingLabel: 'Testing…', onError: (error) => { message.textContent = error.message; }}));
 
   return panel('Text messages', 'The django-mojo instance this platform asks to send SMS.',
     h('div', {class: 'field-grid'},

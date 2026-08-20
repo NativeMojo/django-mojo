@@ -1,4 +1,5 @@
 import {api, apiEnvelope, badge, formatDate, h, icon, pageHeader, statusTone, TableView} from '../../core.js';
+import {copyButton, runAction} from '../../components/actions.js';
 import {openInspector} from '../../components/overlays.js';
 import {decodeRouteState, restoreReturnLocation, returnLocation, routeHref} from '../../components/routes.js';
 import {emptyState, errorState, loadingState, permissionDeniedState, sectionTabs} from '../../components/views.js';
@@ -104,7 +105,9 @@ function writeState(state, {load = true} = {}) {
   const target = routeHref('activity', Object.fromEntries(params));
   history.replaceState({}, '', target);
   state.unsupported = '';
-  if (load) state.reload?.();
+  // Returned, not fired and forgotten: every caller below is a control whose
+  // affordance has to last as long as the reload it started.
+  return load ? state.reload?.() : undefined;
 }
 
 function subjectFilters(state, tab) {
@@ -182,9 +185,9 @@ function evidenceBlock(label, value) {
   // Copy hands over the stored value exactly — investigations must never
   // inherit the display bounds.
   const raw = typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2);
-  const copy = h('button', {class: 'button ghost compact', type: 'button', onclick: async (event) => {
-    await navigator.clipboard?.writeText(raw); event.currentTarget.textContent = 'Copied';
-  }}, 'Copy evidence');
+  // The shared clipboard affordance: a non-secure context rejects writeText,
+  // which the hand-rolled version swallowed silently.
+  const copy = copyButton(raw, {label: 'Copy evidence', copiedLabel: 'Copied'});
   return h('section', {class: 'activity-evidence'}, h('header', {}, h('h3', {text: label}), copy), h('pre', {text}));
 }
 
@@ -215,13 +218,20 @@ function knownReference(row) {
   })}, `Open ${name} ${id}`);
 }
 
-async function saveStatus(state, row, inspector, status, refresh) {
+// The Save button lives in the inspector this closes on success, so the
+// pending state rides the button for the wait and is never restored onto a
+// panel that has gone.
+function saveStatus(state, row, inspector, button, status, refresh) {
   const model = MODELS[state.tab];
   const message = inspector.panel.querySelector('.form-message');
-  try {
+  return runAction(button, async () => {
+    message.textContent = '';
     await api(`${model.endpoint}/${row.id}`, {method: 'PUT', body: JSON.stringify({status})});
     inspector.close(); await refresh();
-  } catch (error) { message.textContent = error.message; }
+  }, {
+    pendingLabel: 'Saving…', restoreOnSuccess: false,
+    onError: (error) => { message.textContent = error.message; },
+  });
 }
 
 function openRecord(state, row, ctx, refresh) {
@@ -236,7 +246,7 @@ function openRecord(state, row, ctx, refresh) {
     const save = h('button', {class: 'button primary compact', type: 'button'}, 'Save status');
     content.append(h('section', {class: 'activity-action'}, h('h3', {text: 'Lifecycle'}), h('p', {text: 'Uses the existing record save path so model history and audit hooks remain authoritative.'}), select, save, message));
     const inspector = openInspector({title: `${MODELS[state.tab].label.slice(0, -1)} ${row.id}`, subtitle: row.title || row.category || row.kind || '', content, wide: true});
-    save.addEventListener('click', () => saveStatus(state, row, inspector, select.value, refresh));
+    save.addEventListener('click', () => saveStatus(state, row, inspector, save, select.value, refresh));
     return;
   }
   openInspector({title: `${MODELS[state.tab].label.slice(0, -1)} ${row.id}`, subtitle: row.title || row.category || row.kind || '', content, wide: true});
@@ -289,10 +299,18 @@ function filtersView(state, reload) {
 function pagination(state, envelope) {
   const page = Math.floor(state.start / state.size) + 1;
   const pages = Math.max(1, Math.ceil(envelope.count / state.size));
-  const previous = h('button', {class: 'button ghost compact', disabled: state.start === 0 || null, onclick: () => { state.start = Math.max(0, state.start - state.size); writeState(state); }}, 'Previous');
-  const next = h('button', {class: 'button ghost compact', disabled: state.start + state.size >= envelope.count || null, onclick: () => { state.start += state.size; writeState(state); }}, 'Next');
+  // † Every one of these controls lives inside the stream body that refresh()
+  // replaces with a loading state on its very first synchronous line, so the
+  // affordance is that repaint, never a pending state pinned here. What the
+  // wrapper adds is the guard: one page turn per click, and the promise is
+  // awaited rather than dropped. They share a key because they all mean
+  // "re-run this query" — a second one landing mid-flight would fight the first.
+  const turn = (mutate) => runAction(null, () => { mutate(); return writeState(state); },
+    {key: 'activity-query'});
+  const previous = h('button', {class: 'button ghost compact', disabled: state.start === 0 || null, onclick: () => turn(() => { state.start = Math.max(0, state.start - state.size); })}, 'Previous');
+  const next = h('button', {class: 'button ghost compact', disabled: state.start + state.size >= envelope.count || null, onclick: () => turn(() => { state.start += state.size; })}, 'Next');
   const size = h('select', {'aria-label': 'Rows per page'}, ...PAGE_SIZES.map((value) => h('option', {value, text: `${value} rows`, selected: state.size === value || null})));
-  size.addEventListener('change', () => { state.size = Number(size.value); state.start = 0; writeState(state); });
+  size.addEventListener('change', () => turn(() => { state.size = Number(size.value); state.start = 0; }));
   return h('footer', {class: 'activity-pagination'}, h('span', {text: `${envelope.count} total · page ${page} of ${pages}`}), h('div', {}, size, previous, next));
 }
 
@@ -329,7 +347,10 @@ export async function activityPage(ctx, parentSignal) {
       button.classList.toggle('active', active);
       if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
     });
-    writeState(state);
+    // Returned so sectionTabs' pending state on the clicked tab lasts as long
+    // as the reload it started. The tab bar itself is built once and lives
+    // outside the body refresh() repaints, so the tab survives its own action.
+    return writeState(state);
   }});
   const returnHref = restoreReturnLocation(state.return);
   const page = h('div', {class: 'page'}, pageHeader('Operations', 'Activity', 'Search and inspect bounded system evidence without bypassing source permissions.', [

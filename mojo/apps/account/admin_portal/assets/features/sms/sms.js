@@ -5,6 +5,7 @@
 // the phone-config tier gets a read-only page with the operator actions.
 
 import {api, h} from '../../core.js';
+import {runAction} from '../../components/actions.js';
 import {rowSection, statusRow} from '../../components/rows.js';
 import {emptyState, errorState, loadingState} from '../../components/views.js';
 
@@ -140,7 +141,10 @@ function editorSection(report, reload) {
   showPanel();
 
   const save = h('button', {class: 'button', type: 'button'}, 'Verify & save');
-  save.addEventListener('click', async () => {
+  // A successful save reloads the page and replaces this editor, so the pending
+  // state is not restored — it would land on a detached button, and restoring
+  // one that survived would re-open the double-submit window.
+  save.addEventListener('click', () => runAction(save, async () => {
     const provider = providerSelect.value;
     const payload = {action: 'save', provider,
       expected_revision: report.configuration_revision,
@@ -159,16 +163,14 @@ function editorSection(report, reload) {
       payload.remote_url = mojoUrl.value.trim();
       if (mojoKey.value) payload.api_key = mojoKey.value;
     }
-    save.disabled = true; message.textContent = 'Verifying with the provider…';
-    try {
-      await api(MUTATE_URL, {method: 'POST', body: JSON.stringify(payload)});
-      twilioToken.value = ''; awsSecret.value = ''; mojoKey.value = '';
-      await reload();
-    } catch (error) {
-      message.textContent = error.message || 'The save was refused.';
-      save.disabled = false;
-    }
-  });
+    message.textContent = 'Verifying with the provider…';
+    await api(MUTATE_URL, {method: 'POST', body: JSON.stringify(payload)});
+    twilioToken.value = ''; awsSecret.value = ''; mojoKey.value = '';
+    await reload();
+  }, {
+    pendingLabel: 'Verifying…', restoreOnSuccess: false,
+    onError: (error) => { message.textContent = error.message || 'The save was refused.'; },
+  }));
 
   return h('div', {class: 'sms-editor'},
     h('h2', {text: 'Change the system provider'}),
@@ -183,33 +185,33 @@ function editorSection(report, reload) {
 
 function actionsBar(report, results) {
   const testButton = h('button', {class: 'button ghost compact', type: 'button'}, 'Test connection');
-  testButton.addEventListener('click', async () => {
-    testButton.disabled = true;
-    try {
-      const result = await api(MUTATE_URL, {method: 'POST', body: JSON.stringify({action: 'test_connection'})});
-      results.replaceChildren(resultLine(result));
-    } catch (error) {
-      results.replaceChildren(resultLine({state: 'failed', message: error.message}));
-    } finally { testButton.disabled = false; }
-  });
+  // The results block is a sibling of these buttons, not their container, so
+  // both the pending state and the answer survive each other.
+  testButton.addEventListener('click', () => runAction(testButton, async () => {
+    const result = await api(MUTATE_URL, {method: 'POST', body: JSON.stringify({action: 'test_connection'})});
+    results.replaceChildren(resultLine(result));
+  }, {
+    pendingLabel: 'Testing…',
+    onError: (error) => { results.replaceChildren(resultLine({state: 'failed', message: error.message})); },
+  }));
   const number = h('input', {autocomplete: 'off', placeholder: '+15551230000', 'aria-label': 'Test recipient number'});
   const sendButton = h('button', {class: 'button ghost compact', type: 'button'}, 'Send test message');
-  sendButton.addEventListener('click', async () => {
+  sendButton.addEventListener('click', () => {
     if (!number.value.trim()) {
       results.replaceChildren(resultLine({state: 'failed', message: 'Enter a recipient number first.'}));
-      return;
+      return undefined;
     }
-    sendButton.disabled = true;
-    try {
+    return runAction(sendButton, async () => {
       const result = await api(MUTATE_URL, {method: 'POST',
         body: JSON.stringify({action: 'send_test', to_number: number.value.trim()})});
       const detail = result.test_number ? result.message
         : `${result.message} — SMS #${result.sms?.id} is ${result.sms?.status}` +
           (result.sms?.error_message ? ` (${result.sms.error_message})` : '');
       results.replaceChildren(resultLine({state: result.sent || result.test_number ? 'ok' : 'failed', message: detail}));
-    } catch (error) {
-      results.replaceChildren(resultLine({state: 'failed', message: error.message}));
-    } finally { sendButton.disabled = false; }
+    }, {
+      pendingLabel: 'Sending…',
+      onError: (error) => { results.replaceChildren(resultLine({state: 'failed', message: error.message})); },
+    });
   });
   return h('div', {class: 'sms-actions'}, testButton, number, sendButton);
 }

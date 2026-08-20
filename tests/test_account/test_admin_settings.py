@@ -423,7 +423,10 @@ def test_settings_feature_assets(opts):
     advanced = (ROOT / "mojo/apps/account/admin_portal/assets/features/advanced/page.js").read_text()
     assert "[dashboard, webapps, advanced, people, activity, platform, settings, sms, email]" in registry, \
         "the sidebar feature order is not Dashboard/Web Apps/Domains/People/Activity/Platform/Settings/SMS/Email"
-    for contract in ("Search settings", "openBusy", "apiOnce", "configure_providers",
+    # `busy: {title:` rather than `openBusy`: every save still runs behind the
+    # scrim, but it is opened by the shared runAction wrapper now instead of by
+    # hand — see docs/django_developer/account/admin_portal/responsiveness.md.
+    for contract in ("Search settings", "busy: {title:", "apiOnce", "configure_providers",
                      "rowSection", "statusRow", "How this platform is configured.",
                      "focus: 'geoip'"):
         assert contract in page, f"the Settings list omitted {contract}"

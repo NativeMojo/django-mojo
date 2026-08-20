@@ -3,6 +3,7 @@
 // where AWS is actually contacted — the list itself never pays that cost.
 
 import {api, h} from '../../core.js';
+import {runAction} from '../../components/actions.js';
 import {openInspector} from '../../components/overlays.js';
 import {loadingState} from '../../components/views.js';
 
@@ -52,19 +53,23 @@ export function openDomainInspector(domain, reload) {
   const results = h('div', {class: 'email-audit', 'aria-live': 'polite'});
   const check = h('button', {class: 'button compact', type: 'button'}, 'Check now');
   let dirty = false;
-  async function runAudit() {
-    check.disabled = true;
-    results.replaceChildren(loadingState('Checking with AWS…'));
-    try {
+  // The results block is a sibling of the button, so the pending state on
+  // "Check now" and the answer it produces do not destroy each other.
+  function runAudit() {
+    return runAction(check, async () => {
+      results.replaceChildren(loadingState('Checking with AWS…'));
       const data = await api(AUDIT_URL(domain.id));
       dirty = true; // the audit persisted fresh readiness fields
       results.replaceChildren(auditSummary(data));
-    } catch (error) {
-      results.replaceChildren(h('p', {class: 'email-note warning',
-        text: `Could not check right now — ${error.message || 'AWS did not answer'}. Showing the last saved state.`}));
-    } finally { check.disabled = false; }
+    }, {
+      pendingLabel: 'Checking…',
+      onError: (error) => {
+        results.replaceChildren(h('p', {class: 'email-note warning',
+          text: `Could not check right now — ${error.message || 'AWS did not answer'}. Showing the last saved state.`}));
+      },
+    });
   }
-  check.addEventListener('click', runAudit);
+  check.addEventListener('click', () => runAudit());
   const inspector = openInspector({
     title: domain.name,
     content: h('div', {class: 'email-inspector'},
@@ -97,18 +102,23 @@ export function makeDefaultControl(box, reload) {
   function confirm() {
     const yes = h('button', {class: 'button compact', type: 'button'}, `Send as ${box.email}`);
     const no = h('button', {class: 'button ghost compact', type: 'button'}, 'Cancel');
-    yes.addEventListener('click', async () => {
-      yes.disabled = true; no.disabled = true;
-      try {
-        await api(DEFAULT_URL, {method: 'POST', body: JSON.stringify(
-          {mailbox: box.id, scope: 'system'})});
-        if (reload) await reload();
-      } catch (error) {
+    // The confirm is already on screen, so this click is past the human-input
+    // step: the pending state belongs on the confirm button itself. Success
+    // reloads the list out from under it, and a failure rebuilds the offer, so
+    // neither path restores it.
+    yes.addEventListener('click', () => runAction(yes, async () => {
+      no.setAttribute('aria-disabled', 'true');
+      await api(DEFAULT_URL, {method: 'POST', body: JSON.stringify(
+        {mailbox: box.id, scope: 'system'})});
+      if (reload) await reload();
+    }, {
+      pendingLabel: 'Applying…', restoreOnSuccess: false,
+      onError: (error) => {
         message.textContent = error.message || 'The change was refused.';
         offer();
         host.append(message);
-      }
-    });
+      },
+    }));
     no.addEventListener('click', offer);
     host.replaceChildren(yes, no);
   }
@@ -140,21 +150,21 @@ export function testSendSection(report) {
   const subjectInput = h('input', {autocomplete: 'off', value: 'Test email from the Admin portal'});
   const results = h('div', {class: 'email-results', 'aria-live': 'polite'});
   const send = h('button', {class: 'button', type: 'button'}, 'Send test email');
-  send.addEventListener('click', async () => {
+  send.addEventListener('click', () => {
     if (!toInput.value.trim()) {
       results.replaceChildren(resultLine({sent: false, error: 'Enter a recipient address first.'}));
-      return;
+      return undefined;
     }
-    send.disabled = true;
-    try {
+    return runAction(send, async () => {
       const result = await api(TEST_URL, {method: 'POST', body: JSON.stringify({
         from_email: fromSelect.value, to: toInput.value.trim(),
         subject: subjectInput.value.trim(),
         body_text: 'This is a test email sent from the built-in Admin portal.'})});
       results.replaceChildren(resultLine(result));
-    } catch (error) {
-      results.replaceChildren(resultLine({sent: false, error: error.message}));
-    } finally { send.disabled = false; }
+    }, {
+      pendingLabel: 'Sending…',
+      onError: (error) => { results.replaceChildren(resultLine({sent: false, error: error.message})); },
+    });
   });
   return h('div', {class: 'email-test'},
     h('h2', {text: 'Send a test email'}),

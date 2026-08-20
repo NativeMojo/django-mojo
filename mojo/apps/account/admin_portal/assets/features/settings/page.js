@@ -7,7 +7,8 @@
 // the row's own panel, which is also where every editor now lives.
 
 import {api, apiOnce, h, icon, pageHeader} from '../../core.js';
-import {confirmAction, openBusy} from '../../components/overlays.js';
+import {runAction} from '../../components/actions.js';
+import {confirmAction} from '../../components/overlays.js';
 import {decodeRouteState, routeHref} from '../../components/routes.js';
 import {rowSection, statusRow} from '../../components/rows.js';
 import {errorState, skeletonState} from '../../components/views.js';
@@ -179,27 +180,31 @@ export async function settingsPage(ctx, route, signal) {
       // Every drill-in re-enters through here, so a panel always opens against
       // a freshly read expected_revision rather than one the list cached.
       const report = await api('/api/account/admin/settings', {signal});
-      const mutate = async (payload) => {
-        const busy = openBusy({title: 'Saving setting…', detail: 'The database override is being applied.'});
-        try { await apiOnce('/api/account/admin/settings', {method: 'POST', body: JSON.stringify(payload)}); statusText = `${payload.key} saved.`; await load(); }
-        finally { busy.close(); }
-      };
-      const owner = async (payload) => {
-        const busy = openBusy({title: 'Saving configuration…', detail: 'The typed owner is validating this change.'});
-        try { await apiOnce('/api/account/admin/advanced/settings', {method: 'POST', body: JSON.stringify(payload)}); statusText = 'Configuration saved.'; await load(); }
-        finally { busy.close(); }
-      };
-      const configureProviders = async (topic, providers) => {
-        const busy = openBusy({title: 'Saving…', detail: 'Writing the encrypted configuration for this integration.'});
-        try {
-          await apiOnce('/api/account/admin/settings', {method: 'POST',
-            body: JSON.stringify({action: 'configure_providers', topic, providers})});
-          statusText = topic === 'geoip'
-            ? 'GeoIP saved. Config-sync will roll the fleet restart.'
-            : 'Text messaging saved.';
-          await load();
-        } finally { busy.close(); }
-      };
+      // Every save here invalidates the whole list and reloads it, and the
+      // control that started it lives in a panel `load()` replaces — so the
+      // affordance is the scrim, never a node. The guard key is the thing being
+      // written, so two different settings are two different actions.
+      const mutate = (payload) => runAction(null, async () => {
+        await apiOnce('/api/account/admin/settings', {method: 'POST', body: JSON.stringify(payload)});
+        statusText = `${payload.key} saved.`;
+        await load();
+      }, {key: `settings-mutate:${payload.action || 'set'}:${payload.key}`,
+        busy: {title: 'Saving setting…', detail: 'The database override is being applied.'}});
+      const owner = (payload) => runAction(null, async () => {
+        await apiOnce('/api/account/admin/advanced/settings', {method: 'POST', body: JSON.stringify(payload)});
+        statusText = 'Configuration saved.';
+        await load();
+      }, {key: `settings-owner:${Object.keys(payload).join(',')}`,
+        busy: {title: 'Saving configuration…', detail: 'The typed owner is validating this change.'}});
+      const configureProviders = (topic, providers) => runAction(null, async () => {
+        await apiOnce('/api/account/admin/settings', {method: 'POST',
+          body: JSON.stringify({action: 'configure_providers', topic, providers})});
+        statusText = topic === 'geoip'
+          ? 'GeoIP saved. Config-sync will roll the fleet restart.'
+          : 'Text messaging saved.';
+        await load();
+      }, {key: `settings-providers:${topic}`,
+        busy: {title: 'Saving…', detail: 'Writing the encrypted configuration for this integration.'}});
       const testProviders = async (topic, providers) => apiOnce('/api/account/admin/settings', {
         method: 'POST', body: JSON.stringify({action: 'test_providers', topic, providers})});
       const clear = async (row, conflicts) => {

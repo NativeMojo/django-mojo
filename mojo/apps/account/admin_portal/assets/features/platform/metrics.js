@@ -1,4 +1,5 @@
 import {api, h, icon, pageHeader} from '../../core.js';
+import {runAction} from '../../components/actions.js';
 import {decodeRouteState, routeHref} from '../../components/routes.js';
 import {rowSection, statusRow} from '../../components/rows.js';
 import {degradedState, errorState, loadingState, permissionDeniedState} from '../../components/views.js';
@@ -104,6 +105,14 @@ function resourceTone(row) {
   return 'danger';
 }
 
+// Deliberately NOT wrapped in runAction. Every one of these selects reloads the
+// chart, and loadSeries already supersedes correctly — it aborts the previous
+// request and drops a stale answer. A re-entry guard here would do the opposite
+// of what this item is about: the second change would return the first's
+// promise, the chart would keep the old selection, and the control and the
+// screen would disagree. The affordance is loadSeries' own skeleton, which is
+// painted into chartSlot — a node no repaint here destroys — before the await,
+// and carries role="status" so it is announced.
 function selectControl(label, options, value, onChange) {
   const select = h('select', {'aria-label': label, onchange: (event) => onChange(event.target.value)},
     ...options.map((option) => h('option', {value: option.value, text: option.label})));
@@ -142,8 +151,11 @@ export async function metricsPage(ctx, signal) {
   const root = h('div', {class: 'metrics-page'},
     pageHeader('Platform', 'Metrics',
       'CloudWatch time series for the EC2, RDS, and ElastiCache resources this installation can see.',
+      // The header sits outside `body`, so unlike everything else on this page
+      // the Refresh button survives its own reload and can carry the state.
       [h('button', {class: 'button ghost compact', type: 'button',
-        onclick: () => { loadResources(); }}, icon('refresh'), 'Refresh')]),
+        onclick: (event) => runAction(event.currentTarget, () => loadResources(),
+          {announceLabel: 'Refreshing resources…'})}, icon('refresh'), 'Refresh')]),
     body);
 
   function disposeChart() {
@@ -178,11 +190,14 @@ export async function metricsPage(ctx, signal) {
     const box = h('input', {
       type: 'checkbox', class: 'metrics-pick', 'aria-label': `Chart ${row.slug}`,
       checked: picks.has(row.slug),
+      // Unguarded for the same reason as selectControl: ticking a second box
+      // while the first read is in flight has to start a new read, and
+      // loadSeries aborts the old one. chartSlot's skeleton is the affordance.
       onchange: (event) => {
         if (event.target.checked) picks.add(row.slug); else picks.delete(row.slug);
         state.focus = picks.size === 1 ? [...picks][0] : '';
         rememberRoute();
-        loadSeries();
+        return loadSeries();
       },
     });
     return statusRow({

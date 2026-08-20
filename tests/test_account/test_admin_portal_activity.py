@@ -179,8 +179,11 @@ def test_activity_browser_contract(opts):
     assert "depth >= 5" not in page and "slice(0, 40)" not in page and "slice(0, 80)" not in page, \
         "display caps must be too large for legitimate evidence to hit"
     assert "more items" in page and "more keys" in page, "display truncation must announce itself, never drop data silently"
-    assert "writeText(raw)" in page and "writeText(text)" not in page, \
-        "Copy evidence must copy the raw stored value, not the masked render"
+    # The clipboard call itself moved into the shared copyButton helper; what
+    # this still owns is WHICH value is handed over — `raw`, the stored value,
+    # never `text`, which carries the display bounds.
+    assert "copyButton(raw," in page and "copyButton(text" not in page, \
+        "Copy evidence must copy the raw stored value, not the bounded render"
     assert "envelope.count > 0 && state.start >= envelope.count" in page
     assert "Unavailable" in page and "String(envelope.count)" in page
     assert "/api/incident/stats" not in page

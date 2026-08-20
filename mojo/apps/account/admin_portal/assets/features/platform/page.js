@@ -1,4 +1,5 @@
 import {api, apiOnce, badge, formatDate, h, icon, listData, pageHeader, statusTone} from '../../core.js';
+import {runAction} from '../../components/actions.js';
 import {openBusy} from '../../components/overlays.js';
 import {decodeRouteState, restoreReturnLocation, routeHref} from '../../components/routes.js';
 import {errorState, loadingState} from '../../components/views.js';
@@ -144,11 +145,17 @@ function choiceForm(operation, actions, suggestions) {
   const message = h('div', {class: 'form-message', role: 'alert'}, unavailable ? 'No suitable existing resource was discovered. Repair provider access, then cancel and rerun this section.' : '');
   const button = h('button', {class: 'button primary', type: 'submit', disabled: unavailable}, icon('check'),
     isS3Choice(current) ? 'Use this bucket' : 'Save and continue');
-  return h('form', {class: 'setup-choice', onsubmit: async (event) => {
-    event.preventDefault(); button.disabled = true; message.textContent = '';
+  // † The whole operation view — this form and its submit button with it — is
+  // rebuilt by the render() that setupAction fires before the request even
+  // leaves, so a pending state pinned to `button` would be detached inside a
+  // frame. The affordance is the busy scrim that setupAction opens.
+  return h('form', {class: 'setup-choice', onsubmit: (event) => {
+    event.preventDefault(); message.textContent = '';
     const choice = {};
     fields.forEach(({name, input}) => { choice[name] = input.type === 'checkbox' ? input.checked : input.value; });
-    try { await actions.choose(current, choice); } catch (error) { message.textContent = error.message; button.disabled = unavailable; }
+    // setupAction reports its own failures through the page's errorState.
+    return runAction(null, () => actions.choose(current, choice),
+      {key: `setup-choice:${current.id}`});
   }}, h('div', {class: 'choice-intro'}, h('strong', {text: current.label}), h('p', {text: isS3Choice(current)
     ? 'Choose an existing bucket from this AWS account. Setup verifies it before making changes, preserves its objects and unrelated configuration, and configures the private media access django-mojo needs.'
     : current.kind === 'base_url' && suggestions.base_url
@@ -183,7 +190,7 @@ function operationView(operation, actions, suggestions) {
           operation.status === 'succeeded' ? icon('check') : icon('activity'),
           h('div', {}, h('strong', {text: terminalOutcome[0]}), h('p', {text: terminalOutcome[1]}))) : null,
         !terminal && operation.status !== 'waiting_for_choice' ? h('div', {class: 'running-state'}, icon('activity'), h('div', {}, h('strong', {text: 'Reconciling authoritative state'}), h('p', {text: 'The operation advances one durable step at a time. It is safe to close and resume.'}))) : null,
-        h('div', {class: 'form-actions'}, cancellable ? h('button', {class: 'button ghost', onclick: actions.cancel}, 'Cancel operation') : null,
+        h('div', {class: 'form-actions'}, cancellable ? h('button', {class: 'button ghost', onclick: () => actions.cancel()}, 'Cancel operation') : null,
           terminal ? h('a', {class: 'button ghost', href: returnTarget}, 'Return to Dashboard') : null,
           operation.status === 'succeeded' ? h('a', {class: 'button primary', href: routeHref('deployments')}, 'Onboard WebApp') : null))),
     h('details', {class: 'operation-log'}, h('summary', {text: 'Technical details'}),
@@ -249,21 +256,28 @@ export async function setupPage(ctx, signal = null) {
     } finally { driving = false; render(); }
   }
 
-  async function runAction(title, detail, task) {
-    if (activeAction || signal?.aborted) return;
-    activeAction = true; actionError = null;
-    const busy = openBusy({title, detail}); render();
-    try { await task(busy); }
-    catch (error) {
-      if (error?.code !== 'fresh_auth_required') actionError = error;
-    } finally {
-      busy.close(); activeAction = false; render();
-    }
+  // The local re-entry guard, error capture and 440 special-case that used to
+  // live here are the shared wrapper's job now. What stays is scrim OWNERSHIP:
+  // `drive` reports its progress through `busy.update`, so this page has to
+  // hold the handle rather than let runAction open and close one it cannot see.
+  // Every setup action is one operation on one installation, so they share a
+  // guard key — a second click while one is driving returns the first promise.
+  function setupAction(title, detail, task) {
+    if (signal?.aborted) return undefined;
+    return runAction(null, async () => {
+      activeAction = true; actionError = null;
+      const busy = openBusy({title, detail}); render();
+      try { await task(busy); }
+      finally { activeAction = false; busy.close(); render(); }
+    }, {
+      key: 'setup-operation',
+      onError: (error) => { actionError = error; render(); },
+    });
   }
 
   const actions = {
     create: async (mode, section = '') => {
-      await runAction(mode === 'fix' ? 'Repairing System Setup' : 'Checking System Setup',
+      await setupAction(mode === 'fix' ? 'Repairing System Setup' : 'Checking System Setup',
         section ? `Preparing ${section.replaceAll('_', ' ')}` : 'Preparing the durable operation', async (busy) => {
           replayKey = replayKey || crypto.randomUUID();
           try {
@@ -280,7 +294,7 @@ export async function setupPage(ctx, signal = null) {
         });
     },
     choose: async (step, choice) => {
-      await runAction('Saving Setup choice', step.label, async (busy) => {
+      await setupAction('Saving Setup choice', step.label, async (busy) => {
         operation = await apiOnce('/api/account/admin/setup/choose', {method: 'POST', signal, body: JSON.stringify({
           operation: operation.id, step_id: step.id, definition_version: step.definition_version,
           choice_revision: step.choice_revision, choice,
@@ -289,7 +303,7 @@ export async function setupPage(ctx, signal = null) {
       });
     },
     cancel: async () => {
-      await runAction('Cancelling Setup operation', 'Waiting for the durable cancellation result', async () => {
+      await setupAction('Cancelling Setup operation', 'Waiting for the durable cancellation result', async () => {
         cancelled = true;
         operation = await apiOnce('/api/account/admin/setup/cancel', {method: 'POST', signal, body: JSON.stringify({operation: operation.id})});
         replayKey = null; render();
@@ -331,7 +345,7 @@ export async function setupPage(ctx, signal = null) {
     await prepareChoice();
     render();
     if (operation && !TERMINAL.has(operation.status) && operation.status !== 'waiting_for_choice') {
-      await runAction('Resuming System Setup', operation.current_step?.label || 'Reconciling the active operation', drive);
+      await setupAction('Resuming System Setup', operation.current_step?.label || 'Reconciling the active operation', drive);
     }
   } catch (error) { root.replaceChildren(errorState(error)); }
   root.dispose = () => { cancelled = true; };

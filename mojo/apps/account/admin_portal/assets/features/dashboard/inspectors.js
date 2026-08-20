@@ -4,8 +4,8 @@
 // a narrowed `?sections=` slice on open — that work is paid only when someone
 // actually asks for it, never on every Dashboard load.
 import {api, formatDate, h} from '../../core.js';
+import {loadInto, runAction} from '../../components/actions.js';
 import {openInspector} from '../../components/overlays.js';
-import {errorState} from '../../components/views.js';
 import {capacityPanel} from '../platform/capacity.js';
 
 const FLEET_PATH = '/api/account/admin/platform?sections=fleet';
@@ -16,14 +16,20 @@ const SECURITY_PATH = '/api/account/admin/platform?sections=security';
 export function wireAction(row, run) {
   const link = row.querySelector('.row-link');
   if (link) {
-    link.addEventListener('click', (event) => { event.preventDefault(); run(); });
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      runAction(event.currentTarget, () => run(), {announceLabel: `Opening ${link.textContent.trim()}…`});
+    });
   }
   return row;
 }
 
 export function detailLink(label, run) {
   const link = h('a', {class: 'row-link', href: '#'}, label);
-  link.addEventListener('click', (event) => { event.preventDefault(); run(); });
+  link.addEventListener('click', (event) => {
+    event.preventDefault();
+    runAction(event.currentTarget, () => run(), {announceLabel: `Opening ${label}…`});
+  });
   return link;
 }
 
@@ -90,14 +96,16 @@ function runnerList(rows) {
 // so it loads last, only for callers whose grants the endpoint would also
 // accept, and only when the drill-in is actually open. A caller without the
 // capability sees this inspector exactly as it was before capacity existed.
+// Only this block fails: the fleet evidence above it was already proven, and a
+// capacity read that will not answer must not blank the drill-in. loadInto
+// paints the loading state into the slot alone and renders the failure there
+// with a retry — the older hand-rolled version had no retry at all.
 function mountCapacity(ctx, slot) {
-  if (ctx?.features?.platform?.capabilities?.capacity !== true) return;
-  slot.replaceChildren(h('p', {class: 'muted small', text: 'Loading capacity…'}));
-  capacityPanel(ctx)
-    .then((panel) => { slot.replaceChildren(panel); })
-    // Only this block fails: the fleet evidence above it was already proven,
-    // and a capacity read that will not answer must not blank the drill-in.
-    .catch((error) => { slot.replaceChildren(errorState(error)); });
+  if (ctx?.features?.platform?.capabilities?.capacity !== true) return undefined;
+  return loadInto(slot, async (current) => {
+    const panel = await capacityPanel(ctx);
+    if (current()) slot.replaceChildren(panel);
+  }, {message: 'Loading capacity…'});
 }
 
 // The EC2 row's own evidence renders immediately; the edge runner roster is a
@@ -122,8 +130,12 @@ export function openFleetInspector(ctx, computeSource) {
     mountCapacity(ctx, capacity);
     return inspector;
   }
-  slot.replaceChildren(h('p', {class: 'muted small', text: 'Loading edge runners…'}));
-  api(FLEET_PATH).then((report) => {
+  // Only this block fails: the instance evidence above it was already proven,
+  // so the loading state and the failure both go into the slot, not over the
+  // inspector.
+  loadInto(slot, async (current) => {
+    const report = await api(FLEET_PATH);
+    if (!current()) return;
     const section = report?.sections?.fleet || {};
     if (!Object.keys(section.data || {}).length) {
       // An unauthorized/timeout envelope carries no data — absent evidence is
@@ -136,10 +148,7 @@ export function openFleetInspector(ctx, computeSource) {
     slot.replaceChildren(
       h('h3', {class: 'dash-subhead', text: `Edge runners · ${section.data?.channel || 'edge'}`}),
       runnerList(section.data?.runners || []));
-  }).catch((error) => {
-    // Only this block fails: the instance evidence above it was already proven.
-    slot.replaceChildren(errorState(error));
-  }).finally(() => { mountCapacity(ctx, capacity); });
+  }, {message: 'Loading edge runners…'}).finally(() => { mountCapacity(ctx, capacity); });
   return inspector;
 }
 
@@ -222,8 +231,7 @@ function securityView(section) {
 // of the Dashboard payload. The caller offers this drill-in only to callers
 // the platform-security tier would accept.
 export function openSecurityInspector(ctx) {
-  const slot = h('div', {class: 'dash-block'},
-    h('p', {class: 'muted small', text: 'Loading security posture…'}));
+  const slot = h('div', {class: 'dash-block'});
   const inspector = openInspector({title: 'Security posture',
     content: h('div', {class: 'dash-inspector'}, slot)});
   if (ctx?.features?.platform?.capabilities?.security !== true) {
@@ -231,8 +239,9 @@ export function openSecurityInspector(ctx) {
       text: 'Your role cannot read platform security evidence.'}));
     return inspector;
   }
-  api(SECURITY_PATH).then((report) => {
-    slot.replaceChildren(...securityView(report?.sections?.security));
-  }).catch((error) => { slot.replaceChildren(errorState(error)); });
+  loadInto(slot, async (current) => {
+    const report = await api(SECURITY_PATH);
+    if (current()) slot.replaceChildren(...securityView(report?.sections?.security));
+  }, {message: 'Loading security posture…'});
   return inspector;
 }

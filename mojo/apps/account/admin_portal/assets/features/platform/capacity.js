@@ -16,6 +16,7 @@
 //      operator would otherwise assume wrongly — a reader this app does not
 //      read from, and a replica that is failover capacity rather than speed.
 import {api, apiOnce, h, icon} from '../../core.js';
+import {runAction} from '../../components/actions.js';
 import {openModal} from '../../components/overlays.js';
 import {rowSection, statusHeadline, statusRow} from '../../components/rows.js';
 import {errorState, loadingState} from '../../components/views.js';
@@ -376,10 +377,17 @@ export async function capacityPanel(ctx, signal = null) {
 
   // ── rows ────────────────────────────────────────────────────────────────
 
+  // † and human-input in one control. `run` opens a typed-echo confirmation
+  // first, so nothing may paint until the operator has answered; once they
+  // have, submit() replaces this row with its own progress line, which means
+  // there is no surviving node here to pin a pending state to either. So the
+  // wrapper is headless: all it adds is the guard, keyed on the link, so a
+  // double click cannot stack two confirmation modals for the same row.
   function wire(row, run) {
-    row.querySelector('.row-link')?.addEventListener('click', (event) => {
+    const link = row.querySelector('.row-link');
+    link?.addEventListener('click', (event) => {
       event.preventDefault();
-      run();
+      runAction(null, () => run(), {key: link});
     });
     return row;
   }

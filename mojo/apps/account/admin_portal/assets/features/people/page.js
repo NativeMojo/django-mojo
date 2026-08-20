@@ -1,4 +1,5 @@
 import {api, apiEnvelope, badge, FormView, formatDate, h, icon, pageHeader, TableView} from '../../core.js';
+import {copyButton, loadInto, runAction} from '../../components/actions.js';
 import {modelHeader} from '../../components/model.js';
 import {confirmAction, openInspector, openModal} from '../../components/overlays.js';
 import {activityHref, decodeRouteState, returnLocation, routeHref} from '../../components/routes.js';
@@ -46,9 +47,11 @@ function oneTimeSecret(title, label, value, returnFocus = null) {
   let secret = String(value || '');
   const input = h('input', {class: 'secret-value', readonly: true, value: secret,
     autocomplete: 'off', 'data-one-time-secret': 'true'});
-  const copy = h('button', {class: 'button primary', type: 'button', onclick: async () => {
-    await navigator.clipboard.writeText(secret); copy.textContent = 'Copied';
-  }}, 'Copy once');
+  // A function, not the string: the dialog scrubs `secret` on close, and the
+  // shared button reads it at click time so a copy after that copies nothing
+  // rather than re-leaking a value the dialog promised to forget.
+  const copy = copyButton(() => secret, {label: 'Copy once', copiedLabel: 'Copied',
+    className: 'button primary'});
   const content = h('div', {class: 'secret-reveal'},
     h('p', {text: `${label} is displayed only in this dialog. Store it now.`}), input,
     h('div', {class: 'form-actions'}, copy));
@@ -109,33 +112,44 @@ async function userSection(ctx, user, section, body, reload) {
     if (!caps.manage_users) {
       body.replaceChildren(h('p', {class: 'muted', text: 'Permission bundles require global People management access.'})); return;
     }
-    const contract = await api(`/api/account/admin/people/permission-bundles?user=${encodeURIComponent(user.id)}`);
-    const selected = new Set(contract.selected || []);
-    const switches = contract.bundles.map((bundle) => {
-      const input = h('input', {type: 'checkbox', checked: selected.has(bundle.id), value: bundle.id});
-      return h('label', {class: 'bundle-option'}, input, h('span', {}, h('strong', {text: bundle.label}),
-        h('small', {text: bundle.permissions.join(', ')})));
-    });
-    body.replaceChildren(h('div', {class: 'bundle-grid'}, ...switches),
-      h('p', {class: 'muted', text: 'Unknown and Advanced-only permission keys are preserved.'}),
-      h('button', {class: 'button primary', onclick: async () => {
+    await loadInto(body, async (current) => {
+      const contract = await api(`/api/account/admin/people/permission-bundles?user=${encodeURIComponent(user.id)}`);
+      if (!current()) return;
+      const selected = new Set(contract.selected || []);
+      const switches = contract.bundles.map((bundle) => {
+        const input = h('input', {type: 'checkbox', checked: selected.has(bundle.id), value: bundle.id});
+        return h('label', {class: 'bundle-option'}, input, h('span', {}, h('strong', {text: bundle.label}),
+          h('small', {text: bundle.permissions.join(', ')})));
+      });
+      // The Save button lives in the body its own success repaints, so it
+      // carries the wait and is never restored onto the replaced node.
+      const save = h('button', {class: 'button primary'}, 'Save access bundles');
+      save.addEventListener('click', () => runAction(save, async () => {
         const names = switches.filter((row) => row.querySelector('input').checked).map((row) => row.querySelector('input').value);
         await post('/api/account/admin/people/permission-bundles', {user: user.id, version: contract.version, selected: names});
         await userSection(ctx, user, 'access', body, reload);
-      }}, 'Save access bundles'));
+      }, {pendingLabel: 'Saving…', restoreOnSuccess: false}));
+      body.replaceChildren(h('div', {class: 'bundle-grid'}, ...switches),
+        h('p', {class: 'muted', text: 'Unknown and Advanced-only permission keys are preserved.'}), save);
+    }, {message: 'Loading access bundles…',
+      retry: () => userSection(ctx, user, 'access', body, reload)});
     return;
   }
   if (section === 'signins') {
     if (!caps.view_logins) {
       body.replaceChildren(h('p', {class: 'muted', text: 'Sign-in evidence is not available with your current access.'})); return;
     }
-    const events = (await apiEnvelope(`/api/account/logins?user=${encodeURIComponent(user.id)}&size=50&sort=-created`)).items;
-    body.replaceChildren(timelineView(events.map((event) => ({
-      title: `${event.source || 'Sign-in'} · ${event.ip_address || 'Unknown IP'}`,
-      detail: [event.city, event.region, event.country_code, event.user_agent_info?.browser,
-        event.is_new_country ? 'New country' : '', event.is_new_region ? 'New region' : ''].filter(Boolean).join(' · '),
-      created: event.created,
-    }))));
+    await loadInto(body, async (current) => {
+      const events = (await apiEnvelope(`/api/account/logins?user=${encodeURIComponent(user.id)}&size=50&sort=-created`)).items;
+      if (!current()) return;
+      body.replaceChildren(timelineView(events.map((event) => ({
+        title: `${event.source || 'Sign-in'} · ${event.ip_address || 'Unknown IP'}`,
+        detail: [event.city, event.region, event.country_code, event.user_agent_info?.browser,
+          event.is_new_country ? 'New country' : '', event.is_new_region ? 'New region' : ''].filter(Boolean).join(' · '),
+        created: event.created,
+      }))));
+    }, {message: 'Loading sign-ins…',
+      retry: () => userSection(ctx, user, 'signins', body, reload)});
     return;
   }
   body.replaceChildren(activityLinks(ctx, {type: 'user', id: user.id}));
@@ -233,27 +247,43 @@ async function groupSection(ctx, group, section, body, reload) {
       caps.manage_groups ? h('button', {class: 'button', onclick: () => editGroup(group, reload)}, 'Edit identity') : null); return;
   }
   if (section === 'members' || section === 'permissions') {
-    const members = (await apiEnvelope(`/api/group/member?group=${encodeURIComponent(group.id)}&size=100`)).items;
-    const rows = new TableView({columns: [
-      {label: 'Member', render: (row) => h('div', {}, h('strong', {text: row.user?.display_name || row.user?.username || `User ${row.user?.id}`}), h('small', {text: row.user?.email || ''}))},
-      {label: 'Role', render: (row) => badge(row.permissions?.guest ? 'Guest' : 'Member')},
-      {label: 'Status', render: (row) => badge(row.is_active ? 'Active' : 'Inactive', row.is_active ? 'success' : 'danger')},
-      {label: 'Permissions', render: (row) => h('span', {text: Object.keys(row.permissions || {}).filter((key) => row.permissions[key] && key !== 'guest').join(', ') || 'None'})},
-    ], rows: members, empty: 'No members are visible in this group.'}).render();
-    body.replaceChildren(rows, section === 'members' && caps.manage_groups ? h('button', {class: 'button', onclick: () => addMember(group, reload)}, 'Add member') : null); return;
+    await loadInto(body, async (current) => {
+      const members = (await apiEnvelope(`/api/group/member?group=${encodeURIComponent(group.id)}&size=100`)).items;
+      if (!current()) return;
+      const rows = new TableView({columns: [
+        {label: 'Member', render: (row) => h('div', {}, h('strong', {text: row.user?.display_name || row.user?.username || `User ${row.user?.id}`}), h('small', {text: row.user?.email || ''}))},
+        {label: 'Role', render: (row) => badge(row.permissions?.guest ? 'Guest' : 'Member')},
+        {label: 'Status', render: (row) => badge(row.is_active ? 'Active' : 'Inactive', row.is_active ? 'success' : 'danger')},
+        {label: 'Permissions', render: (row) => h('span', {text: Object.keys(row.permissions || {}).filter((key) => row.permissions[key] && key !== 'guest').join(', ') || 'None'})},
+      ], rows: members, empty: 'No members are visible in this group.'}).render();
+      body.replaceChildren(rows, section === 'members' && caps.manage_groups ? h('button', {class: 'button', onclick: () => addMember(group, reload)}, 'Add member') : null);
+    }, {message: 'Loading members…', retry: () => groupSection(ctx, group, section, body, reload)});
+    return;
   }
   if (section === 'keys') {
-    const keys = (await apiEnvelope(`/api/group/apikey?group=${encodeURIComponent(group.id)}&size=100`)).items;
-    body.replaceChildren(new TableView({columns: [
-      {label: 'Key', render: (row) => h('div', {}, h('strong', {text: row.name}), h('small', {text: `ID ${row.id}`}))},
-      {label: 'Status', render: (row) => badge(row.is_active ? 'Active' : 'Inactive', row.is_active ? 'success' : 'danger')},
-      {label: 'Last used', render: (row) => formatDate(row.last_used)},
-      {label: 'Actions', render: (row) => h('div', {class: 'inline-actions'},
-        h('button', {class: 'button compact', onclick: async (event) => { event.stopPropagation(); const result = await post('/api/account/admin/apikey/action', {api_key: row.id, action: 'rotate'}); oneTimeSecret('Rotated API key', 'API key token', result.token, event.currentTarget); await reload(); }}, 'Rotate'),
-        h('button', {class: 'button compact', onclick: async (event) => { event.stopPropagation(); await post('/api/account/admin/apikey/action', {api_key: row.id, action: row.is_active ? 'deactivate' : 'reactivate'}); await reload(); }}, row.is_active ? 'Deactivate' : 'Reactivate'),
-        h('button', {class: 'button compact danger', onclick: async (event) => { event.stopPropagation(); const answer = await confirmAction({title: `Revoke ${row.name}?`, copy: 'The API key record and credential will be deleted.', confirmLabel: 'Revoke key', danger: true}); if (answer.confirmed) { await post('/api/account/admin/apikey/action', {api_key: row.id, action: 'revoke'}); await reload(); } }}, 'Revoke'))},
-    ], rows: keys, empty: 'No API keys exist for this group.'}).render(),
-    caps.manage_api_keys ? h('button', {class: 'button', onclick: () => createApiKey(group, reload)}, 'Create API key') : null); return;
+    // † Every one of these three actions ends in reload(), which rebuilds the
+    // table the button sits in, so there is no node to pin a pending state to.
+    // They are credential operations, so they run behind the busy scrim, keyed
+    // per key-and-action so one row's Rotate can never return another's promise.
+    const keyAction = (row, action, task) => runAction(null, task,
+      {key: `apikey:${row.id}:${action}`, busy: {title: `${action} ${row.name}…`,
+        detail: 'The credential is being changed.'}});
+    await loadInto(body, async (current) => {
+      const keys = (await apiEnvelope(`/api/group/apikey?group=${encodeURIComponent(group.id)}&size=100`)).items;
+      if (!current()) return;
+      body.replaceChildren(new TableView({columns: [
+        {label: 'Key', render: (row) => h('div', {}, h('strong', {text: row.name}), h('small', {text: `ID ${row.id}`}))},
+        {label: 'Status', render: (row) => badge(row.is_active ? 'Active' : 'Inactive', row.is_active ? 'success' : 'danger')},
+        {label: 'Last used', render: (row) => formatDate(row.last_used)},
+        {label: 'Actions', render: (row) => h('div', {class: 'inline-actions'},
+          h('button', {class: 'button compact', onclick: (event) => { event.stopPropagation(); const trigger = event.currentTarget; return keyAction(row, 'Rotating', async () => { const result = await post('/api/account/admin/apikey/action', {api_key: row.id, action: 'rotate'}); oneTimeSecret('Rotated API key', 'API key token', result.token, trigger); await reload(); }); }}, 'Rotate'),
+          h('button', {class: 'button compact', onclick: (event) => { event.stopPropagation(); return keyAction(row, row.is_active ? 'Deactivating' : 'Reactivating', async () => { await post('/api/account/admin/apikey/action', {api_key: row.id, action: row.is_active ? 'deactivate' : 'reactivate'}); await reload(); }); }}, row.is_active ? 'Deactivate' : 'Reactivate'),
+          // The confirm comes first and nothing paints while it is open.
+          h('button', {class: 'button compact danger', onclick: (event) => { event.stopPropagation(); return confirmAction({title: `Revoke ${row.name}?`, copy: 'The API key record and credential will be deleted.', confirmLabel: 'Revoke key', danger: true}).then((answer) => answer.confirmed ? keyAction(row, 'Revoking', async () => { await post('/api/account/admin/apikey/action', {api_key: row.id, action: 'revoke'}); await reload(); }) : undefined); }}, 'Revoke'))},
+      ], rows: keys, empty: 'No API keys exist for this group.'}).render(),
+      caps.manage_api_keys ? h('button', {class: 'button', onclick: () => createApiKey(group, reload)}, 'Create API key') : null);
+    }, {message: 'Loading API keys…', retry: () => groupSection(ctx, group, section, body, reload)});
+    return;
   }
   if (section === 'activity') {
     body.replaceChildren(activityLinks(ctx, {type: 'group', id: group.id})); return;
@@ -293,15 +323,22 @@ export async function peoplePage(ctx, route) {
     root.replaceChildren(pageHeader('Identity & access', 'People', 'Manage users, groups, access, and authentication evidence.', [
       canManage ? h('button', {class: 'button primary', onclick: () => isUsers ? inviteUser(render) : newGroup(render)}, icon('plus'), isUsers ? 'Invite user' : 'New group') : null,
     ]));
-    const tabs = h('nav', {class: 'tabs', 'aria-label': 'People views'}, ...available.map(([id, label]) => h('button', {class: id === active ? 'active' : '', onclick: () => { active = id; history.replaceState({}, '', routeHref(id)); render(); }, text: label})));
+    // † render() replaces the whole page, tab bar included, so a pending state
+    // on the clicked tab would be detached before it painted. Headless, with
+    // one key for the pair: the skeleton loadInto paints below is the feedback.
+    const tabs = h('nav', {class: 'tabs', 'aria-label': 'People views'}, ...available.map(([id, label]) => h('button', {class: id === active ? 'active' : '', onclick: () => { active = id; history.replaceState({}, '', routeHref(id)); return runAction(null, () => render(), {key: 'people-view'}); }, text: label})));
     const input = h('input', {placeholder: `Search ${active}`, 'aria-label': `Search ${active}`, value: term});
     const panel = h('section', {class: 'panel'}, h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: isUsers ? 'Users' : 'Groups'}), h('p', {text: 'Select a row to open the standard inspector.'})), h('label', {class: 'search'}, icon('search'), input)));
+    // The table loads into a body node, never over the panel: the heading and
+    // the search box beside it must survive the load and every re-search.
+    const listBody = h('div', {});
+    panel.append(listBody);
     root.append(tabs, panel);
     let timer; input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => render(input.value.trim()), 250); });
-    try {
+    await loadInto(listBody, async (current) => {
       const query = new URLSearchParams({size: '50', sort: isUsers ? '-last_activity' : 'name'}); if (term) query.set('search', term);
       const rows = (await apiEnvelope(`/api/${isUsers ? 'user' : 'group'}?${query}`)).items;
-      if (mine !== generation) return root;
+      if (!current() || mine !== generation) return;
       const columns = isUsers ? [
         {label: 'User', render: (row) => h('div', {class: 'identity'}, h('span', {class: 'avatar', text: initials(row).toUpperCase()}), h('div', {}, h('strong', {text: row.display_name || row.username}), h('small', {text: row.email || row.username})))},
         {label: 'Status', render: (row) => badge(row.is_active ? (row.requires_password_change ? 'Password change' : 'Active') : 'Inactive', row.is_active ? (row.requires_password_change ? 'warning' : 'success') : 'danger')},
@@ -311,11 +348,11 @@ export async function peoplePage(ctx, route) {
         {label: 'Parent', render: (row) => row.parent?.name || '—'}, {label: 'Status', render: (row) => badge(row.is_active ? 'Active' : 'Inactive', row.is_active ? 'success' : 'danger')}, {label: '', render: () => icon('chevron')},
       ];
       const open = (row) => isUsers ? openUser(ctx, row, render) : openGroup(ctx, row, render);
-      panel.append(new TableView({columns, rows, empty: `No matching ${active}.`, onSelect: open}).render());
+      listBody.replaceChildren(new TableView({columns, rows, empty: `No matching ${active}.`, onSelect: open}).render());
       const inspector = decodeRouteState().state.inspector;
       const linked = inspector && rows.find((row) => String(row.id) === String(inspector));
       if (linked && !linkedInspectorOpened) { linkedInspectorOpened = true; await open(linked); }
-    } catch (error) { panel.append(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
+    }, {message: `Loading ${active}…`, retry: () => render(term)});
     return root;
   }
   await render(); return root;

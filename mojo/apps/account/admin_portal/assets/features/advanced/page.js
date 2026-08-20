@@ -92,14 +92,6 @@ function queryParam(name) {
   return new URLSearchParams(query).get(name);
 }
 
-// The local one-off is retired in favour of the shared state: a heading, a
-// role="alert", and a retry. The bare div it used to append had none of the
-// three, so a reader saw a sentence with no way to try again.
-// (Phase 3 removes this shim entirely and calls errorState at the call site.)
-function actionError(panel, error, retry = null) {
-  panel.append(errorState(error, retry));
-}
-
 // A provider mutation that fails has no panel of its own left to fail into —
 // the table it belonged to is being rebuilt. Say so where the operator is
 // looking, and to assistive technology, rather than losing it to the console.
@@ -418,7 +410,7 @@ async function domainsPage(ctx) {
       ctx.capabilities.manage_network ? h('button', {class: 'button primary', onclick: () => purchaseDomain(ctx, render)}, icon('plus'), 'Buy domain') : null,
     ]));
     const panel = tablePanel('Managed domains', 'Open a domain to change registrar settings; use DNS Records for the live provider zone.'); root.append(panel);
-    if (failure) { actionError(panel, failure, render); return; }
+    if (failure) { panel.append(errorState(failure, render)); return; }
     panel.append(new TableView({rows, empty: 'No managed domains yet.',
       onSelect: (row) => { location.hash = routeHref('domains', {domain: row.id}); }, columns: [
         {label: 'Domain', render: (row) => h('div', {}, h('strong', {text: row.name}), h('small', {text: row.provider}))},
