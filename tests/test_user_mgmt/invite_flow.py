@@ -267,16 +267,69 @@ def test_get_or_generate_fresh_after_consumption(opts):
 
     tok1 = tokens.get_or_generate_invite_token(user)
 
-    # Simulate consumption — clear the JTI as _verify does
-    user.set_secret("invite_jti", None)
-    user.set_secret("invite_token", None)
-    user.save()
+    # Redeem it for real. This used to clear only invite_jti by hand, which is
+    # what hid the bug: _verify's consume path left invite_ts and invite_token
+    # in place, so a genuine redemption still looked reusable and this function
+    # handed the dead token straight back out until the 7-day TTL lapsed.
+    tokens.verify_invite_token(tok1)
+    user.refresh_from_db()
+
+    assert_eq(user.get_secret("invite_jti"), None,
+              "redeeming an invite must clear the JTI that makes it verify")
+    assert_eq(user.get_secret("invite_ts"), None,
+              "redeeming an invite must clear the timestamp get_or_generate "
+              "reads, or a consumed invite still looks fresh")
+    assert_eq(user.get_secret("invite_token"), None,
+              "redeeming an invite must clear the cached token string, or "
+              "get_or_generate has a dead token to hand back")
 
     tok2 = tokens.get_or_generate_invite_token(user)
 
     assert_true(tok1 != tok2,
                 "get_or_generate_invite_token should generate a new token after the old one is consumed")
     assert_true(tok2.startswith("iv:"), f"new token should be an iv: token, got {tok2[:5]}")
+
+
+@th.django_unit_test("invite_flow: a redeemed invite is never re-issued to a second group invite")
+def test_reinviting_after_redemption_yields_a_usable_token(opts):
+    """The end-to-end shape of the bug: invite, redeem, invite again.
+
+    The second invite email has to carry a token that actually works. Before
+    consumption cleared the reuse bookkeeping, it carried the redeemed one and
+    the recipient met "Token already used" on a link they had never clicked.
+    """
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo import errors as merrors
+
+    user = User.objects.get(pk=opts.user_id)
+    User.objects.filter(pk=user.pk).update(last_login=None)
+    user.refresh_from_db()
+
+    first = tokens.get_or_generate_invite_token(user)
+    tokens.verify_invite_token(first)
+    user.refresh_from_db()
+
+    second = tokens.get_or_generate_invite_token(user)
+    assert_true(second != first,
+                "re-inviting a user whose invite was already redeemed must "
+                "mint a fresh token")
+
+    # The re-issued token must verify. This is the assertion the whole fix is
+    # for: a fresh string that does not work would be no better.
+    verified = tokens.verify_invite_token(second)
+    assert_eq(verified.pk, user.pk,
+              "the re-issued invite token must verify against the same user")
+
+    # And the first one stays dead — reissuing must not resurrect it.
+    raised = False
+    try:
+        tokens.verify_invite_token(first)
+    except merrors.ValueException:
+        raised = True
+    assert_true(raised,
+                "the already-redeemed token must remain rejected after a new "
+                "invite is issued")
 
 
 @th.django_unit_test("invite_flow: get_or_generate generates fresh token after expiry")

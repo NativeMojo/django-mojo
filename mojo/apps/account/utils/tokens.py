@@ -146,8 +146,19 @@ def _verify(raw_token, expected_kind=None, consume=True):
             raise merrors.ValueException("Token already used")
 
         if consume:
-            # Consume — single use
+            # Consume — single use.
+            #
+            # The JTI is what makes a token verify, but it is not the only thing
+            # `_generate` wrote: the matching `<kind>_ts` is reuse bookkeeping,
+            # and for invites `invite_token` caches the token string itself.
+            # Clearing only the JTI left `get_or_generate_invite_token` looking
+            # at a fresh timestamp and a cached token whose JTI was already
+            # gone, so it handed a redeemed invite straight back out until the
+            # 7-day TTL lapsed. Whatever `_generate` set, consuming clears.
             user.set_secret(_JTI_KEYS[kind], None)
+            user.set_secret(_TS_KEYS[kind], None)
+            if kind == KIND_INVITE:
+                user.set_secret("invite_token", None)
             user.save(update_fields=["mojo_secrets", "modified"])
         return user
 
@@ -308,6 +319,11 @@ def get_or_generate_invite_token(user):
     Return the existing invite token if still valid, otherwise generate a fresh one.
     Allows inviting the same user to multiple groups without overwriting the JTI
     and invalidating already-sent invite emails.
+
+    "Still valid" is read from the same two secrets `_generate`/`generate_invite_token`
+    wrote, which is only sound because `_verify(consume=True)` clears them — a
+    redeemed invite leaves nothing here to reuse, so re-inviting that user always
+    mints a new token rather than handing back a dead one.
     """
     existing_ts = int(user.get_secret("invite_ts") or 0)
     existing_token = user.get_secret("invite_token")
