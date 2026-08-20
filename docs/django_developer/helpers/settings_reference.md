@@ -581,7 +581,24 @@ reasoning: [edge README](../edge/README.md#settings),
 
 ### FRESH
 
-- `FRESH_AUTH_WINDOW`
+- `FRESH_AUTH_ENFORCE` — bool, default `True`. The master switch for step-up
+  ("fresh auth") re-authentication. Set it false and no endpoint asks for a
+  password again, including the ones that hard-code their own window.
+
+  It exists because `FRESH_AUTH_WINDOW` is not the off switch it looks like: an
+  endpoint's explicit `requires_fresh_auth(600)` takes precedence over the
+  setting, and around twenty endpoints pass one — deploy-key minting, API-key
+  rotation, capacity changes, email admin, domain purchase. With
+  `FRESH_AUTH_WINDOW` at its `0` default those endpoints still re-prompted
+  every ten minutes and nothing in configuration could stop it.
+
+  **Turning it off is a real reduction in security**, not a UX preference: it
+  removes the re-auth prompt from every sensitive mutation in the product. Do
+  it only where the session is already strongly protected (short-lived tokens,
+  SSO with its own step-up, a trusted admin network).
+- `FRESH_AUTH_WINDOW` — int seconds, default `0` (off). The global freshness
+  window for endpoints that do **not** name their own. An endpoint that passes
+  an explicit `seconds` ignores this; only `FRESH_AUTH_ENFORCE` overrides those.
 
 ### GEOFENCE
 
