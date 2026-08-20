@@ -456,13 +456,23 @@ already knows:
   `JobManager.release_inflight(channel, job_id)` — a ZREM with **no requeue**,
   because the caller is stating the job is finished, not abandoned.
 
-Two properties are deliberate and easy to break:
+Three properties are deliberate and easy to break:
 
-- **No channel filter.** `deploy_node` is published to the target runner's own
-  channel, and `JobEngine` accepts an explicit `--runner-id`, so a node started
-  that way has a channel nothing in the platform can predict. Matching is by
-  `func` + `status="running"` + `payload__deployment`, and each matched row's
-  OWN channel is what gets released.
+- **It closes THIS node's row only.** A fleet deploy publishes one deployment
+  UUID to *every* node, and every node reaches this call, so `func` +
+  `status="running"` + `payload__deployment` alone identifies up to a whole
+  fleet of sibling rows. Closing those would record peers terminal before they
+  had finished and delete the in-flight leases whose expiry is the only
+  detector of a node deploy that hung — and on the failure path it would
+  rewrite healthy peers to `failed`. The match is therefore
+  `runner_id == local_runner_id()` **or** `channel == local_runner_id()`.
+- **...with a deployment-only fallback.** `JobEngine` accepts an explicit
+  `--runner-id`, so a node started that way has a runner id, and therefore a
+  channel, that `local_runner_id()` cannot predict; the node-scoped pass
+  matches nothing there. Only when it matches **nothing at all** does the
+  deployment-only match run, capped at `MAX_HANDOFF_JOBS`. On such a node it is
+  the one row that can be meant; on a normal node the scoped pass has already
+  answered. Each matched row's OWN channel is what gets released.
 - **It never raises.** It runs on the deploy callback and on the rollback
   report; a jobs-plane or Redis problem must not block either. Failures are
   logged and swallowed, exactly as the incident reporter's are.

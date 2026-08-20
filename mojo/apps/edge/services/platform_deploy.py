@@ -434,12 +434,23 @@ def close_handoff_job(value, state="completed"):
     callback time — it is the thing reporting it — so it writes the terminal
     status here, and drops the in-flight entry the dying engine will not.
 
-    NO CHANNEL FILTER, deliberately. `deploy_node` is published to the target
-    runner's own channel, and `JobEngine` accepts an explicit `--runner-id`
-    (see mojo.apps.jobs.cli), so a node started that way has a runner id — and
-    therefore a channel — that nothing here can predict. Filtering on the
-    default would match zero rows on exactly those nodes. Each matched row's
-    OWN channel is what gets released.
+    SCOPED TO THIS NODE, WITH A FALLBACK. A fleet deploy publishes ONE
+    deployment UUID to EVERY node (`asyncjobs._publish_deploy_node`), and every
+    node reaches this call, so the deployment alone identifies up to a whole
+    fleet of sibling rows. Closing those would record peers `completed` before
+    they have finished and delete the in-flight leases whose expiry is the only
+    thing that ever detects an abandoned node deploy — and on the failure path
+    it would rewrite healthy peers to `failed`. So the first pass matches this
+    box: `runner_id` (stamped by the engine that claimed the row) or `channel`
+    (what the orchestrator published to), against `deploy.local_runner_id()`.
+
+    The fallback is what keeps the ORIGINAL bug closed. `JobEngine` accepts an
+    explicit `--runner-id` (see mojo.apps.jobs.cli), and a node started that
+    way has a runner id — and therefore a channel — that `local_runner_id()`
+    cannot predict, so the scoped pass matches nothing there. Only when it
+    matches NOTHING do we fall back to the deployment-only match: on such a
+    node it is the one row that can be meant, and on a normal node the scoped
+    pass has already answered. Each matched row's OWN channel is released.
 
     Every failure is logged and swallowed. This runs on the deploy callback
     and on the rollback report; neither may be blocked by a jobs-plane
@@ -447,6 +458,7 @@ def close_handoff_job(value, state="completed"):
 
     Returns the number of rows closed.
     """
+    from django.db.models import Q
     from mojo.helpers import logit
 
     try:
@@ -459,9 +471,16 @@ def close_handoff_job(value, state="completed"):
         from mojo.apps.jobs.models import Job, JobEvent
         from mojo.apps.edge.services import deploy
 
-        rows = list(Job.objects.filter(
+        candidates = Job.objects.filter(
             func=deploy.DEPLOY_NODE_JOB, status="running",
-            payload__deployment=owner)[:MAX_HANDOFF_JOBS])
+            payload__deployment=owner)
+        local = deploy.local_runner_id()
+        rows = []
+        if local:
+            rows = list(candidates.filter(
+                Q(runner_id=local) | Q(channel=local))[:MAX_HANDOFF_JOBS])
+        if not rows:
+            rows = list(candidates[:MAX_HANDOFF_JOBS])
         closed = 0
         for job in rows:
             metadata = dict(job.metadata or {})

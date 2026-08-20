@@ -1013,9 +1013,15 @@ def test_node_summary_buckets(opts):
 # ---------------------------------------------------------------------------
 
 
-def _node_job(deployment, channel="edge-a-engine", status="running"):
+def _node_job(deployment, channel="edge-a-engine", status="running",
+              runner_id=None):
     """A `deploy_node` job as the orchestrator publishes it, plus the in-flight
-    ZSET entry the engine would normally remove when the job ends."""
+    ZSET entry the engine would normally remove when the job ends.
+
+    `runner_id` defaults to the channel — the orchestrator publishes to the
+    target runner's own channel, and the engine that claims the row stamps its
+    own id — but the two are separable so the node scoping can be exercised on
+    each column alone."""
     from mojo.apps.jobs.adapters import get_adapter
     from mojo.apps.jobs.keys import JobKeys
     from mojo.apps.jobs.models import Job
@@ -1023,7 +1029,7 @@ def _node_job(deployment, channel="edge-a-engine", status="running"):
 
     job = Job.objects.create(
         id=uuid.uuid4().hex, channel=channel, func=deploy.DEPLOY_NODE_JOB,
-        status=status, runner_id=channel,
+        status=status, runner_id=channel if runner_id is None else runner_id,
         payload={"sha": SHA, "deployment": str(deployment)})
     get_adapter().zadd(JobKeys().processing(channel), {job.id: 1})
     return job
@@ -1046,11 +1052,13 @@ def _clean_node_jobs():
 
 
 @th.django_unit_test(
-    "close_handoff_job finds the node job whatever channel it was published to")
+    "close_handoff_job still closes the row of a node named by --runner-id")
 def test_close_handoff_job_ignores_the_channel(opts):
     """A node started with an explicit --runner-id consumes a channel named
-    after that id, and `deploy_node` is published to it. Matching on a default
-    channel name would close nothing on exactly those nodes."""
+    after that id, and `deploy_node` is published to it. `local_runner_id()`
+    cannot predict that name, so the node-scoped pass matches nothing there and
+    the deployment-only fallback has to answer — otherwise exactly those nodes
+    close nothing."""
     from mojo.apps.jobs.models import Job, JobEvent
     from mojo.apps.edge.services import platform_deploy
 
@@ -1082,6 +1090,86 @@ def test_close_handoff_job_ignores_the_channel(opts):
         "the in-flight lease must be released on the job's OWN channel — "
         "otherwise the next engine's reaper is the only thing that ever "
         "clears it, a visibility timeout later")
+    _clean_node_jobs()
+    _clean_deploy_state()
+
+
+@th.django_unit_test(
+    "close_handoff_job closes THIS node's row, never a fleet peer's")
+def test_close_handoff_job_is_scoped_to_this_node(opts):
+    """One fleet deploy publishes ONE deployment UUID to EVERY node, and every
+    node reaches this call at the end of its own update.sh.
+
+    Matching on the deployment alone therefore let whichever node finished
+    first record its still-running PEERS `completed` and drop their in-flight
+    leases — and lease expiry is the only thing that ever detects a node deploy
+    that hung or never came back. On the failure path the same match rewrote
+    healthy peers to `failed`."""
+    from mojo.apps.jobs.models import JobEvent
+    from mojo.apps.edge.services import deploy, platform_deploy
+
+    _clean_deploy_state()
+    _clean_node_jobs()
+    row = _attempt("canary")
+    me = deploy.local_runner_id()
+    mine = _node_job(row.pk, channel=me)
+    peer = _node_job(row.pk, channel="edge-peer-engine")
+    third = _node_job(row.pk, channel="edge-third-engine")
+
+    closed = platform_deploy.close_handoff_job(row.pk, "failed")
+
+    th.assert_eq(closed, 1,
+                 f"exactly this node's row is closed, not one per fleet node, "
+                 f"got {closed}")
+    mine.refresh_from_db()
+    th.assert_eq(mine.status, "failed",
+                 f"this node's own row takes the outcome it reported, got "
+                 f"{mine.status!r}")
+    th.assert_true(not _inflight(me, mine.id),
+                   "this node's in-flight lease is released")
+    for other, label in ((peer, "edge-peer-engine"),
+                         (third, "edge-third-engine")):
+        other.refresh_from_db()
+        th.assert_eq(other.status, "running",
+                     f"{label} is still deploying and must stay `running` — "
+                     f"a peer recorded terminal here is a peer whose hang "
+                     f"nobody will ever notice, got {other.status!r}")
+        th.assert_eq(JobEvent.objects.filter(job=other).count(), 0,
+                     f"{label} collects no handoff event from another node")
+        th.assert_true(_inflight(label, other.id),
+                       f"{label}'s in-flight lease must survive — its expiry "
+                       f"is the reaper's only evidence of an abandoned node "
+                       f"deploy")
+    _clean_node_jobs()
+    _clean_deploy_state()
+
+
+@th.django_unit_test(
+    "close_handoff_job matches this node on runner_id as well as on channel")
+def test_close_handoff_job_scopes_on_runner_id(opts):
+    """`runner_id` is stamped by the engine that claimed the row; `channel` is
+    what the orchestrator published to. Either one naming this box is this
+    box's row, and neither alone may be trusted to be populated."""
+    from mojo.apps.edge.services import deploy, platform_deploy
+
+    _clean_deploy_state()
+    _clean_node_jobs()
+    row = _attempt("canary")
+    me = deploy.local_runner_id()
+    mine = _node_job(row.pk, channel="edge-published-elsewhere", runner_id=me)
+    peer = _node_job(row.pk, channel="edge-peer-engine")
+
+    closed = platform_deploy.close_handoff_job(row.pk, "completed")
+
+    th.assert_eq(closed, 1,
+                 f"the row this engine claimed is this node's row, got "
+                 f"{closed}")
+    mine.refresh_from_db()
+    th.assert_eq(mine.status, "completed",
+                 f"a runner_id match closes the row, got {mine.status!r}")
+    peer.refresh_from_db()
+    th.assert_eq(peer.status, "running",
+                 f"the peer is untouched, got {peer.status!r}")
     _clean_node_jobs()
     _clean_deploy_state()
 
