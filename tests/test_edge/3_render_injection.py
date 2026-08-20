@@ -339,8 +339,10 @@ def test_edge_mojosec_mode_contract(opts):
     observed_base = render.render_http_base(knobs, security=[])
     assert "log_format mojosec_v1 escape=json" in observed_base, \
         "Edge observe mode omitted the structured security stream"
+    # Bounded by the directive that follows the MojoSec block. It used to be
+    # the $connection_upgrade map, which moved to the node bootstrap.
     security_log = observed_base[observed_base.index("# MojoSec"):
-                                 observed_base.index("map $http_upgrade")]
+                                 observed_base.index("sendfile on;")]
     assert '"request_uri":"$request_uri"' in security_log, \
         "Edge security logging must use the shared bounded raw request target"
     assert '"user_agent":"$http_user_agent"' in security_log, \
