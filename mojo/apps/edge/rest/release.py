@@ -10,7 +10,11 @@ import mojo.decorators as md
 from mojo import errors as me
 from mojo.models.rest import _resolve_stamp_actor
 
+from mojo.apps.account.services import webapp_authority
 from mojo.apps.edge.models import WebApp, WebAppDeployment, WebAppRelease
+from mojo.apps.edge.models.web_app_release import (
+    SOURCE_API, SOURCE_GITHUB, SOURCE_UPLOAD,
+)
 from mojo.apps.edge.services import releases, webapp_deploy
 
 
@@ -55,6 +59,36 @@ def _authorized_webapp(request, pk):
     return web_app
 
 
+def _release_source(request, web_app):
+    """Name how this release arrived, deciding the CLASS server-side.
+
+    This endpoint is the last place that can tell the three ways apart: after
+    the row exists, a browser upload and a CI push are the same two columns.
+
+    The class is structural, never claimed. An interactive session IS the
+    portal's upload path, so it is `upload` whatever the body says. Everything
+    else is key-authenticated, so it is `api` — and refines to `github` only
+    when all three of these hold at once:
+
+    - a real ApiKey authenticated the call (a session can never claim github),
+    - the caller sent the exact marker the shipped Action sends, and
+    - the site is actually wired to a GitHub repository.
+
+    So the client may only refine WITHIN the class its credential already
+    proved, and a hint on an unwired site stays honest at `api`. Any other
+    hint value is ignored rather than refused: the marker is additive, and a
+    stale or vendored client must still be able to deploy.
+    """
+    if webapp_authority.is_interactive_request(request):
+        return SOURCE_UPLOAD
+    if getattr(request, "api_key", None) is None:
+        return SOURCE_API
+    hint = str(request.DATA.get("source") or "").strip().lower()
+    if hint == SOURCE_GITHUB and (web_app.github_repository or "").strip():
+        return SOURCE_GITHUB
+    return SOURCE_API
+
+
 @md.POST('release')
 @md.requires_params("webapp", "version", "manifest")
 @md.custom_security("site ApiKey identity, or manage_dns on the WebApp, in body")
@@ -77,6 +111,7 @@ def on_release_register(request):
         # a 500 on the CI happy path. This helper returns None for every
         # non-model identity (ApiKey, ANONYMOUS_USER, the system pseudo-user).
         user=_resolve_stamp_actor(request),
+        source=_release_source(request, web_app),
     )
     return dict(
         release=release.pk,

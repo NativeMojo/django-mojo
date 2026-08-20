@@ -140,11 +140,18 @@ def write_output(name, value):
 def deploy(args, client, sleep=time.sleep, clock=time.monotonic):
     root = Path(args.artifact_dir).resolve()
     release_manifest = manifest(root)
-    registered = client.json("POST", "edge/release", {
+    body = {
         "webapp": int(args.webapp_id),
         "version": args.version,
         "manifest": release_manifest,
-    })
+    }
+    # A marker, not a claim of authority: the platform decides the source
+    # CLASS from the credential and only lets this refine it to "github" for a
+    # key-authenticated call against a GitHub-wired site. Gated on the runner
+    # variable GitHub sets, so the same script run by hand stays honest.
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        body["source"] = "github"
+    registered = client.json("POST", "edge/release", body)
     release_id = registered["release"]
     write_output("release", release_id)
 

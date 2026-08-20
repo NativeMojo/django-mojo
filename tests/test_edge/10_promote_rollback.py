@@ -449,6 +449,127 @@ def test_session_without_perms_is_refused(opts):
         f"(status {status.status_code})")
 
 
+@th.django_unit_test("how a release arrived is derived at the boundary, never claimed")
+def test_release_source_is_derived_at_the_boundary(opts):
+    """`POST edge/release` is the last place that can tell the three ways
+    apart. The server decides the CLASS from the credential; the body may only
+    refine WITHIN that class, and only on a site actually wired to GitHub.
+
+    Register runs the real presign path against dummy AWS credentials — the
+    same local-signing pattern the session test above uses.
+    """
+    from mojo.apps.edge.models import WebAppRelease
+    from mojo.apps.edge.services import webapp_keys
+    from tests.test_edge._helpers import make_group_member
+
+    wired = make_webapp(opts.group, slug="sourcewired")
+    wired.github_repository = "NativeMojo/example-site"
+    wired.save()
+    _, _, wired_token, _ = webapp_keys.link(wired)
+
+    bare = make_webapp(opts.group, slug="sourcebare")
+    assert not bare.github_repository, \
+        "the unwired fixture must have no repository for case (c) to mean anything"
+    _, _, bare_token, _ = webapp_keys.link(bare)
+
+    session_site = make_webapp(opts.group, slug="sourcesession")
+    _, member_email, member_pw, _ = make_group_member(
+        ["manage_dns"], group=opts.group)
+
+    def register(site, version, body_source=None):
+        payload = dict(webapp=site.pk, version=version,
+                       manifest=make_manifest())
+        if body_source is not None:
+            payload["source"] = body_source
+        resp = opts.client.post("/api/edge/release", json=payload)
+        assert resp.status_code == 200, (
+            f"register {version} failed: {resp.status_code} {resp.body}")
+        # Read the STORED value back, not the response: the field is evidence
+        # at rest, and an endpoint echoing its own input would prove nothing.
+        return WebAppRelease.objects.get(
+            webapp=site, version=version).source
+
+    # One settings block for every case — each entry reloads the server.
+    with th.server_settings(AWS_KEY="AKIAEDGETESTKEY00000",
+                            AWS_SECRET="edge-test-secret-not-real",
+                            AWS_REGION="us-west-2"):
+        _use_apikey(opts, wired_token)
+        try:
+            # (a) A key on a GitHub-wired site, no marker: still just api.
+            assert register(wired, "srcA") == "api", \
+                "a key-authenticated register with no marker was not labelled api"
+            # (b) The same key, with the Action's marker: github.
+            assert register(wired, "srcB", "github") == "github", \
+                "the shipped Action's marker did not label the release github"
+            # (f) A key can never claim the interactive class.
+            assert register(wired, "srcF", "upload") == "api", \
+                "a machine credential claimed the browser-upload class"
+        finally:
+            _clear_apikey(opts)
+
+        _use_apikey(opts, bare_token)
+        try:
+            # (c) The marker on a site with no repository stays honest.
+            assert register(bare, "srcC", "github") == "api", \
+                "a github marker was honored on a site with no GitHub repository"
+        finally:
+            _clear_apikey(opts)
+
+        login(opts, member_email, member_pw)
+        # (d) The portal's Upload-a-build path is upload by structure alone.
+        assert register(session_site, "srcD") == "upload", \
+            "an interactive session's release was not labelled upload"
+        # (e) A session cannot relabel itself as a GitHub push.
+        assert register(session_site, "srcE", "github") == "upload", \
+            "an interactive session claimed a release came from a GitHub push"
+
+
+@th.django_unit_test("how a release arrived is not writable over REST")
+def test_source_is_not_a_field_write(opts):
+    """Provenance that a field write can rewrite is not provenance: a
+    manage_dns holder could relabel a hand upload as a reviewed GitHub push."""
+    uploaded = make_release(opts.webapp, "sourcefieldwrite", status="uploaded")
+    assert uploaded.source == "unknown", \
+        f"the fixture release starts at {uploaded.source}, not unknown"
+    login(opts, opts.admin_email, opts.admin_pw)
+
+    resp = opts.client.post(f"/api/edge/release/{uploaded.pk}", json=dict(
+        source="github"))
+    uploaded.refresh_from_db()
+    assert uploaded.source == "unknown", (
+        "a release's source was changed by a field write "
+        f"(status {resp.status_code}, now {uploaded.source})")
+
+
+@th.django_unit_test("re-registering an existing version never restamps its source")
+def test_release_source_is_immutable_on_reuse(opts):
+    """The reuse branch returns the stored row. If it restamped, a later CI
+    push could rewrite how an already deployed build got here."""
+    from mojo.apps.edge.models import WebAppRelease
+    from mojo.apps.edge.models.web_app_release import (
+        SOURCE_GITHUB, SOURCE_UPLOAD,
+    )
+    from mojo.apps.edge.services import releases
+
+    site = make_webapp(opts.group, slug="sourcereuse")
+    manifest = make_manifest(["index.html"])
+    # Already `uploaded`, so the reuse branch mints no upload URLs and this
+    # exercises the immutability alone, with no signing to arrange.
+    first = WebAppRelease.objects.create(
+        webapp=site, version="reuse1", manifest=manifest,
+        status="uploaded", source=SOURCE_UPLOAD)
+
+    again, uploads = releases.register(
+        site, "reuse1", manifest, source=SOURCE_GITHUB)
+
+    again.refresh_from_db()
+    assert first.pk == again.pk, "reuse created a second row for one version"
+    assert not uploads, "a verified release was handed fresh upload URLs"
+    assert again.source == SOURCE_UPLOAD, (
+        "re-registering an existing version restamped how it arrived "
+        f"(now {again.source})")
+
+
 @th.django_unit_test("status is not writable over REST")
 def test_status_is_not_a_field_write(opts):
     """Otherwise a manage_dns holder marks a pending release live with a field

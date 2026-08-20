@@ -94,6 +94,36 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(client.calls[1], (
             "POST", "edge/release/complete", {"release": 7}))
 
+    def _register_body(self, environment):
+        """Run one deploy with `environment` as the WHOLE env, and return the
+        body the register call was made with.
+
+        `clear=True` matters: this suite may itself be running inside GitHub
+        Actions, and a test that inherited the runner's own GITHUB_ACTIONS
+        would assert nothing about the gate.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            self._artifact(temporary)
+            client = FakeClient([{"status": "live", "terminal": True}])
+            with mock.patch.dict(os.environ, environment, clear=True):
+                deploy_action.deploy(
+                    args(temporary), client, sleep=lambda _: None)
+        return client.calls[0][2]
+
+    def test_github_actions_marks_the_release_source(self):
+        body = self._register_body({"GITHUB_ACTIONS": "true"})
+        self.assertEqual(body.get("source"), "github")
+
+    def test_running_the_script_by_hand_sends_no_source(self):
+        # No marker at all, rather than a different one: the platform's own
+        # default is what labels a hand run, and an absent key is additive.
+        self.assertNotIn("source", self._register_body({}))
+
+    def test_a_non_actions_runner_sends_no_source(self):
+        # Some CI systems set GITHUB_ACTIONS to other values; only the exact
+        # string the GitHub runner sets counts.
+        self.assertNotIn("source", self._register_body({"GITHUB_ACTIONS": "false"}))
+
     def test_existing_verified_release_skips_upload(self):
         with tempfile.TemporaryDirectory() as temporary:
             self._artifact(temporary)

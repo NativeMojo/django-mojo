@@ -52,6 +52,7 @@ from mojo.apps.edge.models.web_app_deployment import (
     ACTIVE_STATUSES, STATUS_LIVE as DEPLOYMENT_LIVE,
 )
 from mojo.apps.edge.models.web_app_release import (
+    SOURCE_UNKNOWN,
     STATUS_LIVE, STATUS_PENDING, STATUS_SUPERSEDED, STATUS_UPLOADED,
 )
 
@@ -89,8 +90,14 @@ def _upload_urls(release):
     return uploads
 
 
-def register(web_app, version, manifest, user=None):
-    """Create or safely reuse one immutable release version."""
+def register(web_app, version, manifest, user=None, source=SOURCE_UNKNOWN):
+    """Create or safely reuse one immutable release version.
+
+    `source` records how this release ARRIVED, and only the creating call
+    stamps it. The reuse branch below returns the stored row untouched: a row
+    that could be restamped would let a later caller rewrite how an already
+    deployed build got here, which is the one thing the field is for.
+    """
     validators.validate_release_version(version)
     # Re-check the bucket at MINT time, not only when the row was created: a
     # bucket removed from EDGE_RELEASE_BUCKETS would otherwise keep receiving
@@ -110,7 +117,7 @@ def register(web_app, version, manifest, user=None):
 
     release = WebAppRelease.objects.create(
         webapp=web_app, version=version, manifest=cleaned,
-        status=STATUS_PENDING, created_by=user)
+        status=STATUS_PENDING, source=source, created_by=user)
 
     uploads = _upload_urls(release)
 

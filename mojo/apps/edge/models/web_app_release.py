@@ -15,6 +15,21 @@ STATUSES = [
     (STATUS_SUPERSEDED, "Was live, retained for rollback"),
 ]
 
+# How a release ARRIVED. Derived at the one boundary that can still see it —
+# `POST edge/release` — because nothing downstream can tell a CI push from a
+# browser upload after the row exists.
+SOURCE_GITHUB = "github"
+SOURCE_API = "api"
+SOURCE_UPLOAD = "upload"
+SOURCE_UNKNOWN = "unknown"
+
+SOURCES = [
+    (SOURCE_GITHUB, "Pushed by the GitHub Action"),
+    (SOURCE_API, "Registered by a key-authenticated client"),
+    (SOURCE_UPLOAD, "Uploaded from an interactive session"),
+    (SOURCE_UNKNOWN, "Registered before arrival was recorded"),
+]
+
 
 class WebAppRelease(models.Model, MojoModel):
     """
@@ -55,6 +70,11 @@ class WebAppRelease(models.Model, MojoModel):
     status = models.CharField(
         max_length=16, choices=STATUSES, default=STATUS_PENDING, db_index=True)
 
+    source = models.CharField(
+        max_length=16, choices=SOURCES, default=SOURCE_UNKNOWN,
+        help_text="How the release FIRST arrived; re-registering the same "
+                  "version never restamps it.")
+
     created_by = models.ForeignKey(
         "account.User",
         related_name="web_app_releases",
@@ -90,17 +110,19 @@ class WebAppRelease(models.Model, MojoModel):
         # `status` is a promotion decision. Leaving it savable would let a
         # manage_dns holder mark a pending release live with a field write,
         # bypassing both the manifest verification and the manage_webapp gate.
+        # `source` is evidence of arrival for the same reason: a writable
+        # provenance stamp is not provenance.
         NO_SAVE_FIELDS = [
             "id", "pk", "created", "uuid",
-            "webapp", "version", "manifest", "status", "created_by",
+            "webapp", "version", "manifest", "status", "source", "created_by",
         ]
         GRAPHS = {
             "basic": {
-                "fields": ["id", "version", "status", "created"],
+                "fields": ["id", "version", "status", "source", "created"],
             },
             "default": {
                 "fields": [
-                    "id", "created", "modified", "version", "status",
+                    "id", "created", "modified", "version", "status", "source",
                 ],
                 "extra": ["file_count"],
                 "graphs": {

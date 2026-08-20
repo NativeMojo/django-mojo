@@ -47,6 +47,26 @@ its checkout, dependency install, tests, and build. Using the full Git commit
 SHA as `version` makes reruns idempotent: the same manifest is reused, while a
 different artifact under the same SHA is rejected.
 
+## How the release is labelled
+
+`deploy.py` adds one additive key — `"source": "github"` — to the register
+call, and only when `GITHUB_ACTIONS=true`, the variable the runner sets. Run
+the same script from a laptop and the key is absent, so a hand-run stays
+honestly labelled.
+
+The marker is a hint, never an authority. The platform derives the source
+class from the credential itself and only lets this key refine it: it becomes
+`github` when a key-authenticated call registers against a site with a GitHub
+repository configured, and `api` otherwise. An interactive browser session is
+always `upload`, whatever it sends. No caller can label a release with a class
+its credential did not already prove.
+
+**A pinned or vendored copy reads "via CLI or API".** The marker lives in
+`deploy.py`, so workflows on `@v1`, on a forked copy, or on hand-rolled CI of
+their own keep registering without it — those releases are labelled `api`,
+which is true. Moving to `@main`, or to a `@v1` tag that includes this change,
+is what starts the GitHub labelling.
+
 Verified completion always starts deployment. There is no separate promotion
 approval or manual hold: the protected GitHub branch is the human control
 plane. To roll back intentionally, rerun the workflow for the older commit.
