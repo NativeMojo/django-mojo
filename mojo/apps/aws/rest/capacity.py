@@ -141,9 +141,10 @@ def on_capacity_apply(request):
         raise me.ValueException(f"Unknown capacity action '{action}'")
 
     # Fleet-wide actions have no resource of their own — the server derives
-    # the targets — so their typed echo is the action word the panel showed.
-    resource = (data.get("resource") or "").strip() \
-        if action in FLEET_ACTIONS else _text(data, "resource")
+    # the targets — so their typed echo is ALWAYS the action word the panel
+    # showed. A caller-supplied resource is ignored outright: honoring it
+    # would let the caller choose their own echo and steer the audit subject.
+    resource = "" if action in FLEET_ACTIONS else _text(data, "resource")
     expected = resource or action
 
     # Typed confirmation, checked before anything reaches AWS. An operator who

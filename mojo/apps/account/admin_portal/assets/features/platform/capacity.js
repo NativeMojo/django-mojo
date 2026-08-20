@@ -53,6 +53,7 @@ const BLOCKED_COPY = {
   no_fleet_nodes: 'no node is registered behind a load balancer',
   fleet_unavailable: 'the serving tier could not be read, so the fleet is unknown — not empty',
   addresses_unavailable: 'the region\'s Elastic IPs could not be read',
+  policy_unavailable: 'the stable-IPs policy could not be read — its state is unknown, not off',
 };
 
 const PHASE_COPY = {
@@ -535,12 +536,16 @@ export async function capacityPanel(ctx, signal = null) {
     const running = progressRow(ENABLE_STABLE_IPS, 'Stable outbound IPs', '')
       || progressRow(DISABLE_STABLE_IPS, 'Stable outbound IPs', '');
     if (running) return [running];
-    // A failed read is UNKNOWN, never an empty allowlist rendered as canonical.
-    if (!egress.available) {
+    // A failed read is UNKNOWN, never an empty allowlist — or an "off" —
+    // rendered as canonical.
+    if (!egress.available || egress.policy_available === false) {
       return [statusRow({tone: 'warn', name: 'Stable outbound IPs',
         value: 'Unknown',
         detail: egress.fleet_available === false
-          ? BLOCKED_COPY.fleet_unavailable : BLOCKED_COPY.addresses_unavailable,
+          ? BLOCKED_COPY.fleet_unavailable
+          : egress.addresses_available === false
+            ? BLOCKED_COPY.addresses_unavailable
+            : BLOCKED_COPY.policy_unavailable,
         detailTone: 'warning'})];
     }
     const rows = [];

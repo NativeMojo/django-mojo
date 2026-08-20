@@ -1051,3 +1051,104 @@ def test_rest_stable_ips_echo_and_assign(opts):
         assert audit_actions == ["aws_capacity_enable_stable_ips",
                                  "aws_capacity_disable_stable_ips"], \
             f"the audit trail actions are wrong: {audit_actions!r}"
+
+
+# ── security-review fold-ins ────────────────────────────────────────────────
+
+@th.django_unit_test("an unreadable policy renders Unknown, never a canonical 'off'")
+def test_report_policy_read_degrades(opts):
+    from mojo.apps.aws.services import capacity
+
+    ec2 = _ec2_client(
+        instances=[_instance(NODE_A, "mojo-api-a", public_ip=IP_A)],
+        addresses=[_eip(ALLOC_A, IP_A, instance_id=NODE_A,
+                        tags=_stable_tags())])
+    with mock.patch.object(capacity, "_egress_enabled",
+                           side_effect=RuntimeError("db down")):
+        envelope = _report(ec2=ec2)
+    egress = envelope["egress"]
+    assert egress["policy_available"] is False and egress["enabled"] is False, \
+        f"a failed policy read did not degrade: {egress!r}"
+    assert egress["addresses"] == [IP_A], \
+        "the AWS-side facts must still render — only the policy is unknown"
+    for name in ("enable_stable_ips", "disable_stable_ips"):
+        assert envelope["actions"][name] == {
+            "offered": False, "blocked_reason": "policy_unavailable"}, \
+            f"{name} was not blocked on the unreadable policy: " \
+            f"{envelope['actions'][name]!r}"
+
+
+@th.django_unit_test("a stale explicit assignment is dropped, never tagged")
+def test_attach_stale_assignment_never_tags(opts):
+    from mojo.apps.aws.services import capacity
+    from mojo.helpers.aws import ec2 as ec2_helper
+
+    # The assignment names an allocation that is no longer unassociated at
+    # job time. It must not be tagged — it may be somebody else's now — and
+    # the node falls through to a fresh allocation.
+    view = {"by_instance": {}, "attached": [], "unassociated": [],
+            "reserved": [], "pending": [NODE_B]}
+    with mock.patch.object(ec2_helper, "tag_resources") as tagged, \
+            mock.patch.object(ec2_helper, "allocate_address",
+                              return_value={"allocation_id": ALLOC_B,
+                                            "public_ip": IP_B}) as allocated, \
+            mock.patch.object(ec2_helper, "associate_address") as associated:
+        allocation, public_ip = capacity._attach_stable_ip(
+            NODE_B, "mojo-api-b", view, {NODE_B: ALLOC_FOREIGN})
+    assert tagged.call_count == 0, \
+        "a reservation that stopped being free was still tagged as ours"
+    assert allocated.call_count == 1 and allocation == ALLOC_B, \
+        f"the stale assignment did not fall through to allocation: " \
+        f"{allocation!r}"
+    assert associated.call_args[0] == (ALLOC_B, NODE_B), \
+        f"the fresh allocation was not the one associated: " \
+        f"{associated.call_args!r}"
+
+
+@th.django_unit_test("disable refuses an empty serving read when addresses were attached")
+def test_disable_refuses_empty_fleet_with_expected_attachments(opts):
+    from mojo.apps.aws.services import capacity
+    from mojo.helpers.aws import ec2 as ec2_helper
+
+    record = _stable_record(capacity, capacity.ACTION_DISABLE_STABLE_IPS,
+                            detail={"fleet": [NODE_A], "attached": [ALLOC_A]})
+    empty = {"balancers": [], "groups": []}
+    with mock.patch.object(capacity, "_serving", return_value=empty), \
+            mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
+            mock.patch.object(capacity, "invalidate"), \
+            mock.patch.object(capacity, "_release"), \
+            mock.patch.object(ec2_helper, "address_map") as read, \
+            mock.patch.object(ec2_helper, "disassociate_address") as detached:
+        capacity._run_disable_stable_ips(record)
+    assert record["state"] == "failed" \
+        and record["error_code"] == "address_unverified", \
+        f"an empty serving read laundered the detach: {record!r}"
+    assert read.call_count == 0 and detached.call_count == 0, \
+        "the guard must fire before any address read or mutation"
+
+
+@th.django_unit_test("a caller-supplied resource cannot steer a fleet action's echo or audit")
+def test_rest_fleet_resource_is_ignored(opts):
+    from mojo import errors as me
+    from mojo.apps.aws.services import capacity
+
+    view = _view("on_capacity_apply")
+    actor = _superuser()
+    with mock.patch.object(capacity, "apply") as applied:
+        # The old shape — echo whatever `resource` says — must be dead: the
+        # typed echo is the action word, full stop.
+        with th.assert_raises(me.ValueException):
+            view(_request(actor, action="disable_stable_ips", resource="x",
+                          confirm_resource="x"))
+        assert applied.call_count == 0, \
+            "a steered echo still reached the apply service"
+
+        applied.return_value = {"id": "op-9"}
+        with mock.patch("mojo.apps.account.services.admin_platform.audit_after_commit") as audited:
+            view(_request(actor, action="disable_stable_ips", resource="x",
+                          confirm_resource="disable_stable_ips"))
+        assert applied.call_args[0][2] == "", \
+            f"the ignored resource leaked into the service call: " \
+            f"{applied.call_args!r}"
+        assert audited.call_args[0][2] == "fleet:op-9", \
+            f"the audit subject was steerable: {audited.call_args!r}"

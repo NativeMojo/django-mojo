@@ -68,6 +68,7 @@ retry.
       "available": true,
       "fleet_available": true,
       "addresses_available": true,
+      "policy_available": true,
       "addresses": ["203.0.113.10", "203.0.113.11"],
       "attached": [
         {"instance": "i-0a1b…", "public_ip": "203.0.113.10",
@@ -126,7 +127,10 @@ actually attached to fleet nodes, with unmanaged ones labelled
 enable converges exactly those); `reserved` are kept, unattached addresses a
 future enable reuses first. `available` requires BOTH the serving read and the
 addresses read: when either failed, the fleet is **unknown, not empty**, and a
-client must render the list as unavailable — never as an empty allowlist. Cost
+client must render the list as unavailable — never as an empty allowlist. The
+policy read gets the same honesty: when `policy_available` is false, `enabled`
+is unknown — render "Unknown", never "off" — and both actions come back
+blocked `policy_unavailable`. Cost
 has a sign worth stating correctly: AWS bills every public IPv4 identically,
 so an ATTACHED stable address replaces the node's auto-assigned-IPv4 charge
 (enable is net ~zero/month), and the additive `monthly_usd_per_address`
@@ -265,7 +269,7 @@ operation record instead.
 | `address_not_eligible` | 409 | An explicitly assigned allocation is associated, unknown, or carries no django-mojo ownership tag. The remedy (tag it in the console) is in the message |
 | `capacity_in_progress` | 409 | Another capacity change holds the single-flight claim. **All adds share one claim; enable and disable of stable IPs share another** |
 | `cache_unavailable` | 503 | The coordination cache cannot rule out a concurrent change. Retry shortly |
-| `dispatch_failed` | 503 | No job runner accepted the operation. **Nothing was changed** |
+| `dispatch_failed` | 503 | No job runner accepted the operation. **Nothing was changed** — except for the stable-IPs actions, where the durable policy WAS recorded before dispatch; their message says so, and re-running the action converges |
 | `provider_denied` | 403 | AWS refused. `data.failure.iam_action` names the missing grant — and nothing else |
 | `provider_unavailable` | 503 | A retryable AWS failure |
 | `provider_error` | 502 | Any other AWS failure |

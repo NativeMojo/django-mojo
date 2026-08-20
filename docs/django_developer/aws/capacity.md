@@ -291,6 +291,23 @@ grant for a number AWS enforces anyway; `AddressLimitExceeded` maps to
 `address_quota` naming how many nodes were addressed and how many remain
 (default quota: 5 public IPv4s per region).
 
+### Hardening details (from the security review)
+
+- The report's policy read carries its own availability flag
+  (`egress.policy_available`): an unreadable policy renders "Unknown", never a
+  canonical "off", and blocks both actions (`policy_unavailable`).
+- A fleet action's typed echo is ALWAYS the action word — a caller-supplied
+  `resource` is ignored outright, so neither the echo nor the audit subject
+  (`fleet:<operation id>`) can be steered by the request body.
+- An explicitly assigned reservation that stopped being free by job time is
+  dropped, never tagged — tags are ownership, and stamping them on what may
+  now be somebody else's address would make every later reuse pass wrong.
+- A disable whose fresh serving read comes back EMPTY while addresses were
+  attached at request time fails `address_unverified` instead of reporting a
+  verified-sounding "off".
+- A dispatch failure on these two actions says the truth: the policy IS
+  recorded, only the convergence did not start.
+
 ### Boundaries
 
 - The fleet is what `serving_map()` shows: **registered** instances. A fleet

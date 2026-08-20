@@ -485,6 +485,21 @@ def _egress_enabled(strict=False):
     return isinstance(value, dict) and value.get("enabled") is True
 
 
+def _egress_policy():
+    """``(enabled, available)`` — the report's form of the policy read.
+
+    The AWS legs publish ``fleet_available``/``addresses_available`` so a
+    failed read renders as unknown; the policy read gets the same honesty. A
+    DB blip must not paint "off" beside attached addresses as if it were a
+    canonical answer.
+    """
+    try:
+        return _egress_enabled(strict=True), True
+    except Exception:
+        logger.warning("capacity: stable-ips policy could not be read")
+        return False, False
+
+
 def _stable_tagged(tags):
     """Does this feature manage the address? Mutation is gated on this tag."""
     return (tags or {}).get(STABLE_EIP_TAG) == STABLE_EIP_TAG_VALUE
@@ -738,14 +753,16 @@ def _offers(envelope):
     egress = envelope.get("egress") or {}
 
     def egress_block():
-        # Order matters: unknown fleet is not an empty fleet, and neither read
-        # failing may render an empty allowlist as a canonical answer.
+        # Order matters: unknown fleet is not an empty fleet, and no failed
+        # read — AWS or policy — may render its answer as canonical.
         if external:
             return infrastructure.ERROR_CODE
         if not egress.get("fleet_available"):
             return "fleet_unavailable"
         if not egress.get("addresses_available"):
             return "addresses_unavailable"
+        if not egress.get("policy_available"):
+            return "policy_unavailable"
         return None
 
     enable_block = egress_block()
@@ -842,11 +859,13 @@ def _egress_envelope(serving, addresses):
     view = _address_view(fleet, addresses) if (
         fleet_available and addresses_available) else {
         "attached": [], "reserved": [], "pending": []}
+    enabled, policy_available = _egress_policy()
     return {
-        "enabled": _egress_enabled(),
+        "enabled": enabled,
         "available": fleet_available and addresses_available,
         "fleet_available": fleet_available,
         "addresses_available": addresses_available,
+        "policy_available": policy_available,
         "addresses": sorted({row.get("public_ip")
                              for row in view["attached"]
                              if row.get("public_ip")}),
@@ -1341,7 +1360,21 @@ def _apply_stable_ips(actor, action, assign=None, elbv2_client=None,
         _release(claim)
         raise
     record = _new_operation(action, "fleet", actor, claim, detail)
-    _dispatch(record)
+    try:
+        _dispatch(record)
+    except CapacityError as err:
+        if err.error_code != "dispatch_failed":
+            raise
+        # The generic dispatch refusal says "nothing was changed" — false
+        # here, because the durable policy flipped a line ago and the add_node
+        # admission gate already honors it. Say what actually happened.
+        state = ("enabled" if action == ACTION_ENABLE_STABLE_IPS
+                 else "disabled")
+        raise CapacityError(
+            f"The stable-outbound-IPs policy IS recorded ({state}), but no "
+            f"job runner accepted the convergence, so no address was "
+            f"attached or detached. Run the action again to converge.",
+            "dispatch_failed", 503) from None
     return record
 
 
@@ -1738,17 +1771,24 @@ def _attach_stable_ip(instance_id, name, view, assignments=None):
     if allocation:
         row = next((r for r in view["unassociated"]
                     if r.get("allocation_id") == allocation), None)
-        public_ip = (row or {}).get("public_ip")
-        ec2_helper.tag_resources([allocation], _stable_ip_tags(name))
-    elif view["reserved"]:
-        chosen = view["reserved"].pop(0)
-        allocation = chosen.get("allocation_id")
-        public_ip = chosen.get("public_ip")
-        ec2_helper.tag_resources([allocation], _stable_ip_tags(name))
-    else:
-        allocated = ec2_helper.allocate_address(_stable_ip_tags(name))
-        allocation = allocated.get("allocation_id")
-        public_ip = allocated.get("public_ip")
+        if row is None:
+            # The named reservation stopped being free between the
+            # request-time check and this fresh read. Never tag what may now
+            # be somebody else's — drop the assignment and fall through.
+            allocation = None
+        else:
+            public_ip = row.get("public_ip")
+            ec2_helper.tag_resources([allocation], _stable_ip_tags(name))
+    if allocation is None:
+        if view["reserved"]:
+            chosen = view["reserved"].pop(0)
+            allocation = chosen.get("allocation_id")
+            public_ip = chosen.get("public_ip")
+            ec2_helper.tag_resources([allocation], _stable_ip_tags(name))
+        else:
+            allocated = ec2_helper.allocate_address(_stable_ip_tags(name))
+            allocation = allocated.get("allocation_id")
+            public_ip = allocated.get("public_ip")
     try:
         ec2_helper.associate_address(allocation, instance_id)
     except ProviderCallError as err:
@@ -1884,6 +1924,16 @@ def _run_disable_stable_ips(record):
 def _disable_stable_ips(record):
     serving = _serving()
     fleet = _fleet_ids(serving)
+    expected = record["detail"].get("attached") or []
+    if not fleet and expected:
+        # A successful-but-empty serving read must not launder a detach:
+        # addresses were attached at request time, nothing was touched, and
+        # "off" would be a verified-sounding lie.
+        return _fail(record, "address_unverified",
+                     f"The serving tier now reports no registered node, but "
+                     f"{len(expected)} managed address(es) were attached when "
+                     f"this was requested. Nothing was detached — re-read the "
+                     f"capacity report and run the disable again.")
     view = _address_view(fleet, ec2_helper.address_map())
     managed = [row for row in view["attached"] if row.get("managed")]
     _advance(record, "detaching",
