@@ -1639,9 +1639,14 @@ def test_apply_repairs_missing_system_bucket_direct_upload_cors(opts):
     }, "GetBucketCors")
 
     try:
-        report = aws_check.AWSCheckRunner(
-            clients={"sts": _verified_sts(), "s3": s3}, apply=True, yes=True,
-        ).run(["s3"])
+        # Pin the release-bucket sweep off: this test asserts the EXACT number
+        # of put_bucket_cors calls the fileman repair makes, and another
+        # module's EDGE_RELEASE_BUCKETS Setting in the shared DB would add its
+        # own put. The release sweep has its own tests below.
+        with mock.patch.object(aws_check, "_release_buckets", return_value=[]):
+            report = aws_check.AWSCheckRunner(
+                clients={"sts": _verified_sts(), "s3": s3}, apply=True, yes=True,
+            ).run(["s3"])
         manager.refresh_from_db()
         configured = [item for item in report["items"] if item["code"] == "bucket.cors_configured"]
         assert configured and configured[0]["status"] == "pass", \
@@ -1651,6 +1656,120 @@ def test_apply_repairs_missing_system_bucket_direct_upload_cors(opts):
         s3.put_bucket_cors.assert_called_once()
     finally:
         manager.delete()
+
+
+@th.django_unit_test()
+def test_release_bucket_cors_present_passes_without_mutation(opts):
+    from mojo.apps.fileman.models import FileManager
+    from mojo.apps.aws.services import aws_check
+
+    FileManager.objects.filter(
+        user__isnull=True, group__isnull=True, backend_type=FileManager.AWS_S3,
+    ).delete()
+    s3 = mock.Mock()
+    s3.get_bucket_cors.return_value = {"CORSRules": [{
+        "AllowedOrigins": ["https://api.example.com"],
+        "AllowedMethods": ["PUT"],
+        "AllowedHeaders": ["content-type", "x-amz-checksum-sha256"],
+        "ExposeHeaders": ["ETag"],
+    }]}
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()), \
+            mock.patch.object(aws_check, "_release_buckets",
+                              return_value=["release-media"]):
+        report = aws_check.AWSCheckRunner(
+            clients={"s3": s3, "sts": _verified_sts()}).run(["s3"])
+    item = next(row for row in report["items"] if row["code"] == "release_bucket.cors")
+    assert item["status"] == "pass", \
+        f"a covering release-bucket rule must pass, got {item}"
+    assert item["details"]["allowed_origin"] == "https://api.example.com", \
+        f"the checked origin must be the platform's BASE_URL origin: {item}"
+    s3.put_bucket_cors.assert_not_called()
+
+
+@th.django_unit_test()
+def test_release_bucket_cors_missing_warns_without_apply(opts):
+    from mojo.apps.fileman.models import FileManager
+    from mojo.apps.aws.services import aws_check
+
+    FileManager.objects.filter(
+        user__isnull=True, group__isnull=True, backend_type=FileManager.AWS_S3,
+    ).delete()
+    s3 = mock.Mock()
+    s3.get_bucket_cors.side_effect = aws_check.ClientError({
+        "Error": {"Code": "NoSuchCORSConfiguration", "Message": "missing"},
+    }, "GetBucketCors")
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()), \
+            mock.patch.object(aws_check, "_release_buckets",
+                              return_value=["release-media"]):
+        report = aws_check.AWSCheckRunner(
+            clients={"s3": s3, "sts": _verified_sts()}).run(["s3"])
+    item = next(row for row in report["items"] if row["code"] == "release_bucket.cors")
+    assert item["status"] == "warn", \
+        f"a missing release rule must warn on a read-only run, got {item}"
+    assert "--apply" in item["remediation"], \
+        f"the warn must say how to fix it, got {item}"
+    s3.put_bucket_cors.assert_not_called()
+
+
+@th.django_unit_test()
+def test_release_bucket_cors_apply_merges_one_tight_rule(opts):
+    from mojo.apps.fileman.models import FileManager
+    from mojo.apps.aws.services import aws_check
+
+    FileManager.objects.filter(
+        user__isnull=True, group__isnull=True, backend_type=FileManager.AWS_S3,
+    ).delete()
+    unrelated = {"AllowedOrigins": ["https://tenant.example"],
+                 "AllowedMethods": ["GET"], "AllowedHeaders": ["authorization"]}
+    s3 = mock.Mock()
+    s3.get_bucket_cors.return_value = {"CORSRules": [dict(unrelated)]}
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()), \
+            mock.patch.object(aws_check, "_release_buckets",
+                              return_value=["release-media"]):
+        report = aws_check.AWSCheckRunner(
+            clients={"s3": s3, "sts": _verified_sts()}, apply=True, yes=True,
+        ).run(["s3"])
+    configured = next(row for row in report["items"]
+                      if row["code"] == "release_bucket.cors_configured")
+    assert configured["status"] == "pass" and configured["changed"] is True, \
+        f"apply must report the repaired release bucket, got {configured}"
+    call = next(row for row in s3.put_bucket_cors.call_args_list
+                if row.kwargs.get("Bucket") == "release-media")
+    rules = call.kwargs["CORSConfiguration"]["CORSRules"]
+    assert unrelated in rules, \
+        f"the merge must preserve unrelated bucket rules, got {rules}"
+    added = next(rule for rule in rules if rule != unrelated)
+    assert added["AllowedOrigins"] == ["https://api.example.com"], \
+        f"the release rule must allow ONLY the portal origin, got {added}"
+    assert added["AllowedMethods"] == ["PUT"], \
+        f"the release rule must allow PUT and nothing else, got {added}"
+    assert set(added["AllowedHeaders"]) == {"content-type", "x-amz-checksum-sha256"}, \
+        f"the release rule must allow exactly the upload's headers, got {added}"
+    assert added["ExposeHeaders"] == ["ETag"], \
+        f"the release rule must expose ETag to the browser, got {added}"
+
+
+@th.django_unit_test()
+def test_release_bucket_cors_needs_a_base_url_origin(opts):
+    from mojo.apps.fileman.models import FileManager
+    from mojo.apps.aws.services import aws_check
+
+    FileManager.objects.filter(
+        user__isnull=True, group__isnull=True, backend_type=FileManager.AWS_S3,
+    ).delete()
+    s3 = mock.Mock()
+    with mock.patch.object(aws_check, "_setting",
+                           side_effect=_setting_values(BASE_URL="")), \
+            mock.patch.object(aws_check, "_release_buckets",
+                              return_value=["release-media"]):
+        report = aws_check.AWSCheckRunner(
+            clients={"s3": s3, "sts": _verified_sts()}).run(["s3"])
+    item = next(row for row in report["items"]
+                if row["code"] == "release_bucket.cors_origin_unknown")
+    assert item["status"] == "warn", \
+        f"no BASE_URL means the origin is unknowable — warn, got {item}"
+    s3.get_bucket_cors.assert_not_called()
+    s3.put_bucket_cors.assert_not_called()
 
 
 @th.django_unit_test()

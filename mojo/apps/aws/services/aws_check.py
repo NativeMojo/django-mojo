@@ -118,6 +118,69 @@ def _cors_supports_direct_upload(cors, origins):
     return True
 
 
+# Headers the release presigned PUT actually sends: the checksum the URL binds,
+# plus the content type browsers attach to every body.
+RELEASE_UPLOAD_HEADERS = ("content-type", "x-amz-checksum-sha256")
+
+
+def _release_upload_cors_rule(origin):
+    """Browser release uploads from the portal, and nothing wider.
+
+    Deliberately tighter than `_direct_upload_cors_rule`: one origin (the
+    platform's own), PUT only, and only the two headers the presigned PUT
+    sends. The presigned URLs remain the access control — this rule only lets
+    the browser deliver them.
+    """
+    return {
+        "AllowedHeaders": list(RELEASE_UPLOAD_HEADERS),
+        "AllowedMethods": ["PUT"],
+        "AllowedOrigins": [origin],
+        "ExposeHeaders": ["ETag"],
+        "MaxAgeSeconds": 3000,
+    }
+
+
+def _cors_supports_release_upload(cors, origin):
+    required_headers = set(RELEASE_UPLOAD_HEADERS)
+    if not isinstance(cors, list):
+        return False
+    for rule in cors:
+        if not isinstance(rule, dict):
+            continue
+        allowed_origins = rule.get("AllowedOrigins", [])
+        if "*" not in allowed_origins and origin not in allowed_origins:
+            continue
+        methods = {str(value).upper() for value in rule.get("AllowedMethods", [])}
+        if "PUT" not in methods:
+            continue
+        headers = {str(value).lower() for value in rule.get("AllowedHeaders", [])}
+        if "*" in headers or required_headers.issubset(headers):
+            return True
+    return False
+
+
+def _release_buckets():
+    """The declared edge release buckets, through one patchable seam.
+
+    `validators.release_buckets` is the same allowlist the release plane
+    enforces at mint time, so this section can never audit a bucket releases
+    cannot use. Fails closed to [] when edge is absent or unconfigured.
+    """
+    try:
+        from mojo.apps.edge import validators
+        return list(validators.release_buckets())
+    except Exception:
+        return []
+
+
+def _portal_origin():
+    """The one origin browser uploads come from: the platform's BASE_URL."""
+    parsed = urlparse(_setting("BASE_URL", "") or "")
+    if parsed.scheme == "https" and parsed.hostname:
+        return f"https://{parsed.netloc}"
+    return ""
+
+
 def _safe_slug(value):
     return (re.sub(r"[^a-z0-9-]+", "-", (value or "").lower()).strip("-")[:48] or "deployment")
 
@@ -531,10 +594,74 @@ class AWSCheckRunner:
             "s3:PutBucketCORS", mutation=True)
         return True
 
+    def _check_release_bucket_cors(self):
+        """Release buckets must accept the portal's browser uploads.
+
+        The portal's Upload-a-build tab PUTs presigned objects straight to the
+        release bucket from the admin's browser; without a CORS rule for the
+        platform's own origin every one of those PUTs is blocked before it
+        leaves the browser. Same idioms as the direct-upload rule above: read
+        current rules, diff, gate the merge behind _approve, and never replace
+        unrelated rules.
+        """
+        buckets = _release_buckets()
+        if not buckets:
+            return
+        origin = _portal_origin()
+        if not origin:
+            self._add("s3", "warn", "release_bucket.cors_origin_unknown",
+                      "Release buckets cannot be checked for browser uploads without a public HTTPS BASE_URL",
+                      {"buckets": buckets},
+                      remediation="Set the platform's public address (BASE_URL) in System Setup, then rerun.")
+            return
+        s3 = self._client("s3")
+        for bucket in buckets:
+            try:
+                try:
+                    cors = self._provider_call(
+                        "s3.get_bucket_cors",
+                        lambda bucket=bucket: s3.get_bucket_cors(Bucket=bucket),
+                        "s3:GetBucketCORS").get("CORSRules", [])
+                except ProviderCallError as exc:
+                    if exc.provider_code != "NoSuchCORSConfiguration":
+                        raise
+                    cors = []
+                if not isinstance(cors, list):
+                    cors = []
+                if _cors_supports_release_upload(cors, origin):
+                    self._add("s3", "pass", "release_bucket.cors",
+                              "Release bucket accepts browser uploads from this portal",
+                              {"bucket": bucket, "allowed_origin": origin, "rule_count": len(cors)})
+                elif self.apply and self._approve(
+                        f"Allow browser release uploads from {origin} on {bucket}?"):
+                    rules = list(cors)
+                    rules.append(_release_upload_cors_rule(origin))
+                    self._provider_call(
+                        "s3.put_bucket_cors",
+                        lambda bucket=bucket, rules=rules: s3.put_bucket_cors(
+                            Bucket=bucket, CORSConfiguration={"CORSRules": rules}),
+                        "s3:PutBucketCORS", mutation=True)
+                    self._add("s3", "pass", "release_bucket.cors_configured",
+                              "Configured release-bucket CORS for browser uploads",
+                              {"bucket": bucket, "allowed_origin": origin}, changed=True)
+                else:
+                    self._add("s3", "warn", "release_bucket.cors",
+                              "Release bucket blocks browser uploads from this portal",
+                              {"bucket": bucket, "allowed_origin": origin, "rule_count": len(cors)},
+                              remediation="Rerun with --apply --section s3 to allow uploads from the portal.")
+            except ProviderCallError as exc:
+                self._add("s3", "fail", "release_bucket.cors", exc, {
+                    "bucket": bucket, "aws_code": exc.provider_code,
+                    "iam_action": exc.iam_action})
+
     def check_s3(self):
         from mojo.apps.fileman.models import FileManager
         if self.apply and not self._ensure_mutation_identity("s3"):
             return
+        # Release buckets are audited before the system FileManager: they are
+        # independent of it, and the fileman path's early returns must not
+        # hide a blocked release bucket.
+        self._check_release_bucket_cors()
         managers = list(FileManager.objects.filter(
             user__isnull=True, group__isnull=True, is_active=True,
             is_default=True, backend_type=FileManager.AWS_S3,

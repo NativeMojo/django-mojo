@@ -226,10 +226,264 @@ function rollbackTo(app, release, reload) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Upload a build: pick or drop the built folder, hash every file right here
+// (crypto.subtle sha256), PUT each one straight to storage with the exact
+// x-amz-checksum-sha256 header its signed URL binds, mark the release
+// complete, and watch the deploy land — the same three calls CI makes.
+// ---------------------------------------------------------------------------
+
+// The server refuses more than this per release (its EDGE_RELEASE_MAX_FILES /
+// EDGE_RELEASE_MAX_BYTES defaults); refusing here first saves the hashing.
+const UPLOAD_LIMITS = {files: 5000, bytes: 1073741824};
+const STORAGE_BLOCKED_COPY = 'The browser was blocked from uploading directly to storage — run the storage checkup in System Setup (bucket sharing rules), then try again.';
+const DEPLOY_POLL_MS = 1800;
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
+  if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GB`;
+  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+// upload-YYYYMMDD-HHMMSS: unique enough per hand deploy, and within the
+// server's version charset (letters, digits, ., _, -).
+function defaultUploadVersion() {
+  return `upload-${new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-')}`;
+}
+
+async function sha256Hex(file) {
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Manifest paths are relative to the picked root: backslashes normalized to
+// forward slashes, leading ./ and / stripped.
+function normalizeRelPath(raw) {
+  let path = String(raw || '').replace(/\\/g, '/');
+  while (path.startsWith('./')) path = path.slice(2);
+  return path.replace(/^\/+/, '');
+}
+
+// A folder pick carries webkitRelativePath ("dist/assets/app.js"); the picked
+// folder itself is the root, so its own name is not part of any path.
+function pickedFiles(input) {
+  return [...(input.files || [])].map((file) => {
+    let path = normalizeRelPath(file.webkitRelativePath || file.name);
+    if (file.webkitRelativePath && path.includes('/')) path = path.slice(path.indexOf('/') + 1);
+    return {file, path};
+  });
+}
+
+async function droppedFiles(dataTransfer) {
+  const entries = [...(dataTransfer.items || [])]
+    .map((item) => (item.webkitGetAsEntry ? item.webkitGetAsEntry() : null))
+    .filter(Boolean);
+  if (!entries.length) {
+    return [...(dataTransfer.files || [])].map((file) => ({file, path: normalizeRelPath(file.name)}));
+  }
+  const out = [];
+  async function walk(entry, base) {
+    if (entry.isFile) {
+      const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+      out.push({file, path: normalizeRelPath(base ? `${base}/${entry.name}` : entry.name)});
+      return;
+    }
+    if (!entry.isDirectory) return;
+    const reader = entry.createReader();
+    let batch;
+    do {
+      batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+      for (const child of batch) await walk(child, base ? `${base}/${entry.name}` : entry.name);
+    } while (batch.length);
+  }
+  for (const entry of entries) await walk(entry, '');
+  // One dropped folder is the picked root — same rule as the folder picker.
+  if (entries.length === 1 && entries[0].isDirectory) {
+    const prefix = `${normalizeRelPath(entries[0].name)}/`;
+    return out.map((row) => ({
+      file: row.file,
+      path: row.path.startsWith(prefix) ? row.path.slice(prefix.length) : row.path,
+    }));
+  }
+  return out;
+}
+
+function uploadPanel(ctx, app, summary, reload) {
+  const manage = ctx.capabilities.manage_webapps;
+  const panel = h('div', {class: 'setup-block upload-build'});
+  if (!manage) {
+    panel.append(h('p', {class: 'muted', text: 'You don’t have permission to deploy this app.'}));
+    return panel;
+  }
+  const state = {files: [], busy: false};
+  const message = h('div', {class: 'form-message', role: 'alert'});
+  const progress = h('p', {class: 'muted small', role: 'status'});
+  const chosen = h('p', {class: 'muted small', text: 'Nothing picked yet.'});
+  const version = h('input', {value: defaultUploadVersion(), autocomplete: 'off', spellcheck: 'false'});
+  const deploy = h('button', {class: 'button primary', disabled: true}, icon('deploy'), 'Upload and deploy');
+
+  const totalBytes = () => state.files.reduce((sum, row) => sum + row.file.size, 0);
+  const overCaps = () => state.files.length > UPLOAD_LIMITS.files || totalBytes() > UPLOAD_LIMITS.bytes;
+  const capsMessage = () =>
+    `Too big to deploy: the server accepts at most ${UPLOAD_LIMITS.files.toLocaleString()} files and ` +
+    `${formatBytes(UPLOAD_LIMITS.bytes)} per release. This pick is ` +
+    `${state.files.length.toLocaleString()} files, ${formatBytes(totalBytes())}.`;
+  const setProgress = (text) => { progress.textContent = text; };
+
+  function fail(error) {
+    state.busy = false;
+    deploy.disabled = !state.files.length || overCaps();
+    setProgress('');
+    if (error?.storageBlocked || error?.name === 'TypeError') {
+      message.replaceChildren(
+        document.createTextNode(`${STORAGE_BLOCKED_COPY} `),
+        h('a', {href: routeHref('setup'), text: 'Open System Setup'}));
+      return;
+    }
+    message.textContent = error?.message || 'Something went wrong. Try again.';
+  }
+
+  function takeFiles(rows) {
+    if (state.busy) return;
+    const seen = new Map();
+    (rows || []).forEach((row) => { if (row.file && row.path) seen.set(row.path, row); });
+    if (!seen.size) {
+      message.textContent = 'Nothing usable was picked. Choose the folder your build produced.';
+      return;
+    }
+    state.files = [...seen.values()];
+    chosen.textContent = `${state.files.length.toLocaleString()} files, ${formatBytes(totalBytes())}.`;
+    message.textContent = '';
+    setProgress('');
+    if (overCaps()) { message.textContent = capsMessage(); deploy.disabled = true; return; }
+    deploy.disabled = false;
+  }
+
+  // Polls /api/edge/release/deployment/<id> the way the app pages poll a run:
+  // a setTimeout loop that stops when the panel leaves the document.
+  function watchDeployment(deploymentId, versionName) {
+    return new Promise((resolve) => {
+      const step = async () => {
+        if (!panel.isConnected) { resolve(); return; }
+        let status = null;
+        try {
+          status = await api(`/api/edge/release/deployment/${encodeURIComponent(deploymentId)}`);
+        } catch (_) { /* keep the last progress line; the next tick retries */ }
+        if (status?.terminal) {
+          state.busy = false;
+          deploy.disabled = false;
+          if (status.success) {
+            setProgress('');
+            progress.replaceChildren(
+              document.createTextNode(`Deployed — ${status.version || versionName} is live. `),
+              h('a', {href: routeHref('deployments', {webapp: app.id, tab: 'deploys'}), text: 'See your deploys'}));
+          } else {
+            fail(new Error(status.detail || `The deploy finished as ${String(status.status).replace(/_/g, ' ')}. Try again, or roll back from the Deploys tab.`));
+          }
+          resolve();
+          return;
+        }
+        if (status) setProgress(`Deploying to your fleet — ${String(status.status).replace(/_/g, ' ')}…`);
+        setTimeout(step, DEPLOY_POLL_MS);
+      };
+      step();
+    });
+  }
+
+  async function run() {
+    if (state.busy || !state.files.length) return;
+    message.textContent = '';
+    const name = version.value.trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(name)) {
+      message.textContent = 'Version names use letters, digits, dots, dashes and underscores.';
+      return;
+    }
+    if (overCaps()) { message.textContent = capsMessage(); return; }
+    state.busy = true;
+    deploy.disabled = true;
+    try {
+      const manifest = [];
+      for (let i = 0; i < state.files.length; i += 1) {
+        setProgress(`Reading file ${i + 1} of ${state.files.length}…`);
+        const row = state.files[i];
+        manifest.push({path: row.path, sha256: await sha256Hex(row.file), size: row.file.size});
+      }
+      setProgress('Registering the release…');
+      const registered = await api('/api/edge/release', {
+        method: 'POST', body: JSON.stringify({webapp: app.id, version: name, manifest})});
+      // The register response carries one signed URL per file plus the exact
+      // headers that URL was bound to (x-amz-checksum-sha256). An already
+      // verified version returns no uploads and goes straight to complete.
+      const uploads = registered.uploads || [];
+      const byPath = new Map(state.files.map((row) => [row.path, row.file]));
+      for (let i = 0; i < uploads.length; i += 1) {
+        const upload = uploads[i];
+        setProgress(`Uploading file ${i + 1} of ${uploads.length}…`);
+        let response;
+        try {
+          response = await fetch(upload.url, {
+            method: 'PUT', headers: upload.headers || {}, body: byPath.get(upload.path)});
+        } catch (error) {
+          const blocked = new Error(STORAGE_BLOCKED_COPY);
+          blocked.storageBlocked = true;
+          throw blocked;
+        }
+        if (!response.ok) {
+          throw new Error(`Storage refused ${upload.path} (${response.status}). Try again.`);
+        }
+      }
+      setProgress('Checking every file landed…');
+      const completed = await api('/api/edge/release/complete', {
+        method: 'POST', body: JSON.stringify({release: registered.release})});
+      setProgress('Deploying to your fleet…');
+      await watchDeployment(completed.deployment, name);
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  const folderInput = h('input', {type: 'file', webkitdirectory: true, multiple: true, hidden: true,
+    onchange: () => takeFiles(pickedFiles(folderInput))});
+  const filesInput = h('input', {type: 'file', multiple: true, hidden: true,
+    onchange: () => takeFiles(pickedFiles(filesInput))});
+  const drop = h('div', {class: 'upload-drop', role: 'button', tabindex: '0',
+    'aria-label': 'Drop your built site folder here, or press Enter to pick it',
+    ondragover: (event) => { event.preventDefault(); drop.classList.add('active'); },
+    ondragleave: () => drop.classList.remove('active'),
+    ondrop: async (event) => {
+      event.preventDefault();
+      drop.classList.remove('active');
+      if (!state.busy) takeFiles(await droppedFiles(event.dataTransfer));
+    },
+    onclick: () => { if (!state.busy) folderInput.click(); },
+    onkeydown: (event) => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (!state.busy) folderInput.click(); }
+    }},
+  icon('deploy'),
+  h('strong', {text: 'Drop your built site folder here'}),
+  h('p', {class: 'muted small', text: 'or click to pick the folder'}));
+  deploy.addEventListener('click', run);
+
+  panel.append(
+    h('p', {text: 'Deploy by hand: pick the folder your build produced, and it goes live the same way a CI deploy does.'}),
+    drop, folderInput, filesInput,
+    h('p', {class: 'muted small'}, 'Prefer files over a folder? ',
+      h('a', {href: '#', onclick: (event) => { event.preventDefault(); if (!state.busy) filesInput.click(); }, text: 'Pick individual files'}), '.'),
+    chosen,
+    h('label', {class: 'field'}, h('span', {text: 'Version name'}), version),
+    h('p', {class: 'muted small', text:
+      `The server accepts at most ${UPLOAD_LIMITS.files.toLocaleString()} files and ${formatBytes(UPLOAD_LIMITS.bytes)} per release.`}),
+    h('div', {class: 'row-actions'}, deploy),
+    progress, message);
+  return panel;
+}
+
 // "Set up deploys": the ways a first (or next) build actually reaches this
 // app. GitHub Actions is the default because it is the one we can generate
-// outright; the other two stay honest — the upload panel promises only what
-// exists today, and the API panel names the three calls any CI can make.
+// outright; the upload panel deploys a build straight from the browser, and
+// the API panel names the three calls any CI can make.
 const SETUP_WAYS = [
   ['github', 'GitHub Actions'], ['upload', 'Upload a build'],
   ['api', 'Any other CI / API'],
@@ -246,9 +500,7 @@ function setupPanel(ctx, app, summary, reload) {
   function paint() {
     if (active === 'github') { body.replaceChildren(workflowPanel(app, keyButton())); return; }
     if (active === 'upload') {
-      body.replaceChildren(h('div', {class: 'setup-block'},
-        h('p', {text: 'Uploading a build straight from this page — drag and drop — is landing here shortly.'}),
-        h('p', {class: 'muted small', text: 'Until it does, deploy with GitHub Actions or from any CI using the API instructions in the next tab.'})));
+      body.replaceChildren(uploadPanel(ctx, app, summary, reload));
       return;
     }
     body.replaceChildren(h('div', {class: 'setup-block'},

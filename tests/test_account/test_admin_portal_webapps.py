@@ -384,14 +384,59 @@ def test_webapp_detail_page_contract(opts):
         "the GitHub Actions steps lost the inline reveal-once key creation"
     assert "workflowPanel(app, keyButton())" in page, \
         "the GitHub Actions steps do not reuse the generated workflow panel"
-    # The upload way stays honest until it exists: copy only, no dead controls.
-    upload = page[page.index("if (active === 'upload')"):page.index("if (active === 'upload')") + 500]
-    assert "landing here shortly" in upload and "h('button'" not in upload, \
-        "the upload placeholder grew dead controls or dishonest copy"
+    # The upload way is a real uploader now, not the Phase-2 placeholder.
+    assert "landing here shortly" not in page, \
+        "the upload tab still carries its placeholder copy"
+    assert "uploadPanel(ctx, app, summary, reload)" in page, \
+        "the upload sub-tab does not render the real uploader"
     # The list page stays, and every row opens the app page by link.
     assert "startWizard(ctx, render)" in page \
         and "action: {label: 'Open', href: openHref}" in page, \
         "the deployments list no longer links each app to its own page"
+
+
+@th.django_unit_test("the upload tab really uploads: picker, drop zone, hashing, honest limits and failure copy")
+def test_webapp_upload_tab_contract(opts):
+    root = Path(__file__).resolve().parents[2]
+    page = (root / "mojo/apps/account/admin_portal/assets/features/webapps/page.js").read_text()
+
+    upload = page[page.index("function uploadPanel"):page.index("const SETUP_WAYS")]
+    # A folder picker (with a plain multi-file fallback) AND a drag-drop zone.
+    assert "webkitdirectory: true" in upload and "type: 'file', multiple: true" in upload, \
+        "the uploader lost its folder picker or its plain-files fallback"
+    assert "upload-drop" in upload and "ondrop" in upload and "ondragover" in upload, \
+        "the uploader lost its drag-drop zone"
+    # The manifest is built client-side: relative paths, sha256 via
+    # crypto.subtle, size — and each PUT sends the server's exact headers.
+    assert "crypto.subtle.digest('SHA-256'" in page and "webkitRelativePath" in page, \
+        "the manifest is not hashed and path-relativized in the browser"
+    assert "manifest.push({path: row.path, sha256: await sha256Hex(row.file), size: row.file.size})" in upload, \
+        "the register manifest lost its path/sha256/size shape"
+    assert "headers: upload.headers || {}" in upload, \
+        "PUTs do not send the exact headers the signed URL was bound to"
+    assert "x-amz-checksum-sha256" in page, \
+        "the uploader no longer names the checksum header binding"
+    # The three calls, in order, then the deployment poll.
+    assert "api('/api/edge/release', {" in upload and "api('/api/edge/release/complete', {" in upload \
+        and "/api/edge/release/deployment/" in upload, \
+        "the uploader does not make the register/complete/status calls"
+    assert "panel.isConnected" in upload and "setTimeout(step, DEPLOY_POLL_MS)" in upload, \
+        "deployment polling does not stop when the panel is closed"
+    # A blocked PUT (network/CORS-shaped) says what to run, and links Setup.
+    blocked = ("The browser was blocked from uploading directly to storage — "
+               "run the storage checkup in System Setup (bucket sharing rules), "
+               "then try again.")
+    assert blocked in page, \
+        "the storage-blocked failure copy drifted from its contract"
+    assert "storageBlocked" in upload and "error?.name === 'TypeError'" in upload \
+        and "routeHref('setup')" in upload, \
+        "a blocked upload does not route the admin to System Setup"
+    # Cap honesty: the server's own numbers, refused before registering.
+    assert "{files: 5000, bytes: 1073741824}" in page, \
+        "the client caps drifted from the server's EDGE_RELEASE_* defaults"
+    assert "Too big to deploy: the server accepts at most" in upload \
+        and "per release." in upload, \
+        "the caps refusal does not cite the server's limits plainly"
 
 
 @th.django_unit_test("WebApp list rows state their health plainly and the copy carries no plumbing words")

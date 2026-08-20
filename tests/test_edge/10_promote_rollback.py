@@ -352,6 +352,103 @@ def test_promote_moves_the_generation(opts):
         "promoting a different release did not move the generation id"
 
 
+@th.django_unit_test("an interactive session with the WebApp's SAVE_PERMS drives all three release calls")
+def test_session_release_register_complete_status(opts):
+    """The portal's Upload-a-build tab uses the SAME endpoints CI does, on a
+    logged-in session: register -> complete -> deployment status. A holder of
+    the WebApp's SAVE_PERMS (manage_dns) passes _authorized_webapp on all
+    three with no deploy key linked.
+
+    Register runs the real presign path against dummy AWS credentials (pure
+    local signing — the 12_security_review CI happy path's exact pattern).
+    Complete cannot HeadObject offline, so it exercises the idempotent
+    short-circuit: a release already `uploaded` completes without S3 and
+    starts deployment.
+    """
+    import base64
+
+    from tests.test_edge._helpers import make_group_member
+
+    site = make_webapp(opts.group, slug="sessionrel")
+    # A group MEMBER holding manage_dns on the site's own group — the scoped
+    # portal admin, not a global grant and not a superuser.
+    _, member_email, member_pw, _ = make_group_member(
+        ["manage_dns"], group=opts.group)
+    login(opts, member_email, member_pw)
+
+    manifest = make_manifest(["index.html", "app.js"])
+    with th.server_settings(AWS_KEY="AKIAEDGETESTKEY00000",
+                            AWS_SECRET="edge-test-secret-not-real",
+                            AWS_REGION="us-west-2"):
+        resp = opts.client.post("/api/edge/release", json=dict(
+            webapp=site.pk, version="sess1", manifest=manifest))
+
+    assert resp.status_code == 200, (
+        "a manage_dns session could not register a release by hand: "
+        f"{resp.status_code} {resp.body}")
+    data = resp.json.get("data") or {}
+    assert data.get("status") == "pending", f"the release is not pending: {data}"
+    uploads = data.get("uploads") or []
+    assert {u["path"] for u in uploads} == {"index.html", "app.js"}, \
+        f"register did not mint one upload per manifest file: {uploads}"
+    expected = base64.b64encode(bytes.fromhex(manifest[0]["sha256"])).decode()
+    first = next(u for u in uploads if u["path"] == "index.html")
+    assert first["headers"]["x-amz-checksum-sha256"] == expected, (
+        "the response headers do not carry the base64 checksum the signed "
+        f"URL binds: {first['headers']}")
+
+    # Complete an already-verified release: same endpoint, no S3 round trip.
+    verified = make_release(site, "sess2", status="uploaded")
+    completed = opts.client.post("/api/edge/release/complete", json=dict(
+        release=verified.pk))
+    assert completed.status_code == 200, (
+        "a manage_dns session could not complete a verified release: "
+        f"{completed.status_code} {completed.body}")
+    completed_data = completed.json.get("data") or {}
+    deployment_id = completed_data.get("deployment")
+    assert deployment_id, f"completion did not start a deployment: {completed_data}"
+
+    status = opts.client.get(f"/api/edge/release/deployment/{deployment_id}")
+    assert status.status_code == 200, (
+        "a manage_dns session could not read its own deployment status: "
+        f"{status.status_code} {status.body}")
+    status_data = status.json.get("data") or {}
+    assert status_data.get("webapp") == site.pk, \
+        f"the deployment status is for another site: {status_data}"
+    assert "terminal" in status_data and "success" in status_data, \
+        f"the status payload lost the fields the portal polls on: {status_data}"
+
+
+@th.django_unit_test("a session WITHOUT the WebApp's perms gets 404 from all three release calls")
+def test_session_without_perms_is_refused(opts):
+    site = make_webapp(opts.group, slug="sessdenied")
+    verified = make_release(site, "denied1", status="uploaded")
+    from mojo.apps.edge.services import releases
+
+    deployment = releases.deploy_verified(
+        make_release(site, "denied2", status="uploaded"))
+
+    nobody, nobody_email, nobody_pw = make_user([])
+    login(opts, nobody_email, nobody_pw)
+
+    register = opts.client.post("/api/edge/release", json=dict(
+        webapp=site.pk, version="deniedreg", manifest=make_manifest()))
+    assert register.status_code == 404, (
+        "a permission-less session registered a release "
+        f"(status {register.status_code}) — not_found() must hide the site")
+
+    complete = opts.client.post("/api/edge/release/complete", json=dict(
+        release=verified.pk))
+    assert complete.status_code == 404, (
+        "a permission-less session completed a release "
+        f"(status {complete.status_code})")
+
+    status = opts.client.get(f"/api/edge/release/deployment/{deployment.pk}")
+    assert status.status_code == 404, (
+        "a permission-less session read a deployment's fleet status "
+        f"(status {status.status_code})")
+
+
 @th.django_unit_test("status is not writable over REST")
 def test_status_is_not_a_field_write(opts):
     """Otherwise a manage_dns holder marks a pending release live with a field
