@@ -311,8 +311,8 @@ async function manageSection(ctx, app, summary, section, body, reload, current =
   }
   if (section === 'deploys') {
     const currentId = summary.current_release?.id;
-    const releases = listData(await api(`/api/edge/webapp/release?webapp=${encodeURIComponent(app.id)}&sort=-created&size=25`));
-    const deployments = listData(await api(`/api/edge/webapp/deployment?webapp=${encodeURIComponent(app.id)}&graph=list&sort=-created&size=15`));
+    const releases = listData(await api(`/api/edge/release?webapp=${encodeURIComponent(app.id)}&sort=-created&size=25`));
+    const deployments = listData(await api(`/api/edge/deployment?webapp=${encodeURIComponent(app.id)}&graph=list&sort=-created&size=15`));
     if (!current()) return;
     const releaseTable = new TableView({columns: [
       {label: 'Version', render: (r) => h('div', {}, h('strong', {text: r.version}), r.id === currentId ? badge('Live now', 'success') : null)},

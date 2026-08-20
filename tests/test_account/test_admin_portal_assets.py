@@ -496,10 +496,15 @@ def test_webapp_onboarding_asset_contract(opts):
             f"the wizard shows the framework word {banned!r} in visible copy"
 
     # --- day-2 management (page.js) ---
+    # release and deployment are TOP-LEVEL edge resources, not nested under
+    # webapp/ — this list asserted the nested form for both and so pinned a
+    # pair of paths that 404'd, which is how the Deploys tab shipped never
+    # having loaded. test_admin_portal_endpoints.py now audits every one of
+    # these against the registered routes instead of trusting the spelling.
     for endpoint in (
             "/api/edge/webapp/summary",
-            "/api/edge/webapp/deployment",
-            "/api/edge/webapp/release",
+            "/api/edge/deployment",
+            "/api/edge/release",
             "/api/edge/webapp/rollback",
             "/api/edge/webapp/detach_address",
             "/api/edge/webapp/health",
