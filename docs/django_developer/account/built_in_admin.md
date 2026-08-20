@@ -209,6 +209,17 @@ missing, unknown, absolute, backslash, dot, and traversal paths fail closed.
 Add a shared asset to the foundation manifest or a feature asset to that
 feature's manifest. Do not add a second Python allowlist.
 
+Shared browser behaviour is packaged the same way. `assets/components/actions.js`
+carries the portal-wide responsiveness affordances — the pending state, the
+clipboard control, and the loading/error wrapper every panel paints through —
+and is declared in the foundation `manifest.json`. An undeclared asset fails
+silently: `load_manifest` raises only for a *declared but absent* file, so a
+module on disk that nobody declared is simply never served, and the browser
+404s it. See
+[admin_portal/responsiveness.md](admin_portal/responsiveness.md) for the policy,
+the rule about where a pending state may be attached, and the banned-pattern
+test that enforces it.
+
 Use `bin/create_testproject` and test through the real HTTP endpoints. The
 split tests in `tests/test_account/test_admin_portal_*.py` prove anonymous
 gate-only delivery, exact asset denial, cookie attributes, authorized delivery,

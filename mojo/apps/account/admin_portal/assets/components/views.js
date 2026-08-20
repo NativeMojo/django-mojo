@@ -1,4 +1,5 @@
 import {formatDate, h, icon} from '../core.js';
+import {runAction} from './actions.js';
 
 export function skeletonState(message = 'Loading…', rows = 5) {
   return h('div', {class: 'loading skeleton-state state-view', role: 'status', 'aria-label': message},
@@ -24,10 +25,18 @@ export function degradedState(title, copy, action = null) {
     h('strong', {text: title}), h('p', {text: copy}), action);
 }
 
+// `onChange` may be sync or async; either way the clicked tab carries the
+// pending state. It is deliberately NOT held across a repaint: every caller
+// rebuilds its own nav, so a fresh tab bar re-derives the state rather than
+// inheriting a stale one from a node that no longer exists. The tab keeps its
+// label and its caller-owned `active` class — only aria-disabled, .is-pending
+// and the announcement are ours.
 export function sectionTabs({items, active, onChange, label = 'Sections'}) {
   return h('nav', {class: 'tabs', 'aria-label': label}, ...items.map((item) => h('button', {
     type: 'button', class: item.id === active ? 'active' : '', 'aria-current': item.id === active ? 'page' : null,
-    text: item.label, onclick: () => onChange(item.id),
+    text: item.label,
+    onclick: (event) => runAction(event.currentTarget, () => onChange(item.id),
+      {announceLabel: `Loading ${item.label}…`}),
   })));
 }
 

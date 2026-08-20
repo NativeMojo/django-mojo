@@ -244,8 +244,18 @@ export class FormView {
         field.help ? h('small', {text: field.help}) : null);
     });
     const button = h('button', {class: 'button primary', type: 'submit'}, icon('check'), this.submitLabel);
+    // This is the one site whose guard is already right: the disable is
+    // synchronous (routing it through runAction would defer it 150ms), and it
+    // deliberately stays disabled on success, because success normally closes
+    // the modal and re-enabling would re-open a double-submit window. All it
+    // was missing is the announcement — nothing else here changes.
+    const pending = h('div', {class: 'sr-only', role: 'status', 'aria-live': 'polite'});
+    // responsiveness-exempt: FormView already guards correctly — a synchronous
+    // disable (routing it through runAction would defer it 150ms) that stays
+    // disabled on success, because success closes the modal.
     const form = h('form', {onsubmit: async (event) => {
       event.preventDefault(); button.disabled = true; message.textContent = '';
+      pending.textContent = `${this.submitLabel}…`;
       const data = {};
       Object.entries(inputs).forEach(([name, control]) => {
         data[name] = control.getValue ? control.getValue()
@@ -253,8 +263,8 @@ export class FormView {
       });
       try {
         await this.onSubmit(data, Object.fromEntries(Object.entries(inputs).map(([name, control]) => [name, control.input])));
-      } catch (error) { message.textContent = error.message; button.disabled = false; }
-    }}, ...fields, message, h('div', {class: 'form-actions'}, button));
+      } catch (error) { message.textContent = error.message; button.disabled = false; pending.textContent = ''; }
+    }}, ...fields, pending, message, h('div', {class: 'form-actions'}, button));
     form.dispose = () => Object.values(inputs).forEach((control) => control.dispose?.());
     return form;
   }

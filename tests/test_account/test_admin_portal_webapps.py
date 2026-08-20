@@ -380,7 +380,8 @@ def test_webapp_detail_page_contract(opts):
         "legacy numeric ?inspector= deep links do not redirect to the app page"
     # The five tabs re-home the existing sections; Setup is promoted to
     # "Set up deploys" with three honest sub-tabs.
-    assert "['setup', 'Set up deploys']" in page and "manageSection(ctx, app, summary, id, body, reload)" in page, \
+    assert "['setup', 'Set up deploys']" in page \
+        and "manageSection(ctx, app, summary, id, body, reload, current)" in page, \
         "the app page does not re-home the existing management sections"
     assert "'GitHub Actions'" in page and "'Upload a build'" in page \
         and "'Any other CI / API'" in page, \
