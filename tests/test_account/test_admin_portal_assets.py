@@ -363,7 +363,7 @@ def test_feature_asset_contracts(opts):
 def test_domain_certificate_panel_asset_contract(opts):
     advanced = (ASSETS / "features/advanced/page.js").read_text()
     assert "domainCertificatesPanel(ctx, domain)" in advanced, \
-        "the domain inspector lost its Certificates panel"
+        "the domain page lost its Certificates panel"
     assert "Covers every app on this domain — current and future." in advanced, \
         "the wildcard headline row lost its covers-everything copy"
     assert "Retire — use wildcard" in advanced, \
@@ -384,6 +384,53 @@ def test_domain_certificate_panel_asset_contract(opts):
     # page for day-to-day work.
     assert "Manage certificates per-domain from the domain page." in advanced, \
         "the inventory page lost its link to per-domain management"
+
+
+@th.django_unit_test("one domain is a page of its own, never a drawer over the list")
+def test_domain_detail_is_a_page_contract(opts):
+    advanced = (ASSETS / "features/advanced/page.js").read_text()
+    feature = (ASSETS / "features/advanced/feature.js").read_text()
+    routes = (ASSETS / "components/routes.js").read_text()
+
+    # ?domain=<id> renders the detail; an unresolved id is simply the list.
+    assert "const wanted = queryParam('domain');" in advanced \
+        and "if (selected) renderDetail(selected); else renderList(rows, failure);" in advanced, \
+        "the domain detail is not keyed off ?domain=<id> with a list fallback"
+    assert "openInspector" not in advanced, \
+        "the Domains lane still opens the domain detail in a drawer"
+    assert "linkedInspectorOpened" not in advanced, \
+        "the drawer's deep-link bookkeeping survived the page conversion"
+
+    # A row click is a navigation; the per-row Records link still escapes it.
+    assert "location.hash = routeHref('domains', {domain: row.id})" in advanced, \
+        "a domain row no longer navigates to its own page"
+    assert "href: routeHref('dns', {domain: row.id}), onclick: (event) => event.stopPropagation()" in advanced, \
+        "the per-row Records link lost its route or its click guard"
+
+    # Real page furniture: a way back, its own header, the gated edit action.
+    assert "h('a', {href: routeHref('domains')}, '← All domains')" in advanced, \
+        "the domain page has no way back to the list"
+    assert "pageHeader('Network & hosting', domain.name," in advanced, \
+        "the domain page has no page header naming the domain"
+    assert "ctx.capabilities.manage_network ? h('button', {class: 'button ghost', onclick: () => editDomain(domain, render)}" in advanced, \
+        "Edit registrar settings is missing or no longer gated on manage_network"
+
+    # Reachable from the page, unchanged: certificates, DNS records, logs.
+    assert "domainCertificatesPanel(ctx, domain)" in advanced, \
+        "the certificates panel is not reachable from the domain page"
+    for link in ("Open DNS records", "Related logs"):
+        assert link in advanced, f"the domain page lost its {link!r} link"
+
+    # Legacy ?inspector=<id> deep links still land on the domain.
+    assert r"/^\d+$/.test(String(entry.inspector || ''))" in advanced \
+        and "history.replaceState({}, '', routeHref('domains', {domain: entry.inspector}))" in advanced, \
+        "old ?inspector= domain links no longer redirect to the page form"
+
+    # No new route key, no second sidebar entry.
+    assert "'inspector', 'return', 'domain'" in routes, \
+        "the shared domain route key changed instead of being reused"
+    assert feature.count("route: 'domains'") == 1, \
+        "the domain page added a second navigation entry"
 
 
 @th.django_unit_test("WebApps owns URL-first onboarding, external domains, and day-2")

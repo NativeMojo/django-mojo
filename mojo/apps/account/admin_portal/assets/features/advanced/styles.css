@@ -1,4 +1,7 @@
 .cert-headline { margin: 12px 16px; }
+/* The domain detail is a page; its back link must exist even when the
+   WebApps feature (which declares the same rule) is disabled. */
+.back-link { margin: 0 0 .35rem; font-size: .82rem; }
 .typed-settings { display: grid; gap: 1rem; }
 .method-settings { margin: 0; padding: .8rem; border: 1px solid var(--line); border-radius: 8px; }
 .method-settings legend { padding: 0 .35rem; font-size: .75rem; font-weight: 700; }

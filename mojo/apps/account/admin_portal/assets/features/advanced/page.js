@@ -2,7 +2,6 @@ import {
   api, apiOnce, badge, FormView, formatDate, h, icon, listData, openModal,
   pageHeader, statusTone, TableView,
 } from '../../core.js';
-import {openInspector} from '../../components/overlays.js';
 import {activityHref, decodeRouteState, returnLocation, routeHref} from '../../components/routes.js';
 
 const DNS_TYPES = ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'SRV', 'CAA', 'NS'];
@@ -344,43 +343,58 @@ function domainCertificatesPanel(ctx, domain) {
   return panel;
 }
 
+// One domain is a page of its own (?domain=<id>), never a drawer over the
+// list. The list and the detail are the same route, so a row click is a plain
+// navigation and the browser Back button behaves the way an operator expects.
 async function domainsPage(ctx) {
-  const root = h('div', {class: 'page'}); let linkedInspectorOpened = false;
-  const inspect = (domain, reload) => {
-    const content = h('div', {}, h('dl', {class: 'details'},
-      h('div', {}, h('dt', {text: 'Provider'}), h('dd', {text: domain.provider})),
-      h('div', {}, h('dt', {text: 'Status'}), h('dd', {text: domain.status})),
-      h('div', {}, h('dt', {text: 'Scope'}), h('dd', {text: domain.group?.name || 'Platform'})),
-      h('div', {}, h('dt', {text: 'Expires'}), h('dd', {text: formatDate(domain.expires)}))),
+  const root = h('div', {class: 'page'});
+  // Legacy ?inspector=<id> deep links predate the page and must still land on
+  // the domain. replaceState fires no hashchange, so this render continues.
+  const entry = decodeRouteState().state;
+  if (!entry.domain && /^\d+$/.test(String(entry.inspector || ''))) {
+    history.replaceState({}, '', routeHref('domains', {domain: entry.inspector}));
+  }
+  function renderDetail(domain) {
+    root.replaceChildren(
+      h('p', {class: 'back-link'}, h('a', {href: routeHref('domains')}, '← All domains')),
+      pageHeader('Network & hosting', domain.name, 'Registrar settings, TLS coverage, and the live provider zone for this domain.', [
+        ctx.capabilities.manage_network ? h('button', {class: 'button ghost', onclick: () => editDomain(domain, render)}, 'Edit registrar settings') : null,
+      ]),
+      h('dl', {class: 'details'},
+        h('div', {}, h('dt', {text: 'Provider'}), h('dd', {text: domain.provider})),
+        h('div', {}, h('dt', {text: 'Status'}), h('dd', {text: domain.status})),
+        h('div', {}, h('dt', {text: 'Scope'}), h('dd', {text: domain.group?.name || 'Platform'})),
+        h('div', {}, h('dt', {text: 'Expires'}), h('dd', {text: formatDate(domain.expires)}))),
       domainCertificatesPanel(ctx, domain),
       h('div', {class: 'activity-links'},
         h('a', {class: 'related-record', href: routeHref('dns', {domain: domain.id, return: returnLocation()})}, h('strong', {text: 'Open DNS records'}), icon('chevron')),
         h('a', {class: 'related-record', href: activityHref('logs', {type: 'model', id: domain.id, model: 'Domain'}, {return: returnLocation()})}, h('strong', {text: 'Related logs'}), icon('chevron'))));
-    const inspector = openInspector({title: `Domain · ${domain.name}`, content, wide: true});
-    if (ctx.capabilities.manage_network) content.prepend(h('button', {class: 'button compact', onclick: () => {
-      inspector.close(); editDomain(domain, reload);
-    }}, 'Edit registrar settings'));
-  };
-  async function render() {
+  }
+  function renderList(rows, failure) {
     root.replaceChildren(pageHeader('Network & hosting', 'Domains', 'Register, adopt, and manage the names this installation controls.', [
       ctx.capabilities.manage_network ? h('button', {class: 'button ghost', onclick: () => registerExisting(ctx, render)}, icon('plus'), 'Register existing') : null,
       ctx.user.is_superuser ? h('button', {class: 'button ghost', onclick: () => adoptDomain(ctx, render)}, icon('globe'), 'Adopt') : null,
       ctx.capabilities.manage_network ? h('button', {class: 'button primary', onclick: () => purchaseDomain(ctx, render)}, icon('plus'), 'Buy domain') : null,
     ]));
     const panel = tablePanel('Managed domains', 'Open a domain to change registrar settings; use DNS Records for the live provider zone.'); root.append(panel);
-    try {
-      const rows = await loadDomains();
-      panel.append(new TableView({rows, empty: 'No managed domains yet.', onSelect: (row) => inspect(row, render), columns: [
+    if (failure) { actionError(panel, failure); return; }
+    panel.append(new TableView({rows, empty: 'No managed domains yet.',
+      onSelect: (row) => { location.hash = routeHref('domains', {domain: row.id}); }, columns: [
         {label: 'Domain', render: (row) => h('div', {}, h('strong', {text: row.name}), h('small', {text: row.provider}))},
         {label: 'Status', render: (row) => statusBadge(row.status)},
         {label: 'Scope', render: (row) => row.group?.name || 'Platform'},
         {label: 'Expires', render: (row) => formatDate(row.expires)},
         {label: 'Zone', render: (row) => h('a', {class: 'button compact', href: routeHref('dns', {domain: row.id}), onclick: (event) => event.stopPropagation()}, icon('dns'), 'Records')},
       ]}).render());
-      const inspector = decodeRouteState().state.inspector;
-      const linked = inspector && rows.find((row) => String(row.id) === String(inspector));
-      if (linked && !linkedInspectorOpened) { linkedInspectorOpened = true; inspect(linked, render); }
-    } catch (error) { actionError(panel, error); }
+  }
+  async function render() {
+    let rows = []; let failure = null;
+    try { rows = await loadDomains(); } catch (error) { failure = error; }
+    const wanted = queryParam('domain');
+    // An id the caller cannot see (or that no longer exists) is not an error —
+    // it is simply the list.
+    const selected = wanted ? rows.find((row) => String(row.id) === String(wanted)) : null;
+    if (selected) renderDetail(selected); else renderList(rows, failure);
   }
   await render(); return root;
 }
