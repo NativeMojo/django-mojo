@@ -351,9 +351,39 @@ def test_feature_asset_contracts(opts):
             "/api/dnsman/registrar/purchase", "/api/dnsman/credential/link",
             "/api/dnsman/dns", "/api/dnsman/certificate/request",
             "/api/dnsman/certificate/remove-failed",
+            "/api/dnsman/certificate/retire-eligibility",
             "/api/edge/upstream/declare", "/api/edge/vhost",
             "/api/edge/route"):
         assert endpoint in advanced, f"Advanced is missing {endpoint}"
+    assert "'/api/dnsman/certificate/retire'" in advanced, \
+        "Advanced is missing the retire endpoint itself (not just eligibility)"
+
+
+@th.django_unit_test("the domain page owns per-domain certificate work")
+def test_domain_certificate_panel_asset_contract(opts):
+    advanced = (ASSETS / "features/advanced/page.js").read_text()
+    assert "domainCertificatesPanel(ctx, domain)" in advanced, \
+        "the domain inspector lost its Certificates panel"
+    assert "Covers every app on this domain — current and future." in advanced, \
+        "the wildcard headline row lost its covers-everything copy"
+    assert "Retire — use wildcard" in advanced, \
+        "eligible rows lost their retire action"
+    # Retire only shows where the eligibility read marked a replacement, and
+    # the confirmation names both certificates plus the address count.
+    assert "eligibility[String(row.id)]" in advanced, \
+        "the retire action no longer keys off the eligibility read"
+    assert "} addresses now served by ${" in advanced, \
+        "the retire confirmation must count addresses, not internal row kinds"
+    # Reuse, not reimplementation: the panel wires the existing request and
+    # remove-failed flows.
+    assert "certificateRequest([domain], render)" in advanced, \
+        "the domain panel must reuse the shared certificate request dialog"
+    assert "removeFailedCertificate(row, render)" in advanced, \
+        "the failed-attempt cleanup flow is no longer wired"
+    # The full inventory page stays, gains nothing, and points at the domain
+    # page for day-to-day work.
+    assert "Manage certificates per-domain from the domain page." in advanced, \
+        "the inventory page lost its link to per-domain management"
 
 
 @th.django_unit_test("WebApps owns URL-first onboarding, external domains, and day-2")
@@ -430,7 +460,7 @@ def test_webapp_onboarding_asset_contract(opts):
             "/api/edge/webapp/link_key",
             "/api/edge/webapp/onboarding/workflow"):
         assert endpoint in page, f"management view omitted {endpoint}"
-    for tab in ("'Overview'", "'Deploys'", "'Deploy key'", "'Setup'", "'Danger'"):
+    for tab in ("'Overview'", "'Deploys'", "'Deploy key'", "'Set up deploys'", "'Danger'"):
         assert tab in page, f"management view omitted the {tab} tab"
     for action in ("Roll back", "Change address", "Take offline", "Delete app"):
         assert action in page, f"management view omitted the {action!r} action"
@@ -448,7 +478,7 @@ def test_webapp_onboarding_asset_contract(opts):
         "the merged list does not build on the shared row grammar"
     assert "history.replaceState" in page and "routeHref('deployments'" in page, \
         "#/webapps does not canonicalize to #/deployments"
-    assert "No address yet — not reachable" in page and "'Set address'" in page, \
+    assert "Setup never finished — not reachable" in page and "'Set address'" in page, \
         "a missing address is not the row's health story"
     assert "label: 'Created'" not in page, \
         "the redesign removed the Created column; last deploy is the date that matters"

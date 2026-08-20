@@ -273,6 +273,77 @@ async function purchaseDomain(ctx, reload) {
   renderSearch();
 }
 
+async function loadDomainCertificates(domainId) {
+  return listData(await api(`/api/dnsman/certificate?domain=${encodeURIComponent(domainId)}&graph=default&size=200`));
+}
+
+async function loadRetireEligibility(domainId) {
+  const payload = await api(`/api/dnsman/certificate/retire-eligibility?domain=${encodeURIComponent(domainId)}`);
+  return payload.eligibility || {};
+}
+
+function certificateExpiry(row) {
+  return row.days_remaining == null ? formatDate(row.not_after) : `${row.days_remaining} days`;
+}
+
+async function retireCertificate(row, covering, addressCount, reload) {
+  const confirmed = await confirmAction({
+    title: `Retire ${row.common_name}?`,
+    copy: `${covering?.common_name || 'The replacement certificate'} takes over ${addressCount} addresses now served by ${row.common_name}, then the retired certificate is removed from the inventory.`,
+    confirmLabel: 'Retire certificate', danger: true});
+  if (!confirmed) return;
+  await apiOnce('/api/dnsman/certificate/retire', {method: 'POST', body: JSON.stringify({certificate: row.id})});
+  await reload();
+}
+
+function domainCertificatesPanel(ctx, domain) {
+  const panel = h('section', {class: 'panel'});
+  async function render() {
+    panel.replaceChildren(h('div', {class: 'panel-heading'}, h('div', {},
+      h('h2', {text: 'Certificates'}),
+      h('p', {text: 'TLS coverage for this domain. Private key material is never shown.'})),
+      ctx.capabilities.manage_network ? h('button', {class: 'button compact', onclick: () => certificateRequest([domain], render)}, icon('certificate'), 'Request certificate') : null));
+    try {
+      const [rows, eligibility, vhosts] = await Promise.all([
+        loadDomainCertificates(domain.id),
+        loadRetireEligibility(domain.id).catch(() => ({})),
+        loadVhosts().catch(() => []),
+      ]);
+      const wildcardName = `*.${domain.name}`;
+      const headline = rows.find((row) => row.status === 'active' && [row.common_name, ...(row.sans || [])].includes(wildcardName)) || null;
+      const addressCount = (row) => vhosts.filter((vhost) => Number(vhost.certificate?.id || vhost.certificate) === Number(row.id)).length;
+      const retireButton = (row) => {
+        const coveringId = eligibility[String(row.id)];
+        if (!coveringId || !ctx.capabilities.manage_network) return null;
+        const covering = rows.find((item) => Number(item.id) === Number(coveringId));
+        return h('button', {class: 'button compact', onclick: async (event) => {
+          event.stopPropagation();
+          await retireCertificate(row, covering, addressCount(row), render);
+        }}, 'Retire — use wildcard');
+      };
+      if (headline) {
+        panel.append(h('div', {class: 'result-card cert-headline'},
+          h('div', {},
+            h('strong', {text: [headline.common_name, ...(headline.sans || []).filter((name) => name !== headline.common_name)].join(', ')}),
+            h('span', {text: 'Covers every app on this domain — current and future.'})),
+          statusBadge(headline.status),
+          h('strong', {text: headline.renew_after ? `Renews ${formatDate(headline.renew_after)}` : `Expires ${certificateExpiry(headline)}`})));
+      }
+      const others = rows.filter((row) => row !== headline);
+      panel.append(new TableView({rows: others, empty: headline ? 'No other certificates on this domain.' : 'No certificates have been requested for this domain.', columns: [
+        {label: 'Certificate', render: (row) => h('div', {}, h('strong', {text: row.common_name}), h('small', {text: (row.sans || []).join(', ')}))},
+        {label: 'Status', render: (row) => statusBadge(row.status)},
+        {label: 'Expires', render: (row) => certificateExpiry(row)},
+        {label: '', render: (row) => h('div', {class: 'form-actions'},
+          retireButton(row),
+          ctx.capabilities.manage_network && row.status === 'failed' ? h('button', {class: 'icon-button danger-text', 'aria-label': `Remove failed certificate attempt for ${row.common_name}`, onclick: async (event) => { event.stopPropagation(); await removeFailedCertificate(row, render); }}, icon('trash')) : null)},
+      ]}).render());
+    } catch (error) { actionError(panel, error); }
+  }
+  render();
+  return panel;
+}
+
 async function domainsPage(ctx) {
   const root = h('div', {class: 'page'}); let linkedInspectorOpened = false;
   const inspect = (domain, reload) => {
@@ -281,6 +352,7 @@ async function domainsPage(ctx) {
       h('div', {}, h('dt', {text: 'Status'}), h('dd', {text: domain.status})),
       h('div', {}, h('dt', {text: 'Scope'}), h('dd', {text: domain.group?.name || 'Platform'})),
       h('div', {}, h('dt', {text: 'Expires'}), h('dd', {text: formatDate(domain.expires)}))),
+      domainCertificatesPanel(ctx, domain),
       h('div', {class: 'activity-links'},
         h('a', {class: 'related-record', href: routeHref('dns', {domain: domain.id, return: returnLocation()})}, h('strong', {text: 'Open DNS records'}), icon('chevron')),
         h('a', {class: 'related-record', href: activityHref('logs', {type: 'model', id: domain.id, model: 'Domain'}, {return: returnLocation()})}, h('strong', {text: 'Related logs'}), icon('chevron'))));
@@ -506,7 +578,11 @@ async function certificatesPage(ctx) {
     root.replaceChildren(pageHeader('Network & hosting', 'Certificates', 'Issue and monitor TLS certificates without exposing private key material.', [
       ctx.capabilities.manage_network ? h('button', {class: 'button primary', onclick: () => certificateRequest(domains.filter((row) => row.status === 'active'), render)}, icon('certificate'), 'Request certificate') : null,
     ]));
-    const panel = tablePanel('TLS certificates', 'Only lifecycle, names, issuer, and expiry metadata are shown.'); root.append(panel);
+    const panel = h('section', {class: 'panel'}, h('div', {class: 'panel-heading'}, h('div', {},
+      h('h2', {text: 'TLS certificates'}),
+      h('p', {}, 'The whole inventory; only lifecycle, names, issuer, and expiry metadata are shown. ',
+        h('a', {href: routeHref('domains'), text: 'Manage certificates per-domain from the domain page.'})))));
+    root.append(panel);
     panel.append(new TableView({rows, empty: 'No certificates have been requested.', columns: [
       {label: 'Certificate', render: (row) => h('div', {}, h('strong', {text: row.common_name}), h('small', {text: (row.sans || []).join(', ')}))},
       {label: 'Status', render: (row) => statusBadge(row.status)},

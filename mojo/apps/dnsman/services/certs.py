@@ -844,6 +844,144 @@ def revoke(certificate, reason=0):
 
 
 # ----------------------------------------------------------------------
+# retirement
+# ----------------------------------------------------------------------
+
+def _certificate_names(certificate):
+    """Every name a certificate lists — CN plus SANs, deduplicated."""
+    names = []
+    if certificate.common_name:
+        names.append(certificate.common_name)
+    for san in (certificate.sans or []):
+        if isinstance(san, str) and san not in names:
+            names.append(san)
+    return names
+
+
+def _covers_all(candidate, names):
+    """Whether `candidate` covers every name in `names`.
+
+    Uses edge's ``certificate_covers`` — the exact rule the vhost layer
+    enforces at enable time — so retirement can never leave a serving name
+    that nginx would then refuse to enable. dnsman already imports from edge
+    (see asyncjobs), so the dependency direction allows this.
+    """
+    from mojo.apps.edge.validators import certificate_covers
+
+    return all(certificate_covers(candidate, name) for name in names)
+
+
+def retire_eligibility(domain, now=None):
+    """For every Certificate on a domain, the id of the ACTIVE certificate
+    that could take over its duty, or None.
+
+    DB-only on purpose — the portal calls this per domain page load, so it
+    must never fan out into provider calls. A replacement must be active, not
+    inside its renewal window, and cover both every name the certificate
+    lists and every server name of every enabled vhost still pointing at it.
+    """
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.dnsman.models.certificate import STATUS_ACTIVE
+    from mojo.apps.edge.models import Vhost
+
+    now = now or dates.utcnow()
+    certificates = list(Certificate.objects.filter(domain=domain))
+    candidates = [
+        cert for cert in certificates
+        if cert.status == STATUS_ACTIVE
+        and not (cert.renew_after and cert.renew_after <= now)]
+
+    served = {}
+    for vhost in Vhost.objects.filter(
+            certificate__domain=domain,
+            is_enabled=True).select_related("domain"):
+        served.setdefault(vhost.certificate_id, []).append(vhost.server_name)
+
+    eligibility = {}
+    for cert in certificates:
+        names = _certificate_names(cert) + served.get(cert.pk, [])
+        replacement = None
+        for candidate in candidates:
+            if candidate.pk == cert.pk:
+                continue
+            if _covers_all(candidate, names):
+                replacement = candidate.pk
+                break
+        eligibility[cert.pk] = replacement
+    return eligibility
+
+
+def retire_certificate(certificate):
+    """Retire a certificate another active certificate can fully replace.
+
+    Every vhost still pointing at the target — enabled or parked — is
+    repointed to the replacement (their ``save()`` publishes fleet
+    convergence), then the target row is deleted; ``Vhost.certificate`` is
+    PROTECT, satisfied once nothing references it. Refusals are fail-closed
+    and name the reason in plain language.
+    """
+    from mojo.apps.dnsman.models import Certificate
+    from mojo.apps.dnsman.models.certificate import STATUS_ACTIVE
+    from mojo.apps.edge.models import Vhost
+
+    now = dates.utcnow()
+    required = _certificate_names(certificate)
+    covering = [
+        candidate for candidate in Certificate.objects.filter(
+            domain_id=certificate.domain_id,
+            status=STATUS_ACTIVE).exclude(pk=certificate.pk)
+        if _covers_all(candidate, required)]
+    if not covering:
+        raise me.ValueException(
+            "No other active certificate on this domain covers every name "
+            "this certificate lists")
+    fresh = [
+        candidate for candidate in covering
+        if not (candidate.renew_after and candidate.renew_after <= now)]
+    if not fresh:
+        raise me.ValueException(
+            "The certificate that would take over is due for renewal — "
+            "retire this one after it has renewed")
+
+    vhosts = list(Vhost.objects.filter(
+        certificate=certificate).select_related("domain"))
+    enabled_names = [
+        vhost.server_name for vhost in vhosts if vhost.is_enabled]
+    replacement = None
+    missing = None
+    for candidate in fresh:
+        gaps = [name for name in enabled_names
+                if not _covers_all(candidate, [name])]
+        if not gaps:
+            replacement = candidate
+            break
+        if missing is None:
+            missing = gaps[0]
+    if replacement is None:
+        raise me.ValueException(
+            f"The replacement certificate cannot serve {missing}, which "
+            f"still uses this certificate")
+
+    retired_id = certificate.pk
+    with transaction.atomic():
+        repointed = 0
+        for vhost in vhosts:
+            vhost.certificate = replacement
+            # save() re-validates coverage for enabled rows and publishes
+            # convergence after commit — deliberately not update().
+            vhost.save()
+            repointed += 1
+        certificate.delete()
+    logit.info(
+        f"dnsman: retired certificate {retired_id} "
+        f"({certificate.common_name}) in favor of {replacement.pk} "
+        f"({replacement.common_name}); {repointed} vhost(s) repointed")
+    return objict(
+        retired=retired_id, replaced_by=replacement.pk,
+        vhosts_repointed=repointed)
+
+
+# ----------------------------------------------------------------------
 # consumer sync
 # ----------------------------------------------------------------------
 

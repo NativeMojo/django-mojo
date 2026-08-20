@@ -172,6 +172,7 @@ TEST_POOLS = [
     "default", "staging", "nginxreal", "reltest", "wwwsync",
     "itesthappy", "itestexclude", "itesthouse",
     "itestgraph", "itestretired", "itesthouseup",
+    "dmretire",
 ]
 
 

@@ -108,6 +108,55 @@ def on_certificate_remove_failed(request):
     return {"id": certificate_id, "status": "removed"}
 
 
+@md.GET('certificate/retire-eligibility')
+@md.custom_security("gated on the resolved Domain via "
+                    "rest_check_permission_or_raise, plus the house-domain "
+                    "platform-admin guard")
+@md.requires_params("domain")
+def on_certificate_retire_eligibility(request):
+    """Which certificates on a domain another active certificate could take
+    over. DB-only — no provider calls — so the portal can ask on every domain
+    page load. Returns {certificate id: replacement id or null}."""
+    domain = Domain.get_instance_or_404(request.DATA.get("domain"))
+    Domain.rest_check_permission_or_raise(request, ["VIEW_PERMS"], domain)
+    # Same fall-through as _guard_house_certificate: a house domain resolves
+    # its tenant to None and the model check lands on the caller's GLOBAL
+    # permissions, so the platform inventory needs the explicit gate. Model
+    # check first, for the same classification-oracle reason as the detail
+    # route above.
+    if domain.group_id is None:
+        require_platform_admin(request, "House certificates")
+    eligibility = certs.retire_eligibility(domain)
+    return {
+        "domain": domain.pk,
+        "eligibility": {str(pk): covering for pk, covering in eligibility.items()},
+    }
+
+
+@md.POST('certificate/retire')
+@md.requires_params("certificate")
+def on_certificate_retire(request):
+    """Retire a certificate whose duty another active certificate can take
+    over: every address still using it is repointed to the replacement, then
+    the row is deleted. Same guards as remove-failed — this is destructive."""
+    certificate = Certificate.get_instance_or_404(request.DATA.get("certificate"))
+    # Model check first, then the house guard — same ordering and same reason
+    # as the detail and revoke routes above.
+    Certificate.rest_check_permission_or_raise(
+        request, ["SAVE_PERMS", "VIEW_PERMS"], certificate)
+    _guard_house_certificate(request, certificate, "Retiring a house certificate")
+    result = certs.retire_certificate(certificate)
+    logit.info(
+        f"dnsman: certificate {result.retired} retired in favor of "
+        f"{result.replaced_by} ({result.vhosts_repointed} vhost(s) repointed, "
+        f"user={getattr(request.user, 'pk', None)}, ip={request.ip})")
+    return {
+        "retired": result.retired,
+        "replaced_by": result.replaced_by,
+        "vhosts_repointed": result.vhosts_repointed,
+    }
+
+
 # Dynamic segment last: mid-path pk segments are forbidden by the repo's REST
 # conventions (see .claude/rules/rest.md).
 @md.GET('certificate/material/<int:pk>')
