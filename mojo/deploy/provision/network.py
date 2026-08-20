@@ -448,7 +448,7 @@ def ensure_security_groups(clients, spec, observed, apply=False):
                 GroupName=wanted_names[r], Description=descriptions[r],
                 VpcId=vpc_id,
                 TagSpecifications=spec_module.tag_specifications(
-                    spec, "network", "security-group", name=wanted_names[r])))
+                    spec, r, "security-group", name=wanted_names[r])))
         if created:
             group_ids[role] = created["GroupId"]
 

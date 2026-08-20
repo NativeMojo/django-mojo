@@ -164,8 +164,16 @@ fi
 # LAST. This installs var/django.conf from the config bucket and, with
 # CONFIG_SYNC_RESTART=true, restarts mojo-asgi — which is only correct once
 # var/profile above says prod.
+#
+# BEST-EFFORT on first boot, deliberately. On a fresh account the node always
+# boots before the operator's `configure` step has published django.conf, so
+# a hard failure here would fail cloud-init on EVERY first boot and block the
+# convergence that would have fixed it. `configure` (and config-sync.timer)
+# is the authoritative convergence; this sync is just the fast path when the
+# config already exists.
 
 log "syncing django.conf and restarting the app"
-python3 -m mojo.deploy.config_sync --config "$BOOTSTRAP_CONF"
+python3 -m mojo.deploy.config_sync --config "$BOOTSTRAP_CONF" || \
+    warn "django.conf is not published yet — expected on first boot; the configure step converges this node"
 
 log "stage1 complete"
