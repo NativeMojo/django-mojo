@@ -176,9 +176,9 @@ def generate_password_reset_token(user):
     return _generate(user, KIND_PASSWORD_RESET)
 
 
-def verify_password_reset_token(token):
-    """Verify a password-reset token and return the User."""
-    return _verify(token, expected_kind=KIND_PASSWORD_RESET)
+def verify_password_reset_token(token, consume=True):
+    """Verify a ``pr:`` token, optionally leaving it for atomic consume."""
+    return _verify(token, expected_kind=KIND_PASSWORD_RESET, consume=consume)
 
 
 def generate_forced_password_token(user):
@@ -318,9 +318,9 @@ def get_or_generate_invite_token(user):
     return generate_invite_token(user)
 
 
-def verify_invite_token(token):
-    """Verify an invite token and return the User."""
-    return _verify(token, expected_kind=KIND_INVITE)
+def verify_invite_token(token, consume=True):
+    """Verify an ``iv:`` token, optionally leaving it for atomic consume."""
+    return _verify(token, expected_kind=KIND_INVITE, consume=consume)
 
 
 def generate_email_change_token(user, new_email):

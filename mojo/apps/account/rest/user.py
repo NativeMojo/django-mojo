@@ -1090,22 +1090,46 @@ def on_user_password_reset_code(request):
 @md.requires_geofence(scope="auth", after_auth=True)
 @md.requires_params("token", "new_password")
 def on_user_password_reset_token(request):
+    """Set a password from an invite (iv:) or password-reset (pr:) token.
+
+    The token is checked without consumption before strength validation, then
+    consumed while the User row is locked. A weak password therefore does not
+    burn the credential — the user can retry the same emailed link with a
+    stronger one — while concurrent valid submissions remain single-use.
+    """
     token = request.DATA.get("token")
     new_password = request.DATA.get("new_password")
-    if token.startswith("iv:"):
-        user = tokens.verify_invite_token(token)
-        user.is_email_verified = True
+    is_invite = token.startswith("iv:")
+    if is_invite:
+        verify = tokens.verify_invite_token
     elif token.startswith("pr:"):
-        user = tokens.verify_password_reset_token(token)
-        # If the user has never logged in, this token was consumed via an invite link —
-        # the fact they received and clicked it proves email ownership.
-        if user.last_login is None:
-            user.is_email_verified = True
+        verify = tokens.verify_password_reset_token
     else:
         raise merrors.ValueException("Invalid token kind")
-    user.set_permanent_password(new_password)
-    user.save()
-    return jwt_login(request, user, source="password_reset")
+
+    user = verify(token, consume=False)
+    user.check_password_strength(new_password)
+
+    with transaction.atomic():
+        locked = User.objects.select_for_update().filter(pk=user.pk).first()
+        if locked is None:
+            raise merrors.ValueException("Invalid token")
+        verified = verify(token, consume=True)
+        if verified.pk != locked.pk:
+            raise merrors.ValueException("Invalid token")
+        if is_invite:
+            locked.is_email_verified = True
+        elif locked.last_login is None:
+            # If the user has never logged in, this token was consumed via an invite link —
+            # the fact they received and clicked it proves email ownership.
+            locked.is_email_verified = True
+        locked.set_permanent_password(new_password)
+        # Scoped save: `verified` already persisted the JTI consumption to
+        # mojo_secrets, and `locked` was read before that write. A full save()
+        # would write the stale secrets back and un-burn the token.
+        locked.save(update_fields=[
+            "password", "requires_password_change", "is_email_verified", "modified"])
+    return jwt_login(request, locked, source="password_reset")
 
 
 @md.POST("auth/password/forced")
