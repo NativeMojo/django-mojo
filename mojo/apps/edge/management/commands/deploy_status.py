@@ -52,8 +52,25 @@ class Command(BaseCommand):
             "--evidence", action="store_true", default=False,
             help="Attach the sanitized tail captured by update.sh (failed only).")
 
+    def _read_var_line(self, name, limit=128):
+        path = os.path.join(django_settings.PROJECT_ROOT, "var", name)
+        try:
+            with open(path, "r") as stream:
+                return stream.read(limit).strip()
+        except OSError:
+            return ""
+
     def _failure_detail(self, phase, include_evidence):
         detail = {"phase": phase}
+        # The rollback target is the pair of node-local facts update.sh
+        # captured before anything moved. Both must validate or neither
+        # travels — half a pair would read as a rollback promise the node
+        # cannot keep.
+        sha = self._read_var_line("previous_sha")
+        framework = self._read_var_line("previous_framework")
+        if (len(sha) == 40 and deploy.is_valid_sha(sha)
+                and deploy.is_valid_version(framework)):
+            detail["rollback_to"] = {"sha": sha, "framework": framework}
         if not include_evidence:
             return detail
         path = os.path.join(
@@ -193,6 +210,17 @@ class Command(BaseCommand):
             platform_deploy.evidence(
                 deployment_id, runner_id, state,
                 detail=failure_detail)
+        else:
+            # The row is already failed: update.sh is reporting how the first
+            # failure ENDED — "rollback failed" / "rollback impossible: no
+            # previous state" (see deploy._FAILURE_PHASES) — or repeating
+            # itself. A latest-per-runner evidence write would silently
+            # swallow it; the append-only diagnosis journal is where the rest
+            # of the story accumulates, with its own tail.
+            kind = ("outcome" if failure_phase in (
+                "rollback_failed", "rollback_impossible") else "failure")
+            platform_deploy.record_diagnosis(
+                deployment_id, runner_id, detail=failure_detail, kind=kind)
 
         if deploy.set_status(
                 state, sha, detail=options.get("detail"),

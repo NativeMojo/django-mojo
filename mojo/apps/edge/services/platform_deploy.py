@@ -14,9 +14,21 @@ from mojo.apps.edge.models import PlatformDeployment
 MAX_ROSTER = 128
 MAX_TRANSITIONS = 64
 MAX_EVIDENCE = 128
+# Per KIND ("failure" and "outcome" budget separately), and the FIRST entries
+# are the story — a flood of late reports can never evict them.
+MAX_DIAGNOSIS = 16
 MAX_TEXT = 320
 EVIDENCE_TTL = 600
 FLEET_PROOF_GRACE = 120
+# Evidence states that end an attempt on a node. These are copied into the
+# immutable diagnosis journal, because node_evidence keeps only the LATEST
+# observation per runner and a later probe (verify's `unavailable`) replaces
+# them (item 2225).
+TERMINAL_EVIDENCE_STATES = {"failed", "identity_mismatch"}
+# Bounds for the lease-independent rollback-outcome sweep: only recently
+# failed attempts are worth asking the node about, and only a handful.
+ROLLBACK_OUTCOME_WINDOW = 48 * 3600
+ROLLBACK_OUTCOME_SCAN = 5
 
 
 def _text(value, limit=MAX_TEXT):
@@ -202,6 +214,60 @@ def add_link(value, kind, target):
         return True
 
 
+def _diagnosis_key(detail):
+    detail = detail if isinstance(detail, dict) else {}
+    # identity_mismatch details carry `reason`, not `phase`.
+    return detail.get("phase") or detail.get("reason")
+
+
+def _append_diagnosis(row, runner, detail=None, proof=None, kind="failure"):
+    """Append one entry to an already-locked row's diagnosis, or refuse.
+
+    Returns the rebuilt list, or None when the entry is refused: the runner is
+    not in the frozen roster, this kind's budget is already spent (the first
+    entries ARE the story and are never evicted), or an entry with the same
+    (kind, runner, phase-or-reason) already exists — idempotence against
+    repeated callbacks and repeated sweeps. The append rules live here once;
+    `record_diagnosis` and `evidence` both route through it.
+    """
+    runner = _text(runner, 64)
+    if runner not in set(row.frozen_roster or []):
+        return None
+    kind = _text(kind, 16)
+    detail = _safe(detail or {})
+    entries = [item for item in list(row.diagnosis or []) if isinstance(item, dict)]
+    if len([item for item in entries if item.get("kind") == kind]) >= MAX_DIAGNOSIS:
+        return None
+    key = _diagnosis_key(detail)
+    for item in entries:
+        if (item.get("kind") == kind and item.get("runner") == runner
+                and _diagnosis_key(item.get("detail")) == key):
+            return None
+    entries.append({
+        "runner": runner, "at": _at(), "kind": kind,
+        "detail": detail, "proof": _safe(proof or {}),
+    })
+    return entries
+
+
+def record_diagnosis(value, runner, detail=None, proof=None, kind="failure"):
+    """Append one immutable diagnosis entry under the same row-lock pattern
+    as `evidence()`. Returns whether the entry landed."""
+    with transaction.atomic():
+        row = get(value, for_update=True)
+        if row is None:
+            return False
+        entries = _append_diagnosis(
+            row, runner, detail=detail, proof=proof, kind=kind)
+        if entries is None:
+            return False
+        # Assign the rebuilt list rather than mutating the fetched one, the
+        # same way evidence() assigns row.node_evidence.
+        row.diagnosis = entries
+        row.save(update_fields=["diagnosis", "modified"])
+        return True
+
+
 def evidence(value, runner, state, proof=None, detail=None):
     """Append one sanitized, bounded node observation under a row lock."""
     with transaction.atomic():
@@ -226,7 +292,17 @@ def evidence(value, runner, state, proof=None, detail=None):
             by_runner[name] for name in sorted(by_runner)
             if name in set(row.frozen_roster or [])
         ][:MAX_EVIDENCE]
-        row.save(update_fields=["node_evidence", "modified"])
+        update_fields = ["node_evidence", "modified"]
+        if entry["state"] in TERMINAL_EVIDENCE_STATES:
+            # A terminal observation is the attempt's failure story; copy it
+            # into the append-only journal before a later probe replaces this
+            # runner's node_evidence entry.
+            entries = _append_diagnosis(
+                row, runner, detail=detail, proof=proof, kind="failure")
+            if entries is not None:
+                row.diagnosis = entries
+                update_fields.append("diagnosis")
+        row.save(update_fields=update_fields)
         return True
 
 
@@ -259,6 +335,30 @@ def strip_stderr_tail(entries):
     return result
 
 
+def _node_summary(row):
+    """Bucket counts a UI can render without re-deriving evidence semantics.
+
+    The buckets partition the OBSERVED entries — they always sum to
+    len(node_evidence) — while `expected` is the frozen roster size.
+    """
+    summary = {"expected": len(row.frozen_roster or []), "proven": 0,
+               "reported": 0, "failed": 0, "dispatched": 0, "other": 0}
+    for item in row.node_evidence or []:
+        state = item.get("state") if isinstance(item, dict) else None
+        if state == "proven":
+            summary["proven"] += 1
+        elif state in ("deploying", "identity_pending"):
+            summary["reported"] += 1
+        elif state in ("failed", "identity_mismatch", "publish_failed"):
+            summary["failed"] += 1
+        elif state == "dispatched":
+            summary["dispatched"] += 1
+        else:
+            # unavailable, rolled_back, and anything unrecognized.
+            summary["other"] += 1
+    return summary
+
+
 def serialize(row, desired_commit=_DESIRED_UNSET, include_stderr=False):
     duration = None
     if row.started:
@@ -287,6 +387,9 @@ def serialize(row, desired_commit=_DESIRED_UNSET, include_stderr=False):
                         else strip_stderr_tail(row.transitions)),
         "node_evidence": (list(row.node_evidence or []) if include_stderr
                           else strip_stderr_tail(row.node_evidence)),
+        "diagnosis": (list(row.diagnosis or []) if include_stderr
+                      else strip_stderr_tail(row.diagnosis)),
+        "node_summary": _node_summary(row),
         "links": dict(row.links or {}), "detail": dict(row.detail or {}),
         "started": row.started.isoformat() if row.started else None,
         "finished": row.finished.isoformat() if row.finished else None,
@@ -478,12 +581,70 @@ def finalize_post_restart():
     return str(row.pk)
 
 
+def record_rollback_outcomes():
+    """Close the loop on a failed single-runner deploy: what runs there NOW?
+
+    Lease-independent and idempotent, unlike `finalize_post_restart` — a
+    failed lease may be long cleared (or expired) by the time this node's
+    replacement engine runs, yet the durable row still says only "failed",
+    never whether the rollback took. The node's own identity answers that: a
+    valid FOREIGN identity (another attempt's UUID with a full live SHA)
+    proves the node serves something other than the failed attempt, so a
+    `rolled_back` observation plus an outcome-kind diagnosis entry is
+    recorded. The node's OWN identity, an empty one, or an invalidated one
+    proves nothing and records nothing. Single-runner rosters only — on a
+    multi-node fleet this node's identity says nothing about the canary that
+    failed. Returns the number of attempts recorded.
+    """
+    from mojo.apps.edge.services import deploy, readiness
+
+    runner = deploy.local_runner_id()
+    cutoff = timezone.now() - timedelta(seconds=ROLLBACK_OUTCOME_WINDOW)
+    rows = PlatformDeployment.objects.filter(
+        status=PlatformDeployment.STATUS_FAILED,
+        modified__gte=cutoff).order_by("-modified")[:ROLLBACK_OUTCOME_SCAN]
+    candidates = []
+    for row in rows:
+        if list(row.frozen_roster or []) != [runner]:
+            continue
+        kinds = {item.get("kind") for item in (row.diagnosis or [])
+                 if isinstance(item, dict)}
+        if "failure" in kinds and "outcome" not in kinds:
+            candidates.append(row)
+    if not candidates:
+        return 0
+    try:
+        proof = readiness.local_node_proof()
+    except Exception:
+        return 0
+    proof = proof if isinstance(proof, dict) else {}
+    sha = proof.get("platform_sha")
+    owner = proof.get("platform_deployment")
+    if not (isinstance(sha, str) and len(sha) == 40 and deploy.is_valid_sha(sha)):
+        return 0
+    if not owner:
+        return 0
+    recorded = 0
+    for row in candidates:
+        if str(owner) == str(row.pk):
+            # The node still proves THIS attempt; its own identity is not
+            # evidence of a rollback (the SAME_RELEASE failure case).
+            continue
+        evidence(row.pk, runner, "rolled_back", proof=proof,
+                 detail={"reason": "post_restart_observation"})
+        if record_diagnosis(row.pk, runner, detail={"phase": "rolled_back"},
+                            proof=proof, kind="outcome"):
+            recorded += 1
+    return recorded
+
+
 def reconcile_stale():
     """Verify released fleets, then close abandoned coordination attempts."""
     from datetime import timedelta
     from mojo.apps.edge.services import deploy
 
     finalize_post_restart()
+    record_rollback_outcomes()
     now = timezone.now()
     cutoff = now - timedelta(seconds=max(60, deploy.status_ttl()))
     proof_cutoff = now - timedelta(seconds=FLEET_PROOF_GRACE)

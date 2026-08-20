@@ -742,6 +742,56 @@ def test_admin_graph_evidence_gated_at_boundary(opts):
             f"graph={graph} must fall back to the evidence-free default"
 
 
+@th.django_unit_test("verify() preserves the terminal failure diagnosis")
+def test_verify_preserves_diagnosis(opts):
+    """The headline regression (item 2225): node_evidence is latest-per-runner,
+    so an Admin clicking Verify on a FAILED deploy used to replace the only
+    copy of the failure (phase + stderr tail) with `unavailable` — destroying
+    the evidence the button was pressed to inspect. The immutable `diagnosis`
+    journal is what must survive that."""
+    from mojo.apps.edge.services import platform_deploy
+
+    _clean_deploy_state()
+    with mock.patch("mojo.apps.jobs.get_runners_bounded", return_value=[{
+            "runner_id": "edge-a-engine", "alive": True}]):
+        row, _ = platform_deploy.create(SHA, source="test")
+    th.assert_true(platform_deploy.evidence(
+        row.pk, "edge-a-engine", "failed",
+        detail={"phase": "post_deploy_migrate",
+                "stderr_tail": ["FATAL: migration command refused schema drift"]}),
+        "the frozen-roster runner's failure report must land")
+    platform_deploy.transition(
+        row.pk, "failed", {"phase": "post_deploy_migrate", "source": "node_report"})
+
+    with mock.patch(
+            "mojo.apps.jobs.manager.JobManager.execute_on_runner",
+            return_value=None):
+        result = platform_deploy.verify(row.pk)
+
+    th.assert_eq(result.node_evidence[0]["state"], "unavailable",
+                 "verify must still record the live observation it made")
+    th.assert_eq(result.status, "failed",
+                 f"verify must never move a terminal row, got {result.status}")
+    entries = [item for item in (result.diagnosis or [])
+               if isinstance(item, dict)]
+    th.assert_true(entries,
+                   "verify() destroyed the terminal failure diagnosis")
+    first = entries[0]
+    th.assert_eq(first.get("kind"), "failure",
+                 f"the first diagnosis entry must be the failure, got {first!r}")
+    th.assert_eq(first.get("runner"), "edge-a-engine",
+                 f"the diagnosis must name the failed runner, got {first!r}")
+    detail = first.get("detail") or {}
+    th.assert_eq(detail.get("phase"), "post_deploy_migrate",
+                 f"the failure phase must survive verify, got {detail!r}")
+    th.assert_eq(detail.get("stderr_tail"),
+                 ["FATAL: migration command refused schema drift"],
+                 f"the stderr tail must survive verify, got {detail!r}")
+    th.assert_true(first.get("at"),
+                   f"the diagnosis entry must carry its timestamp, got {first!r}")
+    _clean_deploy_state()
+
+
 @th.django_unit_test("same_sha_retry returns the deployment row, not create()'s tuple")
 def test_same_sha_retry_returns_a_row(opts):
     from mojo.apps.edge.models import PlatformDeployment
@@ -757,3 +807,202 @@ def test_same_sha_retry_returns_a_row(opts):
     assert retried.pk != original.pk, "the retry did not create a new attempt"
     assert retried.retry_of_id == original.pk, \
         "the retry does not reference the row it retried"
+
+
+def _diagnosis_row(**extra):
+    """One failed single-runner attempt carrying a tailed failure diagnosis."""
+    from mojo.apps.edge.models import PlatformDeployment
+    _clean_deploy_state()
+    return PlatformDeployment.objects.create(
+        sha=SHA, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=["edge-a-engine"], status="failed", transitions=[],
+        diagnosis=[{
+            "runner": "edge-a-engine", "at": "2026-08-19T00:00:00+00:00",
+            "kind": "failure", "proof": {},
+            "detail": {"phase": "update_script", "exit": 23, "stderr_tail": [
+                "psql: postgres://deploy:hunter2@db.internal/app",
+                "ERROR: relation already exists"]}}],
+        **extra)
+
+
+@th.django_unit_test("serialize gates the diagnosis stderr tail like node_evidence")
+def test_serialize_gates_diagnosis_stderr(opts):
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import platform_deploy
+
+    row = _diagnosis_row()
+    public = platform_deploy.serialize(row)
+    assert "stderr_tail" not in str(public["diagnosis"]), \
+        "the default serialization must strip the diagnosis stderr tail"
+    detail = public["diagnosis"][0]["detail"]
+    th.assert_eq(detail["phase"], "update_script",
+                 "the benign diagnosis detail must survive the strip")
+    th.assert_eq(detail["exit"], 23, "the exit code must survive the strip")
+
+    privileged = platform_deploy.serialize(row, include_stderr=True)
+    tail = privileged["diagnosis"][0]["detail"]["stderr_tail"]
+    th.assert_eq(len(tail), 2,
+                 "deploy authority must read the whole diagnosis tail")
+    assert "ERROR: relation already exists" in tail[1], \
+        "the privileged diagnosis tail must be verbatim, not reshaped"
+
+    stored = PlatformDeployment.objects.get(pk=row.pk)
+    assert "hunter2" in str(stored.diagnosis), \
+        "serializing must copy, never strip the durable diagnosis itself"
+
+    # Graph boundary: only the permission-gated admin graph carries diagnosis.
+    assert "diagnosis" in row.to_dict(graph="admin"), \
+        "the admin graph must carry the diagnosis journal"
+    for graph in ("basic", "default", "unmapped-name"):
+        assert "diagnosis" not in row.to_dict(graph=graph), \
+            f"graph={graph} must stay evidence-free"
+    _clean_deploy_state()
+
+
+@th.django_unit_test("diagnosis entries are bounded per kind, first-wins, and deduped")
+def test_diagnosis_bounds_and_dedupe(opts):
+    from mojo.apps.edge.services import platform_deploy
+
+    _clean_deploy_state()
+    row = _attempt("failed", roster=("edge-a-engine",))
+    th.assert_true(
+        not platform_deploy.record_diagnosis(
+            row.pk, "not-in-roster", detail={"phase": "update_script"}),
+        "a runner outside the frozen roster must be refused")
+    for index in range(20):
+        platform_deploy.record_diagnosis(
+            row.pk, "edge-a-engine", detail={"phase": f"phase_{index}"})
+    row.refresh_from_db()
+    failures = [item for item in row.diagnosis if item["kind"] == "failure"]
+    th.assert_eq(len(failures), 16,
+                 f"the failure budget must cap at 16, got {len(failures)}")
+    th.assert_eq(failures[0]["detail"]["phase"], "phase_0",
+                 "the FIRST entries are the story and must never be evicted")
+    th.assert_true(
+        not platform_deploy.record_diagnosis(
+            row.pk, "edge-a-engine", detail={"phase": "phase_1"}),
+        "a duplicate (kind, runner, phase) must be refused")
+    th.assert_true(
+        platform_deploy.record_diagnosis(
+            row.pk, "edge-a-engine", detail={"phase": "rolled_back"},
+            proof={"platform_sha": "9" * 40}, kind="outcome"),
+        "an outcome must land even when the failure budget is spent")
+    row.refresh_from_db()
+    outcomes = [item for item in row.diagnosis if item["kind"] == "outcome"]
+    th.assert_eq(len(outcomes), 1,
+                 f"exactly one outcome entry must exist, got {outcomes!r}")
+    _clean_deploy_state()
+
+
+@th.django_unit_test("record_rollback_outcomes records only a proven foreign identity")
+def test_record_rollback_outcomes(opts):
+    from mojo.apps.edge.services import deploy, platform_deploy, readiness
+
+    _clean_deploy_state()
+    runner = deploy.local_runner_id()
+    row = _attempt("failed", roster=(runner,))
+    th.assert_true(
+        platform_deploy.record_diagnosis(
+            row.pk, runner, detail={"phase": "post_deploy_migrate"}),
+        "the fixture's failure entry must land")
+    th.assert_eq(deploy.get_status(), None,
+                 "the sweep must run with no coordination lease present")
+
+    # (a) an absent, empty, or own identity records nothing.
+    for proof in (
+            {"platform_sha": "", "platform_deployment": ""},
+            {"platform_sha": "not-a-sha", "platform_deployment": str(uuid.uuid4())},
+            {"platform_sha": SHA, "platform_deployment": str(row.pk)}):
+        with mock.patch.object(readiness, "local_node_proof", return_value=proof):
+            th.assert_eq(platform_deploy.record_rollback_outcomes(), 0,
+                         f"an unproven identity must record nothing: {proof!r}")
+    with mock.patch.object(readiness, "local_node_proof",
+                           side_effect=RuntimeError("proof offline")):
+        th.assert_eq(platform_deploy.record_rollback_outcomes(), 0,
+                     "an unavailable proof must record nothing")
+    row.refresh_from_db()
+    th.assert_eq([item["kind"] for item in row.diagnosis], ["failure"],
+                 f"an unproven sweep wrote an outcome: {row.diagnosis!r}")
+
+    # (b) a valid FOREIGN identity records the outcome once, idempotently.
+    foreign = {"platform_sha": "9" * 40,
+               "platform_deployment": str(uuid.uuid4()), "node_id": "test"}
+    with mock.patch.object(readiness, "local_node_proof", return_value=foreign):
+        th.assert_eq(platform_deploy.record_rollback_outcomes(), 1,
+                     "a proven foreign identity must record one outcome")
+        th.assert_eq(platform_deploy.record_rollback_outcomes(), 0,
+                     "a repeated sweep must be a no-op")
+    row.refresh_from_db()
+    th.assert_eq([item["kind"] for item in row.diagnosis],
+                 ["failure", "outcome"],
+                 f"the outcome must append after the failure: {row.diagnosis!r}")
+    th.assert_eq(row.diagnosis[0]["detail"]["phase"], "post_deploy_migrate",
+                 "the original failure entry must be untouched")
+    outcome = row.diagnosis[-1]
+    th.assert_eq(outcome["detail"]["phase"], "rolled_back",
+                 f"the outcome must say the node rolled back: {outcome!r}")
+    th.assert_eq(outcome["proof"]["platform_sha"], "9" * 40,
+                 f"the outcome must carry what the node now runs: {outcome!r}")
+    observed = {item["runner"]: item for item in row.node_evidence}
+    th.assert_eq(observed[runner]["state"], "rolled_back",
+                 f"the live observation must be recorded too: {row.node_evidence!r}")
+    th.assert_eq(observed[runner]["detail"]["reason"], "post_restart_observation",
+                 f"the observation must name its source: {observed[runner]!r}")
+
+    # (c) a multi-node roster is skipped — this node's identity says nothing
+    # about the canary that failed.
+    _clean_deploy_state()
+    fleet_row = _attempt("failed", roster=(runner, "edge-b-engine"))
+    fleet_row.diagnosis = [{
+        "runner": runner, "at": "2026-08-19T00:00:00+00:00", "kind": "failure",
+        "detail": {"phase": "update_script"}, "proof": {}}]
+    fleet_row.save(update_fields=["diagnosis"])
+    with mock.patch.object(readiness, "local_node_proof", return_value=foreign):
+        th.assert_eq(platform_deploy.record_rollback_outcomes(), 0,
+                     "a multi-node roster must never receive a sweep outcome")
+    _clean_deploy_state()
+
+
+@th.django_unit_test("node_summary buckets partition the observed evidence")
+def test_node_summary_buckets(opts):
+    from mojo.apps.edge.services import platform_deploy
+
+    _clean_deploy_state()
+    row = _attempt("canary", roster=("edge-a-engine", "edge-b-engine"))
+    platform_deploy.evidence(row.pk, "edge-a-engine", "dispatched",
+                             detail={"migrate": True, "job": "1"})
+    row.refresh_from_db()
+    summary = platform_deploy.serialize(row)["node_summary"]
+    th.assert_eq(summary["expected"], 2,
+                 f"expected must be the frozen roster size: {summary!r}")
+    th.assert_eq(summary["dispatched"], 1,
+                 f"a dispatched node must count as dispatched: {summary!r}")
+
+    # A post-verify `unavailable` observation lands in `other`, never in
+    # `failed` — the failure story lives in the diagnosis.
+    platform_deploy.evidence(row.pk, "edge-a-engine", "unavailable",
+                             detail={"reason": "proof_unavailable"})
+    platform_deploy.evidence(row.pk, "edge-b-engine", "deploying")
+    row.refresh_from_db()
+    summary = platform_deploy.serialize(row)["node_summary"]
+    th.assert_eq(summary["other"], 1,
+                 f"unavailable must bucket as other: {summary!r}")
+    th.assert_eq(summary["reported"], 1,
+                 f"deploying must bucket as reported: {summary!r}")
+    th.assert_eq(summary["failed"], 0,
+                 f"nothing here is a failure observation: {summary!r}")
+    total = sum(summary[key] for key in
+                ("proven", "reported", "failed", "dispatched", "other"))
+    th.assert_eq(total, len(row.node_evidence),
+                 f"buckets must partition the observed entries: {summary!r}")
+
+    _clean_deploy_state()
+    single = _attempt("converged", roster=("edge-a-engine",))
+    platform_deploy.evidence(
+        single.pk, "edge-a-engine", "proven",
+        proof={"platform_deployment": str(single.pk), "platform_sha": SHA})
+    single.refresh_from_db()
+    summary = platform_deploy.serialize(single)["node_summary"]
+    th.assert_eq((summary["proven"], summary["expected"]), (1, 1),
+                 f"a converged single runner must read 1 of 1: {summary!r}")
+    _clean_deploy_state()

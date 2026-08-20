@@ -86,6 +86,7 @@ def on_engine_start(engine):
     from mojo.apps.edge.services import platform_deploy, webapp_auth_routes
 
     platform_deploy.finalize_post_restart()
+    platform_deploy.record_rollback_outcomes()
 
     if not cronjobs.converge_enabled():
         return "disabled"

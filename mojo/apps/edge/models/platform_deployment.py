@@ -44,6 +44,10 @@ class PlatformDeployment(models.Model, MojoModel):
     frozen_roster = models.JSONField(default=list, blank=True)
     transitions = models.JSONField(default=list, blank=True)
     node_evidence = models.JSONField(default=list, blank=True)
+    # node_evidence is the latest observation per runner and gets REPLACED by
+    # later probes (verify's `unavailable` included); diagnosis is the bounded,
+    # append-only failure story that survives them (item 2225).
+    diagnosis = models.JSONField(default=list, blank=True)
     links = models.JSONField(default=dict, blank=True)
     detail = models.JSONField(default=dict, blank=True)
 
@@ -72,14 +76,14 @@ class PlatformDeployment(models.Model, MojoModel):
             "id", "created", "modified", "started", "finished", "sha",
             "framework_version", "status", "source", "actor", "created_by",
             "request_key", "source_delivery", "retry_of", "frozen_roster",
-            "transitions", "node_evidence", "links", "detail",
+            "transitions", "node_evidence", "diagnosis", "links", "detail",
         ]
         SEARCH_FIELDS = ["sha", "actor", "request_key", "source_delivery"]
-        # node_evidence (which carries the privileged deploy stderr tail) is
-        # served ONLY by the `admin` graph, which GRAPH_PERMISSIONS gates on
-        # manage_platform/admin (item 2102). `default`/`basic` are evidence
-        # -free, and an unmapped graph name resolves to `default`, so no
-        # ungated serialization path can hand out the tail. The privileged
+        # node_evidence and diagnosis (both carry the privileged deploy stderr
+        # tail) are served ONLY by the `admin` graph, which GRAPH_PERMISSIONS
+        # gates on manage_platform/admin (item 2102). `default`/`basic` are
+        # evidence-free, and an unmapped graph name resolves to `default`, so
+        # no ungated serialization path can hand out the tail. The privileged
         # platform service (which has a request to check) is the other reader.
         GRAPH_PERMISSIONS = {"admin": ["manage_platform", "admin"]}
         GRAPHS = {
@@ -109,7 +113,8 @@ class PlatformDeployment(models.Model, MojoModel):
                     "id", "created", "modified", "sha", "framework_version",
                     "status", "source", "actor", "request_key",
                     "source_delivery", "frozen_roster", "transitions",
-                    "node_evidence", "links", "detail", "started", "finished",
+                    "node_evidence", "diagnosis", "links", "detail",
+                    "started", "finished",
                 ],
                 "graphs": {"retry_of": "basic"},
             },
