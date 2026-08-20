@@ -436,6 +436,48 @@ def test_login_html_completes_forced_password(opts):
         opts.group.save(update_fields=["metadata"])
 
 
+@th.django_unit_test("hosted login clears the stashed pr: token after a FAILED redemption")
+def test_login_html_clears_the_reset_stash_on_failure(opts):
+    """The stash must be single use, exactly like the token inside it.
+
+    The bouncer cold-click fix parks a `pr:` token in
+    `sessionStorage["mat_reset_token"]` so a reset link works on its first click
+    for a visitor with no session. If the redemption then fails — weak password,
+    expired, already used — a stash left behind is replayed by the NEXT
+    token-less visit to /auth, which greets the user with "already used" instead
+    of a login form. Seen on a live run.
+    """
+    html = _render('account/login.html', group=opts.group)
+
+    handler = html.split('onForm("form-set-password"', 1)
+    assert_true(len(handler) == 2,
+                "login.html must still bind a submit handler for the "
+                "set-password form")
+    body = handler[1].split('onForm("form-magic"', 1)[0]
+
+    assert_eq(
+        body.count('sessionStorage.removeItem("mat_reset_token")'), 2,
+        "the set-password handler must clear the stashed pr: token on BOTH "
+        "resolutions of the redemption attempt — the success path and the "
+        "failure path. Clearing it only on success leaves a dead token to be "
+        "replayed on the next token-less visit")
+    assert_true(
+        '.catch(function (err) {' in body and
+        'sessionStorage.removeItem("mat_reset_token")' in
+        body.split('.catch(function (err) {', 1)[1],
+        "one of those two removals must live inside the catch — the failure "
+        "path is the one that used to leave the stash behind")
+    assert_true(
+        'attemptedResetToken = token' in body,
+        "the token must survive in page memory for the rest of this page load, "
+        "or clearing the stash would break the weak-password retry the server "
+        "deliberately does not burn the token on")
+    assert_true(
+        'sessionStorage.setItem("mat_attempted' not in html,
+        "the in-memory copy must stay in page memory — persisting it would "
+        "recreate the poisoned stash under a new name")
+
+
 # ---------------------------------------------------------------------------
 # Configurable register form (AUTH_REGISTER_FIELDS)
 # ---------------------------------------------------------------------------

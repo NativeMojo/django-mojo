@@ -491,5 +491,9 @@ What this means for you:
   simply runs the challenge page again there, which stashes the token again.
   What does not survive is a tab where `sessionStorage` is unavailable — some
   private-browsing configurations — and there the link needs a second click.
+- **The stash is spent by the first attempt.** `/auth` removes it as soon as a
+  redemption resolves either way, so a failed reset does not leave a dead token
+  for the next visit to replay. Retrying with a stronger password on the same
+  page still works — the token is held in page memory for that.
 - Nothing about this changes the token itself or any API call: the reset is
   still submitted the same way, with the same `pr:` token.
