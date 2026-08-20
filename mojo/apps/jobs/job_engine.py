@@ -898,8 +898,18 @@ class JobEngine:
                             try:
                                 job = Job.objects.get(id=jid)
 
-                                # Check if job already completed or canceled - just clean up Redis
-                                if job.status in ('completed', 'canceled'):
+                                # Already over — just clean up Redis. `failed`
+                                # and `expired` belong here as much as
+                                # `completed` and `canceled` do: the requeue
+                                # below cannot touch a non-running row anyway,
+                                # so leaving them out only meant the reaper
+                                # rewrote a finished job's story with a
+                                # max-retries claim on the way past. A node
+                                # that deploys itself produces exactly this
+                                # state — terminal row, engine killed before
+                                # the ZREM.
+                                if job.status in ('completed', 'canceled',
+                                                  'failed', 'expired'):
                                     logger.debug(f"Reaper: Job {jid} already {job.status}, removing from processing")
                                     self._remove_from_processing(ch, jid)
                                     continue
@@ -920,11 +930,15 @@ class JobEngine:
 
                                 # Check retry limits (prevent infinite requeuing)
                                 if job.attempt >= job.max_retries:
-                                    logger.info(f"Reaper: Job {jid} exceeded max retries ({job.attempt}/{job.max_retries}), marking as failed")
+                                    logger.info(f"Reaper: Job {jid} is not retryable ({job.attempt}/{job.max_retries}), marking as failed")
                                     self._remove_from_processing(ch, jid)
                                     job.status = 'failed'
                                     job.finished_at = dates.utcnow()
-                                    job.last_error = f"Exceeded max retries after reaper timeout (attempt {job.attempt})"
+                                    # Most jobs that land here were published
+                                    # max_retries=0 and exceeded nothing; what
+                                    # actually happened is that their in-flight
+                                    # lease ran out with no retry available.
+                                    job.last_error = "in-flight lease expired and the job is not retryable"
                                     job.save(update_fields=['status', 'finished_at', 'last_error'])
                                     JobEvent.objects.create(
                                         job=job, channel=ch, event='failed',
