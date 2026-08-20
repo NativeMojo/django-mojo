@@ -147,6 +147,9 @@ EOF
     cat > "$STUB/pip" <<'EOF'
 #!/bin/bash
 echo "CMD pip $*" >> "$CALLLOG"
+if [ "$*" = "install --help" ]; then
+    echo "  --refresh-package <package>"
+fi
 EOF
 
     # A successful install is what makes amazon-cloudwatch-agent-ctl appear —
@@ -224,10 +227,12 @@ assert_eq "$rc" 0 "a clean first run exits 0"
 assert_has "$CALLLOG" "app.tar.gz" "the application tarball is fetched"
 if [ -f "$PROJ/aws/ec2_bootstrap.sh" ]; then ok "the tree is unpacked into PROJ_PATH"; else fail "the tree is unpacked into PROJ_PATH"; fi
 assert_before "app.tar.gz" "CMD ec2_bootstrap.sh" "the tarball is unpacked BEFORE ec2_bootstrap.sh runs (it lives inside it)"
-assert_before "CMD ec2_bootstrap.sh" "CMD pip install --upgrade django-mojo==${VERSION}" \
+assert_before "CMD ec2_bootstrap.sh" "CMD pip install --refresh-package=django-mojo --upgrade django-mojo==${VERSION}" \
     "the version pin runs AFTER ec2_bootstrap.sh, so it overwrites the unpinned install"
-assert_before "CMD pip install --upgrade django-mojo==${VERSION}" "CMD ec2_deploy.sh" \
+assert_before "CMD pip install --refresh-package=django-mojo --upgrade django-mojo==${VERSION}" "CMD ec2_deploy.sh" \
     "the pin is in place before the project deploy runs"
+assert_has "$CALLLOG" "CMD pip install --refresh-package=django-mojo --upgrade django-mojo==${VERSION}" \
+    "the provisioning pin refreshes django-mojo's catalog entry"
 
 echo "stage1.sh: var/profile"
 assert_eq "$(cat "$PROJ/var/profile" 2>/dev/null)" "prod" "var/profile contains exactly 'prod'"
