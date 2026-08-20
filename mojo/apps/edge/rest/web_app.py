@@ -255,6 +255,115 @@ def on_webapp_aliases(request):
                 addresses=webapp_alias.status_rows(web_app))
 
 
+@md.GET('webapp/serving')
+@md.denies_key_backed_session()
+@md.requires_params("webapp")
+@md.requires_perms("view_dns", "manage_dns", "security")
+def on_webapp_serving(request):
+    """How this site is served: address, certificate, shape, and paths.
+
+    A read, so no step-up — the same entitlement as `webapp/aliases`. The
+    caller's WRITE authority is evaluated separately and non-raisingly: only a
+    caller who could actually save is told which fleet pools and which
+    destinations exist, because that inventory is the deployment's topology
+    rather than anything about this one site.
+    """
+    from mojo.apps.edge.services import webapp_serving
+
+    web_app = WebApp.get_instance_or_404(request.DATA.get("webapp"))
+    WebApp.rest_check_permission_or_raise(
+        request, ["VIEW_PERMS", "SAVE_PERMS"], web_app)
+    include_editables = WebApp.rest_check_permission(
+        request, ["SAVE_PERMS"], web_app)
+    return webapp_serving.serving_for(
+        web_app, include_editables=include_editables)
+
+
+@md.POST('webapp/serving')
+@md.denies_key_backed_session()
+@md.requires_fresh_auth(600)
+@md.requires_params("webapp")
+@md.requires_perms("manage_webapp")
+def on_webapp_serving_save(request):
+    """Change the fleet pool, the single-page fallback, or the certificate.
+
+    Applies to the site's own address AND every extra address it answers on —
+    a pool move that landed on one but not the others would leave a custom
+    domain on a node fleet that never installs the release behind it.
+
+    Same guard stack as `attach_domain`: no CI key, recent interactive auth,
+    and an explicit object check, because `uses_model_security` does not gate
+    a custom action and `requires_perms` gates the verb but not the row.
+    """
+    from mojo.apps.edge.services import webapp_serving
+
+    web_app = WebApp.get_instance_or_404(request.DATA.get("webapp"))
+    WebApp.rest_check_permission_or_raise(
+        request, ["SAVE_PERMS", "VIEW_PERMS"], web_app)
+    return webapp_serving.apply(web_app, request.DATA)
+
+
+@md.POST('webapp/certificate')
+@md.denies_key_backed_session()
+@md.requires_fresh_auth(600)
+@md.requires_params("webapp")
+@md.requires_perms("manage_webapp")
+def on_webapp_certificate(request):
+    """Request a certificate covering this site's address alone.
+
+    Requesting only. Switching the site onto it is a separate `webapp/serving`
+    save once it is active and really covers the name — a site pointed at a
+    pending certificate would serve nothing.
+
+    `request.user` is passed as the actor: when the address sits on an
+    ANCESTOR's domain, ordering a certificate is a write against that zone and
+    needs authority in the group that owns it.
+    """
+    from mojo.apps.edge.services import webapp_serving
+
+    web_app = WebApp.get_instance_or_404(request.DATA.get("webapp"))
+    WebApp.rest_check_permission_or_raise(
+        request, ["SAVE_PERMS", "VIEW_PERMS"], web_app)
+    webapp_serving.request_dedicated_certificate(web_app, request.user)
+    return webapp_serving.serving_for(web_app, include_editables=True)
+
+
+@md.POST('webapp/add_route')
+@md.denies_key_backed_session()
+@md.requires_fresh_auth(600)
+@md.requires_params("webapp", "path_prefix", "upstream")
+@md.requires_perms("manage_webapp")
+def on_webapp_add_route(request):
+    """Send one path to a declared destination, on every address of this site."""
+    from mojo.apps.edge.services import webapp_serving
+
+    web_app = WebApp.get_instance_or_404(request.DATA.get("webapp"))
+    WebApp.rest_check_permission_or_raise(
+        request, ["SAVE_PERMS", "VIEW_PERMS"], web_app)
+    return webapp_serving.add_route(
+        web_app, request.DATA.get("path_prefix"), request.DATA.get("upstream"))
+
+
+@md.POST('webapp/remove_route')
+@md.denies_key_backed_session()
+@md.requires_fresh_auth(600)
+@md.requires_params("webapp", "path_prefix")
+@md.requires_perms("manage_webapp")
+def on_webapp_remove_route(request):
+    """Stop sending one path elsewhere, on every address of this site.
+
+    The platform's own sign-in and account paths are refused here: they are
+    derived from the resolved hosted-auth contract, not stored as a flag, so a
+    caller cannot delete the routes that make logging in work.
+    """
+    from mojo.apps.edge.services import webapp_serving
+
+    web_app = WebApp.get_instance_or_404(request.DATA.get("webapp"))
+    WebApp.rest_check_permission_or_raise(
+        request, ["SAVE_PERMS", "VIEW_PERMS"], web_app)
+    return webapp_serving.remove_route(web_app, request.DATA.get("path_prefix"))
+
+
 @md.GET('webapp/health')
 @md.denies_key_backed_session()
 @md.requires_params("webapp")
