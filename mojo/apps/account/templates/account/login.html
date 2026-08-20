@@ -245,6 +245,16 @@
     // A tp: credential proves the temporary password was correct, but it is
     // not a session. Keep it in this page closure only — never browser storage.
     var forcedPasswordToken = null;
+
+    // The bouncer's stashed pr: token, once an attempt has been made with it.
+    // sessionStorage holds it only until the FIRST redemption attempt resolves
+    // — success or failure — because the stash has to be single use exactly
+    // like the token inside it. A failed attempt that left the stash behind
+    // meant the next token-less visit to /auth replayed a dead token and showed
+    // "already used" instead of a login form (seen on a live run). The value
+    // lives on here for the rest of this page load so a weak-password retry,
+    // which the server deliberately does NOT burn the token on, still works.
+    var attemptedResetToken = null;
     m.onPasswordChangeRequired = function (data) {
         if (!data || !data.forced_password_token) {
             m.showMessage("Could not start the required password change. Please sign in again.", "error");
@@ -449,10 +459,11 @@
     onForm("form-set-password", function (e) {
         e.preventDefault();
         var np = $("set-password-new").value, cp = $("set-password-confirm").value;
-        var token = forcedPasswordToken || sessionStorage.getItem("mat_reset_token");
+        var token = forcedPasswordToken || attemptedResetToken || sessionStorage.getItem("mat_reset_token");
         if (!token) { m.showMessage("Invalid or expired link.", "error"); showView("forgot"); return; }
         if (!np) { m.showMessage("Please enter a new password.", "error"); return; }
         if (np !== cp) { m.showMessage("Passwords do not match.", "error"); return; }
+        if (!forcedPasswordToken) { attemptedResetToken = token; }
         var btn = $("btn-set-password"); m.setLoading(btn, true); m.hideMessage();
         var completion = forcedPasswordToken
             ? MojoAuth.completeForcedPassword(forcedPasswordToken, np)
@@ -460,10 +471,14 @@
         completion
             .then(function () {
                 forcedPasswordToken = null;
+                attemptedResetToken = null;
                 sessionStorage.removeItem("mat_reset_token");
                 m.onAuthSuccess();
             })
             .catch(function (err) {
+                // Same removal on the failing path. The attempt happened; the
+                // stash is spent whether the server accepted it or not.
+                sessionStorage.removeItem("mat_reset_token");
                 m.setLoading(btn, false);
                 m.showMessage(MojoAuth.getError(err) || "Could not set your new password.", "error");
             });

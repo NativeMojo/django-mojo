@@ -282,6 +282,12 @@ def manual(step, code, message, remedy):
     return Finding(step, MANUAL, code, message, remedy)
 
 
-def pending(step, code, message):
-    return Finding(step, PENDING, code, message,
+def pending(step, code, message, remedy=None):
+    """Not ready YET. The remedy defaults to the one that is nearly always true.
+
+    A caller passes its own only when "re-run once it reports ready" would send
+    an operator to the wrong place — an instance that is still `pending` is
+    waiting on EC2, not on the resource the finding names.
+    """
+    return Finding(step, PENDING, code, message, remedy or
                    "AWS is still building this — re-run once it reports ready")

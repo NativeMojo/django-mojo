@@ -425,6 +425,15 @@ ever looked at — and it worked only if they happened to click the link a
 second time. The admin portal's existing "Send reset link" action was broken
 by the same mechanism, and is fixed by the same two template changes.
 
+**The stash is single use, like the token in it.** `login.html` removes
+`mat_reset_token` as soon as a redemption ATTEMPT resolves — success *and*
+failure. A stash left behind after a failed attempt (weak password, expired,
+already used) is replayed by the next token-less visit to `/auth`, which greets
+the visitor with "already used" instead of a login form; that was observed
+live. The token stays in a page-closure variable for the rest of that page
+load, so the weak-password retry — which the server deliberately does not burn
+the token on — still works.
+
 Overriding either template? Keep both halves, or reset links stop working on
 first click for exactly the visitors who most need them.
 

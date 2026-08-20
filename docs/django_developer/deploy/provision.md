@@ -39,6 +39,13 @@ and the summary names which steps are still coming up and tells you to run
 re-observation, every run is safe to interrupt, and running against a converged
 account creates nothing at all.
 
+An instance is one of those slow things too, on a smaller scale. Attaching a
+node's elastic IP seconds after `run_instances` gets `InvalidInstanceID` — "the
+pending instance ... is not in a valid state for this operation" — and that is
+reported as `PENDING` (`address.instance_not_ready`), not as a failure: the
+address is allocated and reserved, and the next `apply` attaches it. Any other
+association error is still `BLIND` and still fails the step.
+
 ## The eight questions
 
 `init` needs no AWS credential — it is eight questions and a file.
@@ -151,7 +158,13 @@ change with a review moment attached.
 Generated secrets — the database password, the Django secret key, the node's
 private SSH key — live in **`bootstrap-secrets.json` in the config bucket**,
 written by the provisioner and read back by the booting node. They are never
-asked for at the prompt and never written to disk on the operator's machine.
+asked for at the prompt and never written into the environment file.
+
+One of them does reach the operator's disk, deliberately: `configure` and
+`admin` copy `ssh_private_key` to `~/.ssh/<project>-<env>.pem` at mode `0600`
+so they can SSH to the nodes without the operator extracting it from that JSON
+by hand — see [`--identity` below](#flags). The path is printed; the key itself
+is never printed, logged, or put into a finding.
 
 `init` over an existing file **prefills every answer and preserves keys this
 version does not recognize**, so a file written by a newer django-mojo survives
@@ -218,13 +231,28 @@ budgets against.
 | `--nlb` | all | Build a balancer the preset would not |
 | `--skip-certificate` | `configure` | Converge the nodes, leave the placeholder certificate in place |
 | `--ssh-user` | `configure`, `admin` | The account to reach the nodes as (default `ec2-user`) |
-| `--identity` | `configure`, `admin` | Private key, when it is not one your agent already holds |
+| `--identity` | `configure`, `admin` | Private key to authenticate with. **Rarely needed** — see below |
 | `--email` | `admin` | The account to create (default: the file's `operator_email`) |
 | `--list-resources` | `status` | Print the tag-scoped inventory |
 | `--json` | `status` | Emit findings, steps and inventory as JSON |
 
 Shared flags live on the **subcommands**: `apply --env staging`, not
 `--env staging apply`.
+
+### `--identity` finds itself
+
+When `apply` generates the key pair, AWS hands back the private key exactly
+once and the provisioner stores it in `bootstrap-secrets.json`. `configure` and
+`admin` already read that object while observing the account, so with no
+`--identity` they write it to `~/.ssh/<project>-<env>.pem` at `0600` and use
+it. Nothing has to be extracted by hand, and re-running rewrites nothing when
+the file already matches.
+
+Pass `--identity` when you want a specific key — it always wins, and nothing is
+written anywhere. If the environment's key pair was **imported** (you supplied
+`public_key`, so AWS never generated a private half), there is nothing to
+materialize: the command says so and falls back to your SSH agent, exactly as
+before.
 
 ### Credentials: `--profile` is the one to use
 

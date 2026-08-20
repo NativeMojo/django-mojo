@@ -35,6 +35,23 @@ PROFILE_ERROR_MARKERS = ("Invalid IAM Instance Profile",
 
 RUNNING_STATES = ("pending", "running")
 
+# "That instance is not ready for this yet", as opposed to "that request was
+# wrong". EC2 models no error shapes at all, so these are matched on the code
+# string boto3 lifts out of the response body:
+#
+#   InvalidInstanceID       what AssociateAddress returns for an instance still
+#                           in `pending` — "The pending instance 'i-...' is not
+#                           in a valid state for this operation". Observed on a
+#                           real first run against an empty account, seconds
+#                           after run_instances.
+#   IncorrectInstanceState  the same refusal for an instance that is stopping,
+#                           stopped or otherwise mid-transition.
+#
+# InvalidInstanceID.NotFound is deliberately NOT here. It is a different
+# sentence — the instance is not there at all — and treating that as "wait a
+# bit" would turn a terminated node into a run that quietly reports progress.
+NOT_READY_CODES = ("InvalidInstanceID", "IncorrectInstanceState")
+
 # The project root every node script agrees on. Not configurable here: it is
 # baked into the skeleton's ec2_bootstrap.sh, into config_sync's defaults and
 # into check_node's audit, so a fifth opinion would only be a way to disagree.
@@ -302,6 +319,43 @@ def _run_with_profile_retry(ec2, request, findings):
     return None
 
 
+def _associate_address(ec2, allocation_id, instance_id, hostname, findings):
+    """Attach one elastic IP — and treat a not-yet-running instance as PENDING.
+
+    `report.safe` turns every ClientError it does not recognise into BLIND, and
+    a BLIND finding fails this step and BLOCKS `dns`. But an instance that is
+    still `pending` a second after `run_instances` is not a failure at all: it
+    is the ordinary state of the run that just launched it, and the next `apply`
+    associates the address in one call. That is precisely what PENDING exists
+    for — the same treatment `data.ensure_database` gives a still-creating
+    Aurora cluster.
+
+    Everything else still goes through `report.safe` as BLIND. The unrecognised
+    error is RE-RAISED inside the callable rather than handled here, so denials,
+    throttles and rejected credentials keep the classification and the remedy
+    they already have in one place.
+    """
+    from botocore.exceptions import ClientError
+
+    def attempt():
+        try:
+            return ec2.associate_address(AllocationId=allocation_id,
+                                         InstanceId=instance_id)
+        except ClientError as err:
+            code = (err.response.get("Error") or {}).get("Code", "")
+            if code not in NOT_READY_CODES:
+                raise
+            findings.append(report.pending(
+                STEP, "address.instance_not_ready",
+                f"{hostname} ({instance_id}) is not running yet, so its "
+                f"elastic IP was not associated ({code})",
+                "the address is allocated and reserved — re-run `apply` once "
+                "the instance reports running and it will be attached"))
+            return None
+
+    return report.safe(findings, STEP, "ec2.associate_address", attempt)
+
+
 def _ensure_addresses(ec2, spec, observed, names, instance_ids,
                       findings, actions, apply):
     """A stable public address per node — but only where one is needed.
@@ -345,10 +399,8 @@ def _ensure_addresses(ec2, spec, observed, names, instance_ids,
             actions.append(report.Action(STEP, "attach",
                                          existing.get("PublicIp"), hostname))
             if apply and instance_id:
-                report.safe(
-                    findings, STEP, "ec2.associate_address",
-                    lambda a=existing, i=instance_id: ec2.associate_address(
-                        AllocationId=a.get("AllocationId"), InstanceId=i))
+                _associate_address(ec2, existing.get("AllocationId"),
+                                   instance_id, hostname, findings)
             continue
 
         findings.append(report.missing(
@@ -368,8 +420,6 @@ def _ensure_addresses(ec2, spec, observed, names, instance_ids,
             continue
         resolved.append(allocated.get("PublicIp"))
         if instance_id:
-            report.safe(
-                findings, STEP, "ec2.associate_address",
-                lambda a=allocated, i=instance_id: ec2.associate_address(
-                    AllocationId=a.get("AllocationId"), InstanceId=i))
+            _associate_address(ec2, allocated.get("AllocationId"),
+                               instance_id, hostname, findings)
     return resolved
