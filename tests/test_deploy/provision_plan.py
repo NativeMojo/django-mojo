@@ -287,8 +287,12 @@ def _converged(spec):
     from mojo.deploy.provision import spec as spec_module
 
     names = spec_module.names(spec)
+    # EVERY field storage.SECRET_FIELDS names. A bundle short one credential
+    # is not a converged account — `apply` backfills it, correctly, and this
+    # fixture would then be asserting that a real write does not happen.
     secrets = {"db_password": "p" * 40, "cache_auth_token": "t" * 40,
                "django_secret_key": "s" * 64,
+               "github_webhook_secret": "w" * 40,
                "ssh_private_key": "PRIVATE", "ssh_key_name": names["key_pair"]}
     groups = balancer.target_group_specs(spec, VPC_ID)
 

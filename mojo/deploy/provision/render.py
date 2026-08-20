@@ -97,6 +97,12 @@ def django_conf(spec, answers, observed, secrets):
     setting("BASE_URL", _quote(f"https://{apex}" if apex else ""))
     setting("EMAIL_FROM", _quote(answers.get("operator_email") or ""))
     setting("GITHUB_REPO", _quote(answers.get("github_repo") or ""))
+    # Push-to-deploy's whole trust boundary: GitHub signs each delivery with
+    # this and the node verifies X-Hub-Signature-256 against it. Written even
+    # when empty so the key's absence from a node is legible as "this estate
+    # predates the field" rather than as a rendering bug.
+    setting("GITHUB_WEBHOOK_SECRET",
+            _quote(secrets.get("github_webhook_secret", "")))
 
     section("database")
     setting("DATABASE_HOST", _quote(observed.get("db_endpoint") or ""))

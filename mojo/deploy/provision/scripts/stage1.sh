@@ -105,6 +105,19 @@ rm -f "${PROJ_PATH}/var/app.tar.gz"
 [ -f "${PROJ_PATH}/aws/ec2_bootstrap.sh" ] || \
     die "the archive has no aws/ec2_bootstrap.sh — is this a django-mojo project?"
 
+# The commit that tarball came from. A tarball carries no history, so this is
+# the only record of which commit this node runs — `provision configure` reads
+# it to wire /opt/api to origin at exactly this sha, and the deploy plane is
+# `git fetch && git reset --hard` from there. Best-effort: an estate whose
+# payload predates app.sha still boots, it just stays unwired until the next
+# `apply` republishes the payload.
+if s3_get "app.sha" "${PROJ_PATH}/var/app_sha"; then
+    log "provisioned from commit $(cat "${PROJ_PATH}/var/app_sha")"
+else
+    rm -f "${PROJ_PATH}/var/app_sha"
+    warn 'no app.sha in the boot payload — this node cannot name its own commit, so "provision configure" will not wire it to origin. Re-run "provision apply" to republish the payload.'
+fi
+
 # ── 2. the OS ────────────────────────────────────────────────────────────────
 
 log "running ec2_bootstrap.sh (users, packages, nginx, certbot)"

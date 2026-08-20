@@ -335,6 +335,10 @@ def names(spec):
         "stage1_object": f"{BOOTSTRAP_PREFIX}/stage1.json",
         "stage1_script_object": f"{BOOTSTRAP_PREFIX}/stage1.sh",
         "app_archive_object": f"{BOOTSTRAP_PREFIX}/app.tar.gz",
+        # The commit app.tar.gz was archived from. The tarball carries no
+        # history, so without this the node cannot say which commit it runs
+        # and `configure` cannot wire it to origin — see storage.app_archive.
+        "app_sha_object": f"{BOOTSTRAP_PREFIX}/app.sha",
         "cloudwatch_object": f"{BOOTSTRAP_PREFIX}/cloudwatch-agent.json",
         "config_prefix": f"{CONFIG_PREFIX_ROOT}/{spec.project}/{spec.env}",
         "django_conf_object":

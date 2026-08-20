@@ -659,6 +659,65 @@ def test_storage_never_puts_a_secret_in_the_report(opts):
                      "are printed to a terminal and rendered into a browser")
 
 
+@th.django_unit_test("a bundle predating a credential gains it without losing the rest")
+def test_storage_secrets_backfill_only_adds(opts):
+    from mojo.deploy.provision import report, storage
+    from mojo.deploy.provision import spec as spec_module
+
+    # Exactly what an estate provisioned before github_webhook_secret existed
+    # has in its bucket. It must come out of an upgrade still able to reach
+    # its own database.
+    old = {"db_password": "p" * 40, "cache_auth_token": "c" * 40,
+           "django_secret_key": "k" * 50}
+    spec = _spec()
+    names = spec_module.names(spec)
+    client, stubber = _stub("s3")
+    stubber.add_response("put_object", {})
+    with stubber:
+        findings, actions, result = storage.ensure_secrets(
+            _clients(s3=client), spec,
+            _observed(config_bucket=names["config_bucket"], secrets=old),
+            apply=True)
+
+    _assert_no_blind(findings, "the backfill write must be model-valid")
+    stubber.assert_no_pending_responses()
+    merged = result["secrets"]
+    for key, value in old.items():
+        th.assert_eq(merged[key], value,
+                     f"{key} was re-minted — an upgrade that invents a new "
+                     f"database password takes the environment down")
+    th.assert_true(len(merged.get("github_webhook_secret", "")) >= 32,
+                   "the missing credential must be minted")
+    th.assert_in("secrets.incomplete", _codes(findings, report.DRIFT),
+                 f"the backfill must be reported: {_codes(findings)}")
+    rendered = " ".join(f.message + " " + (f.remedy or "") for f in findings)
+    th.assert_eq(merged["github_webhook_secret"] in rendered, False,
+                 "a minted credential appeared in the report")
+
+
+@th.django_unit_test("a dry-run backfill writes nothing and claims nothing")
+def test_storage_secrets_backfill_is_not_previewed_into_existence(opts):
+    from mojo.deploy.provision import storage
+    from mojo.deploy.provision import spec as spec_module
+
+    old = {"db_password": "p" * 40, "cache_auth_token": "c" * 40,
+           "django_secret_key": "k" * 50}
+    spec = _spec()
+    names = spec_module.names(spec)
+    client, stubber = _stub("s3")
+    with stubber:
+        findings, actions, result = storage.ensure_secrets(
+            _clients(s3=client), spec,
+            _observed(config_bucket=names["config_bucket"], secrets=old),
+            apply=False)
+
+    _assert_no_blind(findings, "a preview must make no S3 call")
+    th.assert_eq(result["secrets"].get("github_webhook_secret"), None,
+                 "a preview that hands back an unwritten secret renders a "
+                 "django.conf no node can ever agree with")
+    th.assert_eq(len(actions), 1, "the pending write must still be declared")
+
+
 # ── data ────────────────────────────────────────────────────────────────────
 
 @th.django_unit_test("a still-creating cluster is PENDING, not a failure and not a wait")
