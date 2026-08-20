@@ -66,15 +66,17 @@ def ensure_checkout(run, host, repo):
     if not repo:
         return findings
 
-    sha = _archived_sha(run, host, findings)
-    if sha is None:
+    # ONCE WIRED, HANDS OFF. var/app_sha names the commit this node BOOTED
+    # from, and the deploy plane moves HEAD forward from there on every push.
+    # Treating that file as authoritative forever means a later `configure` —
+    # run to publish a setting, or to renew a certificate — silently rolls a
+    # deployed node back to the commit it was born at. It did exactly that
+    # once, which is why this check comes before the sha is even read.
+    if _already_wired(run, host, repo, findings):
         return findings
 
-    rc, head, _ = run(f"git -C {PROJ_PATH} rev-parse HEAD", COMMAND_TIMEOUT)
-    if rc == 0 and head.strip() == sha:
-        findings.append(report.existing(
-            STEP, "checkout.ok",
-            f"{host}: {PROJ_PATH} is a checkout of {repo} at {sha[:12]}"))
+    sha = _archived_sha(run, host, findings)
+    if sha is None:
         return findings
 
     if not _wire_remote(run, host, repo, findings):
@@ -85,6 +87,32 @@ def ensure_checkout(run, host, repo):
         return findings
     _adopt(run, host, repo, sha, findings)
     return findings
+
+
+def _already_wired(run, host, repo, findings):
+    """Is this tree a checkout of `repo` with a resolvable HEAD?
+
+    A wrong origin is not "wired" — it is repointed below, since the repository
+    the operator provisioned with is the answer. But the COMMIT is never
+    touched once a repository exists: whatever HEAD says is what the deploy
+    plane last put there.
+    """
+    rc, out, _ = run(
+        f"git -C {PROJ_PATH} rev-parse --is-inside-work-tree", COMMAND_TIMEOUT)
+    if rc != 0 or out.strip() != "true":
+        return False
+    rc, url, _ = run(f"git -C {PROJ_PATH} remote get-url origin",
+                     COMMAND_TIMEOUT)
+    if rc != 0 or url.strip() != remote_url(repo):
+        return False
+    rc, head, _ = run(f"git -C {PROJ_PATH} rev-parse HEAD", COMMAND_TIMEOUT)
+    if rc != 0 or not _SHA.match(head.strip()):
+        return False
+    findings.append(report.existing(
+        STEP, "checkout.ok",
+        f"{host}: {PROJ_PATH} is a checkout of {repo} at {head.strip()[:12]} "
+        f"— the deploy plane owns HEAD from here"))
+    return True
 
 
 def _archived_sha(run, host, findings):

@@ -122,7 +122,8 @@ def test_checkout_is_idempotent(opts):
     from mojo.deploy.provision import checkout
 
     run = _Runner([
-        ("cat /opt/api/var/app_sha", (0, SHA, "")),
+        ("rev-parse --is-inside-work-tree", (0, "true", "")),
+        ("remote get-url origin", (0, f"git@github.com:{REPO}.git", "")),
         ("rev-parse HEAD", (0, SHA, "")),
     ])
     findings = checkout.ensure_checkout(run, HOST, REPO)
@@ -134,22 +135,48 @@ def test_checkout_is_idempotent(opts):
                  f"the converged state must be reported: {_codes(findings)}")
 
 
-@th.django_unit_test("a node at a different commit is moved to the archived one")
-def test_checkout_corrects_a_node_at_another_commit(opts):
+@th.django_unit_test("a node the deploy plane moved forward is never rolled back")
+def test_checkout_leaves_a_deployed_head_alone(opts):
+    from mojo.deploy.provision import checkout
+
+    # The node booted at SHA and has since been deployed to OTHER_SHA. This is
+    # the ordinary state of any node that has ever taken a push.
+    run = _Runner([
+        ("cat /opt/api/var/app_sha", (0, SHA, "")),
+        ("rev-parse --is-inside-work-tree", (0, "true", "")),
+        ("remote get-url origin", (0, f"git@github.com:{REPO}.git", "")),
+        ("rev-parse HEAD", (0, OTHER_SHA, "")),
+    ])
+    findings = checkout.ensure_checkout(run, HOST, REPO)
+
+    th.assert_eq(run.ran("reset"), [],
+                 "var/app_sha names the commit this node BOOTED from. Treating "
+                 "it as authoritative forever means a configure run — to "
+                 "publish a setting, to renew a certificate — silently rolls a "
+                 "deployed node back to the commit it was born at")
+    th.assert_eq(run.ran("fetch"), [], "and must not fetch to do it")
+    th.assert_true(any(OTHER_SHA[:12] in f.message for f in findings),
+                   f"the report must name the commit actually deployed: "
+                   f"{[f.message for f in findings]}")
+
+
+@th.django_unit_test("an unwired tree whose origin is wrong is repointed, then adopted")
+def test_checkout_adopts_after_repointing(opts):
     from mojo.deploy.provision import checkout
 
     run = _Runner([
         ("cat /opt/api/var/app_sha", (0, SHA, "")),
-        ("rev-parse HEAD", (0, OTHER_SHA, "")),
         ("rev-parse --is-inside-work-tree", (0, "true", "")),
-        ("remote get-url origin", (0, f"git@github.com:{REPO}.git", "")),
+        ("remote get-url origin", (0, "git@github.com:Someone/else.git", "")),
+        ("rev-parse HEAD", (0, OTHER_SHA, "")),
     ])
     findings = checkout.ensure_checkout(run, HOST, REPO)
 
     th.assert_eq(run.ran("git init -q /opt/api"), [],
                  "an existing repository must not be re-initialised")
     th.assert_true(run.ran(f"reset --mixed --quiet {SHA}"),
-                   "HEAD must be corrected to the commit the tree actually is")
+                   "a tree pointing at another repository was never wired by "
+                   "this environment, so its HEAD proves nothing")
     th.assert_in("checkout.wired", _codes(findings), str(_codes(findings)))
 
 

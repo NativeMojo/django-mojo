@@ -65,6 +65,12 @@ HEADER = """\
 """
 
 
+# Where a node's application tree lives. The same constant `remote.py` and
+# `nodes.py` hold — the framework's, not the operator's, and everything the
+# node plane installs is positioned against it.
+PROJ_PATH = "/opt/api"
+
+
 def _quote(value):
     """A Python string literal, because this file is executed as settings."""
     return '"%s"' % str(value).replace("\\", "\\\\").replace('"', '\\"')
@@ -137,6 +143,13 @@ def django_conf(spec, answers, observed, secrets):
     # KSMSecrets refuses to load without this, and dnsman's Certificate is a
     # KSMSecrets model — so an edge vhost cannot serve TLS without it.
     setting("KMS_KEY_ID", _quote(observed.get("kms_key_id") or ""))
+    # Where a unix Upstream's socket_path is allowed to resolve. The default
+    # is /run/mojo, but the framework's own mojo-asgi.service binds
+    # <PROJ_PATH>/var/asgi.sock — so on a default node the edge plane cannot
+    # declare an upstream pointing at the app it is running beside. Published
+    # from PROJ_PATH, which is the framework's constant, never a tenant value:
+    # the boundary still exists, it just sits where the socket actually is.
+    setting("EDGE_SOCKET_BASE", _quote(f"{PROJ_PATH}/var"))
 
     section("config plane")
     setting("CONFIG_SYNC_RESTART", "True")

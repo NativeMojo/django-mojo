@@ -253,3 +253,8 @@ def test_conf_publishes_the_edge_plane_settings(opts):
                  '["%s"]' % names["releases_bucket"],
                  "a list literal — validators.release_buckets reads it with "
                  "kind='list', and a bare string would allowlist nothing")
+    th.assert_eq(values.get("EDGE_SOCKET_BASE"), '"/opt/api/var"',
+                 "validators.socket_base() defaults to /run/mojo while the "
+                 "framework's own mojo-asgi.service binds "
+                 "<PROJ_PATH>/var/asgi.sock — unpublished, no edge vhost can "
+                 "declare an upstream to the app running beside it")
