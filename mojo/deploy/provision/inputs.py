@@ -73,7 +73,8 @@ SCHEMA_KEYS = frozenset((
     "apex_domain", "operator_email", "preset", "github_repo",
     "aws_profile", "role_arn",
     "admin_cidrs",
-    "backups_days", "reader", "replica", "nlb", "route53_zone", "staging",
+    "backups_days", "reader", "replica", "nlb", "stable_node_ips",
+    "route53_zone", "staging",
     "infrastructure_mode",
 ))
 
@@ -799,7 +800,7 @@ def problems(answers):
     return list(spec_module.validate_names(to_spec(answers)))
 
 
-def to_spec(answers, nlb=False):
+def to_spec(answers, nlb=False, stable_node_ips=False):
     """The `spec.Spec` these answers describe.
 
     Reader and replica are ADDITIVE on top of the preset — `reader: true` means
@@ -819,6 +820,8 @@ def to_spec(answers, nlb=False):
 
     if nlb or answers.get("nlb"):
         overrides["want_balancer"] = True
+    if stable_node_ips or answers.get("stable_node_ips"):
+        overrides["stable_node_ips"] = True
 
     built = spec_module.build(
         answers.get("project") or "", answers.get("env") or "",
