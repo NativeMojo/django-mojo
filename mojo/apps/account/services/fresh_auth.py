@@ -26,9 +26,24 @@ from mojo.helpers.settings import settings
 def resolve_window(request=None, seconds=None):
     """The freshness window in seconds. <= 0 means disabled.
 
-    Precedence: explicit `seconds` arg > X-Mojo-Test-Fresh-Auth-Window (test
-    requests only) > FRESH_AUTH_WINDOW setting (default 0 = off).
+    Precedence: FRESH_AUTH_ENFORCE=False (kills every window, including a
+    hard-coded one) > explicit `seconds` arg > X-Mojo-Test-Fresh-Auth-Window
+    (test requests only) > FRESH_AUTH_WINDOW setting (default 0 = off).
+
+    FRESH_AUTH_ENFORCE exists because `seconds` beats the global setting, and
+    roughly twenty endpoints pass an explicit 600. That made step-up auth
+    unconditional in practice: FRESH_AUTH_WINDOW=0 reads like an off switch and
+    silently was not one, so an operator being re-prompted for their password
+    every ten minutes had no supported way to stop it.
+
+    It defaults to True — the current behaviour — and turning it off is a real
+    reduction in security, not a cosmetic setting: it removes the re-auth
+    prompt from deploy-key minting, API-key rotation, capacity changes and
+    domain purchases. Set it false only where the session itself is already
+    strongly protected.
     """
+    if not settings.get("FRESH_AUTH_ENFORCE", True, kind="bool"):
+        return 0
     if seconds is not None:
         return int(seconds)
     if request is not None and _tm.is_test_request(request):

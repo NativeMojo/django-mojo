@@ -2,6 +2,7 @@ import {api, apiEnvelope, badge, FormView, formatDate, h, icon, pageHeader, Tabl
 import {modelHeader} from '../../components/model.js';
 import {confirmAction, openInspector, openModal} from '../../components/overlays.js';
 import {activityHref, decodeRouteState, returnLocation, routeHref} from '../../components/routes.js';
+import {toast} from '../../components/actions.js';
 import {sectionTabs, timelineView} from '../../components/views.js';
 
 export const ACTIVITY_QUERY_KEYS = Object.freeze([
@@ -160,16 +161,19 @@ async function openUser(ctx, summary, reloadList) {
       onReactivate: async ({reason}) => { await post(`/api/user/${user.id}`, {reactivate: {note: reason}}); await reload(); }} : null,
     actions: [
       {label: 'Edit identity', capability: manage, run: () => editUser(user, reload)},
-      {label: 'Resend invite', capability: manage, run: async () => { await post(`/api/user/${user.id}`, {send_invite: {}}); }},
-      {label: 'Send password-reset link', capability: manage, run: async () => { await post('/api/account/admin/user/password/reset', {user: user.id}); }},
+      {label: 'Resend invite', capability: manage, done: 'Invite sent.', run: async () => { await post(`/api/user/${user.id}`, {send_invite: {}}); }},
+      {label: 'Send password-reset link', capability: manage, done: 'Password reset link sent.', run: async () => { await post('/api/account/admin/user/password/reset', {user: user.id}); }},
       {label: 'Set temporary password', capability: manage, danger: true, run: async () => {
         const result = await post('/api/account/admin/user/password/temporary', {user: user.id}); oneTimeSecret('Temporary password', 'Temporary password', result.temporary_password);
       }},
       {label: 'Revoke sessions', capability: manage, danger: true, run: async () => {
         const answer = await confirmAction({title: 'Revoke all sessions?', copy: 'Every active token and websocket session for this user will be invalidated.', confirmLabel: 'Revoke sessions', danger: true});
-        if (answer.confirmed) { await post(`/api/user/${user.id}`, {revoke_sessions: {}}); await reload(); }
+        if (!answer.confirmed) return;
+        await post(`/api/user/${user.id}`, {revoke_sessions: {}});
+        await reload();
+        toast('All sessions revoked.');
       }},
-      {label: 'Copy safe identifiers', run: () => navigator.clipboard.writeText(`user:${user.id}\nusername:${user.username}`)},
+      {label: 'Copy safe identifiers', done: 'Identifiers copied.', run: () => navigator.clipboard.writeText(`user:${user.id}\nusername:${user.username}`)},
     ], context: {user},
   });
   const content = h('div', {class: 'people-inspector'}, header, tabs, body);
@@ -278,7 +282,7 @@ async function openGroup(ctx, summary, reloadList) {
       onDisable: async ({reason}) => { await post(`/api/group/${group.id}`, {disable: {reason: 'admin', note: reason}}); await reload(); },
       onReactivate: async ({reason}) => { await post(`/api/group/${group.id}`, {reactivate: {note: reason}}); await reload(); }} : null,
     actions: [{label: 'Edit identity', capability: manage, run: () => editGroup(group, reload)},
-      {label: 'Copy safe identifiers', run: () => navigator.clipboard.writeText(`group:${group.id}\nuuid:${group.uuid || ''}`)}], context: {group}});
+      {label: 'Copy safe identifiers', done: 'Identifiers copied.', run: () => navigator.clipboard.writeText(`group:${group.id}\nuuid:${group.uuid || ''}`)}], context: {group}});
   openInspector({title: `Group · ${group.name}`, content: h('div', {class: 'people-inspector'}, header, tabs, body), wide: true});
   await groupSection(ctx, group, active, body, reload);
 }
