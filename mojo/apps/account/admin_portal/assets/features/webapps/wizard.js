@@ -83,7 +83,20 @@ function recordCard(record, purpose) {
     h('div', {class: 'record-line'}, h('span', {class: 'record-key', text: 'Points to'}), h('code', {text: value}), copy(value)));
 }
 
-function stepBar(index) {
+// The record purposes, in one place: the wizard shows them beside a record
+// someone is typing at their DNS host, and the app page's records table shows
+// the same records in a column. Two spellings of "what this record is for"
+// would be two different explanations of one thing.
+export function recordPurpose(position) {
+  return position === 0 ? 'Points your address at us.'
+    : 'Lets us issue your HTTPS certificate.';
+}
+
+// A name-first run has ONE input and lands on its own: a four-step progress bar
+// over it would be counting steps nobody takes. The address-first flow (repair,
+// change-address, no-eligible-workspace) really does walk them, and keeps it.
+function stepBar(state, index) {
+  if (state.nameFirst) return null;
   return h('ol', {class: 'wizard-steps', 'aria-label': 'Setup progress'},
     ...WIZARD_STEPS.map((label, position) => h('li', {
       class: position < index ? 'complete' : position === index ? 'current' : '',
@@ -124,6 +137,10 @@ function runWizard(ctx, reloadApps, resumeDraft, adopt) {
   const state = {
     ctx, reloadApps, disposed: false, pollTimer: null, adopt: adopt || null,
     phase: adopt ? 'address' : newAppEntry,
+    // A name-first run is the one-decision flow: no step bar over it, and it
+    // lands on the app itself instead of ending on a button. `finish` rides on
+    // state so donePanel can close the wizard from a microtask.
+    nameFirst: !adopt && newAppEntry === 'name', landed: false, finish,
     groupId: adopt ? String(adopt.group_id) : (defaultGroup(ctx) || initialGroup(ctx)),
     url: '', precheck: null, resolved: null, options: null,
     operation: null, message: '',
@@ -323,7 +340,7 @@ function namePhase(state, render, finish) {
 
   main.replaceChildren(h('div', {class: 'wizard-loading'}, icon('refresh'), h('p', {text: 'Getting things ready…'})));
   loadOptions();
-  return h('div', {class: 'wizard-panel'}, stepBar(0),
+  return h('div', {class: 'wizard-panel'},
     intro('deploy', 'What’s your app called?', 'Pick a name and we put it online — its own address, HTTPS, and a starter page, ready for your first deploy.'),
     main);
 }
@@ -430,7 +447,7 @@ function addressPhase(state, render, finish) {
   check.addEventListener('click', runCheck);
   input.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); runCheck(); } });
 
-  return h('div', {class: 'wizard-panel'}, stepBar(0),
+  return h('div', {class: 'wizard-panel'}, stepBar(state, 0),
     intro('globe', 'What web address do you want?', 'Type the address people will use to reach your app, like myapp.example.com. We will check it and set everything else up.'),
     showGroup ? field('Workspace', group, 'Which workspace this app belongs to.') : null,
     h('div', {class: 'address-entry'}, input, check),
@@ -469,7 +486,7 @@ function domainPhase(state, render) {
     'Don’t have a domain yet? Buy one now and we’ll wire it up automatically.',
     '', () => { state.resolved = {mode: 'purchase'}; state.phase = 'identity'; render(); }));
 
-  return h('div', {class: 'wizard-panel'}, stepBar(0),
+  return h('div', {class: 'wizard-panel'}, stepBar(state, 0),
     intro('dns', 'How should we handle your domain?', `We didn’t find ${hostname} set up in this workspace yet. Choose what fits — in plain terms, none of these need any technical know-how.`),
     cards,
     !options.external_available && concreteGroup ? h('p', {class: 'muted small', text: 'Keeping your DNS elsewhere isn’t available on this installation yet.'}) : null,
@@ -563,7 +580,7 @@ function externalPhase(state, render) {
     onError: (error) => { message.textContent = error.message; },
   }));
 
-  return h('div', {class: 'wizard-panel'}, stepBar(0),
+  return h('div', {class: 'wizard-panel'}, stepBar(state, 0),
     intro('certificate', 'Keep your DNS where it is', 'Confirm your domain and we’ll show you the exact record to add at your DNS host. Nothing here changes where your domain lives.'),
     field('Your domain', domainInput, 'The domain your address ends with — for example example.com.'),
     h('div', {class: 'form-actions'}, h('button', {class: 'button ghost', type: 'button', onclick: () => { state.phase = 'domain'; render(); }}, 'Back'), start),
@@ -639,7 +656,7 @@ function identityPhase(state, render, finish) {
     });
   });
 
-  return h('div', {class: 'wizard-panel'}, stepBar(1), heading,
+  return h('div', {class: 'wizard-panel'}, stepBar(state, 1), heading,
     field('App name', name, adopt ? 'Changing the address doesn’t rename your app.' : 'The friendly name shown in Admin.'),
     advanced, message,
     h('div', {class: 'form-actions'},
@@ -834,7 +851,7 @@ function runPhase(state, render, finish) {
   addRow('DNS', address.dns);
   addRow('Certificate', address.certificate);
   addRow('Next automatic retry', op.next_attempt_at);
-  return h('div', {class: 'wizard-panel'}, stepBar(index),
+  return h('div', {class: 'wizard-panel'}, stepBar(state, index),
     h('div', {class: 'run-heading'}, h('strong', {text: op.profile?.display_name || 'Your app'}),
       h('button', {class: 'button ghost compact', type: 'button', onclick: (event) => runAction(event.currentTarget,
         () => refresh(state, render), {announceLabel: 'Checking again…'})}, icon('refresh'), 'Check again')),
@@ -909,8 +926,7 @@ function addressStep(state, render) {
       intro('dns', certFailed ? 'One more record to add' : 'Add these records at your DNS host',
         certFailed ? 'The certificate couldn’t be issued yet — please make sure both records below are in place at your DNS host.'
           : 'Copy each record into your DNS host exactly as shown. When they’re in, check again.'),
-      ...records.map((record, position) => recordCard(record,
-        position === 0 ? 'Points your address at us.' : 'Lets us issue your HTTPS certificate.')),
+      ...records.map((record, position) => recordCard(record, recordPurpose(position))),
       h('p', {class: 'muted small', text: 'Using Cloudflare or a proxy? Set these to “DNS only” (grey cloud) or the check will fail.'}),
       message, h('div', {class: 'form-actions'}, check));
   }
@@ -1008,12 +1024,31 @@ function verifyStep(state, render) {
 function donePanel(state, finish) {
   const op = state.operation;
   const host = (op.evidence || {}).address?.hostname;
-  return h('div', {class: 'wizard-panel'}, stepBar(4),
+  const app = op.resources?.webapp;
+  if (state.nameFirst && app && !state.landed) {
+    // A name-first run made exactly one decision, and the outcome is already
+    // true: the app is live. Ending on a congratulations screen with a button
+    // makes someone acknowledge a fact instead of acting on it — so close the
+    // wizard and land on the app's own Set up deploys tab, where its live-now
+    // banner says the same thing beside the thing to do next. The guard makes
+    // it once-only: render() runs again on every poll tick.
+    state.landed = true;
+    queueMicrotask(() => {
+      // finish() clears the durable draft first, so the arrival is a clean app
+      // page rather than one offering to resume a run that already finished.
+      finish();
+      location.hash = routeHref('deployments', {webapp: app, tab: 'setup'});
+    });
+    // Never visibly painted — the hash change lands in the same frame.
+    return h('div', {class: 'wizard-panel'}, h('p', {text: 'Taking you to your app…'}));
+  }
+  // Adopt / repair, and any run with no app to land on: the explicit hand-off.
+  return h('div', {class: 'wizard-panel'}, stepBar(state, 4),
     h('div', {class: 'result-state success'}, icon('check'),
       h('div', {}, h('strong', {text: 'You’re live!'}),
         h('p', {}, 'Your app is up', host ? h('span', {}, ' at ', h('code', {text: host})) : null, ', serving a welcome page until your first deploy.'))),
     h('div', {class: 'form-actions'},
-      h('button', {class: 'button primary', type: 'button', onclick: () => { const app = op.resources?.webapp; finish(); if (app) location.hash = routeHref('deployments', {webapp: app, tab: 'setup'}); }}, 'Set up deploys'),
+      h('button', {class: 'button primary', type: 'button', onclick: () => { finish(); if (app) location.hash = routeHref('deployments', {webapp: app, tab: 'setup'}); }}, 'Set up deploys'),
       h('button', {class: 'button ghost', type: 'button', onclick: finish}, 'Done')));
 }
 

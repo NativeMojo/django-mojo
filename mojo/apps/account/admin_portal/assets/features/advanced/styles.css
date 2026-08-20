@@ -2,6 +2,11 @@
 /* The domain detail is a page; its back link must exist even when the
    WebApps feature (which declares the same rule) is disabled. */
 .back-link { margin: 0 0 .35rem; font-size: .82rem; }
+.domain-role { display: flex; align-items: center; gap: .5rem; margin: 0 0 .35rem; color: var(--muted); font-size: .82rem; }
+/* Declared here for the same reason as .back-link above: the domain overview's
+   subheads must be styled even when the WebApps feature (which owns the other
+   copy of this rule) is disabled. */
+.section-subhead { margin: .5rem 0 0; font-size: .85rem; }
 .typed-settings { display: grid; gap: 1rem; }
 .method-settings { margin: 0; padding: .8rem; border: 1px solid var(--line); border-radius: 8px; }
 .method-settings legend { padding: 0 .35rem; font-size: .75rem; font-weight: 700; }

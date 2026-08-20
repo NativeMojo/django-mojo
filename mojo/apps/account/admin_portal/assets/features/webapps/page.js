@@ -10,7 +10,7 @@ import {decodeRouteState, routeHref} from '../../components/routes.js';
 import {rowSection, statusHeadline, statusRow} from '../../components/rows.js';
 import {announce, copyButton, loadInto, runAction} from '../../components/actions.js';
 import {emptyState, errorState, sectionTabs} from '../../components/views.js';
-import {hasPendingWizard, resumeWizard, startChangeAddress, startWizard} from './wizard.js';
+import {hasPendingWizard, recordPurpose, resumeWizard, startChangeAddress, startWizard} from './wizard.js';
 import {servingPanel} from './serving.js';
 import {
   FRAMEWORK_PATH, PLATFORM_SECTIONS_PATH, apiServiceRow, applyFrameworkUpdate,
@@ -153,14 +153,20 @@ async function changeAddressFor(ctx, app, reload) {
 
 // Type / Name / Value, rendered verbatim from the response. Composing a record
 // here would be a guess about someone else's DNS host.
+// What each record is FOR leads the row: someone reading this is about to type
+// two near-identical CNAMEs into a stranger's control panel, and "which one is
+// this again" is the question the table was not answering. The sentences are
+// the wizard's own (recordPurpose) — the same records, told the same way.
 function recordsTable(records) {
   const cell = (value) => h('div', {class: 'record-cell'}, h('code', {text: value}), copyButton(value));
   const text = (value) => (Array.isArray(value) ? value.join(', ') : String(value ?? ''));
+  const rows = (records || []).map((record, position) => ({...record, purpose: recordPurpose(position)}));
   return new TableView({columns: [
+    {label: 'What it does', render: (row) => h('span', {text: row.purpose})},
     {label: 'Type', render: (record) => cell(text(record.type))},
     {label: 'Name', render: (record) => cell(text(record.name))},
     {label: 'Value', render: (record) => cell(text(record.value))},
-  ], rows: records || [], empty: 'Nothing to add — check again.'}).render();
+  ], rows, empty: 'Nothing to add — check again.'}).render();
 }
 
 function certBadge(certificate) {
@@ -220,11 +226,18 @@ function addAddressDialog(app, reload) {
   const message = h('div', {class: 'form-message', role: 'alert'});
   const area = h('div', {class: 'verdict-area'});
   const submit = h('button', {class: 'button primary', type: 'button'}, icon('globe'), 'Add address');
+  // Opening this dialog and thinking better of it needs a way out that is not
+  // the Escape key — every other form in the feature offers one.
+  const cancel = h('button', {class: 'button ghost', type: 'button', onclick: () => close()}, 'Cancel');
   let done = false;
+  // ONE counter over both the passive hint and the real submit. They race: a
+  // preview in flight when Add lands must never paint over Add's result.
+  let seq = 0;
+  let previewTimer = null;
   const content = h('div', {},
     h('p', {class: 'modal-copy', text: 'Point an address you already own at this app. It serves exactly what your app’s own address serves.'}),
     h('label', {class: 'field'}, h('span', {text: 'Address'}), input),
-    message, area, h('div', {class: 'form-actions'}, submit));
+    message, area, h('div', {class: 'form-actions'}, cancel, submit));
   const close = openModal({title: `Add a custom domain to ${app.slug}`,
     subtitle: 'One address, one label — like www or shop.', content,
     onClose: () => { if (done) reload(); }});
@@ -241,6 +254,9 @@ function addAddressDialog(app, reload) {
           h('p', {text: managed
             ? 'This address now serves your app — and this domain’s DNS is managed here — records and HTTPS are handled for you.'
             : 'This address now serves your app, with HTTPS.'}))));
+      // Two ways to close a finished dialog is one too many, and "Cancel" over
+      // a done deal reads as if it could undo it.
+      cancel.remove();
       submit.replaceWith(h('button', {class: 'button primary', type: 'button', onclick: () => close()}, 'Done'));
       return;
     }
@@ -276,6 +292,40 @@ function addAddressDialog(app, reload) {
       h('div', {}, h('strong', {text: result.reason || result.status}))));
   }
 
+  // The same verdict, before anything is written. Only `ready` is new copy:
+  // needs_domain reuses paint's steer node verbatim, and `unusable` falls into
+  // its unknown-status branch, so each sentence exists exactly once.
+  function paintPreview(result) {
+    if (result.status !== 'ready') { paint(result); return; }
+    const managed = result.dns === 'managed';
+    area.replaceChildren(managed
+      ? h('div', {class: 'verdict ready'}, icon('check'),
+        h('div', {}, h('strong', {text: `${result.domain.name} is managed here`}),
+          h('p', {text: `We’ll point ${result.hostname} at your app and issue its HTTPS certificate. Nothing to add at your DNS host.`})))
+      : h('div', {class: 'verdict steer'}, icon('dns'),
+        h('div', {}, h('strong', {text: `${result.domain.name}’s DNS is at your own host`}),
+          h('p', {text: 'Add the address and we’ll show you the exact record to publish, then check it for you.'}))));
+  }
+
+  // A hint, not an action: nothing is triggered, so there is no pending state
+  // to pin and no error to report. A hint that cannot be given is simply not
+  // given — the address still submits, and the write's own answer is the truth.
+  function runPreview() {
+    if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
+    if (done) return;
+    const hostname = input.value.trim();
+    if (!hostname) { area.replaceChildren(); return; }
+    const mine = ++seq;
+    api(`/api/edge/webapp/attach_preview?webapp=${encodeURIComponent(app.id)}&hostname=${encodeURIComponent(hostname)}`)
+      .then((result) => { if (mine === seq && !done) paintPreview(result); })
+      .catch(() => { /* silent by design */ });
+  }
+
+  function schedulePreview() {
+    if (previewTimer) clearTimeout(previewTimer);
+    previewTimer = setTimeout(runPreview, 350);
+  }
+
   // The pending state goes on `submit`, never on the Check / Try again buttons
   // paint() renders: those live inside `area`, which every branch replaces.
   // submit sits outside it and outlives each result.
@@ -284,6 +334,10 @@ function addAddressDialog(app, reload) {
     if (!hostname) { message.textContent = 'Type the address you want to point at this app.'; return Promise.resolve(); }
     message.textContent = '';
     area.replaceChildren();
+    // Bump the shared counter: a preview already in flight is now stale, and
+    // must not repaint the hint over whatever this call comes back with.
+    if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
+    seq += 1;
     const payload = {webapp: app.id, hostname};
     // Only the explicit repair sets this — a plain check must never mint a new
     // certificate order.
@@ -301,6 +355,10 @@ function addAddressDialog(app, reload) {
 
   submit.addEventListener('click', () => run(false));
   input.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); run(false); } });
+  input.addEventListener('input', schedulePreview);
+  // Leaving the field is the moment someone has finished typing a name; answer
+  // then rather than making them wait out the debounce.
+  input.addEventListener('blur', runPreview);
 }
 
 // `current` comes from loadInto's generation token: two fast tab clicks are
@@ -756,7 +814,22 @@ function setupPanel(ctx, app, summary, reload) {
     paint();
   }});
   paint();
-  return h('div', {class: 'setup-ways'}, tabs, body);
+  const ways = h('div', {class: 'setup-ways'}, tabs, body);
+  if (summary.address?.hostname && !summary.current_release) {
+    // Landing here from onboarding, the three ways to deploy read as three
+    // ways to fix something — because nothing on the tab said the app was
+    // already up. It is: the address, its certificate and a welcome page all
+    // went live during setup, and deploying only replaces the page.
+    const secure = certState(summary.address.certificate).tone === 'ok';
+    const origin = httpsLink(summary.address.https_origin);
+    ways.prepend(h('div', {class: 'result-state success'}, icon('check'),
+      h('div', {},
+        h('strong', {text: 'Your app is already live'}),
+        h('p', {text: `${summary.address.hostname} is serving the welcome page it came with${secure ? ', over HTTPS' : ''}. Deploying replaces that page with your build — there is nothing to fix first.`}),
+        secure ? null : h('p', {class: 'muted small', text: 'Its HTTPS certificate is still being issued — that finishes on its own.'}),
+        origin ? h('a', {class: 'button ghost compact', href: origin, target: '_blank', rel: 'noopener'}, 'Open') : null)));
+  }
+  return ways;
 }
 
 // ---------------------------------------------------------------------------

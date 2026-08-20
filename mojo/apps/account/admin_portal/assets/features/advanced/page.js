@@ -388,6 +388,100 @@ function domainCertificatesPanel(ctx, domain) {
   return panel;
 }
 
+// Everything this domain is already doing, and — just as important — what
+// putting an app live on it does NOT touch. The reads are the ones this portal
+// already makes: the live provider zone, the vhost inventory, and the app list.
+// Nothing here writes, and nothing here is derived from a guess about record
+// shapes: an address belongs to this domain because its vhost says so.
+function domainOverviewPanel(ctx, domain) {
+  const panel = tablePanel('What’s on this domain',
+    'Everything this domain is doing, and what putting an app live does not touch.');
+  // Into a body node, not the panel: the panel carries the heading this
+  // loading state would otherwise replace.
+  const body = h('div', {}); panel.append(body);
+  loadInto(body, async (current) => {
+    // `mojo` is the provider name for "the customer keeps their own DNS", and a
+    // domain that is not active has no zone here to ask about. Asking anyway is
+    // a guaranteed provider error rendered as if the domain were broken, so the
+    // zone read is skipped outright and the blocks say why.
+    const keepsOwnDns = domain.provider === 'mojo' || domain.status !== 'active';
+    // Each read is caught on its own: a zone the provider will not answer for
+    // must still leave the addresses block standing, and vice versa.
+    const [records, vhosts, apps] = await Promise.all([
+      keepsOwnDns ? Promise.resolve(null)
+        : api(`/api/dnsman/dns?domain=${encodeURIComponent(domain.id)}`)
+          .then((payload) => payload.records || []).catch(() => null),
+      loadVhosts().catch(() => []),
+      api('/api/edge/webapp?graph=default&size=200').then(listData).catch(() => []),
+    ]);
+    if (!current()) return;
+
+    const keptDnsCopy = 'This domain’s DNS lives at your own host — its records are managed there.';
+    const unreadableCopy = 'This domain’s zone could not be read just now.';
+    const zoneNote = keepsOwnDns ? keptDnsCopy : records === null ? unreadableCopy : null;
+
+    // The wildcard is the whole reason a new app is instant. Matched by exact
+    // name, trailing dot and all — providers return both spellings.
+    const wildcardName = `*.${domain.name}`;
+    const bare = (value) => String(value || '').replace(/\.$/, '');
+    const wildcard = (records || []).find((row) =>
+      String(row.type || '').toUpperCase() === 'CNAME' && bare(row.name) === wildcardName);
+    const wildcardCard = zoneNote
+      ? h('p', {class: 'muted small', text: zoneNote})
+      : wildcard
+        ? h('div', {class: 'result-card'}, h('div', {},
+          h('strong', {text: `${wildcardName} → ${(wildcard.record_values || []).map(bare).join(', ')}`}),
+          h('span', {text: 'Every app under this domain answers here. This is why a new app is instant — no record is added for it.'})))
+        : h('div', {class: 'result-card'}, h('div', {},
+          h('strong', {text: 'No wildcard record yet'}),
+          h('span', {text: 'The first app created under this domain adds it, along with the certificate that covers every app on it.'})));
+
+    // An EXACT-ID join, never a suffix match: `*.eu.example.com` is a different
+    // domain row than `example.com`, and a name test would fold one into the
+    // other. This catches primaries, extra addresses and apex rows alike.
+    const onDomain = vhosts.filter((vhost) => vhost.domain?.id === domain.id);
+    const appByVhost = new Map();
+    apps.forEach((app) => { if (app.vhost?.id != null) appByVhost.set(app.vhost.id, app); });
+    const addressRows = onDomain.map((vhost) => ({
+      hostname: vhost.server_name, kind: vhost.kind,
+      app: appByVhost.get(vhost.id) || null,
+    }));
+    const addresses = new TableView({rows: addressRows,
+      empty: 'No apps are using this domain yet.', columns: [
+        {label: 'Address', render: (row) => h('span', {class: 'mono', text: row.hostname})},
+        // No app owns this vhost as its own address: it is one app's extra
+        // address, or a vhost an admin made by hand. Said plainly, not hidden.
+        {label: 'App', render: (row) => (row.app
+          ? h('a', {href: routeHref('deployments', {webapp: row.app.id})},
+            row.app.display_name || row.app.slug)
+          : h('span', {class: 'muted', text: ['site', 'site_api'].includes(row.kind)
+            ? '— extra address' : `— ${row.kind}`}))},
+      ]}).render();
+
+    // Mail is the fear this panel exists to settle: nothing about putting an
+    // app live reaches an MX or a verification TXT.
+    const mail = (records || []).filter((row) =>
+      ['MX', 'TXT'].includes(String(row.type || '').toUpperCase()));
+    const mailBlock = zoneNote
+      ? h('p', {class: 'muted small', text: zoneNote})
+      : new TableView({rows: mail,
+        empty: 'No mail or verification records in this zone.', columns: [
+          {label: 'Type', render: (row) => badge(row.type, 'neutral')},
+          {label: 'Name', render: (row) => h('span', {class: 'mono', text: row.name})},
+          {label: 'Value', render: (row) => h('div', {class: 'record-values'},
+            ...(row.record_values || []).map((value) => h('code', {text: value})))},
+        ]}).render();
+
+    body.replaceChildren(
+      h('h3', {class: 'section-subhead', text: 'The wildcard record'}), wildcardCard,
+      h('h3', {class: 'section-subhead', text: 'Addresses on this domain'}), addresses,
+      h('h3', {class: 'section-subhead', text: 'Mail and verification records'}),
+      h('p', {class: 'muted small', text: 'Yours to manage. Putting an app live never adds, changes, or removes anything here.'}),
+      mailBlock);
+  }, {message: 'Reading this domain…'});
+  return panel;
+}
+
 // One domain is a page of its own (?domain=<id>), never a drawer over the
 // list. The list and the detail are the same route, so a row click is a plain
 // navigation and the browser Back button behaves the way an operator expects.
@@ -400,11 +494,32 @@ async function domainsPage(ctx) {
     history.replaceState({}, '', routeHref('domains', {domain: entry.inspector}));
   }
   function renderDetail(domain) {
+    // Whether THIS is the domain new apps in its workspace go live under — the
+    // single most load-bearing fact about a domain, and one the page never
+    // said. Taken from the workspace's own onboarding options, so it is the
+    // server's answer rather than a guess from record shapes. Starts empty and
+    // fills in: a domain that is not the apps domain simply never gains a line.
+    //
+    // Gated on manage_webapps because the read belongs to WebApps: a DNS-only
+    // operator does not make the call at all, and sees no badge. Accepted —
+    // silence is better than a permission error on a page about DNS.
+    const role = h('p', {class: 'domain-role'});
+    if (domain.group?.id && ctx.capabilities.manage_webapps) {
+      api(`/api/edge/webapp/onboarding/options?group=${encodeURIComponent(domain.group.id)}`)
+        .then((options) => {
+          if (options?.apps_domain?.id !== domain.id) return;
+          role.replaceChildren(badge('Apps domain', 'success'),
+            h('span', {text: 'New apps in this workspace go live under this domain — one wildcard record and one certificate cover every one of them.'}));
+        })
+        .catch(() => { /* a fact that cannot be read is simply not stated */ });
+    }
     root.replaceChildren(
       h('p', {class: 'back-link'}, h('a', {href: routeHref('domains')}, '← All domains')),
       pageHeader('Network & hosting', domain.name, 'Registrar settings, TLS coverage, and the live provider zone for this domain.', [
         ctx.capabilities.manage_network ? h('button', {class: 'button ghost', onclick: () => editDomain(domain, render)}, 'Edit registrar settings') : null,
       ]),
+      role,
+      domainOverviewPanel(ctx, domain),
       h('dl', {class: 'details'},
         h('div', {}, h('dt', {text: 'Provider'}), h('dd', {text: domain.provider})),
         h('div', {}, h('dt', {text: 'Status'}), h('dd', {text: domain.status})),
