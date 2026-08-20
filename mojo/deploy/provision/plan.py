@@ -45,9 +45,9 @@ the first time it disagreed with reality it would be worse than useless.
 
 from objict import objict
 
-from mojo.deploy.provision import (balancer, data, discover, dns, identity,
-                                   network, nodes, observability, report,
-                                   storage)
+from mojo.deploy.provision import (balancer, data, discover, dns, encryption,
+                                   identity, network, nodes, observability,
+                                   report, storage)
 from mojo.deploy.provision import spec as spec_module
 
 
@@ -117,6 +117,13 @@ STEPS = (
          description="the bucket everything else is read from"),
     Step("secrets", storage.ensure_secrets, ("config_bucket",),
          description="generated once, read back forever"),
+    # The edge plane's two prerequisites. Both depend only on the account, so
+    # an environment gets them on its first apply rather than discovering at
+    # WebApp-onboarding time that it cannot hold a certificate.
+    Step("encryption", encryption.ensure_key, ("account",),
+         description="the KMS key KSMSecrets models encrypt against"),
+    Step("releases_bucket", storage.ensure_releases_bucket, ("account",),
+         description="where WebApp artifacts are published and fetched"),
     Step("network", network.ensure_vpc, ("account",),
          description="VPC, subnets, gateway, routes, S3 endpoint"),
     Step("security_groups", network.ensure_security_groups, ("network",),

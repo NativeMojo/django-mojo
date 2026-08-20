@@ -49,7 +49,15 @@ AUDIT_ACTIONS = {
     capacity_service.ACTION_ADD_READER: "aws_capacity_add_reader",
     capacity_service.ACTION_REMOVE_READER: "aws_capacity_remove_reader",
     capacity_service.ACTION_SET_CACHE_REPLICAS: "aws_capacity_set_cache_replicas",
+    capacity_service.ACTION_ENABLE_STABLE_IPS: "aws_capacity_enable_stable_ips",
+    capacity_service.ACTION_DISABLE_STABLE_IPS: "aws_capacity_disable_stable_ips",
 }
+
+# Actions that operate on the whole fleet rather than one named resource. The
+# typed echo for these is the ACTION WORD the panel showed the operator.
+FLEET_ACTIONS = (capacity_service.ACTION_ADD_NODE,
+                 capacity_service.ACTION_ENABLE_STABLE_IPS,
+                 capacity_service.ACTION_DISABLE_STABLE_IPS)
 
 
 def _truthy(value):
@@ -132,11 +140,12 @@ def on_capacity_apply(request):
     if action not in capacity_service.ACTIONS:
         raise me.ValueException(f"Unknown capacity action '{action}'")
 
-    # `add_node` has no resource of its own — the server picks the clone
-    # source — so its typed echo is the word the panel showed the operator.
-    resource = (data.get("resource") or "").strip() \
-        if action == capacity_service.ACTION_ADD_NODE else _text(data, "resource")
-    expected = resource or capacity_service.ACTION_ADD_NODE
+    # Fleet-wide actions have no resource of their own — the server derives
+    # the targets — so their typed echo is ALWAYS the action word the panel
+    # showed. A caller-supplied resource is ignored outright: honoring it
+    # would let the caller choose their own echo and steer the audit subject.
+    resource = "" if action in FLEET_ACTIONS else _text(data, "resource")
+    expected = resource or action
 
     # Typed confirmation, checked before anything reaches AWS. An operator who
     # cannot reproduce the identifier is not looking at the resource they think.
@@ -145,6 +154,18 @@ def on_capacity_apply(request):
             "confirm_resource must exactly match the resource identifier")
 
     params = {}
+    if action == capacity_service.ACTION_ENABLE_STABLE_IPS:
+        assign = data.get("assign")
+        if assign is not None:
+            if (not isinstance(assign, dict) or not assign or any(
+                    not isinstance(key, str) or not key.strip()
+                    or not isinstance(value, str) or not value.strip()
+                    for key, value in assign.items())):
+                raise me.ValueException(
+                    "assign must be a non-empty object mapping instance ids "
+                    "to Elastic IP allocation ids")
+            params = {"assign": {key.strip(): value.strip()
+                                 for key, value in assign.items()}}
     if action == capacity_service.ACTION_SET_CACHE_REPLICAS:
         if "count" not in data:
             raise me.ValueException(

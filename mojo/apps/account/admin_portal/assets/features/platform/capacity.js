@@ -34,6 +34,8 @@ const TERMINATE_NODE = 'terminate_node';
 const ADD_READER = 'add_reader';
 const REMOVE_READER = 'remove_reader';
 const SET_CACHE_REPLICAS = 'set_cache_replicas';
+const ENABLE_STABLE_IPS = 'enable_stable_ips';
+const DISABLE_STABLE_IPS = 'disable_stable_ips';
 
 // Never a dead control: when the server would refuse, the row says which thing
 // is in the way instead of offering a button that fails.
@@ -46,6 +48,12 @@ const BLOCKED_COPY = {
   no_reader: 'this database has no reader to remove',
   no_cache_group: 'no ElastiCache replication group was found in this region',
   cluster_mode_unsupported: 'cluster-mode enabled — its replica count is a resharding decision, not a capacity change',
+  already_enabled: 'on — every node holds its stable address',
+  not_enabled: 'stable outbound IPs are off and nothing is attached',
+  no_fleet_nodes: 'no node is registered behind a load balancer',
+  fleet_unavailable: 'the serving tier could not be read, so the fleet is unknown — not empty',
+  addresses_unavailable: 'the region\'s Elastic IPs could not be read',
+  policy_unavailable: 'the stable-IPs policy could not be read — its state is unknown, not off',
 };
 
 const PHASE_COPY = {
@@ -61,6 +69,11 @@ const PHASE_COPY = {
   creating: 'creating',
   deleting: 'deleting',
   scaling: 'changing the replica count',
+  addressing: 'attaching the fleet\'s stable outbound address',
+  planning: 'planning which node gets which address',
+  associating: 'attaching stable addresses',
+  verifying: 're-reading AWS to prove the result',
+  detaching: 'detaching stable addresses',
   complete: 'done',
 };
 
@@ -407,6 +420,7 @@ export async function capacityPanel(ctx, signal = null) {
     if (running) return running;
     const labels = [
       row.name && row.name !== row.id ? row.name : '',
+      row.public_ip ? `${row.public_ip}${row.stable_ip ? ' (stable)' : ''}` : '',
       row.self ? 'this node' : '',
       row.primary ? 'certbot primary' : '',
       row.added_by_capacity ? 'added here' : '',
@@ -451,6 +465,143 @@ export async function capacityPanel(ctx, signal = null) {
     return wire(statusRow({tone: 'muted', name: 'Add a node',
       value: '', detail: 'clones a healthy member and proves it before it serves',
       action: {label: 'Add node…', href: '#'}}), addNode);
+  }
+
+  // ── stable outbound addresses ───────────────────────────────────────────
+
+  async function enableStableIps() {
+    const egress = report?.egress || {};
+    const reserved = (egress.reserved || []).map((row) => row.public_ip).filter(Boolean);
+    const toAllocate = Number(egress.to_allocate || 0);
+    const pending = (egress.pending_nodes || []).length;
+    const choice = await confirm({
+      title: 'Turn on stable outbound IPs?',
+      subtitle: pending ? `${pending} node(s) need an address` : 'already converged',
+      expect: ENABLE_STABLE_IPS,
+      verb: 'Enable stable IPs',
+      consequence:
+        'Every registered node gets a permanent Elastic IP for its outbound '
+        + 'calls. Attaching swaps a node\'s public source address, which briefly '
+        + 'cuts in-flight OUTBOUND connections; inbound service through the '
+        + 'balancer is unaffected. When it finishes, the panel shows the exact '
+        + 'addresses to give providers.',
+      notes: [
+        toAllocate > 0
+          ? `${toAllocate} new address(es) will be allocated — no net new monthly `
+            + 'cost while attached, since each replaces the node\'s identical '
+            + 'auto-assigned-IPv4 charge. AWS\'s default quota is 5 public IPv4s '
+            + 'per region; a quota error names the fix.'
+          : 'No new address needs to be allocated.',
+        reserved.length
+          ? `Reserved address(es) are reused first: ${reserved.join(', ')}.` : '',
+        'Only currently-registered nodes converge — a drained-but-running node '
+        + 'is not included. Nodes added later receive their address '
+        + 'automatically before they serve.',
+      ],
+    });
+    if (!choice) return;
+    submit(ENABLE_STABLE_IPS,
+      {action: ENABLE_STABLE_IPS, confirm_resource: ENABLE_STABLE_IPS});
+  }
+
+  async function disableStableIps() {
+    const egress = report?.egress || {};
+    const list = (egress.addresses || []).join(', ');
+    const choice = await confirm({
+      title: 'Turn off stable outbound IPs?',
+      subtitle: list,
+      expect: DISABLE_STABLE_IPS,
+      verb: 'Disable stable IPs',
+      consequence:
+        'Providers that allowlisted these addresses may start refusing this '
+        + 'fleet\'s calls the moment they detach. Each node is left on a NEW '
+        + 'auto-assigned address after a gap of up to a few minutes — or with '
+        + 'no public address at all if its network interface was not launched '
+        + 'with auto-assign — and outbound provider calls fail during that gap.',
+      notes: [
+        'The addresses are KEPT reserved, so re-enabling restores the exact '
+        + 'same allowlisted addresses. From that moment each reservation bills '
+        + '~$3.60/month on top of the node\'s auto-assigned address.',
+        'Releasing the reserved addresses is deliberately not part of this '
+        + 'switch — that stays an AWS console action.',
+      ],
+    });
+    if (!choice) return;
+    submit(DISABLE_STABLE_IPS,
+      {action: DISABLE_STABLE_IPS, confirm_resource: DISABLE_STABLE_IPS});
+  }
+
+  function egressRows() {
+    const egress = report?.egress || {};
+    const running = progressRow(ENABLE_STABLE_IPS, 'Stable outbound IPs', '')
+      || progressRow(DISABLE_STABLE_IPS, 'Stable outbound IPs', '');
+    if (running) return [running];
+    // A failed read is UNKNOWN, never an empty allowlist — or an "off" —
+    // rendered as canonical.
+    if (!egress.available || egress.policy_available === false) {
+      return [statusRow({tone: 'warn', name: 'Stable outbound IPs',
+        value: 'Unknown',
+        detail: egress.fleet_available === false
+          ? BLOCKED_COPY.fleet_unavailable
+          : egress.addresses_available === false
+            ? BLOCKED_COPY.addresses_unavailable
+            : BLOCKED_COPY.policy_unavailable,
+        detailTone: 'warning'})];
+    }
+    // Balancer-less install: no fleet for the toggle to manage, but a node
+    // holding an address is still the answer an operator came for. Read-only —
+    // no control is offered, and the rows never feed the offers.
+    const fallback = egress.fallback_attached || [];
+    const fleetless = !(egress.attached || []).length
+      && !(egress.pending_nodes || []).length;
+    if (fleetless && fallback.length) {
+      const ips = [...new Set(fallback.map((row) => row.public_ip)
+        .filter(Boolean))].join('  ');
+      return [
+        statusRow({tone: 'ok', name: 'Stable outbound IPs', value: 'external',
+          detail: `give providers: ${ips} · managed outside this portal — no `
+            + 'load balancer here, so there is nothing for this control to do',
+          mono: true}),
+        ...fallback.map((row) => statusRow({
+          tone: 'muted', name: row.instance_name || row.instance,
+          value: row.public_ip || '', mono: true,
+          detail: 'stable address · attach or detach in the AWS console'})),
+      ];
+    }
+    const rows = [];
+    const pending = egress.pending_nodes || [];
+    const list = (egress.addresses || []).join('  ');
+    const enable = action(ENABLE_STABLE_IPS);
+    const disable = action(DISABLE_STABLE_IPS);
+    rows.push(statusRow({
+      tone: egress.enabled ? (pending.length ? 'warn' : 'ok') : 'muted',
+      name: 'Stable outbound IPs',
+      value: egress.enabled ? (pending.length ? 'on (incomplete)' : 'on') : 'off',
+      detail: list
+        ? `give providers: ${list}`
+          + (pending.length ? ` · ${pending.length} node(s) still without a stable address` : '')
+        : (pending.length
+          ? `${pending.length} node(s) without a stable address`
+          : 'no addresses attached'),
+      detailTone: pending.length ? 'warning' : '',
+      mono: Boolean(list),
+    }));
+    if (enable.offered) {
+      rows.push(wire(statusRow({tone: 'muted',
+        name: egress.enabled ? 'Finish enabling' : 'Enable',
+        value: '',
+        detail: 'gives every registered node a permanent outbound address for provider allowlists',
+        action: {label: 'Enable…', href: '#'}}), enableStableIps));
+    } else if (!egress.enabled) {
+      rows.push(statusRow({tone: 'muted', name: 'Enable', value: '',
+        detail: blockedDetail(enable), detailTone: 'warning'}));
+    }
+    if (disable.offered) {
+      rows.push(wire(statusRow({tone: 'muted', name: 'Disable', value: '',
+        detail: 'detaches the addresses; the reservations are kept for re-enable',
+        action: {label: 'Disable…', href: '#'}}), disableStableIps));
+    }
+    return rows;
   }
 
   function databaseRows() {
@@ -540,6 +691,7 @@ export async function capacityPanel(ctx, signal = null) {
     body.replaceChildren(...[
       headline(),
       rowSection('Nodes', [...(report?.nodes?.instances || []).map(nodeRow), addNodeRow()]),
+      rowSection('Outbound addresses', egressRows()),
       rowSection('Databases', databaseRows()),
       rowSection('Cache', cacheRows()),
       rowSection('Access', warningRows()),

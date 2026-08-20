@@ -37,7 +37,7 @@
 #
 # Project inputs (exported by the shim before it execs this file):
 #   PROJ_PATH    the deployed tree                (default /opt/api)
-#   SANITY_URL   the URL sanity_check must probe  (default http://127.0.0.1/api/version)
+#   SANITY_URL   the URL sanity_check must probe  (default https://127.0.0.1/api/version)
 #
 # Structure the engine depends on (do not reorder casually):
 #   - The script reports terminal status itself: `restart_engine` at the end
@@ -89,7 +89,13 @@ done
 PROJ_PATH="${PROJ_PATH:-/opt/api}"
 cd "$PROJ_PATH" || { echo "FATAL: cannot cd to $PROJ_PATH" >&2; exit 1; }
 
-SANITY_URL="${SANITY_URL:-http://127.0.0.1/api/version}"
+# HTTPS, not http. The shipped :80 vhost 301s everything except the ACME
+# path, so a plain-http probe can only ever see nginx's redirect — and the
+# canary then reports EVERY successful deploy as a sanity-check failure and
+# rolls it back. sanity_check skips certificate verification on the loopback
+# for the same reason `remote.py` does: the certificate names the site, not
+# 127.0.0.1.
+SANITY_URL="${SANITY_URL:-https://127.0.0.1/api/version}"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S'): $*" | tee -a var/update.log; }
 
@@ -142,13 +148,13 @@ phase_now() {
 phase_reset() { # pass — which half of the run the following phases belong to
     PHASE_PASS="$1"
     mkdir -p "$PHASE_DIR" 2>/dev/null || true
-    printf '%s\n' "$1" > "$PHASE_PASS_FILE" 2>/dev/null || true
+    printf '%s\n' "$1" 2>/dev/null > "$PHASE_PASS_FILE" || true
     return 0
 }
 
 phase_truncate() {
     mkdir -p "$PHASE_DIR" 2>/dev/null || true
-    : > "$PHASE_FILE" 2>/dev/null || true
+    : 2>/dev/null > "$PHASE_FILE" || true
     return 0
 }
 
@@ -166,8 +172,13 @@ phase_record() { # name start — for a span whose start was kept elsewhere
     if [ "$PHASE_MS" = "1" ]; then unit="ms"; fi
     delta=$(( end - start ))
     [ "$delta" -ge 0 ] 2>/dev/null || delta=0
+    # 2>/dev/null FIRST. Redirections apply left to right, so with the append
+    # first, a failure to OPEN the file is reported by the shell to a stderr
+    # that has not been silenced yet — which is how an unwritable timings file
+    # printed "Permission denied" into the middle of every deploy's output
+    # despite the `|| true` this line already had.
     printf '%s %s %s %s\n' "$PHASE_PASS" "$name" "$delta" "$unit" \
-        >> "$PHASE_FILE" 2>/dev/null || true
+        2>/dev/null >> "$PHASE_FILE" || true
     return 0
 }
 

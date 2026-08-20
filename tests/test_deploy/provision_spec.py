@@ -307,3 +307,39 @@ def test_engine_versions_are_pinned(opts):
     for engine, version in spec_module.ENGINE_VERSIONS.items():
         th.assert_true(version and version[0].isdigit(),
                        f"{engine} must pin a concrete version, got {version!r}")
+
+
+@th.django_unit_test("stable_node_ips adds the node-address cost line even with an NLB")
+def test_cost_table_stable_node_ips(opts):
+    from mojo.deploy.provision import inputs
+    from mojo.deploy.provision import spec as spec_module
+
+    flagged = spec_module.estimate_cost(
+        _spec(preset="small", stable_node_ips=True))
+    items = [row["item"] for row in flagged["rows"]]
+    th.assert_in("balancer addresses", items,
+                 f"the NLB's own addresses must stay in the estimate: {items}")
+    th.assert_in("node addresses", items,
+                 f"stable_node_ips buys per-node addresses, so the estimate "
+                 f"must show them: {items}")
+
+    plain = spec_module.estimate_cost(_spec(preset="small"))
+    plain_items = [row["item"] for row in plain["rows"]]
+    th.assert_eq("node addresses" in plain_items, False,
+                 f"without the flag a balancer fleet budgets no node "
+                 f"addresses: {plain_items}")
+
+    # The answers key and the CLI kwarg both reach the spec.
+    answers = {"project": "mojo", "env": "prod", "region": "us-east-1",
+               "preset": "small", "stable_node_ips": True}
+    th.assert_true(inputs.to_spec(answers).stable_node_ips,
+                   "the stable_node_ips answers key never reached the spec")
+    th.assert_true(
+        inputs.to_spec({"project": "mojo", "env": "prod",
+                        "region": "us-east-1", "preset": "small"},
+                       stable_node_ips=True).stable_node_ips,
+        "the --stable-node-ips CLI kwarg never reached the spec")
+    th.assert_eq(
+        inputs.to_spec({"project": "mojo", "env": "prod",
+                        "region": "us-east-1", "preset": "small"}).stable_node_ips,
+        False, "stable_node_ips must default off")

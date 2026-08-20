@@ -86,6 +86,44 @@ def _section_status(checks):
     return "pass"
 
 
+def _sanitize_report(report):
+    """Keep the bounded readiness envelope schema-safe at collection edges."""
+    safe = sanitize(report)
+    if not isinstance(safe, dict):
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "overall": "pending",
+            "summary": {status: 0 for status in STATUSES},
+            "sections": [],
+            "truncated": True,
+        }
+    partial = safe.get("truncated") is True
+    raw_sections = safe.get("sections")
+    if not isinstance(raw_sections, list):
+        raw_sections = []
+        partial = True
+    sections = []
+    for section_report in raw_sections:
+        if (not isinstance(section_report, dict) or
+                section_report.get("status") not in STATUSES or
+                not isinstance(section_report.get("checks"), list)):
+            partial = True
+            continue
+        checks = []
+        for check in section_report["checks"]:
+            if not isinstance(check, dict) or check.get("status") not in STATUSES:
+                partial = True
+                continue
+            checks.append(check)
+        clean_section = dict(section_report)
+        clean_section["checks"] = checks
+        sections.append(clean_section)
+    safe["sections"] = sections
+    if partial:
+        safe["truncated"] = True
+    return safe
+
+
 def run(section=None, context=None):
     selected = sections()
     if section:
@@ -116,7 +154,7 @@ def run(section=None, context=None):
     for section_report in reports:
         for check in section_report["checks"]:
             summary[check["status"]] += 1
-    return sanitize({
+    return _sanitize_report({
         "schema_version": SCHEMA_VERSION,
         "generated_at": timezone.now().isoformat(),
         "overall": overall,

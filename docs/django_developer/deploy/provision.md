@@ -215,7 +215,9 @@ number is on screen before the button is pressed — it is not a billing
 integration and is not meant to be one. The **load balancer line appears exactly
 when an NLB will exist after this run**, because an estimate listing a resource
 the run will not build is worse than no estimate: it is the number someone
-budgets against.
+budgets against. The node-addresses line follows the same rule: it appears
+without a balancer, or behind one when `stable_node_ips` pins per-node
+outbound addresses.
 
 ## Flags
 
@@ -229,6 +231,7 @@ budgets against.
 | `--yes` | `apply` | Skip the typed confirmation |
 | `--override-external` | `apply` | One run against an `external` environment |
 | `--nlb` | all | Build a balancer the preset would not |
+| `--stable-node-ips` | all | Give every node its own elastic IP even behind a balancer — fixed outbound addresses for providers that allowlist caller IPs (env-file key: `stable_node_ips`). DNS still points at the NLB. The Admin capacity panel's "Stable outbound IPs" control is the runtime form of the same policy; a panel disable will be re-attached by the next `apply`, so change both or expect that |
 | `--skip-certificate` | `configure` | Converge the nodes, leave the placeholder certificate in place |
 | `--ssh-user` | `configure`, `admin` | The account to reach the nodes as (default `ec2-user`) |
 | `--identity` | `configure`, `admin` | Private key to authenticate with. **Rarely needed** — see below |
@@ -404,7 +407,7 @@ published to the config bucket with the version pin substituted, and logged to
 |---|---|---|
 | 1 | untar the app tarball into `/opt/api` | `ec2_bootstrap.sh` and `ec2_deploy.sh` are files **inside** it |
 | 2 | `aws/ec2_bootstrap.sh` | the OS: users, packages, nginx, certbot, and an **unpinned** `pip install django-mojo` |
-| 3 | `pip install --upgrade "django-mojo==<version>"` | **after** step 2, precisely so it overwrites that unpinned install |
+| 3 | `pip install --refresh-package=django-mojo --upgrade "django-mojo==<version>"` | **after** step 2, precisely so it overwrites that unpinned install; the refresh option is feature-detected and omitted on pre-26.2 pip |
 | 4 | `aws/ec2_deploy.sh` | the project: nginx vhosts, systemd units, `var/` ownership |
 | 5 | `echo prod > var/profile`, chown `ec2-user:www`, chmod 640 | after step 4's ownership sweep, before step 7's restart |
 | 6 | CloudWatch agent | installed if absent, configured, enabled — before the restart, so the app's first minutes are logged |
@@ -437,6 +440,8 @@ by reading `/var/log/mojo-stage1.log` over SSH. (A *yanked* release still
 installs from an exact pin under PEP 592, so "published once" is the whole
 question.) If PyPI cannot be reached at all, the run continues with a warning
 — a network flake should not stand between an operator and their environment.
+Stage 1 also refreshes the `django-mojo` Simple API entry when pip supports it,
+so pip 26.2 cannot reuse PyPI's cached catalog response after this preflight.
 
 ### Where the logs go
 

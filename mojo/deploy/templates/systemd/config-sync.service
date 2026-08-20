@@ -1,6 +1,6 @@
 [Unit]
 Description=Pull application config from S3
-# Docs: django-mojo docs/django_developer/deploy/README.md (config_sync)
+Documentation=https://github.com/NativeMojo/django-mojo/blob/main/docs/django_developer/deploy/README.md
 
 # Needs the network up to reach S3, and must complete BEFORE the app starts so
 # a freshly booted node never starts against a missing or stale django.conf.

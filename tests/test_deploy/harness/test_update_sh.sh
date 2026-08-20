@@ -319,7 +319,10 @@ APP_USER="mojo-app"
 SHA_NEW="2222222222222222222222222222222222222222"
 DEPLOYMENT_UUID="12345678-1234-4123-8123-123456789abc"
 PREVIOUS_UUID="87654321-4321-4321-8321-cba987654321"
-DEFAULT_URL="http://127.0.0.1/api/version"
+# HTTPS: the shipped :80 vhost 301s everything except the ACME path, so a
+# plain-http sanity check reported EVERY successful deploy as a failure
+# and rolled it back.
+DEFAULT_URL="https://127.0.0.1/api/version"
 SHIM_URL="http://127.0.0.1:8080/api/version"
 
 # ── tests ────────────────────────────────────────────────────────────────────

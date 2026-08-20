@@ -217,6 +217,14 @@ class Spec:
         self.balancer = sizes.get("balancer", False)
         self.want_balancer = None
 
+        # Per-node elastic IPs INDEPENDENT of the balancer decision. Without a
+        # balancer every node gets one regardless (the node IS the DNS target);
+        # behind one, nodes default to changing auto-assigned addresses — set
+        # this when providers allowlist caller IPs and the fleet's outbound
+        # must stay fixed. The Admin capacity panel's "Stable outbound IPs"
+        # control is the runtime form of the same policy.
+        self.stable_node_ips = False
+
         # Who may reach :22. Never defaulted to 0.0.0.0/0 — an empty list means
         # SSH is not opened at all, which is a working configuration (Session
         # Manager) and a much better accident than a world-open one.
@@ -330,11 +338,24 @@ def names(spec):
         "node_policy": "django-mojo-setup",
         "instance_profile": f"{base}-node",
         "config_bucket": spec.config_bucket or f"{base}-config",
+        # Where a WebApp's built artifacts are uploaded and where every node
+        # fetches them from. Separate from the config bucket on purpose: this
+        # one receives writes from a GitHub Actions credential, and the config
+        # bucket holds the environment's secrets.
+        "releases_bucket": f"{base}-releases",
+        # KMS_KEY_ID. `KSMSecrets` models — dnsman certificates above all —
+        # refuse to load without one, so the edge plane cannot serve TLS in an
+        # environment that has no key.
+        "kms_alias": f"alias/{base}",
         "secrets_object": "bootstrap-secrets.json",
         "bootstrap_prefix": BOOTSTRAP_PREFIX,
         "stage1_object": f"{BOOTSTRAP_PREFIX}/stage1.json",
         "stage1_script_object": f"{BOOTSTRAP_PREFIX}/stage1.sh",
         "app_archive_object": f"{BOOTSTRAP_PREFIX}/app.tar.gz",
+        # The commit app.tar.gz was archived from. The tarball carries no
+        # history, so without this the node cannot say which commit it runs
+        # and `configure` cannot wire it to origin — see storage.app_archive.
+        "app_sha_object": f"{BOOTSTRAP_PREFIX}/app.sha",
         "cloudwatch_object": f"{BOOTSTRAP_PREFIX}/cloudwatch-agent.json",
         "config_prefix": f"{CONFIG_PREFIX_ROOT}/{spec.project}/{spec.env}",
         "django_conf_object":
@@ -540,7 +561,9 @@ def estimate_cost(spec):
         row("load balancer", resolved["balancer"], COST_TABLE["nlb"])
         row("balancer addresses", f"{AZ_COUNT} x elastic IP",
             COST_TABLE["eip"] * AZ_COUNT)
-    else:
+    if not wants_balancer(spec) or spec.stable_node_ips:
+        # Node addresses exist without a balancer (the node is the DNS
+        # target), or behind one when stable_node_ips pins outbound.
         row("node addresses", f"{spec.node_count} x elastic IP",
             COST_TABLE["eip"] * spec.node_count)
 

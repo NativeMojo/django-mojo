@@ -29,6 +29,7 @@ from mojo.deploy.provision import spec as spec_module
 
 
 BUCKET_STEP = "config_bucket"
+RELEASES_STEP = "releases_bucket"
 SECRETS_STEP = "secrets"
 STAGE1_STEP = "stage1_payload"
 PAYLOAD_STEP = "bootstrap_payload"
@@ -100,6 +101,60 @@ def ensure_config_bucket(clients, spec, observed, apply=False):
         state = observed.get("config_bucket_state") or {}
 
     _converge_bucket_settings(s3, spec, bucket, state, BUCKET_STEP,
+                              findings, actions, apply)
+    return findings, actions, result
+
+
+def ensure_releases_bucket(clients, spec, observed, apply=False):
+    """Where WebApp artifacts are uploaded and where nodes fetch them.
+
+    Its own bucket rather than a prefix in the config bucket, for one reason
+    that settles it: a GitHub Actions run holds a credential that writes here,
+    and the config bucket holds this environment's `bootstrap-secrets.json`.
+    Those two facts must not meet.
+
+    Same hardening as the config bucket — versioning, encryption, public-access
+    block, deny-insecure-transport — through the same helper, so the two cannot
+    drift apart.
+    """
+    findings, actions = [], []
+    result = report.Result()
+    names = spec_module.names(spec)
+    bucket = names["releases_bucket"]
+    s3 = clients.get("s3")
+    result.set("releases_bucket", bucket)
+
+    if not observed.get("releases_bucket"):
+        findings.append(report.missing(
+            RELEASES_STEP, "releases.missing",
+            f"bucket {bucket} does not exist",
+            "apply creates it — it is the only bucket EDGE_RELEASE_BUCKETS "
+            "declares, and a WebApp release cannot be registered without one"))
+        actions.append(report.Action(RELEASES_STEP, "create", bucket))
+        if not apply:
+            return findings, actions, result
+
+        request = {"Bucket": bucket}
+        if spec.region != "us-east-1":
+            request["CreateBucketConfiguration"] = {
+                "LocationConstraint": spec.region}
+        created = report.safe(findings, RELEASES_STEP, "s3.create_bucket",
+                              lambda: s3.create_bucket(**request))
+        if created is None:
+            return findings, actions, result
+        report.safe(
+            findings, RELEASES_STEP, "s3.put_bucket_tagging",
+            lambda: s3.put_bucket_tagging(
+                Bucket=bucket,
+                Tagging={"TagSet": spec_module.tag_list(spec, "storage",
+                                                        name=bucket)}))
+        state = {}
+    else:
+        findings.append(report.existing(
+            RELEASES_STEP, "releases.ok", f"bucket {bucket} is in place"))
+        state = observed.get("releases_bucket_state") or {}
+
+    _converge_bucket_settings(s3, spec, bucket, state, RELEASES_STEP,
                               findings, actions, apply)
     return findings, actions, result
 
@@ -218,11 +273,34 @@ def generate_secrets():
     produced out of the bucket, which is what makes a re-run of `apply` connect
     to the database it built rather than to a password it has just invented.
     """
-    return {
-        "db_password": _token(PASSWORD_LENGTH),
-        "cache_auth_token": _token(PASSWORD_LENGTH),
-        "django_secret_key": _token(SECRET_KEY_LENGTH),
-    }
+    return {name: _token(length) for name, length in SECRET_FIELDS}
+
+
+# Name and length of every credential this package mints. Adding a row here is
+# how a new secret reaches BOTH a fresh environment (generate_secrets) and an
+# environment that predates the field (backfill_secrets) — the two paths read
+# one list precisely so a new secret cannot land on new estates only.
+SECRET_FIELDS = (
+    ("db_password", PASSWORD_LENGTH),
+    ("cache_auth_token", PASSWORD_LENGTH),
+    ("django_secret_key", SECRET_KEY_LENGTH),
+    # Verifies X-Hub-Signature-256 on GitHub's push webhook, which is what
+    # makes a push to the project's repo deploy the fleet. Absent, every
+    # delivery is rejected (mojo/apps/github/services/github_app.py) and
+    # push-to-deploy silently does nothing.
+    ("github_webhook_secret", PASSWORD_LENGTH),
+)
+
+
+def backfill_secrets(existing):
+    """Fields SECRET_FIELDS names that this bundle predates, freshly minted.
+
+    Returns only the additions, never a replacement for a value already there:
+    re-minting a live database password is how an upgrade takes an environment
+    down. An empty dict means the bundle is current.
+    """
+    return {name: _token(length) for name, length in SECRET_FIELDS
+            if not (existing or {}).get(name)}
 
 
 def _token(length):
@@ -241,7 +319,33 @@ def ensure_secrets(clients, spec, observed, apply=False):
         findings.append(report.existing(
             SECRETS_STEP, "secrets.ok",
             f"s3://{bucket}/{key} exists and was read back"))
-        result.set("secrets", dict(existing))
+        merged = dict(existing)
+        added = backfill_secrets(existing)
+        if not added:
+            result.set("secrets", merged)
+            return findings, actions, result
+
+        # An environment provisioned before a credential existed. The names go
+        # in the finding; the values never do.
+        findings.append(report.drift(
+            SECRETS_STEP, "secrets.incomplete",
+            f"s3://{bucket}/{key} predates {', '.join(sorted(added))}",
+            "apply mints the missing field and leaves every existing value "
+            "untouched"))
+        actions.append(report.Action(
+            SECRETS_STEP, "write", f"s3://{bucket}/{key}"))
+        if not apply:
+            # Report what IS there. Handing back a bundle padded with secrets
+            # that were never written would render a django.conf whose webhook
+            # secret no node can ever agree with.
+            result.set("secrets", merged)
+            return findings, actions, result
+
+        merged.update(added)
+        stored = report.safe(
+            findings, SECRETS_STEP, "s3.put_object",
+            lambda: _put_secrets(clients.get("s3"), bucket, key, merged))
+        result.set("secrets", merged if stored is not None else dict(existing))
         return findings, actions, result
 
     findings.append(report.missing(
@@ -257,17 +361,20 @@ def ensure_secrets(clients, spec, observed, apply=False):
         return findings, actions, result
 
     generated = generate_secrets()
-    s3 = clients.get("s3")
     stored = report.safe(
         findings, SECRETS_STEP, "s3.put_object",
-        lambda: s3.put_object(
-            Bucket=bucket, Key=key,
-            Body=json.dumps(generated, indent=2, sort_keys=True).encode("utf-8"),
-            ContentType="application/json",
-            ServerSideEncryption="AES256"))
+        lambda: _put_secrets(clients.get("s3"), bucket, key, generated))
     if stored is not None:
         result.set("secrets", generated)
     return findings, actions, result
+
+
+def _put_secrets(s3, bucket, key, payload):
+    return s3.put_object(
+        Bucket=bucket, Key=key,
+        Body=json.dumps(payload, indent=2, sort_keys=True).encode("utf-8"),
+        ContentType="application/json",
+        ServerSideEncryption="AES256")
 
 
 # ── the operator's copy of the generated SSH key ────────────────────────────
@@ -495,10 +602,16 @@ def cloudwatch_agent_config(spec):
 
 
 def app_archive(project_root="."):
-    """`git archive HEAD` of the project, as bytes, plus any warnings.
+    """`git archive HEAD` of the project — bytes, the commit, and warnings.
 
     A tarball rather than a clone: a fresh node has no deploy key yet, and the
     tree it unpacks is exactly the commit the operator provisioned from.
+
+    The SHA is returned because a tarball has no history. A node that cannot
+    name its own commit cannot be wired to origin later, and the deploy plane
+    is `git fetch && git reset --hard <sha>` — so this is the one fact that
+    turns an unpacked archive back into a checkout. `remote.ensure_checkout`
+    is what spends it.
 
     A DIRTY WORKTREE WARNS AND DOES NOT BLOCK. `git archive HEAD` ships the
     commit, not the working tree, so uncommitted work simply is not in what the
@@ -520,6 +633,26 @@ def app_archive(project_root="."):
             "the worktree has uncommitted changes — the node receives HEAD, "
             "not what is on your disk")
 
+    resolved = subprocess.run(["git", "-C", root, "rev-parse", "HEAD"],
+                              capture_output=True, text=True, check=False)
+    sha = (resolved.stdout or "").strip()
+    if resolved.returncode != 0 or len(sha) != 40:
+        raise ValueError(
+            f"could not resolve HEAD in {os.path.abspath(root)}: "
+            f"{(resolved.stderr or '').strip() or 'no commits yet?'}")
+
+    # Pushed-ness is checked on the node, not here. A commit that is only
+    # local still boots a node correctly — the tarball is self-contained —
+    # and refusing here would block provisioning from an unpushed branch,
+    # which is a normal thing to do while a project is young. What must not
+    # happen is `configure` resetting a node onto a commit origin never had;
+    # `remote.ensure_checkout` is where that is enforced, against the remote
+    # the node itself can reach.
+    if not _sha_on_a_remote(root, sha):
+        warnings.append(
+            f"{sha[:12]} is not on any remote — the node will boot from it "
+            f"fine, but stays unwired for deploys until the commit is pushed")
+
     archived = subprocess.run(
         ["git", "-C", root, "archive", "--format=tar.gz", "HEAD"],
         capture_output=True, check=False)
@@ -527,7 +660,23 @@ def app_archive(project_root="."):
         raise ValueError(
             f"git archive HEAD failed in {os.path.abspath(root)}: "
             f"{archived.stderr.decode('utf-8', 'replace').strip()}")
-    return archived.stdout, warnings
+    return archived.stdout, sha, warnings
+
+
+def _sha_on_a_remote(root, sha):
+    """Does any remote-tracking branch contain this commit? Unknown reads True.
+
+    `--contains` against remote refs only — a local branch pointing at it
+    proves nothing about what a node can fetch. A git failure returns True on
+    purpose: this drives a warning, and a warning nobody can act on is worse
+    than silence.
+    """
+    found = subprocess.run(
+        ["git", "-C", root, "branch", "--remotes", "--contains", sha],
+        capture_output=True, text=True, check=False)
+    if found.returncode != 0:
+        return True
+    return bool((found.stdout or "").strip())
 
 
 def pypi_has_version(version, timeout=PYPI_TIMEOUT):
@@ -588,11 +737,12 @@ def put_object(s3, bucket, key, body, content_type):
 def ensure_bootstrap_payload(clients, spec, observed, apply=False):
     """Everything a node downloads at boot, published before any node exists.
 
-    Three objects under the bucket's `bootstrap/` prefix: the substituted
-    stage-1 script, the application tarball and the CloudWatch agent's
-    configuration. `nodes` depends on this step and refuses to launch without
-    it, which is what keeps the ordering honest — an instance that boots before
-    its payload is published spends money doing nothing until someone SSHes in.
+    Four objects under the bucket's `bootstrap/` prefix: the substituted
+    stage-1 script, the application tarball, the commit that tarball was
+    archived from, and the CloudWatch agent's configuration. `nodes` depends on
+    this step and refuses to launch without it, which is what keeps the
+    ordering honest — an instance that boots before its payload is published
+    spends money doing nothing until someone SSHes in.
     """
     findings, actions = [], []
     result = report.Result()
@@ -601,7 +751,7 @@ def ensure_bootstrap_payload(clients, spec, observed, apply=False):
     version = django_mojo_version()
     s3 = clients.get("s3")
     keys = (names["stage1_script_object"], names["cloudwatch_object"],
-            names["app_archive_object"])
+            names["app_archive_object"], names["app_sha_object"])
 
     if not apply:
         # A preview must stay cheap. Building the tarball and asking PyPI about
@@ -649,7 +799,8 @@ def ensure_bootstrap_payload(clients, spec, observed, apply=False):
     try:
         script = stage1_script(version)
         agent_config = cloudwatch_agent_config(spec)
-        archive, warnings = app_archive(getattr(spec, "project_root", None))
+        archive, app_sha, warnings = app_archive(
+            getattr(spec, "project_root", None))
     except ValueError as err:
         findings.append(report.manual(
             PAYLOAD_STEP, "payload.unbuildable",
@@ -666,6 +817,7 @@ def ensure_bootstrap_payload(clients, spec, observed, apply=False):
         (names["stage1_script_object"], script, "text/x-shellscript"),
         (names["cloudwatch_object"], agent_config, "application/json"),
         (names["app_archive_object"], archive, "application/gzip"),
+        (names["app_sha_object"], app_sha + "\n", "text/plain"),
     )
 
     stale = []

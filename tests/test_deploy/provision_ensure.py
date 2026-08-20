@@ -659,6 +659,65 @@ def test_storage_never_puts_a_secret_in_the_report(opts):
                      "are printed to a terminal and rendered into a browser")
 
 
+@th.django_unit_test("a bundle predating a credential gains it without losing the rest")
+def test_storage_secrets_backfill_only_adds(opts):
+    from mojo.deploy.provision import report, storage
+    from mojo.deploy.provision import spec as spec_module
+
+    # Exactly what an estate provisioned before github_webhook_secret existed
+    # has in its bucket. It must come out of an upgrade still able to reach
+    # its own database.
+    old = {"db_password": "p" * 40, "cache_auth_token": "c" * 40,
+           "django_secret_key": "k" * 50}
+    spec = _spec()
+    names = spec_module.names(spec)
+    client, stubber = _stub("s3")
+    stubber.add_response("put_object", {})
+    with stubber:
+        findings, actions, result = storage.ensure_secrets(
+            _clients(s3=client), spec,
+            _observed(config_bucket=names["config_bucket"], secrets=old),
+            apply=True)
+
+    _assert_no_blind(findings, "the backfill write must be model-valid")
+    stubber.assert_no_pending_responses()
+    merged = result["secrets"]
+    for key, value in old.items():
+        th.assert_eq(merged[key], value,
+                     f"{key} was re-minted — an upgrade that invents a new "
+                     f"database password takes the environment down")
+    th.assert_true(len(merged.get("github_webhook_secret", "")) >= 32,
+                   "the missing credential must be minted")
+    th.assert_in("secrets.incomplete", _codes(findings, report.DRIFT),
+                 f"the backfill must be reported: {_codes(findings)}")
+    rendered = " ".join(f.message + " " + (f.remedy or "") for f in findings)
+    th.assert_eq(merged["github_webhook_secret"] in rendered, False,
+                 "a minted credential appeared in the report")
+
+
+@th.django_unit_test("a dry-run backfill writes nothing and claims nothing")
+def test_storage_secrets_backfill_is_not_previewed_into_existence(opts):
+    from mojo.deploy.provision import storage
+    from mojo.deploy.provision import spec as spec_module
+
+    old = {"db_password": "p" * 40, "cache_auth_token": "c" * 40,
+           "django_secret_key": "k" * 50}
+    spec = _spec()
+    names = spec_module.names(spec)
+    client, stubber = _stub("s3")
+    with stubber:
+        findings, actions, result = storage.ensure_secrets(
+            _clients(s3=client), spec,
+            _observed(config_bucket=names["config_bucket"], secrets=old),
+            apply=False)
+
+    _assert_no_blind(findings, "a preview must make no S3 call")
+    th.assert_eq(result["secrets"].get("github_webhook_secret"), None,
+                 "a preview that hands back an unwritten secret renders a "
+                 "django.conf no node can ever agree with")
+    th.assert_eq(len(actions), 1, "the pending write must still be declared")
+
+
 # ── data ────────────────────────────────────────────────────────────────────
 
 @th.django_unit_test("a still-creating cluster is PENDING, not a failure and not a wait")
@@ -2053,3 +2112,49 @@ def test_cli_falls_back_to_the_ssh_agent_when_the_key_was_imported(opts):
                    f"an imported key pair is not a failure — the operator must "
                    f"be told why no key file is being used rather than watching "
                    f"a silent SSH failure: {console.text()!r}")
+
+
+@th.django_unit_test("stable_node_ips keeps per-node EIPs even behind a balancer")
+def test_nodes_stable_ips_behind_balancer(opts):
+    from mojo.deploy.provision import nodes, report
+    from mojo.deploy.provision import spec as spec_module
+
+    spec = _spec(preset="micro", want_balancer=True, stable_node_ips=True)
+    th.assert_true(spec_module.wants_balancer(spec),
+                   "this test exists for the balancer path; the spec lost it")
+    names = spec_module.names(spec)
+    hostname = names["nodes"][0]
+    observed = _observed(
+        instances=[{"InstanceId": "i-0aaa", "State": {"Name": "running"},
+                    "InstanceType": spec.node_type, "ImageId": "ami-0base",
+                    "Tags": [{"Key": "Name", "Value": hostname}]}],
+        ami_id="ami-0base")
+
+    client, stubber = _stub("ec2")
+    stubber.add_response("allocate_address", {"AllocationId": "eipalloc-mine",
+                                              "PublicIp": "203.0.113.10"})
+    stubber.add_response("associate_address", {"AssociationId": "eipassoc-1"})
+    with stubber:
+        findings, actions, result = nodes.ensure_nodes(
+            _clients(ec2=client), spec, observed, apply=True)
+
+    _assert_no_blind(findings, "every EC2 request must be model-valid")
+    stubber.assert_no_pending_responses()
+    th.assert_eq(result["node_addresses"], ["203.0.113.10"],
+                 "a balancer fleet with stable_node_ips must still hold "
+                 "per-node addresses — that is the whole point of the flag")
+
+    # Without the flag, the balancer path stays address-free as before.
+    plain = _spec(preset="micro", want_balancer=True)
+    client, stubber = _stub("ec2")
+    with stubber:
+        findings, actions, result = nodes.ensure_nodes(
+            _clients(ec2=client), plain, observed, apply=True)
+    stubber.assert_no_pending_responses()
+    th.assert_eq(result["node_addresses"], [],
+                 "a balancer fleet without stable_node_ips must not grow "
+                 "node addresses")
+    address_codes = [f.code for f in findings if f.code.startswith("address.")]
+    th.assert_eq(address_codes, [],
+                 f"the balancer path reported address work it must not do: "
+                 f"{address_codes}")

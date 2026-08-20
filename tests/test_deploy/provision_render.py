@@ -43,6 +43,7 @@ SECRETS = {
     "db_password": "dbpassword0123456789",
     "cache_auth_token": "cachetoken0123456789",
     "django_secret_key": "secretkey0123456789",
+    "github_webhook_secret": "webhooksecret0123456789",
 }
 
 
@@ -91,6 +92,7 @@ def test_conf_has_every_required_key(opts):
     values = _settings(_conf())
 
     for key in ("SECRET_KEY", "BASE_URL", "EMAIL_FROM", "GITHUB_REPO",
+                "GITHUB_WEBHOOK_SECRET",
                 "DATABASE_HOST", "DATABASE_PORT", "DATABASE_NAME",
                 "DATABASE_USER", "DATABASE_PASSWORD",
                 "REDIS_SERVER", "REDIS_PORT",
@@ -110,6 +112,11 @@ def test_conf_has_every_required_key(opts):
                  "EMAIL_FROM comes from the operator email answer")
     th.assert_eq(values["GITHUB_REPO"], ANSWERS["github_repo"],
                  "GITHUB_REPO comes from the repository answer")
+    th.assert_eq(values["GITHUB_WEBHOOK_SECRET"],
+                 SECRETS["github_webhook_secret"],
+                 "GITHUB_WEBHOOK_SECRET must be the environment's own — a "
+                 "node whose copy disagrees with the hook rejects every push "
+                 "delivery, and push-to-deploy silently does nothing")
     th.assert_eq(values["CONFIG_SYNC_RESTART"], "True",
                  "config_sync must restart the app when the config changes")
 

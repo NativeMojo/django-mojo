@@ -65,6 +65,12 @@ HEADER = """\
 """
 
 
+# Where a node's application tree lives. The same constant `remote.py` and
+# `nodes.py` hold — the framework's, not the operator's, and everything the
+# node plane installs is positioned against it.
+PROJ_PATH = "/opt/api"
+
+
 def _quote(value):
     """A Python string literal, because this file is executed as settings."""
     return '"%s"' % str(value).replace("\\", "\\\\").replace('"', '\\"')
@@ -97,6 +103,12 @@ def django_conf(spec, answers, observed, secrets):
     setting("BASE_URL", _quote(f"https://{apex}" if apex else ""))
     setting("EMAIL_FROM", _quote(answers.get("operator_email") or ""))
     setting("GITHUB_REPO", _quote(answers.get("github_repo") or ""))
+    # Push-to-deploy's whole trust boundary: GitHub signs each delivery with
+    # this and the node verifies X-Hub-Signature-256 against it. Written even
+    # when empty so the key's absence from a node is legible as "this estate
+    # predates the field" rather than as a rendering bug.
+    setting("GITHUB_WEBHOOK_SECRET",
+            _quote(secrets.get("github_webhook_secret", "")))
 
     section("database")
     setting("DATABASE_HOST", _quote(observed.get("db_endpoint") or ""))
@@ -120,6 +132,24 @@ def django_conf(spec, answers, observed, secrets):
     setting("AWS_CONFIG_BUCKET",
             _quote(observed.get("config_bucket") or names["config_bucket"]))
     setting("AWS_CONFIG_PREFIX", _quote(names["config_prefix"]))
+
+    section("edge plane")
+    # The allowlist a WebApp release is checked against at mint time AND at
+    # fetch time. A list literal, not a bare string: `validators.release_buckets`
+    # reads it with kind="list".
+    setting("EDGE_RELEASE_BUCKETS",
+            "[%s]" % _quote(observed.get("releases_bucket")
+                            or names["releases_bucket"]))
+    # KSMSecrets refuses to load without this, and dnsman's Certificate is a
+    # KSMSecrets model — so an edge vhost cannot serve TLS without it.
+    setting("KMS_KEY_ID", _quote(observed.get("kms_key_id") or ""))
+    # Where a unix Upstream's socket_path is allowed to resolve. The default
+    # is /run/mojo, but the framework's own mojo-asgi.service binds
+    # <PROJ_PATH>/var/asgi.sock — so on a default node the edge plane cannot
+    # declare an upstream pointing at the app it is running beside. Published
+    # from PROJ_PATH, which is the framework's constant, never a tenant value:
+    # the boundary still exists, it just sits where the socket actually is.
+    setting("EDGE_SOCKET_BASE", _quote(f"{PROJ_PATH}/var"))
 
     section("config plane")
     setting("CONFIG_SYNC_RESTART", "True")

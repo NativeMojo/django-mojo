@@ -22,21 +22,49 @@ const STEP_STATE_LABELS = {
 };
 
 function operatorChecks(checks = []) {
-  return checks.filter((check) => check.code !== 'django.static_directories' &&
+  if (!Array.isArray(checks)) return [];
+  return checks.filter(isReadinessCheck).map((check) => ({
+    ...check,
+    code: typeof check.code === 'string' && check.code ? check.code : 'unknown',
+    explanation: typeof check.explanation === 'string' && check.explanation
+      ? check.explanation : 'Readiness check',
+    remediation: typeof check.remediation === 'string' ? check.remediation : '',
+  })).filter((check) => check.code !== 'django.static_directories' &&
     (check.code !== 'django.local_request' || check.details?.target_source === 'configured_static'));
 }
 
+function isReadinessObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isReadinessCheck(value) {
+  return isReadinessObject(value) && READINESS_SEVERITY.includes(value.status);
+}
+
 function operatorReport(report) {
-  if (!report?.sections) return report;
+  const source = isReadinessObject(report) ? report : {};
+  const hasSections = Array.isArray(source.sections);
+  const rawSections = hasSections ? source.sections : [];
+  let truncated = source.truncated === true || !hasSections;
   const summary = {pass: 0, warn: 0, fail: 0, pending: 0};
-  const sections = report.sections.map((section) => {
-    const checks = operatorChecks(section.checks);
+  const sections = [];
+  rawSections.forEach((section) => {
+    if (!isReadinessObject(section)) { truncated = true; return; }
+    const rawChecks = Array.isArray(section.checks) ? section.checks : [];
+    if (!Array.isArray(section.checks) || rawChecks.some((check) => !isReadinessCheck(check))) truncated = true;
+    const checks = operatorChecks(rawChecks);
     checks.forEach((check) => { if (check.status in summary) summary[check.status] += 1; });
     const status = READINESS_SEVERITY.find((value) => checks.some((check) => check.status === value)) || 'pass';
-    return {...section, checks, status};
-  }).filter((section) => section.checks.length);
+    if (checks.length) sections.push({
+      ...section,
+      code: typeof section.code === 'string' && section.code ? section.code : 'unknown',
+      label: typeof section.label === 'string' && section.label ? section.label : 'Readiness section',
+      checks,
+      status,
+    });
+  });
   const overall = READINESS_SEVERITY.find((value) => summary[value]) || 'pass';
-  return {...report, sections, summary, overall};
+  return {...source, sections, summary, overall, truncated};
 }
 
 function checkAction(section, check, config, actions) {
@@ -56,9 +84,12 @@ function checkAction(section, check, config, actions) {
 }
 
 function reportView(report, options, actions) {
-  if (!report?.sections?.length) return h('div', {class: 'empty'}, h('p', {text: 'Run checks to create a readiness report.'}));
+  const partial = report?.truncated === true ? h('div', {class: 'callout warning'}, icon('alert'),
+    h('p', {text: 'Only part of this readiness report could be shown. Truncated or malformed entries were omitted; rerun the checks for a complete report.'})) : null;
+  if (!report?.sections?.length) return h('div', {}, partial,
+    h('div', {class: 'empty'}, h('p', {text: partial ? 'No valid readiness checks were returned.' : 'Run checks to create a readiness report.'})));
   const byCode = new Map((options?.sections || []).map((entry) => [entry.code, entry]));
-  return h('div', {class: 'setup-sections'}, ...report.sections.map((section) => {
+  return h('div', {class: 'setup-sections'}, partial, ...report.sections.map((section) => {
     const config = byCode.get(section.code) || {};
     const sectionActions = h('div', {class: 'section-actions'},
       h('button', {class: 'button ghost compact', onclick: () => actions.create('check', section.code)}, icon('refresh'), 'Check'));

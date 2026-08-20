@@ -23,7 +23,7 @@
 #
 # Project inputs (exported by the shim; every default matches the skeleton):
 #   PROJ_PATH     the deployed tree                     (default /opt/api)
-#   PROBE_URL     post-restart health gate              (default http://127.0.0.1/api/version)
+#   PROBE_URL     post-restart health gate              (default https://127.0.0.1/api/version)
 #   APP_USER      owns the tree and runs the engines    (default ec2-user)
 #   WEB_USER      runs the asgi app behind nginx        (default www)
 #   ASGI_WORKERS  uvicorn worker count (@WORKERS@)      (default 4)
@@ -39,7 +39,12 @@
 set -euo pipefail
 
 PROJ_PATH="${PROJ_PATH:-/opt/api}"
-PROBE_URL="${PROBE_URL:-http://127.0.0.1/api/version}"
+# HTTPS, and -k below, for the reason remote.py and sanity.py both give:
+# the shipped :80 vhost 301s everything except the ACME path. `curl -f`
+# does not fail on a 3xx, so a plain-http gate PASSED on nginx's redirect
+# alone — with the app dead behind it. A health gate that cannot fail is
+# worse than none, because it is reported as evidence.
+PROBE_URL="${PROBE_URL:-https://127.0.0.1/api/version}"
 APP_USER="${APP_USER:-ec2-user}"
 WEB_USER="${WEB_USER:-www}"
 ASGI_WORKERS="${ASGI_WORKERS:-4}"
@@ -94,6 +99,15 @@ case "$_phase_pass" in
     deploy|rollback) PHASE_PASS="$_phase_pass" ;;
 esac
 mkdir -p "$PHASE_DIR" 2>/dev/null || true
+# BOTH scripts append here, and they run as different users: post_deploy.sh is
+# root (sudo), update.sh is the app user. Root touching the file first left it
+# 0644 root:<web group>, so every one of update.sh's own timings was a
+# "Permission denied" on the redirection — and the phase table reaching the
+# platform was missing exactly the half that wraps the deploy. var/deploy is
+# setgid to the web group and the app user is a member, so group-writable is
+# all it takes.
+touch "$PHASE_FILE" 2>/dev/null || true
+chmod 0664 "$PHASE_FILE" 2>/dev/null || true
 
 phase_now() {
     if [ "$PHASE_MS" = "1" ]; then
@@ -234,6 +248,15 @@ trusted_pip() {
     fi
 }
 
+# pip 26.2 started honoring PyPI's Simple API cache lifetime. A framework
+# published immediately before a deploy can therefore be absent from a cached
+# catalog response even though its wheel is already live. Older pip releases
+# do not know this option, but they revalidate by default, so feature-detect it.
+FRAMEWORK_PIP_ARGS=()
+if pip install --help 2>/dev/null | grep -q -- '--refresh-package'; then
+    FRAMEWORK_PIP_ARGS+=(--refresh-package=django-mojo)
+fi
+
 # ── dependencies ─────────────────────────────────────────────────────────────
 #
 # Project deps first (exact pins from requirements.txt — regenerated with
@@ -244,20 +267,31 @@ trusted_pip() {
 # across nodes for the seconds a deploy takes, never across time. Bare runs
 # install latest, so releases are never missed. Either way a failure is loud.
 
-log "Installing project dependencies..."
+# A project whose only dependency IS django-mojo legitimately has nothing to
+# pin, and dying on the missing file is a worse failure than the one that check
+# was protecting against: it makes every deploy on such a project fail at this
+# line, after the tree has already moved. The file being absent is a fact about
+# the project; the file being present and unusable is still fatal.
 phase_begin deps
-trusted_pip pip install -r "${PROJ_PATH}/requirements.txt" \
-    || die "dependency install failed — refusing to restart with an incomplete environment"
+if [ -f "${PROJ_PATH}/requirements.txt" ]; then
+    log "Installing project dependencies..."
+    trusted_pip pip install -r "${PROJ_PATH}/requirements.txt" \
+        || die "dependency install failed — refusing to restart with an incomplete environment"
+else
+    log "no requirements.txt — installing the framework only. Export one with \
+\`uv export --no-emit-project --no-hashes\` (excluding django-mojo) if this \
+project has dependencies of its own."
+fi
 phase_end
 
 phase_begin framework
 if [ -n "$FRAMEWORK" ]; then
     log "Installing django-mojo==${FRAMEWORK} (fleet-pinned)..."
-    trusted_pip pip install "django-mojo==${FRAMEWORK}" \
+    trusted_pip pip install "${FRAMEWORK_PIP_ARGS[@]}" "django-mojo==${FRAMEWORK}" \
         || die "django-mojo ${FRAMEWORK} install failed — refusing to deploy on an unknown framework version"
 else
     log "Upgrading django-mojo (latest)..."
-    trusted_pip pip install --upgrade django-mojo \
+    trusted_pip pip install "${FRAMEWORK_PIP_ARGS[@]}" --upgrade django-mojo \
         || die "django-mojo upgrade failed — refusing to deploy on an unknown framework version"
 fi
 phase_end
@@ -786,7 +820,7 @@ snapshot_self() {
 # `curl -f`).
 phase_begin probe
 for _ in $(seq 1 15); do
-    if curl -fsS -o /dev/null --max-time 2 "$PROBE_URL" 2>/dev/null; then
+    if curl -fsSk -o /dev/null --max-time 2 "$PROBE_URL" 2>/dev/null; then
         phase_end
         snapshot_self
         log "Post-deploy complete — app responding."

@@ -203,6 +203,9 @@ setup_env() {
         cat > "$STUB/$cmd" <<EOF
 #!/bin/bash
 echo "CMD $cmd \$*" >> "\$CALLLOG"
+if [ "$cmd" = "pip" ] && [ "\$*" = "install --help" ]; then
+    [ -f "\$STUBCTL/pip.no_refresh" ] || echo "  --refresh-package <package>"
+fi
 ctl="\$STUBCTL/$cmd.exit"
 [ -f "\$ctl" ] && exit "\$(cat "\$ctl")"
 exit 0
@@ -318,17 +321,29 @@ run_post_deploy --framework 9.9.9 >/dev/null 2>&1
 assert_eq "$?" 0 "--framework run exits 0"
 assert_in_log "CMD pip install -r $PROJ/requirements.txt" \
     "requirements install uses an absolute path that survives the trusted helper cwd"
-assert_in_log "CMD pip install django-mojo==9.9.9" "pinned install argv"
-assert_order "CMD pip install -r" "CMD pip install django-mojo==9.9.9" \
+assert_in_log "CMD pip install --refresh-package=django-mojo django-mojo==9.9.9" \
+    "pinned install refreshes django-mojo's catalog entry"
+assert_order "CMD pip install -r" "CMD pip install --refresh-package=django-mojo django-mojo==9.9.9" \
     "requirements install precedes the framework pin"
 setup_env
 run_post_deploy >/dev/null 2>&1
 assert_eq "$?" 0 "bare run exits 0"
-assert_in_log "CMD pip install --upgrade django-mojo" "bare run upgrades to latest"
-assert_order "CMD pip install -r" "CMD pip install --upgrade django-mojo" \
+assert_in_log "CMD pip install --refresh-package=django-mojo --upgrade django-mojo" \
+    "bare run refreshes django-mojo before upgrading to latest"
+assert_order "CMD pip install -r" "CMD pip install --refresh-package=django-mojo --upgrade django-mojo" \
     "requirements install precedes the latest upgrade"
-assert_order "CMD pip install --upgrade django-mojo" "CMD python3 -m mojo.deploy render" \
+assert_order "CMD pip install --refresh-package=django-mojo --upgrade django-mojo" "CMD python3 -m mojo.deploy render" \
     "render runs AFTER the framework install (renders the just-installed templates)"
+
+echo "post_deploy.sh: pre-26.2 pip keeps its historical no-flag path"
+setup_env
+touch "$CTL/pip.no_refresh"
+run_post_deploy --framework 9.9.9 >/dev/null 2>&1
+assert_eq "$?" 0 "an older pip run exits 0"
+assert_in_log "CMD pip install django-mojo==9.9.9" \
+    "older pip receives no unsupported refresh option"
+assert_not_in_log "--refresh-package=django-mojo" \
+    "older pip never receives the new option"
 
 echo "post_deploy.sh: --migrate runs migrate_locked BEFORE the restart; absent runs none"
 setup_env
@@ -347,7 +362,7 @@ run_post_deploy > "$OUT" 2>&1
 assert_eq "$?" 0 "bare invocation exits 0"
 assert_in_log "CMD nginx -t" "nginx config test ran"
 assert_in_log "CMD systemctl restart mojo-asgi" "app restarted"
-assert_in_log "CMD curl .*http://127.0.0.1/api/version" \
+assert_in_log "CMD curl .*https://127.0.0.1/api/version" \
     "the probe targets the default PROBE_URL"
 assert_file "$TMP/nginx_etc/nginx.conf" "nginx.conf landed in the NGINX_ETC seam"
 assert_file "$TMP/nginx_etc/conf.d/00_django_mojo_runtime.conf" \
@@ -442,7 +457,7 @@ run_post_deploy_env PROBE_URL="http://127.0.0.1:8080/api/version" APP_USER="appu
 assert_eq "$?" 0 "overridden run exits 0"
 assert_in_log "CMD curl .*http://127.0.0.1:8080/api/version" \
     "the probe targets the overridden PROBE_URL"
-assert_not_in_log "CMD curl .*http://127.0.0.1/api/version " \
+assert_not_in_log "CMD curl .*https://127.0.0.1/api/version " \
     "the default probe URL is not used once overridden"
 assert_in_log "CMD chown -R appu:webu" "chown argv carries APP_USER:WEB_USER"
 assert_has "$TMP/systemd_etc/mojo-asgi.service" "--workers 7" "ASGI_WORKERS renders into the unit"
@@ -612,7 +627,8 @@ assert_not_in_log "path /etc/mojosec" \
 assert_lacks "$OUT" "MojoSec control state is never trusted-change scope" \
     "no self-conflicting declaration reaches the validator"
 assert_lacks "$OUT" "FATAL: MojoSec deployment failed" "the enrolled deploy does not abort"
-assert_in_log "CMD pip install django-mojo==9.9.9" "pip still runs through the pip-run passthrough"
+assert_in_log "CMD pip install --refresh-package=django-mojo django-mojo==9.9.9" \
+    "refreshed pip still runs through the pip-run passthrough"
 assert_in_log "migrate_locked" "the canary still migrates under the journal"
 assert_in_log "MOJOSEC_CWD /" "the converge child keeps its cwd invariant under the wrapper"
 
@@ -652,7 +668,7 @@ assert_eq "$?" 0 "timer failure does not veto a healthy app deploy"
 assert_has "$OUT" "phase=timers; deploy continues" "timer failure is explicit"
 assert_in_log "CMD systemctl restart mojo-asgi" \
     "the web app still restarts after the timer warning"
-assert_in_log "CMD curl .*http://127.0.0.1/api/version" \
+assert_in_log "CMD curl .*https://127.0.0.1/api/version" \
     "the real app probe still gates the warned deploy"
 
 echo "post_deploy.sh: undeclared collision is inert; declared override applies"

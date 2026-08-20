@@ -52,8 +52,8 @@ import sys
 
 from mojo.deploy.provision import certificate as certificate_module
 from mojo.deploy.provision import clients as clients_module
-from mojo.deploy.provision import (discover, inputs, plan, remote, render,
-                                   report, storage)
+from mojo.deploy.provision import (checkout, discover, github, inputs, plan,
+                                   remote, render, report, storage)
 from mojo.deploy.provision import spec as spec_module
 
 
@@ -130,6 +130,10 @@ def build_parser():
     shared.add_argument(
         "--nlb", action="store_true",
         help="build a network load balancer even when the size would not")
+    shared.add_argument(
+        "--stable-node-ips", action="store_true",
+        help="give every node its own elastic IP even behind a balancer — "
+             "fixed outbound addresses for providers that allowlist caller IPs")
 
     parser = argparse.ArgumentParser(
         prog="python3 -m mojo.deploy.provision",
@@ -258,6 +262,8 @@ def run_init(args, console):
                          console=console)
     if args.nlb:
         answers["nlb"] = True
+    if args.stable_node_ips:
+        answers["stable_node_ips"] = True
 
     remaining = inputs.problems(answers)
     if remaining:
@@ -461,7 +467,8 @@ def run_configure(args, console):
     all_findings.extend(
         _finish_https(args, answers, topology, hosts, identity, console))
     all_findings.extend(
-        _add_deploy_key(args, answers, hosts, identity, console))
+        _wire_deploy_plane(args, answers, hosts, identity, run.observed,
+                           console))
 
     _summarize(all_findings, console)
     return EXIT_FINDINGS if report.Report(all_findings).is_blocking() else EXIT_OK
@@ -532,41 +539,44 @@ def _finish_https(args, answers, topology, hosts, identity, console):
     return findings
 
 
-def _add_deploy_key(args, answers, hosts, identity, console):
-    """Best effort, and honest about it.
+def _wire_deploy_plane(args, answers, hosts, identity, observed, console):
+    """The last mile: make a push to the project's repo able to deploy it.
 
-    A failure here is not a failed provision: it costs the operator one paste
-    into a browser, so it prints the key and the URL rather than exiting
-    non-zero.
+    Three things, in this order, because each depends on the one before:
+    every node's deploy key on the repository, then every node's `/opt/api`
+    wired to that repository as a real checkout, then one push webhook
+    pointed at the fleet. Without all three a node serves perfectly and
+    accepts no deploy — a state that looks like success from the outside,
+    which is exactly why this runs inside `configure` rather than living in a
+    runbook.
+
+    Best effort throughout. `gh` frequently cannot administer the repository
+    being deployed, and an estate that is otherwise finished is not failed by
+    that — every failure names the manual step instead.
     """
     repo = answers.get("github_repo")
     if not repo:
-        return []
-    run = remote.build_runner(hosts[0], user=args.ssh_user, identity=identity)
-    rc, pubkey, _ = run("cat /home/ec2-user/.ssh/id_ed25519.pub", timeout=30)
-    if rc != 0 or not pubkey.strip():
         console.say("")
-        console.say("could not read the node's deploy public key — "
-                    "ec2_bootstrap.sh generates /home/ec2-user/.ssh/id_ed25519")
+        console.say("no repository was configured, so nothing was wired for "
+                    "push-to-deploy — re-run `provision configure` after "
+                    "setting one to finish the deploy plane.")
         return []
 
-    import subprocess
-
-    title = f"ec2-user@{hosts[0]}"
-    done = subprocess.run(
-        ["gh", "repo", "deploy-key", "add", "/dev/stdin", "--repo", repo,
-         "--title", title],
-        input=pubkey + "\n", capture_output=True, text=True, check=False)
     console.say("")
-    if done.returncode == 0:
-        console.say(f"added the node's deploy key to {repo} as {title}")
-        return []
-    detail = (done.stderr or "").strip().splitlines()
-    console.say(f"could not add the deploy key to {repo} automatically "
-                f"({detail[-1] if detail else 'is gh installed and logged in?'})")
-    console.say(f"  add it by hand at https://github.com/{repo}/settings/keys")
-    console.say(f"  {pubkey.strip()}")
-    return []
+    console.say(f"wiring push-to-deploy for {repo}")
+    findings = []
+    for host in hosts:
+        run = remote.build_runner(host, user=args.ssh_user, identity=identity)
+        findings.extend(github.ensure_deploy_key(run, host, repo))
+        findings.extend(checkout.ensure_checkout(run, host, repo))
+
+    secrets = observed.get("secrets") or {}
+    findings.extend(github.ensure_webhook(
+        repo, answers.get("apex_domain"),
+        secrets.get("github_webhook_secret")))
+
+    render_findings(findings, console.say)
+    return findings
 
 
 def _summarize(findings, console):
@@ -651,7 +661,8 @@ def _topology(args, answers):
     committed environment file: it is a property of the machine running the
     command, not of the environment.
     """
-    topology = inputs.to_spec(answers, nlb=args.nlb)
+    topology = inputs.to_spec(answers, nlb=args.nlb,
+                              stable_node_ips=args.stable_node_ips)
     topology.project_root = args.project_root
     return topology
 

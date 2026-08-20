@@ -488,10 +488,15 @@ def test_one_time_secret_modal_is_not_clipped(opts):
     # word-break keeps it readable in two.
     assert "rows: '4'" not in secret, \
         "the one-time secret still reserves four rows for a single opaque token"
-    assert "class: 'secret', readonly: true, rows: '2'" in secret, \
-        "the secret field lost its compact two-row shape"
-    # Reveal-once behavior and copy are untouched.
-    assert "secretField.value = ''" in secret and "result.token = null" in secret \
+    # A <pre>, not a <textarea>: read-only text to copy, never to edit. The
+    # compact shape is now .is-inline rather than a row count.
+    assert "'code-block is-inline'" in secret, \
+        "the secret field lost its compact single-value shape"
+    assert "h('textarea'" not in secret, \
+        "the one-time secret is a form field again — it is read-only text"
+    # Reveal-once behavior and copy are untouched. A <pre> has no .value, so
+    # textContent is the whole scrub.
+    assert "secretField.textContent = ''" in secret and "result.token = null" in secret \
         and "secret = ''" in secret, \
         "the reveal-once scrub changed"
     assert "Copy this value now" in secret \
