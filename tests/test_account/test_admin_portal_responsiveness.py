@@ -57,14 +57,19 @@ def test_deploys_tab_renders_its_own_states_contract(opts):
         assert copy in page, f"the Deploys tab lost its {copy!r} empty state"
 
 
-# The shared surfaces phase 1 actually swept. Feature files join this set in
-# the later phases; until then they carry their own raw handlers knowingly.
+# The surfaces actually swept so far: the shared components (phase 1) and the
+# high-traffic feature files (phase 2). The remaining feature files join this
+# set in phase 3; until then they carry their own raw handlers knowingly.
 SWEPT = (
     "components/actions.js",
     "components/model.js",
     "components/rows.js",
     "components/views.js",
     "core.js",
+    "features/advanced/page.js",
+    "features/webapps/api.js",
+    "features/webapps/page.js",
+    "features/webapps/wizard.js",
 )
 
 # Handler spellings that hand a promise to an event listener nobody awaits:
@@ -272,6 +277,108 @@ def test_pending_state_survives_its_own_action_contract(opts):
     assert ".disabled" not in tabs and "pendingLabel" not in tabs, \
         "sectionTabs disables the tab or swaps its label — the label must stay " \
         "and the control must stay focusable"
+
+
+def _window(text, start, end):
+    """The source between two anchors, so an assertion cannot pass on a
+    neighbouring function that happens to contain the same string."""
+    head = text.index(start)
+    return text[head:text.index(end, head)]
+
+
+@th.django_unit_test("a swept feature trigger outlives the render its own action starts")
+def test_feature_pending_states_survive_their_own_actions_contract(opts):
+    api_side = (ASSETS / "features/webapps/api.js").read_text()
+    page = (ASSETS / "features/webapps/page.js").read_text()
+    wizard = (ASSETS / "features/webapps/wizard.js").read_text()
+    advanced = (ASSETS / "features/advanced/page.js").read_text()
+
+    for name, text in (("webapps/api.js", api_side), ("webapps/page.js", page),
+                       ("webapps/wizard.js", wizard), ("advanced/page.js", advanced)):
+        assert "'../../components/actions.js'" in text, \
+            f"{name} does not use the shared responsiveness helpers"
+
+    # --- api.js, the three † triggers: each closes the inspector BEFORE it
+    # awaits, so the clicked button is detached from the first frame and a
+    # pending state pinned to it would never be seen. Their affordance is the
+    # scrim their runner opens.
+    inspector = api_side.split("export function openFrameworkInspector", 1)[1]
+    assert inspector.count("inspector.close(); return ") == 3, \
+        "the framework drill-in's three actions no longer close the inspector " \
+        "before handing off — re-check where their affordance belongs"
+    assert "runAction(event.currentTarget" not in inspector, \
+        "a framework drill-in action pins its pending state to the button the " \
+        "inspector.close() on the line before has already detached"
+    for runner in ("applyFrameworkUpdate(ctx, framework, reload)",
+                   "writeFrameworkPin('hold', reload)", "writeFrameworkPin('', reload)"):
+        assert runner in inspector, \
+            f"the framework drill-in no longer delegates to {runner}"
+
+    # The runner that owns each of those: dialog first (human input, no
+    # affordance), then a scrim over a task with no surviving trigger at all.
+    update = _window(api_side, "export async function applyFrameworkUpdate",
+                     "async function writeFrameworkPin")
+    assert update.index("await confirmFrameworkUpdate(framework)") < update.index("runAction(null,"), \
+        "the framework update paints a busy scrim while a human is still " \
+        "reading its typed-version confirmation"
+    assert "busy: {title: 'Updating django-mojo…'" in update, \
+        "restarting every node's service no longer opens the busy scrim"
+    pin = _window(api_side, "async function writeFrameworkPin", "export function openFrameworkInspector")
+    assert "runAction(null," in pin and "busy: {title:" in pin, \
+        "writing the fleet-wide update policy has no affordance of its own"
+
+    # The deploy-recovery buttons are NOT †: the inspector closes only after the
+    # request lands, so the button carries the wait itself and is gone with the
+    # inspector on success.
+    act = _window(api_side, "const act = (action, row, button, alert)", "const extras =")
+    assert "runAction(button," in act and "restoreOnSuccess: false" in act, \
+        "a deploy recovery action does not carry its pending state on the " \
+        "button, or tries to restore one onto a closed inspector"
+
+    # --- page.js: every destructive flow confirms first (human input, nothing
+    # paints), then runs under the scrim — the trigger is inside the table or
+    # the tab that reload() rebuilds.
+    destructive = (
+        ("function revokeKey", "function workflowPanel"),
+        ("function removeAddress", "function addressesCard"),
+        ("function deleteWebApp", "function rollbackTo"),
+        ("function rollbackTo", "const UPLOAD_LIMITS"),
+    )
+    for start, end in destructive:
+        block = _window(page, start, end)
+        assert "runAction(null," in block, \
+            f"{start} attaches its affordance to a node, but reload() rebuilds " \
+            f"the row or tab the trigger lives in — this one belongs on the scrim"
+        assert "busy: {title:" in block, \
+            f"{start} is destructive but does not open the busy scrim"
+        assert block.index("confirmAction({") < block.index("runAction(null,"), \
+            f"{start} starts its affordance before the human has answered the dialog"
+
+    # --- advanced/page.js: same shape for every provider mutation.
+    for start, end in (("async function retireCertificate", "function domainCertificatesPanel"),
+                       ("async function removeFailedCertificate", "async function certificatesPage"),
+                       ("async function deleteRecord", "async function dnsPage"),
+                       ("async function retireUpstream", "async function upstreamsPage"),
+                       ("async function deleteRoute", "async function routesPage")):
+        block = _window(advanced, start, end)
+        assert "runAction(null," in block and "busy: {title:" in block, \
+            f"{start} runs a provider mutation with no busy scrim over it"
+        assert block.index("await confirmAction({") < block.index("runAction(null,"), \
+            f"{start} paints while a human is still reading its confirmation"
+
+    # A panel's loading state goes into a body node, never over the panel: the
+    # heading and its Request/Refresh buttons live in the panel itself.
+    assert "loadInto(panel," not in advanced, \
+        "a panel-scoped load paints its skeleton over the panel heading and " \
+        "the action buttons that sit beside it"
+    assert advanced.count("const body = h('div', {}); panel.append(body);") >= 3, \
+        "the panel-scoped loads stopped rendering into a body node of their own"
+
+    # Money spends behind a scrim, on both surfaces that spend it.
+    assert "busy: {title: 'Registering your domain…'" in wizard, \
+        "the wizard's domain purchase no longer runs behind the busy scrim"
+    assert "busy: {title: `Registering ${quote.name}…`" in advanced, \
+        "the Domains purchase no longer runs behind the busy scrim"
 
 
 @th.django_unit_test("the shared controls answer the click that started them")

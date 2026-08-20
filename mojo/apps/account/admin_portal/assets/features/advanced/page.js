@@ -2,7 +2,9 @@ import {
   api, apiOnce, badge, FormView, formatDate, h, icon, listData, openModal,
   pageHeader, statusTone, TableView,
 } from '../../core.js';
+import {announce, loadInto, runAction} from '../../components/actions.js';
 import {activityHref, decodeRouteState, returnLocation, routeHref} from '../../components/routes.js';
+import {errorState} from '../../components/views.js';
 
 const DNS_TYPES = ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'SRV', 'CAA', 'NS'];
 const VHOST_SHAPES = [
@@ -90,8 +92,21 @@ function queryParam(name) {
   return new URLSearchParams(query).get(name);
 }
 
-function actionError(panel, error) {
-  panel.append(h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message})));
+// The local one-off is retired in favour of the shared state: a heading, a
+// role="alert", and a retry. The bare div it used to append had none of the
+// three, so a reader saw a sentence with no way to try again.
+// (Phase 3 removes this shim entirely and calls errorState at the call site.)
+function actionError(panel, error, retry = null) {
+  panel.append(errorState(error, retry));
+}
+
+// A provider mutation that fails has no panel of its own left to fail into —
+// the table it belonged to is being rebuilt. Say so where the operator is
+// looking, and to assistive technology, rather than losing it to the console.
+function mutationFailed(title, error) {
+  const detail = error?.message || 'That change was not applied.';
+  announce(detail);
+  openModal({title, content: h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: detail}))});
 }
 
 function statusBadge(value) { return badge(String(value || 'unknown').replaceAll('_', ' '), statusTone(value)); }
@@ -226,13 +241,16 @@ async function purchaseDomain(ctx, reload) {
     const name = h('input', {type: 'text', placeholder: 'example.com', autocomplete: 'off'});
     const group = h('select', {}, h('option', {value: '', text: 'Choose a group'}), ...(ctx.groups || []).map((row) => h('option', {value: row.id, text: row.name})));
     const message = h('div', {class: 'form-message', role: 'alert'});
-    const search = h('button', {class: 'button primary', onclick: async () => {
-      search.disabled = true; message.textContent = '';
-      try {
-        const row = await api('/api/dnsman/registrar/search', {method: 'POST', body: JSON.stringify({domain: name.value})});
-        renderResult(row, group.value);
-      } catch (error) { message.textContent = error.message; search.disabled = false; }
-    }}, icon('search'), 'Check availability');
+    const search = h('button', {class: 'button primary', onclick: () => runAction(search, async () => {
+      message.textContent = '';
+      const row = await api('/api/dnsman/registrar/search', {method: 'POST', body: JSON.stringify({domain: name.value})});
+      renderResult(row, group.value);
+    }, {
+      // renderResult replaces the whole wizard body, this button included, so
+      // there is nothing to restore on the path that succeeds.
+      pendingLabel: 'Checking…', restoreOnSuccess: false,
+      onError: (error) => { message.textContent = error.message; },
+    })}, icon('search'), 'Check availability');
     body.replaceChildren(h('div', {class: 'wizard-steps'}, badge('1 Search', 'success'), badge('2 Quote'), badge('3 Confirm')),
       h('label', {class: 'field'}, h('span', {text: 'Group'}), group), h('label', {class: 'field'}, h('span', {text: 'Domain'}), name), message, search);
   }
@@ -241,27 +259,35 @@ async function purchaseDomain(ctx, reload) {
     body.replaceChildren(h('div', {class: 'wizard-steps'}, badge('1 Search', 'success'), badge('2 Quote', 'success'), badge('3 Confirm')),
       h('div', {class: 'result-card'}, h('div', {}, h('strong', {text: row.name}), h('span', {text: row.reason || (available ? 'Available to register' : 'Not available')})), statusBadge(available ? 'active' : 'failed'), h('strong', {text: `${price} ${row.currency || 'USD'}`})),
       h('div', {class: 'form-actions'}, h('button', {class: 'button ghost', onclick: renderSearch}, 'Search again'),
-        available && groupId ? h('button', {class: 'button primary', onclick: async (event) => {
-          event.currentTarget.disabled = true;
-          try {
-            quote = await apiOnce('/api/dnsman/registrar/quote', {method: 'POST', body: JSON.stringify({group: groupId, domain: row.name, years: 1})});
-            token = quote.token; quote.token = null; renderConfirm(groupId);
-          } catch (error) { body.append(h('div', {class: 'form-message', text: error.message})); }
-        }}, 'Get live quote') : null));
+        available && groupId ? h('button', {class: 'button primary', onclick: (event) => runAction(event.currentTarget, async () => {
+          quote = await apiOnce('/api/dnsman/registrar/quote', {method: 'POST', body: JSON.stringify({group: groupId, domain: row.name, years: 1})});
+          token = quote.token; quote.token = null; renderConfirm(groupId);
+        }, {
+          pendingLabel: 'Getting a quote…', restoreOnSuccess: false,
+          onError: (error) => { body.append(h('div', {class: 'form-message', text: error.message})); },
+        })}, 'Get live quote') : null));
   }
   function renderConfirm(groupId) {
     const typedDomain = h('input', {autocomplete: 'off', placeholder: quote.name});
     const typedPrice = h('input', {autocomplete: 'off', inputmode: 'decimal', placeholder: String(quote.price)});
     const message = h('div', {class: 'form-message', role: 'alert'});
-    const buy = h('button', {class: 'button danger', disabled: true, onclick: async () => {
-      buy.disabled = true;
+    // This spends money on a single non-retried attempt. The scrim is the
+    // point: nothing else on the page is clickable — least of all this button
+    // a second time — while the registrar is deciding.
+    const buy = h('button', {class: 'button danger', disabled: true, onclick: () => runAction(buy, async () => {
       let purchaseToken = token; token = null;
       try {
         await apiOnce('/api/dnsman/registrar/purchase', {method: 'POST', body: JSON.stringify({group: groupId, purchase: quote.purchase, confirm_token: purchaseToken, confirm_domain: typedDomain.value, confirm_price: typedPrice.value})});
         close(); await reload();
-      } catch (error) { if (quote) quote.token = null; message.textContent = `${error.message} The quote was spent; take a new quote before trying again.`; }
-      finally { purchaseToken = null; }
-    }}, 'Register domain');
+      } finally { purchaseToken = null; }
+    }, {
+      busy: {title: `Registering ${quote.name}…`, detail: 'This is a single attempt — it is not retried.'},
+      restoreOnSuccess: false,
+      onError: (error) => {
+        if (quote) quote.token = null;
+        message.textContent = `${error.message} The quote was spent; take a new quote before trying again.`;
+      },
+    })}, 'Register domain');
     const validate = () => { buy.disabled = typedDomain.value.trim().toLowerCase() !== quote.name || typedPrice.value.trim() !== String(quote.price); };
     typedDomain.addEventListener('input', validate); typedPrice.addEventListener('input', validate);
     body.replaceChildren(h('div', {class: 'wizard-steps'}, badge('1 Search', 'success'), badge('2 Quote', 'success'), badge('3 Confirm', 'warning')),
@@ -291,23 +317,38 @@ async function retireCertificate(row, covering, addressCount, reload) {
     copy: `${covering?.common_name || 'The replacement certificate'} takes over ${addressCount} addresses now served by ${row.common_name}, then the retired certificate is removed from the inventory.`,
     confirmLabel: 'Retire certificate', danger: true});
   if (!confirmed) return;
-  await apiOnce('/api/dnsman/certificate/retire', {method: 'POST', body: JSON.stringify({certificate: row.id})});
-  await reload();
+  // The confirm was the human's part; the retirement moves live traffic onto
+  // the covering certificate and rebuilds the row the button sat in.
+  await runAction(null, async () => {
+    await apiOnce('/api/dnsman/certificate/retire', {method: 'POST', body: JSON.stringify({certificate: row.id})});
+    await reload();
+  }, {
+    key: `certificate-retire:${row.id}`,
+    busy: {title: `Retiring ${row.common_name}…`, detail: 'Moving its addresses onto the covering certificate.'},
+    onError: (error) => mutationFailed('The certificate was not retired', error),
+  });
 }
 
 function domainCertificatesPanel(ctx, domain) {
   const panel = h('section', {class: 'panel'});
+  // The heading is painted synchronously and the reads land underneath it, so
+  // the loading state goes in `body` — replacing the panel would take the
+  // heading and the Request certificate button with it.
+  const body = h('div', {});
   async function render() {
     panel.replaceChildren(h('div', {class: 'panel-heading'}, h('div', {},
       h('h2', {text: 'Certificates'}),
       h('p', {text: 'TLS coverage for this domain. Private key material is never shown.'})),
-      ctx.capabilities.manage_network ? h('button', {class: 'button compact', onclick: () => certificateRequest([domain], render)}, icon('certificate'), 'Request certificate') : null));
-    try {
+      ctx.capabilities.manage_network ? h('button', {class: 'button compact', onclick: () => certificateRequest([domain], render)}, icon('certificate'), 'Request certificate') : null),
+    body);
+    await loadInto(body, async (current) => {
       const [rows, eligibility, vhosts] = await Promise.all([
         loadDomainCertificates(domain.id),
         loadRetireEligibility(domain.id).catch(() => ({})),
         loadVhosts().catch(() => []),
       ]);
+      if (!current()) return;
+      body.replaceChildren();
       const wildcardName = `*.${domain.name}`;
       const headline = rows.find((row) => row.status === 'active' && [row.common_name, ...(row.sans || [])].includes(wildcardName)) || null;
       const addressCount = (row) => vhosts.filter((vhost) => Number(vhost.certificate?.id || vhost.certificate) === Number(row.id)).length;
@@ -315,13 +356,13 @@ function domainCertificatesPanel(ctx, domain) {
         const coveringId = eligibility[String(row.id)];
         if (!coveringId || !ctx.capabilities.manage_network) return null;
         const covering = rows.find((item) => Number(item.id) === Number(coveringId));
-        return h('button', {class: 'button compact', onclick: async (event) => {
+        return h('button', {class: 'button compact', onclick: (event) => {
           event.stopPropagation();
-          await retireCertificate(row, covering, addressCount(row), render);
+          return retireCertificate(row, covering, addressCount(row), render);
         }}, 'Retire — use wildcard');
       };
       if (headline) {
-        panel.append(h('div', {class: 'result-card cert-headline'},
+        body.append(h('div', {class: 'result-card cert-headline'},
           h('div', {},
             h('strong', {text: [headline.common_name, ...(headline.sans || []).filter((name) => name !== headline.common_name)].join(', ')}),
             h('span', {text: 'Covers every app on this domain — current and future.'})),
@@ -329,15 +370,15 @@ function domainCertificatesPanel(ctx, domain) {
           h('strong', {text: headline.renew_after ? `Renews ${formatDate(headline.renew_after)}` : `Expires ${certificateExpiry(headline)}`})));
       }
       const others = rows.filter((row) => row !== headline);
-      panel.append(new TableView({rows: others, empty: headline ? 'No other certificates on this domain.' : 'No certificates have been requested for this domain.', columns: [
+      body.append(new TableView({rows: others, empty: headline ? 'No other certificates on this domain.' : 'No certificates have been requested for this domain.', columns: [
         {label: 'Certificate', render: (row) => h('div', {}, h('strong', {text: row.common_name}), h('small', {text: (row.sans || []).join(', ')}))},
         {label: 'Status', render: (row) => statusBadge(row.status)},
         {label: 'Expires', render: (row) => certificateExpiry(row)},
         {label: '', render: (row) => h('div', {class: 'form-actions'},
           retireButton(row),
-          ctx.capabilities.manage_network && row.status === 'failed' ? h('button', {class: 'icon-button danger-text', 'aria-label': `Remove failed certificate attempt for ${row.common_name}`, onclick: async (event) => { event.stopPropagation(); await removeFailedCertificate(row, render); }}, icon('trash')) : null)},
+          ctx.capabilities.manage_network && row.status === 'failed' ? h('button', {class: 'icon-button danger-text', 'aria-label': `Remove failed certificate attempt for ${row.common_name}`, onclick: (event) => { event.stopPropagation(); return removeFailedCertificate(row, render); }}, icon('trash')) : null)},
       ]}).render());
-    } catch (error) { actionError(panel, error); }
+    }, {message: 'Loading certificates…', retry: render});
   }
   render();
   return panel;
@@ -377,7 +418,7 @@ async function domainsPage(ctx) {
       ctx.capabilities.manage_network ? h('button', {class: 'button primary', onclick: () => purchaseDomain(ctx, render)}, icon('plus'), 'Buy domain') : null,
     ]));
     const panel = tablePanel('Managed domains', 'Open a domain to change registrar settings; use DNS Records for the live provider zone.'); root.append(panel);
-    if (failure) { actionError(panel, failure); return; }
+    if (failure) { actionError(panel, failure, render); return; }
     panel.append(new TableView({rows, empty: 'No managed domains yet.',
       onSelect: (row) => { location.hash = routeHref('domains', {domain: row.id}); }, columns: [
         {label: 'Domain', render: (row) => h('div', {}, h('strong', {text: row.name}), h('small', {text: row.provider}))},
@@ -387,14 +428,20 @@ async function domainsPage(ctx) {
         {label: 'Zone', render: (row) => h('a', {class: 'button compact', href: routeHref('dns', {domain: row.id}), onclick: (event) => event.stopPropagation()}, icon('dns'), 'Records')},
       ]}).render());
   }
+  // The domain read IS this page: until it lands there is nothing to look at,
+  // and on a re-render the previous list would otherwise sit there reading as
+  // current. The loader paints the result itself, so loadInto only owns the
+  // wait — the read's own failure still becomes the list's in-panel error.
   async function render() {
-    let rows = []; let failure = null;
-    try { rows = await loadDomains(); } catch (error) { failure = error; }
-    const wanted = queryParam('domain');
-    // An id the caller cannot see (or that no longer exists) is not an error —
-    // it is simply the list.
-    const selected = wanted ? rows.find((row) => String(row.id) === String(wanted)) : null;
-    if (selected) renderDetail(selected); else renderList(rows, failure);
+    await loadInto(root, async () => {
+      let rows = []; let failure = null;
+      try { rows = await loadDomains(); } catch (error) { failure = error; }
+      const wanted = queryParam('domain');
+      // An id the caller cannot see (or that no longer exists) is not an error —
+      // it is simply the list.
+      const selected = wanted ? rows.find((row) => String(row.id) === String(wanted)) : null;
+      if (selected) renderDetail(selected); else renderList(rows, failure);
+    }, {message: 'Loading domains…', retry: render});
   }
   await render(); return root;
 }
@@ -447,16 +494,20 @@ async function credentialsPage(ctx) {
       ctx.capabilities.manage_network ? h('button', {class: 'button primary', onclick: () => credentialDialog(ctx, null, render)}, icon('key'), 'Link credential') : null,
     ]));
     const panel = tablePanel('DNS provider credentials', 'Only masked suffixes and verification metadata are returned by the API.'); root.append(panel);
-    try {
+    // Into a body node, not the panel: the panel carries the heading this
+    // loading state would otherwise replace.
+    const body = h('div', {}); panel.append(body);
+    await loadInto(body, async (current) => {
       const rows = await loadCredentials();
-      panel.append(new TableView({rows, empty: 'No DNS credentials are linked.', onSelect: ctx.capabilities.manage_network ? (row) => credentialDialog(ctx, row, render) : null, columns: [
+      if (!current()) return;
+      body.replaceChildren(new TableView({rows, empty: 'No DNS credentials are linked.', onSelect: ctx.capabilities.manage_network ? (row) => credentialDialog(ctx, row, render) : null, columns: [
         {label: 'Credential', render: (row) => h('div', {}, h('strong', {text: row.name}), h('small', {text: row.provider}))},
         {label: 'Scope', render: (row) => row.group?.name || 'Platform'},
         {label: 'Verified', render: (row) => statusBadge(row.verified ? 'verified' : 'failed')},
         {label: 'Key', render: (row) => h('span', {class: 'mono', text: row.api_key_masked || 'Hidden'})},
         {label: 'Domains', render: (row) => String(row.domain_count || 0)},
       ]}).render());
-    } catch (error) { actionError(panel, error); }
+    }, {message: 'Loading credentials…', retry: render});
   }
   await render(); return root;
 }
@@ -481,6 +532,9 @@ function recordEditor(domain, record, records, refresh) {
   const ttl = h('input', {type: 'number', min: '30', max: '86400', value: record?.ttl || 300});
   const values = h('textarea', {rows: '7', text: (record?.record_values || []).join('\n'), placeholder: 'One complete record value per line'});
   const message = h('div', {class: 'form-message', role: 'alert'});
+  // responsiveness-exempt: the first await here is confirmAction — a human
+  // deciding whether to replace a record set. Policy is that nothing paints
+  // until they have answered; the write that follows carries the scrim.
   const save = h('button', {class: 'button primary', onclick: async () => {
     const target = {type: type.value, name: name.value.trim(), ttl: Number(ttl.value), record_values: normalizedValues(values.value.split('\n'))};
     if (!target.name || !target.record_values.length) { message.textContent = 'Name and at least one value are required.'; return; }
@@ -489,8 +543,10 @@ function recordEditor(domain, record, records, refresh) {
       const confirmed = await confirmAction({title: 'Replace the complete record set?', copy: `Saving replaces every value for ${target.type} ${target.name}. These values will be removed: ${removed.join(', ')}`, confirmLabel: 'Replace record set', danger: true});
       if (!confirmed) return;
     }
-    save.disabled = true; message.textContent = '';
-    try {
+    message.textContent = '';
+    // A provider write that lands unconfirmed latches the whole record set;
+    // nothing else on the page may be clicked while it is in flight.
+    await runAction(save, async () => {
       const before = await refresh(false);
       const current = before.find((row) => recordIdentity(domain, row) === recordIdentity(domain, target));
       if (!original && current) {
@@ -508,7 +564,11 @@ function recordEditor(domain, record, records, refresh) {
           return applied && sameRecordSet(applied, target) ? 'applied' : 'unconfirmed';
         });
       close(); await refresh(false);
-    } catch (error) { message.textContent = error.message; save.disabled = false; }
+    }, {
+      busy: {title: 'Saving the record set…', detail: 'Writing to the provider, then reading the zone back.'},
+      restoreOnSuccess: false,
+      onError: (error) => { message.textContent = error.message; },
+    });
   }}, icon('check'), 'Save record set');
   const close = openModal({title: record ? `Edit ${record.type} record` : 'Add DNS record', subtitle: 'The provider stores one complete set for each type and name.', wide: true, content: h('div', {},
     h('div', {class: 'field-grid'}, h('label', {class: 'field'}, h('span', {text: 'Type'}), type), h('label', {class: 'field'}, h('span', {text: 'Name'}), name), h('label', {class: 'field'}, h('span', {text: 'TTL'}), ttl)),
@@ -519,11 +579,17 @@ async function deleteRecord(domain, record, refresh) {
   const confirmed = await confirmAction({title: `Delete ${record.type} record?`, copy: `Delete the complete ${record.type} set at ${record.name}? This request is attempted once and then reconciled from the provider.`, confirmLabel: 'Delete record set', danger: true});
   if (!confirmed) return;
   const key = `dns:${domain.id}:${recordIdentity(domain, record)}`;
-  await providerMutation(key,
-    () => apiOnce('/api/dnsman/dns/delete', {method: 'POST', body: JSON.stringify({domain: domain.id, type: record.type, name: record.name, record_values: record.record_values})}),
-    () => refresh(false),
-    (observed) => observed.some((row) => recordIdentity(domain, row) === recordIdentity(domain, record)) ? 'unconfirmed' : 'applied');
-  await refresh(false);
+  await runAction(null, async () => {
+    await providerMutation(key,
+      () => apiOnce('/api/dnsman/dns/delete', {method: 'POST', body: JSON.stringify({domain: domain.id, type: record.type, name: record.name, record_values: record.record_values})}),
+      () => refresh(false),
+      (observed) => observed.some((row) => recordIdentity(domain, row) === recordIdentity(domain, record)) ? 'unconfirmed' : 'applied');
+    await refresh(false);
+  }, {
+    key: `delete-${key}`,
+    busy: {title: `Deleting ${record.type} ${record.name}…`, detail: 'Writing to the provider, then reading the zone back.'},
+    onError: (error) => mutationFailed('The record set was not deleted', error),
+  });
 }
 
 async function dnsPage(ctx) {
@@ -538,10 +604,16 @@ async function dnsPage(ctx) {
   function render() {
     const picker = h('select', {'aria-label': 'Managed domain'}, h('option', {value: '', text: 'Choose a domain'}), ...domains.map((row) => h('option', {value: row.id, text: row.name, selected: row.id === active?.id})));
     picker.value = active?.id || '';
-    picker.addEventListener('change', async () => { active = domains.find((row) => String(row.id) === picker.value) || null; records = []; if (active) await fetchRecords(false); else render(); });
+    // A <select> gets aria-disabled and the announcement, never a label swap:
+    // rewriting the chosen option under the pointer is its own bug.
+    picker.addEventListener('change', () => runAction(picker, async () => {
+      active = domains.find((row) => String(row.id) === picker.value) || null; records = [];
+      if (active) await fetchRecords(false); else render();
+    }, {announceLabel: 'Loading the zone…'}));
     root.replaceChildren(pageHeader('Network & hosting', 'DNS records', 'Edit the live provider zone as complete record sets; no database mirror can drift.', [
       h('label', {class: 'toolbar-select'}, icon('globe'), picker),
-      active ? h('button', {class: 'button ghost', onclick: () => fetchRecords(true)}, icon('refresh'), 'Refresh') : null,
+      active ? h('button', {class: 'button ghost', onclick: (event) => runAction(event.currentTarget,
+        () => fetchRecords(true), {announceLabel: 'Refreshing the zone…'})}, icon('refresh'), 'Refresh') : null,
       active && ctx.capabilities.manage_network ? h('button', {class: 'button primary', onclick: () => recordEditor(active, null, records, fetchRecords)}, icon('plus'), 'Add record') : null,
     ]));
     if (!active) { root.append(h('section', {class: 'panel empty'}, h('p', {text: 'Choose a managed domain to load its authoritative provider zone.'}))); return; }
@@ -553,14 +625,19 @@ async function dnsPage(ctx) {
       {label: 'Name', render: (row) => h('span', {class: 'mono', text: row.name})},
       {label: 'Complete values', render: (row) => h('div', {class: 'record-values'}, ...(row.record_values || []).map((value) => h('code', {text: value})))},
       {label: 'TTL', render: (row) => String(row.ttl)},
-      {label: '', render: (row) => ctx.capabilities.manage_network ? h('button', {class: 'icon-button danger-text', 'aria-label': `Delete ${row.type} ${row.name}`, onclick: async (event) => { event.stopPropagation(); await deleteRecord(active, row, fetchRecords); }}, icon('trash')) : null},
+      {label: '', render: (row) => ctx.capabilities.manage_network ? h('button', {class: 'icon-button danger-text', 'aria-label': `Delete ${row.type} ${row.name}`, onclick: (event) => { event.stopPropagation(); return deleteRecord(active, row, fetchRecords); }}, icon('trash')) : null},
     ]}).render());
   }
-  try {
-    domains = (await loadDomains()).filter((row) => row.status === 'active');
-    active = domains.find((row) => String(row.id) === String(queryParam('domain'))) || domains[0] || null;
-    if (active) await fetchRecords(false); else render();
-  } catch (error) { root.replaceChildren(pageHeader('Network & hosting', 'DNS records', 'Live provider zone management.'), h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
+  // Nothing can be shown until the domain list lands, and a failed read used to
+  // leave a bare sentence with no way to try again.
+  async function load() {
+    await loadInto(root, async () => {
+      domains = (await loadDomains()).filter((row) => row.status === 'active');
+      active = domains.find((row) => String(row.id) === String(queryParam('domain'))) || domains[0] || null;
+      if (active) await fetchRecords(false); else render();
+    }, {message: 'Loading domains…', retry: load});
+  }
+  await load();
   return root;
 }
 
@@ -580,8 +657,14 @@ function certificateRequest(domains, reload) {
 async function removeFailedCertificate(row, reload) {
   const confirmed = await confirmAction({title: `Remove failed attempt for ${row.common_name}?`, copy: 'This removes the obsolete certificate attempt from the inventory. The failure remains in the job and application logs.', confirmLabel: 'Remove failed attempt', danger: true});
   if (!confirmed) return;
-  await apiOnce('/api/dnsman/certificate/remove-failed', {method: 'POST', body: JSON.stringify({certificate: row.id})});
-  await reload();
+  await runAction(null, async () => {
+    await apiOnce('/api/dnsman/certificate/remove-failed', {method: 'POST', body: JSON.stringify({certificate: row.id})});
+    await reload();
+  }, {
+    key: `certificate-remove-failed:${row.id}`,
+    busy: {title: `Removing the failed attempt for ${row.common_name}…`},
+    onError: (error) => mutationFailed('The failed attempt was not removed', error),
+  });
 }
 
 async function certificatesPage(ctx) {
@@ -603,13 +686,19 @@ async function certificatesPage(ctx) {
       {label: 'Domain', render: (row) => row.domain?.name || '—'},
       {label: 'Issuer', render: (row) => row.issuer || 'Pending'},
       {label: 'Expires', render: (row) => row.days_remaining == null ? formatDate(row.not_after) : `${row.days_remaining} days`},
-      {label: '', render: (row) => ctx.capabilities.manage_network && row.status === 'failed' ? h('button', {class: 'icon-button danger-text', 'aria-label': `Remove failed certificate attempt for ${row.common_name}`, onclick: async (event) => { event.stopPropagation(); await removeFailedCertificate(row, render); }}, icon('trash')) : null},
+      {label: '', render: (row) => ctx.capabilities.manage_network && row.status === 'failed' ? h('button', {class: 'icon-button danger-text', 'aria-label': `Remove failed certificate attempt for ${row.common_name}`, onclick: (event) => { event.stopPropagation(); return removeFailedCertificate(row, render); }}, icon('trash')) : null},
     ]}).render());
     if (rows.some((row) => ['pending', 'issuing'].includes(row.status)) && pollTicks < 36 && location.hash.startsWith('#/certificates')) {
       pollTicks += 1; pollTimer = setTimeout(() => render().catch(() => {}), 10000);
     }
   }
-  try { await render(); } catch (error) { root.replaceChildren(pageHeader('Network & hosting', 'Certificates', 'TLS lifecycle metadata.'), h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
+  // Two reads before anything paints, and a failure that used to be a bare
+  // sentence. The poll keeps calling render() directly — a background tick
+  // must never blank the table the operator is reading.
+  async function load() {
+    await loadInto(root, () => render(), {message: 'Loading certificates…', retry: load});
+  }
+  await load();
   return root;
 }
 
@@ -633,7 +722,13 @@ function upstreamDialog(ctx, reload) {
 async function retireUpstream(row, reload) {
   const confirmed = await confirmAction({title: `Retire ${row.name}?`, copy: 'Existing Vhosts keep their historical reference but stop serving until repaired.', confirmLabel: 'Retire upstream', danger: true});
   if (!confirmed) return;
-  await apiOnce('/api/edge/upstream/retire', {method: 'POST', body: JSON.stringify({upstream: row.id})}); await reload();
+  await runAction(null, async () => {
+    await apiOnce('/api/edge/upstream/retire', {method: 'POST', body: JSON.stringify({upstream: row.id})}); await reload();
+  }, {
+    key: `upstream-retire:${row.id}`,
+    busy: {title: `Retiring ${row.name}…`, detail: 'Vhosts pointing at it stop serving until they are repaired.'},
+    onError: (error) => mutationFailed('The upstream was not retired', error),
+  });
 }
 
 async function upstreamsPage(ctx) {
@@ -643,16 +738,18 @@ async function upstreamsPage(ctx) {
       ctx.user.is_superuser ? h('button', {class: 'button primary', onclick: () => upstreamDialog(ctx, render)}, icon('plus'), 'Declare upstream') : null,
     ]));
     const panel = tablePanel('Declared destinations', 'Retirement preserves history; destinations are never silently repointed.'); root.append(panel);
-    try {
+    const body = h('div', {}); panel.append(body);
+    await loadInto(body, async (current) => {
       const rows = await loadUpstreams();
-      panel.append(new TableView({rows, empty: 'No upstream destinations are declared.', columns: [
+      if (!current()) return;
+      body.replaceChildren(new TableView({rows, empty: 'No upstream destinations are declared.', columns: [
         {label: 'Upstream', render: (row) => h('div', {}, h('strong', {text: row.name}), h('small', {text: row.kind}))},
         {label: 'Target', render: (row) => h('code', {text: row.kind === 'unix' ? row.socket_path : `${row.host}:${row.port}`})},
         {label: 'Scope', render: (row) => row.group?.name || 'Shared'},
         {label: 'Status', render: (row) => statusBadge(row.is_enabled ? 'active' : 'inactive')},
         {label: '', render: (row) => ctx.user.is_superuser && row.is_enabled ? h('button', {class: 'button compact', onclick: () => retireUpstream(row, render)}, 'Retire') : null},
       ]}).render());
-    } catch (error) { actionError(panel, error); }
+    }, {message: 'Loading upstreams…', retry: render});
   }
   await render(); return root;
 }
@@ -681,9 +778,12 @@ async function createVhostWizard(ctx, reload) {
     const bodySize = h('input', {type: 'number', min: '1', max: '4096', value: '50'}); const enabled = h('input', {type: 'checkbox', checked: true});
     const spa = h('input', {type: 'checkbox'}); const serveStatic = h('input', {type: 'checkbox'}); const redirect = h('input', {placeholder: 'www.example.com'});
     const routes = h('textarea', {rows: '4', placeholder: '/api | 12\n/ws | 14'}); const message = h('div', {class: 'form-message', role: 'alert'});
-    const create = h('button', {class: 'button primary', onclick: async () => {
-      create.disabled = true; message.textContent = '';
-      try {
+    // Creating a Vhost publishes a new desired generation and then walks its
+    // routes one at a time; a second click mid-walk would create a second
+    // Vhost. Scrim plus the guard, not an inline state.
+    const create = h('button', {class: 'button primary', onclick: () => runAction(create, async () => {
+      message.textContent = '';
+      {
         const payload = {domain: Number(domain.value), kind, label: label.value.trim(), certificate: Number(certificate.value), pool: pool.value.trim(), body_size_mb: Number(bodySize.value), is_enabled: enabled.checked, spa: spa.checked, serve_static: serveStatic.checked, quiet_paths: []};
         if (!payload.domain || !payload.certificate || !payload.pool) throw new Error('Domain, certificate, and pool are required.');
         if (kind === 'api') { payload.upstream = Number(upstream.value); if (!payload.upstream) throw new Error('An API host requires an upstream.'); }
@@ -707,8 +807,12 @@ async function createVhostWizard(ctx, reload) {
         if (failed.length) { partialRoutes.set(vhost.id, failed); writeRouteRepairs(); }
         await reload();
         body.replaceChildren(h('div', {class: `result-state ${failed.length ? 'warning' : 'success'}`}, icon(failed.length ? 'alert' : 'check'), h('h3', {text: failed.length ? 'Vhost created; routes need repair' : 'Vhost created'}), h('p', {text: failed.length ? `${failed.length} route(s) did not land. Open Routes to retry only those rows.` : 'The desired generation was published and the fleet can converge.'}), h('div', {class: 'form-actions'}, failed.length ? h('a', {class: 'button primary', href: '#/routes', onclick: close}, 'Open Routes') : h('button', {class: 'button primary', onclick: close}, 'Done'))));
-      } catch (error) { message.textContent = error.message; create.disabled = false; }
-    }}, 'Create Vhost');
+      }
+    }, {
+      busy: {title: 'Creating the Vhost…', detail: 'Publishing the desired generation, then adding its routes one at a time.'},
+      restoreOnSuccess: false,
+      onError: (error) => { message.textContent = error.message; },
+    })}, 'Create Vhost');
     body.replaceChildren(h('div', {class: 'wizard-steps'}, badge('1 Shape', 'success'), badge('2 Details', 'warning'), badge('3 Converge')),
       h('button', {class: 'button ghost compact', onclick: shapes}, '← Change shape'),
       h('div', {class: 'field-grid'}, h('label', {class: 'field'}, h('span', {text: 'Domain'}), domain), h('label', {class: 'field'}, h('span', {text: 'Certificate'}), certificate), h('label', {class: 'field'}, h('span', {text: 'Label'}), label), h('label', {class: 'field'}, h('span', {text: 'Pool'}), pool), h('label', {class: 'field'}, h('span', {text: 'Body size MB'}), bodySize)),
@@ -767,16 +871,18 @@ async function vhostsPage(ctx) {
     root.append(edgeHttpPosture(ctx));
     const proof = await hostingProof(ctx); if (proof) root.append(proof);
     const panel = tablePanel('Serving configuration', 'API, Site, Site + API, and Redirect are the only supported shapes.'); root.append(panel);
-    try {
+    const body = h('div', {}); panel.append(body);
+    await loadInto(body, async (current) => {
       const rows = await loadVhosts();
-      panel.append(new TableView({rows, empty: 'No Vhosts are configured.', onSelect: ctx.capabilities.manage_network ? (row) => vhostDetail(row, render) : null, columns: [
+      if (!current()) return;
+      body.replaceChildren(new TableView({rows, empty: 'No Vhosts are configured.', onSelect: ctx.capabilities.manage_network ? (row) => vhostDetail(row, render) : null, columns: [
         {label: 'Hostname', render: (row) => h('div', {}, h('strong', {text: row.server_name}), h('small', {text: row.domain?.name || ''}))},
         {label: 'Shape', render: (row) => badge(row.kind.replaceAll('_', ' '))},
         {label: 'Pool', render: (row) => h('span', {class: 'mono', text: row.pool})},
         {label: 'Status', render: (row) => statusBadge(row.is_enabled ? 'active' : 'inactive')},
         {label: 'Routes', render: (row) => h('a', {class: 'button compact', href: `#/routes?vhost=${row.id}`, onclick: (event) => event.stopPropagation()}, icon('route'), 'Open')},
       ]}).render());
-    } catch (error) { actionError(panel, error); }
+    }, {message: 'Loading Vhosts…', retry: render});
   }
   await render(); return root;
 }
@@ -813,11 +919,17 @@ async function repairRoutes(vhost, reload) {
 async function deleteRoute(row, reload) {
   const confirmed = await confirmAction({title: `Delete ${row.path_prefix}?`, copy: 'Requests below this prefix will fall back to the static site.', confirmLabel: 'Delete route', danger: true});
   if (!confirmed) return;
-  let mutationError = null;
-  try { await apiOnce(`/api/edge/route/${row.id}`, {method: 'DELETE'}); } catch (error) { mutationError = error; }
-  const remaining = await loadRoutes();
-  if (remaining.some((item) => item.id === row.id)) throw new Error(mutationError ? `Route deletion was not confirmed: ${mutationError.message}` : 'Route deletion was not visible in authoritative state.');
-  await reload();
+  await runAction(null, async () => {
+    let mutationError = null;
+    try { await apiOnce(`/api/edge/route/${row.id}`, {method: 'DELETE'}); } catch (error) { mutationError = error; }
+    const remaining = await loadRoutes();
+    if (remaining.some((item) => item.id === row.id)) throw new Error(mutationError ? `Route deletion was not confirmed: ${mutationError.message}` : 'Route deletion was not visible in authoritative state.');
+    await reload();
+  }, {
+    key: `route-delete:${row.id}`,
+    busy: {title: `Deleting ${row.path_prefix}…`, detail: 'Deleting, then reading authoritative state back.'},
+    onError: (error) => mutationFailed('The route was not deleted', error),
+  });
 }
 
 async function routesPage(ctx) {
@@ -839,7 +951,13 @@ async function routesPage(ctx) {
     ]));
     [...partialRoutes.entries()].forEach(([vhost, pending]) => {
       const detail = pending.map((row) => row.error).filter(Boolean).join(' · ');
-      root.append(h('div', {class: 'callout warning'}, icon('alert'), h('div', {}, h('strong', {text: `${pending.length} route(s) need repair`}), h('p', {text: detail || 'The Vhost and earlier routes remain in place. Retry only the missing rows.'})), h('button', {class: 'button compact', onclick: () => repairRoutes(vhost, render)}, 'Repair routes')));
+      // The callout this button lives in is rebuilt by render(), and the repair
+      // walks one route at a time — a second click mid-walk would double-write.
+      root.append(h('div', {class: 'callout warning'}, icon('alert'), h('div', {}, h('strong', {text: `${pending.length} route(s) need repair`}), h('p', {text: detail || 'The Vhost and earlier routes remain in place. Retry only the missing rows.'})), h('button', {class: 'button compact', onclick: () => runAction(null, () => repairRoutes(vhost, render), {
+        key: `route-repair:${vhost}`,
+        busy: {title: 'Repairing routes…', detail: 'Retrying only the rows that did not land, one at a time.'},
+        onError: (error) => mutationFailed('The routes were not repaired', error),
+      })}, 'Repair routes')));
     });
     const panel = tablePanel('Proxied paths', filter ? 'Filtered to one Vhost. Clear the filter from the sidebar Routes link.' : 'Longest matching prefix wins.'); root.append(panel);
     panel.append(new TableView({rows: filtered, empty: 'No proxied routes are configured.', columns: [
@@ -850,7 +968,12 @@ async function routesPage(ctx) {
       {label: '', render: (row) => ctx.capabilities.manage_network ? h('button', {class: 'icon-button danger-text', 'aria-label': `Delete route ${row.path_prefix}`, onclick: () => deleteRoute(row, render)}, icon('trash')) : null},
     ]}).render());
   }
-  try { await render(); } catch (error) { root.replaceChildren(pageHeader('Network & hosting', 'Routes', 'Path-prefix proxy rules.'), h('div', {class: 'error-state'}, icon('alert'), h('p', {text: error.message}))); }
+  // Three reads before the page can paint anything, and a failure that used to
+  // be a bare sentence with no way back.
+  async function load() {
+    await loadInto(root, () => render(), {message: 'Loading routes…', retry: load});
+  }
+  await load();
   return root;
 }
 

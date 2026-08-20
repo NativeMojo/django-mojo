@@ -7,6 +7,7 @@
 // raw record type appears only where someone types it at their own DNS host,
 // and technical identifiers live under "Advanced".
 import {api, apiOnce, badge, formatDate, h, icon, listData, openModal} from '../../core.js';
+import {copyButton, runAction} from '../../components/actions.js';
 import {routeHref} from '../../components/routes.js';
 
 const ONBOARDING_DRAFT_KEY = 'mojo-admin:webapp-onboarding-draft:v1';
@@ -71,9 +72,10 @@ function slugify(value) {
 // here — this is the single place someone actually types it.
 function recordCard(record, purpose) {
   const value = Array.isArray(record.value) ? record.value.join(', ') : record.value;
-  const copy = (text) => h('button', {class: 'button ghost compact', type: 'button', onclick: async (event) => {
-    await navigator.clipboard.writeText(text); event.currentTarget.textContent = 'Copied';
-  }}, 'Copy');
+  // A DNS host is exactly where someone is typing into another browser tab, so
+  // a clipboard write that silently fails (no secure context) is worse here
+  // than anywhere else. The shared button says so on its own face.
+  const copy = (text) => copyButton(text, {label: 'Copy'});
   return h('div', {class: 'record-card'},
     purpose ? h('p', {class: 'record-purpose', text: purpose}) : null,
     h('div', {class: 'record-line'}, h('span', {class: 'record-key', text: 'Type'}), h('code', {text: record.type}), copy(record.type)),
@@ -297,11 +299,11 @@ function namePhase(state, render, finish) {
     main.replaceChildren(h('div', {class: 'wizard-loading'}, icon('refresh'), h('p', {text: 'Loading workspace…'})));
     loadOptions();
   });
-  create.addEventListener('click', async () => {
+  create.addEventListener('click', () => {
     const slug = currentSlug();
     const domain = appsDomain();
-    if (!domain || !slug) return;
-    create.disabled = true; message.textContent = '';
+    if (!domain || !slug) return undefined;
+    message.textContent = '';
     rememberGroup(state.groupId);
     // Seed the run machine exactly like a resolved managed domain: the address
     // choice auto-submits from the run loop once the fetched state reaches it.
@@ -311,8 +313,12 @@ function namePhase(state, render, finish) {
     };
     const identity = {display_name: name.value.trim(), slug,
       environment: environment.value, bucket: bucket.value};
-    try { await createOperation(state, identity, render); }
-    catch (error) { message.textContent = error.message; updateCreate(); }
+    // Success re-renders the wizard body into the run panel, taking this button
+    // with it; a refusal leaves it here with the reason beside it.
+    return runAction(create, () => createOperation(state, identity, render), {
+      pendingLabel: 'Creating…', restoreOnSuccess: false,
+      onError: (error) => { message.textContent = error.message; updateCreate(); },
+    });
   });
 
   main.replaceChildren(h('div', {class: 'wizard-loading'}, icon('refresh'), h('p', {text: 'Getting things ready…'})));
@@ -341,19 +347,22 @@ function addressPhase(state, render, finish) {
   group.addEventListener('change', () => { state.groupId = group.value; });
   const showGroup = groupOptions.length > 1 && !state.adopt;
 
-  async function runCheck() {
+  // The Check button sits beside the input, outside the verdict area every
+  // branch of renderVerdict replaces, so it survives its own result.
+  function runCheck() {
     const url = input.value.trim();
     state.url = url; state.message = ''; message.textContent = ''; verdict.replaceChildren();
-    if (!url) { message.textContent = 'Type the web address you want.'; return; }
-    check.disabled = true;
-    try {
+    if (!url) { message.textContent = 'Type the web address you want.'; return Promise.resolve(); }
+    return runAction(check, async () => {
       const query = state.groupId === NEW_GROUP_VALUE ? 'group_intent=new'
         : `group=${encodeURIComponent(state.groupId)}`;
       const result = await api(`/api/edge/webapp/onboarding/precheck?${query}&url=${encodeURIComponent(url)}`);
       state.precheck = result;
       renderVerdict(result);
-    } catch (error) { message.textContent = error.message; }
-    finally { check.disabled = false; }
+    }, {
+      pendingLabel: 'Checking…',
+      onError: (error) => { message.textContent = error.message; },
+    });
   }
 
   function useSuggestion(suggested) { input.value = suggested; runCheck(); }
@@ -522,36 +531,37 @@ function externalPhase(state, render) {
       recordCard(rec, ''),
       h('p', {class: 'muted small', text: 'If your DNS host has a proxy or an orange cloud (like Cloudflare), set this record to “DNS only” or the check will fail.'}),
       status, h('div', {class: 'form-actions'}, check)));
-    check.addEventListener('click', async () => {
-      check.disabled = true; status.textContent = 'Checking…';
-      try {
-        const verified = await apiOnce('/api/dnsman/delegation/verify', {method: 'POST', body: JSON.stringify({delegation: delegation.id})});
-        if (verified.state === 'verified') {
-          // The domain now exists in this workspace; re-run the address check so
-          // we pick up the app record it still needs (usually just one).
-          const query = `group=${encodeURIComponent(state.groupId)}`;
-          const result = await api(`/api/edge/webapp/onboarding/precheck?${query}&url=${encodeURIComponent(state.url)}`);
-          state.precheck = result;
-          const normalized = result.normalized || {};
-          state.resolved = {domainId: result.domain?.id, label: normalized.label,
-            hostname: normalized.hostname, domainName: normalized.domain_name,
-            provider: result.domain?.provider, records: result.records || []};
-          state.phase = 'identity'; render();
-          return;
-        }
-        status.textContent = 'We can’t see that record yet. DNS can take a few minutes — wait a moment and check again.';
-      } catch (error) { status.textContent = error.message; }
-      finally { check.disabled = false; }
-    });
+    check.addEventListener('click', () => runAction(check, async () => {
+      status.textContent = '';
+      const verified = await apiOnce('/api/dnsman/delegation/verify', {method: 'POST', body: JSON.stringify({delegation: delegation.id})});
+      if (verified.state === 'verified') {
+        // The domain now exists in this workspace; re-run the address check so
+        // we pick up the app record it still needs (usually just one).
+        const query = `group=${encodeURIComponent(state.groupId)}`;
+        const result = await api(`/api/edge/webapp/onboarding/precheck?${query}&url=${encodeURIComponent(state.url)}`);
+        state.precheck = result;
+        const normalized = result.normalized || {};
+        state.resolved = {domainId: result.domain?.id, label: normalized.label,
+          hostname: normalized.hostname, domainName: normalized.domain_name,
+          provider: result.domain?.provider, records: result.records || []};
+        state.phase = 'identity'; render();
+        return;
+      }
+      status.textContent = 'We can’t see that record yet. DNS can take a few minutes — wait a moment and check again.';
+    }, {
+      pendingLabel: 'Checking…',
+      onError: (error) => { status.textContent = error.message; },
+    }));
   }
 
-  start.addEventListener('click', async () => {
-    message.textContent = ''; start.disabled = true;
-    try {
-      const delegation = await apiOnce('/api/dnsman/delegation/initiate', {method: 'POST', body: JSON.stringify({group: Number(state.groupId), name: domainInput.value.trim().toLowerCase()})});
-      await verifyDelegation(delegation);
-    } catch (error) { message.textContent = error.message; start.disabled = false; }
-  });
+  start.addEventListener('click', () => runAction(start, async () => {
+    message.textContent = '';
+    const delegation = await apiOnce('/api/dnsman/delegation/initiate', {method: 'POST', body: JSON.stringify({group: Number(state.groupId), name: domainInput.value.trim().toLowerCase()})});
+    await verifyDelegation(delegation);
+  }, {
+    pendingLabel: 'Setting it up…',
+    onError: (error) => { message.textContent = error.message; },
+  }));
 
   return h('div', {class: 'wizard-panel'}, stepBar(0),
     intro('certificate', 'Keep your DNS where it is', 'Confirm your domain and we’ll show you the exact record to add at your DNS host. Nothing here changes where your domain lives.'),
@@ -615,14 +625,18 @@ function identityPhase(state, render, finish) {
   }
   loadOptions();
 
-  submit.addEventListener('click', async () => {
-    if (!adopt && !name.value.trim()) { message.textContent = 'Give your app a name.'; return; }
-    submit.disabled = true; message.textContent = '';
+  submit.addEventListener('click', () => {
+    if (!adopt && !name.value.trim()) { message.textContent = 'Give your app a name.'; return undefined; }
+    message.textContent = '';
     const identity = adopt
       ? {display_name: adopt.display_name, slug: adopt.slug, environment: adopt.environment, bucket: adopt.bucket}
       : {display_name: name.value.trim(), slug: slug.value.trim(), environment: environment.value, bucket: bucket.value};
-    try { await createOperation(state, identity, render); }
-    catch (error) { message.textContent = error.message; submit.disabled = false; }
+    // Success re-renders the wizard into the run panel and takes this button
+    // with it, so there is nothing to restore on that path.
+    return runAction(submit, () => createOperation(state, identity, render), {
+      pendingLabel: adopt ? 'Updating…' : 'Creating…', restoreOnSuccess: false,
+      onError: (error) => { message.textContent = error.message; },
+    });
   });
 
   return h('div', {class: 'wizard-panel'}, stepBar(1), heading,
@@ -822,7 +836,8 @@ function runPhase(state, render, finish) {
   addRow('Next automatic retry', op.next_attempt_at);
   return h('div', {class: 'wizard-panel'}, stepBar(index),
     h('div', {class: 'run-heading'}, h('strong', {text: op.profile?.display_name || 'Your app'}),
-      h('button', {class: 'button ghost compact', type: 'button', onclick: () => refresh(state, render)}, icon('refresh'), 'Check again')),
+      h('button', {class: 'button ghost compact', type: 'button', onclick: (event) => runAction(event.currentTarget,
+        () => refresh(state, render), {announceLabel: 'Checking again…'})}, icon('refresh'), 'Check again')),
     (state.choiceError || op.last_error) ? h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: state.choiceError || op.last_error})) : null,
     body,
     detailRows.length ? h('details', {class: 'run-evidence'}, h('summary', {text: 'Technical details'}), h('dl', {class: 'details'}, ...detailRows)) : null);
@@ -840,9 +855,9 @@ function busyRow(title, detail) {
 function appStep(state, render) {
   const message = h('div', {class: 'form-message', role: 'alert'});
   return h('div', {class: 'wizard-choice'}, intro('deploy', 'Create your app', 'We’ll set up your app with the details you entered.'),
-    h('button', {class: 'button primary', type: 'button', onclick: async () => {
-      try { await submitChoice(state, 'app', {}); driveRun(state, render); } catch (error) { message.textContent = error.message; }
-    }}, 'Continue'), message);
+    h('button', {class: 'button primary', type: 'button', onclick: (event) => runAction(event.currentTarget, async () => {
+      await submitChoice(state, 'app', {}); driveRun(state, render);
+    }, {pendingLabel: 'Setting up…', onError: (error) => { message.textContent = error.message; }})}, 'Continue'), message);
 }
 
 function addressStep(state, render) {
@@ -857,11 +872,11 @@ function addressStep(state, render) {
   // honestly and offer a retry — never fall back to a fabricated records panel.
   if (state.choiceError) {
     const retry = h('button', {class: 'button primary', type: 'button'}, 'Try again');
-    retry.addEventListener('click', async () => {
-      retry.disabled = true; state.choiceError = '';
+    retry.addEventListener('click', () => runAction(retry, async () => {
+      state.choiceError = '';
       await submitChoiceRecovering(state, 'address', addressChoicePayload(state));
       driveRun(state, render);
-    });
+    }, {pendingLabel: 'Trying again…', restoreOnSuccess: false}));
     return h('div', {class: 'wizard-choice'},
       intro('alert', 'We couldn’t start setting up your address', state.choiceError),
       h('div', {class: 'form-actions'}, retry));
@@ -885,11 +900,10 @@ function addressStep(state, render) {
   if (records.length) {
     const message = h('div', {class: 'form-message', role: 'alert'});
     const check = h('button', {class: 'button primary', type: 'button'}, 'I’ve added them — check now');
-    check.addEventListener('click', async () => {
-      check.disabled = true; message.textContent = 'Checking…';
-      try { await submitChoice(state, 'address', addressChoicePayload(state)); driveRun(state, render); }
-      catch (error) { message.textContent = error.message; check.disabled = false; }
-    });
+    check.addEventListener('click', () => runAction(check, async () => {
+      message.textContent = '';
+      await submitChoice(state, 'address', addressChoicePayload(state)); driveRun(state, render);
+    }, {pendingLabel: 'Checking…', onError: (error) => { message.textContent = error.message; }}));
     const certFailed = evidence.certificate === 'failed';
     return h('div', {class: 'wizard-choice'},
       intro('dns', certFailed ? 'One more record to add' : 'Add these records at your DNS host',
@@ -904,10 +918,9 @@ function addressStep(state, render) {
   const message = h('div', {class: 'form-message', role: 'alert'});
   return h('div', {class: 'wizard-choice'}, busyRow('Still finishing your address',
     'Your certificate is taking a little longer than usual. Give it a moment, then check again.'),
-    h('div', {class: 'form-actions'}, h('button', {class: 'button primary', type: 'button', onclick: async () => {
-      try { await submitChoice(state, 'address', addressChoicePayload(state)); driveRun(state, render); }
-      catch (error) { message.textContent = error.message; }
-    }}, 'Check now')), message);
+    h('div', {class: 'form-actions'}, h('button', {class: 'button primary', type: 'button', onclick: (event) => runAction(event.currentTarget, async () => {
+      await submitChoice(state, 'address', addressChoicePayload(state)); driveRun(state, render);
+    }, {pendingLabel: 'Checking…', onError: (error) => { message.textContent = error.message; }})}, 'Check now')), message);
 }
 
 function addressChoicePayload(state) {
@@ -927,26 +940,32 @@ function purchaseStep(state, render) {
   const quoteButton = h('button', {class: 'button', type: 'button'}, 'Get a price');
   const confirm = h('div');
   let quote = null;
-  quoteButton.addEventListener('click', async () => {
+  quoteButton.addEventListener('click', () => runAction(quoteButton, async () => {
     message.textContent = '';
-    try {
-      quote = await apiOnce('/api/dnsman/registrar/quote', {method: 'POST', body: JSON.stringify({group: state.groupId, domain: nameInput.value.trim(), years: 1})});
-      const domainConfirm = h('input', {autocomplete: 'off'});
-      const priceConfirm = h('input', {inputmode: 'decimal', autocomplete: 'off'});
-      confirm.replaceChildren(
-        h('div', {class: 'callout warning'}, icon('alert'), h('div', {},
-          h('strong', {text: `${quote.name} — ${quote.price} ${quote.currency}`}),
-          h('p', {text: `This offer expires ${formatDate(quote.expires)}. Type the domain and price to confirm the purchase.`}))),
-        field('Confirm the domain', domainConfirm), field('Confirm the price', priceConfirm),
-        h('button', {class: 'button danger', type: 'button', onclick: async () => {
-          try {
-            await submitChoice(state, 'address', {purchase: quote.purchase, confirm_token: quote.token,
-              confirm_domain: domainConfirm.value, confirm_price: priceConfirm.value, label: labelInput.value.trim().toLowerCase()});
-            quote.token = null; quote = null; driveRun(state, render);
-          } catch (error) { message.textContent = error.message; }
-        }}, 'Buy and continue'));
-    } catch (error) { message.textContent = error.message; }
-  });
+    quote = await apiOnce('/api/dnsman/registrar/quote', {method: 'POST', body: JSON.stringify({group: state.groupId, domain: nameInput.value.trim(), years: 1})});
+    const domainConfirm = h('input', {autocomplete: 'off'});
+    const priceConfirm = h('input', {inputmode: 'decimal', autocomplete: 'off'});
+    confirm.replaceChildren(
+      h('div', {class: 'callout warning'}, icon('alert'), h('div', {},
+        h('strong', {text: `${quote.name} — ${quote.price} ${quote.currency}`}),
+        h('p', {text: `This offer expires ${formatDate(quote.expires)}. Type the domain and price to confirm the purchase.`}))),
+      field('Confirm the domain', domainConfirm), field('Confirm the price', priceConfirm),
+      // This spends money on a one-shot, non-retried call. The scrim is the
+      // point: the operator must not be able to click anything else — least of
+      // all this button again — while the registrar is deciding.
+      h('button', {class: 'button danger', type: 'button', onclick: (event) => runAction(event.currentTarget, async () => {
+        await submitChoice(state, 'address', {purchase: quote.purchase, confirm_token: quote.token,
+          confirm_domain: domainConfirm.value, confirm_price: priceConfirm.value, label: labelInput.value.trim().toLowerCase()});
+        quote.token = null; quote = null; driveRun(state, render);
+      }, {
+        busy: {title: 'Registering your domain…', detail: 'This is a single attempt — it is not retried.'},
+        restoreOnSuccess: false,
+        onError: (error) => { message.textContent = error.message; },
+      })}, 'Buy and continue'));
+  }, {
+    pendingLabel: 'Getting a price…',
+    onError: (error) => { message.textContent = error.message; },
+  }));
   return h('div', {class: 'wizard-choice'},
     intro('globe', 'Buy your domain', 'We’ll register it and wire it up automatically. You confirm the exact domain and price before anything is bought.'),
     field('Domain to buy', nameInput), field('Which part of the address', labelInput, 'The word before your domain, like app or www.'),
@@ -963,29 +982,27 @@ function githubStep(state, render) {
   const message = h('div', {class: 'form-message', role: 'alert'});
   const skip = h('details', {class: 'wizard-advanced'}, h('summary', {text: 'Not using GitHub?'}),
     h('p', {class: 'muted small', text: 'You can deploy from any CI or by hand using the release instructions. Continue here to finish setup, then open Setup on the app to see how.'}),
-    h('button', {class: 'button ghost compact', type: 'button', onclick: async () => {
-      try { await submitChoice(state, 'github', {repository: repository.value, ref: ref.value, output: output.value, attest_unavailable: true}); driveRun(state, render); }
-      catch (error) { message.textContent = error.message; }
-    }}, 'Skip GitHub for now'));
+    h('button', {class: 'button ghost compact', type: 'button', onclick: (event) => runAction(event.currentTarget, async () => {
+      await submitChoice(state, 'github', {repository: repository.value, ref: ref.value, output: output.value, attest_unavailable: true}); driveRun(state, render);
+    }, {pendingLabel: 'Skipping…', onError: (error) => { message.textContent = error.message; }})}, 'Skip GitHub for now'));
 
   return h('div', {class: 'wizard-choice'},
     intro('deploy', 'Connect GitHub', 'Point us at your repository. When you push, GitHub builds your app and deploys it — one secret and one file, set up on the next screen.'),
     evidence.status === 'unavailable' ? h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: evidence.reason || 'We couldn’t verify that repository. Check the name, or continue without GitHub below.'})) : null,
     field('Repository', repository, 'For example your-org/your-repo.'),
     field('Branch to deploy from', ref), field('Build output folder', output, 'The folder your build produces, like dist or build.'),
-    h('button', {class: 'button primary', type: 'button', onclick: async () => {
-      try { await submitChoice(state, 'github', {repository: repository.value, ref: ref.value, output: output.value, attest_unavailable: false}); driveRun(state, render); }
-      catch (error) { message.textContent = error.message; }
-    }}, 'Connect and continue'), skip, message);
+    h('button', {class: 'button primary', type: 'button', onclick: (event) => runAction(event.currentTarget, async () => {
+      await submitChoice(state, 'github', {repository: repository.value, ref: ref.value, output: output.value, attest_unavailable: false}); driveRun(state, render);
+    }, {pendingLabel: 'Connecting…', onError: (error) => { message.textContent = error.message; }})}, 'Connect and continue'), skip, message);
 }
 
 function verifyStep(state, render) {
   const message = h('div', {class: 'form-message', role: 'alert'});
   return h('div', {class: 'wizard-choice'},
     intro('check', 'Go live', 'Everything is set up. We’ll confirm your address is serving your app over a secure connection.'),
-    h('button', {class: 'button primary', type: 'button', onclick: async () => {
-      try { await submitChoice(state, 'verify', {}); driveRun(state, render); } catch (error) { message.textContent = error.message; }
-    }}, 'Check my address'), message);
+    h('button', {class: 'button primary', type: 'button', onclick: (event) => runAction(event.currentTarget, async () => {
+      await submitChoice(state, 'verify', {}); driveRun(state, render);
+    }, {pendingLabel: 'Checking…', onError: (error) => { message.textContent = error.message; }})}, 'Check my address'), message);
 }
 
 function donePanel(state, finish) {
@@ -1006,11 +1023,11 @@ function failedPanel(state, render, finish) {
       h('div', {}, h('strong', {text: 'Setup couldn’t finish'}),
         h('p', {text: state.operation.last_error || 'Something went wrong. You can start over and try again.'}))),
     h('div', {class: 'form-actions'},
-      h('button', {class: 'button ghost', type: 'button', onclick: async () => {
+      h('button', {class: 'button ghost', type: 'button', onclick: (event) => runAction(event.currentTarget, async () => {
         try { await apiOnce('/api/edge/webapp/onboarding/cancel', {method: 'POST', body: JSON.stringify({operation: state.operation.operation_id})}); } catch (_) { /* best effort */ }
         clearPendingDraft(); state.operation = null;
         state.phase = state.adopt || !(state.ctx.webapp_groups || []).length ? 'address' : 'name';
         state.resolved = null; render();
-      }}, 'Start over'),
+      }, {pendingLabel: 'Starting over…', restoreOnSuccess: false})}, 'Start over'),
       h('button', {class: 'button ghost', type: 'button', onclick: finish}, 'Close')));
 }

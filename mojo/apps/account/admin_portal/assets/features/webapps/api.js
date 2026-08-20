@@ -8,6 +8,7 @@ import {api, apiOnce, badge, formatDate, h, icon, statusTone} from '../../core.j
 import {openInspector, openModal} from '../../components/overlays.js';
 import {activityHref, returnLocation} from '../../components/routes.js';
 import {statusRow} from '../../components/rows.js';
+import {runAction} from '../../components/actions.js';
 
 export const PLATFORM_SECTIONS_PATH = '/api/account/admin/platform?sections=deployments,api';
 export const FRAMEWORK_PATH = '/api/account/admin/platform/framework';
@@ -80,17 +81,30 @@ function plainPhase(value) {
 
 // statusRow renders its action as a .row-link anchor; wire the handler onto it
 // (same pattern as the Maintenance lane).
+//
+// The runner is either a synchronous inspector open — nothing to wait for — or
+// applyFrameworkUpdate, whose first await is a human answering a typed-echo
+// dialog. Policy says no affordance paints while a person is reading one, so
+// what runAction contributes here is the re-entry guard alone (a null target
+// paints nothing), keyed on the link. The work that follows the dialog carries
+// its own scrim, inside applyFrameworkUpdate.
 function wireAction(row, run) {
   const link = row.querySelector('.row-link');
   if (link) {
-    link.addEventListener('click', (event) => { event.preventDefault(); run(); });
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      runAction(null, () => run(), {key: link});
+    });
   }
   return row;
 }
 
 function detailLink(label, run) {
   const link = h('a', {class: 'row-link', href: '#'}, label);
-  link.addEventListener('click', (event) => { event.preventDefault(); run(); });
+  link.addEventListener('click', (event) => {
+    event.preventDefault();
+    runAction(null, () => run(), {key: link});
+  });
   return link;
 }
 
@@ -291,18 +305,21 @@ export function openApiInspector(ctx, deployments, reload, apiSection = null) {
   const message = h('div', {class: 'form-message', role: 'alert'});
   let closeInspector = null;
 
-  const act = async (action, row, button, alert) => {
-    button.disabled = true; alert.textContent = '';
-    try {
-      await api(`${DEPLOY_ACTION_PATH}${action}`, {
-        method: 'POST', body: JSON.stringify({deployment: row.id})});
-      closeInspector?.close();
-      await reload();
-    } catch (error) {
-      button.disabled = false;
-      if (error?.code !== 'fresh_auth_required') alert.textContent = error.message;
-    }
-  };
+  // The inspector closes only AFTER the request lands, so the button is still
+  // in the document for the whole wait and can carry the pending state itself.
+  // Success takes it away with the inspector — hence restoreOnSuccess: false.
+  // A 440 never reaches onError: runAction restores and renders nothing,
+  // because the shared client already prompted and already retried.
+  const act = (action, row, button, alert) => runAction(button, async () => {
+    alert.textContent = '';
+    await api(`${DEPLOY_ACTION_PATH}${action}`, {
+      method: 'POST', body: JSON.stringify({deployment: row.id})});
+    closeInspector?.close();
+    await reload();
+  }, {
+    pendingLabel: 'Working…', restoreOnSuccess: false,
+    onError: (error) => { alert.textContent = error.message; },
+  });
 
   const extras = {serving: data.currently_serving || null, apiSection};
   const older = rows.slice(1);
@@ -419,35 +436,57 @@ function confirmFrameworkUpdate(framework) {
 
 export async function applyFrameworkUpdate(ctx, framework, reload) {
   if (!framework?.can_update) return;
+  // The typed-echo dialog is human input: nothing paints until they answer it.
   const choice = await confirmFrameworkUpdate(framework);
   if (!choice) return;
-  try {
-    // One shot, no transport retry: an ambiguous outcome is reconciled by
-    // re-reading the framework overview and the deploy history.
-    await apiOnce(FRAMEWORK_UPDATE_PATH, {method: 'POST', body: JSON.stringify({
-      version: choice.version, confirm_version: choice.version,
-    })});
-  } catch (error) {
-    if (error?.code === 'fresh_auth_required') return;
-    openModal({title: 'Update not started', content: h('div', {class: 'callout warning'},
-      icon('alert'), h('p', {text: error.message}))});
-  }
-  await reload();
+  // What follows restarts every node's service and must not be interrupted.
+  // There is no surviving trigger to pin an inline state to either — the row
+  // and the drill-in that started it are both rebuilt by reload(), and the
+  // inspector path has already closed itself — so this is a scrim.
+  await runAction(null, async () => {
+    try {
+      // One shot, no transport retry: an ambiguous outcome is reconciled by
+      // re-reading the framework overview and the deploy history.
+      await apiOnce(FRAMEWORK_UPDATE_PATH, {method: 'POST', body: JSON.stringify({
+        version: choice.version, confirm_version: choice.version,
+      })});
+    } catch (error) {
+      if (error?.code === 'fresh_auth_required') return;
+      openModal({title: 'Update not started', content: h('div', {class: 'callout warning'},
+        icon('alert'), h('p', {text: error.message}))});
+    }
+    await reload();
+  }, {
+    key: 'framework-update',
+    busy: {title: 'Updating django-mojo…', detail: 'The canary migrates first, then the fleet rolls.'},
+    onError: (error) => openModal({title: 'Update not started',
+      content: h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: error.message}))}),
+  });
 }
 
 async function writeFrameworkPin(value, reload) {
   // The existing owner-tier writer — surfaced, not reimplemented. "hold"
   // pauses updates at the proven version; "" resumes the latest policy.
-  try {
-    await apiOnce(ADVANCED_SETTINGS_PATH, {method: 'POST', body: JSON.stringify({
-      framework_pin: value,
-    })});
-  } catch (error) {
-    if (error?.code === 'fresh_auth_required') return;
-    openModal({title: 'Hold not changed', content: h('div', {class: 'callout warning'},
-      icon('alert'), h('p', {text: error.message}))});
-  }
-  await reload();
+  // The control lives in an inspector its own caller has already closed, so
+  // the affordance is the scrim, never the button.
+  await runAction(null, async () => {
+    try {
+      await apiOnce(ADVANCED_SETTINGS_PATH, {method: 'POST', body: JSON.stringify({
+        framework_pin: value,
+      })});
+    } catch (error) {
+      if (error?.code === 'fresh_auth_required') return;
+      openModal({title: 'Hold not changed', content: h('div', {class: 'callout warning'},
+        icon('alert'), h('p', {text: error.message}))});
+    }
+    await reload();
+  }, {
+    key: 'framework-pin',
+    busy: {title: value === 'hold' ? 'Pausing updates…' : 'Resuming the latest policy…',
+      detail: 'Writing the fleet-wide update policy.'},
+    onError: (error) => openModal({title: 'Hold not changed',
+      content: h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: error.message}))}),
+  });
 }
 
 export function openFrameworkInspector(ctx, framework, reload) {
@@ -467,9 +506,13 @@ export function openFrameworkInspector(ctx, framework, reload) {
     title: 'django-mojo framework',
     content: h('div', {class: 'framework-inspector'}, rows,
       h('p', {class: 'muted small', text: PIN_COPY[pin.mode] || PIN_COPY.latest}),
+      // Each of these three closes the inspector BEFORE it awaits, so the
+      // button that was clicked is gone by the time any pending state would
+      // paint. The affordance belongs to the scrim the runner opens, and never
+      // to `event.currentTarget`.
       framework?.can_update && manage
         ? h('div', {class: 'form-actions'}, h('button', {class: 'button primary',
-          onclick: async () => { inspector.close(); await applyFrameworkUpdate(ctx, framework, reload); },
+          onclick: () => { inspector.close(); return applyFrameworkUpdate(ctx, framework, reload); },
         }, `Update to ${framework.latest}`))
         : h('p', {class: 'muted small',
           text: framework?.can_update && !manage
@@ -477,11 +520,11 @@ export function openFrameworkInspector(ctx, framework, reload) {
             : (BLOCKED_COPY[framework?.blocked_reason] || 'No update is available right now.')}),
       ownerEdit ? h('div', {class: 'form-actions'},
         pin.mode === 'latest'
-          ? h('button', {class: 'button ghost', onclick: async () => {
-            inspector.close(); await writeFrameworkPin('hold', reload);
+          ? h('button', {class: 'button ghost', onclick: () => {
+            inspector.close(); return writeFrameworkPin('hold', reload);
           }}, 'Hold updates')
-          : h('button', {class: 'button ghost', onclick: async () => {
-            inspector.close(); await writeFrameworkPin('', reload);
+          : h('button', {class: 'button ghost', onclick: () => {
+            inspector.close(); return writeFrameworkPin('', reload);
           }}, pin.mode === 'hold' ? 'Resume updates' : 'Clear pin and follow latest')) : null),
   });
   return inspector;

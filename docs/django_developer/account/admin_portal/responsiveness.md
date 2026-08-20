@@ -165,7 +165,7 @@ button.addEventListener('click', async () => {
 
 `test_no_raw_async_handlers_contract` walks the swept set, honours an exemption
 comment within three lines above the handler, and caps the total number of
-exemptions. There are two today:
+exemptions. There are three today, and the cap is three:
 
 - `components/model.js` `lifecycleControl` — the await is a confirm dialog.
 - `core.js` `FormView` — it already guards correctly. Its disable is
@@ -173,10 +173,37 @@ exemptions. There are two today:
   deliberately stays disabled on success, because success normally closes the
   modal and re-enabling would re-open a double-submit window. It gains the
   announcement and nothing else.
+- `features/advanced/page.js` `recordEditor` — its first await is the
+  replace-the-record-set confirm. The provider write that follows runs behind
+  the busy scrim.
 
-The swept set currently holds the shared surfaces — `components/actions.js`,
-`components/model.js`, `components/rows.js`, `components/views.js`, `core.js`.
-Feature files join it as they are swept.
+The swept set holds the shared surfaces — `components/actions.js`,
+`components/model.js`, `components/rows.js`, `components/views.js`, `core.js` —
+plus the high-traffic feature files: `features/webapps/page.js`,
+`features/webapps/api.js`, `features/webapps/wizard.js`,
+`features/advanced/page.js`. The remaining feature files join it as they are
+swept.
+
+## Choosing between inline and the scrim, in practice
+
+The swept feature files settled into three recognisable shapes. Reach for the
+matching one rather than re-deriving it:
+
+| Shape | Example | What it gets |
+|---|---|---|
+| Click → request → result lands beside the button | `addAddressDialog`'s Check, the wizard's Create app | `runAction(button, task, {pendingLabel})`, plus `restoreOnSuccess: false` when success closes the modal |
+| Confirm dialog → destructive or fleet-wide work | delete app, roll back, retire a certificate, delete a DNS record set | **no affordance while the dialog is open**, then `runAction(null, task, {key, busy})` — the trigger is inside the table `reload()` rebuilds, so there is nothing to pin to |
+| Trigger closes its own container, then awaits | the framework drill-in's Update / Hold / Resume | `runAction(null, …)` with a scrim, never `event.currentTarget` — the button is detached from the first frame |
+
+Two details worth copying:
+
+- **Pass an explicit `key` for a headless action.** `runAction(null, …)` with no
+  `key` mints a fresh symbol, so two clicks are two runs. A stable string —
+  `` `webapp-rollback:${app.id}` `` — is what makes the guard real.
+- **A panel's skeleton goes into a body node, not the panel.** `loadInto(panel, …)`
+  would replace the panel heading and the Refresh button sitting beside it. The
+  Domains, Credentials, Upstreams and Vhosts panels each append a plain
+  `<div>` and load into that.
 
 ## Styling
 

@@ -8,7 +8,7 @@ import {api, badge, formatDate, h, icon, listData, pageHeader, statusTone, Table
 import {confirmAction, openModal} from '../../components/overlays.js';
 import {decodeRouteState, routeHref} from '../../components/routes.js';
 import {rowSection, statusHeadline, statusRow} from '../../components/rows.js';
-import {loadInto} from '../../components/actions.js';
+import {announce, copyButton, loadInto, runAction} from '../../components/actions.js';
 import {emptyState, errorState, sectionTabs} from '../../components/views.js';
 import {hasPendingWizard, resumeWizard, startChangeAddress, startWizard} from './wizard.js';
 import {
@@ -35,6 +35,15 @@ function httpsLink(origin) {
   return typeof origin === 'string' && origin.startsWith('https://') ? origin : null;
 }
 
+// A destructive action fails with no panel of its own to fail into: the view it
+// belonged to is gone, or about to be. Say so where the operator is looking
+// instead of letting the scrim vanish onto an unchanged screen.
+function actionFailed(title, error) {
+  const detail = error?.message || 'That did not work.';
+  announce(detail);
+  openModal({title, content: h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: detail}))});
+}
+
 // The deploy key is shown once. When the dialog closes we scrub the node, the
 // closure, and the response so the value cannot be read back from memory.
 function oneTimeSecret(webapp, result, returnFocus) {
@@ -44,9 +53,9 @@ function oneTimeSecret(webapp, result, returnFocus) {
     h('div', {class: 'callout warning'}, icon('alert'), h('div', {}, h('strong', {text: 'Copy this value now'}),
       h('p', {text: 'It can’t be shown again after you close this. If it’s lost, rotate the key to get a new one.'}))),
     h('label', {class: 'field'}, h('span', {text: 'GitHub Actions secret: MOJO_DEPLOY_KEY'}), secretField),
-    h('button', {class: 'button primary', onclick: async (event) => {
-      await navigator.clipboard.writeText(secret); event.currentTarget.textContent = 'Copied';
-    }}, icon('key'), 'Copy secret'),
+    // A function, not a string: onClose scrubs `secret`, and the button must
+    // never be able to hand back a value the dialog has already forgotten.
+    copyButton(() => secret, {label: 'Copy secret', className: 'button primary'}),
     h('div', {class: 'command'}, h('code', {text: 'gh secret set MOJO_DEPLOY_KEY --repo YOUR_ORG/YOUR_REPO'})));
   openModal({title: `${webapp.slug} deployment key`, subtitle: 'The previous key is already inactive.', content, returnFocus, onClose: () => {
     secretField.value = ''; secretField.textContent = ''; secret = ''; result.token = null;
@@ -69,43 +78,57 @@ function keyDialog(webapp, reload) {
       message, h('div', {class: 'form-actions'},
         status.linked ? h('button', {class: 'button ghost', onclick: () => revokeKey(webapp, reload)}, 'Turn key off') : null, submit));
     const close = openModal({title: `${webapp.slug} deploy key`, subtitle: 'Shown once, and auditable.', content, danger: status.linked});
-    submit.addEventListener('click', async () => {
-      submit.disabled = true;
-      try {
-        const result = await api('/api/edge/webapp/link_key', {method: 'POST', body: JSON.stringify({webapp: webapp.id, action, operation_id: crypto.randomUUID()})});
-        close(); await reload();
-        if (result.token) oneTimeSecret(webapp, result);
-        else openModal({title: `${webapp.slug} secret unavailable`, subtitle: 'The key was created but its value was already consumed.',
-          content: h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: 'The one-time value couldn’t be recovered. Rotate the key to receive a fresh secret.'}))});
-      } catch (error) { message.textContent = error.message; submit.disabled = false; }
-    });
+    // Success closes this modal, so nothing is restored onto a detached button;
+    // a refusal keeps the dialog open with the server's sentence in `message`.
+    submit.addEventListener('click', () => runAction(submit, async () => {
+      const result = await api('/api/edge/webapp/link_key', {method: 'POST', body: JSON.stringify({webapp: webapp.id, action, operation_id: crypto.randomUUID()})});
+      close(); await reload();
+      if (result.token) oneTimeSecret(webapp, result);
+      else openModal({title: `${webapp.slug} secret unavailable`, subtitle: 'The key was created but its value was already consumed.',
+        content: h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: 'The one-time value couldn’t be recovered. Rotate the key to receive a fresh secret.'}))});
+    }, {
+      pendingLabel: `${actionLabel}…`, restoreOnSuccess: false,
+      onError: (error) => { message.textContent = error.message; },
+    }));
   })();
 }
 
+// Confirm first — the dialog is human input, and nothing paints while a person
+// is reading it. What follows takes the key out from under every running
+// deploy, so it gets the scrim rather than an inline state on a control the
+// reload is about to rebuild.
 function revokeKey(webapp, reload) {
-  confirmAction({title: `Turn off ${webapp.slug}’s deploy key?`, danger: true, confirmLabel: 'Turn key off',
-    copy: 'Deploys will fail until you create a new key. Existing releases stay live.'}).then(async (answer) => {
-    if (!answer.confirmed) return;
-    await api('/api/edge/webapp/revoke_key', {method: 'POST', body: JSON.stringify({webapp: webapp.id, operation_id: crypto.randomUUID()})});
-    await reload();
+  return confirmAction({title: `Turn off ${webapp.slug}’s deploy key?`, danger: true, confirmLabel: 'Turn key off',
+    copy: 'Deploys will fail until you create a new key. Existing releases stay live.'}).then((answer) => {
+    if (!answer.confirmed) return undefined;
+    return runAction(null, async () => {
+      await api('/api/edge/webapp/revoke_key', {method: 'POST', body: JSON.stringify({webapp: webapp.id, operation_id: crypto.randomUUID()})});
+      await reload();
+    }, {
+      key: `webapp-revoke-key:${webapp.id}`,
+      busy: {title: 'Turning the deploy key off…', detail: 'Deploys will fail until a new key is created.'},
+      onError: (error) => actionFailed('The key was not turned off', error),
+    });
   });
 }
 
 function workflowPanel(webapp, keyAction = null) {
-  const message = h('div', {class: 'form-message', role: 'alert'});
-  const panel = h('div', {class: 'setup-block'}, message);
-  api('/api/edge/webapp/onboarding/workflow', {method: 'POST', body: JSON.stringify({webapp: webapp.id})})
-    .then((result) => {
-      const text = h('textarea', {class: 'secret', readonly: true, rows: '18', text: result.yaml});
-      panel.replaceChildren(
-        h('p', {text: 'Two things set up deploys from GitHub: one secret, and one file.'}),
-        h('ol', {class: 'setup-list'},
-          h('li', {}, h('strong', {text: 'Add the secret. '}), 'In your repo’s Settings → Secrets, add ', h('code', {text: 'MOJO_DEPLOY_KEY'}), '. ', keyAction),
-          h('li', {}, h('strong', {text: 'Add the file. '}), 'Save this as ', h('code', {text: result.filename}), ' and push:')),
-        text,
-        h('button', {class: 'button primary', onclick: async (event) => { await navigator.clipboard.writeText(text.value); event.currentTarget.textContent = 'Copied'; }}, 'Copy file'));
-    })
-    .catch((error) => { message.textContent = error.message; });
+  const panel = h('div', {class: 'setup-block'});
+  // The workflow file is generated server-side, so this tab always awaits
+  // before it can paint: a loading state before, and an in-panel failure with
+  // a retry after — never a blank block that might or might not be finished.
+  loadInto(panel, async (current) => {
+    const result = await api('/api/edge/webapp/onboarding/workflow', {method: 'POST', body: JSON.stringify({webapp: webapp.id})});
+    if (!current()) return;
+    const text = h('textarea', {class: 'secret', readonly: true, rows: '18', text: result.yaml});
+    panel.replaceChildren(
+      h('p', {text: 'Two things set up deploys from GitHub: one secret, and one file.'}),
+      h('ol', {class: 'setup-list'},
+        h('li', {}, h('strong', {text: 'Add the secret. '}), 'In your repo’s Settings → Secrets, add ', h('code', {text: 'MOJO_DEPLOY_KEY'}), '. ', keyAction),
+        h('li', {}, h('strong', {text: 'Add the file. '}), 'Save this as ', h('code', {text: result.filename}), ' and push:')),
+      text,
+      copyButton(() => text.value, {label: 'Copy file', className: 'button primary'}));
+  }, {message: 'Building your workflow file…'});
   return panel;
 }
 
@@ -126,12 +149,6 @@ async function changeAddressFor(ctx, app, reload) {
 // evidence — the browser never decides what your DNS host needs.
 // ---------------------------------------------------------------------------
 
-function copyButton(text) {
-  return h('button', {class: 'button ghost compact', type: 'button', onclick: async (event) => {
-    await navigator.clipboard.writeText(text); event.currentTarget.textContent = 'Copied';
-  }}, 'Copy');
-}
-
 // Type / Name / Value, rendered verbatim from the response. Composing a record
 // here would be a guess about someone else's DNS host.
 function recordsTable(records) {
@@ -150,37 +167,47 @@ function certBadge(certificate) {
 }
 
 function removeAddress(app, row, reload) {
-  confirmAction({title: `Remove ${row.hostname}?`, danger: true, confirmLabel: 'Remove address',
-    copy: 'Visitors using this address will stop reaching your app. Your app’s own address keeps serving, and nothing is deleted.'}).then(async (answer) => {
-    if (!answer.confirmed) return;
-    await api('/api/edge/webapp/detach_domain', {method: 'POST', body: JSON.stringify({webapp: app.id, vhost: row.vhost})});
-    await reload();
+  return confirmAction({title: `Remove ${row.hostname}?`, danger: true, confirmLabel: 'Remove address',
+    copy: 'Visitors using this address will stop reaching your app. Your app’s own address keeps serving, and nothing is deleted.'}).then((answer) => {
+    if (!answer.confirmed) return undefined;
+    // The Remove button lives in the addresses table that reload() rebuilds,
+    // so there is nothing here to pin an inline state to.
+    return runAction(null, async () => {
+      await api('/api/edge/webapp/detach_domain', {method: 'POST', body: JSON.stringify({webapp: app.id, vhost: row.vhost})});
+      await reload();
+    }, {
+      key: `webapp-detach-domain:${app.id}:${row.vhost}`,
+      busy: {title: `Removing ${row.hostname}…`, detail: 'Your app’s own address keeps serving.'},
+      onError: (error) => actionFailed('The address was not removed', error),
+    });
   });
 }
 
 // One card, one call: every address this app answers on, its own first.
 function addressesCard(ctx, app, reload) {
   const manage = ctx.capabilities.manage_webapps;
-  const body = h('div', {}, h('p', {class: 'muted small', text: 'Checking your addresses…'}));
+  const body = h('div', {});
   const card = h('section', {class: 'address-block'},
     h('div', {class: 'run-heading'},
       h('h3', {class: 'section-subhead', text: 'Addresses'}),
       manage ? h('button', {class: 'button compact', type: 'button', onclick: () => addAddressDialog(app, reload)},
         icon('globe'), 'Add a custom domain') : null),
     body);
-  api(`/api/edge/webapp/aliases?webapp=${encodeURIComponent(app.id)}`)
-    .then((payload) => {
-      const rows = payload.addresses || [];
-      body.replaceChildren(new TableView({columns: [
-        {label: 'Address', render: (row) => h('div', {class: 'address-cell'}, h('code', {text: row.hostname}),
-          row.role === 'primary' ? badge('Your app’s address', 'neutral') : null)},
-        {label: 'HTTPS', render: (row) => certBadge(row.certificate)},
-        {label: '', render: (row) => (manage && row.role === 'alias'
-          ? h('button', {class: 'button ghost compact danger-text', type: 'button',
-            onclick: () => removeAddress(app, row, reload)}, 'Remove') : null)},
-      ], rows, empty: 'No addresses yet.'}).render());
-    })
-    .catch((error) => { body.replaceChildren(h('div', {class: 'form-message', role: 'alert', text: error.message})); });
+  // A failed read used to leave a bare sentence with no way to try again; the
+  // shared loader owns both the wait and the in-panel retry.
+  loadInto(body, async (current) => {
+    const payload = await api(`/api/edge/webapp/aliases?webapp=${encodeURIComponent(app.id)}`);
+    if (!current()) return;
+    const rows = payload.addresses || [];
+    body.replaceChildren(new TableView({columns: [
+      {label: 'Address', render: (row) => h('div', {class: 'address-cell'}, h('code', {text: row.hostname}),
+        row.role === 'primary' ? badge('Your app’s address', 'neutral') : null)},
+      {label: 'HTTPS', render: (row) => certBadge(row.certificate)},
+      {label: '', render: (row) => (manage && row.role === 'alias'
+        ? h('button', {class: 'button ghost compact danger-text', type: 'button',
+          onclick: () => removeAddress(app, row, reload)}, 'Remove') : null)},
+    ], rows, empty: 'No addresses yet.'}).render());
+  }, {message: 'Checking your addresses…'});
   return card;
 }
 
@@ -247,24 +274,27 @@ function addAddressDialog(app, reload) {
       h('div', {}, h('strong', {text: result.reason || result.status}))));
   }
 
-  async function run(retryCertificate) {
+  // The pending state goes on `submit`, never on the Check / Try again buttons
+  // paint() renders: those live inside `area`, which every branch replaces.
+  // submit sits outside it and outlives each result.
+  function run(retryCertificate) {
     const hostname = input.value.trim();
-    if (!hostname) { message.textContent = 'Type the address you want to point at this app.'; return; }
-    message.textContent = 'Checking…';
+    if (!hostname) { message.textContent = 'Type the address you want to point at this app.'; return Promise.resolve(); }
+    message.textContent = '';
     area.replaceChildren();
-    submit.disabled = true;
     const payload = {webapp: app.id, hostname};
     // Only the explicit repair sets this — a plain check must never mint a new
     // certificate order.
     if (retryCertificate) payload.retry_certificate = true;
-    try {
+    return runAction(submit, async () => {
       const result = await api('/api/edge/webapp/attach_domain', {method: 'POST', body: JSON.stringify(payload)});
       message.textContent = '';
       paint(result);
-    } catch (error) {
+    }, {
+      pendingLabel: 'Checking…',
       // A refusal is the server's sentence, verbatim — never reworded here.
-      message.textContent = error.message;
-    } finally { submit.disabled = false; }
+      onError: (error) => { message.textContent = error.message; },
+    });
   }
 
   submit.addEventListener('click', () => run(false));
@@ -296,7 +326,8 @@ async function manageSection(ctx, app, summary, section, body, reload, current =
       // An addressless app's next step is picking an address — offer it right
       // here so reaching the inspector (the only path to Delete) doesn't hide it.
       body.append(h('div', {class: 'row-actions'},
-        h('button', {class: 'button primary', onclick: () => changeAddressFor(ctx, app, reload)}, icon('globe'), 'Set address')));
+        h('button', {class: 'button primary', onclick: (event) => runAction(event.currentTarget,
+          () => changeAddressFor(ctx, app, reload), {pendingLabel: 'Opening…'})}, icon('globe'), 'Set address')));
     }
     if (address.hostname) {
       // Every address this app answers on, and the way to add one of your own.
@@ -319,7 +350,7 @@ async function manageSection(ctx, app, summary, section, body, reload, current =
       {label: 'State', render: (r) => badge(r.status, statusTone(r.status))},
       {label: 'Uploaded', render: (r) => formatDate(r.created)},
       {label: '', render: (r) => manage && r.id !== currentId && PROMOTABLE.has(r.status)
-        ? h('button', {class: 'button compact', onclick: (event) => { event.stopPropagation(); rollbackTo(app, r, reload); }}, 'Roll back to this') : null},
+        ? h('button', {class: 'button compact', onclick: (event) => { event.stopPropagation(); return rollbackTo(app, r, reload); }}, 'Roll back to this') : null},
     ], rows: releases, empty: 'No versions have been deployed yet.'}).render();
     const history = deployments.length ? h('ol', {class: 'timeline-view'}, ...deployments.map((d) => h('li', {},
       h('span', {class: 'timeline-dot'}), h('div', {},
@@ -342,18 +373,28 @@ async function manageSection(ctx, app, summary, section, body, reload, current =
       status.linked ? detailGrid([['Created', formatDate(status.created)], ['Last used', formatDate(status.last_used)]]) : null,
       h('p', {class: 'muted small', text: 'This is the only credential your deploy needs. It can register releases for this app and nothing else.'}),
       manage ? h('div', {class: 'row-actions'},
-        h('button', {class: 'button', 'data-webapp-key': app.id, onclick: () => keyDialog(app, reload)}, icon('key'), status.linked ? 'Rotate key' : 'Create key'),
+        h('button', {class: 'button', 'data-webapp-key': app.id, onclick: (event) => runAction(event.currentTarget,
+          () => keyDialog(app, reload), {pendingLabel: 'Opening…'})}, icon('key'), status.linked ? 'Rotate key' : 'Create key'),
         status.linked ? h('button', {class: 'button ghost', onclick: () => revokeKey(app, reload)}, 'Turn off') : null) : null);
     return;
   }
   // danger ('setup' renders through setupPanel, not here)
   if (!manage) { body.replaceChildren(h('p', {class: 'muted', text: 'You don’t have permission to change this app.'})); return; }
-  const changeAddress = h('button', {class: 'button', onclick: () => changeAddressFor(ctx, app, reload)}, icon('globe'), 'Change address');
+  const changeAddress = h('button', {class: 'button', onclick: (event) => runAction(event.currentTarget,
+    () => changeAddressFor(ctx, app, reload), {pendingLabel: 'Opening…'})}, icon('globe'), 'Change address');
   const takeOffline = address.hostname ? h('button', {class: 'button', onclick: () => {
-    confirmAction({title: `Take ${app.slug} offline?`, danger: true, confirmLabel: 'Take offline', requireReason: true, reasonLabel: 'Why?',
-      copy: 'Visitors will stop reaching your app. The app and its versions are kept — you can put it back on an address later.'}).then(async (answer) => {
-      if (!answer.confirmed) return;
-      await api('/api/edge/webapp/detach_address', {method: 'POST', body: JSON.stringify({webapp: app.id})}); await reload();
+    return confirmAction({title: `Take ${app.slug} offline?`, danger: true, confirmLabel: 'Take offline', requireReason: true, reasonLabel: 'Why?',
+      copy: 'Visitors will stop reaching your app. The app and its versions are kept — you can put it back on an address later.'}).then((answer) => {
+      if (!answer.confirmed) return undefined;
+      // Taking an app off its address invalidates every tab on this page, and
+      // reload() rebuilds the button that started it: scrim, not inline.
+      return runAction(null, async () => {
+        await api('/api/edge/webapp/detach_address', {method: 'POST', body: JSON.stringify({webapp: app.id})}); await reload();
+      }, {
+        key: `webapp-detach-address:${app.id}`,
+        busy: {title: `Taking ${app.slug} offline…`, detail: 'The app and its versions are kept.'},
+        onError: (error) => actionFailed('The app was not taken offline', error),
+      });
     });
   }}, 'Take offline') : null;
   const deleteApp = h('button', {class: 'button danger', onclick: () => deleteWebApp(app, async () => {
@@ -368,20 +409,35 @@ async function manageSection(ctx, app, summary, section, body, reload, current =
 // The one delete flow, shared by the app page's Danger tab and the list row's
 // inline Delete for an app whose setup never finished.
 function deleteWebApp(app, onDeleted) {
-  confirmAction({title: `Delete ${app.slug}?`, danger: true, confirmLabel: 'Delete app', requireReason: true, reasonLabel: 'Why?',
-    copy: 'This removes the app, its address, its deploy key, and its deploy history for good. This cannot be undone.'}).then(async (answer) => {
-    if (!answer.confirmed) return;
-    await api(`/api/edge/webapp/${encodeURIComponent(app.id)}`, {method: 'DELETE'});
-    await onDeleted();
+  return confirmAction({title: `Delete ${app.slug}?`, danger: true, confirmLabel: 'Delete app', requireReason: true, reasonLabel: 'Why?',
+    copy: 'This removes the app, its address, its deploy key, and its deploy history for good. This cannot be undone.'}).then((answer) => {
+    if (!answer.confirmed) return undefined;
+    // Permanent, and it navigates away from the page the trigger lives on.
+    return runAction(null, async () => {
+      await api(`/api/edge/webapp/${encodeURIComponent(app.id)}`, {method: 'DELETE'});
+      await onDeleted();
+    }, {
+      key: `webapp-delete:${app.id}`,
+      busy: {title: `Deleting ${app.slug}…`, detail: 'Removing the app, its address, and its deploy history.'},
+      onError: (error) => actionFailed('The app was not deleted', error),
+    });
   });
 }
 
 function rollbackTo(app, release, reload) {
-  confirmAction({title: `Roll back to ${release.version}?`, danger: true, confirmLabel: 'Roll back', requireReason: true, reasonLabel: 'Why are you rolling back?',
-    copy: `This makes ${release.version} live again across your fleet. Visitors will see that version within a few minutes.`}).then(async (answer) => {
-    if (!answer.confirmed) return;
-    await api('/api/edge/webapp/rollback', {method: 'POST', body: JSON.stringify({webapp: app.id, release: release.id})});
-    await reload();
+  return confirmAction({title: `Roll back to ${release.version}?`, danger: true, confirmLabel: 'Roll back', requireReason: true, reasonLabel: 'Why are you rolling back?',
+    copy: `This makes ${release.version} live again across your fleet. Visitors will see that version within a few minutes.`}).then((answer) => {
+    if (!answer.confirmed) return undefined;
+    // A fleet-wide rollback must not be interrupted, and the row holding the
+    // button is rebuilt by reload().
+    return runAction(null, async () => {
+      await api('/api/edge/webapp/rollback', {method: 'POST', body: JSON.stringify({webapp: app.id, release: release.id})});
+      await reload();
+    }, {
+      key: `webapp-rollback:${app.id}`,
+      busy: {title: `Rolling back to ${release.version}…`, detail: 'Visitors will see that version within a few minutes.'},
+      onError: (error) => actionFailed('The rollback did not start', error),
+    });
   });
 }
 
@@ -623,7 +679,11 @@ function uploadPanel(ctx, app, summary, reload) {
   icon('deploy'),
   h('strong', {text: 'Drop your built site folder here'}),
   h('p', {class: 'muted small', text: 'or click to pick the folder'}));
-  deploy.addEventListener('click', run);
+  // The upload flow keeps its own progress machine — it has real per-file
+  // progress to report, which a generic pending state would only hide. What it
+  // gains here is the shared re-entry guard: `state.busy` is set after two
+  // early returns, and a double click before then registered two deploys.
+  deploy.addEventListener('click', () => runAction(deploy, run, {announceLabel: 'Uploading and deploying…'}));
 
   panel.append(
     h('p', {text: 'Deploy by hand: pick the folder your build produced, and it goes live the same way a CI deploy does.'}),
@@ -653,8 +713,9 @@ function setupPanel(ctx, app, summary, reload) {
   const body = h('div', {class: 'setup-way'});
   let active = 'github';
   const keyButton = () => (manage
-    ? h('button', {class: 'button compact', type: 'button', onclick: () => keyDialog(app, reload)}, icon('key'),
-      summary.deployment_key?.linked ? 'Rotate key — shown once' : 'Create key — shown once')
+    ? h('button', {class: 'button compact', type: 'button', onclick: (event) => runAction(event.currentTarget,
+      () => keyDialog(app, reload), {pendingLabel: 'Opening…'})}, icon('key'),
+    summary.deployment_key?.linked ? 'Rotate key — shown once' : 'Create key — shown once')
     : null);
   function paint() {
     if (active === 'github') { body.replaceChildren(workflowPanel(app, keyButton())); return; }
@@ -783,7 +844,8 @@ function webappRow(ctx, item, {reload}) {
     return statusRow({tone: 'warn', name,
       value: 'Setup never finished — not reachable',
       detailNode: manage ? h('span', {class: 'row-inline-actions'},
-        h('button', {class: 'button ghost compact', type: 'button', onclick: () => changeAddressFor(ctx, app, reload)}, 'Finish setup'),
+        h('button', {class: 'button ghost compact', type: 'button', onclick: (event) => runAction(event.currentTarget,
+          () => changeAddressFor(ctx, app, reload), {pendingLabel: 'Opening…'})}, 'Finish setup'),
         h('button', {class: 'button ghost compact danger-text', type: 'button', onclick: () => deleteWebApp(app, reload)}, 'Delete')) : null,
       action: {label: 'Open', href: openHref}});
   }

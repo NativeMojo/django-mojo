@@ -328,11 +328,16 @@ def test_name_only_creation_contract(opts):
         and "routeHref('domains')" in name_phase, \
         "a workspace without an apps domain is not steered to Setup and Domains"
     # The create payload keeps its shape: group + slug + display_name from the
-    # name + environment, through the same frozen createOperation path.
+    # name + environment, through the same frozen createOperation path. The
+    # call is now the task runAction runs (the responsiveness sweep), so it is
+    # a thunk rather than a bare await — the path it takes is unchanged.
     assert "display_name: name.value.trim(), slug," in name_phase \
         and "environment: environment.value, bucket: bucket.value" in name_phase \
-        and "await createOperation(state, identity, render)" in name_phase, \
+        and "() => createOperation(state, identity, render)" in name_phase, \
         "name-only creation does not reuse the frozen createOperation payload"
+    assert "runAction(create," in name_phase, \
+        "Create app fires without a pending state, so a slow create looks like " \
+        "a dead button"
 
 
 @th.django_unit_test("the run panel drives github-skip and verify itself, keyed on the fetched step")
