@@ -89,7 +89,14 @@ After a site is live, each app has its own **full page**
 (`#/deployments?webapp=<id>`, not a modal — a link anyone can follow or
 share) with five tabs:
 **Overview** (address + domain, health, and current release, via
-`GET /api/edge/webapp/summary` and on-demand `GET /api/edge/webapp/health`),
+`GET /api/edge/webapp/summary` and on-demand `GET /api/edge/webapp/health`,
+plus an **Addresses** card listing every address the app answers on from
+`GET /api/edge/webapp/aliases` — each extra one removable through
+`POST /api/edge/webapp/detach_domain`, and "Add a custom domain" opening a
+dialog that drives `POST /api/edge/webapp/attach_domain` and renders whatever
+the server returns: the records to publish with a Check button, a certificate
+in flight, a failed certificate with an explicit "Try again", or the plain
+reason a domain has to be connected on the Domains page first),
 **Deploys** (deployment history from `GET /api/edge/webapp/deployment` with
 one-click `POST /api/edge/webapp/rollback`), **Set up deploys** (three honest
 sub-tabs — **GitHub Actions** re-shows the generated workflow and can mint a

@@ -203,8 +203,13 @@ def test_webapp_onboarding_browser_contract(opts):
     # gated Domains destination to a scoped WebApp admin.
     assert "startWizard(ctx, render)" in page and "hasPendingWizard()" in page, \
         "the WebApps list cannot launch or resume onboarding"
+    # Scoped to the LIST page: its header must not offer a globally gated
+    # Domains destination. The app page's needs_domain steer is a different
+    # thing — the admin has just named a domain that has to be connected first,
+    # and the plain reason without the way to act on it would be a dead end.
+    list_page = page[page.index("export async function deploymentsPage"):]
     assert "ctx.capabilities.manage_webapps ? h('button'" in page and \
-        "routeHref('domains')" not in page, \
+        "routeHref('domains')" not in list_page, \
         "the WebApps header exposes globally gated Domains to a scoped-only admin"
 
 
@@ -437,6 +442,67 @@ def test_webapp_upload_tab_contract(opts):
     assert "Too big to deploy: the server accepts at most" in upload \
         and "per release." in upload, \
         "the caps refusal does not cite the server's limits plainly"
+
+
+@th.django_unit_test("the app page lists every address and adds a custom one from server evidence")
+def test_webapp_addresses_card_and_add_domain_dialog(opts):
+    root = Path(__file__).resolve().parents[2]
+    page = (root / "mojo/apps/account/admin_portal/assets/features/webapps/page.js").read_text()
+
+    # The Overview tab carries an Addresses card, fed by the address list.
+    overview = page[page.index("section === 'overview'"):page.index("section === 'deploys'")]
+    assert "addressesCard(ctx, app, reload)" in overview, \
+        "the Overview tab does not render the Addresses card"
+    card = page[page.index("function addressesCard"):page.index("function addAddressDialog")]
+    assert "/api/edge/webapp/aliases?webapp=" in card, \
+        "the Addresses card does not read the app's addresses from the server"
+    assert "'Addresses'" in card and "'Add a custom domain'" in card \
+        and "addAddressDialog(app, reload)" in card, \
+        "the Addresses card lost its heading or its add-an-address action"
+    assert "row.role === 'primary'" in card and "row.role === 'alias'" in card, \
+        "the card does not distinguish the app's own address from an added one"
+    assert "certBadge(row.certificate)" in card and "removeAddress(app, row, reload)" in card, \
+        "an address row lost its live/certificate state or its Remove action"
+    remove = page[page.index("function removeAddress"):page.index("function addressesCard")]
+    assert "confirmAction({title: `Remove ${row.hostname}?`" in remove \
+        and "'/api/edge/webapp/detach_domain'" in remove and "await reload();" in remove, \
+        "Remove does not confirm, detach and reload"
+
+    dialog = page[page.index("function addAddressDialog"):page.index("async function manageSection")]
+    # Every branch is keyed on the SERVER's status; nothing is detected here.
+    for status in ("attached", "needs_domain", "records_needed",
+                   "certificate_pending", "certificate_failed"):
+        assert f"'{status}'" in dialog, \
+            f"the add-an-address dialog cannot render a {status} result"
+    assert "result.dns === 'managed'" in dialog and \
+        "this domain’s DNS is managed here — records and HTTPS are handled for you" in dialog, \
+        "the managed-domain confirmation is missing or is fabricated client-side"
+    assert "done = true" in dialog and "onClose: () => { if (done) reload(); }" in dialog, \
+        "a successful add does not close and reload the page"
+    # A plain Check re-runs the same call; only Try again asks for a new
+    # certificate order. bool('false') would have made every check a retry.
+    assert "onclick: () => run(false)" in dialog and "onclick: () => run(true)" in dialog, \
+        "the dialog lost its Check or its explicit certificate retry"
+    assert "if (retryCertificate) payload.retry_certificate = true;" in dialog, \
+        "retry_certificate is not sent only for the explicit repair"
+    check = dialog[dialog.index("const checkButton"):dialog.index("function paint")]
+    assert "retry_certificate" not in check, \
+        "a plain Check would re-request the certificate"
+    # needs_domain steers to Domains, with no records to publish.
+    steer = dialog[dialog.index("'needs_domain'"):dialog.index("'records_needed'")]
+    assert "routeHref('domains')" in steer and "recordsTable" not in steer, \
+        "needs_domain does not steer to Domains, or invents records to publish"
+    # The records themselves: Type / Name / Value, each copyable, verbatim.
+    records = page[page.index("function recordsTable"):page.index("function certBadge")]
+    for label in ("'Type'", "'Name'", "'Value'"):
+        assert label in records, f"the records table lost its {label} column"
+    assert records.count("cell(text(record.") == 3 and "copyButton(value)" in records, \
+        "the records table does not render each value verbatim with a Copy button"
+    # Copy rules: addresses, never plumbing.
+    assert "vhost" not in dialog.lower(), \
+        "the add-an-address dialog leaks the internal address record name"
+    assert "Add address" in dialog and "an address you already own" in dialog, \
+        "the dialog does not talk about addresses in plain words"
 
 
 @th.django_unit_test("WebApp list rows state their health plainly and the copy carries no plumbing words")

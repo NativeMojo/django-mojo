@@ -119,6 +119,157 @@ async function changeAddressFor(ctx, app, reload) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Addresses: the app's own address, plus any address of your own you point at
+// it. Both serve the identical release. Everything shown here is server
+// evidence — the browser never decides what your DNS host needs.
+// ---------------------------------------------------------------------------
+
+function copyButton(text) {
+  return h('button', {class: 'button ghost compact', type: 'button', onclick: async (event) => {
+    await navigator.clipboard.writeText(text); event.currentTarget.textContent = 'Copied';
+  }}, 'Copy');
+}
+
+// Type / Name / Value, rendered verbatim from the response. Composing a record
+// here would be a guess about someone else's DNS host.
+function recordsTable(records) {
+  const cell = (value) => h('div', {class: 'record-cell'}, h('code', {text: value}), copyButton(value));
+  const text = (value) => (Array.isArray(value) ? value.join(', ') : String(value ?? ''));
+  return new TableView({columns: [
+    {label: 'Type', render: (record) => cell(text(record.type))},
+    {label: 'Name', render: (record) => cell(text(record.name))},
+    {label: 'Value', render: (record) => cell(text(record.value))},
+  ], rows: records || [], empty: 'Nothing to add — check again.'}).render();
+}
+
+function certBadge(certificate) {
+  const state = certState(certificate);
+  return badge(state.label, state.tone === 'ok' ? 'success' : state.tone === 'warn' ? 'warning' : 'danger');
+}
+
+function removeAddress(app, row, reload) {
+  confirmAction({title: `Remove ${row.hostname}?`, danger: true, confirmLabel: 'Remove address',
+    copy: 'Visitors using this address will stop reaching your app. Your app’s own address keeps serving, and nothing is deleted.'}).then(async (answer) => {
+    if (!answer.confirmed) return;
+    await api('/api/edge/webapp/detach_domain', {method: 'POST', body: JSON.stringify({webapp: app.id, vhost: row.vhost})});
+    await reload();
+  });
+}
+
+// One card, one call: every address this app answers on, its own first.
+function addressesCard(ctx, app, reload) {
+  const manage = ctx.capabilities.manage_webapps;
+  const body = h('div', {}, h('p', {class: 'muted small', text: 'Checking your addresses…'}));
+  const card = h('section', {class: 'address-block'},
+    h('div', {class: 'run-heading'},
+      h('h3', {class: 'section-subhead', text: 'Addresses'}),
+      manage ? h('button', {class: 'button compact', type: 'button', onclick: () => addAddressDialog(app, reload)},
+        icon('globe'), 'Add a custom domain') : null),
+    body);
+  api(`/api/edge/webapp/aliases?webapp=${encodeURIComponent(app.id)}`)
+    .then((payload) => {
+      const rows = payload.addresses || [];
+      body.replaceChildren(new TableView({columns: [
+        {label: 'Address', render: (row) => h('div', {class: 'address-cell'}, h('code', {text: row.hostname}),
+          row.role === 'primary' ? badge('Your app’s address', 'neutral') : null)},
+        {label: 'HTTPS', render: (row) => certBadge(row.certificate)},
+        {label: '', render: (row) => (manage && row.role === 'alias'
+          ? h('button', {class: 'button ghost compact danger-text', type: 'button',
+            onclick: () => removeAddress(app, row, reload)}, 'Remove') : null)},
+      ], rows, empty: 'No addresses yet.'}).render());
+    })
+    .catch((error) => { body.replaceChildren(h('div', {class: 'form-message', role: 'alert', text: error.message})); });
+  return card;
+}
+
+// Add one address you already own. Every branch below is keyed on the server's
+// own status — including whether this domain's DNS is ours to write.
+function addAddressDialog(app, reload) {
+  const input = h('input', {placeholder: 'www.example.com', autocomplete: 'off', spellcheck: 'false'});
+  const message = h('div', {class: 'form-message', role: 'alert'});
+  const area = h('div', {class: 'verdict-area'});
+  const submit = h('button', {class: 'button primary', type: 'button'}, icon('globe'), 'Add address');
+  let done = false;
+  const content = h('div', {},
+    h('p', {class: 'modal-copy', text: 'Point an address you already own at this app. It serves exactly what your app’s own address serves.'}),
+    h('label', {class: 'field'}, h('span', {text: 'Address'}), input),
+    message, area, h('div', {class: 'form-actions'}, submit));
+  const close = openModal({title: `Add a custom domain to ${app.slug}`,
+    subtitle: 'One address, one label — like www or shop.', content,
+    onClose: () => { if (done) reload(); }});
+
+  const checkButton = (label) => h('button', {class: 'button primary', type: 'button',
+    onclick: () => run(false)}, label);
+
+  function paint(result) {
+    const managed = result.dns === 'managed';
+    if (result.status === 'attached') {
+      done = true;
+      area.replaceChildren(h('div', {class: 'result-state success'}, icon('check'),
+        h('div', {}, h('strong', {text: `${result.hostname} is live`}),
+          h('p', {text: managed
+            ? 'This address now serves your app — and this domain’s DNS is managed here — records and HTTPS are handled for you.'
+            : 'This address now serves your app, with HTTPS.'}))));
+      submit.replaceWith(h('button', {class: 'button primary', type: 'button', onclick: () => close()}, 'Done'));
+      return;
+    }
+    if (result.status === 'needs_domain') {
+      // No records: nothing can be published until the domain itself is
+      // connected here, which is its own deliberate flow.
+      area.replaceChildren(h('div', {class: 'verdict steer'}, icon('globe'),
+        h('div', {}, h('strong', {text: result.reason}),
+          h('p', {}, 'Connect it first, then add this address. ',
+            h('a', {href: routeHref('domains')}, 'Open Domains')))));
+      return;
+    }
+    if (result.status === 'records_needed' || result.status === 'certificate_failed') {
+      const failed = result.status === 'certificate_failed';
+      area.replaceChildren(h('div', {class: 'records-block'},
+        h('p', {text: result.reason}),
+        recordsTable(result.records),
+        h('p', {class: 'muted small', text: 'Using Cloudflare or a proxy? Set these to “DNS only” (grey cloud) or the check will fail.'}),
+        h('div', {class: 'form-actions'},
+          checkButton('I’ve added them — check now'),
+          failed ? h('button', {class: 'button', type: 'button', onclick: () => run(true)}, 'Try again') : null)));
+      return;
+    }
+    if (result.status === 'certificate_pending') {
+      area.replaceChildren(
+        h('div', {class: 'run-busy'}, icon('lock'),
+          h('div', {}, h('strong', {text: 'Setting up HTTPS'}), h('p', {text: result.reason}))),
+        h('div', {class: 'form-actions'}, checkButton('Check now')));
+      return;
+    }
+    // Any status this build does not know: show what the server said, plainly.
+    area.replaceChildren(h('div', {class: 'verdict'}, icon('alert'),
+      h('div', {}, h('strong', {text: result.reason || result.status}))));
+  }
+
+  async function run(retryCertificate) {
+    const hostname = input.value.trim();
+    if (!hostname) { message.textContent = 'Type the address you want to point at this app.'; return; }
+    message.textContent = 'Checking…';
+    area.replaceChildren();
+    submit.disabled = true;
+    const payload = {webapp: app.id, hostname};
+    // Only the explicit repair sets this — a plain check must never mint a new
+    // certificate order.
+    if (retryCertificate) payload.retry_certificate = true;
+    try {
+      const result = await api('/api/edge/webapp/attach_domain', {method: 'POST', body: JSON.stringify(payload)});
+      message.textContent = '';
+      paint(result);
+    } catch (error) {
+      // A refusal is the server's sentence, verbatim — never reworded here.
+      message.textContent = error.message;
+    } finally { submit.disabled = false; }
+  }
+
+  submit.addEventListener('click', () => run(false));
+  input.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); run(false); } });
+}
+
 async function manageSection(ctx, app, summary, section, body, reload) {
   const manage = ctx.capabilities.manage_webapps;
   const address = summary.address || {};
@@ -144,6 +295,8 @@ async function manageSection(ctx, app, summary, section, body, reload) {
         h('button', {class: 'button primary', onclick: () => changeAddressFor(ctx, app, reload)}, icon('globe'), 'Set address')));
     }
     if (address.hostname) {
+      // Every address this app answers on, and the way to add one of your own.
+      body.append(addressesCard(ctx, app, reload));
       api(`/api/edge/webapp/health?webapp=${encodeURIComponent(app.id)}`)
         .then((res) => { const tone = res.status === 'healthy' ? 'success' : res.status === 'not_configured' ? 'neutral' : 'danger';
           const label = res.status === 'healthy' ? 'Yes — responding' : res.status === 'not_configured' ? 'Not serving yet' : `No — ${res.detail || 'unreachable'}`;

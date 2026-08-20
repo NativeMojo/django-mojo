@@ -111,6 +111,11 @@
 .setup-list { margin: 0; padding-left: 1.2rem; display: grid; gap: .4rem; font-size: .85rem; }
 .command code { display: block; padding: .5rem .65rem; border-radius: 7px; background: var(--surface-2); overflow-x: auto; }
 
+/* ---- addresses card (app page overview) ---- */
+.address-block { display: grid; gap: .6rem; }
+.record-cell { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.record-cell code { overflow-wrap: anywhere; font-size: .82rem; }
+
 /* ---- danger area ---- */
 .danger-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .85rem; border: 1px solid var(--line); border-radius: 9px; }
 .danger-row.danger { border-color: var(--danger); }

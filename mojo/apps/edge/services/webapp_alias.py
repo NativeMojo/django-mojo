@@ -117,6 +117,15 @@ def _needs_challenge_record(domain):
     return row is None or row.state == STATE_BROKEN
 
 
+def _dns_mode(domain):
+    """Who publishes this name's DNS: the PLATFORM, or the customer.
+
+    Every attach result carries it so the UI can say "we handle the records and
+    HTTPS for you" from server evidence instead of guessing from the hostname.
+    """
+    return "external" if domain.provider == "mojo" else "managed"
+
+
 def _record_values(record):
     return sorted(str(value).rstrip(".") for value in (
         getattr(record, "record_values", None) or
@@ -221,7 +230,8 @@ def attach(web_app, hostname, actor, retry_certificate=False):
             # Already ours: report success without touching DNS again. This is
             # what makes the Check button free to press.
             return objict(status="attached", hostname=hostname,
-                          vhost=existing.pk, domain=domain.pk, created=False)
+                          vhost=existing.pk, domain=domain.pk,
+                          dns=_dns_mode(domain), created=False)
         # Covers another app's primary, another app's alias, and any
         # admin-created vhost of any kind — so the enabled-name uniqueness
         # constraint is never reached as an IntegrityError.
@@ -237,6 +247,7 @@ def attach(web_app, hostname, actor, retry_certificate=False):
         if not webapp_onboarding._verify_external_cname(hostname, target):
             return objict(
                 status="records_needed", hostname=hostname, domain=domain.pk,
+                dns=_dns_mode(domain),
                 reason="Add this record at your DNS host, then check again.",
                 records=webapp_onboarding._external_records(
                     hostname, target, domain,
@@ -251,6 +262,7 @@ def attach(web_app, hostname, actor, retry_certificate=False):
             return objict(
                 status="certificate_pending", hostname=hostname,
                 domain=domain.pk, certificate=pending.pk,
+                dns=_dns_mode(domain),
                 reason="The security certificate is still being issued. "
                        "Check again in a few minutes.")
         latest = _latest_profile_certificate(domain)
@@ -261,6 +273,7 @@ def attach(web_app, hostname, actor, retry_certificate=False):
             return objict(
                 status="certificate_failed", hostname=hostname,
                 domain=domain.pk, certificate=latest.pk,
+                dns=_dns_mode(domain),
                 reason="The security certificate could not be issued. Check "
                        "these records, then try again.",
                 records=_repair_records(hostname, target, domain))
@@ -268,6 +281,7 @@ def attach(web_app, hostname, actor, retry_certificate=False):
         return objict(
             status="certificate_pending", hostname=hostname,
             domain=domain.pk, certificate=requested.pk,
+            dns=_dns_mode(domain),
             reason="The security certificate has been requested. Check again "
                    "in a few minutes.")
 
@@ -276,7 +290,8 @@ def attach(web_app, hostname, actor, retry_certificate=False):
         pool=primary.pool, spa=True, alias_of=web_app)
     vhost, _, _ = webapp_auth_routes.reconcile(vhost)
     return objict(status="attached", hostname=hostname, vhost=vhost.pk,
-                  domain=domain.pk, certificate=certificate.pk, created=True)
+                  domain=domain.pk, certificate=certificate.pk,
+                  dns=_dns_mode(domain), created=True)
 
 
 def detach(web_app, vhost):
@@ -304,7 +319,7 @@ def _address_row(vhost, role):
         # Whether the PLATFORM writes this name's DNS, or the customer does.
         # A live per-name lookup would be a provider round trip per row, which
         # a status list must not spend.
-        "dns": ("external" if vhost.domain.provider == "mojo" else "managed"),
+        "dns": _dns_mode(vhost.domain),
         "enabled": vhost.is_enabled,
         "certificate": ({
             "status": certificate.status,

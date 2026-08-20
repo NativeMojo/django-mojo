@@ -593,6 +593,165 @@ def test_summary_lists_aliases(opts):
 
 
 # ---------------------------------------------------------------------------
+# the REST surface — same guard stack as link_key
+# ---------------------------------------------------------------------------
+@th.django_unit_test("a member with manage_webapp adds and removes an address through the API")
+def test_attach_and_detach_endpoints(opts):
+    from mojo.apps.edge.models import Vhost
+
+    web_app, domain, _, primary = _app_with_primary(opts)
+    hostname = f"api.{domain.name}"
+    # Attach once in-process (every provider seam mocked); the endpoint call
+    # below then re-enters attach on an address this app already owns, which is
+    # exactly the free, write-free path the Check button relies on.
+    seeded, error, _, _, _, _ = _attach(opts, web_app, hostname)
+    assert error is None, f"setup attach failed: {error}"
+
+    login(opts, opts.actor_email, opts.actor_password)
+    try:
+        response = opts.client.post("/api/edge/webapp/attach_domain", json=dict(
+            webapp=web_app.pk, hostname=hostname, group=opts.group.pk))
+        data = response.json.get("data") or {}
+        assert response.status_code == 200, \
+            f"a manage_webapp member could not add an address: {response.body}"
+        assert data.get("status") == "attached" and data.get("created") is False, \
+            f"the endpoint did not return the attach result verbatim: {data}"
+        assert data.get("hostname") == hostname and data.get("vhost") == seeded.vhost, \
+            f"the endpoint reported a different address than the service: {data}"
+        assert data.get("dns") == "managed", \
+            f"the endpoint dropped the server's own managed-DNS finding: {data}"
+
+        # The app's OWN address is not removable through this path, and a
+        # foreign id is refused the same way a missing one is.
+        refused = opts.client.post("/api/edge/webapp/detach_domain", json=dict(
+            webapp=web_app.pk, vhost=primary.pk, group=opts.group.pk))
+        assert refused.status_code == 404, \
+            f"the app's own address was removable as an alias: {refused.body}"
+        assert Vhost.objects.filter(pk=primary.pk).exists(), \
+            "the refused call still removed the app's own address"
+
+        removed = opts.client.post("/api/edge/webapp/detach_domain", json=dict(
+            webapp=web_app.pk, vhost=seeded.vhost, group=opts.group.pk))
+        removed_data = removed.json.get("data") or {}
+        assert removed.status_code == 200, \
+            f"a manage_webapp member could not remove an address: {removed.body}"
+        assert removed_data.get("status") == "detached" and \
+            removed_data.get("hostname") == hostname, \
+            f"detach did not report the address it removed: {removed_data}"
+        assert not Vhost.objects.filter(pk=seeded.vhost).exists(), \
+            "the removed address is still serving"
+
+        repeat = opts.client.post("/api/edge/webapp/detach_domain", json=dict(
+            webapp=web_app.pk, vhost=seeded.vhost, group=opts.group.pk))
+        assert repeat.status_code == 404, \
+            f"a removed address was not a plain 404 on the second call: {repeat.body}"
+    finally:
+        opts.client.logout()
+
+
+@th.django_unit_test("adding an address refuses machine sessions and stale logins")
+def test_attach_endpoint_requires_fresh_interactive_auth(opts):
+    import time
+
+    from mojo.apps.account.utils.jwtoken import JWToken
+    from mojo.apps.edge.services import webapp_keys
+
+    web_app, domain, _, _ = _app_with_primary(opts)
+    hostname = f"gate.{domain.name}"
+    _, _, machine_token, _ = webapp_keys.link(web_app)
+
+    opts.client.logout()
+    opts.client.session.headers["Authorization"] = f"apikey {machine_token}"
+    try:
+        machine = opts.client.post("/api/edge/webapp/attach_domain", json=dict(
+            webapp=web_app.pk, hostname=hostname))
+        assert machine.status_code == 403, \
+            f"a deployment key added an address ({machine.status_code})"
+        machine = opts.client.post("/api/edge/webapp/detach_domain", json=dict(
+            webapp=web_app.pk, vhost=987654321))
+        assert machine.status_code == 403, \
+            f"a deployment key removed an address ({machine.status_code})"
+    finally:
+        opts.client.session.headers.pop("Authorization", None)
+
+    opts.client.is_authenticated = True
+    opts.client.bearer = "bearer"
+    opts.client.access_token = JWToken(
+        opts.admin.get_auth_key()).create_access_token(
+            uid=opts.admin.pk, auth_time=int(time.time()) - 601)
+    stale = opts.client.post("/api/edge/webapp/attach_domain", json=dict(
+        webapp=web_app.pk, hostname=hostname))
+    assert stale.status_code == 440, \
+        f"a stale login added an address without stepping up ({stale.status_code})"
+    stale = opts.client.post("/api/edge/webapp/detach_domain", json=dict(
+        webapp=web_app.pk, vhost=987654321))
+    assert stale.status_code == 440, \
+        f"a stale login removed an address without stepping up ({stale.status_code})"
+    opts.client.logout()
+
+
+@th.django_unit_test("the address list is a plain read, and never answers for another tenant's app")
+def test_aliases_endpoint_scope(opts):
+    from mojo.apps.edge.rest import web_app as views
+
+    assert getattr(views.on_webapp_aliases,
+                   "_mojo_denies_key_backed_session", False), \
+        "the address list accepts key-backed sessions"
+    assert not hasattr(views.on_webapp_aliases, "_mojo_requires_fresh_auth"), \
+        "a read of the address list demands a step-up"
+
+    web_app, domain, _, _ = _app_with_primary(opts)
+    result, error, _, _, _, _ = _attach(opts, web_app, f"list.{domain.name}")
+    assert error is None, f"setup attach failed: {error}"
+
+    viewer, viewer_email, viewer_password, _ = make_group_member(
+        ["view_dns"], group=opts.group)
+    login(opts, viewer_email, viewer_password)
+    try:
+        response = opts.client.get(
+            f"/api/edge/webapp/aliases?webapp={web_app.pk}&group={opts.group.pk}")
+        data = response.json.get("data") or {}
+        assert response.status_code == 200, \
+            f"a view-level member could not read the addresses: {response.body}"
+        rows = data.get("addresses") or []
+        assert [row["role"] for row in rows] == ["primary", "alias"], \
+            f"the address list did not lead with the app's own address: {rows}"
+        assert rows[1]["hostname"] == f"list.{domain.name}" and \
+            rows[1]["vhost"] == result.vhost, \
+            f"the added address is missing from the list: {rows}"
+    finally:
+        opts.client.logout()
+
+    stranger = make_group("edge-alias-reader")
+    _, outsider_email, outsider_password, _ = make_group_member(
+        ["view_dns", "manage_dns"], group=stranger)
+    login(opts, outsider_email, outsider_password)
+    try:
+        refused = opts.client.get(
+            f"/api/edge/webapp/aliases?webapp={web_app.pk}&group={stranger.pk}")
+        assert refused.status_code in (401, 403, 404), \
+            f"another tenant read this app's addresses: {refused.body}"
+        assert domain.name not in str(refused.body), \
+            f"the refusal disclosed the app's addresses: {refused.body}"
+    finally:
+        opts.client.logout()
+
+
+@th.django_unit_test("the certificate retry flag is a strict boolean, never bool('false')")
+def test_retry_certificate_flag_is_strict(opts):
+    from mojo.apps.edge.rest.web_app import _flag
+
+    for raw in (True, "true", "True", "1", "yes", "on"):
+        assert _flag(raw) is True, \
+            f"an explicit retry was dropped for {raw!r}"
+    # bool("false") is True — the whole reason this helper exists. A retry
+    # mints a fresh ACME order, so junk must never turn into one.
+    for raw in (None, False, "", "false", "False", "0", "no", "off", "maybe", 0):
+        assert _flag(raw) is False, \
+            f"{raw!r} was read as an explicit certificate retry"
+
+
+# ---------------------------------------------------------------------------
 # model invariants — hold even when a service is bypassed
 # ---------------------------------------------------------------------------
 @th.django_unit_test("an alias vhost must be a site kind and cannot also be a primary")

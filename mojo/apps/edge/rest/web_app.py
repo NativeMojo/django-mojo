@@ -168,6 +168,93 @@ def on_webapp_detach_address(request):
     return dict(webapp=web_app.pk, address=None)
 
 
+def _flag(value):
+    """Strict truthiness for a request flag.
+
+    `bool("false")` is True, and the browser sends form values as strings — so
+    a plain bool() here would turn "false" into a certificate re-request. Only
+    a real True or an explicit affirmative word counts; everything else, junk
+    included, is False.
+    """
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+@md.POST('webapp/attach_domain')
+@md.denies_key_backed_session()
+@md.requires_fresh_auth(600)
+@md.requires_params("webapp", "hostname")
+@md.requires_perms("manage_webapp")
+def on_webapp_attach_domain(request):
+    """Point one more address at this site. Safe to call again at any point.
+
+    The service's result is returned as-is: a status, a plain-language reason,
+    and — when the caller has records to publish — the exact records. The UI's
+    Check button is this same call, which is why it must stay side-effect-free
+    for an address that is already attached.
+
+    Same guard stack as `link_key`: no CI key (`denies_key_backed_session`),
+    recent interactive auth, and an explicit object check, because
+    `uses_model_security` does not gate a custom action and `requires_perms`
+    gates the verb but not the row.
+    """
+    from mojo.apps.edge.services import webapp_alias
+
+    web_app = WebApp.get_instance_or_404(request.DATA.get("webapp"))
+    WebApp.rest_check_permission_or_raise(
+        request, ["SAVE_PERMS", "VIEW_PERMS"], web_app)
+    result = webapp_alias.attach(
+        web_app, request.DATA.get("hostname"), request.user,
+        retry_certificate=_flag(request.DATA.get("retry_certificate")))
+    return dict(webapp=web_app.pk, **result)
+
+
+@md.POST('webapp/detach_domain')
+@md.denies_key_backed_session()
+@md.requires_fresh_auth(600)
+@md.requires_params("webapp", "vhost")
+@md.requires_perms("manage_webapp")
+def on_webapp_detach_domain(request):
+    """Remove one extra address from this site. The site itself stays up.
+
+    The address is scoped to this site — and to its ALIASES specifically — so a
+    foreign or primary address 404s instead of leaking that it exists. Taking
+    the site's own address down is `detach_address`, deliberately a different,
+    louder action.
+    """
+    from mojo.apps.edge.models import Vhost
+    from mojo.apps.edge.services import webapp_alias
+
+    web_app = WebApp.get_instance_or_404(request.DATA.get("webapp"))
+    WebApp.rest_check_permission_or_raise(
+        request, ["SAVE_PERMS", "VIEW_PERMS"], web_app)
+    vhost = Vhost.objects.filter(
+        pk=request.DATA.get("vhost"), alias_of=web_app).first()
+    if vhost is None:
+        raise me.RestErrorException("address not found", code=404, status=404)
+    return dict(webapp=web_app.pk, **webapp_alias.detach(web_app, vhost))
+
+
+@md.GET('webapp/aliases')
+@md.denies_key_backed_session()
+@md.requires_params("webapp")
+@md.requires_perms("view_dns", "manage_dns", "security")
+def on_webapp_aliases(request):
+    """Every address this site answers on: its own first, then the extra ones.
+
+    A read, so no step-up: seeing which addresses a site serves is exactly what
+    a viewer of the site is entitled to. The rows carry no provider round trip.
+    """
+    from mojo.apps.edge.services import webapp_alias
+
+    web_app = WebApp.get_instance_or_404(request.DATA.get("webapp"))
+    WebApp.rest_check_permission_or_raise(
+        request, ["VIEW_PERMS", "SAVE_PERMS"], web_app)
+    return dict(webapp=web_app.pk,
+                addresses=webapp_alias.status_rows(web_app))
+
+
 @md.GET('webapp/health')
 @md.denies_key_backed_session()
 @md.requires_params("webapp")
