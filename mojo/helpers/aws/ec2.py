@@ -882,6 +882,7 @@ def _facts(row):
         "vpc_id": row.get("VpcId"),
         "availability_zone": placement.get("AvailabilityZone"),
         "private_ip": row.get("PrivateIpAddress"),
+        "public_ip": row.get("PublicIpAddress"),
         "private_dns_name": private_dns,
         # The first label is what `hostname -s` reports on the box, which is
         # the only thing a self-removal check can compare against.
@@ -1077,3 +1078,95 @@ def terminate(instance_id, client=None, region=None):
     for row in page.get("TerminatingInstances") or []:
         return str((row.get("CurrentState") or {}).get("Name") or "").lower()
     return ""
+
+
+# ── module-level: Elastic IP addresses, for the stable-egress control ───────
+
+
+def address_map(client=None, region=None):
+    """Every Elastic IP in the region, projected to what the caller decides on.
+
+    One describe, no filter: which addresses are OURS is a tag decision the
+    capacity service makes, and filtering here would hide the foreign addresses
+    the report must still label rather than pretend away.
+    """
+    ec2 = _ec2(client, region)
+    page = _caller.call(
+        "ec2.describe_addresses",
+        lambda: ec2.describe_addresses(),
+        iam_action="ec2:DescribeAddresses", mutation=False)
+    rows = []
+    for row in page.get("Addresses") or []:
+        tags = _tag_map(row)
+        rows.append({
+            "allocation_id": row.get("AllocationId"),
+            "association_id": row.get("AssociationId"),
+            "public_ip": row.get("PublicIp"),
+            "instance_id": row.get("InstanceId"),
+            "network_interface_id": row.get("NetworkInterfaceId"),
+            "tags": tags,
+            "name": tags.get("Name"),
+        })
+    return rows
+
+
+def allocate_address(tags, client=None, region=None):
+    """Allocate ONE Elastic IP, tagged at creation. Returns its ids.
+
+    Tagged in the allocate call itself, never in a second one: an allocation
+    that succeeds followed by a tag call that does not would leave an address
+    this feature can never recognise as its own — reserved, billing, and
+    invisible to every later reuse pass.
+    """
+    ec2 = _ec2(client, region)
+    page = _caller.call(
+        "ec2.allocate_address",
+        lambda: ec2.allocate_address(
+            Domain="vpc",
+            TagSpecifications=[{"ResourceType": "elastic-ip",
+                                "Tags": _tag_list(tags)}]),
+        iam_action="ec2:AllocateAddress", mutation=True)
+    return {"allocation_id": page.get("AllocationId"),
+            "public_ip": page.get("PublicIp")}
+
+
+def associate_address(allocation_id, instance_id, client=None, region=None):
+    """Attach one allocation to one instance. Returns the association id.
+
+    ``AllowReassociation=False`` is explicit and load-bearing: an address that
+    is already attached somewhere else must be an ERROR here, never silently
+    ripped off another instance — losing a race is recoverable, stealing an
+    address in production is an outage.
+    """
+    ec2 = _ec2(client, region)
+    page = _caller.call(
+        "ec2.associate_address",
+        lambda: ec2.associate_address(
+            AllocationId=str(allocation_id), InstanceId=str(instance_id),
+            AllowReassociation=False),
+        iam_action="ec2:AssociateAddress", mutation=True)
+    return page.get("AssociationId")
+
+
+def disassociate_address(association_id, client=None, region=None):
+    """Detach one association. The allocation itself is deliberately kept —
+    releasing a reserved address is a console decision, never a side effect."""
+    ec2 = _ec2(client, region)
+    _caller.call(
+        "ec2.disassociate_address",
+        lambda: ec2.disassociate_address(AssociationId=str(association_id)),
+        iam_action="ec2:DisassociateAddress", mutation=True)
+    return True
+
+
+def tag_resources(resource_ids, tags, client=None, region=None):
+    """Add/overwrite tags on existing resources (adoption tagging)."""
+    ids = [str(value) for value in (resource_ids or []) if value]
+    if not ids or not tags:
+        return False
+    ec2 = _ec2(client, region)
+    _caller.call(
+        "ec2.create_tags",
+        lambda: ec2.create_tags(Resources=ids, Tags=_tag_list(tags)),
+        iam_action="ec2:CreateTags", mutation=True)
+    return True
