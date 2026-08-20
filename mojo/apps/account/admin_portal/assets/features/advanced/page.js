@@ -746,12 +746,25 @@ async function hostingProof(ctx) {
   } catch (_) { return null; }
 }
 
+function edgeHttpPosture(ctx) {
+  const edge = ctx.edge || {};
+  const known = edge.available === true && typeof edge.http_enabled === 'boolean';
+  const http = known ? (edge.http_enabled ? 'enabled' : 'disabled') : 'unknown';
+  const issuance = edge.available === true && edge.dnsman_issuance ? edge.dnsman_issuance : 'unknown';
+  return h('section', {class: 'convergence-card'}, icon('certificate'), h('div', {},
+    h('span', {text: 'Certificate serving posture'}),
+    h('strong', {text: `Public HTTP vhosts on this node: ${http}`}),
+    h('small', {class: 'muted', text: `DNSMAN issuance: ${issuance}`})),
+  statusBadge(known ? 'healthy' : 'pending'));
+}
+
 async function vhostsPage(ctx) {
   const root = h('div', {class: 'page'});
   async function render() {
     root.replaceChildren(pageHeader('Network & hosting', 'Vhosts', 'Structured serving shapes that publish one desired generation to the fleet.', [
       ctx.capabilities.manage_network ? h('button', {class: 'button primary', onclick: () => createVhostWizard(ctx, render)}, icon('plus'), 'Create Vhost') : null,
     ]));
+    root.append(edgeHttpPosture(ctx));
     const proof = await hostingProof(ctx); if (proof) root.append(proof);
     const panel = tablePanel('Serving configuration', 'API, Site, Site + API, and Redirect are the only supported shapes.'); root.append(panel);
     try {

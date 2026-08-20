@@ -35,6 +35,11 @@ API derives everything that ends up in a config file:
 A request carrying anything nginx would treat as syntax is rejected, not
 escaped.
 
+The deployment chooses its public listener posture, not each vhost. A
+DNSMAN-only installation may serve these shapes on HTTPS alone; an installation
+that deliberately supports HTTP redirects or HTTP-01 may also expose port 80.
+That posture is file-managed and is not writable through the vhost API.
+
 > **Kind enum change (2026-08).** `static`, `spa` and `proxy` are gone.
 > Existing rows were migrated automatically: `proxy` → `api`, `spa` →
 > `site` with `spa: true`, `static` → `site`. Consumers that send or branch

@@ -4,6 +4,7 @@ import mimetypes
 import secrets
 from urllib.parse import quote
 
+from django.apps import apps
 from django.http import HttpResponse, HttpResponseRedirect
 
 import mojo
@@ -201,6 +202,19 @@ def on_admin_bootstrap(request):
         "settings_owner_edit": system_settings.can_system_admin(request.user),
         "infrastructure_managed": mode == infrastructure.MANAGED,
     }
+    edge = {
+        "available": False,
+        "http_enabled": None,
+        "dnsman_issuance": None,
+    }
+    if apps.is_installed("mojo.apps.edge"):
+        from mojo.apps.edge.services import render as edge_render
+        edge = {
+            "available": True,
+            "http_enabled": edge_render.http_enabled(),
+            "dnsman_issuance": "dns-01",
+        }
+
     return {
         "version": mojo.__version__,
         "admin_path": _ADMIN_ROOT_SLASH,
@@ -220,5 +234,6 @@ def on_admin_bootstrap(request):
         "capabilities": capabilities,
         "infrastructure": {"mode": mode,
                            "managed": mode == infrastructure.MANAGED},
+        "edge": edge,
         "features": admin_features.bootstrap_features(request, capabilities),
     }

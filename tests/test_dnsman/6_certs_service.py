@@ -601,8 +601,11 @@ def test_delegated_alias_failure_precedes_order(opts):
 
 @th.django_unit_test("dnsman certs: a successful issue stores material and cleans up the challenge record")
 def test_certs_issue_success_stores_and_cleans_up(opts):
+    from unittest import mock
+
     from mojo.apps.dnsman.models import Certificate
     from mojo.apps.dnsman.services import certs
+    from mojo.apps.edge.services import render as edge_render
 
     domain = _reset_domain("issue-certs.test")
     names = [domain.name, f"*.{domain.name}"]
@@ -613,7 +616,18 @@ def test_certs_issue_success_stores_and_cleans_up(opts):
     chain, leaf = _make_chain(names, days=90, serial=0xABC123)
     client = FakeAcmeClient([domain.name, domain.name], chain=chain)
 
-    with _issuance_env(client) as env:
+    def static(name, default=None, kind=None):
+        if name == "EDGE_HTTP_ENABLED":
+            return False
+        if name == "EDGE_ACME_WEBROOT":
+            raise AssertionError("DNS-01 issuance read the edge ACME webroot")
+        return default
+
+    with mock.patch.object(
+            edge_render.settings, "get_static", side_effect=static), \
+            _issuance_env(client) as env:
+        assert edge_render.http_enabled() is False, \
+            "the regression did not exercise the DNS-01-only edge posture"
         result = certs.issue(cert)
 
         assert result.ok, f"issuance should have succeeded, error was: {result.get('error')}"

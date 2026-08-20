@@ -283,6 +283,8 @@ def test_http_knobs_converge(opts):
     """The latent gap this item folds in: EDGE_TLS_PROTOCOLS/CIPHERS were
     substituted at render time but absent from the hashed payload, so a TLS
     policy change never moved the generation and never reached a node."""
+    from unittest import mock
+
     from mojo.apps.account.models.setting import Setting
     from mojo.apps.edge.services import render
 
@@ -293,6 +295,35 @@ def test_http_knobs_converge(opts):
     assert http.get("tls_ciphers") == render.tls_ciphers(), \
         "the payload's http key does not carry the TLS ciphers"
     assert http.get("log_dir"), "the payload's http key does not carry log_dir"
+    assert http.get("django_static_root"), \
+        "the payload's http key does not carry the Django static root"
+
+    api_domain = make_domain(group=opts.group)
+    api_cert = make_certificate(api_domain)
+    api_upstream = make_upstream(group=opts.group)
+    api_vhost = make_vhost(
+        api_domain, api_cert, label="snapshot", kind="api",
+        upstream=api_upstream, quiet_paths=["/health"], serve_static=True)
+    late_getters = (
+        "tls_protocols", "tls_ciphers", "proxy_read_timeout", "log_dir",
+        "mojosec_mode", "django_static_root",
+    )
+    patches = [mock.patch.object(
+        render, name, side_effect=AssertionError(
+            f"render re-resolved {name} after hashing")) for name in late_getters]
+    for patch in patches:
+        patch.start()
+    try:
+        text = render.render_vhost(api_vhost, "snapshot", knobs=http)
+    finally:
+        for patch in reversed(patches):
+            patch.stop()
+    assert http["tls_protocols"] in text, \
+        "the rendered vhost did not consume the hashed TLS snapshot"
+    assert f"proxy_read_timeout {http['proxy_read_timeout']}s;" in text, \
+        "the rendered vhost did not consume the hashed proxy snapshot"
+    assert f"alias {http['django_static_root']}/;" in text, \
+        "the rendered vhost did not consume the hashed static-root snapshot"
 
     rows = payload.get("security")
     assert isinstance(rows, list), \
@@ -311,6 +342,53 @@ def test_http_knobs_converge(opts):
             "a TLS policy change would never converge")
     finally:
         Setting.remove("EDGE_TLS_PROTOCOLS", group=None)
+
+
+@th.django_unit_test("the file-only HTTP posture and enabled webroot converge")
+def test_http_posture_converges(opts):
+    from unittest import mock
+
+    import django.conf
+
+    from mojo.apps.account.models.setting import Setting
+    from mojo.apps.edge.services import render
+
+    def payload(http, webroot="/var/www/certbot", default_server="false"):
+        values = {
+            "EDGE_HTTP_ENABLED": http,
+            "EDGE_HTTP_DEFAULT_SERVER": default_server,
+            "EDGE_ACME_WEBROOT": webroot,
+        }
+        with mock.patch.multiple(django.conf.settings, create=True, **values):
+            return render.desired_state([opts.vhost])
+
+    Setting.set("EDGE_HTTP_ENABLED", True, group=None)
+    try:
+        disabled = payload("false", webroot="/must/not/hash")
+        disabled_other = payload("false", webroot="/also/not/hash")
+        enabled = payload("true", webroot="/one")
+        enabled_moved = payload("true", webroot="/two")
+        default_enabled = payload(
+            "false", webroot="/ignored", default_server="true")
+    finally:
+        Setting.remove("EDGE_HTTP_ENABLED", group=None)
+
+    assert disabled["http"]["http_enabled"] is False, \
+        f"file false did not defeat the DB true row: {disabled['http']}"
+    assert "acme_webroot" not in disabled["http"], \
+        f"disabled state carried an ACME webroot: {disabled['http']}"
+    assert disabled["generation"] == disabled_other["generation"], \
+        "an unused disabled-mode ACME webroot moved the generation"
+    assert enabled["http"]["acme_webroot"] == "/one", \
+        f"enabled state omitted its webroot: {enabled['http']}"
+    assert enabled["generation"] != enabled_moved["generation"], \
+        "an enabled ACME webroot change did not move the generation"
+    assert enabled["generation"] != disabled["generation"], \
+        "disabling HTTP did not move the generation"
+    assert default_enabled["http"]["default_server"] is True, \
+        "string true did not enable the default server"
+    assert disabled["http"]["default_server"] is False, \
+        "string false unexpectedly enabled the default server"
 
 
 @th.django_unit_test("retiring an upstream moves the generation id")

@@ -19,7 +19,8 @@ KINDS = [
 
 class Vhost(models.Model, MojoModel):
     """
-    One nginx server block pair (443 + 80), as structured data.
+    One HTTPS nginx server block, plus an optional deployment-controlled HTTP
+    shell, as structured data.
 
     Nothing here is nginx syntax. `server_name` is derived from the `Domain`
     FK, the web root is derived from this row's own primary key, and a proxy

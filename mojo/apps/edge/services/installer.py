@@ -440,7 +440,7 @@ def _previous_web_root(previous, vhost_id):
 
 
 def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
-                     previous=None, pool="default"):
+                     previous=None, pool="default", http=None):
     """Build `generations/<generation>/` completely.
 
     Returns `objict(excluded, cert_excluded)`: every vhost left out of the
@@ -545,7 +545,7 @@ def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
             report=vhost.pk not in reported_certs,
             key=f"cert-material:{vhost.pk}:{vhost.certificate_id}")
 
-    files = render.render_generation(installable, generation)
+    files = render.render_generation(installable, generation, knobs=http)
     for name, text in files.items():
         # Two copies of every rendered file: the real tree (what `current`
         # serves after the swap) and the staging/ listen-remapped copy the
@@ -777,7 +777,8 @@ def install(pool="default", force=False, pools=None):
 
     staged = stage_generation(vhosts, generation, webapps,
                               fetch_failures=fetch_failures,
-                              previous=previous, pool=selected_pools[0])
+                              previous=previous, pool=selected_pools[0],
+                              http=payload["http"])
     excluded = staged.excluded
 
     gen_dir = render.generation_dir(generation)
