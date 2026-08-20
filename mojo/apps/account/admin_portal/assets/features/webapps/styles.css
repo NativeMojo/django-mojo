@@ -116,6 +116,15 @@
 .record-cell { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .record-cell code { overflow-wrap: anywhere; font-size: .82rem; }
 
+/* ---- serving tab: address, certificate, shape, routes ---- */
+.serving-card { display: grid; gap: .55rem; padding: .9rem; border: 1px solid var(--line); border-radius: 10px; }
+.serving-card > p { margin: 0; }
+.serving-card .field, .serving-card .check-field { margin: 0; }
+.serving-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.serving-row code { overflow-wrap: anywhere; font-size: .85rem; }
+.route-managed { display: inline-flex; align-items: center; }
+.serving-operator { border-top: 1px solid var(--line); padding-top: .55rem; }
+
 /* ---- danger area ---- */
 .danger-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .85rem; border: 1px solid var(--line); border-radius: 9px; }
 .danger-row.danger { border-color: var(--danger); }
@@ -139,4 +148,6 @@
   .record-line .button { grid-column: 2; justify-self: start; }
   .danger-row { flex-direction: column; align-items: stretch; }
   .verdict .button { margin-left: 0; }
+  .serving-card .run-heading { flex-direction: column; align-items: stretch; gap: .5rem; }
+  .serving-row { align-items: flex-start; }
 }

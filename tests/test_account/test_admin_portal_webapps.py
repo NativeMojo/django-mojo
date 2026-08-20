@@ -563,6 +563,83 @@ def test_webapp_addresses_card_and_add_domain_dialog(opts):
         "the dialog does not talk about addresses in plain words"
 
 
+@th.django_unit_test("the Serving tab shows the address, its certificate, its shape and its paths")
+def test_webapp_serving_tab_contract(opts):
+    root = Path(__file__).resolve().parents[2]
+    assets = root / "mojo/apps/account/admin_portal/assets"
+    page = (assets / "features/webapps/page.js").read_text()
+    serving = (assets / "features/webapps/serving.js").read_text()
+    feature = (assets / "features/advanced/feature.js").read_text()
+
+    # The tab sits between Set up deploys and Deploy key.
+    tabs = page[page.index("const PAGE_TABS"):page.index("const PROMOTABLE")]
+    assert "['serving', 'Serving']" in tabs, \
+        "the app page has no Serving tab"
+    assert tabs.index("'setup'") < tabs.index("'serving'") < tabs.index("'key'"), \
+        f"the Serving tab is not between Set up deploys and Deploy key: {tabs}"
+    assert "if (section === 'serving')" in page \
+        and "servingPanel(ctx, app, body, current, {" in page, \
+        "the Serving tab does not render through servingPanel under loadInto"
+    assert "renderAddresses: () => addressesCard(ctx, app, reload)" in page \
+        and "onChangeAddress: () => changeAddressFor(ctx, app, reload)" in page, \
+        "the Serving tab does not reuse the app page's addresses card and " \
+        "change-address wizard — a second copy of either would drift"
+
+    # One read, four writes, plus the live check the address card shows.
+    for endpoint in ("/api/edge/webapp/serving", "/api/edge/webapp/certificate",
+                     "/api/edge/webapp/add_route", "/api/edge/webapp/remove_route",
+                     "/api/edge/webapp/health"):
+        assert endpoint in serving, f"the Serving tab omitted {endpoint}"
+
+    # Four cards.
+    for heading in ("'Address'", "'Certificate'", "'How it’s served'", "'Routes'"):
+        assert heading in serving, f"the Serving tab omitted the {heading} card"
+
+    # Wildcard coverage is SERVER evidence, both halves of it.
+    assert "wildcard.covered === true && address.dns === 'managed'" in serving \
+        and "wildcard — DNS and HTTPS need nothing from you" in serving, \
+        "the address card invents its wildcard sentence instead of reading it " \
+        "off the server's coverage and DNS-mode evidence"
+
+    # A dedicated certificate is offered only where the server says one could
+    # be issued, and the two phases stay separate.
+    assert "certificate.dedicated_supported !== true" in serving \
+        and "certificate.dedicated_reason" in serving, \
+        "an unavailable dedicated certificate shows a dead button instead of " \
+        "the server's own explanation"
+    assert "own.ready === true" in serving and "Switch to it" in serving, \
+        "the app can be switched onto a certificate that is not active yet"
+
+    # The shape is read-only, and says why.
+    assert "can’t be changed here" in serving and "SHAPES[serving.kind]" in serving, \
+        "the serving shape is presented without saying why it is fixed"
+    assert "pool: poolSelect.value, spa: spaBox.checked" in serving, \
+        "the Save button sends something other than the pool and the fallback"
+    assert "Array.isArray(pools)" in serving, \
+        "a viewer with no pool inventory still gets editing controls"
+
+    # Managed paths are labelled and cannot be removed.
+    assert "badge('Managed for you', 'neutral')" in serving, \
+        "platform-managed paths are not marked as such"
+    assert "manage && !row.managed" in serving, \
+        "a platform-managed path offers a Remove button — sign-in would 404"
+
+    # The control-plane pages are reachable from here, and only by an operator.
+    assert "if (!ctx.capabilities.manage_network) return null;" in serving, \
+        "the operator links are not gated on manage_network"
+    assert "routeHref('vhosts')" in serving and "routeHref('routes'" in serving, \
+        "the Serving tab does not link the control-plane serving and routes pages"
+    assert "route: 'vhosts'" in feature and "label: 'Serving'" in feature, \
+        "the control-plane serving pages still have no navigation entry"
+
+    # Danger is destructive actions only now.
+    danger = page[page.index("// danger ('setup' renders"):page.index("function deleteWebApp")]
+    assert "Change address" not in danger, \
+        "Change address is still filed under Danger beside Delete app"
+    assert "Take offline" in danger and "Delete this app" in danger, \
+        "the Danger tab lost one of its destructive actions"
+
+
 @th.django_unit_test("WebApp list rows state their health plainly and the copy carries no plumbing words")
 def test_webapp_row_copy_and_jargon_gate(opts):
     import re
@@ -571,6 +648,7 @@ def test_webapp_row_copy_and_jargon_gate(opts):
     assets = root / "mojo/apps/account/admin_portal/assets/features/webapps"
     wizard = (assets / "wizard.js").read_text()
     page = (assets / "page.js").read_text()
+    serving = (assets / "serving.js").read_text()
 
     row = page[page.index("function webappRow"):page.index("export async function deploymentsPage")]
     # Live on the placeholder page only: honest state plus a way forward that
@@ -584,7 +662,8 @@ def test_webapp_row_copy_and_jargon_gate(opts):
     # No plumbing vocabulary in any user-facing literal of either file: scan
     # every quoted/template literal that reads as copy (contains a space) for
     # the words a person should never see.
-    for name, src in (("wizard.js", wizard), ("page.js", page)):
+    for name, src in (("wizard.js", wizard), ("page.js", page),
+                      ("serving.js", serving)):
         literals = [lit for lit in
                     re.findall(r"'([^'\n]*)'", src) + re.findall(r"`([^`\n]*)`", src)
                     if " " in lit and "/api/" not in lit]

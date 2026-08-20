@@ -445,7 +445,9 @@ def test_webapp_onboarding_asset_contract(opts):
     wizard = (ASSETS / "features/webapps/wizard.js").read_text()
     page = (ASSETS / "features/webapps/page.js").read_text()
     api_side = (ASSETS / "features/webapps/api.js").read_text()
+    serving = (ASSETS / "features/webapps/serving.js").read_text()
     webapp_styles = (ASSETS / "features/webapps/styles.css").read_text()
+    advanced_feature = (ASSETS / "features/advanced/feature.js").read_text()
     platform = (ASSETS / "features/platform/page.js").read_text()
     preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
 
@@ -519,10 +521,43 @@ def test_webapp_onboarding_asset_contract(opts):
             "/api/edge/webapp/link_key",
             "/api/edge/webapp/onboarding/workflow"):
         assert endpoint in page, f"management view omitted {endpoint}"
-    for tab in ("'Overview'", "'Deploys'", "'Deploy key'", "'Set up deploys'", "'Danger'"):
+    for tab in ("'Overview'", "'Deploys'", "'Deploy key'", "'Set up deploys'",
+                "'Serving'", "'Danger'"):
         assert tab in page, f"management view omitted the {tab} tab"
-    for action in ("Roll back", "Change address", "Take offline", "Delete app"):
+    for action in ("Roll back", "Take offline", "Delete app"):
         assert action in page, f"management view omitted the {action!r} action"
+    # Changing the address moved to the Serving tab (#2229): it is a normal
+    # day-2 change and belongs beside the address it changes, not in Danger
+    # beside Take offline and Delete.
+    assert "Change address" in serving and "Change address" not in page, \
+        "Change address is not on the Serving tab, or is still duplicated in Danger"
+
+    # --- Serving tab (serving.js) ---
+    for heading in ("'Address'", "'Certificate'", "'How it’s served'", "'Routes'"):
+        assert heading in serving, f"the Serving tab omitted the {heading} card"
+    for endpoint in (
+            "/api/edge/webapp/serving",
+            "/api/edge/webapp/certificate",
+            "/api/edge/webapp/add_route",
+            "/api/edge/webapp/remove_route",
+            "/api/edge/webapp/health"):
+        assert endpoint in serving, f"the Serving tab omitted {endpoint}"
+    # The operator pages are reachable, and only by an operator.
+    assert "ctx.capabilities.manage_network" in serving \
+        and "routeHref('vhosts')" in serving and "routeHref('routes'" in serving, \
+        "the Serving tab does not link the control-plane pages behind manage_network"
+
+    # --- the control-plane pages finally have a home (advanced/feature.js) ---
+    assert "vhosts: 'Serving'" in advanced_feature, \
+        "the control-plane serving page is still labelled with the row's model name"
+    assert "route: 'vhosts', matches: ['vhosts', 'routes', 'upstreams'], " \
+        "label: 'Serving'" in advanced_feature, \
+        "#/vhosts and #/routes have no navigation entry — they are reachable " \
+        "only by typing the URL"
+    nav = advanced_feature[advanced_feature.index("navigation: (ctx)"):
+                           advanced_feature.index("title: (route)")]
+    assert "ctx.capabilities.manage_network ? {\n      route: 'vhosts'" in nav, \
+        "the Serving navigation entry is not gated on manage_network alone"
     assert "startWizard" in page and "resumeWizard" in page and "startChangeAddress" in page, \
         "the list does not launch or resume the wizard"
     assert "statuses.set(row.id" not in page, \

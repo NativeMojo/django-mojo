@@ -11,6 +11,7 @@ import {rowSection, statusHeadline, statusRow} from '../../components/rows.js';
 import {announce, copyButton, loadInto, runAction} from '../../components/actions.js';
 import {emptyState, errorState, sectionTabs} from '../../components/views.js';
 import {hasPendingWizard, resumeWizard, startChangeAddress, startWizard} from './wizard.js';
+import {servingPanel} from './serving.js';
 import {
   FRAMEWORK_PATH, PLATFORM_SECTIONS_PATH, apiServiceRow, applyFrameworkUpdate,
   frameworkRow, openApiInspector, openFrameworkInspector,
@@ -18,7 +19,8 @@ import {
 
 const PAGE_TABS = [
   ['overview', 'Overview'], ['deploys', 'Deploys'],
-  ['setup', 'Set up deploys'], ['key', 'Deploy key'], ['danger', 'Danger'],
+  ['setup', 'Set up deploys'], ['serving', 'Serving'],
+  ['key', 'Deploy key'], ['danger', 'Danger'],
 ];
 const PROMOTABLE = new Set(['uploaded', 'live', 'superseded']);
 
@@ -132,8 +134,8 @@ function workflowPanel(webapp, keyAction = null) {
   return panel;
 }
 
-// Both the row-level "Set address" and the Danger tab's "Change address" run
-// the same wizard flow, seeded from the full record.
+// The row-level "Set address", Overview's own offer, and the Serving tab all
+// run the same wizard flow, seeded from the full record.
 async function changeAddressFor(ctx, app, reload) {
   const full = await api(`/api/edge/webapp/${encodeURIComponent(app.id)}`);
   startChangeAddress(ctx, reload, {
@@ -363,6 +365,17 @@ async function manageSection(ctx, app, summary, section, body, reload, current =
       h('h3', {class: 'section-subhead', text: 'Recent deploys'}), history);
     return;
   }
+  if (section === 'serving') {
+    // Everything about HOW the app is reached lives in serving.js: address,
+    // certificate, shape, paths. The addresses table and the change-address
+    // wizard stay here and are handed over, so there is one of each.
+    await servingPanel(ctx, app, body, current, {
+      reload,
+      renderAddresses: () => addressesCard(ctx, app, reload),
+      onChangeAddress: () => changeAddressFor(ctx, app, reload),
+    });
+    return;
+  }
   if (section === 'key') {
     const payload = await api(`/api/edge/webapp/key_status?webapp=${encodeURIComponent(app.id)}`);
     if (!current()) return;
@@ -379,9 +392,12 @@ async function manageSection(ctx, app, summary, section, body, reload, current =
     return;
   }
   // danger ('setup' renders through setupPanel, not here)
+  //
+  // Danger is destructive actions only. Changing the address is a normal
+  // day-2 change and now lives on the Serving tab, beside the address it
+  // changes — it was never destructive, and putting it here made it read as
+  // if it were.
   if (!manage) { body.replaceChildren(h('p', {class: 'muted', text: 'You don’t have permission to change this app.'})); return; }
-  const changeAddress = h('button', {class: 'button', onclick: (event) => runAction(event.currentTarget,
-    () => changeAddressFor(ctx, app, reload), {pendingLabel: 'Opening…'})}, icon('globe'), 'Change address');
   const takeOffline = address.hostname ? h('button', {class: 'button', onclick: () => {
     return confirmAction({title: `Take ${app.slug} offline?`, danger: true, confirmLabel: 'Take offline', requireReason: true, reasonLabel: 'Why?',
       copy: 'Visitors will stop reaching your app. The app and its versions are kept — you can put it back on an address later.'}).then((answer) => {
@@ -401,7 +417,6 @@ async function manageSection(ctx, app, summary, section, body, reload, current =
     body.dispatchEvent(new CustomEvent('mojo-webapp-deleted', {bubbles: true}));
   })}, icon('trash'), 'Delete app');
   body.replaceChildren(
-    h('div', {class: 'danger-row'}, h('div', {}, h('strong', {text: 'Change address'}), h('p', {class: 'muted small', text: 'Move this app to a different address. The current one keeps serving until the new one is ready.'})), changeAddress),
     takeOffline ? h('div', {class: 'danger-row'}, h('div', {}, h('strong', {text: 'Take offline'}), h('p', {class: 'muted small', text: 'Stop serving the app without deleting it.'})), takeOffline) : null,
     h('div', {class: 'danger-row danger'}, h('div', {}, h('strong', {text: 'Delete this app'}), h('p', {class: 'muted small', text: 'Remove the app and everything about it. Permanent.'})), deleteApp));
 }

@@ -869,7 +869,7 @@ function edgeHttpPosture(ctx) {
 async function vhostsPage(ctx) {
   const root = h('div', {class: 'page'});
   async function render() {
-    root.replaceChildren(pageHeader('Network & hosting', 'Vhosts', 'Structured serving shapes that publish one desired generation to the fleet.', [
+    root.replaceChildren(pageHeader('Network & hosting', 'Serving', 'Structured serving shapes that publish one desired generation to the fleet.', [
       ctx.capabilities.manage_network ? h('button', {class: 'button primary', onclick: () => createVhostWizard(ctx, render)}, icon('plus'), 'Create Vhost') : null,
     ]));
     root.append(edgeHttpPosture(ctx));

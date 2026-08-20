@@ -396,10 +396,12 @@ def test_feature_pending_states_survive_their_own_actions_contract(opts):
     api_side = (ASSETS / "features/webapps/api.js").read_text()
     page = (ASSETS / "features/webapps/page.js").read_text()
     wizard = (ASSETS / "features/webapps/wizard.js").read_text()
+    serving = (ASSETS / "features/webapps/serving.js").read_text()
     advanced = (ASSETS / "features/advanced/page.js").read_text()
 
     for name, text in (("webapps/api.js", api_side), ("webapps/page.js", page),
-                       ("webapps/wizard.js", wizard), ("advanced/page.js", advanced)):
+                       ("webapps/wizard.js", wizard), ("webapps/serving.js", serving),
+                       ("advanced/page.js", advanced)):
         assert "'../../components/actions.js'" in text, \
             f"{name} does not use the shared responsiveness helpers"
 
