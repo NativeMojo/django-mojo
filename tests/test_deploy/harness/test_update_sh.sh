@@ -40,10 +40,10 @@ assert_eq() { # actual expected label
     if [ "$1" = "$2" ]; then ok "$3"; else fail "$3 (got: $1, want: $2)"; fi
 }
 assert_in_log() { # pattern label
-    if grep -q "$1" "$CALLLOG" 2>/dev/null; then ok "$2"; else fail "$2 (no '$1' in log)"; fi
+    if grep -q -e "$1" "$CALLLOG" 2>/dev/null; then ok "$2"; else fail "$2 (no '$1' in log)"; fi
 }
 assert_not_in_log() { # pattern label
-    if grep -q "$1" "$CALLLOG" 2>/dev/null; then fail "$2 ('$1' present)"; else ok "$2"; fi
+    if grep -q -e "$1" "$CALLLOG" 2>/dev/null; then fail "$2 ('$1' present)"; else ok "$2"; fi
 }
 assert_last_cmd() { # pattern label
     local last
@@ -102,6 +102,11 @@ EOF
 echo "CMD python3 $*" >> "$CALLLOG"
 case "$*" in
     *"import mojo"*) cat "$STUBCTL/framework.txt" 2>/dev/null || echo "0.0.0"; exit 0 ;;
+    *"deploy_status set --help"*)
+        # The probe update.sh runs before it dares pass --phases. A rollback
+        # can restore a deploy_status that has no such flag.
+        [ -f "$STUBCTL/deploy_status.no_phases" ] || echo "  --phases PHASES"
+        exit 0 ;;
     *deploy_status*)
         echo "ENV identity_ready=${MOJO_DEPLOY_IDENTITY_READY:-}" >> "$CALLLOG"
         if [[ "$*" == *"deploy_status set deploying"* ]] && \
@@ -687,6 +692,75 @@ assert_order "deploy_status set failed" "CMD jobman stop engine" \
 assert_last_cmd "jobman start" \
     "the replacement engine is what finalizes the terminal UUID — it has to \
 exist"
+
+# ── phase timings ────────────────────────────────────────────────────────────
+
+phase_field() { # field-number -> that column of every recorded line
+    awk -v n="$1" '{print $n}' "$PROJ/var/deploy/phase_timings" 2>/dev/null
+}
+
+echo "update.sh: every deploy records where its seconds went"
+setup_env
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_eq "$?" 0 "a timed canary run still exits 0"
+if [ -s "$PROJ/var/deploy/phase_timings" ]; then
+    ok "the run recorded phase timings"
+else
+    fail "no phase timings were recorded"
+fi
+assert_eq "$(phase_field 2 | tr '\n' ' ')" "git_sync post_deploy sanity_check identity total " \
+    "the phases are recorded in the order they happened"
+assert_eq "$(phase_field 1 | sort -u | tr '\n' ' ')" "deploy " \
+    "a clean deploy records exactly one pass"
+bad_values="$(phase_field 3 | grep -cv '^[0-9][0-9]*$')"
+assert_eq "$bad_values" "0" \
+    "every recorded value is all digits — a date without %3N echoes the \
+format literally, and that must never reach the platform"
+bad_units="$(phase_field 4 | grep -cv '^\(ms\|s\)$')"
+assert_eq "$bad_units" "0" "every recorded unit is one this parser knows"
+bad_names="$(phase_field 2 | grep -cv '^[a-z_]\{1,32\}$')"
+assert_eq "$bad_names" "0" "every recorded name matches the platform's charset"
+assert_eq "$(cat "$PROJ/var/deploy/phase_pass")" "deploy" \
+    "post_deploy.sh reads the pass from a file, never from an argv it may be \
+too old to understand"
+assert_in_log "deploy_status set deploying .*--phases var/deploy/phase_timings" \
+    "the timings travel with the terminal callback"
+assert_in_log "deploy_status set --help" \
+    "the flag is probed before it is used"
+
+echo "update.sh: a deploy_status without --phases is never passed one"
+setup_env
+touch "$CTL/deploy_status.no_phases"
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_eq "$?" 0 "an older deploy_status does not fail the deploy"
+assert_in_log "deploy_status set deploying" "the callback still happens"
+assert_not_in_log "phases" \
+    "a rollback can restore a deploy_status that argparse-exits 2 on --phases, \
+which report_status would report as a node failure on a healthy deploy"
+
+echo "update.sh: a rollback's phases are marked as the rollback's"
+setup_env
+touch "$CTL/sudo.fail_first"
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_eq "$?" 1 "the failed canary still exits 1"
+assert_eq "$(phase_field 1 | sort -u | tr '\n' ' ')" "deploy rollback " \
+    "the timings distinguish the deploy pass from the rollback pass"
+assert_eq "$(cat "$PROJ/var/deploy/phase_pass")" "rollback" \
+    "post_deploy.sh re-entered by the rollback is told which pass it is in"
+assert_in_log "deploy_status set failed .*--phases var/deploy/phase_timings" \
+    "a failure report carries the timings too — that is when they matter most"
+
+echo "update.sh: timings are this run's, not the last one's"
+setup_env
+mkdir -p "$PROJ/var/deploy"
+echo "deploy stale_entry 999 ms" > "$PROJ/var/deploy/phase_timings"
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_not_in_log "stale_entry" "no leftover is reported"
+if grep -q "stale_entry" "$PROJ/var/deploy/phase_timings"; then
+    fail "a previous run's timings survived into this one"
+else
+    ok "the timings file is truncated at the start of every run"
+fi
 
 # ── result ───────────────────────────────────────────────────────────────────
 

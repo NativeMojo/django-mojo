@@ -811,3 +811,64 @@ def test_deploy_status_handoff_failure_is_swallowed(opts):
                      f"have applied, got {status!r}")
     finally:
         deploy.clear_status(row.pk)
+
+
+@th.django_unit_test("deploy_status set carries the node's phase timings, or none")
+def test_deploy_status_phases(opts):
+    """`--phases` is optional in both directions: a node script that predates
+    it passes nothing, and this command must keep working — that is why
+    update.sh probes for the flag before passing it."""
+    import os
+
+    from django.conf import settings as django_settings
+    from django.core.management import call_command
+    from mojo.apps.edge.services import deploy, platform_deploy
+
+    var_root = os.path.join(django_settings.PROJECT_ROOT, "var", "deploy")
+    os.makedirs(var_root, exist_ok=True)
+    path = os.path.join(var_root, "phase_timings")
+    with open(path, "w") as stream:
+        stream.write("deploy git_sync 1200 ms\n")
+        stream.write("deploy post_deploy 41230 ms\n")
+        stream.write("deploy nonsense not-a-number ms\n")
+
+    row, _job = _armed_attempt()
+    try:
+        with mock.patch.object(platform_deploy, "evidence"):
+            call_command("deploy_status", "set", "deploying", sha=SHA_C,
+                         deployment=str(row.pk),
+                         phases="var/deploy/phase_timings")
+        row.refresh_from_db()
+        th.assert_eq(
+            [item["phase"] for item in (row.detail.get("phases") or [])],
+            ["git_sync", "post_deploy"],
+            f"the node's timings must reach the durable row, and the "
+            f"malformed line must not, got {row.detail!r}")
+    finally:
+        deploy.clear_status(row.pk)
+
+    second, _second_job = _armed_attempt()
+    try:
+        with mock.patch.object(platform_deploy, "evidence"):
+            call_command("deploy_status", "set", "deploying", sha=SHA_C,
+                         deployment=str(second.pk))
+        second.refresh_from_db()
+        th.assert_true("phases" not in (second.detail or {}),
+                       f"an older node script passes no --phases and must "
+                       f"still report normally, got {second.detail!r}")
+    finally:
+        deploy.clear_status(second.pk)
+        os.unlink(path)
+
+    third, _third_job = _armed_attempt()
+    try:
+        with mock.patch.object(platform_deploy, "evidence"):
+            call_command("deploy_status", "set", "deploying", sha=SHA_C,
+                         deployment=str(third.pk),
+                         phases="var/deploy/does-not-exist")
+        third.refresh_from_db()
+        th.assert_true("phases" not in (third.detail or {}),
+                       f"an unreadable timings file is no timings, never a "
+                       f"failed callback, got {third.detail!r}")
+    finally:
+        deploy.clear_status(third.pk)

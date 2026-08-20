@@ -1169,3 +1169,113 @@ def test_close_handoff_job_swallows_failures(opts):
                  f"raising, got {closed}")
     _clean_node_jobs()
     _clean_deploy_state()
+
+
+# ---------------------------------------------------------------------------
+# phase timings — where a deploy's seconds went
+# ---------------------------------------------------------------------------
+
+
+@th.django_unit_test("phase timings parse defensively and normalize seconds")
+def test_parse_phases(opts):
+    """The input is lines a shell script appended on a node, read by the
+    platform. Everything that does not fit the shape is dropped rather than
+    reported: a malformed line is a missing timing, never a failed callback."""
+    from mojo.apps.edge.services import platform_deploy
+
+    entries = platform_deploy.parse_phases(
+        "deploy git_sync 1200 ms\n"
+        "deploy post_deploy 41230 ms\n"
+        "rollback post_deploy 9 s\n"
+        "deploy Bad-Name 10 ms\n"          # name charset
+        "deploy ok twelve ms\n"            # non-numeric
+        "deploy ok 10 minutes\n"           # unknown unit
+        "sideways ok 10 ms\n"              # unknown pass
+        "deploy ok 10\n"                   # wrong field count
+        "deploy ok 10 ms extra\n"
+        "\n")
+
+    th.assert_eq([item["phase"] for item in entries],
+                 ["git_sync", "post_deploy", "post_deploy"],
+                 f"only well-formed lines survive, got {entries!r}")
+    th.assert_eq(entries[0], {"phase": "git_sync", "pass": "deploy", "ms": 1200},
+                 f"a millisecond entry is carried as-is, got {entries[0]!r}")
+    th.assert_eq(entries[2],
+                 {"phase": "post_deploy", "pass": "rollback", "ms": 9000,
+                  "approx": True},
+                 f"seconds normalize to ms and say so — a node whose date has "
+                 f"no %3N still has something worth reporting, got "
+                 f"{entries[2]!r}")
+
+    flood = "\n".join(["deploy padding 1 ms"] * 200)
+    th.assert_eq(len(platform_deploy.parse_phases(flood)),
+                 platform_deploy.MAX_PHASES,
+                 "the entry count is bounded")
+    th.assert_eq(platform_deploy.parse_phases(""), [],
+                 "no timings is not an error")
+
+
+@th.django_unit_test("recorded phases land on the durable row's detail")
+def test_record_phases(opts):
+    from mojo.apps.edge.services import platform_deploy
+
+    _clean_deploy_state()
+    row = _attempt("canary")
+    entries = platform_deploy.parse_phases("deploy post_deploy 41230 ms\n")
+
+    th.assert_true(platform_deploy.record_phases(row.pk, entries),
+                   "well-formed timings must be stored")
+    row.refresh_from_db()
+    th.assert_eq(row.detail.get("phases"), entries,
+                 f"the timings must be readable at detail.phases, got "
+                 f"{row.detail!r}")
+    th.assert_eq(platform_deploy.serialize(row)["detail"]["phases"], entries,
+                 "and must survive serialization to the API")
+    th.assert_true(not platform_deploy.record_phases(row.pk, []),
+                   "nothing to record is not a write")
+    _clean_deploy_state()
+
+
+@th.django_unit_test("the engine restart is timed on the platform side")
+def test_record_engine_restart(opts):
+    """The node cannot time this phase: its last act is to kill the process
+    that would have. It is measured from the `verified` transition the dying
+    node wrote to the moment its replacement converges the row."""
+    from datetime import timedelta
+
+    from django.utils import timezone
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import platform_deploy
+
+    _clean_deploy_state()
+    row = _attempt("verified")
+    verified_at = (timezone.now() - timedelta(seconds=12)).isoformat()
+    row.transitions = [{"status": PlatformDeployment.STATUS_VERIFIED,
+                        "at": verified_at, "detail": {}}]
+    row.detail = {"phases": [{"phase": "post_deploy", "pass": "deploy",
+                              "ms": 41230}]}
+    row.save(update_fields=["transitions", "detail"])
+
+    th.assert_true(platform_deploy.record_engine_restart(row.pk),
+                   "a verified row must get its restart phase")
+    row.refresh_from_db()
+    phases = row.detail.get("phases") or []
+    th.assert_eq([item["phase"] for item in phases],
+                 ["post_deploy", "engine_restart"],
+                 f"the restart closes the table the node started, got "
+                 f"{phases!r}")
+    restart = phases[-1]
+    th.assert_true(11000 <= restart["ms"] <= 20000,
+                   f"the restart must be measured from the verified "
+                   f"transition (~12s here), got {restart!r}")
+
+    th.assert_true(not platform_deploy.record_engine_restart(row.pk),
+                   "a second finalize must not append a second entry")
+    row.refresh_from_db()
+    th.assert_eq(len(row.detail.get("phases") or []), 2,
+                 "the phase table stays as it was")
+
+    other = _attempt("canary")
+    th.assert_true(not platform_deploy.record_engine_restart(other.pk),
+                   "a row that never reached `verified` has nothing to measure")
+    _clean_deploy_state()

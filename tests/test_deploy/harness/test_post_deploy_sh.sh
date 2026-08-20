@@ -361,6 +361,42 @@ assert_no_file "$TMP/nginx_etc/conf.d/sample.example.conf" \
 assert_has "$OUT" "converged 2 vhost(s)" "conf.d convergence logs its count"
 assert_not_in_log "migrate" "bare invocation never migrates"
 
+echo "post_deploy.sh: the run records its own phase timings, under update.sh's pass"
+assert_file "$PROJ/var/deploy/phase_timings" "post_deploy recorded phase timings"
+pd_field() { awk -v n="$1" '{print $n}' "$PROJ/var/deploy/phase_timings" 2>/dev/null; }
+assert_eq "$(pd_field 2 | tr '\n' ' ')" \
+    "deps framework collectstatic render nginx mojosec restart probe " \
+    "the phases are recorded in the order they happened"
+assert_eq "$(pd_field 3 | grep -cv '^[0-9][0-9]*$')" "0" \
+    "every value is all digits — this host's date has no %3N, and the literal \
+format must never be recorded as a number"
+assert_eq "$(pd_field 1 | sort -u | tr '\n' ' ')" "deploy " \
+    "with no phase_pass file the pass defaults to deploy"
+
+setup_env
+mkdir -p "$PROJ/var/deploy"
+printf 'rollback\n' > "$PROJ/var/deploy/phase_pass"
+run_post_deploy --framework 9.9.9 > "$OUT" 2>&1
+assert_eq "$?" 0 "a rollback-pass run still exits 0"
+assert_eq "$(pd_field 1 | sort -u | tr '\n' ' ')" "rollback " \
+    "the pass comes from the FILE — a rollback can leave this script older \
+than the update.sh calling it, and a new flag would die on argv"
+printf 'nonsense\n' > "$PROJ/var/deploy/phase_pass"
+: > "$PROJ/var/deploy/phase_timings"
+run_post_deploy --framework 9.9.9 > "$OUT" 2>&1
+assert_eq "$?" 0 "an unreadable pass never fails a deploy"
+assert_eq "$(pd_field 1 | sort -u | tr '\n' ' ')" "deploy " \
+    "an unrecognized pass falls back to deploy"
+
+setup_env
+run_post_deploy --framework 9.9.9 --migrate > "$OUT" 2>&1
+assert_eq "$?" 0 "a migrating run exits 0"
+assert_eq "$(pd_field 2 | grep -c '^migrate$')" "1" \
+    "the migration is timed when it runs"
+
+setup_env
+run_post_deploy > "$OUT" 2>&1
+
 echo "post_deploy.sh: templates render into var/deploy, then install substituted"
 assert_file "$PROJ/var/deploy/cron.d/1_certbot" "rendered cron landed in var/deploy"
 assert_file "$PROJ/var/deploy/systemd/mojo-asgi.service" "rendered unit landed in var/deploy"

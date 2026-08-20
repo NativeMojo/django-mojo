@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import uuid
 from datetime import timedelta
 
@@ -32,6 +33,10 @@ ROLLBACK_OUTCOME_SCAN = 5
 # One node deploy job per runner, and the roster is capped. The bound exists so
 # a malformed payload can never turn a callback into an unbounded scan.
 MAX_HANDOFF_JOBS = 8
+# Phase timings: a deploy pass emits about fourteen and a rollback pass adds
+# ten more, so the cap is a bound on hostile input, not a working limit.
+MAX_PHASES = 32
+PHASE_NAME_PATTERN = re.compile(r"^[a-z_]{1,32}$")
 
 
 def _text(value, limit=MAX_TEXT):
@@ -307,6 +312,116 @@ def evidence(value, runner, state, proof=None, detail=None):
                 update_fields.append("diagnosis")
         row.save(update_fields=update_fields)
         return True
+
+
+def parse_phases(text):
+    """Phase timings as the node scripts append them, as bounded entries.
+
+        <pass> <name> <value> <unit>        deploy post_deploy 41230 ms
+
+    This is data written by a shell script on a box, read by the platform, so
+    it is parsed as hostile input: fixed shape, a name charset, digits only,
+    a known unit, and a hard entry cap. Anything that does not fit is dropped
+    silently — a malformed line is a missing timing, never an error and never
+    a reason to fail a deploy callback.
+
+    Seconds normalise to milliseconds and are marked `approx`: `date +%s%3N`
+    is a GNU extension, and a node whose date does not support it still has
+    something worth reporting.
+    """
+    entries = []
+    for line in (text or "").splitlines():
+        if len(entries) >= MAX_PHASES:
+            break
+        parts = line.split()
+        if len(parts) != 4:
+            continue
+        pass_name, name, value, unit = parts
+        if pass_name not in ("deploy", "rollback"):
+            continue
+        if not PHASE_NAME_PATTERN.match(name):
+            continue
+        if not value.isdigit() or len(value) > 12:
+            continue
+        if unit not in ("ms", "s"):
+            continue
+        entry = {"phase": name, "pass": pass_name,
+                 "ms": int(value) * (1000 if unit == "s" else 1)}
+        if unit == "s":
+            entry["approx"] = True
+        entries.append(entry)
+    return entries
+
+
+def record_engine_restart(value):
+    """Close the phase table with the one gap the node cannot time itself.
+
+    update.sh's last act is to stop the engine that is running the deploy job,
+    so nothing on the node is alive to time what happens next: the engine
+    coming back on the new code and proving the release. That interval is
+    measured HERE instead — from the `verified` transition the dying node
+    wrote to the moment its replacement converges the row — and appended as a
+    normal phase entry, so the table reads end to end.
+
+    Idempotent, and silent about every failure: a missing timing is a missing
+    timing.
+    """
+    from django.utils.dateparse import parse_datetime
+    from mojo.helpers import logit
+
+    try:
+        with transaction.atomic():
+            row = get(value, for_update=True)
+            if row is None:
+                return False
+            at = None
+            for entry in reversed(list(row.transitions or [])):
+                if (isinstance(entry, dict)
+                        and entry.get("status") == PlatformDeployment.STATUS_VERIFIED):
+                    at = entry.get("at")
+                    break
+            started = parse_datetime(at) if at else None
+            if started is None:
+                return False
+            elapsed = (timezone.now() - started).total_seconds()
+            if elapsed < 0:
+                return False
+            detail = dict(row.detail or {})
+            phases = [item for item in (detail.get("phases") or [])
+                      if isinstance(item, dict)]
+            if any(item.get("phase") == "engine_restart" for item in phases):
+                return False
+            phases.append({"phase": "engine_restart", "pass": "deploy",
+                           "ms": int(elapsed * 1000)})
+            detail["phases"] = phases[:MAX_PHASES]
+            row.detail = detail
+            row.save(update_fields=["detail", "modified"])
+            return True
+    except Exception:
+        logit.exception(
+            f"edge deploy {value}: failed to record the engine restart phase")
+        return False
+
+
+def record_phases(value, entries):
+    """Store a node's phase timings on the durable row's `detail`."""
+    from mojo.helpers import logit
+
+    try:
+        if not entries:
+            return False
+        with transaction.atomic():
+            row = get(value, for_update=True)
+            if row is None:
+                return False
+            detail = dict(row.detail or {})
+            detail["phases"] = _safe(list(entries)[:MAX_PHASES])
+            row.detail = detail
+            row.save(update_fields=["detail", "modified"])
+            return True
+    except Exception:
+        logit.exception(f"edge deploy {value}: failed to record phase timings")
+        return False
 
 
 def close_handoff_job(value, state="completed"):
@@ -638,6 +753,8 @@ def finalize_post_restart():
                     row.pk, PlatformDeployment.STATUS_CONVERGED,
                     {"source": "post_restart", "proven": 1, "expected": 1}):
                 return None
+        # The node timed everything up to its own death; this is the rest.
+        record_engine_restart(row.pk)
 
     if not deploy.clear_status(row.pk):
         return None

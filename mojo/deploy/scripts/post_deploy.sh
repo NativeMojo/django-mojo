@@ -62,6 +62,72 @@ log() { echo "[$(date '+%H:%M:%S')] $*"; }
 die() { echo "[$(date '+%H:%M:%S')] FATAL: $*" >&2; exit 1; }
 warn() { echo "[$(date '+%H:%M:%S')] WARN: $*" >&2; }
 
+# ── phase timing ─────────────────────────────────────────────────────────────
+#
+# The same append-only file update.sh writes, in the same format:
+#
+#   <pass> <name> <value> <unit>      e.g.  deploy framework 18042 ms
+#
+# The PASS comes from var/deploy/phase_pass, NOT from argv. A rollback
+# re-enters this script, and a rollback is also the one time the caller may be
+# a NEWER update.sh than this file: pip has already downgraded the framework,
+# so the shim can locate an older post_deploy.sh. A new flag would `die
+# "unknown argument"` there and turn a rollback into an unknown-state node. An
+# older copy ignores an unread file, which is exactly right.
+#
+# Under `set -euo pipefail` every one of these has to be airtight: no bare
+# `((X++))` (it returns 1 when X is 0), no unguarded command substitution, no
+# `test && assign` as the last statement of a function, and a `return 0` on
+# every path. A missing timing is nothing; a failed deploy is an outage.
+PHASE_DIR="${PROJ_PATH}/var/deploy"
+PHASE_FILE="${PHASE_DIR}/phase_timings"
+PHASE_PASS="deploy"
+PHASE_NAME=""
+PHASE_START=""
+_phase_probe="$(date +%s%3N 2>/dev/null || true)"
+case "$_phase_probe" in
+    ''|*[!0-9]*) PHASE_MS=0 ;;
+    *)           PHASE_MS=1 ;;
+esac
+_phase_pass="$(head -c 16 "${PHASE_DIR}/phase_pass" 2>/dev/null | tr -d '\r\n' || true)"
+case "$_phase_pass" in
+    deploy|rollback) PHASE_PASS="$_phase_pass" ;;
+esac
+mkdir -p "$PHASE_DIR" 2>/dev/null || true
+
+phase_now() {
+    if [ "$PHASE_MS" = "1" ]; then
+        date +%s%3N 2>/dev/null || true
+    else
+        date +%s 2>/dev/null || true
+    fi
+}
+
+phase_begin() { # name
+    PHASE_NAME="$1"
+    PHASE_START="$(phase_now)"
+    return 0
+}
+
+phase_record() { # name start — for a span whose start was kept elsewhere
+    local name="$1" start="$2" end="" delta=0 unit="s"
+    case "$start" in ''|*[!0-9]*) return 0 ;; esac
+    end="$(phase_now)"
+    case "$end" in ''|*[!0-9]*) return 0 ;; esac
+    if [ "$PHASE_MS" = "1" ]; then unit="ms"; fi
+    delta=$(( end - start ))
+    [ "$delta" -ge 0 ] 2>/dev/null || delta=0
+    printf '%s %s %s %s\n' "$PHASE_PASS" "$name" "$delta" "$unit" \
+        >> "$PHASE_FILE" 2>/dev/null || true
+    return 0
+}
+
+phase_end() { # [name]
+    phase_record "${1:-$PHASE_NAME}" "$PHASE_START"
+    PHASE_START=""
+    return 0
+}
+
 # Only fixed phase names enter the durable incident system. Command output is
 # still visible in update.sh's bounded private capture, but is never copied to
 # an operator-facing incident where it could disclose credentials.
@@ -179,9 +245,12 @@ trusted_pip() {
 # install latest, so releases are never missed. Either way a failure is loud.
 
 log "Installing project dependencies..."
+phase_begin deps
 trusted_pip pip install -r "${PROJ_PATH}/requirements.txt" \
     || die "dependency install failed — refusing to restart with an incomplete environment"
+phase_end
 
+phase_begin framework
 if [ -n "$FRAMEWORK" ]; then
     log "Installing django-mojo==${FRAMEWORK} (fleet-pinned)..."
     trusted_pip pip install "django-mojo==${FRAMEWORK}" \
@@ -191,6 +260,7 @@ else
     trusted_pip pip install --upgrade django-mojo \
         || die "django-mojo upgrade failed — refusing to deploy on an unknown framework version"
 fi
+phase_end
 
 # Refresh the stable producer only after the framework install is complete.
 # When an old stable copy exists, it journals its own exact replacement; the
@@ -230,15 +300,19 @@ fi
 
 if [ "$MIGRATE" = "1" ]; then
     log "Running migrations (locked)..."
+    phase_begin migrate
     python3 "${PROJ_PATH}/bin/manage.py" migrate_locked --noinput \
         || die "migration failed — the schema is in an unknown state, NOT restarting the app"
+    phase_end
 else
     log "Skipping migrations (deploy did not request them)."
 fi
 
 log "Collecting static files..."
+phase_begin collectstatic
 python3 "${PROJ_PATH}/bin/manage.py" collectstatic --noinput \
     || die "collectstatic failed"
+phase_end
 
 # ── render ───────────────────────────────────────────────────────────────────
 #
@@ -249,6 +323,7 @@ python3 "${PROJ_PATH}/bin/manage.py" collectstatic --noinput \
 # deploy here, before anything touches /etc.
 
 log "Rendering node templates into var/deploy..."
+phase_begin render
 # This unchanged argv is also the first-upgrade nginx runtime repair hook:
 # the newly installed Python module converges and verifies the persistent
 # spill paths before this old-inode shell can reach MojoSec or nginx reload.
@@ -260,10 +335,12 @@ compgen -G "${DEPLOY_DIR}/cron.d/*" > /dev/null \
     || record_warning cron "render produced no cron entries"
 [[ -f "${DEPLOY_DIR}/systemd/mojo-asgi.service" ]] \
     || die "render did not produce mojo-asgi.service — the web app cannot start"
+phase_end
 
 # ── nginx ────────────────────────────────────────────────────────────────────
 
 log "Updating nginx configs..."
+phase_begin nginx
 install_file "${PROJ_PATH}/aws/nginx/nginx.conf"  "${NGINX_ETC}/nginx.conf"
 install_file "${PROJ_PATH}/aws/nginx/asgi.inc"    "${NGINX_ETC}/asgi.inc"
 MOJOSEC_DJANGO_EXISTED=0
@@ -540,6 +617,8 @@ rm -f -- "$MOJOSEC_DJANGO_BACKUP"
 # gate. Run it with strict internal rollback, then continue from the new
 # release's nginx baseline if convergence itself fails. The later nginx test
 # remains fatal, so this can never wave through a broken serving graph.
+phase_end nginx
+phase_begin mojosec
 MOJOSEC_RC=0
 if [ -n "$MOJOSEC_DJANGO_BACKUP" ]; then
     set +e
@@ -555,6 +634,7 @@ if [ "$MOJOSEC_RC" -ne 0 ]; then
     fi
     record_warning mojosec "MojoSec convergence failed and restored its prior state"
 fi
+phase_end
 
 # ── retired names ────────────────────────────────────────────────────────────
 #
@@ -682,7 +762,9 @@ fi
 # ── restart ──────────────────────────────────────────────────────────────────
 
 log "Restarting mojo-asgi..."
+phase_begin restart
 systemctl restart mojo-asgi || die "mojo-asgi failed to restart"
+phase_end
 
 # Snapshot the installed copy of this script next to the rendered contract.
 # This is the shim's rollback self-heal: when a rollback reinstalls a
@@ -702,12 +784,15 @@ snapshot_self() {
 # PROBE_URL, which the shim points at whatever vhost proxies straight to the
 # asgi socket (a port-80 server that 301s everything would false-pass
 # `curl -f`).
+phase_begin probe
 for _ in $(seq 1 15); do
     if curl -fsS -o /dev/null --max-time 2 "$PROBE_URL" 2>/dev/null; then
+        phase_end
         snapshot_self
         log "Post-deploy complete — app responding."
         exit 0
     fi
     sleep 2
 done
+phase_end
 die "app did not answer ${PROBE_URL} within 30s of restart — on an edge-converged node the port-80 catch-all returns 444; export a vhost-true PROBE_URL from the shim"

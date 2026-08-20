@@ -34,6 +34,10 @@ from django.core.management.base import BaseCommand, CommandError
 from mojo.apps.edge.services import deploy
 from mojo.apps.edge.services import platform_deploy
 
+# The scripts write about two dozen short lines. The cap is a bound on a file
+# that lives in an application-writable directory, not a working limit.
+PHASES_MAX_BYTES = 8192
+
 
 class Command(BaseCommand):
     help = (
@@ -59,6 +63,10 @@ class Command(BaseCommand):
         parser.add_argument(
             "--evidence", action="store_true", default=False,
             help="Attach the sanitized tail captured by update.sh (failed only).")
+        parser.add_argument(
+            "--phases", default=None,
+            help="Optional path to update.sh's phase timings file. Omitting it "
+                 "is normal: an older node script does not write one.")
 
     def _read_var_line(self, name, limit=128):
         path = os.path.join(django_settings.PROJECT_ROOT, "var", name)
@@ -95,6 +103,24 @@ class Command(BaseCommand):
         if tail:
             detail["stderr_tail"] = tail
         return detail
+
+    def _read_phases(self, path):
+        """Where this node's seconds went, as the scripts recorded them.
+
+        Bounded read of a file the node wrote seconds ago. Anything unreadable
+        or unparseable is simply no timings — this is a diagnostic, and it may
+        never be the reason a deploy callback fails.
+        """
+        if not path:
+            return []
+        if not os.path.isabs(path):
+            path = os.path.join(django_settings.PROJECT_ROOT, path)
+        try:
+            with open(path, "r") as stream:
+                text = stream.read(PHASES_MAX_BYTES)
+        except OSError:
+            return []
+        return platform_deploy.parse_phases(text)
 
     def _report_failure_incident(self, deployment_id, sha, runner_id, phase):
         from mojo.apps.incident import reporter
@@ -169,6 +195,11 @@ class Command(BaseCommand):
         record = platform_deploy.get(deployment_id)
         if record is None or record.sha != sha:
             raise CommandError("deployment UUID does not belong to --sha")
+
+        # Recorded before any of the terminal bookkeeping below, so a
+        # superseded or refused report still says where the time went.
+        platform_deploy.record_phases(
+            deployment_id, self._read_phases(options.get("phases")))
 
         runner_id = deploy.local_runner_id()
         failure_phase = deploy.failure_phase(options.get("detail"))

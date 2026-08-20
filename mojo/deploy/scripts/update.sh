@@ -100,6 +100,104 @@ log_quietly() {
     printf '%s: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> var/update.log 2>/dev/null
 }
 
+# ── phase timing ─────────────────────────────────────────────────────────────
+#
+# Where the seconds went, appended a line at a time to var/deploy/phase_timings
+# and carried to the platform in the terminal callback. Both node scripts write
+# the same file, and post_deploy.sh reads the PASS from var/deploy/phase_pass
+# rather than from argv: a rollback re-enters post_deploy.sh, and giving that
+# script a new flag would break the one case that matters — a rollback whose
+# pip has already downgraded the framework, leaving the shim to locate an OLDER
+# post_deploy.sh that would die on an argument it has never heard of.
+#
+#   <pass> <name> <value> <unit>      e.g.  deploy post_deploy 41230 ms
+#
+# THE CLOCK IS PROBED, NOT ASSUMED. `date +%s%3N` is a GNU extension; where it
+# is unsupported the `%3N` is echoed literally ("17872374243N"), so the answer
+# is checked for SHAPE — all digits — and seconds are used when it is not. A
+# second-resolution timing is still worth having. Nothing here may fail a
+# deploy: every write is `|| true`, and every arithmetic use is guarded,
+# because post_deploy.sh runs under `set -e` where `((X++))` returning 1 is
+# fatal.
+PHASE_DIR="var/deploy"
+PHASE_FILE="${PHASE_DIR}/phase_timings"
+PHASE_PASS_FILE="${PHASE_DIR}/phase_pass"
+PHASE_PASS="deploy"
+PHASE_NAME=""
+PHASE_START=""
+_phase_probe="$(date +%s%3N 2>/dev/null || true)"
+case "$_phase_probe" in
+    ''|*[!0-9]*) PHASE_MS=0 ;;
+    *)           PHASE_MS=1 ;;
+esac
+
+phase_now() {
+    if [ "$PHASE_MS" = "1" ]; then
+        date +%s%3N 2>/dev/null || true
+    else
+        date +%s 2>/dev/null || true
+    fi
+}
+
+phase_reset() { # pass — which half of the run the following phases belong to
+    PHASE_PASS="$1"
+    mkdir -p "$PHASE_DIR" 2>/dev/null || true
+    printf '%s\n' "$1" > "$PHASE_PASS_FILE" 2>/dev/null || true
+    return 0
+}
+
+phase_truncate() {
+    mkdir -p "$PHASE_DIR" 2>/dev/null || true
+    : > "$PHASE_FILE" 2>/dev/null || true
+    return 0
+}
+
+phase_begin() { # name
+    PHASE_NAME="$1"
+    PHASE_START="$(phase_now)"
+    return 0
+}
+
+phase_record() { # name start — for a span whose start was kept elsewhere
+    local name="$1" start="$2" end="" delta=0 unit="s"
+    case "$start" in ''|*[!0-9]*) return 0 ;; esac
+    end="$(phase_now)"
+    case "$end" in ''|*[!0-9]*) return 0 ;; esac
+    if [ "$PHASE_MS" = "1" ]; then unit="ms"; fi
+    delta=$(( end - start ))
+    [ "$delta" -ge 0 ] 2>/dev/null || delta=0
+    printf '%s %s %s %s\n' "$PHASE_PASS" "$name" "$delta" "$unit" \
+        >> "$PHASE_FILE" 2>/dev/null || true
+    return 0
+}
+
+phase_end() { # [name]
+    phase_record "${1:-$PHASE_NAME}" "$PHASE_START"
+    PHASE_START=""
+    return 0
+}
+
+# --phases is PROBED, never assumed. A rollback can reinstall a framework whose
+# deploy_status has no such flag, and argparse would exit 2 — which report_status
+# propagates as a node failure on a deploy that actually worked.
+PHASE_ARGS=()
+PHASE_FLAG_SUPPORTED=""
+set_phase_args() {
+    PHASE_ARGS=()
+    [ -s "$PHASE_FILE" ] || return 0
+    if [ -z "$PHASE_FLAG_SUPPORTED" ]; then
+        if python3 bin/manage.py deploy_status set --help 2>/dev/null \
+                | grep -q -- '--phases'; then
+            PHASE_FLAG_SUPPORTED=1
+        else
+            PHASE_FLAG_SUPPORTED=0
+        fi
+    fi
+    [ "$PHASE_FLAG_SUPPORTED" = "1" ] || return 0
+    PHASE_ARGS=(--phases "$PHASE_FILE")
+    return 0
+}
+
 # ── who owns the job engine ──────────────────────────────────────────────────
 #
 # This script runs as ROOT (the deploy plane execs it through `sudo -n`), and
@@ -241,6 +339,12 @@ else
     flock -n 9 || { log "another update is in flight on this box"; exit 1; }
 fi
 
+# The timings belong to THIS run. Truncated behind the lock, so a queued deploy
+# cannot erase the file the running one is still appending to.
+phase_truncate
+phase_reset deploy
+RUN_START="$(phase_now)"
+
 # ── deploy status reporting ──────────────────────────────────────────────────
 # Exit 3 from deploy_status means "this deploy was superseded" — stale by
 # design, never a script failure. Any other non-zero propagates to the caller.
@@ -249,16 +353,19 @@ report_status() {
     # report_status <deploying|failed> <sha> [detail] [include-evidence]
     local state="$1" sha="$2" detail="${3:-}" evidence="${4:-0}" rc=0
     local args=()
+    set_phase_args
     if [ "$state" = "deploying" ]; then
         MOJO_DEPLOY_IDENTITY_READY=2 python3 bin/manage.py deploy_status set \
-            "$state" --sha "$sha" --deployment "$DEPLOYMENT" || rc=$?
+            "$state" --sha "$sha" --deployment "$DEPLOYMENT" \
+            "${PHASE_ARGS[@]}" || rc=$?
     elif [ -n "$detail" ]; then
         args=(deploy_status set "$state" --sha "$sha" \
               --deployment "$DEPLOYMENT" --detail "$detail")
         [ "$evidence" != "1" ] || args+=(--evidence)
-        python3 bin/manage.py "${args[@]}" || rc=$?
+        python3 bin/manage.py "${args[@]}" "${PHASE_ARGS[@]}" || rc=$?
     else
-        python3 bin/manage.py deploy_status set "$state" --sha "$sha" --deployment "$DEPLOYMENT" || rc=$?
+        python3 bin/manage.py deploy_status set "$state" --sha "$sha" \
+            --deployment "$DEPLOYMENT" "${PHASE_ARGS[@]}" || rc=$?
     fi
     if [ "$rc" = "3" ]; then
         log "deploy_status: deploy superseded — report ignored (tolerated)"
@@ -392,13 +499,19 @@ if [ "$MODE" = "deploy" ]; then
                 rollback_ok=1
             elif [ -n "$PREV_SHA" ] && [ -n "$PREV_FRAMEWORK" ]; then
                 log "rolling back to ${PREV_SHA} / django-mojo ${PREV_FRAMEWORK}"
+                # Everything from here belongs to the rollback pass, including
+                # the phases post_deploy.sh appends when it re-enters.
+                phase_reset rollback
+                phase_begin rollback
                 if git reset --hard "$PREV_SHA" \
                         && run_with_evidence sudo bash ./aws/post_deploy.sh \
                             --framework "$PREV_FRAMEWORK" \
                         && run_with_evidence python3 bin/manage.py sanity_check \
                             --url "$SANITY_URL"; then
+                    phase_end
                     rollback_ok=1
                 else
+                    phase_end
                     log "ROLLBACK FAILED — this node is in an unknown state"
                     report_status failed "$SHA" "rollback failed" 1 || true
                     rm -f -- "$DEPLOY_FAILURE_OUTPUT"
@@ -437,9 +550,12 @@ if [ "$MODE" = "deploy" ]; then
     log "UPDATE STARTED deployment=${DEPLOYMENT} sha=${SHA} framework=${FRAMEWORK} migrate=${MIGRATE}"
     if [ "$SAME_RELEASE" != "1" ]; then
         invalidate_identity || fail_control_plane "identity invalidation"
+        phase_begin git_sync
         git fetch origin                    || fail_deploy "git fetch"
         git reset --hard "$SHA"             || fail_deploy "git reset to ${SHA}"
         git clean -fd                       || fail_deploy "git clean"
+        phase_end
+        phase_begin post_deploy
         if [ "$MIGRATE" = "1" ]; then
             run_with_evidence sudo bash ./aws/post_deploy.sh \
                 --framework "$FRAMEWORK" --migrate \
@@ -449,23 +565,31 @@ if [ "$MODE" = "deploy" ]; then
                 --framework "$FRAMEWORK" \
                                             || fail_deploy "post_deploy" 1
         fi
+        phase_end
     fi
 
     if [ "$MIGRATE" = "1" ] || [ "$SAME_RELEASE" = "1" ]; then
+        phase_begin sanity_check
         run_with_evidence python3 bin/manage.py sanity_check --url "$SANITY_URL" \
                                         || fail_deploy "sanity_check" 1
+        phase_end
     fi
 
+    phase_begin identity
     LIVE_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
     if ! [[ "$LIVE_SHA" =~ ^[0-9a-f]{40}$ ]] || [[ "$LIVE_SHA" != "$SHA"* ]]; then
         fail_deploy "identity sha mismatch"
     fi
     publish_identity "$LIVE_SHA" "$DEPLOYMENT" || fail_control_plane "identity publish"
+    phase_end
 
     if [ "$MIGRATE" = "1" ] || [ "$SAME_RELEASE" = "1" ]; then
         # Exit 3 means superseded and is tolerated by report_status. Any other
         # callback failure stops fleet progression but leaves the already
-        # healthy, identity-published candidate serving.
+        # healthy, identity-published candidate serving. The callback cannot
+        # time itself — it is the thing carrying the timings — so the last
+        # entry is the whole run up to this point.
+        phase_record total "$RUN_START"
         report_status deploying "$SHA"  || fail_control_plane "deploy_status report"
     fi
 
@@ -473,10 +597,14 @@ if [ "$MODE" = "deploy" ]; then
 
 else
     log "MANUAL UPDATE STARTED (origin/main, latest framework)"
+    phase_begin git_sync
     git fetch origin                    || { log "manual update failed: git fetch"; exit 1; }
     git reset --hard origin/main        || { log "manual update failed: git reset"; exit 1; }
     git clean -fd                       || { log "manual update failed: git clean"; exit 1; }
+    phase_end
+    phase_begin post_deploy
     sudo bash ./aws/post_deploy.sh      || { log "manual update failed: post_deploy"; exit 1; }
+    phase_end
 fi
 
 # ── common tail ──────────────────────────────────────────────────────────────
