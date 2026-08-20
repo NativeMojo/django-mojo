@@ -49,7 +49,8 @@ DESTRUCTIVE_PREFIXES = ("delete_", "terminate_", "destroy_", "deregister_",
 # "Not there" is an answer, not a failure. Every one of these is a normal
 # response to asking about a resource on an empty account.
 NOT_FOUND_CODES = (
-    "404", "NotFound", "NoSuchEntity", "NoSuchBucket", "NoSuchTagSet",
+    "404", "NotFound", "NoSuchEntity", "NoSuchBucket", "NoSuchKey",
+    "NoSuchTagSet",
     "NoSuchBucketPolicy", "NoSuchPublicAccessBlockConfiguration",
     "NoSuchConfiguration", "ServerSideEncryptionConfigurationNotFoundError",
     "DBClusterNotFoundFault", "DBInstanceNotFound",
@@ -312,10 +313,22 @@ def _observe_network(clients, spec, observed, findings):
                                "SecurityGroups",
                                Filters=in_vpc + tag_filters(spec)), []) or []
     by_role = {}
+    sg_names = spec_module.names(spec)
+    role_by_name = {sg_names["node_sg"]: "node", sg_names["rds_sg"]: "rds",
+                    sg_names["cache_sg"]: "cache"}
     for group in groups:
         role = tags_of(group).get("mojo:role")
+        if role in role_by_name.values():
+            by_role.setdefault(role, wrap(group))
+    # Name-second, per this package's discovery contract. A group created
+    # before per-role tagging (every SG used to be stamped mojo:role=network)
+    # is still ours when the tag filter already matched it AND it carries the
+    # exact contracted name; without this fallback such a group is invisible
+    # forever and every apply re-attempts the create (InvalidGroup.Duplicate).
+    for group in groups:
+        role = role_by_name.get(group.get("GroupName"))
         if role:
-            by_role[role] = wrap(group)
+            by_role.setdefault(role, wrap(group))
     observed.security_groups = by_role
 
 
