@@ -8,6 +8,7 @@ invite emails are broken.
 Issue: planning/issues/password_reset_token_rejects_invite_token.md
 
 Also covers:
+  - A weak password does not burn the token (the retry with a strong one works)
   - get_or_generate_invite_token reuses valid token across multiple group invites
   - get_or_generate_invite_token generates fresh token after consumption or expiry
   - Distinct error messages: "Token already used", "Expired token",
@@ -117,6 +118,112 @@ def test_password_reset_token_still_works(opts):
     })
     assert_eq(resp.status_code, 200,
               f"pr: token should still work (got {resp.status_code}: {resp.response.data})")
+
+
+# ---------------------------------------------------------------------------
+# Regression: a weak password must not consume the single-use token
+# ---------------------------------------------------------------------------
+
+WEAK_PASSWORD = "abc"
+STRONG_PASSWORD = "NewPass##99"
+
+
+@th.django_unit_test("invite_flow: pr: weak password does not burn the token (regression)")
+def test_pr_token_survives_weak_password(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+
+    user = User.objects.get(pk=opts.user_id)
+    User.objects.filter(pk=user.pk).update(last_login=None)
+    user.refresh_from_db()
+
+    tok = tokens.generate_password_reset_token(user)
+    assert_true(tok.startswith("pr:"),
+                f"password reset token should start with 'pr:', got {tok[:5]}")
+
+    weak = opts.client.post("/api/auth/password/reset/token", {
+        "token": tok,
+        "new_password": WEAK_PASSWORD,
+    })
+    assert_eq(weak.status_code, 400,
+              f"a weak password should be refused with 400, got {weak.status_code}: {weak.response.data}")
+    assert_true("too weak" in (weak.response.error or ""),
+                f"expected the password-strength error, got '{weak.response.error}'")
+
+    retry = opts.client.post("/api/auth/password/reset/token", {
+        "token": tok,
+        "new_password": STRONG_PASSWORD,
+    })
+    assert_eq(retry.status_code, 200,
+              f"the same pr: token must still work after a weak-password attempt "
+              f"(got {retry.status_code}: {retry.response.data})")
+    assert_true(bool(getattr(retry.response.data, "access_token", None)),
+                "the retry should return an access_token JWT")
+
+
+@th.django_unit_test("invite_flow: iv: weak password does not burn the token (regression)")
+def test_iv_token_survives_weak_password(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+
+    user = User.objects.get(pk=opts.user_id)
+    User.objects.filter(pk=user.pk).update(is_email_verified=False, last_login=None)
+    user.refresh_from_db()
+
+    tok = tokens.generate_invite_token(user)
+    assert_true(tok.startswith("iv:"),
+                f"invite token should start with 'iv:', got {tok[:5]}")
+
+    weak = opts.client.post("/api/auth/password/reset/token", {
+        "token": tok,
+        "new_password": WEAK_PASSWORD,
+    })
+    assert_eq(weak.status_code, 400,
+              f"a weak password should be refused with 400, got {weak.status_code}: {weak.response.data}")
+
+    user.refresh_from_db()
+    assert_true(not user.is_email_verified,
+                "a refused weak password must not mark the invited email verified")
+
+    retry = opts.client.post("/api/auth/password/reset/token", {
+        "token": tok,
+        "new_password": STRONG_PASSWORD,
+    })
+    assert_eq(retry.status_code, 200,
+              f"the same iv: token must still work after a weak-password attempt "
+              f"(got {retry.status_code}: {retry.response.data})")
+
+    user.refresh_from_db()
+    assert_true(user.is_email_verified,
+                "is_email_verified should be True once the invite token is redeemed")
+
+
+@th.django_unit_test("invite_flow: token is still single-use after a successful set")
+def test_token_single_use_after_success(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+
+    user = User.objects.get(pk=opts.user_id)
+    User.objects.filter(pk=user.pk).update(last_login=None)
+    user.refresh_from_db()
+
+    tok = tokens.generate_password_reset_token(user)
+
+    first = opts.client.post("/api/auth/password/reset/token", {
+        "token": tok,
+        "new_password": STRONG_PASSWORD,
+    })
+    assert_eq(first.status_code, 200,
+              f"first use should succeed, got {first.status_code}: {first.response.data}")
+
+    second = opts.client.post("/api/auth/password/reset/token", {
+        "token": tok,
+        "new_password": "AnotherPass##77",
+    })
+    assert_eq(second.status_code, 400,
+              f"a consumed token must be refused, got {second.status_code}: {second.response.data}")
+    assert_eq(second.response.error, "Token already used",
+              f"expected 'Token already used', got '{second.response.error}'")
 
 
 @th.django_unit_test("invite_flow: unknown token prefix rejected with 400")
