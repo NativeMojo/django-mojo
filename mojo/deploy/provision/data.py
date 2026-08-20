@@ -38,6 +38,111 @@ IMMUTABLE_CLUSTER_FIELDS = ("DatabaseName", "StorageEncrypted",
                             "MasterUsername", "Engine")
 
 
+# ── a pre-existing subnet group is only as good as the subnets it names ─────
+#
+# A partial teardown that deletes the subnets leaves the subnet group behind,
+# because nothing here deletes one and the console does not cascade. The next
+# run finds `<project>-<env>-aurora` by name, decides it is satisfactory, and
+# spends fifteen minutes getting to `CreateDBCluster`, which answers:
+#
+#     InvalidVPCNetworkStateFault: The DB subnet group doesn't meet
+#     Availability Zone (AZ) coverage requirement. Current AZ coverage: .
+#     Add subnets to cover at least 2 AZs.
+#
+# Nothing after "coverage:" — every subnet it named was gone — and the message
+# names neither the group nor the fact that it is stale. So the same question is
+# asked HERE, in the first pass, from what `discover` already read: no extra AWS
+# call, and the answer arrives before the create instead of a quarter of an hour
+# after it.
+#
+# The verdict is MANUAL, never DRIFT: a subnet group's membership cannot be
+# patched back into existence, and this package does not delete. The only remedy
+# is a human running one delete command, which the finding prints.
+
+def _live_subnet_ids(observed):
+    """Every subnet id this environment is known to have right now.
+
+    Both sources are needed. `subnets` is what `discover` read before the run
+    started, and is the only place an availability zone can be looked up.
+    `private_subnet_ids` / `public_subnet_ids` are what the network step
+    resolved a moment ago, and are the only thing that knows about a subnet
+    created during THIS run — which is exactly the shape a stale subnet group
+    turns up in: the old subnets deleted, new ones built minutes ago, and a
+    group still pointing at the dead ids.
+    """
+    ids = {row.get("SubnetId") for row in (observed.get("subnets") or [])}
+    for key in ("private_subnet_ids", "public_subnet_ids"):
+        ids.update(observed.get(key) or [])
+    ids.discard(None)
+    return ids
+
+
+def _subnet_zones(observed):
+    return {row.get("SubnetId"): row.get("AvailabilityZone")
+            for row in (observed.get("subnets") or [])
+            if row.get("SubnetId")}
+
+
+def subnet_group_coverage(group, observed):
+    """`(judged, live_subnet_ids, az_coverage)` for a subnet group that exists.
+
+    RDS and ElastiCache report membership in the same shape — a `Subnets` list
+    of `SubnetIdentifier` — so one function answers for both.
+
+    `judged` is False when there is nothing honest to compare against: a group
+    whose membership was never observed, or an environment whose own subnets are
+    unknown. The remedy this feeds is "delete the group by hand", which must
+    never be printed on a guess.
+
+    `az_coverage` is an UPPER bound. A live subnet whose zone was never read
+    counts as a zone of its own, so a group is only ever accused when even the
+    optimistic reading of what is left falls short of what AWS requires.
+    """
+    if group is None or "Subnets" not in group:
+        return False, [], 0
+    known = _live_subnet_ids(observed)
+    if not known:
+        return False, [], 0
+    zones = _subnet_zones(observed)
+    named = [row.get("SubnetIdentifier") for row in (group.get("Subnets") or [])
+             if row.get("SubnetIdentifier")]
+    live = [subnet_id for subnet_id in named if subnet_id in known]
+    covered = {zones.get(subnet_id) for subnet_id in live if zones.get(subnet_id)}
+    unplaced = len([subnet_id for subnet_id in live if not zones.get(subnet_id)])
+    return True, live, len(covered) + unplaced
+
+
+def _subnet_group_usable(step, label, name, group, observed, findings, command):
+    """True when this group can carry a cluster. A MANUAL finding when it cannot.
+
+    The caller must honour the answer itself. MANUAL is not in
+    `report.BLOCKING_STATUSES` — a MANUAL step still counts as OK to the DAG,
+    because most MANUAL findings describe something immutable that the rest of
+    the run can live alongside. This one cannot be lived alongside, so the
+    create is made conditional on this return value rather than on the status.
+    """
+    judged, live, coverage = subnet_group_coverage(group, observed)
+    if not judged:
+        return True
+    if not live:
+        message = (f"{label} {name} exists, but every subnet it references has "
+                   f"been deleted — it is left over from a partial teardown")
+    elif coverage < spec_module.AZ_COUNT:
+        message = (f"{label} {name} references only {len(live)} surviving "
+                   f"subnet(s), spanning fewer than {spec_module.AZ_COUNT} "
+                   f"availability zones")
+    else:
+        return True
+    findings.append(report.manual(
+        step, "subnet_group.stale",
+        f"{message}; AWS accepts it until a cluster is created against it and "
+        f"then refuses with \"doesn't meet Availability Zone (AZ) coverage "
+        f"requirement\", so nothing was created",
+        f"a subnet group's subnets cannot be restored and this tool never "
+        f"deletes — remove it yourself and re-run: {command}"))
+    return False
+
+
 def ensure_database(clients, spec, observed, apply=False):
     findings, actions = [], []
     result = report.Result()
@@ -48,8 +153,8 @@ def ensure_database(clients, spec, observed, apply=False):
     sg_id = observed.get("rds_sg_id")
     secrets = observed.get("secrets") or {}
 
-    _ensure_db_subnet_group(rds, spec, observed, names, subnet_ids,
-                            findings, actions, apply)
+    subnet_group_ok = _ensure_db_subnet_group(
+        rds, spec, observed, names, subnet_ids, findings, actions, apply)
 
     cluster = observed.get("db_cluster")
     if cluster:
@@ -61,6 +166,11 @@ def ensure_database(clients, spec, observed, apply=False):
             f"Aurora cluster {names['db_cluster']} does not exist",
             f"apply creates it, encrypted, from "
             f"{spec_module.ENGINE_VERSIONS[spec_module.DB_ENGINE]}"))
+        if not subnet_group_ok:
+            # The MANUAL above already says what has to happen. Not even
+            # PLANNING the create is the point: an action nobody can perform
+            # would be printed in the dry run as though `apply` would do it.
+            return findings, actions, result
         actions.append(report.Action(
             DB_STEP, "create", names["db_cluster"],
             f"{spec_module.DB_ENGINE} "
@@ -126,25 +236,33 @@ def ensure_database(clients, spec, observed, apply=False):
 
 def _ensure_db_subnet_group(rds, spec, observed, names, subnet_ids,
                             findings, actions, apply):
-    if observed.get("db_subnet_group"):
+    """Returns True when a cluster may be created against this subnet group."""
+    group = observed.get("db_subnet_group")
+    if group:
+        if not _subnet_group_usable(
+                DB_STEP, "DB subnet group", names["db_subnet_group"], group,
+                observed, findings,
+                f"aws rds delete-db-subnet-group --db-subnet-group-name "
+                f"{names['db_subnet_group']}"):
+            return False
         findings.append(report.existing(
             DB_STEP, "subnet_group.ok",
             f"DB subnet group {names['db_subnet_group']} is in place"))
-        return
+        return True
     findings.append(report.missing(
         DB_STEP, "subnet_group.missing",
         f"DB subnet group {names['db_subnet_group']} does not exist",
         f"apply creates it across {spec_module.AZ_COUNT} private subnets"))
     actions.append(report.Action(DB_STEP, "create", names["db_subnet_group"]))
     if not apply:
-        return
+        return True
     if len(subnet_ids) < spec_module.AZ_COUNT:
         findings.append(report.missing(
             DB_STEP, "subnet_group.no_subnets",
             f"only {len(subnet_ids)} private subnet(s) are resolved; Aurora "
             f"requires {spec_module.AZ_COUNT}",
             "let the network step run first"))
-        return
+        return True
     report.safe(
         findings, DB_STEP, "rds.create_db_subnet_group",
         lambda: rds.create_db_subnet_group(
@@ -153,6 +271,7 @@ def _ensure_db_subnet_group(rds, spec, observed, names, subnet_ids,
             SubnetIds=list(subnet_ids),
             Tags=spec_module.tag_list(spec, "database",
                                       name=names["db_subnet_group"])))
+    return True
 
 
 def _report_cluster_state(spec, names, cluster, findings, result):
@@ -293,26 +412,8 @@ def ensure_cache(clients, spec, observed, apply=False):
     secrets = observed.get("secrets") or {}
     node_count = 1 + spec.cache_replicas
 
-    if observed.get("cache_subnet_group"):
-        findings.append(report.existing(
-            CACHE_STEP, "subnet_group.ok",
-            f"cache subnet group {names['cache_subnet_group']} is in place"))
-    else:
-        findings.append(report.missing(
-            CACHE_STEP, "subnet_group.missing",
-            f"cache subnet group {names['cache_subnet_group']} does not exist",
-            "apply creates it across the private subnets"))
-        actions.append(report.Action(CACHE_STEP, "create",
-                                     names["cache_subnet_group"]))
-        if apply and subnet_ids:
-            report.safe(
-                findings, CACHE_STEP, "elasticache.create_cache_subnet_group",
-                lambda: cache.create_cache_subnet_group(
-                    CacheSubnetGroupName=names["cache_subnet_group"],
-                    CacheSubnetGroupDescription="django-mojo valkey",
-                    SubnetIds=list(subnet_ids),
-                    Tags=spec_module.tag_list(
-                        spec, "cache", name=names["cache_subnet_group"])))
+    subnet_group_ok = _ensure_cache_subnet_group(
+        cache, spec, observed, names, subnet_ids, findings, actions, apply)
 
     group = observed.get("cache_group")
     if group:
@@ -357,6 +458,10 @@ def ensure_cache(clients, spec, observed, apply=False):
         f"{spec_module.CACHE_ENGINE} "
         f"{spec_module.ENGINE_VERSIONS[spec_module.CACHE_ENGINE]}, encrypted "
         f"in transit and at rest"))
+    if not subnet_group_ok:
+        result.set("cache_group_id", names["cache_group"])
+        result.set("cache_ready", False)
+        return findings, actions, result
     actions.append(report.Action(
         CACHE_STEP, "create", names["cache_group"],
         f"{node_count} x {spec.cache_type}"))
@@ -398,6 +503,40 @@ def ensure_cache(clients, spec, observed, apply=False):
             CACHE_STEP, "group.creating",
             f"{names['cache_group']} was created and is still coming up"))
     return findings, actions, result
+
+
+def _ensure_cache_subnet_group(cache, spec, observed, names, subnet_ids,
+                               findings, actions, apply):
+    """Returns True when a replication group may be created against it."""
+    group = observed.get("cache_subnet_group")
+    if group:
+        if not _subnet_group_usable(
+                CACHE_STEP, "cache subnet group", names["cache_subnet_group"],
+                group, observed, findings,
+                f"aws elasticache delete-cache-subnet-group "
+                f"--cache-subnet-group-name {names['cache_subnet_group']}"):
+            return False
+        findings.append(report.existing(
+            CACHE_STEP, "subnet_group.ok",
+            f"cache subnet group {names['cache_subnet_group']} is in place"))
+        return True
+
+    findings.append(report.missing(
+        CACHE_STEP, "subnet_group.missing",
+        f"cache subnet group {names['cache_subnet_group']} does not exist",
+        "apply creates it across the private subnets"))
+    actions.append(report.Action(CACHE_STEP, "create",
+                                 names["cache_subnet_group"]))
+    if apply and subnet_ids:
+        report.safe(
+            findings, CACHE_STEP, "elasticache.create_cache_subnet_group",
+            lambda: cache.create_cache_subnet_group(
+                CacheSubnetGroupName=names["cache_subnet_group"],
+                CacheSubnetGroupDescription="django-mojo valkey",
+                SubnetIds=list(subnet_ids),
+                Tags=spec_module.tag_list(
+                    spec, "cache", name=names["cache_subnet_group"])))
+    return True
 
 
 def _cache_endpoint(group):
