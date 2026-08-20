@@ -571,8 +571,14 @@ def test_include_graph_staged(opts):
             "http.d/10_upstreams.conf was not staged"
 
         base = open(base_path).read()
-        assert "map $http_upgrade $connection_upgrade {" in base, \
-            "the upgrade map is missing from the base"
+        # The upgrade map is NOT here: it belongs to the node bootstrap, with
+        # default_type and types_hash_max_size, so a node that also serves a
+        # classic vhost can start nginx before its first convergence.
+        assert "map $http_upgrade $connection_upgrade {" not in base, \
+            "the upgrade map is bootstrap-owned; a second copy at http level " \
+            "is a duplicate-directive [emerg] on a node that declares it"
+        assert "$loggable" in base, \
+            "the base still owns the log plumbing the vhosts reference"
         assert "access_log " in base and "$loggable" in base, \
             "the base carries no health-filtered access log"
 
