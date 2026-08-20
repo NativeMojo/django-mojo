@@ -87,6 +87,23 @@ fleet version). `resolved` is what the mode currently works out to, and is
 deployment, which is a refused-deploy state worth surfacing rather than hiding.
 The object is additive; existing `deployments` fields are unchanged.
 
+`deployments.data` also carries two additive facts (item 2225):
+
+```json
+{"currently_serving": {"deployment": "<uuid>", "sha": "<40-hex>",
+                       "framework_version": "1.12.0",
+                       "converged_at": "2026-08-19T00:00:00+00:00"},
+ "coordination": {"state": "migrating", "deployment": "<uuid>",
+                  "sha": "<40-hex>", "at": "2026-08-19T00:00:00+00:00"}}
+```
+
+`currently_serving` is the newest **converged** attempt — after a failed
+deploy `items[0]` is the failure, and this block answers what the fleet
+actually runs; it is `null` on a fleet with no converged attempt.
+`coordination` keeps its existing `state`/`deployment` keys and adds the
+lease's own `sha` and `at` (all `null` when no lease is live). Existing
+fields are unchanged.
+
 The three deployment actions accept `{"deployment":"<uuid>"}`. Retry returns
 `{"schema_version":1,"queued":true|false,"deployment":{...}}`; verify and
 converge return the same version plus the serialized `deployment`. A deployment
@@ -94,16 +111,30 @@ contains its UUID, SHA, source, status, frozen runner roster, bounded
 transitions and latest-per-runner evidence, desired/current commits, and
 timing. It never contains a raw idempotency key or provider exception.
 
-**`node_evidence[].detail.stderr_tail` is permission-dependent.** When a node's
-update script fails, its evidence detail can carry the last ten lines of that
-script's stderr. Those lines are redacted, but not provably free of
-credentials, so the key is present **only** for callers holding
-`view_platform_security`, `manage_platform`, or `admin`. A caller with just
-`view_platform` receives the same evidence entry with everything else intact
-(`runner`, `state`, `phase`, `exit`) and no `stderr_tail` key at all — treat
-its absence as "not permitted or nothing captured", never as an error. The
-three deployment actions above always include it, since they already require
-`manage_platform` and fresh auth.
+Each `items[]` deployment additionally carries (additive, item 2225):
+
+- **`diagnosis`** — the append-only failure story that survives later probes:
+  entries `{runner, at, kind, detail, proof}` where `kind` is `failure` (the
+  terminal failure, with `detail.phase`, optional `detail.rollback_to`
+  `{sha, framework}`, and optionally `detail.stderr_tail`) or `outcome` (how
+  the rollback went: `detail.phase` of `rolled_back`, `rollback_failed`, or
+  `rollback_impossible`). Bounded to 16 entries per kind; empty on rows that
+  never failed.
+- **`node_summary`** — `{expected, proven, reported, failed, dispatched,
+  other}`: `expected` is the frozen roster size and the other five partition
+  the observed `node_evidence` entries, so they always sum to its length.
+  Render counts from this instead of re-deriving them from raw evidence.
+
+**`detail.stderr_tail` is permission-dependent — in `node_evidence[]` and
+`diagnosis[]` alike.** When a node's update script fails, the detail can carry
+the last ten lines of that script's stderr. Those lines are redacted, but not
+provably free of credentials, so the key is present **only** for callers
+holding `view_platform_security`, `manage_platform`, or `admin`. A caller with
+just `view_platform` receives the same entry with everything else intact
+(`runner`, `state`/`kind`, `phase`, `exit`, `rollback_to`) and no
+`stderr_tail` key at all — treat its absence as "not permitted or nothing
+captured", never as an error. The three deployment actions above always
+include it, since they already require `manage_platform` and fresh auth.
 
 Render `unhealthy`, `unauthorized`, `unavailable`, `timeout`, and
 `unconfigured` distinctly. Never infer health from absence or retain evidence

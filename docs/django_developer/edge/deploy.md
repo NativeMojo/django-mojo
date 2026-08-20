@@ -330,6 +330,53 @@ Five checks, stopping at the first failure, exit non-zero naming it:
 Check 5 is the one that matters: 1-4 pass on code that cannot serve a request.
 No AWS calls, nothing beyond localhost — it runs on a node mid-deploy.
 
+## Evidence vs diagnosis — the journal's two axes (item 2225)
+
+`PlatformDeployment` records node reports on two fields with opposite
+retention rules, because they answer different questions:
+
+- **`node_evidence` — the mutable current observation, latest-per-runner.**
+  "What did each frozen-roster node last say?" A repeated callback *replaces*
+  that runner's entry; `verify()` writes `proven`/`unavailable` over whatever
+  was there. Right for liveness, catastrophic for forensics: before the split,
+  clicking **Verify** on a failed deploy replaced the only copy of the failure
+  (phase + stderr tail) with `unavailable`.
+- **`diagnosis` — the immutable, bounded failure story.** Append-only entries
+  `{runner, at, kind, detail, proof}`, written three ways:
+  - `evidence()` copies every **terminal** observation (`failed`,
+    `identity_mismatch`) into the journal as a `kind: "failure"` entry, inside
+    the same row-lock transaction — so the first terminal failure per runner
+    survives any later probe;
+  - `deploy_status` on an **already-failed** row appends the follow-up report
+    (`rollback failed` / `rollback impossible` → `kind: "outcome"`) instead of
+    silently dropping it, each with its own sanitized tail;
+  - `platform_deploy.record_rollback_outcomes()` — a lease-independent,
+    idempotent sweep (engine start and the periodic reconcile) over recent
+    FAILED single-runner attempts that have a failure entry but no outcome. A
+    valid **foreign** local identity (another attempt's UUID with a full live
+    SHA) proves the rollback took: it records a `rolled_back` observation plus
+    a `kind: "outcome"` diagnosis entry naming what the node now serves. The
+    node's own identity, an empty one, or an invalidated one records nothing,
+    and multi-node rosters are skipped — this node's identity says nothing
+    about the canary that failed.
+
+  Bounds: 16 entries per kind (failure and outcome budget separately), the
+  FIRST entries are never evicted, and duplicates on
+  `(kind, runner, phase-or-reason)` are refused. Failure entries carry
+  `detail.rollback_to` (`{sha, framework}`) when the node's
+  `var/previous_sha` / `var/previous_framework` both validate — the state
+  update.sh captured before anything moved. The stderr tail inside a
+  diagnosis entry is permission-gated exactly like `node_evidence`'s:
+  stripped by `serialize()` unless `include_stderr=True`, served raw only by
+  the REST `admin` graph behind `GRAPH_PERMISSIONS`.
+
+`serialize()` also emits **`node_summary`** — `{expected, proven, reported,
+failed, dispatched, other}` — so UIs render counts without re-deriving
+evidence semantics. The buckets partition the observed `node_evidence`
+entries (`reported` = `deploying` + `identity_pending`; `failed` = `failed` +
+`identity_mismatch` + `publish_failed`; `other` = `unavailable`,
+`rolled_back`, unrecognized) while `expected` is the frozen roster size.
+
 ## `deploy_status` — the update script's reporting contract
 
 The skeleton's update script stops the job engine that is running the
@@ -349,6 +396,16 @@ script can tell "stale, fine" from "called wrong"). `--detail` is reduced to
 a fixed allowlisted phase before it enters Redis, evidence, or an incident;
 arbitrary callback text becomes `update_failed`. Process stdout/stderr and
 provider exception messages never enter durable or operator-facing surfaces.
+
+A failure detail also carries `rollback_to` (`{sha, framework}`) when the
+node's `var/previous_sha` and `var/previous_framework` **both** validate (40
+hex + a usable version) — half a pair travels as nothing at all. And because
+update.sh reports **twice** on a failed migrate (the failure, then how the
+rollback went), a `set failed` on a row that is already `failed` no longer
+vanishes: it appends to the `diagnosis` journal — `rollback failed` /
+`rollback impossible: no previous state` as a `kind: "outcome"` entry,
+anything else as another `failure` — with its own sanitized tail, leaving the
+runner's `node_evidence` untouched.
 
 A v2 success callback carries `MOJO_DEPLOY_IDENTITY_READY=2`. The command then
 reads the node's atomic manifest through `local_node_proof` and uses the same
