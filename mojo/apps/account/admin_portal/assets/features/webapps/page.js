@@ -336,8 +336,15 @@ export async function deploymentsPage(ctx, route = 'deployments', navigate = nul
     observedAt: null,
   };
   let linkedInspectorOpened = false;
+  // Bounded auto-refresh while a deploy is in flight (same pattern as the
+  // certificates page): 10s ticks, capped, hash-guarded, abort-cleared.
+  let pollTicks = 0;
+  let pollTimer = null;
+  const clearPoll = () => { if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } };
+  signal?.addEventListener('abort', clearPoll);
 
   async function load(refresh = false) {
+    clearPoll();
     const reads = [];
     if (wantPlatform) {
       reads.push(api(PLATFORM_SECTIONS_PATH, {signal})
@@ -371,12 +378,30 @@ export async function deploymentsPage(ctx, route = 'deployments', navigate = nul
     return state.report?.sections?.deployments || null;
   }
 
+  function apiSection() {
+    return state.report?.sections?.api || null;
+  }
+
+  // An in-flight deploy is exactly when the operator is staring at this page;
+  // it must catch the outcome without a hand refresh. A live coordination
+  // lease or a not-yet-settled newest attempt keeps the poll alive.
+  const POLL_STATUSES = new Set(['requested', 'canary', 'fleet', 'verified', 'partial']);
+
+  function schedulePoll() {
+    const data = deploymentsSection()?.data || null;
+    const active = Boolean(data?.coordination?.state)
+      || POLL_STATUSES.has((data?.items || [])[0]?.status);
+    if (!active || pollTicks >= 36 || !location.hash.startsWith('#/deployments')) return;
+    pollTicks += 1;
+    pollTimer = setTimeout(() => load().catch(() => {}), 10000);
+  }
+
   function apiRows() {
     if (!wantPlatform) return [];
     if (state.reportError) return [];
     const rows = [
       apiServiceRow(ctx, deploymentsSection(), {
-        onOpen: () => openApiInspector(ctx, deploymentsSection(), render),
+        onOpen: () => openApiInspector(ctx, deploymentsSection(), render, apiSection()),
       }),
       frameworkRow(ctx, state.framework, {
         onOpen: () => openFrameworkInspector(ctx, state.framework, render),
@@ -437,6 +462,7 @@ export async function deploymentsPage(ctx, route = 'deployments', navigate = nul
     ].filter(Boolean);
     root.replaceChildren(h('div', {class: 'row-page deployments-body'}, ...children));
     openLinkedInspector();
+    schedulePoll();
   }
 
   // Legacy deep links type-dispatch: WebApp pks are ints, PlatformDeployment
@@ -459,7 +485,7 @@ export async function deploymentsPage(ctx, route = 'deployments', navigate = nul
     }
     if (deployKey && state.report) {
       linkedInspectorOpened = true;
-      openApiInspector(ctx, deploymentsSection(), render);
+      openApiInspector(ctx, deploymentsSection(), render, apiSection());
     }
   }
 

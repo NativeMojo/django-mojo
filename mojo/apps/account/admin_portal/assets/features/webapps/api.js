@@ -17,7 +17,17 @@ const DEPLOY_ACTION_PATH = '/api/account/admin/platform/deploy/';
 const DEPLOY_ACTIONS = [
   ['retry', 'Retry same SHA'], ['verify', 'Verify'], ['converge', 'Converge'],
 ];
-const ACTIVE_STATUSES = new Set(['requested', 'canary', 'fleet', 'partial']);
+// Which recovery controls each attempt state earns. An ACTIVE deploy gets
+// none — the orchestrator is driving it; poking it mid-flight only confuses
+// the evidence. A superseded attempt is history, not a control surface.
+const ACTIONS_BY_STATUS = {
+  failed: ['retry', 'verify'],
+  verified: ['verify', 'converge'],
+  partial: ['verify', 'converge'],
+  unknown: ['verify', 'converge'],
+  converged: ['verify'],
+};
+const ACTIVE_STATUSES = new Set(['requested', 'canary', 'fleet']);
 
 // Never a dead control: when the update cannot happen, the drill-in says which
 // thing is in the way instead of offering a button that fails.
@@ -41,12 +51,31 @@ function shortId(value) {
   return String(value || '').slice(0, 10);
 }
 
-function provenCounts(row) {
-  const evidence = Array.isArray(row.node_evidence) ? row.node_evidence : [];
-  const roster = Array.isArray(row.frozen_roster) && row.frozen_roster.length
-    ? row.frozen_roster.length : evidence.length;
-  const proven = evidence.filter((item) => item && item.state === 'proven').length;
-  return {proven, roster};
+// The server-computed evidence buckets (serialize's node_summary): proven /
+// reported / failed / dispatched / other always partition the observed
+// entries, and `expected` is the frozen roster size.
+function nodeSummary(row) {
+  const summary = row.node_summary || {};
+  const count = (name) => Number(summary[name]) || 0;
+  return {
+    expected: count('expected'), proven: count('proven'),
+    reported: count('reported'), failed: count('failed'),
+    dispatched: count('dispatched'), other: count('other'),
+  };
+}
+
+// Newest diagnosis entry of one kind. `failure` is the terminal story that
+// survives verify(); `outcome` is how the rollback went.
+function latestDiagnosis(row, kind) {
+  const entries = Array.isArray(row.diagnosis) ? row.diagnosis : [];
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (entries[index] && entries[index].kind === kind) return entries[index];
+  }
+  return null;
+}
+
+function plainPhase(value) {
+  return String(value || '').replaceAll('_', ' ');
 }
 
 // statusRow renders its action as a .row-link anchor; wire the handler onto it
@@ -71,7 +100,10 @@ function detailLink(label, run) {
 
 export function apiServiceRow(ctx, deployments, {onOpen}) {
   const manage = ctx.features?.platform?.capabilities?.manage === true;
-  const label = manage ? 'Deploy' : 'Open';
+  // 'History', never 'Deploy': new commits come from CI, and the drill-in
+  // only ever offers retry-same-SHA/verify/converge — a 'Deploy' label
+  // promised a control that does not exist.
+  const label = manage ? 'History' : 'Open';
   if (!deployments || ['timeout', 'unavailable', 'unauthorized'].includes(deployments.status)) {
     // Degraded evidence is stated in the envelope's own vocabulary — never a
     // green row invented from missing data.
@@ -87,18 +119,38 @@ export function apiServiceRow(ctx, deployments, {onOpen}) {
       action: {label: 'Open', href: '#'}}), onOpen);
   }
   const latest = rows[0];
+  const serving = deployments.data?.currently_serving || null;
   const when = formatDate(latest.finished || latest.created);
-  const {proven, roster} = provenCounts(latest);
+  const counts = nodeSummary(latest);
   let tone = 'muted';
   let value = `Outcome unknown · ${when}`;
+  let detailSha = latest.sha;
   if (latest.status === 'converged') {
     tone = 'ok'; value = `Deployed ${when} · all nodes converged`;
   } else if (latest.status === 'verified') {
-    tone = 'ok'; value = `Deployed ${when} · verified on ${proven} of ${roster} nodes`;
+    tone = 'ok'; value = `Node reported success ${when} · awaiting restart proof`;
   } else if (ACTIVE_STATUSES.has(latest.status)) {
-    tone = 'warn'; value = `Deploying since ${formatDate(latest.created)} — ${proven} of ${roster} nodes proven`;
+    tone = 'warn';
+    const observed = (counts.proven || counts.reported)
+      ? `${counts.proven} proven / ${counts.reported} reported of ${counts.expected}`
+      : counts.dispatched
+        ? `dispatched to ${counts.dispatched} of ${counts.expected} — nothing reported yet`
+        : `waiting on ${counts.expected} node${counts.expected === 1 ? '' : 's'}`;
+    value = `Deploying since ${formatDate(latest.created)} · ${observed}`;
   } else if (latest.status === 'failed') {
-    tone = 'danger'; value = `Deploy failed ${when} — ${proven} of ${roster} nodes proven`;
+    // The failure story comes from the durable diagnosis, never from
+    // node_summary.failed — verify() replaces observations, the journal
+    // survives them. The mono detail shows the commit still SERVING.
+    tone = 'danger';
+    const failure = latestDiagnosis(latest, 'failure');
+    const phase = failure?.detail?.phase || failure?.detail?.reason;
+    value = phase
+      ? `Deploy failed ${when} · ${plainPhase(phase)} on ${failure.runner}`
+      : `Deploy failed ${when}`;
+    if (serving?.sha) detailSha = serving.sha;
+  } else if (latest.status === 'partial') {
+    tone = 'warn';
+    value = `Deploy incomplete ${when} · ${counts.proven} of ${counts.expected} nodes proven`;
   } else if (latest.status === 'superseded') {
     value = `Superseded by a newer deploy · ${when}`;
   }
@@ -106,27 +158,122 @@ export function apiServiceRow(ctx, deployments, {onOpen}) {
     tone = 'warn'; value = `${value} · evidence is stale`;
   }
   const row = statusRow({tone, name: 'API service', value,
-    detailNode: h('span', {class: 'row-detail mono', text: shortId(latest.sha)}),
+    detailNode: h('span', {class: 'row-detail mono', text: shortId(detailSha)}),
     action: {label, href: '#'}});
   return wireAction(row, onOpen);
 }
 
-function attemptView(ctx, row, act, message) {
+// The failure explanation, from the durable diagnosis journal. Rows written
+// before the journal existed fall back to the last failed transition's
+// detail plus the row detail — less precise, never blank.
+function failureStory(row) {
+  const outcome = latestDiagnosis(row, 'outcome');
+  const failure = latestDiagnosis(row, 'failure');
+  if (failure) {
+    const detail = failure.detail || {};
+    return {
+      phase: detail.phase || detail.reason || 'unknown phase',
+      runner: failure.runner || null,
+      at: failure.at || null,
+      rollbackTo: detail.rollback_to || null,
+      tail: Array.isArray(detail.stderr_tail) ? detail.stderr_tail : [],
+      outcome,
+    };
+  }
+  const transitions = Array.isArray(row.transitions) ? row.transitions : [];
+  const last = [...transitions].reverse().find((item) => item && item.status === 'failed') || null;
+  const detail = {...(row.detail || {}), ...(last?.detail || {})};
+  return {
+    phase: detail.phase || detail.reason || 'unknown phase',
+    runner: null, at: last?.at || null, rollbackTo: null, tail: [], outcome,
+  };
+}
+
+function rollbackTargetLine(row, story) {
+  const target = story.rollbackTo;
+  if (!target?.sha) return null;
+  if (row.sha && target.sha.startsWith(row.sha)) {
+    // A SAME_RELEASE failure: the recorded "previous" state IS this commit.
+    return 'Rollback target: remains on the same commit';
+  }
+  return `Rollback target: ${shortId(target.sha)} · django-mojo ${target.framework || 'unknown'}`;
+}
+
+function rollbackOutcomeLine(story) {
+  const detail = story.outcome?.detail || {};
+  const phase = detail.phase || detail.reason;
+  if (phase === 'rolled_back') {
+    const sha = story.outcome?.proof?.platform_sha || story.rollbackTo?.sha || '';
+    return sha ? `Rolled back — the node now serves ${shortId(sha)}` : 'Rolled back';
+  }
+  if (phase === 'rollback_failed') return 'Rollback FAILED — this node needs attention';
+  if (phase === 'rollback_impossible') return 'Rollback impossible — no previous state was recorded';
+  return 'Rollback unconfirmed — the node has not reported what it serves now';
+}
+
+function failurePanel(row) {
+  const story = failureStory(row);
+  return h('div', {class: 'deploy-failure'},
+    h('p', {class: 'deploy-failure-headline',
+      text: `Failed during ${plainPhase(story.phase)}`
+        + (story.runner ? ` on ${story.runner}` : '')
+        + (story.at ? ` · ${formatDate(story.at)}` : '')}),
+    rollbackTargetLine(row, story)
+      ? h('p', {class: 'muted small', text: rollbackTargetLine(row, story)}) : null,
+    h('p', {class: 'muted small', text: rollbackOutcomeLine(story)}),
+    story.tail.length
+      ? h('pre', {class: 'deploy-stderr mono'}, story.tail.join('\n')) : null);
+}
+
+function attemptTimeline(row) {
+  const transitions = Array.isArray(row.transitions) ? row.transitions : [];
+  if (!transitions.length) return null;
+  return h('ol', {class: 'deploy-timeline'}, ...transitions.slice(-8).map((item) => h('li', {},
+    h('span', {class: 'deploy-timeline-status', text: plainPhase(item?.status || 'unknown')}),
+    h('time', {class: 'muted small', text: formatDate(item?.at)}))));
+}
+
+function servingLine(serving, apiSection) {
+  const facts = apiSection?.data || {};
+  const nodeVersion = facts.node_version || facts.django_mojo_version || '';
+  const suffix = nodeVersion ? ` · this node runs ${nodeVersion}` : '';
+  if (!serving) {
+    return h('p', {class: 'muted small deploy-serving',
+      text: `Currently serving: no converged deployment on record${suffix}`});
+  }
+  const framework = serving.framework_version || 'unknown';
+  return h('p', {class: 'muted small deploy-serving',
+    text: `Currently serving ${shortId(serving.sha)} · django-mojo ${framework}`
+      + ` · converged ${formatDate(serving.converged_at)}${suffix}`});
+}
+
+function attemptActions(ctx, row, act, message) {
   const manage = ctx.features?.platform?.capabilities?.manage === true;
-  const {proven, roster} = provenCounts(row);
-  const buttons = manage ? h('div', {class: 'row-actions'},
-    ...DEPLOY_ACTIONS.map(([action, label]) => h('button', {
-      class: 'button compact',
-      onclick: (event) => act(action, row, event.currentTarget, message),
-    }, label))) : null;
+  const names = ACTIONS_BY_STATUS[row.status] || [];
+  if (!manage || !names.length) return null;
+  const labels = new Map(DEPLOY_ACTIONS);
+  return h('div', {class: 'row-actions'}, ...names.map((action, index) => h('button', {
+    class: `button compact${row.status === 'failed' && index === 0 ? ' primary' : ''}`,
+    onclick: (event) => act(action, row, event.currentTarget, message),
+  }, labels.get(action))));
+}
+
+// Explanation first, actions after: an operator looking at a failed deploy
+// reads WHAT happened and what the fleet serves now before being offered
+// anything to click.
+function attemptView(ctx, row, act, message, extras = {}) {
+  const counts = nodeSummary(row);
   return h('article', {class: 'panel deploy-attempt'},
     h('div', {class: 'deploy-attempt-head'},
       h('code', {class: 'mono', text: shortId(row.sha)}),
       badge(row.status, statusTone(row.status)),
       h('span', {class: 'muted', text: formatDate(row.finished || row.created)})),
     h('p', {class: 'muted small',
-      text: `${row.actor || 'unknown actor'} · ${row.source || 'unknown source'} · ${proven} of ${roster} nodes proven`}),
-    buttons,
+      text: `${row.actor || 'unknown actor'} · ${row.source || 'unknown source'} · ${counts.proven} of ${counts.expected} nodes proven`}),
+    row.status === 'failed' ? failurePanel(row) : null,
+    attemptTimeline(row),
+    servingLine(extras.serving, extras.apiSection),
+    attemptActions(ctx, row, act, message),
     h('details', {class: 'deploy-technical'}, h('summary', {text: 'Technical details'}),
       h('dl', {class: 'details'},
         h('div', {}, h('dt', {text: 'Commit'}), h('dd', {class: 'mono', text: row.sha})),
@@ -137,7 +284,7 @@ function attemptView(ctx, row, act, message) {
       })}, h('strong', {text: 'Related deployment activity'}), icon('chevron'))));
 }
 
-export function openApiInspector(ctx, deployments, reload) {
+export function openApiInspector(ctx, deployments, reload, apiSection = null) {
   const data = deployments?.data || {};
   const rows = data.items || [];
   const coordination = data.coordination || {};
@@ -157,16 +304,27 @@ export function openApiInspector(ctx, deployments, reload) {
     }
   };
 
+  const extras = {serving: data.currently_serving || null, apiSection};
+  const older = rows.slice(1);
+  const attempts = rows.length
+    ? h('div', {class: 'deploy-attempts'},
+      attemptView(ctx, rows[0], act, message, extras),
+      older.length ? h('details', {class: 'deploy-older'},
+        h('summary', {text: `Show ${older.length} older attempt${older.length === 1 ? '' : 's'}`}),
+        h('div', {class: 'deploy-attempts'},
+          ...older.map((row) => attemptView(ctx, row, act, message, extras)))) : null)
+    : h('p', {class: 'muted', text: 'No platform deployment attempts have been recorded.'});
+
   const content = h('div', {class: 'deploy-inspector'},
     h('p', {class: 'muted small',
       text: 'New deploys arrive from CI. Admin can retry a proven commit, request verification, or converge the fleet — it never chooses a new commit.'}),
     coordination.state ? h('p', {class: 'muted small',
-      text: `Coordination: ${coordination.state}${coordination.deployment ? ` · ${shortId(coordination.deployment)}` : ''}`}) : null,
+      text: `Coordination: ${coordination.state}`
+        + `${coordination.sha ? ` · ${shortId(coordination.sha)}` : ''}`
+        + `${coordination.deployment ? ` · ${shortId(coordination.deployment)}` : ''}`
+        + `${coordination.at ? ` · since ${formatDate(coordination.at)}` : ''}`}) : null,
     message,
-    rows.length
-      ? h('div', {class: 'deploy-attempts'},
-        ...rows.map((row) => attemptView(ctx, row, act, message)))
-      : h('p', {class: 'muted', text: 'No platform deployment attempts have been recorded.'}));
+    attempts);
   closeInspector = openInspector({title: 'API service · deploy history', content, wide: true});
   return closeInspector;
 }
