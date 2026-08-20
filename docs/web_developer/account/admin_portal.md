@@ -153,11 +153,13 @@ missing rows. Deployments is the sole UI that receives the reveal-once
 deployment token for create/rotate and offers revoke; System Setup only links
 there.
 
-The Vhosts page also shows the deployment's read-only certificate serving
-posture from the bootstrap payload: whether public HTTP vhosts are enabled and
-that DNSMAN issuance uses DNS-01. This is operator evidence, not a browser
-toggle; the listener posture is a file-only fleet setting and infrastructure
-port-80 exposure is managed separately.
+The Vhosts page also shows the responding node's read-only certificate serving
+posture from the bootstrap payload: whether its generated public HTTP vhosts
+are enabled and that DNSMAN issuance uses DNS-01. Missing fields during a
+mixed-version rollout, or an installation without Edge, render as `unknown`;
+the browser never invents a healthy default. This is operator evidence, not a
+browser toggle or fleet-convergence proof. The listener posture is a file-only
+fleet setting and infrastructure port-80 exposure is managed separately.
 
 ### Modular browser contract
 

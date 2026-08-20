@@ -748,12 +748,14 @@ async function hostingProof(ctx) {
 
 function edgeHttpPosture(ctx) {
   const edge = ctx.edge || {};
-  const enabled = edge.http_enabled !== false;
+  const known = edge.available === true && typeof edge.http_enabled === 'boolean';
+  const http = known ? (edge.http_enabled ? 'enabled' : 'disabled') : 'unknown';
+  const issuance = edge.available === true && edge.dnsman_issuance ? edge.dnsman_issuance : 'unknown';
   return h('section', {class: 'convergence-card'}, icon('certificate'), h('div', {},
     h('span', {text: 'Certificate serving posture'}),
-    h('strong', {text: `Public HTTP vhosts: ${enabled ? 'enabled' : 'disabled'}`}),
-    h('small', {class: 'muted', text: `DNSMAN issuance: ${edge.dnsman_issuance || 'DNS-01'}`})),
-  statusBadge(enabled ? 'active' : 'healthy'));
+    h('strong', {text: `Public HTTP vhosts on this node: ${http}`}),
+    h('small', {class: 'muted', text: `DNSMAN issuance: ${issuance}`})),
+  statusBadge(known ? 'healthy' : 'pending'));
 }
 
 async function vhostsPage(ctx) {

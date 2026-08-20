@@ -50,7 +50,7 @@ field eventually routes around validation.
 mojo/apps/edge/
   models/
     upstream.py     Upstream — the allowlist of places traffic may go
-    vhost.py        Vhost — one server-block pair, as structured data
+    vhost.py        Vhost — one HTTPS block plus optional HTTP shell
     route.py        VhostRoute — a site_api proxied prefix -> upstream FK
     blocklist.py    BlocklistEntry — fleet blocklist rows (log-first)
   validators.py     Every value that can reach a file passes through here
@@ -88,7 +88,7 @@ A group-less `Upstream` is a house row offered to every tenant.
 An active-group REST list therefore returns that group's upstreams plus these
 shared house rows; it never includes another tenant's upstreams.
 
-### `Vhost` — one server-block pair
+### `Vhost` — one HTTPS block plus an optional HTTP shell
 
 `kind` is one of the four product shapes — **`api`** (whole-host proxy to
 the `upstream` FK), **`site`** (static/SPA via the `spa` flag),

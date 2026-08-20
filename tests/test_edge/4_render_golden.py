@@ -344,3 +344,14 @@ def test_staged_ports_refused(opts):
         assert isinstance(err, me.ValueException), (
             f"a {label} staged port raised {type(err).__name__}, not the "
             "named ValueException refusal")
+
+    def bad_https(name, default=None, kind=None):
+        if name == "EDGE_STAGED_HTTPS_PORT":
+            return 80
+        return default
+
+    with mock.patch.object(render.settings, "get_static", side_effect=bad_https):
+        err = raises(render.render_staged_variant,
+                     "server {\n    listen 443 ssl;\n}\n")
+    assert isinstance(err, me.ValueException), (
+        "the real staged-render path bypassed the active HTTPS port bounds")

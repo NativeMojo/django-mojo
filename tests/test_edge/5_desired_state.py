@@ -283,6 +283,8 @@ def test_http_knobs_converge(opts):
     """The latent gap this item folds in: EDGE_TLS_PROTOCOLS/CIPHERS were
     substituted at render time but absent from the hashed payload, so a TLS
     policy change never moved the generation and never reached a node."""
+    from unittest import mock
+
     from mojo.apps.account.models.setting import Setting
     from mojo.apps.edge.services import render
 
@@ -293,6 +295,35 @@ def test_http_knobs_converge(opts):
     assert http.get("tls_ciphers") == render.tls_ciphers(), \
         "the payload's http key does not carry the TLS ciphers"
     assert http.get("log_dir"), "the payload's http key does not carry log_dir"
+    assert http.get("django_static_root"), \
+        "the payload's http key does not carry the Django static root"
+
+    api_domain = make_domain(group=opts.group)
+    api_cert = make_certificate(api_domain)
+    api_upstream = make_upstream(group=opts.group)
+    api_vhost = make_vhost(
+        api_domain, api_cert, label="snapshot", kind="api",
+        upstream=api_upstream, quiet_paths=["/health"], serve_static=True)
+    late_getters = (
+        "tls_protocols", "tls_ciphers", "proxy_read_timeout", "log_dir",
+        "mojosec_mode", "django_static_root",
+    )
+    patches = [mock.patch.object(
+        render, name, side_effect=AssertionError(
+            f"render re-resolved {name} after hashing")) for name in late_getters]
+    for patch in patches:
+        patch.start()
+    try:
+        text = render.render_vhost(api_vhost, "snapshot", knobs=http)
+    finally:
+        for patch in reversed(patches):
+            patch.stop()
+    assert http["tls_protocols"] in text, \
+        "the rendered vhost did not consume the hashed TLS snapshot"
+    assert f"proxy_read_timeout {http['proxy_read_timeout']}s;" in text, \
+        "the rendered vhost did not consume the hashed proxy snapshot"
+    assert f"alias {http['django_static_root']}/;" in text, \
+        "the rendered vhost did not consume the hashed static-root snapshot"
 
     rows = payload.get("security")
     assert isinstance(rows, list), \

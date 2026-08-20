@@ -154,12 +154,16 @@ def mojosec_trusted_proxy_cidrs():
 def _staged_port_value(name, default):
     raw = settings.get_static(name, default)
     try:
-        return int(raw)
+        port = int(raw)
     except (TypeError, ValueError):
         # The same named-refusal style as every other bad input here — a bare
         # int() traceback would not say which setting to fix.
         raise me.ValueException(
             f"edge staged listen port is not an integer: {name}={raw!r}")
+    if not 1024 <= port <= 65535:
+        raise me.ValueException(
+            f"edge staged listen port out of range (1024-65535): {port}")
+    return port
 
 
 def _staged_ports():
@@ -176,10 +180,6 @@ def _staged_ports():
     """
     http = _staged_port_value("EDGE_STAGED_HTTP_PORT", 61080)
     https = _staged_port_value("EDGE_STAGED_HTTPS_PORT", 61443)
-    for port in (http, https):
-        if not 1024 <= port <= 65535:
-            raise me.ValueException(
-                f"edge staged listen port out of range (1024-65535): {port}")
     if http == https:
         raise me.ValueException(
             f"edge staged listen ports must differ, both are {http}")
@@ -220,6 +220,7 @@ def http_knobs():
         default_server=default_server_enabled(),
         tls_protocols=tls_protocols(),
         tls_ciphers=tls_ciphers(),
+        django_static_root=django_static_root(),
         mojosec_log_path=mojosec_log_path(),
         mojosec_trusted_proxy_cidrs=mojosec_trusted_proxy_cidrs(),
         mojosec_mode=mojosec_mode(),
@@ -304,7 +305,7 @@ def _safe_upstream_target(upstream):
 # blocks
 # ----------------------------------------------------------------------
 
-def _tls_block(generation, certificate_id):
+def _tls_block(generation, certificate_id, knobs):
     """The TLS floor. Emitted unconditionally, fed by settings only.
 
     No model field reaches this — there is no field that could. The values
@@ -314,8 +315,10 @@ def _tls_block(generation, certificate_id):
     This was the file's one unasserted substitution; it no longer is.
     """
     certs = cert_dir(generation, certificate_id)
-    protocols = _safe(tls_protocols(), validators.TLS_VALUE_RE, "TLS protocols")
-    ciphers = _safe(tls_ciphers(), validators.TLS_VALUE_RE, "TLS ciphers")
+    protocols = _safe(
+        knobs["tls_protocols"], validators.TLS_VALUE_RE, "TLS protocols")
+    ciphers = _safe(
+        knobs["tls_ciphers"], validators.TLS_VALUE_RE, "TLS ciphers")
     return "\n".join([
         f"    ssl_certificate     {certs}/fullchain.pem;",
         f"    ssl_certificate_key {certs}/privkey.pem;",
@@ -443,7 +446,7 @@ def _proxy_destination(upstream):
     return f"http://edge_up_{int(upstream.pk)}"
 
 
-def _proxy_location_body(upstream, indent="        "):
+def _proxy_location_body(upstream, knobs, indent="        "):
     """The one canonical proxied-location body (asgi.inc parity).
 
     The literal `proxy_pass` lives here and nowhere else. WebSocket upgrade
@@ -463,7 +466,7 @@ def _proxy_location_body(upstream, indent="        "):
         f"{indent}proxy_set_header Connection $connection_upgrade;",
         f"{indent}proxy_connect_timeout 10s;",
         f"{indent}proxy_send_timeout 120s;",
-        f"{indent}proxy_read_timeout {proxy_read_timeout()}s;",
+        f"{indent}proxy_read_timeout {knobs['proxy_read_timeout']}s;",
         f"{indent}proxy_buffering off;",
         f"{indent}proxy_redirect off;",
         f"{indent}proxy_no_cache 1;",
@@ -476,7 +479,7 @@ def _proxy_location_body(upstream, indent="        "):
     ])
 
 
-def _quiet_location(path, upstream):
+def _quiet_location(path, upstream, knobs):
     """An exact-match location keeping a health check out of the MAIN log.
 
     Any `access_log` directive in a location REPLACES the inherited set, so
@@ -488,22 +491,22 @@ def _quiet_location(path, upstream):
     validators.validate_quiet_path(path)
     return "\n".join([
         f"    location = {path} {{",
-        f"        access_log {log_dir()}/edge_watch.log edge_watch "
+        f"        access_log {knobs['log_dir']}/edge_watch.log edge_watch "
         "if=$edge_watch;",
         "        log_not_found off;",
-        _proxy_location_body(upstream),
+        _proxy_location_body(upstream, knobs),
         "    }",
     ])
 
 
-def _mojosec_receiver_location(upstream):
+def _mojosec_receiver_location(upstream, knobs):
     """The exact machine receiver has a wire cap below a vhost's normal cap."""
     blocks = []
     for path in (MOJOSEC_RECEIVER_PATH, MOJOSEC_RECEIVER_PATH + "/"):
         blocks.append("\n".join([
             f"    location = {path} {{",
             f"        client_max_body_size {MOJOSEC_BODY_LIMIT};",
-            _proxy_location_body(upstream),
+            _proxy_location_body(upstream, knobs),
             "    }",
         ]))
     return "\n".join(blocks)
@@ -527,14 +530,14 @@ def _asset_cache_location():
     ])
 
 
-def _render_api(vhost, generation, server_name):
+def _render_api(vhost, generation, server_name, knobs):
     """Whole-host reverse proxy. No filesystem `root` is in this scope —
     the optional /static/ alias serves the FLEET's Django static root, a
     get_static path no row can point anywhere else."""
     parts = [
         _open(server_name),
         "",
-        _tls_block(generation, vhost.certificate_id),
+        _tls_block(generation, vhost.certificate_id, knobs),
         "",
         _header_block(),
         "",
@@ -547,20 +550,21 @@ def _render_api(vhost, generation, server_name):
     for path in sorted(vhost.quiet_paths or []):
         if path == MOJOSEC_RECEIVER_PATH:
             continue
-        parts.append(_quiet_location(path, vhost.upstream))
+        parts.append(_quiet_location(path, vhost.upstream, knobs))
         parts.append("")
-    if mojosec_mode() == "observe":
-        parts.extend([_mojosec_receiver_location(vhost.upstream), ""])
+    if knobs["mojosec_mode"] == "observe":
+        parts.extend([
+            _mojosec_receiver_location(vhost.upstream, knobs), ""])
     if vhost.serve_static:
         parts.extend([
             "    location /static/ {",
-            f"        alias {django_static_root()}/;",
+            f"        alias {knobs['django_static_root']}/;",
             "    }",
             "",
         ])
     parts.extend([
         "    location / {",
-        _proxy_location_body(vhost.upstream),
+        _proxy_location_body(vhost.upstream, knobs),
         "    }",
         "}",
         "",
@@ -595,12 +599,12 @@ def _site_body(vhost, generation):
     return parts
 
 
-def _render_site(vhost, generation, server_name):
+def _render_site(vhost, generation, server_name, knobs):
     """Static site / SPA. `proxy_pass` is not in this function's scope."""
     parts = [
         _open(server_name),
         "",
-        _tls_block(generation, vhost.certificate_id),
+        _tls_block(generation, vhost.certificate_id, knobs),
         "",
         _header_block(),
         "",
@@ -619,7 +623,7 @@ def _sorted_routes(vhost):
     return sorted(vhost.routes.all(), key=lambda r: r.path_prefix)
 
 
-def _render_site_api(vhost, generation, server_name):
+def _render_site_api(vhost, generation, server_name, knobs):
     """A site plus proxied path prefixes, one location per VhostRoute.
 
     Quiet paths attach to their LONGEST covering route prefix — they only
@@ -634,7 +638,7 @@ def _render_site_api(vhost, generation, server_name):
     parts = [
         _open(server_name),
         "",
-        _tls_block(generation, vhost.certificate_id),
+        _tls_block(generation, vhost.certificate_id, knobs),
         "",
         _header_block(),
         "",
@@ -656,7 +660,7 @@ def _render_site_api(vhost, generation, server_name):
                     covering = route
         if covering is None:
             continue
-        parts.append(_quiet_location(path, covering.upstream))
+        parts.append(_quiet_location(path, covering.upstream, knobs))
         parts.append("")
     receiver_route = None
     for route in routes:
@@ -664,12 +668,13 @@ def _render_site_api(vhost, generation, server_name):
         if MOJOSEC_RECEIVER_PATH.startswith(prefix):
             if receiver_route is None or len(prefix) > len(receiver_route.path_prefix):
                 receiver_route = route
-    if receiver_route is not None and mojosec_mode() == "observe":
-        parts.extend([_mojosec_receiver_location(receiver_route.upstream), ""])
+    if receiver_route is not None and knobs["mojosec_mode"] == "observe":
+        parts.extend([
+            _mojosec_receiver_location(receiver_route.upstream, knobs), ""])
     if vhost.serve_static:
         parts.extend([
             "    location ^~ /static/ {",
-            f"        alias {django_static_root()}/;",
+            f"        alias {knobs['django_static_root']}/;",
             "    }",
             "",
         ])
@@ -678,7 +683,7 @@ def _render_site_api(vhost, generation, server_name):
             validators.validate_route_prefix(path)
             parts.extend([
                 f"    location = {path} {{",
-                _proxy_location_body(auth_contract["upstream"]),
+                _proxy_location_body(auth_contract["upstream"], knobs),
                 "    }",
                 "",
             ])
@@ -686,7 +691,7 @@ def _render_site_api(vhost, generation, server_name):
         prefix = validators.validate_route_prefix(route.path_prefix)
         parts.extend([
             f"    location ^~ {prefix} {{",
-            _proxy_location_body(route.upstream),
+            _proxy_location_body(route.upstream, knobs),
             "    }",
             "",
         ])
@@ -695,7 +700,7 @@ def _render_site_api(vhost, generation, server_name):
     return "\n".join(parts)
 
 
-def _render_redirect(vhost, generation, server_name):
+def _render_redirect(vhost, generation, server_name, knobs):
     """A host-to-host permanent redirect. Neither `root` nor `proxy_pass`
     is in this function's scope — the target is a validated FQDN, re-asserted
     at substitution."""
@@ -704,7 +709,7 @@ def _render_redirect(vhost, generation, server_name):
     parts = [
         _open(server_name),
         "",
-        _tls_block(generation, vhost.certificate_id),
+        _tls_block(generation, vhost.certificate_id, knobs),
         "",
         _header_block(),
         "",
@@ -737,7 +742,7 @@ def render_vhost(vhost, generation, knobs=None):
     builder = _BUILDERS.get(vhost.kind)
     if builder is None:
         raise me.ValueException(f"edge renderer has no builder for {vhost.kind!r}")
-    rendered = builder(vhost, generation, server_name)
+    rendered = builder(vhost, generation, server_name, knobs)
     if knobs["http_enabled"]:
         rendered += "\n" + _port80_block(
             server_name, knobs["acme_webroot"])

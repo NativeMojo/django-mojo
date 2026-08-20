@@ -412,6 +412,10 @@ def test_webapp_new_group_preview_contract(opts):
     bootstrap = server.bootstrap(Handler.groups)
     assert bootstrap["user"]["username"] == "ian@example.com", \
         "preview bootstrap omitted the username used by inline recent authentication"
+    assert bootstrap["edge"] == {
+        "available": True, "http_enabled": True,
+        "dnsman_issuance": "dns-01"}, \
+        "preview bootstrap omitted the Vhosts certificate-serving posture"
     assert all(row.get("can_manage_dns") is True
                for row in bootstrap["webapp_groups"]), \
         "preview bootstrap omitted per-group DNS management authority"

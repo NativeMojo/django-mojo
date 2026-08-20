@@ -51,6 +51,8 @@ def bootstrap(groups, membership_groups=None, can_create_webapp_group=True,
         "capabilities": capabilities,
         "infrastructure": {"mode": infrastructure_mode,
                            "managed": infrastructure_mode == "managed"},
+        "edge": {"available": True, "http_enabled": True,
+                 "dnsman_issuance": "dns-01"},
         "features": {provider.NAME: provider.describe(capabilities)
                      for provider in PROVIDERS},
     }

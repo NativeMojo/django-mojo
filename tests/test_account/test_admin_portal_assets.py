@@ -46,10 +46,12 @@ def test_modular_shell_contract(opts):
         "Domains & DNS sidebar visibility is not permission-gated"
     assert "networkPage(ctx, route)" in advanced and "advancedControlPage" not in advanced, \
         "Advanced no longer renders hosting only — the raw-evidence page is back"
-    assert "Public HTTP vhosts:" in advanced_page and "DNSMAN issuance:" in advanced_page, \
+    assert "Public HTTP vhosts on this node:" in advanced_page and "DNSMAN issuance:" in advanced_page, \
         "the Vhosts page does not explain its HTTP and certificate posture"
     assert "ctx.edge || {}" in advanced_page, \
         "the Vhosts page does not read posture from the network-authorized bootstrap"
+    assert "'unknown'" in advanced_page and "edge.available === true" in advanced_page, \
+        "a mixed-version or Edge-less deployment invents a healthy posture"
     assert "src: 'assets/mojo-logo.png'" in app and "brand-mark', text: 'M'" not in app, \
         "Admin shell did not replace the placeholder badge with the Mojo logo"
     assert '<link rel="icon" type="image/png" href="assets/mojo-logo.png">' in index, \

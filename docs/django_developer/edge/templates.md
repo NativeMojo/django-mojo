@@ -142,10 +142,11 @@ Notes that bite:
   names the fragment path and this include.
 - **Day-0 is safe**: before the first converge, `current/` does not exist
   and both globs match nothing — nginx still starts. If the load balancer
-  needs an answer before the first converge, add a minimal probe server to
+  deliberately exposes HTTP and needs an answer before the first converge,
+  add a minimal probe server to
   the bootstrap (`server { listen 80 default_server; return 204; }`) and
-  **remove it at the `EDGE_HTTP_DEFAULT_SERVER` cutover step below** — two
-  `default_server`s on one port is an `[emerg]`.
+  **remove it before Edge takes over port 80** — two `default_server`s on one
+  port is an `[emerg]`. A DNS-01-only fleet needs no port-80 day-zero probe.
 - **A bootstrap without these includes fails silently-but-converged.** The
   installer stages files, `nginx -t` passes (the real config simply never
   reads the generation), the node reloads and reports the generation
@@ -207,7 +208,8 @@ app writes:
   bundles under `EDGE_WWW_BASE` are app-written too.
 - **What the app user does NOT need** — and must not be given: write access
   to `/var/log/nginx`, and the ability to bind 443/80. The staged check
-  binds only the two staged ports; the harness keeps every scratch path
+  binds only the staged ports for listeners actually rendered; the harness
+  keeps every scratch path
   inside the generation.
 - **Keep the staged ports unreachable from outside the node.** 61080/61443
   are validation scratch, not a serving contract: the staged `-t` briefly
@@ -310,9 +312,16 @@ One step at a time, each independently verifiable:
 4. **Flip `EDGE_HTTP_DEFAULT_SERVER`** once no file-managed default server
    remains (and remove any day-0 probe server) — the rendered catch-alls
    take over unmatched names: 443 rejects the TLS handshake without a
-   certificate, 80 answers 444.
+   certificate; 80 answers 444 only when `EDGE_HTTP_ENABLED=True`.
 5. **Retire the old includes** (`conf.d` glob, `sec.d` glob) from the
    bootstrap when nothing file-managed remains.
+
+For a DNS-01-only cutover, first publish `EDGE_HTTP_ENABLED=False` through the
+deployment's canonical static configuration, then wait for every node's Edge
+generation to converge and verify `nginx -T` contains no `listen 80` or ACME
+challenge location. Only after that proof should the infrastructure owner
+remove the load-balancer listener and port-80 security-group ingress. Reversing
+that order can strand a fleet that still expects HTTP redirects or HTTP-01.
 
 **Logs move.** The rendered base writes the main access log and the watch
 log under **`EDGE_LOG_DIR`** (default `<EDGE_ROOT>/log`), app-owned so the
