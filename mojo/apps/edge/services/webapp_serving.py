@@ -15,12 +15,20 @@ Two derived facts carry the whole design:
   contract. Storing a flag on `VhostRoute` would let the two disagree the
   moment a bouncer path setting changes, and the stored answer would win.
 - **Fleet inventory is a WRITER's fact.** `pools` and `upstreams` are the
-  deployment's own topology (which node pools exist, which upstreams an
-  ancestor org declared). A viewer gets `null` for both; only a caller who
+  deployment's own topology (which node pools exist, which upstreams THIS
+  app's group may send to). A viewer gets `null` for both; only a caller who
   could actually save them is told what the choices are.
+
+The upstream set an app may route to is scoped to the app's OWN group (plus
+house upstreams), never to the domain's group. An app can sit on an ancestor
+group's domain, and `_accessible_upstreams` keys on the domain's group — so
+using it here would let a child-group operator, authorized only in their own
+group, point a public path at the ancestor org's private backend. The Serving
+tab is the app owner's surface; it is scoped to the app owner's tenancy.
 """
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from mojo import errors as me
@@ -154,6 +162,27 @@ def _certificate_payload(certificate, hostname, domain):
     }
 
 
+def _app_upstreams(web_app, primary):
+    """Upstreams THIS app may send a path to, and be able to save it.
+
+    House upstreams (no group) always. A group-scoped upstream only when the
+    app sits on its OWN group's domain — because `validate_route` keys the
+    model-layer rule on the DOMAIN's group while the app owner's authority is
+    the app's group. `_accessible_upstreams(primary)` offers the DOMAIN's
+    group, so for an app on an ANCESTOR's domain it would list the ancestor
+    org's private upstreams — a cross-tenant reach the app owner's write
+    authority never covered. Where the two groups diverge, only house
+    upstreams satisfy both, so only those are offered; the picklist is exactly
+    what the write will accept.
+    """
+    from mojo.apps.edge.models import Upstream
+
+    shared = Q(group__isnull=True)
+    if primary is not None and primary.domain.group_id == web_app.group_id:
+        shared |= Q(group_id=web_app.group_id)
+    return Upstream.objects.filter(shared, is_enabled=True)
+
+
 def _route_rows(vhost):
     managed = set(managed_prefixes())
     if vhost is None:
@@ -181,7 +210,7 @@ def serving_for(web_app, include_editables=False):
     """
     from mojo.apps.edge import validators
     from mojo.apps.edge.models.vhost import KIND_SITE_API
-    from mojo.apps.edge.services import webapp_alias, webapp_auth_routes
+    from mojo.apps.edge.services import webapp_alias
 
     primary = _primary(web_app)
     domain = primary.domain if primary is not None else None
@@ -202,8 +231,7 @@ def serving_for(web_app, include_editables=False):
         if primary is not None:
             upstreams = [
                 {"id": row.pk, "name": row.name}
-                for row in webapp_auth_routes._accessible_upstreams(
-                    primary).order_by("name")
+                for row in _app_upstreams(web_app, primary).order_by("name")
             ]
 
     return {
@@ -379,13 +407,11 @@ def _require_routes(primary):
     return primary
 
 
-def _resolve_upstream(primary, value):
-    from mojo.apps.edge.services import webapp_auth_routes
-
+def _resolve_upstream(web_app, primary, value):
     raw = str(value or "").strip()
     if not raw:
         raise me.ValueException("Choose where this path should go.")
-    queryset = webapp_auth_routes._accessible_upstreams(primary)
+    queryset = _app_upstreams(web_app, primary)
     if raw.isdigit():
         upstream = queryset.filter(pk=int(raw)).first()
     else:
@@ -418,7 +444,7 @@ def add_route(web_app, path_prefix, upstream):
 
     primary = _require_routes(_require_primary(web_app))
     prefix = _clean_prefix(path_prefix)
-    destination = _resolve_upstream(primary, upstream)
+    destination = _resolve_upstream(web_app, primary, upstream)
 
     with transaction.atomic():
         locked = Vhost.objects.select_for_update().get(pk=primary.pk)

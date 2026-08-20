@@ -546,6 +546,48 @@ def test_route_destination_must_be_declared_and_reachable(opts):
         "a refused route still landed on the app"
 
 
+@th.django_unit_test("an app on an ancestor's domain cannot route to the ancestor org's upstream")
+def test_route_destination_is_scoped_to_the_apps_own_group(opts):
+    # The app owner's write authority is in the CHILD group; the domain — and so
+    # `_accessible_upstreams` — belongs to the PARENT. If the picklist were
+    # keyed on the domain's group, a child-group operator could point a public
+    # path at the parent org's private backend. Where app group and domain group
+    # diverge, only house upstreams are offered and routable.
+    from mojo.apps.account.models import Group
+    from mojo.apps.edge.models import VhostRoute
+    from mojo.apps.edge.services import webapp_serving
+
+    parent = make_group("edge-serving-up-parent")
+    child = Group.objects.create(
+        name=f"edge-serving-up-child_{uuid.uuid4().hex[:8]}",
+        kind="organization", parent=parent)
+    domain = make_domain(group=parent, provider="route53")
+    web_app, _, _, primary, _ = _app(
+        opts, group=child, domain=domain, with_alias=False)
+
+    ancestor_upstream = make_upstream(group=parent)
+    house_upstream = make_upstream()  # no group — shared, routable anywhere
+
+    listed = {row["id"] for row in webapp_serving.serving_for(
+        web_app, include_editables=True)["upstreams"]}
+    assert ancestor_upstream.pk not in listed, \
+        "the ancestor org's upstream was offered in the app's own picklist"
+    assert house_upstream.pk in listed, \
+        "a shared (house) upstream was hidden — the scope over-narrowed"
+
+    assert raises(webapp_serving.add_route, web_app, "/into-parent",
+                  ancestor_upstream.pk) is not None, \
+        "a child-group app routed into the ancestor org's private backend"
+    assert not VhostRoute.objects.filter(
+        vhost=primary, path_prefix="/into-parent").exists(), \
+        "the refused ancestor route still landed on the app"
+
+    webapp_serving.add_route(web_app, "/shared", house_upstream.pk)
+    assert VhostRoute.objects.filter(
+        vhost=primary, path_prefix="/shared", upstream=house_upstream).exists(), \
+        "the app could not route to a shared house destination"
+
+
 @th.django_unit_test("a path already pointing somewhere else is not silently repointed")
 def test_add_route_refuses_a_conflicting_prefix(opts):
     from mojo.apps.edge.models import VhostRoute
