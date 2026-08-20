@@ -1410,3 +1410,79 @@ def test_the_package_costs_nothing_to_import(opts):
                  f"boto3 must be imported lazily inside functions and "
                  f"mojo.helpers.logit must never be reachable from here: "
                  f"{done.stdout!r} {done.stderr!r}")
+
+
+@th.unit_test("a NoSuchKey on an optional S3 read is absence, not blindness")
+def test_no_such_key_is_absent_not_blind(opts):
+    from botocore.exceptions import ClientError
+    from mojo.deploy.provision import discover
+
+    def read():
+        raise ClientError(
+            {"Error": {"Code": "NoSuchKey",
+                       "Message": "The specified key does not exist."}},
+            "GetObject")
+
+    findings = []
+    got = discover.optional(findings, "discover", "s3.get_object", read, None)
+    th.assert_eq(got, None,
+                 "an absent optional object must read back as its default")
+    th.assert_eq(len(findings), 0,
+                 "an object that legitimately does not exist yet must not "
+                 "produce a BLIND finding — that was the live NoSuchKey bug "
+                 "that painted every fresh-account observe as unreadable")
+
+
+@th.unit_test("observe maps a security group by its exact name when the role tag is wrong")
+def test_observe_maps_security_group_by_name_when_role_tag_is_wrong(opts):
+    from mojo.deploy.provision import discover
+    from mojo.deploy.provision import spec as spec_module
+
+    spec = _spec()
+    names = spec_module.names(spec)
+
+    def sg(name, role):
+        return {"GroupId": "sg-" + name[-8:], "GroupName": name,
+                "VpcId": "vpc-test", "IpPermissions": [],
+                "Tags": [{"Key": "mojo:project", "Value": spec.project},
+                         {"Key": "mojo:env", "Value": spec.env},
+                         {"Key": "mojo:role", "Value": role},
+                         {"Key": "managed-by", "Value": "django-mojo"}]}
+
+    # Every group carries the OLD step-level role tag ("network") — the shape
+    # the first shipped release actually wrote. Discovery must still map all
+    # three by their exact contracted names, or apply re-creates them forever
+    # (the live InvalidGroup.Duplicate loop this regression pins).
+    groups = [sg(names["node_sg"], "network"),
+              sg(names["rds_sg"], "network"),
+              sg(names["cache_sg"], "network")]
+
+    client, stubber = _stub("ec2")
+    import mojo.deploy.provision.discover as dmod
+    observed = {}
+    findings = []
+    # Drive just the mapping logic through the public observe path by stubbing
+    # every network describe; only describe_security_groups returns rows.
+    from unittest import mock
+    with mock.patch.object(dmod, "optional") as opt:
+        def fake_optional(f, step, name, func, default=None):
+            if name == "ec2.describe_vpcs":
+                return [{"VpcId": "vpc-test", "CidrBlock": "10.0.0.0/16",
+                         "Tags": []}]
+            if name == "ec2.describe_security_groups":
+                return groups
+            return default
+        opt.side_effect = fake_optional
+        obs = dmod.objict()
+        dmod._observe_network(_clients(ec2=client), spec, obs, findings)
+
+    got = obs.get("security_groups") or {}
+    for role in ("node", "rds", "cache"):
+        th.assert_true(role in got,
+                       f"the {role} group must be found by name even though "
+                       f"its mojo:role tag says 'network'")
+        th.assert_eq(got[role]["GroupName"],
+                     {"node": names["node_sg"], "rds": names["rds_sg"],
+                      "cache": names["cache_sg"]}[role],
+                     f"the {role} slot must hold the group with the "
+                     f"contracted name")
