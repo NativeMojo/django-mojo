@@ -338,6 +338,13 @@ def test_name_only_creation_contract(opts):
     assert "runAction(create," in name_phase, \
         "Create app fires without a pending state, so a slow create looks like " \
         "a dead button"
+    # One input, one decision: no four-step progress bar counting steps nobody
+    # takes. The address-first flows still render it, so the bar itself stays.
+    assert "stepBar(" not in name_phase, \
+        "the one-decision creation phase still counts four steps over itself"
+    assert "if (state.nameFirst) return null" in wizard and "WIZARD_STEPS" in wizard \
+        and "stepBar(state, 0)" in wizard, \
+        "the step bar was deleted outright instead of skipped for name-first runs"
 
 
 @th.django_unit_test("the run panel drives github-skip and verify itself, keyed on the fetched step")
@@ -368,6 +375,15 @@ def test_wizard_auto_run_contract(opts):
         "the done panel does not open the app page's Set up deploys tab"
     assert "inspector" not in done, \
         "the done panel still routes to the retired inspector drawer"
+    # A name-first run had one decision in it and it is already made, so it
+    # lands on the app instead of asking someone to acknowledge a fact. Once
+    # only — render() runs again on every poll tick.
+    assert "state.nameFirst" in done and "state.landed" in done \
+        and "queueMicrotask" in done, \
+        "the name-first run still ends on a button instead of landing on the app"
+    # Adopt and repair keep the explicit hand-off: they were not one decision.
+    assert "'Set up deploys'" in done and "'Done'" in done, \
+        "the manual hand-off disappeared for the adopt and repair flows"
 
 
 @th.django_unit_test("each WebApp has its own page with a promoted Set up deploys tab")
@@ -550,17 +566,84 @@ def test_webapp_addresses_card_and_add_domain_dialog(opts):
     steer = dialog[dialog.index("'needs_domain'"):dialog.index("'records_needed'")]
     assert "routeHref('domains')" in steer and "recordsTable" not in steer, \
         "needs_domain does not steer to Domains, or invents records to publish"
-    # The records themselves: Type / Name / Value, each copyable, verbatim.
+    # Before Add is pressed, the dialog says which of the three cases this
+    # address is in — from the server's own gates, not a guess about the name.
+    assert "/api/edge/webapp/attach_preview" in dialog \
+        and "function paintPreview" in dialog, \
+        "the dialog does not ask what adding this address would do"
+    assert dialog.index("function paint(") < dialog.index("function paintPreview"), \
+        "the preview painter is not defined beside the result painter it reuses"
+    assert "is managed here" in dialog and "Nothing to add at your DNS host." in dialog \
+        and "’s DNS is at your own host" in dialog, \
+        "the preview does not name who publishes this domain's DNS"
+    # needs_domain and an unusable address reuse paint()'s own branches, so
+    # each sentence exists exactly once.
+    assert dialog.count("Connect it first, then add this address. ") == 1, \
+        "the preview grew a second copy of the connect-the-domain steer"
+    # A way out that is not the Escape key, and it goes once the deal is done.
+    assert "'Cancel'" in dialog and "cancel.remove()" in dialog, \
+        "the dialog lost its Cancel, or offers it over a finished add"
+    # The hint is passive: no runAction, a debounce, and one sequence counter
+    # shared with the submit so a late preview cannot paint over a real result.
+    assert "setTimeout(runPreview, 350)" in dialog and "const mine = ++seq;" in dialog \
+        and "seq += 1;" in dialog, \
+        "the preview is not debounced and sequenced against the submit"
+
+    # The records themselves: what each one does, then Type / Name / Value,
+    # each copyable, verbatim.
     records = page[page.index("function recordsTable"):page.index("function certBadge")]
     for label in ("'Type'", "'Name'", "'Value'"):
         assert label in records, f"the records table lost its {label} column"
     assert records.count("cell(text(record.") == 3 and "copyButton(value)" in records, \
         "the records table does not render each value verbatim with a Copy button"
+    assert "'What it does'" in records and "recordPurpose(position)" in records, \
+        "the records table does not say what each record is for, in the wizard's words"
     # Copy rules: addresses, never plumbing.
     assert "vhost" not in dialog.lower(), \
         "the add-an-address dialog leaks the internal address record name"
     assert "Add address" in dialog and "an address you already own" in dialog, \
         "the dialog does not talk about addresses in plain words"
+
+
+@th.django_unit_test("Set up deploys opens by saying the app is already live")
+def test_setup_tab_says_the_app_is_already_live(opts):
+    root = Path(__file__).resolve().parents[2]
+    assets = root / "mojo/apps/account/admin_portal/assets"
+    page = (assets / "features/webapps/page.js").read_text()
+    wizard = (assets / "features/webapps/wizard.js").read_text()
+
+    setup = page[page.index("function setupPanel"):page.index("async function webappDetailPage")]
+    # An app with an address and no release is serving the welcome page it was
+    # born with. Without saying so, all three ways to deploy read as repairs.
+    assert "!summary.current_release" in setup and "summary.address?.hostname" in setup, \
+        "the banner is not keyed on an addressed app with nothing deployed yet"
+    assert "Your app is already live" in setup \
+        and "is serving the welcome page it came with" in setup \
+        and "Deploying replaces that page with your build — there is nothing to fix first." in setup, \
+        "the Set up deploys tab does not say the app is already up"
+    # The HTTPS clause is the certificate's own state, never an assumption: a
+    # pending certificate drops the clause and says it finishes on its own.
+    assert "certState(" in setup and "Its HTTPS certificate is still being issued" in setup, \
+        "the banner claims HTTPS without reading the certificate, or hides a pending one"
+    assert "httpsLink(" in setup, \
+        "the banner does not offer the app's own https origin"
+
+    # One set of sentences for what a DNS record is for: the wizard exports
+    # them, the app page's records table imports them. Two spellings would be
+    # two explanations of one thing.
+    assert "export function recordPurpose(position)" in wizard, \
+        "the record purposes are not exported for the records table to reuse"
+    wizard_import = next((line for line in page.splitlines()
+                          if "from './wizard.js'" in line), "")
+    assert "recordPurpose" in wizard_import, \
+        "page.js uses recordPurpose without importing it from the wizard"
+    for sentence in ("Points your address at us.",
+                     "Lets us issue your HTTPS certificate."):
+        assert wizard.count(sentence) == 1, \
+            f"{sentence!r} exists more than once — the shared helper did not " \
+            f"replace the inline copy"
+        assert sentence not in page, \
+            f"page.js re-spells {sentence!r} instead of importing it"
 
 
 @th.django_unit_test("the Serving tab shows the address, its certificate, its shape and its paths")

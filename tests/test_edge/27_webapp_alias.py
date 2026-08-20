@@ -84,6 +84,32 @@ def _attach(opts, web_app, hostname, actor=None, zone=None, cname_targets=None,
     return with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
 
 
+def _preview(opts, web_app, hostname, actor=None):
+    """Run preview behind the SAME provider seams `_attach` mocks.
+
+    Every one of them must go unused: the dialog calls this while someone is
+    still typing, so a provider round trip here is a round trip per keystroke.
+    Returns (result, error, listed, upsert, request, probed).
+    """
+    from mojo.apps.edge.services import webapp_alias
+
+    with mock.patch("mojo.apps.dnsman.services.dns.list_records",
+                    return_value=[]) as listed, \
+            mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
+            mock.patch("mojo.helpers.dns.probe.query_cname") as probed, \
+            mock.patch("mojo.apps.dnsman.services.delegation.for_domain",
+                       return_value=None), \
+            mock.patch(
+                "mojo.apps.dnsman.services.certs.request_certificate") as request:
+        try:
+            result = webapp_alias.preview(
+                web_app, hostname, actor or opts.actor)
+            error = None
+        except Exception as exc:
+            result, error = None, exc
+        return result, error, listed, upsert, request, probed
+
+
 # ---------------------------------------------------------------------------
 # attach — happy paths
 # ---------------------------------------------------------------------------
@@ -439,6 +465,171 @@ def test_authority_is_checked_before_any_provider_call(opts):
     assert error is None and result.status == "attached", \
         f"a parent-level grant did not attach the alias: {error or result}"
     upsert.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# preview — the same verdict, before anything is written
+# ---------------------------------------------------------------------------
+@th.django_unit_test("preview reaches a managed verdict without touching a provider")
+def test_preview_is_free_and_says_who_runs_the_dns(opts):
+    from mojo.apps.edge.models import Vhost
+
+    web_app, domain, _, _ = _app_with_primary(opts)
+
+    result, error, listed, upsert, request, probed = _preview(
+        opts, web_app, f"  SHOP.{domain.name.upper()}.  ")
+
+    assert error is None, f"a clear managed address raised in preview: {error}"
+    assert result.status == "ready", \
+        f"a clear managed address was not previewed as ready: {result}"
+    assert result.hostname == f"shop.{domain.name}", \
+        f"preview did not normalize the typed address: {result.hostname}"
+    assert result.dns == "managed", \
+        f"a route53 domain was not previewed as platform-managed: {result}"
+    assert result.domain["id"] == domain.pk and \
+        result.domain["name"] == domain.name, \
+        f"preview did not name the domain it matched: {result.domain}"
+    # Keystroke-safe by construction: no zone read, no write, no ACME order,
+    # no live CNAME probe. Any one of them is a round trip per keystroke.
+    listed.assert_not_called()
+    upsert.assert_not_called()
+    request.assert_not_called()
+    probed.assert_not_called()
+    assert not Vhost.objects.filter(alias_of=web_app).exists(), \
+        "previewing an address created a serving vhost for it"
+
+
+@th.django_unit_test("preview names the customer's own DNS host as external")
+def test_preview_reports_external_dns(opts):
+    web_app, _, _, _ = _app_with_primary(opts)
+    external = make_domain(group=opts.group, provider="mojo")
+
+    result, error, listed, _, _, probed = _preview(
+        opts, web_app, f"www.{external.name}")
+
+    assert error is None and result.status == "ready", \
+        f"a connected external domain was not previewed as ready: {error or result}"
+    assert result.dns == "external", \
+        f"a customer-run zone was not previewed as external: {result}"
+    listed.assert_not_called()
+    probed.assert_not_called()
+
+
+@th.django_unit_test("preview steers an unconnected domain with attach's own sentence")
+def test_preview_needs_domain_matches_attach(opts):
+    web_app, _, _, _ = _app_with_primary(opts)
+    stranger = make_group("edge-alias-preview-stranger")
+    foreign = make_domain(group=stranger, provider="route53")
+    hostname = f"www.{foreign.name}"
+
+    previewed, error, listed, upsert, request, _ = _preview(
+        opts, web_app, hostname)
+    assert error is None and previewed.status == "needs_domain", \
+        f"an unconnected domain was not previewed as needs_domain: {error or previewed}"
+    listed.assert_not_called()
+    upsert.assert_not_called()
+    request.assert_not_called()
+
+    attached, attach_error, _, _, _, _ = _attach(opts, web_app, hostname)
+    assert attach_error is None and attached.status == "needs_domain", \
+        f"attach stopped steering the same address: {attach_error or attached}"
+    # One sentence, from one place. Two would be two explanations of one fact.
+    assert previewed.reason == attached.reason, \
+        (f"the hint and the write tell different stories about {hostname}: "
+         f"{previewed.reason!r} vs {attached.reason!r}")
+
+
+@th.django_unit_test("preview reports an unusable address with attach's own refusal")
+def test_preview_unusable_matches_attach_refusals(opts):
+    web_app, domain, _, _ = _app_with_primary(opts)
+
+    for hostname in (domain.name, f"a.b.{domain.name}", f"*.{domain.name}"):
+        result, error, listed, upsert, request, _ = _preview(
+            opts, web_app, hostname)
+        assert error is None, \
+            f"preview raised instead of reporting {hostname}: {error!r}"
+        assert result.status == "unusable", \
+            f"{hostname} was not previewed as unusable: {result}"
+        assert result.hostname == hostname.lower(), \
+            f"the unusable verdict lost the address it was about: {result}"
+        _, attach_error, _, _, _, _ = _attach(opts, web_app, hostname)
+        assert attach_error is not None, \
+            f"attach accepted {hostname} after preview called it unusable"
+        assert result.reason == str(attach_error), \
+            (f"the hint and the write refuse {hostname} differently: "
+             f"{result.reason!r} vs {attach_error}")
+        listed.assert_not_called()
+        upsert.assert_not_called()
+        request.assert_not_called()
+
+
+@th.django_unit_test("preview refuses an ancestor's domain as a denial, never a verdict")
+def test_preview_propagates_the_authority_denial(opts):
+    from mojo.apps.account.models import Group
+    from mojo import errors as me
+
+    parent = make_group("edge-alias-preview-parent")
+    child = Group.objects.create(
+        name=f"edge-alias-preview-child_{uuid.uuid4().hex[:8]}",
+        kind="organization", parent=parent)
+    domain = make_domain(group=parent, provider="route53")
+    web_app, _, _, _ = _app_with_primary(
+        opts, group=child, domain=domain, label="own")
+    child_actor, _, _, _ = make_group_member(
+        ["manage_webapp", "manage_dns"], group=child)
+
+    result, error, listed, upsert, request, _ = _preview(
+        opts, web_app, f"shop.{domain.name}", actor=child_actor)
+
+    # A 200 "unusable" here would launder an authorization denial into a hint —
+    # the incident never fires, and the caller learns the ancestor domain exists
+    # and is matchable. The write's denial IS the preview's denial.
+    assert isinstance(error, me.PermissionDeniedException), \
+        f"the preview turned an authorization denial into a verdict: {result or error!r}"
+    assert result is None, "the denied preview still produced an answer"
+    assert "workspace that owns it" in str(error), \
+        f"the denial was not the plain owning-workspace message: {error}"
+    listed.assert_not_called()
+    upsert.assert_not_called()
+    request.assert_not_called()
+
+
+@th.django_unit_test("extracting the pre-write gates changed no refusal and no write")
+def test_resolve_target_extraction_is_behavior_preserving(opts):
+    from mojo.apps.edge.services import webapp_alias
+
+    # Every gate attach() cleared inline now lives in the shared helper, in the
+    # same order, raising the same sentence.
+    addressless = make_webapp(opts.group, slug=f"ext{uuid.uuid4().hex[:6]}")
+    error = raises(webapp_alias._resolve_target, addressless,
+                   "www.example.com", opts.actor)
+    assert error is not None and "address first" in str(error), \
+        f"the address-first precondition left the shared pre-write gate: {error}"
+
+    web_app, domain, _, _ = _app_with_primary(opts)
+    for hostname, expected in (
+            (f"*.{domain.name}", "wildcard address can't be added"),
+            (domain.name, f"Use www.{domain.name} instead."),
+            (f"a.b.{domain.name}", f"Use one label under {domain.name}")):
+        error = raises(webapp_alias._resolve_target, web_app, hostname, opts.actor)
+        assert error is not None and expected in str(error), \
+            f"{hostname} lost its refusal sentence: {error}"
+
+    # An unmatched name is not a refusal — it is the needs_domain steer, and the
+    # hostname it carries is already normalized.
+    resolved = webapp_alias._resolve_target(
+        web_app, " WWW.Not-Connected-Here.example ", opts.actor)
+    assert resolved.domain is None and \
+        resolved.hostname == "www.not-connected-here.example", \
+        f"the unmatched branch stopped normalizing the hostname: {resolved}"
+
+    # And the write path is untouched: one CNAME, the domain's own certificate.
+    hostname = f"kept.{domain.name}"
+    result, error, _, upsert, request, _ = _attach(opts, web_app, hostname)
+    assert error is None and result.status == "attached", \
+        f"the extraction broke the managed write path: {error or result}"
+    upsert.assert_called_once_with(domain, "CNAME", hostname, [TARGET], ttl=300)
+    request.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -816,6 +1007,71 @@ def test_aliases_endpoint_scope(opts):
             f"another tenant read this app's addresses: {refused.body}"
         assert domain.name not in str(refused.body), \
             f"the refusal disclosed the app's addresses: {refused.body}"
+    finally:
+        opts.client.logout()
+
+
+@th.django_unit_test("the address preview is a read carrying the write's permission")
+def test_attach_preview_endpoint_guards_and_shape(opts):
+    from mojo.apps.edge.models import Vhost
+    from mojo.apps.edge.rest import web_app as views
+    from mojo.apps.edge.services import webapp_keys
+
+    assert getattr(views.on_webapp_attach_preview,
+                   "_mojo_denies_key_backed_session", False), \
+        "the address preview accepts key-backed sessions"
+    # It changes nothing, so there is nothing for a step-up to protect. The
+    # step-up stays on attach_domain, the call that writes.
+    assert not hasattr(views.on_webapp_attach_preview,
+                       "_mojo_requires_fresh_auth"), \
+        "a read that changes nothing demands a step-up"
+
+    web_app, domain, _, _ = _app_with_primary(opts)
+    hostname = f"hint.{domain.name}"
+
+    login(opts, opts.actor_email, opts.actor_password)
+    try:
+        # No mocks: preview reaches its verdict without a provider seam at all,
+        # so the endpoint answering here IS the proof that it is free.
+        response = opts.client.get(
+            f"/api/edge/webapp/attach_preview?webapp={web_app.pk}"
+            f"&hostname={hostname}&group={opts.group.pk}")
+        data = response.json.get("data") or {}
+        assert response.status_code == 200, \
+            f"a manage_webapp member could not preview an address: {response.body}"
+        assert data.get("status") == "ready" and data.get("dns") == "managed", \
+            f"the endpoint did not return the preview verdict verbatim: {data}"
+        assert data.get("hostname") == hostname and \
+            data.get("webapp") == web_app.pk, \
+            f"the endpoint reported a different address than the service: {data}"
+        assert not Vhost.objects.filter(alias_of=web_app).exists(), \
+            "previewing an address through the endpoint created one"
+    finally:
+        opts.client.logout()
+
+    _, _, machine_token, _ = webapp_keys.link(web_app)
+    opts.client.session.headers["Authorization"] = f"apikey {machine_token}"
+    try:
+        machine = opts.client.get(
+            f"/api/edge/webapp/attach_preview?webapp={web_app.pk}"
+            f"&hostname={hostname}")
+        assert machine.status_code == 403, \
+            f"a deployment key previewed an address ({machine.status_code})"
+    finally:
+        opts.client.session.headers.pop("Authorization", None)
+
+    stranger = make_group("edge-alias-preview-reader")
+    _, outsider_email, outsider_password, _ = make_group_member(
+        ["manage_webapp", "manage_dns"], group=stranger)
+    login(opts, outsider_email, outsider_password)
+    try:
+        refused = opts.client.get(
+            f"/api/edge/webapp/attach_preview?webapp={web_app.pk}"
+            f"&hostname={hostname}&group={stranger.pk}")
+        assert refused.status_code in (401, 403, 404), \
+            f"another tenant previewed against this app: {refused.body}"
+        assert domain.name not in str(refused.body), \
+            f"the refusal disclosed the app's domain: {refused.body}"
     finally:
         opts.client.logout()
 

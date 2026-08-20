@@ -440,6 +440,66 @@ def test_domain_detail_is_a_page_contract(opts):
         "the domain page added a second navigation entry"
 
 
+@th.django_unit_test("the domain page says what the domain is for and what is on it")
+def test_domain_page_states_its_role_and_contents_contract(opts):
+    advanced = (ASSETS / "features/advanced/page.js").read_text()
+    styles = (ASSETS / "features/advanced/styles.css").read_text()
+
+    detail = advanced[advanced.index("function renderDetail(domain)"):
+                      advanced.index("function renderList(rows, failure)")]
+    # The role line: whether NEW apps in this workspace go live under this
+    # domain. Taken from the workspace's own onboarding options — the server's
+    # answer — not inferred from the records that happen to be in the zone.
+    assert "domain-role" in detail and "'Apps domain'" in detail, \
+        "the domain page never says whether new apps go live under this domain"
+    assert "/api/edge/webapp/onboarding/options?group=" in detail \
+        and "apps_domain" in detail, \
+        "the apps-domain badge is not read from the workspace's onboarding options"
+    assert "domain.group?.id && ctx.capabilities.manage_webapps" in detail, \
+        "the WebApps read is made for a platform-scoped domain, or without the " \
+        "capability that owns it"
+    assert ".domain-role {" in styles, \
+        "the role line has no styling in the lane that renders it"
+
+    # The overview panel: what is already here, and what putting an app live
+    # leaves alone. Read-only, and built from reads the portal already makes.
+    assert "function domainOverviewPanel(ctx, domain)" in advanced \
+        and "domainOverviewPanel(ctx, domain)" in detail, \
+        "the domain page has no overview of what is on the domain"
+    panel = advanced[advanced.index("function domainOverviewPanel"):
+                     advanced.index("// One domain is a page of its own")]
+    assert "What’s on this domain" in panel \
+        and "what putting an app live does not touch" in panel, \
+        "the overview panel lost its heading or its promise"
+    # A zone this installation does not hold credentials for is not read at all:
+    # asking anyway is a guaranteed provider error rendered as a broken domain.
+    assert "domain.provider === 'mojo' || domain.status !== 'active'" in panel \
+        and "This domain’s DNS lives at your own host" in panel, \
+        "the panel reads a zone it cannot read, instead of saying who holds it"
+    for endpoint in ("/api/dnsman/dns?domain=", "/api/edge/vhost?graph=default",
+                     "/api/edge/webapp?graph=default"):
+        assert endpoint in advanced, \
+            f"the overview panel does not reuse the existing {endpoint} read"
+    # An EXACT-ID join. A suffix match on the name would fold `eu.example.com`
+    # into `example.com` and claim another domain's apps as this one's.
+    assert "vhosts.filter((vhost) => vhost.domain?.id === domain.id)" in panel, \
+        "the addresses block matches domains by name instead of by id"
+    assert "appByVhost.set(app.vhost.id, app)" in panel \
+        and "routeHref('deployments', {webapp: row.app.id})" in panel, \
+        "an address is not joined to the app that owns it, or does not link to it"
+    for subhead in ("'The wildcard record'", "'Addresses on this domain'",
+                    "'Mail and verification records'"):
+        assert subhead in panel, f"the overview panel lost its {subhead} block"
+    for empty in ("No wildcard record yet",
+                  "No apps are using this domain yet.",
+                  "No mail or verification records in this zone."):
+        assert empty in panel, f"the overview panel has no empty state for {empty!r}"
+    assert "This is why a new app is instant — no record is added for it." in panel, \
+        "the wildcard block does not explain why a new app needs no record"
+    assert "Putting an app live never adds, changes, or removes anything here." in panel, \
+        "the mail block does not say that going live leaves mail alone"
+
+
 @th.django_unit_test("WebApps owns URL-first onboarding, external domains, and day-2")
 def test_webapp_onboarding_asset_contract(opts):
     wizard = (ASSETS / "features/webapps/wizard.js").read_text()
