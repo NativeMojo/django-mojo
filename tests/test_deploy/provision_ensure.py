@@ -820,6 +820,262 @@ def test_data_creates_the_cache_encrypted(opts):
                  "a freshly created replication group is still coming up")
 
 
+# ── stale subnet groups ─────────────────────────────────────────────────────
+#
+# The shape a partial teardown leaves behind: the subnet group survived (nothing
+# here deletes one), the subnets it names did not, and the network step has just
+# built replacements under new ids. AWS accepts the group right up until the
+# cluster create, then answers "Current AZ coverage: " with nothing after the
+# colon — fifteen minutes in, naming neither the group nor the staleness.
+#
+# In every test below the create is proved NOT to have been attempted twice
+# over: `_assert_no_blind` (an unstubbed call arrives as a BLIND finding, not an
+# exception) and `assert_no_pending_responses`.
+
+def _dead_subnets():
+    return [{"SubnetIdentifier": "subnet-0dead1",
+             "SubnetAvailabilityZone": {"Name": ZONES[0]}},
+            {"SubnetIdentifier": "subnet-0dead2",
+             "SubnetAvailabilityZone": {"Name": ZONES[1]}}]
+
+
+def _live_subnets():
+    return [{"SubnetId": "subnet-0prv1", "AvailabilityZone": ZONES[0]},
+            {"SubnetId": "subnet-0prv2", "AvailabilityZone": ZONES[1]}]
+
+
+def _named_subnets():
+    return [{"SubnetIdentifier": "subnet-0prv1",
+             "SubnetAvailabilityZone": {"Name": ZONES[0]}},
+            {"SubnetIdentifier": "subnet-0prv2",
+             "SubnetAvailabilityZone": {"Name": ZONES[1]}}]
+
+
+def _stale(findings):
+    return [f for f in findings if f.code == "subnet_group.stale"]
+
+
+@th.django_unit_test("a DB subnet group whose subnets are gone is MANUAL, and stops the create")
+def test_data_reports_manual_for_a_stale_db_subnet_group(opts):
+    from mojo.deploy.provision import data, report
+    from mojo.deploy.provision import spec as spec_module
+
+    spec = _spec()
+    names = spec_module.names(spec)
+    observed = _observed(
+        db_subnet_group={"DBSubnetGroupName": names["db_subnet_group"],
+                         "Subnets": _dead_subnets()},
+        subnets=[],
+        private_subnet_ids=["subnet-0new1", "subnet-0new2"],
+        rds_sg_id="sg-0rds",
+        secrets={"db_password": "p" * 40})
+
+    client, stubber = _stub("rds")
+    with stubber:
+        findings, actions, result = data.ensure_database(
+            _clients(rds=client), spec, observed, apply=True)
+
+    th.assert_in("subnet_group.stale", _codes(findings, report.MANUAL),
+                 f"a subnet group naming only deleted subnets must be MANUAL — "
+                 f"its membership cannot be patched back and this tool never "
+                 f"deletes: {_codes(findings)}")
+    stale = _stale(findings)
+    th.assert_true(names["db_subnet_group"] in stale[0].message,
+                   f"the finding must name the subnet group, which the AWS "
+                   f"error never does: {stale[0].message!r}")
+    th.assert_true("delete-db-subnet-group" in (stale[0].remedy or ""),
+                   f"the remedy must give the exact delete command, since a "
+                   f"human is the only thing that can run it: "
+                   f"{stale[0].remedy!r}")
+    th.assert_eq("subnet_group.ok" in _codes(findings), False,
+                 "a stale group must never also be reported as in place")
+    th.assert_eq([a.target for a in actions if a.target == names["db_cluster"]],
+                 [],
+                 "a cluster create must not even be PLANNED against a subnet "
+                 "group AWS is going to reject")
+    _assert_no_blind(findings,
+                     "create_db_cluster must not be attempted — MANUAL alone "
+                     "does not block a step, so the create has to be made "
+                     "conditional on the validation itself")
+    stubber.assert_no_pending_responses()
+
+
+@th.django_unit_test("a DB subnet group down to one zone is MANUAL — AWS requires two")
+def test_data_reports_manual_when_the_db_subnet_group_lost_a_zone(opts):
+    from mojo.deploy.provision import data, report
+    from mojo.deploy.provision import spec as spec_module
+
+    spec = _spec()
+    names = spec_module.names(spec)
+    # One of the two survived. AWS counts zones, not subnets, and one is not two.
+    observed = _observed(
+        db_subnet_group={"DBSubnetGroupName": names["db_subnet_group"],
+                         "Subnets": [_named_subnets()[0],
+                                     _dead_subnets()[1]]},
+        subnets=[_live_subnets()[0]],
+        private_subnet_ids=["subnet-0prv1", "subnet-0new2"],
+        rds_sg_id="sg-0rds",
+        secrets={"db_password": "p" * 40})
+
+    client, stubber = _stub("rds")
+    with stubber:
+        findings, actions, result = data.ensure_database(
+            _clients(rds=client), spec, observed, apply=True)
+
+    th.assert_in("subnet_group.stale", _codes(findings, report.MANUAL),
+                 f"one surviving subnet in one zone does not meet the two-AZ "
+                 f"coverage AWS enforces at create time: {_codes(findings)}")
+    _assert_no_blind(findings, "no cluster create may be attempted")
+    stubber.assert_no_pending_responses()
+
+
+@th.django_unit_test("a stale cache subnet group is MANUAL, and stops the replication group")
+def test_data_reports_manual_for_a_stale_cache_subnet_group(opts):
+    from mojo.deploy.provision import data, report
+    from mojo.deploy.provision import spec as spec_module
+
+    spec = _spec()
+    names = spec_module.names(spec)
+    observed = _observed(
+        cache_subnet_group={
+            "CacheSubnetGroupName": names["cache_subnet_group"],
+            "Subnets": _dead_subnets()},
+        subnets=[],
+        private_subnet_ids=["subnet-0new1", "subnet-0new2"],
+        cache_sg_id="sg-0cache",
+        secrets={"cache_auth_token": "t" * 40})
+
+    client, stubber = _stub("elasticache")
+    with stubber:
+        findings, actions, result = data.ensure_cache(
+            _clients(elasticache=client), spec, observed, apply=True)
+
+    th.assert_in("subnet_group.stale", _codes(findings, report.MANUAL),
+                 f"the cache subnet group has the same failure mode as the DB "
+                 f"one and must be reported the same way: {_codes(findings)}")
+    stale = _stale(findings)
+    th.assert_true(names["cache_subnet_group"] in stale[0].message,
+                   f"the finding must name the cache subnet group: "
+                   f"{stale[0].message!r}")
+    th.assert_true("delete-cache-subnet-group" in (stale[0].remedy or ""),
+                   f"the remedy must give the elasticache delete command: "
+                   f"{stale[0].remedy!r}")
+    th.assert_eq([a.target for a in actions if a.target == names["cache_group"]],
+                 [],
+                 "a replication group create must not be planned against it")
+    th.assert_eq(result["cache_ready"], False,
+                 "nothing was created, so the cache is certainly not ready")
+    _assert_no_blind(findings,
+                     "create_replication_group must not be attempted")
+    stubber.assert_no_pending_responses()
+
+
+@th.django_unit_test("a healthy DB subnet group spanning two zones changes nothing")
+def test_data_accepts_a_db_subnet_group_that_still_spans_two_zones(opts):
+    from mojo.deploy.provision import data, report
+    from mojo.deploy.provision import spec as spec_module
+
+    spec = _spec()
+    names = spec_module.names(spec)
+    observed = _observed(
+        db_subnet_group={"DBSubnetGroupName": names["db_subnet_group"],
+                         "Subnets": _named_subnets()},
+        subnets=_live_subnets(),
+        private_subnet_ids=["subnet-0prv1", "subnet-0prv2"],
+        rds_sg_id="sg-0rds",
+        secrets={"db_password": "p" * 40})
+
+    client, stubber = _stub("rds")
+    stubber.add_response(
+        "create_db_cluster",
+        {"DBCluster": {"DBClusterIdentifier": names["db_cluster"],
+                       "Status": "creating"}},
+        {"DBClusterIdentifier": names["db_cluster"],
+         "Engine": spec_module.DB_ENGINE,
+         "EngineVersion": spec_module.ENGINE_VERSIONS[spec_module.DB_ENGINE],
+         "DatabaseName": names["db_name"],
+         "MasterUsername": data.MASTER_USERNAME,
+         "MasterUserPassword": "p" * 40,
+         "DBSubnetGroupName": names["db_subnet_group"],
+         "VpcSecurityGroupIds": ["sg-0rds"],
+         "Port": spec_module.DB_PORT,
+         "StorageEncrypted": True,
+         "DeletionProtection": True,
+         "BackupRetentionPeriod": spec.db_retention_days,
+         "Tags": spec_module.tag_list(spec, "database",
+                                      name=names["db_cluster"])})
+    stubber.add_response("create_db_instance", {"DBInstance": {}})
+    stubber.add_response("create_db_instance", {"DBInstance": {}})
+
+    with stubber:
+        findings, actions, result = data.ensure_database(
+            _clients(rds=client), spec, observed, apply=True)
+
+    th.assert_eq(_stale(findings), [],
+                 f"a group whose subnets all still exist, across two zones, is "
+                 f"exactly what this package builds — accusing it would send an "
+                 f"operator to delete a working group: {_codes(findings)}")
+    th.assert_in("subnet_group.ok", _codes(findings, report.PASS),
+                 f"a healthy group must still report as in place: "
+                 f"{_codes(findings)}")
+    stubber.assert_no_pending_responses()
+    _assert_no_blind(findings,
+                     "the cluster create must go ahead exactly as before")
+
+
+@th.django_unit_test("a healthy cache subnet group spanning two zones changes nothing")
+def test_data_accepts_a_cache_subnet_group_that_still_spans_two_zones(opts):
+    from mojo.deploy.provision import data, report
+    from mojo.deploy.provision import spec as spec_module
+
+    spec = _spec()
+    names = spec_module.names(spec)
+    observed = _observed(
+        cache_subnet_group={
+            "CacheSubnetGroupName": names["cache_subnet_group"],
+            "Subnets": _named_subnets()},
+        subnets=_live_subnets(),
+        private_subnet_ids=["subnet-0prv1", "subnet-0prv2"],
+        cache_sg_id="sg-0cache",
+        secrets={"cache_auth_token": "t" * 40})
+
+    client, stubber = _stub("elasticache")
+    stubber.add_response(
+        "create_replication_group",
+        {"ReplicationGroup": {"ReplicationGroupId": names["cache_group"],
+                              "Status": "creating"}},
+        {"ReplicationGroupId": names["cache_group"],
+         "ReplicationGroupDescription": "django-mojo valkey",
+         "Engine": spec_module.CACHE_ENGINE,
+         "EngineVersion": spec_module.ENGINE_VERSIONS[spec_module.CACHE_ENGINE],
+         "CacheNodeType": spec.cache_type,
+         "NumCacheClusters": 1 + spec.cache_replicas,
+         "AutomaticFailoverEnabled": True,
+         "MultiAZEnabled": True,
+         "CacheSubnetGroupName": names["cache_subnet_group"],
+         "SecurityGroupIds": ["sg-0cache"],
+         "Port": spec_module.CACHE_PORT,
+         "TransitEncryptionEnabled": True,
+         "AtRestEncryptionEnabled": True,
+         "AuthToken": "t" * 40,
+         "Tags": spec_module.tag_list(spec, "cache",
+                                      name=names["cache_group"])})
+
+    with stubber:
+        findings, actions, result = data.ensure_cache(
+            _clients(elasticache=client), spec, observed, apply=True)
+
+    th.assert_eq(_stale(findings), [],
+                 f"a cache subnet group whose subnets still exist must be left "
+                 f"alone: {_codes(findings)}")
+    th.assert_in("subnet_group.ok", _codes(findings, report.PASS),
+                 f"a healthy cache subnet group must still report as in place: "
+                 f"{_codes(findings)}")
+    stubber.assert_no_pending_responses()
+    _assert_no_blind(findings,
+                     "the replication group create must go ahead as before")
+
+
 # ── nodes ───────────────────────────────────────────────────────────────────
 
 @th.django_unit_test("an elastic IP is adopted only when tagged for this project and env")
