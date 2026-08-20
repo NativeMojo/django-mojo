@@ -258,6 +258,38 @@ def test_conflict_refused_for_primary_and_admin_vhost(opts):
         f"an admin-created redirect vhost did not refuse plainly: {error!r}"
 
 
+@th.django_unit_test("a PARKED vhost at the same address is refused, never duplicated")
+def test_conflict_sees_disabled_rows(opts):
+    from django.db import IntegrityError
+    from mojo.apps.edge.models import Vhost
+
+    web_app, domain, certificate, _ = _app_with_primary(opts)
+    # Another app's address, parked. The partial unique constraint only covers
+    # ENABLED rows, so a scan filtered on is_enabled would not see this — and
+    # attach would mint a second, enabled row that the parked row's owner could
+    # then never re-enable.
+    parked = make_vhost(domain, certificate, label="parked", kind="site_api",
+                        is_enabled=False)
+
+    _, error, _, upsert, request, _ = _attach(
+        opts, web_app, f"parked.{domain.name}")
+
+    assert error is not None and not isinstance(error, IntegrityError), \
+        f"a parked address was adopted or raised at the DB: {error!r}"
+    assert "already serving" in str(error), \
+        f"the parked-address refusal was not the plain message: {error}"
+    assert list(Vhost.objects.filter(domain=domain, label="parked")
+                .values_list("pk", flat=True)) == [parked.pk], \
+        "attach created a second vhost alongside a parked one"
+    upsert.assert_not_called()
+    request.assert_not_called()
+
+    parked.is_enabled = True
+    parked.save()
+    assert Vhost.objects.get(pk=parked.pk).is_enabled is True, \
+        "the parked row's owner could not re-enable it after the refusal"
+
+
 @th.django_unit_test("re-attaching the same address is a free, write-free success")
 def test_idempotent_reattach(opts):
     web_app, domain, _, _ = _app_with_primary(opts)
@@ -278,6 +310,57 @@ def test_idempotent_reattach(opts):
         "an idempotent re-attach reported itself as a fresh create"
     upsert.assert_not_called()  # the Check button must be free to press
     listed.assert_not_called()
+    request.assert_not_called()
+
+
+@th.django_unit_test("a failing reconcile leaves NO half-configured alias behind")
+def test_attach_create_and_reconcile_are_atomic(opts):
+    from mojo.apps.edge.models import Vhost
+
+    web_app, domain, _, _ = _app_with_primary(opts)
+
+    # The alias row and its auth routes are one unit. A committed row whose
+    # reconcile failed would converge to the fleet as a custom domain serving
+    # the SPA with no /auth routes and no honeypots.
+    with mock.patch(
+            "mojo.apps.edge.services.webapp_auth_routes.reconcile",
+            side_effect=RuntimeError("upstream is not unambiguous")):
+        _, error, _, _, _, _ = _attach(
+            opts, web_app, f"halfway.{domain.name}")
+
+    assert error is not None, \
+        "a failing route reconcile still reported the alias as attached"
+    assert not Vhost.objects.filter(domain=domain, label="halfway").exists(), \
+        "a failing reconcile left the alias vhost committed and serving"
+    assert not Vhost.objects.filter(alias_of=web_app).exists(), \
+        "the rolled-back attach still left an alias on the app"
+
+
+@th.django_unit_test("pressing Check on a half-configured alias repairs its auth routes")
+def test_reattach_reconciles_existing_alias(opts):
+    from mojo.apps.edge.models import Vhost, VhostRoute
+    from mojo.apps.edge.services import webapp_auth_routes
+
+    web_app, domain, _, _ = _app_with_primary(opts)
+    hostname = f"repair.{domain.name}"
+    first, error, _, _, _, _ = _attach(opts, web_app, hostname)
+    assert error is None and first.status == "attached", \
+        f"setup attach failed: {error or first}"
+    alias = Vhost.objects.get(pk=first.vhost)
+
+    # Stand in for an alias whose routes never landed: the "already ours" early
+    # return used to report `attached` over the top of that state forever.
+    VhostRoute.objects.filter(vhost=alias).delete()
+
+    second, error, _, upsert, request, _ = _attach(opts, web_app, hostname)
+    assert error is None and second.status == "attached", \
+        f"re-checking a half-configured alias raised: {error or second}"
+    assert second.vhost == alias.pk and second.created is False, \
+        f"the repair minted a second vhost for the same address: {second}"
+    routes = set(alias.routes.values_list("path_prefix", flat=True))
+    assert routes == set(webapp_auth_routes.auth_route_prefixes()), \
+        f"pressing Check did not repair the alias auth contract: {routes}"
+    upsert.assert_not_called()  # the repair costs no DNS write
     request.assert_not_called()
 
 
@@ -771,6 +854,71 @@ def test_alias_kind_and_exclusivity_invariants(opts):
         "one vhost was accepted as both an app's primary address and its alias"
     primary.refresh_from_db()
     assert primary.alias_of_id is None, "the refused write still persisted"
+
+
+@th.django_unit_test("a WebApp cannot claim another app's alias as its own address")
+def test_webapp_cannot_point_primary_at_an_alias(opts):
+    from mojo.apps.edge.models import Vhost, WebApp
+
+    web_app, domain, _, _ = _app_with_primary(opts)
+    result, error, _, _, _, _ = _attach(opts, web_app, f"claim.{domain.name}")
+    assert error is None, f"setup attach failed: {error}"
+    alias = Vhost.objects.get(pk=result.vhost)
+
+    # `WebApp.vhost` is caller-writable and the OneToOne is free — no app
+    # claims an alias vhost as its primary — so without a check here app B
+    # takes over app A's custom domain and serves its own release bytes on it.
+    hijacker = make_webapp(opts.group, slug=f"hij{uuid.uuid4().hex[:6]}")
+    hijacker.vhost = alias
+    error = raises(hijacker.save)
+    assert error is not None, \
+        "a WebApp adopted another app's alias address as its own"
+    assert "extra address" in str(error), \
+        f"the refusal was not the plain extra-address message: {error}"
+    assert WebApp.objects.get(pk=hijacker.pk).vhost_id is None, \
+        "the refused write still linked the alias vhost"
+
+    # The app that OWNS the alias cannot claim it either — a vhost is a primary
+    # or an alias, never both.
+    web_app.vhost = alias
+    assert raises(web_app.save) is not None, \
+        "an app adopted its own alias address as its primary"
+
+
+@th.django_unit_test("one vhost id can never produce two desired-state rows")
+def test_desired_webapps_dedupes_one_vhost(opts):
+    from mojo.apps.edge.models import Vhost, WebApp
+    from mojo.apps.edge.services import releases
+
+    owner, domain, _, primary = _app_with_primary(opts)
+    result, error, _, _, _, _ = _attach(opts, owner, f"dedupe.{domain.name}")
+    assert error is None, f"setup attach failed: {error}"
+    alias = Vhost.objects.get(pk=result.vhost)
+    owner_release = make_release(owner, f"v{uuid.uuid4().hex[:6]}", status="live")
+    owner.current_release = owner_release
+    owner.save(update_fields=["current_release", "modified"])
+
+    intruder = make_webapp(opts.group, slug=f"int{uuid.uuid4().hex[:6]}")
+    intruder_release = make_release(
+        intruder, f"v{uuid.uuid4().hex[:6]}", status="live")
+    # Forced past validation with a queryset update (which never calls save()),
+    # to prove the fan-out itself is structurally single-valued rather than
+    # merely relying on validate_web_app to keep this row from existing.
+    WebApp.objects.filter(pk=intruder.pk).update(
+        vhost=alias, current_release=intruder_release)
+    try:
+        rows = releases.desired_webapps([primary, alias])
+        alias_rows = [row for row in rows if row["vhost"] == alias.pk]
+        assert len(alias_rows) == 1, \
+            f"one vhost id produced {len(alias_rows)} desired-state rows: {rows}"
+        assert alias_rows[0]["slug"] == intruder.slug, \
+            ("the dedupe did not let the PRIMARY link win: "
+             f"{alias_rows[0]['slug']}")
+        assert len(rows) == len({row["vhost"] for row in rows}), \
+            f"desired state carried a duplicate vhost id: {rows}"
+    finally:
+        WebApp.objects.filter(pk=intruder.pk).update(
+            vhost=None, current_release=None)
 
 
 @th.django_unit_test("an alias must share the app's pool and use an owned domain")

@@ -267,23 +267,30 @@ def desired_webapps(vhosts):
 
     Keyed by vhost id because that, not the slug, is what the node turns into a
     filesystem path.
+
+    **One vhost id yields at most ONE row, structurally.** The primary query and
+    the alias query are separate, so a row that is somehow both — an app's
+    primary pointed at another app's alias vhost — would emit twice, and the
+    installer's dict-by-vhost-id build would silently take whichever came last.
+    `validate_web_app` is the primary control that stops such a row existing;
+    the dedupe below is defense in depth, so that even a row forced in past
+    validation cannot make a node install one app's bytes under another app's
+    address. The PRIMARY link wins: it is the stronger claim on the vhost.
     """
     from mojo.apps.edge.models import Vhost
 
     vhost_ids = [v.pk for v in vhosts]
-    rows = [
-        _webapp_row(row.vhost_id, row)
-        for row in WebApp.objects
-        .filter(vhost_id__in=vhost_ids, current_release__isnull=False)
-        .select_related("current_release")
-    ]
-    rows.extend(
-        _webapp_row(alias.pk, alias.alias_of)
-        for alias in Vhost.objects
-        .filter(pk__in=vhost_ids, alias_of__isnull=False,
-                alias_of__vhost__isnull=False,
-                alias_of__current_release__isnull=False)
-        .select_related("alias_of__current_release")
-    )
-    rows.sort(key=lambda row: row["vhost"])
-    return rows
+    by_vhost = {}
+    for row in (WebApp.objects
+                .filter(vhost_id__in=vhost_ids, current_release__isnull=False)
+                .select_related("current_release")):
+        by_vhost[row.vhost_id] = _webapp_row(row.vhost_id, row)
+    for alias in (Vhost.objects
+                  .filter(pk__in=vhost_ids, alias_of__isnull=False,
+                          alias_of__vhost__isnull=False,
+                          alias_of__current_release__isnull=False)
+                  .select_related("alias_of__current_release")):
+        if alias.pk in by_vhost:
+            continue
+        by_vhost[alias.pk] = _webapp_row(alias.pk, alias.alias_of)
+    return sorted(by_vhost.values(), key=lambda row: row["vhost"])

@@ -442,8 +442,24 @@ def validate_web_app(web_app):
     # a domain record and a certificate per team. A house domain is nobody's
     # ancestor (group_id is None matches nothing), so the hijack above stays
     # refused.
+    #
+    # The linked vhost must also NOT be some app's alias address. "A vhost is
+    # either a primary or an alias, never both" used to be enforced from ONE
+    # side only — `validate_vhost_alias`, i.e. `Vhost.save()`. Nothing said it
+    # from here, and `vhost` is caller-writable, so app B could point its
+    # primary at app A's alias vhost: the OneToOne is free because no app
+    # claims an alias vhost as primary, and the group check passes whenever
+    # both apps sit under the same domain. `desired_webapps` then emitted TWO
+    # rows for that one vhost id and the installer's dict-by-vhost-id build
+    # took the last — installing one app's release bytes under a vhost another
+    # app now owns. This is the mirror of the vhost-side rule: the OneToOne no
+    # longer implies the vhost is unclaimed.
     if web_app.vhost_id:
-        vhost_group_id = web_app.vhost.domain.group_id
+        vhost = web_app.vhost
+        if vhost.alias_of_id:
+            raise me.ValueException(
+                "that address is another app's extra address")
+        vhost_group_id = vhost.domain.group_id
         if not _group_at_or_below(web_app.group, vhost_group_id):
             raise me.ValueException(
                 "the vhost must belong to this web app's group or a parent "

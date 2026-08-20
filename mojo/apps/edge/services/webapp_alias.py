@@ -27,6 +27,7 @@ repo, so "the registrable parent of `shop.customer.co.uk`" is a guess, and
 zone. Connecting a domain is its own deliberate flow on the Domains page.
 """
 
+from django.db import transaction
 from django.utils import timezone
 
 from objict import objict
@@ -222,21 +223,39 @@ def attach(web_app, hostname, actor, retry_certificate=False):
                 f"Managing DNS for {domain.name} requires access in the "
                 "workspace that owns it")
 
-    existing = Vhost.objects.filter(
-        domain=domain, label=label, is_enabled=True).select_related(
-            "certificate").first()
-    if existing is not None:
-        if existing.alias_of_id == web_app.pk:
-            # Already ours: report success without touching DNS again. This is
-            # what makes the Check button free to press.
-            return objict(status="attached", hostname=hostname,
-                          vhost=existing.pk, domain=domain.pk,
-                          dns=_dns_mode(domain), created=False)
-        # Covers another app's primary, another app's alias, and any
-        # admin-created vhost of any kind — so the enabled-name uniqueness
-        # constraint is never reached as an IntegrityError.
+    # Every row at this name, ENABLED OR NOT. Scanning only enabled rows
+    # matched the partial unique constraint but missed a PARKED one — another
+    # app's disabled address, or one an admin took down. Attach would then mint
+    # a second (enabled) row for the same name, and the parked row's owner
+    # could never re-enable it: that write hits the constraint as an
+    # IntegrityError with nothing left to do about it.
+    rows = list(Vhost.objects.filter(domain=domain, label=label)
+                .select_related("certificate")
+                .order_by("-is_enabled", "pk"))
+    ours = [row for row in rows if row.alias_of_id == web_app.pk]
+    if len(ours) != len(rows):
+        # Anything here that is not already this app's own alias — another
+        # app's primary, another app's alias, an admin-created vhost of any
+        # kind, enabled or parked — is the same plain refusal, so the
+        # enabled-name uniqueness constraint is never reached as an
+        # IntegrityError.
         raise me.ValueException(
             f"{hostname} is already serving something else here.")
+    existing = ours[0] if ours else None
+    if existing is not None and existing.is_enabled:
+        # Already ours and live: report success without touching DNS again.
+        # This is what makes the Check button free to press. Reconcile anyway —
+        # it is idempotent, and it is what REPAIRS an alias whose routes never
+        # landed (see the create+reconcile transaction below). Without it a
+        # half-configured alias would report `attached` forever while serving
+        # the SPA with no /auth routes and no honeypots.
+        webapp_auth_routes.reconcile(existing)
+        return objict(status="attached", hostname=hostname,
+                      vhost=existing.pk, domain=domain.pk,
+                      dns=_dns_mode(domain), created=False)
+    # `existing` is now either None, or this app's own PARKED alias row. A
+    # parked one is revived below rather than duplicated — but only after the
+    # DNS and certificate gates below have passed, exactly as a fresh one is.
 
     destination = webapp_destination.resolve(hostname)
     target = destination.value
@@ -285,13 +304,29 @@ def attach(web_app, hostname, actor, retry_certificate=False):
             reason="The security certificate has been requested. Check again "
                    "in a few minutes.")
 
-    vhost = Vhost.objects.create(
-        domain=domain, label=label, kind="site_api", certificate=certificate,
-        pool=primary.pool, spa=True, alias_of=web_app)
-    vhost, _, _ = webapp_auth_routes.reconcile(vhost)
+    # ONE transaction. The alias row and its auth routes are a single unit: a
+    # committed row whose reconcile raised would converge to the fleet as a
+    # custom domain serving the SPA with no /auth routes and no honeypots, and
+    # the next Check would take the "already ours" path above and report
+    # `attached` over the top of it.
+    with transaction.atomic():
+        if existing is not None:
+            # This app's own parked address, revived — never a duplicate row.
+            existing.certificate = certificate
+            existing.pool = primary.pool
+            existing.spa = True
+            existing.is_enabled = True
+            existing.save()
+            vhost = existing
+        else:
+            vhost = Vhost.objects.create(
+                domain=domain, label=label, kind="site_api",
+                certificate=certificate, pool=primary.pool, spa=True,
+                alias_of=web_app)
+        vhost, _, _ = webapp_auth_routes.reconcile(vhost)
     return objict(status="attached", hostname=hostname, vhost=vhost.pk,
                   domain=domain.pk, certificate=certificate.pk,
-                  dns=_dns_mode(domain), created=True)
+                  dns=_dns_mode(domain), created=existing is None)
 
 
 def detach(web_app, vhost):
