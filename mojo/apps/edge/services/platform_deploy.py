@@ -493,13 +493,21 @@ def close_handoff_job(value, state="completed"):
         candidates = Job.objects.filter(
             func=deploy.DEPLOY_NODE_JOB, status="running",
             payload__deployment=owner)
-        # The slice is a hostile-input guard only: a node owns at most one
-        # running deploy_node row per deployment, and both matches are already
-        # scoped to this node, so it can never span peers.
-        rows = list(candidates.filter(payload__runner=local)[:MAX_HANDOFF_JOBS])
+        # The slice is a hostile-input guard only. A node USUALLY owns one
+        # running deploy_node row per deployment, but not always: a capacity
+        # converge retry after proof_timeout republishes under a previous
+        # deployment's uuid (aws/services/capacity.py), so two can be live at
+        # once. Both are still THIS node's, and both should close — the bound
+        # caps a hostile row count, it does not paper over an anomaly. What
+        # makes it safe is that each match below is scoped to this node, so
+        # the slice can never span peers. Ordered so the bound is
+        # deterministic rather than whatever the planner returned.
+        rows = list(candidates.filter(
+            payload__runner=local).order_by("created")[:MAX_HANDOFF_JOBS])
         if not rows:
             rows = list(candidates.filter(
-                Q(runner_id=local) | Q(channel=local))[:MAX_HANDOFF_JOBS])
+                Q(runner_id=local) | Q(channel=local)
+            ).order_by("created")[:MAX_HANDOFF_JOBS])
         if not rows:
             logit.info(
                 f"edge deploy {value}: no running node job for {local} — "
