@@ -270,6 +270,74 @@ def ensure_secrets(clients, spec, observed, apply=False):
     return findings, actions, result
 
 
+# ── the operator's copy of the generated SSH key ────────────────────────────
+
+# ssh(1) REFUSES an identity file any other account can read — "UNPROTECTED
+# PRIVATE KEY FILE ... this private key will be ignored" — so 0600 here is not
+# hygiene, it is the difference between `configure` working and `configure`
+# failing with a permission-denied that names nothing useful.
+SSH_IDENTITY_MODE = 0o600
+SSH_DIR_MODE = 0o700
+
+
+def ssh_identity_path(spec, home=None):
+    """Where this environment's generated private key is kept locally.
+
+    One stable path per project+environment, so a second `configure` finds the
+    file the first one wrote instead of accumulating copies, and two
+    environments of the same project never overwrite each other's key.
+    """
+    base = home if home is not None else os.path.expanduser("~")
+    return os.path.join(base, ".ssh", f"{spec.project}-{spec.env}.pem")
+
+
+def materialize_ssh_identity(spec, secrets, home=None):
+    """Put the generated private key on disk at 0600 and return where.
+
+    Returns `(path, wrote)`. `path` is None when the secrets object carries no
+    `ssh_private_key` — the ImportKeyPair case, where the operator supplied
+    their own public key, AWS never generated a private half, and the only thing
+    that can authenticate is the agent they already hold it in. That is not a
+    failure; the caller says so and falls back to the agent.
+
+    THE KEY MATERIAL IS NEVER PRINTED, RETURNED OR LOGGED. Findings and console
+    lines from this package are rendered to a terminal AND into a browser by the
+    portal, so the only thing that leaves this function is the path. The path is
+    safe to print; the contents are not, and nothing above this line should ever
+    be tempted to echo them for debugging.
+
+    Writing is conditional: an identical file is left alone (its mode is still
+    re-asserted, because a file written before this rule existed may be 0644 and
+    ssh would ignore it). The create uses `os.open` with the mode, so the file
+    is 0600 from the instant it exists rather than briefly readable.
+    """
+    material = (secrets or {}).get("ssh_private_key")
+    if not material:
+        return None, False
+    if not material.endswith("\n"):
+        material += "\n"
+
+    path = ssh_identity_path(spec, home=home)
+    os.makedirs(os.path.dirname(path), mode=SSH_DIR_MODE, exist_ok=True)
+
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                if handle.read() == material:
+                    os.chmod(path, SSH_IDENTITY_MODE)
+                    return path, False
+        except OSError:
+            pass
+
+    handle = os.fdopen(
+        os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                SSH_IDENTITY_MODE), "w", encoding="utf-8")
+    with handle:
+        handle.write(material)
+    os.chmod(path, SSH_IDENTITY_MODE)
+    return path, True
+
+
 # ── stage 1 ─────────────────────────────────────────────────────────────────
 
 def stage1_document(spec, observed, secrets_key):

@@ -52,7 +52,8 @@ import sys
 
 from mojo.deploy.provision import certificate as certificate_module
 from mojo.deploy.provision import clients as clients_module
-from mojo.deploy.provision import discover, inputs, plan, remote, render, report
+from mojo.deploy.provision import (discover, inputs, plan, remote, render,
+                                   report, storage)
 from mojo.deploy.provision import spec as spec_module
 
 
@@ -156,8 +157,9 @@ def build_parser():
         help=f"the account to reach the nodes as (default: {remote.SSH_USER})")
     configure.add_argument(
         "--identity",
-        help="private key to authenticate with, when it is not one your agent "
-             "already holds")
+        help="private key to authenticate with. Not normally needed: the key "
+             "this tool generated is fetched from the environment's secrets "
+             "object and written to ~/.ssh/<project>-<env>.pem automatically")
     admin = commands.add_parser(
         "admin", parents=[shared],
         help="create the first superuser and print a single-use login link")
@@ -170,7 +172,8 @@ def build_parser():
         help=f"the account to reach the node as (default: {remote.SSH_USER})")
     admin.add_argument(
         "--identity",
-        help="private key to authenticate with")
+        help="private key to authenticate with. Not normally needed — see "
+             "`configure --help`")
     status = commands.add_parser(
         "status", parents=[shared],
         help="observe the account and report, changing nothing")
@@ -440,12 +443,14 @@ def run_configure(args, console):
                     "would install nothing. Fix the above and re-run.")
         return EXIT_FINDINGS
 
+    identity = _resolve_identity(args, topology, run.observed, console)
+
     console.say("")
     console.say(f"converging {len(hosts)} node(s) over SSH — this waits for "
                 f"cloud-init, so it can take several minutes")
     node_findings = remote.converge(
         hosts, runner_for=lambda host: remote.build_runner(
-            host, user=args.ssh_user, identity=args.identity))
+            host, user=args.ssh_user, identity=identity))
     render_findings(node_findings, console.say)
 
     all_findings = list(conf_findings) + list(node_findings)
@@ -454,14 +459,53 @@ def run_configure(args, console):
         return EXIT_FINDINGS
 
     all_findings.extend(
-        _finish_https(args, answers, topology, hosts, console))
-    all_findings.extend(_add_deploy_key(args, answers, hosts, console))
+        _finish_https(args, answers, topology, hosts, identity, console))
+    all_findings.extend(
+        _add_deploy_key(args, answers, hosts, identity, console))
 
     _summarize(all_findings, console)
     return EXIT_FINDINGS if report.Report(all_findings).is_blocking() else EXIT_OK
 
 
-def _finish_https(args, answers, topology, hosts, console):
+def _resolve_identity(args, topology, observed, console):
+    """The SSH key `configure` and `admin` authenticate with, found for itself.
+
+    An explicit `--identity` always wins: an operator naming a file has said
+    something this cannot know better than.
+
+    Otherwise, the key pair this package generated has its private half sitting
+    in the bootstrap secrets object, which `plan.observe` has ALREADY read out
+    of the config bucket by the time either command reaches here — so there is
+    no second S3 call, and no reason to make an operator extract the key from
+    that JSON by hand before they can run the next command. That manual step is
+    the whole difference between "one command" and "one command plus a page of
+    instructions", and it was the first thing a real end-to-end run tripped on.
+
+    An environment whose key pair was IMPORTED has no private half in the bucket
+    (that is the point of importing: nothing that can only be read once ever
+    exists). That is not a failure — the operator holds the key and their agent
+    is what SSH will use — so it says so and returns None, which `build_runner`
+    reads as "no -i flag", exactly as before this existed.
+
+    The path is printed. THE KEY IS NOT: see `storage.materialize_ssh_identity`.
+    """
+    if args.identity:
+        return args.identity
+
+    path, wrote = storage.materialize_ssh_identity(
+        topology, observed.get("secrets"))
+    console.say("")
+    if not path:
+        console.say("no generated private key is stored for this environment "
+                    "— its key pair was imported, so SSH will use whatever "
+                    "your agent holds. Pass --identity to name a key file.")
+        return None
+    console.say(f"authenticating with the environment's generated key at "
+                f"{path}{' (just written)' if wrote else ''}")
+    return path
+
+
+def _finish_https(args, answers, topology, hosts, identity, console):
     """The certificate, on a single node only.
 
     A fleet gets the hand-off text instead of an attempt: `certbot --nginx`
@@ -481,15 +525,14 @@ def _finish_https(args, answers, topology, hosts, console):
 
     console.say("")
     console.say(f"finishing HTTPS for {apex}")
-    run = remote.build_runner(hosts[0], user=args.ssh_user,
-                              identity=args.identity)
+    run = remote.build_runner(hosts[0], user=args.ssh_user, identity=identity)
     findings = certificate_module.configure_certificate(
         run, apex, answers.get("operator_email"), expected_ip=hosts[0])
     render_findings(findings, console.say)
     return findings
 
 
-def _add_deploy_key(args, answers, hosts, console):
+def _add_deploy_key(args, answers, hosts, identity, console):
     """Best effort, and honest about it.
 
     A failure here is not a failed provision: it costs the operator one paste
@@ -499,8 +542,7 @@ def _add_deploy_key(args, answers, hosts, console):
     repo = answers.get("github_repo")
     if not repo:
         return []
-    run = remote.build_runner(hosts[0], user=args.ssh_user,
-                              identity=args.identity)
+    run = remote.build_runner(hosts[0], user=args.ssh_user, identity=identity)
     rc, pubkey, _ = run("cat /home/ec2-user/.ssh/id_ed25519.pub", timeout=30)
     if rc != 0 or not pubkey.strip():
         console.say("")
@@ -561,8 +603,9 @@ def run_admin(args, console):
                     f"{hosts[0]} and print a one-hour login link.")
         return EXIT_OK
 
+    identity = _resolve_identity(args, topology, run.observed, console)
     runner = remote.build_runner(hosts[0], user=args.ssh_user,
-                                 identity=args.identity)
+                                 identity=identity)
     rc, out, err = runner(
         f"cd {remote.PROJ_PATH} && sudo -u ec2-user python3 bin/manage.py "
         f"create_user --email {email} --superuser --login-link", timeout=300)

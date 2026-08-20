@@ -307,7 +307,8 @@ def test_multi_node_skips_the_certificate_block(opts):
     remote.build_runner = _refuse
     try:
         findings = cli._finish_https(
-            args, answers, topology, ["203.0.113.10", "203.0.113.11"], console)
+            args, answers, topology, ["203.0.113.10", "203.0.113.11"],
+            None, console)
     finally:
         remote.build_runner = original
 

@@ -1486,3 +1486,314 @@ def test_observe_maps_security_group_by_name_when_role_tag_is_wrong(opts):
                       "cache": names["cache_sg"]}[role],
                      f"the {role} slot must hold the group with the "
                      f"contracted name")
+
+
+# ── nodes: an EIP association against a still-pending instance ──────────────
+
+def _one_node_with_a_reserved_eip(spec):
+    """A micro environment whose node exists and whose tagged EIP is unattached.
+
+    That is the shape a real first `apply` leaves behind: `run_instances`
+    returned, the address was allocated and tagged, and the association is the
+    very next call — against an instance EC2 still reports as `pending`.
+    """
+    from mojo.deploy.provision import spec as spec_module
+
+    hostname = spec_module.names(spec)["nodes"][0]
+    return _observed(
+        instances=[{"InstanceId": "i-0new", "State": {"Name": "pending"},
+                    "InstanceType": spec.node_type, "ImageId": "ami-0base",
+                    "Tags": [{"Key": "Name", "Value": hostname}]}],
+        addresses=[{"AllocationId": "eipalloc-mine",
+                    "PublicIp": "203.0.113.10",
+                    "Tags": spec_module.tag_list(spec, "node", name=hostname)}],
+        ami_id="ami-0base")
+
+
+@th.django_unit_test("associating an EIP with a still-pending instance is PENDING, not BLIND")
+def test_nodes_report_pending_when_the_instance_is_not_running_yet(opts):
+    from mojo.deploy.provision import nodes, report
+
+    spec = _spec(preset="micro")
+    observed = _one_node_with_a_reserved_eip(spec)
+
+    client, stubber = _stub("ec2")
+    # The live error, verbatim: EC2 models no error shapes, so the code string
+    # is the only thing there is to classify on.
+    stubber.add_client_error(
+        "associate_address", service_error_code="InvalidInstanceID",
+        service_message="The pending instance 'i-0new' is not in a valid "
+                        "state for this operation",
+        http_status_code=400)
+
+    with stubber:
+        findings, actions, result = nodes.ensure_nodes(
+            _clients(ec2=client), spec, observed, apply=True)
+
+    stubber.assert_no_pending_responses()
+    _assert_no_blind(findings,
+                     "an instance that is simply not running yet must never be "
+                     "BLIND — BLIND fails the step and BLOCKS dns, telling an "
+                     "operator their bootstrap broke when the correct advice is "
+                     "'run it again in a minute'")
+    th.assert_in("address.instance_not_ready", _codes(findings, report.PENDING),
+                 f"the not-yet-running instance must be reported as PENDING: "
+                 f"{[(f.code, f.status) for f in findings]}")
+    th.assert_eq(report.Report(findings).is_blocking(), False,
+                 "a PENDING address must not block the steps that follow — the "
+                 "next apply associates it")
+    waiting = [f for f in findings
+               if f.code == "address.instance_not_ready"][0]
+    th.assert_true(waiting.remedy and "re-run" in waiting.remedy,
+                   f"the remedy must tell the operator to re-run apply, which "
+                   f"is the entire action available to them: {waiting.remedy!r}")
+
+
+@th.django_unit_test("any other associate_address error is still BLIND")
+def test_nodes_still_report_blind_for_a_real_associate_address_failure(opts):
+    from mojo.deploy.provision import nodes, report
+
+    spec = _spec(preset="micro")
+    observed = _one_node_with_a_reserved_eip(spec)
+
+    client, stubber = _stub("ec2")
+    stubber.add_client_error(
+        "associate_address", service_error_code="UnauthorizedOperation",
+        service_message="You are not authorized to perform this operation",
+        http_status_code=403)
+
+    with stubber:
+        findings, actions, result = nodes.ensure_nodes(
+            _clients(ec2=client), spec, observed, apply=True)
+
+    stubber.assert_no_pending_responses()
+    th.assert_in("ec2.associate_address.denied", _codes(findings, report.BLIND),
+                 f"a denial is not 'not ready yet' — it must keep failing the "
+                 f"step through report.safe: "
+                 f"{[(f.code, f.status) for f in findings]}")
+    th.assert_eq(report.Report(findings).is_blocking(), True,
+                 "a credential that cannot associate addresses must block the "
+                 "steps downstream of this one")
+
+
+@th.django_unit_test("a not-ready instance still leaves the address usable to dns")
+def test_nodes_return_the_address_even_when_association_is_pending(opts):
+    from mojo.deploy.provision import nodes
+
+    spec = _spec(preset="micro")
+    observed = _one_node_with_a_reserved_eip(spec)
+
+    client, stubber = _stub("ec2")
+    stubber.add_client_error(
+        "associate_address", service_error_code="IncorrectInstanceState",
+        service_message="The instance 'i-0new' is not in a valid state",
+        http_status_code=400)
+
+    with stubber:
+        findings, actions, result = nodes.ensure_nodes(
+            _clients(ec2=client), spec, observed, apply=True)
+
+    th.assert_eq(result["node_addresses"], ["203.0.113.10"],
+                 "the address is allocated and reserved for this node whether "
+                 "or not the instance was ready to take it — dns points at it "
+                 "either way, and the next apply attaches it")
+
+
+# ── the operator's copy of the generated SSH key ────────────────────────────
+
+PRIVATE_KEY_BODY = ("-----BEGIN OPENSSH PRIVATE KEY-----\n"
+                    "b3BlbnNzaC1rZXktdjEAAAAA-not-a-real-key\n"
+                    "-----END OPENSSH PRIVATE KEY-----")
+
+
+class _Console:
+    """Records what the CLI would print, so a test can assert what it did NOT."""
+
+    def __init__(self):
+        self.lines = []
+
+    def say(self, text=""):
+        self.lines.append(text)
+
+    def text(self):
+        return "\n".join(self.lines)
+
+
+@th.unit_test("the generated private key is written once, at 0600, and re-used after")
+def test_storage_materializes_the_generated_key_at_0600(opts):
+    import os
+    import stat
+    import tempfile
+
+    from mojo.deploy.provision import storage
+
+    spec = _spec()
+    with tempfile.TemporaryDirectory() as home:
+        path, wrote = storage.materialize_ssh_identity(
+            spec, {"ssh_private_key": PRIVATE_KEY_BODY}, home=home)
+
+        th.assert_eq(path, os.path.join(home, ".ssh",
+                                        f"{PROJECT}-{ENV}.pem"),
+                     "the key must land at one stable path per project and "
+                     "environment, so a second configure finds the first "
+                     "one's file instead of writing another copy")
+        th.assert_eq(wrote, True, "the first call must actually write the file")
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        th.assert_eq(oct(mode), oct(0o600),
+                     f"ssh refuses an identity file any other account can read "
+                     f"— 0600 is what makes this usable at all, not hygiene: "
+                     f"got {oct(mode)}")
+        with open(path, "r", encoding="utf-8") as handle:
+            th.assert_eq(handle.read(), PRIVATE_KEY_BODY + "\n",
+                         "the key must be written verbatim, with the trailing "
+                         "newline ssh expects")
+
+        # Second call, identical material: nothing rewritten.
+        path2, wrote2 = storage.materialize_ssh_identity(
+            spec, {"ssh_private_key": PRIVATE_KEY_BODY}, home=home)
+        th.assert_eq(path2, path, "the same path must come back")
+        th.assert_eq(wrote2, False,
+                     "an identical key must not be rewritten on every run")
+
+        # A file left at a permissive mode by an older run is corrected.
+        os.chmod(path, 0o644)
+        storage.materialize_ssh_identity(
+            spec, {"ssh_private_key": PRIVATE_KEY_BODY}, home=home)
+        th.assert_eq(oct(stat.S_IMODE(os.stat(path).st_mode)), oct(0o600),
+                     "a key file found at a mode ssh would ignore must be "
+                     "corrected, not left for the operator to discover")
+
+
+@th.unit_test("a rotated key replaces the file rather than being ignored")
+def test_storage_rewrites_the_key_when_the_material_differs(opts):
+    import tempfile
+
+    from mojo.deploy.provision import storage
+
+    spec = _spec()
+    with tempfile.TemporaryDirectory() as home:
+        storage.materialize_ssh_identity(
+            spec, {"ssh_private_key": "old-material"}, home=home)
+        path, wrote = storage.materialize_ssh_identity(
+            spec, {"ssh_private_key": PRIVATE_KEY_BODY}, home=home)
+
+        th.assert_eq(wrote, True,
+                     "a key that differs from what is on disk must be written "
+                     "— otherwise a re-created key pair leaves configure "
+                     "authenticating with the one it replaced")
+        with open(path, "r", encoding="utf-8") as handle:
+            th.assert_eq(handle.read(), PRIVATE_KEY_BODY + "\n",
+                         "the new material must be what is on disk")
+
+
+@th.unit_test("an imported key pair stores no private half, and nothing is written")
+def test_storage_writes_nothing_when_there_is_no_generated_key(opts):
+    import os
+    import tempfile
+
+    from mojo.deploy.provision import storage
+
+    spec = _spec()
+    with tempfile.TemporaryDirectory() as home:
+        path, wrote = storage.materialize_ssh_identity(
+            spec, {"db_password": "x"}, home=home)
+
+        th.assert_eq(path, None,
+                     "an ImportKeyPair environment has no private half in the "
+                     "bucket — the operator holds it, and saying so is the "
+                     "correct outcome, not writing an empty file")
+        th.assert_eq(wrote, False, "nothing may be written")
+        th.assert_eq(os.path.exists(os.path.join(home, ".ssh")), False,
+                     "not even the directory may be created when there is no "
+                     "key to put in it")
+
+
+@th.unit_test("configure and admin find the generated key themselves")
+def test_cli_resolves_the_identity_from_the_secrets_object(opts):
+    import os
+    import tempfile
+    from unittest import mock
+
+    from objict import objict
+
+    from mojo.deploy.provision import __main__ as cli
+
+    spec = _spec()
+    observed = _observed(secrets={"ssh_private_key": PRIVATE_KEY_BODY,
+                                  "db_password": "p" * 40})
+    console = _Console()
+
+    with tempfile.TemporaryDirectory() as home:
+        with mock.patch.dict(os.environ, {"HOME": home}):
+            identity = cli._resolve_identity(
+                objict(identity=None), spec, observed, console)
+
+        th.assert_eq(identity, os.path.join(home, ".ssh",
+                                            f"{PROJECT}-{ENV}.pem"),
+                     "with no --identity, the key generated for this "
+                     "environment must be resolved automatically — extracting "
+                     "it from bootstrap-secrets.json by hand is exactly the "
+                     "manual step this removes")
+        th.assert_true(os.path.exists(identity),
+                       "the resolved path must be a file ssh can actually use")
+        th.assert_eq(PRIVATE_KEY_BODY in console.text(), False,
+                     "the key material must never be printed — this console "
+                     "output goes to a terminal and, through the portal, into "
+                     "a browser. The path is fine; the contents are not")
+        th.assert_true(identity in console.text(),
+                       "the operator must be told which key is being used")
+
+
+@th.unit_test("an explicit --identity always wins and writes nothing")
+def test_cli_identity_flag_wins_over_the_stored_key(opts):
+    import os
+    import tempfile
+    from unittest import mock
+
+    from objict import objict
+
+    from mojo.deploy.provision import __main__ as cli
+
+    spec = _spec()
+    observed = _observed(secrets={"ssh_private_key": PRIVATE_KEY_BODY})
+    console = _Console()
+
+    with tempfile.TemporaryDirectory() as home:
+        with mock.patch.dict(os.environ, {"HOME": home}):
+            identity = cli._resolve_identity(
+                objict(identity="/keys/mine.pem"), spec, observed, console)
+
+        th.assert_eq(identity, "/keys/mine.pem",
+                     "an operator who named a key has said something this "
+                     "cannot know better than")
+        th.assert_eq(os.path.exists(os.path.join(home, ".ssh")), False,
+                     "an explicit identity must not cause a key to be written "
+                     "anywhere")
+
+
+@th.unit_test("no stored private key falls back to the agent, and says so")
+def test_cli_falls_back_to_the_ssh_agent_when_the_key_was_imported(opts):
+    import os
+    import tempfile
+    from unittest import mock
+
+    from objict import objict
+
+    from mojo.deploy.provision import __main__ as cli
+
+    spec = _spec()
+    observed = _observed(secrets={"db_password": "p" * 40})
+    console = _Console()
+
+    with tempfile.TemporaryDirectory() as home:
+        with mock.patch.dict(os.environ, {"HOME": home}):
+            identity = cli._resolve_identity(
+                objict(identity=None), spec, observed, console)
+
+    th.assert_eq(identity, None,
+                 "None is what build_runner reads as 'no -i flag', which is "
+                 "the agent fallback that worked before this existed")
+    th.assert_true("agent" in console.text(),
+                   f"an imported key pair is not a failure — the operator must "
+                   f"be told why no key file is being used rather than watching "
+                   f"a silent SSH failure: {console.text()!r}")
