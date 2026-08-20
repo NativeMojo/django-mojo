@@ -346,6 +346,80 @@ def test_framework_pin_write_path(opts):
         Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
 
 
+@th.django_unit_test("_deployments answers what serves now, and whose lease is live")
+def test_deployments_currently_serving_and_coordination(opts):
+    """Additive payload (item 2225): `currently_serving` is the newest
+    CONVERGED attempt — after a failed deploy items[0] is the failure, and
+    this block is the answer to "so what is the fleet actually running?" —
+    and `coordination` now carries the lease's own sha and timestamp."""
+    import json
+    import uuid
+    from datetime import timedelta
+
+    from django.utils import timezone
+    from mojo.apps.account.services import admin_platform
+    from mojo.apps.edge.models import PlatformDeployment
+
+    PlatformDeployment.objects.all().delete()
+    older = PlatformDeployment.objects.create(
+        sha="a" * 40, actor="test", source="test", status="converged",
+        framework_version="1.11.0", request_key=str(uuid.uuid4()))
+    newer = PlatformDeployment.objects.create(
+        sha="b" * 40, actor="test", source="test", status="converged",
+        framework_version="1.12.0", request_key=str(uuid.uuid4()),
+        finished=timezone.now())
+    failed = PlatformDeployment.objects.create(
+        sha="c" * 40, actor="test", source="test", status="failed",
+        request_key=str(uuid.uuid4()))
+    PlatformDeployment.objects.filter(pk=older.pk).update(
+        created=timezone.now() - timedelta(minutes=10))
+    PlatformDeployment.objects.filter(pk=newer.pk).update(
+        created=timezone.now() - timedelta(minutes=5))
+
+    lease = json.dumps({
+        "state": "migrating", "sha": "c" * 40,
+        "deployment": str(failed.pk), "detail": "",
+        "at": "2026-08-19T00:00:00+00:00"})
+    with mock.patch.object(admin_platform, "_redis_client") as redis_ctx:
+        pipe = redis_ctx.return_value.__enter__.return_value.pipeline.return_value
+        pipe.execute.return_value = [None, lease]
+        value = admin_platform._deployments()
+    try:
+        newer.refresh_from_db()
+        serving = value["currently_serving"]
+        th.assert_eq(serving["deployment"], str(newer.pk),
+                     f"currently_serving must be the newest CONVERGED row, got {serving!r}")
+        th.assert_eq(serving["sha"], "b" * 40,
+                     f"currently_serving must carry the proven sha, got {serving!r}")
+        th.assert_eq(serving["framework_version"], "1.12.0",
+                     f"currently_serving must carry the framework, got {serving!r}")
+        th.assert_eq(serving["converged_at"], newer.finished.isoformat(),
+                     f"currently_serving must date the convergence, got {serving!r}")
+        th.assert_true(any(item["id"] == str(failed.pk) for item in value["items"]),
+                       "the failed attempt must stay visible in items while "
+                       "currently_serving answers what actually runs")
+        coordination = value["coordination"]
+        th.assert_eq(coordination["state"], "migrating",
+                     f"the lease state must survive, got {coordination!r}")
+        th.assert_eq(coordination["sha"], "c" * 40,
+                     f"the lease must say WHICH sha it coordinates, got {coordination!r}")
+        th.assert_eq(coordination["at"], "2026-08-19T00:00:00+00:00",
+                     f"the lease must say since when, got {coordination!r}")
+
+        with mock.patch.object(admin_platform, "_redis_client") as redis_ctx:
+            pipe = redis_ctx.return_value.__enter__.return_value.pipeline.return_value
+            pipe.execute.return_value = [None, None]
+            PlatformDeployment.objects.filter(
+                status="converged").update(status="superseded")
+            empty = admin_platform._deployments()
+        th.assert_eq(empty["currently_serving"], None,
+                     "a fleet with no converged attempt must say so, not guess")
+        th.assert_eq(empty["coordination"]["sha"], None,
+                     "an empty lease must read back as absent, not invented")
+    finally:
+        PlatformDeployment.objects.all().delete()
+
+
 @th.django_unit_test("the framework hold endpoint demands a fresh interactive superuser")
 def test_framework_pin_endpoint_authority(opts):
     from mojo.apps.account.models import Setting, User
@@ -370,7 +444,7 @@ def test_framework_pin_endpoint_authority(opts):
 
 
 def _tail_deployment():
-    """One durable attempt whose evidence carries a deploy stderr tail."""
+    """One durable attempt whose evidence AND diagnosis carry a stderr tail."""
     import uuid
     from mojo.apps.edge.models import PlatformDeployment
     PlatformDeployment.objects.all().delete()
@@ -380,6 +454,11 @@ def _tail_deployment():
         status="failed", transitions=[],
         node_evidence=[{
             "runner": "edge-a-engine", "state": "failed",
+            "detail": {"phase": "update_script", "exit": 23,
+                       "stderr_tail": ["psql: postgres://deploy:hunter2@db/app"]}}],
+        diagnosis=[{
+            "runner": "edge-a-engine", "at": "2026-08-19T00:00:00+00:00",
+            "kind": "failure", "proof": {},
             "detail": {"phase": "update_script", "exit": 23,
                        "stderr_tail": ["psql: postgres://deploy:hunter2@db/app"]}}])
 
@@ -413,6 +492,11 @@ def test_stderr_tail_hidden_from_read_only_viewer(opts):
     detail = section["data"]["items"][0]["node_evidence"][0]["detail"]
     th.assert_eq(detail["phase"], "update_script",
                  "the benign evidence detail must survive for read-only viewers")
+    story = section["data"]["items"][0]["diagnosis"][0]["detail"]
+    th.assert_eq(story["phase"], "update_script",
+                 "the diagnosis story must stay readable at view_platform")
+    th.assert_true("stderr_tail" not in story,
+                   f"the diagnosis-borne tail leaked below the security tier: {story!r}")
 
     dashboard = _run_dashboard(request, _dashboard_deployment=_REAL)
     assert "stderr_tail" not in str(dashboard["sources"]["last_deployment"]), \
@@ -479,6 +563,9 @@ def test_stderr_tail_visible_to_privileged_tiers(opts):
         section = overview["sections"]["deployments"]
         assert "hunter2" in str(section), \
             f"{granted} must still read the full diagnostic tail"
+        tail = section["data"]["items"][0]["diagnosis"][0]["detail"]["stderr_tail"]
+        assert "hunter2" in tail[0], \
+            f"{granted} must read the diagnosis-borne tail verbatim: {tail!r}"
         dashboard = _run_dashboard(request, _dashboard_deployment=_REAL)
         rendered = str(dashboard["sources"]["last_deployment"])
         assert "hunter2" not in rendered and "stderr_tail" not in rendered, \

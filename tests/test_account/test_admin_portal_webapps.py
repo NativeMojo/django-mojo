@@ -470,6 +470,72 @@ def test_webapp_row_copy_and_jargon_gate(opts):
         assert not offenders, \
             f"{name} user-facing copy leaks plumbing words: {offenders}"
 
+@th.django_unit_test("the Deployments API surface explains failures before offering controls")
+def test_deployments_failure_surface_browser_contract(opts):
+    root = Path(__file__).resolve().parents[2]
+    assets = root / "mojo/apps/account/admin_portal/assets/features/webapps"
+    api_side = (assets / "api.js").read_text()
+    page = (assets / "page.js").read_text()
+
+    # The manage label is History — 'Deploy' promised a new-commit control
+    # that does not exist (Admin only ever retries the same SHA).
+    assert "manage ? 'History' : 'Open'" in api_side, \
+        "the API service row lost its History/Open label split"
+    assert "? 'Deploy'" not in api_side and '"Deploy"' not in api_side, \
+        "the misleading Deploy label is back on the API service row"
+
+    # The failure explanation comes from the durable diagnosis journal (never
+    # node_summary.failed), with the transition-detail fallback for rows
+    # written before the journal existed — and it renders BEFORE the buttons.
+    assert "latestDiagnosis" in api_side and "failureStory" in api_side, \
+        "the failure story is not built from the diagnosis journal"
+    view = api_side[api_side.index("function attemptView"):
+                    api_side.index("export function openApiInspector")]
+    assert view.index("failurePanel(row)") < view.index("attemptActions("), \
+        "the attempt view offers controls before explaining the failure"
+    story = api_side[api_side.index("function failureStory"):
+                     api_side.index("function rollbackTargetLine")]
+    assert "row.transitions" in story and "row.detail" in story, \
+        "a pre-diagnosis row has no transition-detail fallback"
+    for line in ("rollback_failed", "rollback_impossible", "rolled_back",
+                 "Rollback unconfirmed"):
+        assert line in api_side, f"the rollback outcome cannot say {line!r}"
+    assert "remains on the same commit" in api_side, \
+        "a SAME_RELEASE failure would render a self-rollback as a real one"
+
+    # Controls are state-gated: no unconditional three-button map, nothing
+    # offered on an in-flight attempt.
+    assert "ACTIONS_BY_STATUS" in api_side, \
+        "attempt controls are no longer state-gated"
+    assert "DEPLOY_ACTIONS.map" not in api_side, \
+        "the unconditional three-button map is back"
+    gates = api_side[api_side.index("const ACTIONS_BY_STATUS"):
+                     api_side.index("const ACTIVE_STATUSES")]
+    for absent in ("requested", "canary", "fleet", "superseded"):
+        assert f"{absent}:" not in gates, \
+            f"an attempt in {absent!r} must offer no recovery controls"
+
+    # The row and drill-in consume the additive payload facts.
+    assert "currently_serving" in api_side and "node_summary" in api_side, \
+        "the surface ignores currently_serving/node_summary"
+    assert "provenCounts" not in api_side, \
+        "the client still re-derives proof counts from raw evidence"
+    assert "Show ${older.length} older attempt" in api_side, \
+        "older attempts are not collapsed behind a disclosure"
+    assert "coordination.sha" in api_side, \
+        "the coordination line does not say which sha holds the lease"
+
+    # The list polls while a deploy is in flight: bounded, hash-guarded, and
+    # cleared on abort and on every reload.
+    assert "pollTicks >= 36" in api_side + page and "10000" in page, \
+        "the deploy poll lost its tick cap or cadence"
+    assert "location.hash.startsWith('#/deployments')" in page, \
+        "the poll would keep running after the operator navigates away"
+    assert "signal?.addEventListener('abort', clearPoll)" in page, \
+        "the poll is not cleared when the page is torn down"
+    assert page.index("clearPoll();") < page.index("const reads = []"), \
+        "a reload does not clear the pending poll timer first"
+
 
 @th.django_unit_test("literal admin and partial globals do not grant backend WebApp authority")
 def test_webapp_authority_rejects_frontend_admin_and_partial_grants(opts):

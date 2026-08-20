@@ -30,8 +30,18 @@ API access with no browser surface behind them, and `registrar_vs_dns` (inside
 
 The deployment journal's **browser surface** — the attempt list, its drill-in,
 and the same-SHA recovery controls — renders in the merged Deployments lane
-(`#/deployments`, the `webapps` feature); the backend evidence and action
-contracts below are unchanged and remain this page's subject.
+(`#/deployments`, the `webapps` feature). The attempt drill-in is
+**explanation-first**: a failed attempt opens on the failure story (phase,
+runner, rollback target and outcome, sanitized stderr tail — from the durable
+`diagnosis` journal, with a transition-detail fallback for rows written before
+it existed), then a compact transition timeline and a "currently serving"
+line, and only then the controls. Controls are **state-specific** — failed:
+Retry same SHA + Verify; in-flight (requested/canary/fleet): none; verified/
+partial/unknown: Verify + Converge; converged: Verify; superseded: none — and
+the list **polls** every 10 seconds while a deploy is in flight (a live
+coordination lease or an unsettled newest attempt), capped at 36 ticks,
+guarded on the `#/deployments` hash, and cleared on reload and teardown. The
+backend evidence and action contracts below remain this page's subject.
 
 ## Deployment journal
 
@@ -43,12 +53,19 @@ is never attempt identity: a late callback for an older attempt is refused even
 when a newer attempt deploys the same SHA.
 
 The row freezes only live runners advertising the `edge` channel. It stores
-bounded transitions and one latest sanitized observation per frozen runner.
-GitHub's delivery id is conditionally unique; caller idempotency keys are also
-durable. Coordination, queue publication, canary proof, fleet dispatch,
-verification, convergence, partial/unknown outcomes, publish failure, and
-supersession remain queryable after Redis expires. A five-minute reconciler
-marks abandoned active attempts `unknown` after their lease vanishes.
+bounded transitions, one latest sanitized observation per frozen runner
+(`node_evidence`), and the append-only, bounded `diagnosis` journal (item
+2225): the terminal failure per runner with its phase, `rollback_to` target
+and sanitized stderr tail, plus rollback-outcome entries from update.sh's
+second report and from the lease-independent post-restart sweep. The latest
+observation is what a later probe *replaces*; the diagnosis is what survives
+it — see [edge/deploy.md](../../edge/deploy.md) for the write rules and
+bounds. GitHub's delivery id is conditionally unique; caller idempotency keys
+are also durable. Coordination, queue publication, canary proof, fleet
+dispatch, verification, convergence, partial/unknown outcomes, publish
+failure, and supersession remain queryable after Redis expires. A five-minute
+reconciler marks abandoned active attempts `unknown` after their lease
+vanishes.
 
 The existing `POST /api/edge/deploy` contract is unchanged and accepts a
 validated arbitrary SHA. Admin cannot choose a new SHA: it can only retry the
@@ -178,6 +195,7 @@ API-base, redirect, and external-CSS URL fields are not writable. Deploy,
 AWS, KMS, and security settings are owner-managed or file-only. Advanced no
 longer renders a duplicate typed form; Settings is the browser UI home.
 
-The migration is `edge.0010_platformdeployment`, directly after
-`edge.0009_webapp_onboarding`. `bin/admin_preview` provides feature-owned,
-deterministic Platform and Advanced evidence and action fixtures.
+The migrations are `edge.0010_platformdeployment` (directly after
+`edge.0009_webapp_onboarding`) and `edge.0012_platformdeployment_diagnosis`.
+`bin/admin_preview` provides feature-owned, deterministic Platform and
+Advanced evidence and action fixtures.

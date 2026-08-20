@@ -249,6 +249,18 @@ def _deployments(include_stderr=False):
         mode, resolved = "pinned", pin
     else:
         mode, resolved = "latest", None
+    # What the fleet PROVABLY runs right now — the newest converged attempt.
+    # Distinct from items[0]: after a failed deploy the newest attempt is the
+    # failure, and the answer to "so what is serving?" is this row.
+    serving = platform_deploy.last_converged_deployment()
+    currently_serving = None
+    if serving is not None:
+        converged_at = serving.finished or serving.modified
+        currently_serving = {
+            "deployment": str(serving.pk), "sha": serving.sha,
+            "framework_version": serving.framework_version,
+            "converged_at": converged_at.isoformat() if converged_at else None,
+        }
     return {
         "_collector_status": status,
         "items": [platform_deploy.serialize(
@@ -257,11 +269,14 @@ def _deployments(include_stderr=False):
         "limit": 50,
         "desired_commit": (target or {}).get("sha"),
         "desired_deployment": (target or {}).get("deployment"),
+        "currently_serving": currently_serving,
         "framework_pin": {"configured": bool(pin), "value": pin or None,
                           "mode": mode, "resolved": resolved},
         "coordination": {
             "state": (coordination or {}).get("state"),
             "deployment": (coordination or {}).get("deployment"),
+            "sha": (coordination or {}).get("sha"),
+            "at": (coordination or {}).get("at"),
         },
     }
 

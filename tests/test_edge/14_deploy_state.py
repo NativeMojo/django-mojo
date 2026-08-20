@@ -232,12 +232,17 @@ def test_deploy_status_failure_evidence(opts):
     deploy.set_target(SHA_C, actor="test", deployment_id=row.pk)
     deploy.arm_status(SHA_C, deployment_id=row.pk)
 
-    path = os.path.join(
-        django_settings.PROJECT_ROOT, "var", "deploy_failure_output")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    var_root = os.path.join(django_settings.PROJECT_ROOT, "var")
+    path = os.path.join(var_root, "deploy_failure_output")
+    os.makedirs(var_root, exist_ok=True)
     with open(path, "w") as stream:
         stream.write("password=deploy-sentinel\n")
         stream.write("FATAL: migration command refused schema drift\n")
+    # The rollback target update.sh captured before anything moved.
+    with open(os.path.join(var_root, "previous_sha"), "w") as stream:
+        stream.write("f" * 40 + "\n")
+    with open(os.path.join(var_root, "previous_framework"), "w") as stream:
+        stream.write("1.11.6\n")
 
     incident = mock.Mock(return_value=mock.Mock(pk=9127))
     try:
@@ -247,10 +252,11 @@ def test_deploy_status_failure_evidence(opts):
                 deployment=str(row.pk), detail="post_deploy (migrate)",
                 evidence=True)
     finally:
-        try:
-            os.unlink(path)
-        except FileNotFoundError:
-            pass
+        for name in ("deploy_failure_output", "previous_sha", "previous_framework"):
+            try:
+                os.unlink(os.path.join(var_root, name))
+            except FileNotFoundError:
+                pass
 
     row.refresh_from_db()
     entry = row.node_evidence[-1]
@@ -261,6 +267,20 @@ def test_deploy_status_failure_evidence(opts):
         detail.get("stderr_tail"),
         ["[redacted]", "FATAL: migration command refused schema drift"],
         f"the durable tail must redact secrets line-by-line, got {detail!r}")
+    diagnosis = [item for item in (row.diagnosis or []) if isinstance(item, dict)]
+    th.assert_true(diagnosis,
+                   "a terminal failure report must land in the diagnosis journal")
+    story = diagnosis[0]
+    th.assert_eq(story.get("kind"), "failure",
+                 f"the first diagnosis entry must be the failure, got {story!r}")
+    story_detail = story.get("detail") or {}
+    th.assert_eq(story_detail.get("rollback_to"),
+                 {"sha": "f" * 40, "framework": "1.11.6"},
+                 f"the diagnosis must carry the rollback target, got {story_detail!r}")
+    th.assert_eq(
+        story_detail.get("stderr_tail"),
+        ["[redacted]", "FATAL: migration command refused schema drift"],
+        f"the diagnosis tail must stay redacted line-by-line, got {story_detail!r}")
     th.assert_true(incident.called,
                    "a script-reported canary failure must create an incident")
     message = incident.call_args.args[0]
@@ -270,6 +290,78 @@ def test_deploy_status_failure_evidence(opts):
                    "raw command output must never enter the incident message")
     th.assert_in("9127", (row.links or {}).get("incident_events", []),
                  f"the deployment must link its incident, got {row.links!r}")
+    deploy.clear_status(row.pk)
+
+
+@th.django_unit_test(
+    "deploy_status: a rollback report on an already-failed row appends an outcome")
+def test_deploy_status_rollback_report_appends_outcome(opts):
+    """update.sh reports twice on a failed migrate: the failure itself, then how
+    the rollback went. The second report used to vanish (the row was already
+    failed, node_evidence is latest-per-runner). It must append an outcome-kind
+    diagnosis entry with its own tail, leaving the first entry and the runner's
+    evidence untouched."""
+    import os
+    import uuid
+
+    from django.conf import settings as django_settings
+    from django.core.management import call_command
+    import mojo.apps.incident.reporter as reporter_module
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import deploy
+
+    runner = deploy.local_runner_id()
+    row = PlatformDeployment.objects.create(
+        sha=SHA_C, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=[runner], transitions=[])
+    deploy.set_target(SHA_C, actor="test", deployment_id=row.pk)
+    deploy.arm_status(SHA_C, deployment_id=row.pk)
+
+    var_root = os.path.join(django_settings.PROJECT_ROOT, "var")
+    os.makedirs(var_root, exist_ok=True)
+    incident = mock.Mock(return_value=mock.Mock(pk=9128))
+    try:
+        with open(os.path.join(var_root, "deploy_failure_output"), "w") as stream:
+            stream.write("ERROR: relation already exists\n")
+        with mock.patch.object(reporter_module, "report_event", incident):
+            call_command(
+                "deploy_status", "set", "failed", sha=SHA_C,
+                deployment=str(row.pk), detail="post_deploy (migrate)",
+                evidence=True)
+        row.refresh_from_db()
+        evidence_before = list(row.node_evidence)
+        first_entry = dict((row.diagnosis or [{}])[0])
+
+        with open(os.path.join(var_root, "deploy_failure_output"), "w") as stream:
+            stream.write("mv: cannot restore previous release\n")
+        with mock.patch.object(reporter_module, "report_event", incident):
+            call_command(
+                "deploy_status", "set", "failed", sha=SHA_C,
+                deployment=str(row.pk), detail="rollback failed",
+                evidence=True)
+    finally:
+        try:
+            os.unlink(os.path.join(var_root, "deploy_failure_output"))
+        except FileNotFoundError:
+            pass
+
+    row.refresh_from_db()
+    th.assert_eq(row.node_evidence, evidence_before,
+                 "the rollback report must not disturb the runner's evidence")
+    diagnosis = [item for item in (row.diagnosis or []) if isinstance(item, dict)]
+    th.assert_eq(len(diagnosis), 2,
+                 f"the rollback outcome must append one entry, got {diagnosis!r}")
+    th.assert_eq(diagnosis[0], first_entry,
+                 "the original failure entry must be untouched")
+    outcome = diagnosis[-1]
+    th.assert_eq(outcome.get("kind"), "outcome",
+                 f"a rollback report is an outcome, got {outcome!r}")
+    outcome_detail = outcome.get("detail") or {}
+    th.assert_eq(outcome_detail.get("phase"), "rollback_failed",
+                 f"the outcome must carry the fixed phase, got {outcome_detail!r}")
+    th.assert_eq(outcome_detail.get("stderr_tail"),
+                 ["mv: cannot restore previous release"],
+                 f"the outcome must carry its own tail, got {outcome_detail!r}")
     deploy.clear_status(row.pk)
 
 
