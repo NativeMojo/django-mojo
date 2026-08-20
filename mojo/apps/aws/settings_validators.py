@@ -17,3 +17,18 @@ def monitoring_topic_arns(key, value):
         if item not in clean:
             clean.append(item)
     return clean
+
+
+def stable_outbound_ips(key, value):
+    """The stable-egress policy: exactly {"enabled": bool}, nothing else.
+
+    Strict on purpose — this row is an admission gate for add_node, so a shape
+    nobody validated must be refused at write time, not tolerated at read time.
+    """
+    if not isinstance(value, dict):
+        raise ValueError(f'{key} must be a JSON object like {{"enabled": true}}')
+    if set(value.keys()) != {"enabled"}:
+        raise ValueError(f"{key} accepts exactly one key: enabled")
+    if not isinstance(value.get("enabled"), bool):
+        raise ValueError(f"{key} enabled must be true or false")
+    return {"enabled": value["enabled"]}
