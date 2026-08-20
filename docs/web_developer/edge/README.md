@@ -331,8 +331,8 @@ response.
 
 | Method | Endpoint | Purpose | Access |
 |---|---|---|---|
-| GET | `/api/edge/webapp/summary?webapp=<id>` | Frozen v1 read model: address + domain + `certificate` (`status`, `not_after`; null only without a vhost) + `address.aliases` (the app's extra addresses, `{hostname, certificate}` each — always a list, never null), `current_release`, `latest_deployment`, and deploy-key readiness. Secret-free — never a token, certificate key, or internal state. `schema_version` stays `1`: v1 grows additively only. | Human-only; `view_dns` / `manage_dns` / `security` + object access |
-| GET | `/api/edge/webapp/summaries` | Bounded list projection for the merged Admin Deployments lane: one slim summary-v1-subset item per visible app (`webapp` identity, `address` + `certificate`, `current_release`, `latest_deployment`), ordered by slug, `{schema_version: 1, items, count, limit: 50, truncated}`. Scope is exactly the REST list's — global-or-group `VIEW_PERMS`, always intersected with a caller-supplied `?group=`. | Human-only (key-backed sessions refused); `view_dns` / `manage_dns` / `security` globally or in at least one group |
+| GET | `/api/edge/webapp/summary?webapp=<id>` | Frozen v1 read model: address + domain + `certificate` (`status`, `not_after`; null only without a vhost) + `address.aliases` (the app's extra addresses, `{hostname, certificate}` each — always a list, never null), `current_release` (with `source` — how that build arrived), `latest_deployment`, and deploy-key readiness. Secret-free — never a token, certificate key, or internal state. `schema_version` stays `1`: v1 grows additively only. | Human-only; `view_dns` / `manage_dns` / `security` + object access |
+| GET | `/api/edge/webapp/summaries` | Bounded list projection for the merged Admin Deployments lane: one slim summary-v1-subset item per visible app (`webapp` identity, `address` + `certificate`, `current_release` + `source`, `latest_deployment` + its own `release`), ordered by slug, `{schema_version: 1, items, count, limit: 50, truncated, fleet}` — see [the envelope](#the-summaries-envelope). Scope is exactly the REST list's — global-or-group `VIEW_PERMS`, always intersected with a caller-supplied `?group=`. | Human-only (key-backed sessions refused); `view_dns` / `manage_dns` / `security` globally or in at least one group |
 | GET | `/api/edge/webapp/deployment?webapp=<id>` (and `/deployment/<pk>`) | Deployment (fleet-convergence) history, group-scoped. Read-only; a cross-tenant id is not readable. | `view_dns` / `manage_dns` / `security` |
 | POST | `/api/edge/webapp/rollback` | Repoint the app at an already-verified earlier release. Body `{webapp, release}`. A foreign release id 404s; a `pending` (unverified) release is refused. | Human-only (CI keys denied), fresh-auth; `manage_webapp` + explicit object check |
 | POST | `/api/edge/webapp/detach_address` | Take the app offline: unlink and delete its serving vhost, keep the app and its release history. Every extra ("alias") address is removed with it. | Human-only, fresh-auth; `manage_webapp` |
@@ -346,6 +346,51 @@ Deleting a WebApp (`DELETE /api/edge/webapp/<pk>`) tears down its serving vhost
 and deactivates/unlinks its `MOJO_DEPLOY_KEY` in the **same** transaction as the
 row delete; release bytes in S3 are intentionally left. See the
 [backend day-2 reference](../../django_developer/edge/webapps.md#day-2-management).
+
+### The summaries envelope
+
+```json
+{
+  "schema_version": 1,
+  "items": [
+    {
+      "webapp": {"id": 42, "slug": "portal", "display_name": "Portal",
+                 "environment": "production", "deployment_ref": "main"},
+      "address": {"hostname": "portal.example.com",
+                  "certificate": {"status": "active", "not_after": "..."}},
+      "current_release": {"id": 7, "version": "a1b2c3d", "status": "live",
+                          "created": "...", "source": "github"},
+      "latest_deployment": {"id": 9, "status": "rolled_back", "created": "...",
+                            "finished": "...",
+                            "release": {"id": 8, "version": "d4e5f6a",
+                                        "source": "github"}}
+    }
+  ],
+  "count": 1, "limit": 50, "truncated": false,
+  "fleet": {"live": 1, "domains": ["example.com"], "certificate_count": 1,
+            "certificate": {"wildcard": true, "common_name": "portal.example.com",
+                            "not_after": "...", "renew_after": "..."}}
+}
+```
+
+`current_release.source` is how the live build arrived — `github`, `api`,
+`upload`, or `unknown` for a release registered before the platform recorded
+it. See [the register call](releases.md#1-register-the-release-and-get-upload-urls)
+for how that is decided.
+
+**`latest_deployment.release` is not `current_release`.** After a rollback the
+newest deployment carries the release that *failed*, while `current_release`
+names the one that came back. Read the first to say what broke and the second
+to say what is serving; using one for both makes a liar of it exactly when a
+deploy has gone wrong.
+
+**`fleet` describes the apps in THIS response**, not the installation — so a
+`?group=` narrows it, and a `truncated: true` response is not looking at every
+app (drop its `domains` and `certificate` claims when it is). `certificate` is
+non-null only when exactly **one** certificate backs **every** listed address;
+`certificate_count` still tells you how many there are. `wildcard` is decided
+server-side by scanning the common name and SANs for `*.<domain>` — do not
+re-derive it.
 
 ### Attaching your own domain to an app
 

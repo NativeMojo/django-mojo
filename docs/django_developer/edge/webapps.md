@@ -35,14 +35,37 @@ WebApp
   current_release  what nodes should serve
 
 WebAppRelease
-  webapp, version (unique together), manifest, status, created_by
+  webapp, version (unique together), manifest, status, source, created_by
   status: pending -> uploaded -> live -> superseded
+  source: github | api | upload | unknown  (how it ARRIVED)
 
 WebAppDeployment
   release, previous_release, status, targets, rollback_targets, detail
   status: queued -> deploying -> live
                        \-> rolling_back -> rolled_back / failed
 ```
+
+**`WebAppRelease.source` is derived at the boundary, never claimed.** Once the
+row exists, a GitHub push, a CLI call and a browser upload look identical, so
+`POST /api/edge/release` decides the class while it can still see the caller:
+
+| Caller | Body | Stored |
+|---|---|---|
+| interactive session (the portal's Upload-a-build tab) | anything | `upload` |
+| ApiKey, site has `github_repository`, body `source: "github"` | the marker | `github` |
+| ApiKey, any other case | anything | `api` |
+| registered before this field existed | — | `unknown` |
+
+The client may only refine **within** the class its credential already proved:
+no session can claim `github`, no key can claim `upload`, and the marker on a
+site with no GitHub repository stays `api`. Any other hint value is ignored
+rather than refused — the marker is additive, so a stale client must still be
+able to deploy. `source` is in `NO_SAVE_FIELDS` beside `status`, and
+`releases.register()` stamps it only on the creating call: the reuse branch
+returns the stored row untouched, because a re-registration that could restamp
+would rewrite how an already deployed build got here. "upload" is the design's
+word for the whole interactive class — a hand `curl` on a logged-in session is
+`upload` too, since what it names is the credential, not the tool.
 
 **`slug` is a label.** Nothing on disk is named after it — a vhost's web root
 comes from `Vhost.pk`. That is what stops one tenant pointing a vhost at
@@ -481,20 +504,49 @@ fixed the portal's dead "Open domain" link), top-level `current_release`, and
 `latest_deployment`, so a management view can answer "is my app live and serving
 X?" in one call; item 2158 added `address.certificate` (`status`, `not_after`;
 null only when there is no vhost — `Vhost.certificate` is a non-null FK) so the
-same view answers "is SSL healthy?".
+same view answers "is SSL healthy?"; item 2230 added
+`current_release.source`, so the same view says HOW that build got here.
 
 For lists there is `GET /api/edge/webapp/summaries` (no parameters; human-only,
 key-backed sessions refused): a bounded slim projection — one item per app the
 caller may list, each a strict subset of summary v1 (`webapp` identity with
-`deployment_ref`, `address` with `certificate`, `current_release`,
-`latest_deployment`) — in a `{schema_version: 1, items, count, limit: 50,
-truncated}` envelope, ordered by slug. It costs a flat two queries plus the
-count (select_related rows and one Postgres `DISTINCT ON` latest-deployment
-batch) where per-app `summary_for()` would be ~4 queries each. Visibility is
-exactly the REST list's: the `VIEW_PERMS` global/group branches **and** the
-unconditional `request.group` intersection, so a caller-supplied `?group=`
-confines rather than widens. The merged Admin Deployments lane is its consumer;
-onboarding, key, and probe facts stay in the per-app summary.
+`deployment_ref`, `address` with `certificate`, `current_release` with
+`source`, `latest_deployment` with its own `release` `{id, version, source}`) —
+in a `{schema_version: 1, items, count, limit: 50, truncated, fleet}` envelope,
+ordered by slug. It costs a flat two queries plus the count (select_related
+rows and one Postgres `DISTINCT ON` latest-deployment batch) where per-app
+`summary_for()` would be ~4 queries each. Visibility is exactly the REST
+list's: the `VIEW_PERMS` global/group branches **and** the unconditional
+`request.group` intersection, so a caller-supplied `?group=` confines rather
+than widens. The merged Admin Deployments lane is its consumer; onboarding,
+key, and probe facts stay in the per-app summary.
+
+**`latest_deployment.release` is not `current_release`, and that is the point.**
+After a rollback the newest deployment carries the release that failed while
+`current_release` names the one that came back. A failure banner reads the
+first; "what is still serving" reads the second. Collapsing them would make one
+of those two sentences a lie exactly when it matters.
+
+**The `fleet` block is scoped to the LISTED apps**, never to the installation:
+
+```
+fleet: {
+  live,               # listed apps with BOTH an address and a current release
+  domains,            # sorted distinct domain names of the listed primaries
+  certificate_count,  # distinct certificates behind those primaries
+  certificate,        # {wildcard, common_name, not_after, renew_after} or null
+}
+```
+
+Two properties are deliberate. It is computed from rows `select_related`
+already loaded, so it adds **no query** and cannot drift from the items beside
+it. And `certificate` is **all-or-nothing**: it is populated only when exactly
+one certificate backs *every* listed address, because naming one of several
+would be a claim about apps it does not cover. `wildcard` is decided here — the
+server scans `common_name` plus `sans` for `*.<domain>` — rather than leaving
+two surfaces to guess that a wildcard can be carried by either. A truncated
+list is not looking at every app, so its consumer drops the domain and
+certificate claims. `schema_version` stays **1**: all of this is additive.
 
 ### First-deploy bootstrap
 

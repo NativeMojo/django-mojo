@@ -69,6 +69,21 @@ Paths are relative and slash-delimited; each segment may use letters, digits,
 `.`, `_`, `-`, `!`, and `~`. This includes Next.js static-export route and
 Turbopack filenames without allowing absolute or traversing paths.
 
+**Optional: `"source": "github"`.** The platform records how each release
+arrived and shows it beside the version in the portal. It works out the class
+from your credential, not from your body — so this key is a refinement, not a
+claim:
+
+- It is honored only when **`"github"`** is sent by a **key-authenticated**
+  caller registering against a site that has a **GitHub repository configured**.
+  Anything else about it is ignored, never refused.
+- A logged-in browser session is recorded as an upload whatever it sends.
+- Every other key-authenticated call is recorded as `api`, which is what a CI
+  system of your own, or a `curl`, honestly is.
+
+Omit it and your release is labelled `api`. The shipped GitHub Action sends it
+for you, only when it is actually running on a GitHub runner.
+
 Response:
 
 ```json

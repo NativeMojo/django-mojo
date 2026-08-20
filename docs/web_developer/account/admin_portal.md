@@ -304,8 +304,23 @@ actions), and a django-mojo row whose Update calls
 address is amber "Setup never finished — not reachable" with inline **Finish
 setup** / **Delete**, a present address with no release yet is amber "live
 with a welcome page — nothing deployed yet" with **Deploy something**), SSL
-state, and last deploy, with the release id as short muted metadata. Every row
-opens the app's own page at `#/deployments?webapp=<id>`. Deep links
+state, last deploy, and how that build arrived — "via GitHub push", "via CLI
+or API", "via upload", or "source not recorded" — with the release id as short
+muted metadata. A latest deployment of `failed` **or `rolled_back`** turns the
+row red; reading only `failed` rendered a cheerful "deployed &lt;date&gt;" over
+the normal terminal state of a failed deploy. The section carries a subhead
+from the response's `fleet` block (how many are live, the domain they answer
+on, the certificate behind them); a truncated list drops those claims and
+carries "showing the first N apps by name" instead.
+
+The page headline **names the failing thing** rather than saying something
+needs attention: the API service's own failed deploy first (its node counts,
+what is still converged, **See what failed** and — with platform manage —
+**Retry same SHA**, which is the existing `platform/deploy/retry` call), then a
+web app whose latest deployment failed (**See what failed** links its Deploys
+tab; there is no banner retry, because rolling back needs fresh auth and a
+written reason), then any other red or amber row, quoted verbatim from the row
+itself. Every row opens the app's own page at `#/deployments?webapp=<id>`. Deep links
 `#/deployments?inspector=<id>` type-dispatch for backward compatibility — an
 integer redirects to that web app's own page (`?webapp=<id>`), a deployment
 UUID opens the API drill-in — so pre-merge Activity links keep working. The
@@ -613,7 +628,7 @@ This prevents non-admin users from escalating their own access.
 | Secure settings | `GET/POST /api/settings`, `DELETE /api/settings/<id>` | `groups` |
 | System Setup | `/api/account/admin/setup/*` | Literal active superuser only |
 | Platform evidence/deploy recovery | `/api/account/admin/platform` (read it through the `?sections=` allowlist — the portal sends `deployments,api`, `fleet`, or `security`), `/api/account/admin/platform/deploy/*` | Dedicated global Platform grants, checked per section; writes require fresh non-key auth |
-| Web-app deployment rows | `GET /api/edge/webapp/summaries` | Human-only (key-backed sessions refused); WebApp `VIEW_PERMS` globally or in at least one group, always intersected with `?group=` |
+| Web-app deployment rows | `GET /api/edge/webapp/summaries` — each item carries `current_release.source` and `latest_deployment.release`, and the envelope carries a `fleet` block scoped to the listed apps ([shape](../edge/README.md#the-summaries-envelope)) | Human-only (key-backed sessions refused); WebApp `VIEW_PERMS` globally or in at least one group, always intersected with `?group=` |
 | Framework version / update | `/api/account/admin/platform/framework[/update]` | `view_platform` to read; `manage_platform` or `admin` to update, fresh non-key auth. Clearing a pin is literal-superuser only |
 | Managed-service maintenance | `/api/aws/maintenance/versions`, `/api/aws/maintenance/status`, `/api/aws/maintenance/apply` | `manage_aws` to read; the apply needs `manage_aws` **and** superuser / `manage_platform` / `admin`, fresh non-key auth. See [aws/maintenance](../aws/maintenance.md) |
 | Advanced evidence/settings | `/api/account/admin/advanced` (served, but no packaged portal page reads it), `/api/account/admin/advanced/settings` | Dedicated global Advanced grants; settings additionally require literal superuser |

@@ -120,6 +120,32 @@ section reads `GET /api/account/admin/platform?sections=deployments,api` and
 the existing framework-update and advanced-settings `framework_pin` writers —
 one mechanism, surfaced where the operator looks.
 
+Three things the merged list says that it used to leave the operator to work
+out. **The headline names the failing thing**, in priority order: the API
+service's own failed deploy (with its node counts, what is still converged, and
+a **Retry same SHA** that is the existing platform `deploy/retry` verb behind
+its own manage gate), then a web app whose latest deployment is `failed` or
+`rolled_back`, then any other red or amber row — and those last two quote the
+row's own `.row-name`/`.row-value`, so the banner can never contradict the row
+it points at. A web-app failure gets **no node counts**: a `WebAppDeployment`
+records `{runner, job}` targets, not a fleet roster, and it gets no Retry
+either, because the only path forward is the fresh-auth, reason-required
+`webapp/rollback` that already lives on the app's Deploys tab.
+
+**Each row says how its live build arrived** — "via GitHub push", "via CLI or
+API", "via upload", or "source not recorded" — from `current_release.source`.
+And the **Web apps section carries a subhead** built from the response's
+`fleet` block: how many are live, the domain they answer on, and the one
+certificate behind them. A truncated list drops the domain and certificate
+clauses and carries the "showing the first N" sentence instead, which used to
+sit on the headline and read as if it were about the failure.
+
+Both slots are additive on the shared row components: `rowSection(label, rows,
+{sub})` and `statusHeadline({..., actions})`. Nothing inside `statusHeadline`
+may carry `role="status"`, `aria-live`, or a loading/error state — `onRefresh`
+replaces that whole block, so an announcement made there is destroyed before it
+speaks; `runAction`'s document-level live region is what survives.
+
 The wizard defaults to the nonnumeric Create New Group sentinel only when that
 flag is true; otherwise it selects the first eligible existing group and never
 coerces an empty value to id `0`. A draft stores one client UUID in

@@ -212,6 +212,11 @@ right below them, and each one says plainly where it stands: "Setup never
 finished" if it has no address yet, "live with a welcome page" if it has an
 address but nothing deployed, or its real status once something has shipped.
 
+If anything is wrong, the line at the top of that page **names it** — which app
+or service failed, what is still serving visitors in the meantime, and whether
+everything else is fine. Where there is something safe to do about it, the
+button is right there.
+
 - **Overview.** Your address, whether it's healthy (reachable right now), and
   which build is currently live. This is your "is everything okay?" glance. You
   can re-check health on demand. Below it, **Addresses** lists every address
@@ -230,6 +235,18 @@ address but nothing deployed, or its real status once something has shipped.
     does, using your own sign-in rather than a deploy key.
   - **Any other CI / API** — the three-call contract (register, upload,
     complete) for a pipeline that isn't GitHub Actions.
+
+  **Each of the three is labelled on the row**, so you can tell at a glance how
+  the build that is live got here: *via GitHub push*, *via upload*, or *via CLI
+  or API*. A release from before we started recording this reads *source not
+  recorded* — we say we don't know rather than guess.
+
+  Two things worth knowing. The label comes from how you signed in, not from
+  what you claimed: a browser session is always an upload, and only a deploy
+  key registering against an app with a GitHub repository configured can be a
+  GitHub push. And a workflow pinned to `@v1`, a forked copy of the action, or
+  CI you wrote yourself reads *via CLI or API* — which is true of it — until it
+  moves to a version of the action that sends the marker.
 - **Serving.** Everything about *how* your app is reached, in four cards:
   - **Address.** The address itself, whether it's responding right now, and —
     when your domain is run here and a wildcard already covers the name — a
