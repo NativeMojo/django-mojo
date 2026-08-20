@@ -130,6 +130,10 @@ def build_parser():
     shared.add_argument(
         "--nlb", action="store_true",
         help="build a network load balancer even when the size would not")
+    shared.add_argument(
+        "--stable-node-ips", action="store_true",
+        help="give every node its own elastic IP even behind a balancer — "
+             "fixed outbound addresses for providers that allowlist caller IPs")
 
     parser = argparse.ArgumentParser(
         prog="python3 -m mojo.deploy.provision",
@@ -258,6 +262,8 @@ def run_init(args, console):
                          console=console)
     if args.nlb:
         answers["nlb"] = True
+    if args.stable_node_ips:
+        answers["stable_node_ips"] = True
 
     remaining = inputs.problems(answers)
     if remaining:
@@ -651,7 +657,8 @@ def _topology(args, answers):
     committed environment file: it is a property of the machine running the
     command, not of the environment.
     """
-    topology = inputs.to_spec(answers, nlb=args.nlb)
+    topology = inputs.to_spec(answers, nlb=args.nlb,
+                              stable_node_ips=args.stable_node_ips)
     topology.project_root = args.project_root
     return topology
 
