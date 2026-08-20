@@ -437,6 +437,12 @@ processing, `nginx -t` gate + reload, systemd + cron install from
 `var/deploy/`, the structural stale-cron sweep, `var/logs` ownership, restart,
 and a `PROBE_URL` health gate.
 
+Both the fleet-pinned and bare-latest framework installs feature-detect pip's
+`--refresh-package` option and apply it only to `django-mojo`. pip 26.2 began
+honoring PyPI's Simple API cache lifetime, which can otherwise hide a release
+published seconds before deployment. Older pip releases omit the unsupported
+option and retain their historical always-revalidate behavior.
+
 The rollback boundary is deliberately narrow. Dependency/framework install,
 migrations, collectstatic, render, the app's nginx/systemd contract, nginx
 validation/reload, `mojo-asgi` restart, `PROBE_URL`, and `sanity_check` are

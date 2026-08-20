@@ -234,6 +234,15 @@ trusted_pip() {
     fi
 }
 
+# pip 26.2 started honoring PyPI's Simple API cache lifetime. A framework
+# published immediately before a deploy can therefore be absent from a cached
+# catalog response even though its wheel is already live. Older pip releases
+# do not know this option, but they revalidate by default, so feature-detect it.
+FRAMEWORK_PIP_ARGS=()
+if pip install --help 2>/dev/null | grep -q -- '--refresh-package'; then
+    FRAMEWORK_PIP_ARGS+=(--refresh-package=django-mojo)
+fi
+
 # ── dependencies ─────────────────────────────────────────────────────────────
 #
 # Project deps first (exact pins from requirements.txt — regenerated with
@@ -253,11 +262,11 @@ phase_end
 phase_begin framework
 if [ -n "$FRAMEWORK" ]; then
     log "Installing django-mojo==${FRAMEWORK} (fleet-pinned)..."
-    trusted_pip pip install "django-mojo==${FRAMEWORK}" \
+    trusted_pip pip install "${FRAMEWORK_PIP_ARGS[@]}" "django-mojo==${FRAMEWORK}" \
         || die "django-mojo ${FRAMEWORK} install failed — refusing to deploy on an unknown framework version"
 else
     log "Upgrading django-mojo (latest)..."
-    trusted_pip pip install --upgrade django-mojo \
+    trusted_pip pip install "${FRAMEWORK_PIP_ARGS[@]}" --upgrade django-mojo \
         || die "django-mojo upgrade failed — refusing to deploy on an unknown framework version"
 fi
 phase_end
