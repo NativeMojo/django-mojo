@@ -181,15 +181,38 @@ EOF
 
     # id: the uid seam. `id -un` is who the tail thinks it is (root on a real
     # node, because the deploy plane execs this script through sudo); `id -u
-    # <name>` is whether that account exists at all.
+    # <name>` PRINTS that account's uid, which is what the root ban has to be
+    # decided on — a uid-0 alias is a different name with identical power.
+    # known_users.txt lists the accounts that exist; root_aliases.txt lists
+    # which of them are uid 0 (everyone else gets 1000).
+    #
+    # The dash handling is deliberately faithful to the real thing: without a
+    # `--`, `id -u -r` reads -r as ANOTHER FLAG and answers about the current
+    # user (root), which is exactly how a dashed "user name" validates if the
+    # resolver does not reject it first. After a `--`, it is a name like any
+    # other and simply does not exist.
     cat > "$STUB/id" <<'EOF'
 #!/bin/bash
 case "${1:-}" in
     -un) cat "$STUBCTL/whoami.txt" 2>/dev/null || echo root; exit 0 ;;
     -u)
-        [ -n "${2:-}" ] || exit 1
-        grep -qxF "${2}" "$STUBCTL/known_users.txt" 2>/dev/null
-        exit $? ;;
+        shift
+        dashdash=0
+        if [ "${1:-}" = "--" ]; then dashdash=1; shift; fi
+        name="${1:-}"
+        if [ "$dashdash" = "0" ]; then
+            case "$name" in
+                ""|-*) echo 0; exit 0 ;;   # no name, or a further flag: us
+            esac
+        fi
+        [ -n "$name" ] || { echo 0; exit 0; }
+        grep -qxF "$name" "$STUBCTL/known_users.txt" 2>/dev/null || exit 1
+        if grep -qxF "$name" "$STUBCTL/root_aliases.txt" 2>/dev/null; then
+            echo 0
+        else
+            echo 1000
+        fi
+        exit 0 ;;
 esac
 exit 1
 EOF
@@ -256,6 +279,7 @@ EOF
     echo "root" > "$CTL/whoami.txt"
     echo "$APP_USER" > "$CTL/sudo_user.txt"
     printf '%s\n' "$APP_USER" > "$CTL/known_users.txt"
+    : > "$CTL/root_aliases.txt"
     echo "$APP_USER" > "$CTL/pids_owner.txt"
     write_jobs_cron "$APP_USER"
 }
@@ -554,34 +578,83 @@ resolver() { # -> the resolved engine user, or empty
         bash -c ". '$TMP/resolver.sh'; resolve_engine_user" 2>/dev/null )
 }
 
-echo "update.sh: resolve_engine_user — SUDO_USER, then cron, then var/pids"
+echo "update.sh: resolve_engine_user — cron, then SUDO_USER, then var/pids"
 setup_env
 grep -q "^resolve_engine_user() {" "$PROJ/aws/update.sh" \
     && ok "the resolver is a top-level function the harness can extract" \
     || fail "resolve_engine_user is not extractable — the unit cases below are vacuous"
 
-assert_eq "$(resolver)" "$APP_USER" "SUDO_USER wins when it names a real account"
+assert_eq "$(resolver)" "$APP_USER" "the cron entry names the engine user"
 
 echo "$APP_USER-cron" > "$CTL/sudo_user.txt"
 printf '%s\n%s\n' "$APP_USER" "$APP_USER-cron" > "$CTL/known_users.txt"
-assert_eq "$(resolver)" "$APP_USER-cron" "the SUDO_USER answer is used verbatim"
+assert_eq "$(resolver)" "$APP_USER" \
+    "the cron entry outranks SUDO_USER when the two disagree"
+
+# The disagreement that matters: `sudo bash aws/update.sh --manual` from a
+# login account. Taking SUDO_USER there starts the engine as `ubuntu` and
+# leaves var/logs and var/pids ubuntu-owned — the same permanent brick the
+# root ban prevents, on an account that usually carries NOPASSWD:ALL.
+write_jobs_cron "$APP_USER"
+echo "ubuntu" > "$CTL/sudo_user.txt"
+printf '%s\n%s\n' "$APP_USER" "ubuntu" > "$CTL/known_users.txt"
+assert_eq "$(resolver)" "$APP_USER" \
+    "a manual run from a login account still starts the engine as the account \
+the cron entry names"
+
+# ...but SUDO_USER is still the fallback when the cron entry cannot answer.
+write_jobs_cron "root"
+assert_eq "$(resolver)" "ubuntu" \
+    "a cron entry naming root falls through to SUDO_USER"
+
+write_jobs_cron "someone-who-does-not-exist"
+assert_eq "$(resolver)" "ubuntu" \
+    "a cron user that has no account falls through to SUDO_USER"
+
+rm -f "$CTL/cron.d/3_mojo_jobs"
+assert_eq "$(resolver)" "ubuntu" "a missing cron file falls through to SUDO_USER"
+
+printf '%s\n' "$APP_USER" > "$CTL/known_users.txt"
+write_jobs_cron "$APP_USER"
 
 # root: the whole point. Starting the engine as root leaves root-owned logs the
 # app user can never append to again.
 echo "root" > "$CTL/sudo_user.txt"
-assert_eq "$(resolver)" "$APP_USER" "SUDO_USER=root falls through to the cron entry"
+assert_eq "$(resolver)" "$APP_USER" "SUDO_USER=root is never used"
 
 echo "" > "$CTL/sudo_user.txt"
-assert_eq "$(resolver)" "$APP_USER" "an empty SUDO_USER falls through to the cron entry"
+assert_eq "$(resolver)" "$APP_USER" "an empty SUDO_USER is never used"
 
-write_jobs_cron "root"
-assert_eq "$(resolver)" "$APP_USER" "a cron entry naming root falls through to var/pids"
-
-write_jobs_cron "someone-who-does-not-exist"
-assert_eq "$(resolver)" "$APP_USER" "a cron user that has no account is not used"
-
+# The root ban is a STRING test; a uid-0 alias is a different string with
+# identical power. Creating one already needs root, so this is depth, not a
+# reachable exploit — but the function states the invariant, so it holds it.
+printf '%s\n%s\n' "$APP_USER" "toor" > "$CTL/known_users.txt"
+printf '%s\n' "toor" > "$CTL/root_aliases.txt"
+write_jobs_cron "toor"
+assert_eq "$(resolver)" "$APP_USER" \
+    "a uid-0 alias in the cron entry is refused like root itself"
+echo "toor" > "$CTL/sudo_user.txt"
 rm -f "$CTL/cron.d/3_mojo_jobs"
-assert_eq "$(resolver)" "$APP_USER" "a missing cron file falls through to var/pids"
+assert_eq "$(resolver)" "$APP_USER" \
+    "a uid-0 alias in SUDO_USER is refused like root itself"
+echo "toor" > "$CTL/pids_owner.txt"
+assert_eq "$(resolver)" "" "a uid-0 alias owning var/pids is refused too"
+
+# A leading dash is an option to `id`, not a name: unreachable through today's
+# sources, but `id -u -r` answers about the CURRENT user (root), so a resolver
+# that does not reject the dash would hand the tail a "user" called -r.
+setup_env
+rm -f "$CTL/cron.d/3_mojo_jobs"
+echo "" > "$CTL/sudo_user.txt"
+for dashed in -r -n -u -G; do
+    echo "$dashed" > "$CTL/pids_owner.txt"
+    printf '%s\n%s\n' "$APP_USER" "$dashed" > "$CTL/known_users.txt"
+    assert_eq "$(resolver)" "" "a candidate starting with a dash ($dashed) is refused"
+done
+
+setup_env
+echo "" > "$CTL/sudo_user.txt"
+rm -f "$CTL/cron.d/3_mojo_jobs"
 
 echo "UNKNOWN" > "$CTL/pids_owner.txt"
 assert_eq "$(resolver)" "" "GNU stat's UNKNOWN resolves to nothing, never to a user"
@@ -681,6 +754,21 @@ assert_not_in_log "deploy_status handoff" \
     "--manual has no deployment UUID and must not invent one"
 assert_in_log "CMD jobman stop engine --grace 2" "--manual still stops the engine"
 assert_last_cmd "jobman start" "--manual still starts it again"
+
+echo "update.sh: --manual from a login account still starts the fleet's engine"
+# The documented manual path is `sudo bash aws/update.sh --manual`, run from
+# whatever account the operator logged in on. That account is not the engine's.
+setup_env
+echo "ubuntu" > "$CTL/sudo_user.txt"
+printf '%s\n%s\n' "$APP_USER" "ubuntu" > "$CTL/known_users.txt"
+run_update --manual >/dev/null 2>&1
+assert_eq "$?" 0 "--manual from a login account exits 0"
+assert_in_log "CMD sudo -n -u $APP_USER ./bin/jobman start" \
+    "the engine is started as the account the cron entry names"
+assert_not_in_log "CMD sudo -n -u ubuntu" \
+    "never as the operator who typed sudo — that leaves ubuntu-owned var/logs \
+and var/pids, which cron cannot repair, and runs queued work as an account \
+that usually carries NOPASSWD:ALL"
 
 echo "update.sh: a canary rollback restarts the engine too"
 setup_env

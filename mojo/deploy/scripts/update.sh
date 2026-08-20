@@ -207,10 +207,24 @@ set_phase_args() {
 # by hand. APP_USER is post_deploy.sh's input and is NOT in this script's
 # environment, so the owner is discovered instead, most-authoritative first:
 #
-#   1. $SUDO_USER — who invoked the sudo we are running under.
-#   2. field 6 of the jobs cron entry — the every-minute `jobman start` names
-#      the exact account the fleet intends to run the engine as.
-#   3. the owner of var/pids — where the engine writes its pidfiles.
+#   1. field 6 of the jobs cron entry — the every-minute `jobman start` names
+#      the exact account the FLEET intends to run the engine as. It is a
+#      deployed statement of intent, identical on every node, and it is what
+#      will own the engine sixty seconds from now no matter what this script
+#      decides. Ranking anything above it means the restart can disagree with
+#      cron, and the tail exists precisely to pre-empt cron, not to fight it.
+#   2. $SUDO_USER — merely whoever ran the sudo we are under. On the deploy
+#      path it agrees with the cron entry, so it adds nothing; on the
+#      documented manual path (`sudo bash aws/update.sh --manual` from a login
+#      account) it DISAGREES, and taking it would start the engine as e.g.
+#      `ubuntu`: var/logs and var/pids become ubuntu-owned — the same
+#      permanent brick the root ban above prevents, which cron cannot even
+#      repair because it sees a live pidfile — and the engine, which executes
+#      arbitrary queued work, ends up running as an account that typically
+#      carries NOPASSWD:ALL. It is kept only as a fallback for a node whose
+#      cron entry is missing or unusable.
+#   3. the owner of var/pids — where the engine writes its pidfiles. Last
+#      resort: it is evidence of what ran, not of what is meant to run.
 #
 # `root`, an empty answer and GNU stat's `UNKNOWN` all resolve to NOTHING, and
 # nothing means SKIP THE RESTART: cron brings the engine back within the
@@ -219,24 +233,36 @@ set_phase_args() {
 CRON_ETC="${CRON_ETC:-/etc/cron.d}"
 
 valid_engine_user() { # candidate -> 0 only for a real, non-root account
+    local uid=""
     case "${1:-}" in
         ""|root|UNKNOWN) return 1 ;;
+        # A leading dash is an OPTION to `id`, not a name: `-r`, `-n` and `-u`
+        # all survive the charset test below and would make `id` answer about
+        # the current user (root) instead of about the candidate.
+        -*) return 1 ;;
         *[!A-Za-z0-9_.-]*) return 1 ;;
     esac
     case "$1" in
         *[!0-9]*) ;;
         *) return 1 ;;   # all digits: a uid, not a name we were told to use
     esac
-    id -u "$1" >/dev/null 2>&1
+    # `--` so a name is never read as a flag, and the uid rather than just the
+    # exit status: the root ban above is a STRING test, and a uid-0 alias
+    # (`toor`) is a different string with identical power.
+    uid="$(id -u -- "$1" 2>/dev/null)" || return 1
+    case "$uid" in
+        ""|*[!0-9]*) return 1 ;;
+    esac
+    [ "$uid" -ne 0 ]
 }
 
 resolve_engine_user() {
     local candidate=""
-    candidate="${SUDO_USER:-}"
-    if valid_engine_user "$candidate"; then printf '%s\n' "$candidate"; return 0; fi
     # `$1 !~ /=/` skips the SHELL= and PATH= assignments above the schedule.
     candidate="$(awk '$1 !~ /^#/ && $1 !~ /=/ && NF >= 7 { print $6; exit }' \
         "${CRON_ETC}/3_mojo_jobs" 2>/dev/null)"
+    if valid_engine_user "$candidate"; then printf '%s\n' "$candidate"; return 0; fi
+    candidate="${SUDO_USER:-}"
     if valid_engine_user "$candidate"; then printf '%s\n' "$candidate"; return 0; fi
     candidate="$(stat -c %U var/pids 2>/dev/null)" \
         || candidate="$(stat -f %Su var/pids 2>/dev/null)"

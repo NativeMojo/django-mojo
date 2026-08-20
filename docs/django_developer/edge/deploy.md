@@ -639,8 +639,19 @@ because a **fork** owns all of it, and because the deploy plane depends on it:
   writer of `var/logs`, leaves those files root-owned, and every later
   app-user start fails on the log open — permanently. `APP_USER` is
   `post_deploy.sh`'s input and is not in `update.sh`'s environment, so the
-  owner is discovered: `$SUDO_USER`, else field 6 of the jobs cron entry, else
-  the owner of `var/pids`. `root`, an empty answer and GNU stat's `UNKNOWN` all
+  owner is discovered, **cron entry first**: field 6 of `/etc/cron.d/3_mojo_jobs`
+  (the fleet's own statement of which account owns the engine, and what will own
+  it a minute from now regardless), else `$SUDO_USER`, else the owner of
+  `var/pids`. `$SUDO_USER` is only a fallback on purpose — on the `--manual`
+  path it names whoever logged in (`ubuntu`), and starting the engine as that
+  account leaves `var/logs` and `var/pids` owned by it (the same permanent brick
+  the root ban prevents, and one cron cannot repair because it sees a live
+  pidfile) while running arbitrary queued work as an account that usually
+  carries `NOPASSWD:ALL`. A candidate is rejected unless it is a real account
+  whose **uid is not 0** — the check is on the uid, not on the name, so a uid-0
+  alias is refused like `root` itself — and a name beginning with `-` is refused
+  outright rather than handed to `id` as a flag. `root`, an empty answer and GNU
+  stat's `UNKNOWN` all
   resolve to nothing, and **nothing means skip the restart entirely** — cron's
   every-minute `jobman start` is still the backstop, and sixty seconds without
   an engine beats a node nobody can start one on. Every command in the tail is
