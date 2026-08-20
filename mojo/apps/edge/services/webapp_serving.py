@@ -211,6 +211,11 @@ def serving_for(web_app, include_editables=False):
         "webapp": {"id": web_app.pk, "slug": web_app.slug,
                    "display_name": web_app.display_name},
         "address": {
+            # The serving row's own id. Carried so the operator footer can deep
+            # link into the control-plane pages for THIS address; it is already
+            # readable at /api/edge/vhost under the same tenancy, and nothing
+            # tenant-facing renders it.
+            "vhost": primary.pk if primary is not None else None,
             "hostname": hostname,
             "https_origin": f"https://{hostname}" if hostname else None,
             "domain": ({"id": domain.pk, "name": domain.name,
