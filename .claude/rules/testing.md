@@ -27,6 +27,21 @@ Before writing any test, read `docs/django_developer/testit/Overview.md`. This i
   for pre-publish validation, or when you changed what `--all` selects
 - Never use `--plain` — it disables the rich progress UI and parallel execution
 
+## Tiers and Isolation
+- The default tier is only for critical core contracts: security boundaries, shared
+  framework behavior, and regressions whose failure means django-mojo is broken for
+  consumers. Exhaustive variants and feature-internal coverage belong in `extended`;
+  expensive pre-release coverage belongs in `slow`.
+- Every test must pass by itself and under the default parallel runner. Tests may not
+  depend on module order or leak state into another test.
+- Default-tier tests must not patch or mutate process-wide configuration such as the
+  shared `SettingsHelper`, `django.conf.settings`, environment variables, key material,
+  or live config files. Exercise the core contract with test-owned data, dependency
+  injection, or a local fake instead.
+- If process-wide mutation is genuinely unavoidable, put that coverage in an opt-in
+  module and mark the module `serial`. An extra tag alone does not provide isolation:
+  `--all` still runs eligible modules in parallel.
+
 ## Rules
 - Every `assert` must include a descriptive failure message — no bare asserts
 - Tests must pass when the feature is correct and fail when it is broken

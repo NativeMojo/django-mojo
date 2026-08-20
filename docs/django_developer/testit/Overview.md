@@ -254,6 +254,13 @@ whole when the project has not installed that app.
 
 Tag at authoring time; auditing it back out later is far more expensive.
 
+The default tier also has a strict isolation contract: every test must pass alone and
+under the parallel runner. A default test must not patch or mutate process-wide settings,
+environment variables, key material, or live configuration. Keep one representative,
+parallel-safe test for a critical contract and move exhaustive coverage that truly needs
+process-wide mutation to an opt-in, serial module. `requires_extra` selects coverage; it
+does not serialize it, so the module must declare `"serial": true` as well.
+
 To move a whole module, add `"requires_extra": ["slow"]` (or `["extended"]`) to its
 `__init__.py` TESTIT config. For a single test, use the decorator.
 
