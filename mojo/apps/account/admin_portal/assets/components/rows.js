@@ -1,4 +1,5 @@
 import {h} from '../core.js';
+import {runAction} from './actions.js';
 
 // tone -> the shared .status-dot modifier. A calm page spends colour only on
 // states that need words; 'muted' is the plain grey dot.
@@ -52,7 +53,13 @@ export function statusHeadline({tone = 'muted', message = '', sub = '',
     observedAt ? h('span', {text: `as of ${shortTime(observedAt)}`}) : null,
     onRefresh ? h('button', {
       class: 'row-refresh', type: 'button', title: 'Refresh',
-      'aria-label': 'Refresh', onclick: onRefresh,
+      'aria-label': 'Refresh',
+      // onRefresh nearly always repaints the container this button lives in,
+      // so a pending state pinned here would be destroyed before it painted.
+      // runAction parks the announcement on a document-level live region that
+      // survives the repaint, and null-checks this node before restoring it.
+      onclick: (event) => runAction(event.currentTarget, () => onRefresh(),
+        {announceLabel: 'Refreshing…'}),
     }, '↻') : null,
   ].filter(Boolean);
   return h('section', {class: 'status-headline-block'},

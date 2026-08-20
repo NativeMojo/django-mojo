@@ -5,6 +5,7 @@
   - [Dashboard integration](admin_portal/dashboard.md) — Permission-separated source matrix, canonical cross-feature routes, and secret boundaries
   - [People feature](admin_portal/people.md) — User, Group, permission, sign-in, and credential contracts
   - [Settings catalog](admin_portal/settings.md) — Existing-Setting provenance, typed overrides, owner routing, and Admin UX
+  - [Responsiveness](admin_portal/responsiveness.md) — The portal-wide rule that every control answers its own click: the placement rule for a pending state whose handler re-renders it away, the `runAction`/`copyButton`/`loadInto` helpers, the 150 ms/250 ms thresholds, 440 and abort handling, and the banned raw-async-handler tripwire
   - [Metrics feature](admin_portal/metrics.md) — `manage_aws` capability flow, the CloudWatch degradation envelope and reason codes, the markup-free chart, and the five preview states
 - [System Setup and Readiness](system_setup.md) — Protected installation settings, versioned readiness registry, immutable ownership identity, and durable reconcile-before-retry operations
 - [System Setup and platform evidence](admin_portal/platform.md) — UUID deployment truth, bounded health/inventory evidence read through `?sections=`, dedicated global permissions, and the Setup/Metrics/Maintenance lane
