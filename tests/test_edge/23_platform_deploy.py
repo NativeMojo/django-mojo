@@ -1006,3 +1006,166 @@ def test_node_summary_buckets(opts):
     th.assert_eq((summary["proven"], summary["expected"]), (1, 1),
                  f"a converged single runner must read 1 of 1: {summary!r}")
     _clean_deploy_state()
+
+
+# ---------------------------------------------------------------------------
+# the node job's handoff — closing a row whose engine is about to be killed
+# ---------------------------------------------------------------------------
+
+
+def _node_job(deployment, channel="edge-a-engine", status="running"):
+    """A `deploy_node` job as the orchestrator publishes it, plus the in-flight
+    ZSET entry the engine would normally remove when the job ends."""
+    from mojo.apps.jobs.adapters import get_adapter
+    from mojo.apps.jobs.keys import JobKeys
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.edge.services import deploy
+
+    job = Job.objects.create(
+        id=uuid.uuid4().hex, channel=channel, func=deploy.DEPLOY_NODE_JOB,
+        status=status, runner_id=channel,
+        payload={"sha": SHA, "deployment": str(deployment)})
+    get_adapter().zadd(JobKeys().processing(channel), {job.id: 1})
+    return job
+
+
+def _inflight(channel, job_id):
+    from mojo.apps.jobs.adapters import get_adapter
+    from mojo.apps.jobs.keys import JobKeys
+
+    return job_id in (get_adapter().zrangebyscore(
+        JobKeys().processing(channel), float("-inf"), float("inf")) or [])
+
+
+def _clean_node_jobs():
+    from mojo.apps.jobs.models import Job, JobEvent
+    from mojo.apps.edge.services import deploy
+
+    JobEvent.objects.filter(job__func=deploy.DEPLOY_NODE_JOB).delete()
+    Job.objects.filter(func=deploy.DEPLOY_NODE_JOB).delete()
+
+
+@th.django_unit_test(
+    "close_handoff_job finds the node job whatever channel it was published to")
+def test_close_handoff_job_ignores_the_channel(opts):
+    """A node started with an explicit --runner-id consumes a channel named
+    after that id, and `deploy_node` is published to it. Matching on a default
+    channel name would close nothing on exactly those nodes."""
+    from mojo.apps.jobs.models import Job, JobEvent
+    from mojo.apps.edge.services import platform_deploy
+
+    _clean_deploy_state()
+    _clean_node_jobs()
+    row = _attempt("canary")
+    job = _node_job(row.pk, channel="operator-named-runner")
+
+    closed = platform_deploy.close_handoff_job(row.pk, "completed")
+
+    th.assert_eq(closed, 1,
+                 f"the node job must be closed regardless of its channel, "
+                 f"got {closed}")
+    job.refresh_from_db()
+    th.assert_eq(job.status, "completed",
+                 f"the handoff writes the terminal status the node reported, "
+                 f"got {job.status!r}")
+    th.assert_true(job.finished_at is not None,
+                   "a closed job must be stamped finished")
+    th.assert_eq((job.metadata or {}).get("handoff"), True,
+                 f"the row must say it was closed by handoff, not by its own "
+                 f"engine, got {job.metadata!r}")
+    event = JobEvent.objects.filter(job=job).first()
+    th.assert_true(event is not None, "the closure must leave an event trail")
+    th.assert_eq(event.details.get("reason"), "deploy_engine_handoff",
+                 f"the event must name the handoff, got {event.details!r}")
+    th.assert_true(
+        not _inflight("operator-named-runner", job.id),
+        "the in-flight lease must be released on the job's OWN channel — "
+        "otherwise the next engine's reaper is the only thing that ever "
+        "clears it, a visibility timeout later")
+    _clean_node_jobs()
+    _clean_deploy_state()
+
+
+@th.django_unit_test("close_handoff_job normalizes an uppercase deployment UUID")
+def test_close_handoff_job_normalizes_uuid(opts):
+    """update.sh validates --deployment against a case-insensitive hex pattern,
+    while the payload carries `str(uuid.UUID(...))`, which is lowercase."""
+    from mojo.apps.edge.services import platform_deploy
+
+    _clean_deploy_state()
+    _clean_node_jobs()
+    row = _attempt("canary")
+    job = _node_job(row.pk)
+
+    closed = platform_deploy.close_handoff_job(str(row.pk).upper(), "failed")
+
+    th.assert_eq(closed, 1,
+                 f"an uppercase UUID must normalize to the stored payload "
+                 f"value, got {closed}")
+    job.refresh_from_db()
+    th.assert_eq(job.status, "failed",
+                 f"a failed deploy closes its node job failed, got "
+                 f"{job.status!r}")
+    _clean_node_jobs()
+    _clean_deploy_state()
+
+
+@th.django_unit_test("close_handoff_job leaves already-terminal and foreign rows alone")
+def test_close_handoff_job_is_narrow(opts):
+    from mojo.apps.jobs.models import JobEvent
+    from mojo.apps.edge.services import platform_deploy
+
+    _clean_deploy_state()
+    _clean_node_jobs()
+    row = _attempt("canary")
+    other = _attempt("canary")
+    done = _node_job(row.pk, channel="edge-done", status="completed")
+    foreign = _node_job(other.pk, channel="edge-foreign")
+
+    closed = platform_deploy.close_handoff_job(row.pk, "failed")
+
+    th.assert_eq(closed, 0,
+                 f"a job that already reported its own outcome must not be "
+                 f"rewritten, got {closed}")
+    done.refresh_from_db()
+    th.assert_eq(done.status, "completed",
+                 f"the job's own outcome stands, got {done.status!r}")
+    th.assert_eq(JobEvent.objects.filter(job=done).count(), 0,
+                 "an untouched job collects no handoff event")
+    foreign.refresh_from_db()
+    th.assert_eq(foreign.status, "running",
+                 f"another deployment's node job must not be touched, got "
+                 f"{foreign.status!r}")
+    th.assert_true(_inflight("edge-foreign", foreign.id),
+                   "another deployment's in-flight lease must be left alone")
+
+    th.assert_eq(platform_deploy.close_handoff_job(None, "completed"), 0,
+                 "an unusable deployment id closes nothing")
+    th.assert_eq(platform_deploy.close_handoff_job(row.pk, "canceled"), 0,
+                 "only the two terminal states this reports are accepted")
+    _clean_node_jobs()
+    _clean_deploy_state()
+
+
+@th.django_unit_test("a jobs-plane failure never propagates out of the handoff")
+def test_close_handoff_job_swallows_failures(opts):
+    """It runs on the deploy callback and on the rollback report. Neither may
+    be blocked by a Redis or jobs problem — the same rule the incident
+    reporter follows."""
+    from mojo.apps.jobs.manager import JobManager
+    from mojo.apps.edge.services import platform_deploy
+
+    _clean_deploy_state()
+    _clean_node_jobs()
+    row = _attempt("canary")
+    _node_job(row.pk)
+
+    with mock.patch.object(JobManager, "release_inflight",
+                           side_effect=RuntimeError("redis is down")):
+        closed = platform_deploy.close_handoff_job(row.pk, "completed")
+
+    th.assert_eq(closed, 0,
+                 f"a failed handoff reports nothing closed rather than "
+                 f"raising, got {closed}")
+    _clean_node_jobs()
+    _clean_deploy_state()

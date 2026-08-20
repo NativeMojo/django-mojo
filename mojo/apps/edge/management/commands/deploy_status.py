@@ -11,10 +11,18 @@ Redis key, TTL or compare-and-set conventions in bash. It calls this instead:
     manage.py deploy_status get
     manage.py deploy_status set deploying --sha <target-sha> --deployment <uuid>
     manage.py deploy_status set failed --sha <target-sha> --deployment <uuid> --detail <phase>
+    manage.py deploy_status handoff --deployment <uuid>
 
 ``set`` is compare-and-set on the stamped SHA. Exit codes: 0 applied, 3 the
 write was ignored because the deploy was superseded (distinct from argparse's
 2, so the script can tell "stale, fine" from "I called this wrong").
+
+``handoff`` is the other half of the same structural fact: the script is about
+to stop the engine running this deployment's ``deploy_node`` job, so that job
+would otherwise sit ``running`` behind a lease nobody will ever release. It
+closes the job row and drops the in-flight entry, and does nothing else — no
+lease, no evidence. Every successful update calls it, including the fleet runs
+that deliberately report no status at all.
 """
 import json
 import os
@@ -35,7 +43,7 @@ class Command(BaseCommand):
     )
 
     def add_arguments(self, parser):
-        parser.add_argument("action", choices=["get", "set"])
+        parser.add_argument("action", choices=["get", "set", "handoff"])
         parser.add_argument(
             "state", nargs="?", choices=[deploy.STATUS_DEPLOYING, deploy.STATUS_FAILED],
             help="Terminal state to report (set only).")
@@ -110,6 +118,23 @@ class Command(BaseCommand):
         if options["action"] == "get":
             self.stdout.write(json.dumps(dict(
                 target=deploy.get_target(), status=deploy.get_status())))
+            return
+
+        if options["action"] == "handoff":
+            # The tail of EVERY successful update, canary and fleet alike:
+            # this node is about to stop the engine running its own deploy
+            # job. Close that job's row while the engine still exists.
+            # Touches no lease and writes no evidence — the terminal report
+            # (or its deliberate absence, on a fleet run) is the deploy's
+            # story; this is only the job row.
+            deployment_id = platform_deploy.deployment_id(
+                options.get("deployment"))
+            if not deployment_id:
+                raise CommandError(
+                    "handoff requires --deployment <platform deployment UUID>")
+            closed = platform_deploy.close_handoff_job(
+                deployment_id, "completed")
+            self.stdout.write(f"handoff: closed {closed} node job(s)")
             return
 
         state = options.get("state")
@@ -222,9 +247,14 @@ class Command(BaseCommand):
             platform_deploy.record_diagnosis(
                 deployment_id, runner_id, detail=failure_detail, kind=kind)
 
+        # This node's deploy job is over either way — the script is making its
+        # terminal report and will stop the engine running that job moments
+        # from now. Close the row while there is still an engine to close it.
+        job_state = ("failed" if state == deploy.STATUS_FAILED else "completed")
         if deploy.set_status(
                 state, sha, detail=options.get("detail"),
                 deployment_id=deployment_id):
+            platform_deploy.close_handoff_job(deployment_id, job_state)
             if state == deploy.STATUS_FAILED:
                 platform_deploy.transition(
                     deployment_id, "failed",
@@ -242,6 +272,10 @@ class Command(BaseCommand):
                     {"source": "legacy_identity_bridge", "sha": sha})
             self.stdout.write(self.style.SUCCESS(f"applied: {state} ({sha})"))
             return
+        # Superseded: this report is stale, but the run that produced it is
+        # still over and its engine is still about to die. Whoever owns the
+        # lease now, nothing is coming back to finish THIS node's job row.
+        platform_deploy.close_handoff_job(deployment_id, job_state)
         self.stderr.write(
             f"ignored: the armed deploy no longer belongs to {sha} "
             "(superseded, or nothing armed)")

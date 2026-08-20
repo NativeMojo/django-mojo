@@ -29,6 +29,9 @@ TERMINAL_EVIDENCE_STATES = {"failed", "identity_mismatch"}
 # failed attempts are worth asking the node about, and only a handful.
 ROLLBACK_OUTCOME_WINDOW = 48 * 3600
 ROLLBACK_OUTCOME_SCAN = 5
+# One node deploy job per runner, and the roster is capped. The bound exists so
+# a malformed payload can never turn a callback into an unbounded scan.
+MAX_HANDOFF_JOBS = 8
 
 
 def _text(value, limit=MAX_TEXT):
@@ -304,6 +307,67 @@ def evidence(value, runner, state, proof=None, detail=None):
                 update_fields.append("diagnosis")
         row.save(update_fields=update_fields)
         return True
+
+
+def close_handoff_job(value, state="completed"):
+    """Close this deployment's node job before its engine is killed.
+
+    update.sh stops the engine that is running `deploy_node` for this exact
+    deployment, so that job never ends on its own: the row stays `running`
+    with a live in-flight lease, and the story of the deploy is told by a
+    later reaper timing the lease out. The node knows the real outcome at
+    callback time — it is the thing reporting it — so it writes the terminal
+    status here, and drops the in-flight entry the dying engine will not.
+
+    NO CHANNEL FILTER, deliberately. `deploy_node` is published to the target
+    runner's own channel, and `JobEngine` accepts an explicit `--runner-id`
+    (see mojo.apps.jobs.cli), so a node started that way has a runner id — and
+    therefore a channel — that nothing here can predict. Filtering on the
+    default would match zero rows on exactly those nodes. Each matched row's
+    OWN channel is what gets released.
+
+    Every failure is logged and swallowed. This runs on the deploy callback
+    and on the rollback report; neither may be blocked by a jobs-plane
+    problem, the same rule `_report_failure_incident` follows.
+
+    Returns the number of rows closed.
+    """
+    from mojo.helpers import logit
+
+    try:
+        if state not in ("completed", "failed"):
+            raise ValueError(f"invalid handoff job state: {state}")
+        owner = deployment_id(value)
+        if not owner:
+            return 0
+        from mojo.apps.jobs.manager import get_manager
+        from mojo.apps.jobs.models import Job, JobEvent
+        from mojo.apps.edge.services import deploy
+
+        rows = list(Job.objects.filter(
+            func=deploy.DEPLOY_NODE_JOB, status="running",
+            payload__deployment=owner)[:MAX_HANDOFF_JOBS])
+        closed = 0
+        for job in rows:
+            metadata = dict(job.metadata or {})
+            metadata["handoff"] = True
+            # Compare-and-set on `running`: a job the engine somehow DID
+            # finish keeps the outcome it reported for itself.
+            if not Job.objects.filter(pk=job.pk, status="running").update(
+                    status=state, finished_at=timezone.now(),
+                    metadata=metadata, modified=timezone.now()):
+                continue
+            JobEvent.objects.create(
+                job=job, channel=job.channel, event=state,
+                runner_id=job.runner_id, attempt=job.attempt,
+                details={"reason": "deploy_engine_handoff"})
+            get_manager().release_inflight(job.channel, job.pk)
+            closed += 1
+        return closed
+    except Exception:
+        logit.exception(
+            f"edge deploy {value}: failed to close the handoff job")
+        return 0
 
 
 _DESIRED_UNSET = object()

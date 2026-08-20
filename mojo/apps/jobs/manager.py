@@ -345,6 +345,26 @@ class JobManager:
 
         return stuck
 
+    def release_inflight(self, channel, job_id):
+        """Drop one job's in-flight ZSET entry WITHOUT requeuing it.
+
+        The engine removes its own entries as jobs end. A job whose engine is
+        about to be killed mid-run — the node deploy job, which stops the
+        engine executing it — never gets that far, so the entry outlives the
+        durable row's terminal status. The only thing any later reaper can do
+        with such an entry is remove it; this does that now, from the process
+        that already knows the job is over.
+
+        Unlike `clear_stuck_jobs` this requeues nothing: the caller is stating
+        that the job is finished, not that it was abandoned.
+        """
+        try:
+            return bool(self.redis.zrem(self.keys.processing(channel), job_id))
+        except Exception as err:
+            logit.error(
+                f"Failed to release in-flight job {job_id} on {channel}: {err}")
+            return False
+
     def clear_stuck_jobs(self, channel: str, idle_threshold_ms: int = 60000) -> Dict[str, Any]:
         """
         Plan B: Clear stuck in-flight jobs from a channel by re-queueing or removing
