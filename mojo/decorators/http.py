@@ -4,6 +4,7 @@ from mojo.helpers.settings import settings
 from mojo.helpers import modules as jm
 from mojo.helpers import logit
 from mojo.helpers.request import restricted_identity
+from mojo.helpers import error_pages
 import mojo.errors
 from django.urls import path, re_path
 # from django.http import JsonResponse
@@ -68,7 +69,7 @@ _PERMISSION_DENIED_LEVELS = {
 def _emit_permission_denied_event(err, request):
     """Report a PermissionDeniedException with full metadata to the incident system."""
     level = _PERMISSION_DENIED_LEVELS.get(err.event_type, 4)
-    rest.MojoModel.class_report_incident_for_user(
+    return rest.MojoModel.class_report_incident_for_user(
         details=f"Permission denied: {err.reason}",
         event_type=err.event_type or "user_permission_denied",
         request=request,
@@ -151,7 +152,8 @@ def dispatcher(request, *args, **kwargs):
         method_key = f"{key}__ALL"
     if method_key in URLPATTERN_METHODS:
         return dispatch_error_handler(URLPATTERN_METHODS[method_key])(request, *args, **kwargs)
-    return JsonResponse({"error": "Endpoint not found", "code": 404}, status=404)
+    return error_pages.error_response(
+        request, {"error": "Endpoint not found", "code": 404}, 404)
 
 
 def dispatch_error_handler(func):
@@ -186,11 +188,12 @@ def dispatch_error_handler(func):
             metric_key = "api_denied" if (is_perm_denied or is_reauth) else "api_errors"
             if _api_metrics_enabled():
                 metrics.record(metric_key, category="mojo_api", min_granularity=_api_metrics_granularity())
+            event = None
             if _events_on_errors() and not is_reauth:
                 if is_perm_denied:
-                    _emit_permission_denied_event(err, request)
+                    event = _emit_permission_denied_event(err, request)
                 else:
-                    rest.MojoModel.class_report_incident_for_user(
+                    event = rest.MojoModel.class_report_incident_for_user(
                         details=f"Rest Mojo Error: {err.reason}",
                         event_type="mojo_rest_error",
                         request_data=request.DATA,
@@ -201,7 +204,15 @@ def dispatch_error_handler(func):
                         stack_trace=traceback.format_exc(),
                     )
             wire_status = 200 if _status_200_on_error() else err.status
-            return JsonResponse({"error": err.reason, "code": err.code, "status": False }, status=wire_status)
+            # page_status is err.status, NOT wire_status: the 200-on-error shim
+            # exists for API clients only. Browsers, crawlers and monitors get
+            # the true code (see mojo/helpers/error_pages.py).
+            return error_pages.error_response(
+                request,
+                {"error": err.reason, "code": err.code, "status": False },
+                wire_status,
+                page_status=err.status,
+                reference=getattr(event, "pk", None))
         except PermissionError as err:
             if _api_metrics_enabled():
                 metrics.record("api_denied", category="mojo_api", min_granularity=_api_metrics_granularity())
@@ -214,7 +225,8 @@ def dispatch_error_handler(func):
                     level=4,
                     request_path=getattr(request, "path", None)
                 )
-            return JsonResponse({"error": str(err), "code": 403, "status": False }, status=403)
+            return error_pages.error_response(
+                request, {"error": str(err), "code": 403, "status": False }, 403)
         except ValueError as err:
             if _api_metrics_enabled():
                 metrics.record("api_errors", category="mojo_api", min_granularity=_api_metrics_granularity())
@@ -229,14 +241,16 @@ def dispatch_error_handler(func):
                     request_path=getattr(request, "path", None),
                     stack_trace=traceback.format_exc()
                 )
-            return JsonResponse({"error": str(err), "code": 400, "status": False  }, status=400)
+            return error_pages.error_response(
+                request, {"error": str(err), "code": 400, "status": False  }, 400)
         except Exception as err:
             if _api_metrics_enabled():
                 metrics.record("api_errors", category="mojo_api", min_granularity=_api_metrics_granularity())
             # logger.exception(f"Unhandled REST Exception: {request.path}")
             logger.exception(f"Error: {str(err)}, Path: {request.path}, IP: {request.META.get('REMOTE_ADDR')}")
+            event = None
             if _events_on_errors():
-                rest.MojoModel.class_report_incident_for_user(
+                event = rest.MojoModel.class_report_incident_for_user(
                     details=f"Rest Exception: {err}",
                     event_type="rest_error",
                     request_data=request.DATA,
@@ -250,7 +264,14 @@ def dispatch_error_handler(func):
             # error" matches mojo/middleware/logging.py verbatim; the envelope
             # (error/code/status) is unchanged.
             error = str(err) if _return_real_error() else "system error"
-            return JsonResponse({"error": error, "code": 500, "status": False  }, status=500)
+            # The HTML page gets ONLY the incident reference — never `error`,
+            # never the stack, never the path. All of that is already on the
+            # incident record, which is access-controlled.
+            return error_pages.error_response(
+                request,
+                {"error": error, "code": 500, "status": False  },
+                500,
+                reference=getattr(event, "pk", None))
 
     return wrapper
 

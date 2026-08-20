@@ -1,0 +1,11 @@
+{% extends "mojo/errors/_base.html" %}
+{% comment %}
+  This page must never confirm whether the thing behind the door exists. It
+  names no resource, no path and no permission, and it carries no incident
+  reference — a 403 that distinguishes itself from a 404 is free
+  reconnaissance. Keep it that way.
+{% endcomment %}
+{% block page_title %}No access{% endblock %}
+{% block headline %}You don&rsquo;t have access to this{% endblock %}
+{% block body %}You&rsquo;re signed in, but this area needs a permission your account doesn&rsquo;t carry. Whoever manages this site can grant it.{% endblock %}
+{% block extra %}<a class="me-quiet" href="/">Back to the home page</a>{% endblock %}

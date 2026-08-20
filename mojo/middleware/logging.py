@@ -4,7 +4,7 @@ from queue import Queue, Empty
 from mojo.apps.logit.models import Log
 from mojo.helpers.settings import settings
 from mojo.helpers import logit, request as request_helper
-from mojo.helpers.response import JsonResponse
+from mojo.helpers import error_pages
 
 API_PREFIX = "/".join([settings.get_static("MOJO_PREFIX", "api/").rstrip("/"), ""])
 LOGIT_DEBUG_ALL = settings.get_static("LOGIT_DEBUG_ALL", False)
@@ -92,7 +92,13 @@ class LoggerMiddleware:
             error = "system error"
             if LOGIT_RETURN_REAL_ERROR:
                 error = str(e)
-            response = JsonResponse(dict(status=False, error=error), status=500)
+            # This is the outer 500 — it catches what the REST dispatcher never
+            # saw (a non-mojo view, a middleware below this one). Same
+            # negotiation, same JSON bytes for API clients. No incident is
+            # filed here (this path writes a Log, not an Event), so the page
+            # renders without a reference rather than inventing one.
+            response = error_pages.error_response(
+                request, dict(status=False, error=error), 500)
 
         self.log_response(request, response)
         return response
