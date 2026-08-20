@@ -37,7 +37,7 @@
 #
 # Project inputs (exported by the shim before it execs this file):
 #   PROJ_PATH    the deployed tree                (default /opt/api)
-#   SANITY_URL   the URL sanity_check must probe  (default http://127.0.0.1/api/version)
+#   SANITY_URL   the URL sanity_check must probe  (default https://127.0.0.1/api/version)
 #
 # Structure the engine depends on (do not reorder casually):
 #   - The script reports terminal status itself: `restart_engine` at the end
@@ -89,7 +89,13 @@ done
 PROJ_PATH="${PROJ_PATH:-/opt/api}"
 cd "$PROJ_PATH" || { echo "FATAL: cannot cd to $PROJ_PATH" >&2; exit 1; }
 
-SANITY_URL="${SANITY_URL:-http://127.0.0.1/api/version}"
+# HTTPS, not http. The shipped :80 vhost 301s everything except the ACME
+# path, so a plain-http probe can only ever see nginx's redirect — and the
+# canary then reports EVERY successful deploy as a sanity-check failure and
+# rolls it back. sanity_check skips certificate verification on the loopback
+# for the same reason `remote.py` does: the certificate names the site, not
+# 127.0.0.1.
+SANITY_URL="${SANITY_URL:-https://127.0.0.1/api/version}"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S'): $*" | tee -a var/update.log; }
 

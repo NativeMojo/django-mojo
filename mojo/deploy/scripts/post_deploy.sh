@@ -23,7 +23,7 @@
 #
 # Project inputs (exported by the shim; every default matches the skeleton):
 #   PROJ_PATH     the deployed tree                     (default /opt/api)
-#   PROBE_URL     post-restart health gate              (default http://127.0.0.1/api/version)
+#   PROBE_URL     post-restart health gate              (default https://127.0.0.1/api/version)
 #   APP_USER      owns the tree and runs the engines    (default ec2-user)
 #   WEB_USER      runs the asgi app behind nginx        (default www)
 #   ASGI_WORKERS  uvicorn worker count (@WORKERS@)      (default 4)
@@ -39,7 +39,12 @@
 set -euo pipefail
 
 PROJ_PATH="${PROJ_PATH:-/opt/api}"
-PROBE_URL="${PROBE_URL:-http://127.0.0.1/api/version}"
+# HTTPS, and -k below, for the reason remote.py and sanity.py both give:
+# the shipped :80 vhost 301s everything except the ACME path. `curl -f`
+# does not fail on a 3xx, so a plain-http gate PASSED on nginx's redirect
+# alone — with the app dead behind it. A health gate that cannot fail is
+# worse than none, because it is reported as evidence.
+PROBE_URL="${PROBE_URL:-https://127.0.0.1/api/version}"
 APP_USER="${APP_USER:-ec2-user}"
 WEB_USER="${WEB_USER:-www}"
 ASGI_WORKERS="${ASGI_WORKERS:-4}"
@@ -806,7 +811,7 @@ snapshot_self() {
 # `curl -f`).
 phase_begin probe
 for _ in $(seq 1 15); do
-    if curl -fsS -o /dev/null --max-time 2 "$PROBE_URL" 2>/dev/null; then
+    if curl -fsSk -o /dev/null --max-time 2 "$PROBE_URL" 2>/dev/null; then
         phase_end
         snapshot_self
         log "Post-deploy complete — app responding."

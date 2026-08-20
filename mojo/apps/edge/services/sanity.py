@@ -59,18 +59,53 @@ def check_redis(options=None):
     client.ping()
 
 
+LOCAL_PROBE = "https://127.0.0.1/api/version"
+
+# Hosts whose certificate can never match, because a public certificate is
+# issued for the site's name and this probe deliberately dials the loopback.
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]")
+
+
+def _verify_for(url):
+    """Verify TLS unless we are dialling our own loopback.
+
+    HTTPS, and unverified on the loopback, are both forced by what the shipped
+    vhost does: :80 301s everything except the ACME path, so a plain-http probe
+    can only ever see nginx's redirect — never the app. And the :443 certificate
+    is issued for the site's public name, so verifying it against 127.0.0.1
+    fails by construction. The subject of this check is "does nginx reach
+    uvicorn and does the app answer"; certificate validity is a different
+    question, asked elsewhere against the real name.
+    """
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    if parts.scheme != "https":
+        return True
+    return (parts.hostname or "").lower() not in LOOPBACK_HOSTS
+
+
 def check_request(options=None):
     options = options or {}
-    url = options.get("url", "http://127.0.0.1/api/version")
+    url = options.get("url", LOCAL_PROBE)
     timeout = float(options.get("timeout", 5.0))
     retries = max(1, int(options.get("retries", 10)))
     delay = max(0, float(options.get("delay", 2.0)))
+    verify = _verify_for(url)
     last_detail = "no attempt made"
+    if not verify:
+        # One probe per deploy would otherwise print an InsecureRequestWarning
+        # into the canary's captured output, where it reads like a finding.
+        import urllib3
+
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     with requests.Session() as session:
         session.trust_env = False
+        session.verify = verify
         for _ in range(retries):
             try:
-                response = session.get(url, timeout=timeout, allow_redirects=False)
+                response = session.get(url, timeout=timeout,
+                                       allow_redirects=False, verify=verify)
                 if response.status_code == 200:
                     return
                 last_detail = f"HTTP {response.status_code} from local API"

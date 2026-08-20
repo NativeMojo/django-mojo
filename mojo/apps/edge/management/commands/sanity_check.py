@@ -28,9 +28,11 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--url", default="http://127.0.0.1/api/version",
+            "--url", default=sanity.LOCAL_PROBE,
             help="Local probe URL for the real-request check "
-                 "(default: the same probe post_deploy.sh uses).")
+                 "(default: the same probe post_deploy.sh uses). HTTPS on the "
+                 "loopback by default and unverified there — see "
+                 "sanity._verify_for.")
         parser.add_argument(
             "--timeout", type=float, default=5.0,
             help="Per-request timeout in seconds for the probe (default 5).")

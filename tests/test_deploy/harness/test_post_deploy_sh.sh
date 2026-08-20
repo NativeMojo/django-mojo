@@ -347,7 +347,7 @@ run_post_deploy > "$OUT" 2>&1
 assert_eq "$?" 0 "bare invocation exits 0"
 assert_in_log "CMD nginx -t" "nginx config test ran"
 assert_in_log "CMD systemctl restart mojo-asgi" "app restarted"
-assert_in_log "CMD curl .*http://127.0.0.1/api/version" \
+assert_in_log "CMD curl .*https://127.0.0.1/api/version" \
     "the probe targets the default PROBE_URL"
 assert_file "$TMP/nginx_etc/nginx.conf" "nginx.conf landed in the NGINX_ETC seam"
 assert_file "$TMP/nginx_etc/conf.d/00_django_mojo_runtime.conf" \
@@ -442,7 +442,7 @@ run_post_deploy_env PROBE_URL="http://127.0.0.1:8080/api/version" APP_USER="appu
 assert_eq "$?" 0 "overridden run exits 0"
 assert_in_log "CMD curl .*http://127.0.0.1:8080/api/version" \
     "the probe targets the overridden PROBE_URL"
-assert_not_in_log "CMD curl .*http://127.0.0.1/api/version " \
+assert_not_in_log "CMD curl .*https://127.0.0.1/api/version " \
     "the default probe URL is not used once overridden"
 assert_in_log "CMD chown -R appu:webu" "chown argv carries APP_USER:WEB_USER"
 assert_has "$TMP/systemd_etc/mojo-asgi.service" "--workers 7" "ASGI_WORKERS renders into the unit"
@@ -652,7 +652,7 @@ assert_eq "$?" 0 "timer failure does not veto a healthy app deploy"
 assert_has "$OUT" "phase=timers; deploy continues" "timer failure is explicit"
 assert_in_log "CMD systemctl restart mojo-asgi" \
     "the web app still restarts after the timer warning"
-assert_in_log "CMD curl .*http://127.0.0.1/api/version" \
+assert_in_log "CMD curl .*https://127.0.0.1/api/version" \
     "the real app probe still gates the warned deploy"
 
 echo "post_deploy.sh: undeclared collision is inert; declared override applies"
