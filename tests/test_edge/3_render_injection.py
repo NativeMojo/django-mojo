@@ -93,7 +93,7 @@ def test_render_boundary_rejects_hostile_name(opts):
     Domain.objects.filter(pk=opts.domain.pk).update(name="edge-render-example.com")
 
 
-@th.django_unit_test("a rendered vhost emits exactly two server blocks (443 + 80)")
+@th.django_unit_test("default rendering emits exactly two server blocks (443 + 80)")
 def test_exactly_two_server_blocks(opts):
     """The injection pin. One 443 block carrying the kind's contract, one
     port-80 ACME/redirect shell — a third block anywhere means a value
@@ -123,6 +123,54 @@ def test_exactly_two_server_blocks(opts):
             f"{kwargs['kind']}: the port-80 redirect is missing"
         assert f"client_max_body_size {vhost.body_size_mb}m;" in text, \
             f"{kwargs['kind']}: client_max_body_size is not rendered"
+
+
+@th.django_unit_test("DNS-01-only rendering emits HTTPS and no HTTP-01 shell")
+def test_http_disabled_vhost_shapes(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.services import render
+
+    def static(name, default=None, kind=None):
+        if name == "EDGE_HTTP_ENABLED":
+            return False
+        if name == "EDGE_HTTP_DEFAULT_SERVER":
+            return True
+        if name == "EDGE_ACME_WEBROOT":
+            raise AssertionError("disabled HTTP read EDGE_ACME_WEBROOT")
+        return default
+
+    cases = [
+        ("off-site", dict(kind="site")),
+        ("off-api", dict(kind="api", upstream=opts.upstream)),
+        ("off-mixed", dict(kind="site_api")),
+        ("off-redirect", dict(
+            kind="redirect", redirect_to="www.example.com")),
+    ]
+    with mock.patch.object(render.settings, "get_static", side_effect=static):
+        knobs = render.http_knobs()
+        assert knobs["http_enabled"] is False, \
+            f"disabled posture resolved incorrectly: {knobs}"
+        assert "acme_webroot" not in knobs, \
+            f"disabled posture still hashes the ACME webroot: {knobs}"
+        for label, kwargs in cases:
+            vhost = make_vhost(
+                opts.domain, opts.certificate, label=label, **kwargs)
+            text = render.render_vhost(vhost, opts.generation, knobs=knobs)
+            assert text.count("server {") == 1, \
+                f"{label} rendered a non-HTTPS server block:\n{text}"
+            assert "listen 443 ssl;" in text, \
+                f"{label} lost its HTTPS listener:\n{text}"
+            assert "listen 80" not in text and "[::]:80" not in text, \
+                f"{label} retained port 80:\n{text}"
+            assert "/.well-known/acme-challenge/" not in text, \
+                f"{label} retained the HTTP-01 challenge path:\n{text}"
+
+        base = render.render_http_base(knobs=knobs, security=[])
+        assert "listen 443 ssl default_server;" in base, \
+            f"disabled HTTP lost the requested 443 catch-all:\n{base}"
+        assert "listen 80" not in base and "[::]:80" not in base, \
+            f"the default-server flag resurrected port 80:\n{base}"
 
 
 @th.django_unit_test("a site vhost never emits proxy_pass")

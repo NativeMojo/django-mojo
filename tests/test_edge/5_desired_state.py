@@ -313,6 +313,53 @@ def test_http_knobs_converge(opts):
         Setting.remove("EDGE_TLS_PROTOCOLS", group=None)
 
 
+@th.django_unit_test("the file-only HTTP posture and enabled webroot converge")
+def test_http_posture_converges(opts):
+    from unittest import mock
+
+    import django.conf
+
+    from mojo.apps.account.models.setting import Setting
+    from mojo.apps.edge.services import render
+
+    def payload(http, webroot="/var/www/certbot", default_server="false"):
+        values = {
+            "EDGE_HTTP_ENABLED": http,
+            "EDGE_HTTP_DEFAULT_SERVER": default_server,
+            "EDGE_ACME_WEBROOT": webroot,
+        }
+        with mock.patch.multiple(django.conf.settings, create=True, **values):
+            return render.desired_state([opts.vhost])
+
+    Setting.set("EDGE_HTTP_ENABLED", True, group=None)
+    try:
+        disabled = payload("false", webroot="/must/not/hash")
+        disabled_other = payload("false", webroot="/also/not/hash")
+        enabled = payload("true", webroot="/one")
+        enabled_moved = payload("true", webroot="/two")
+        default_enabled = payload(
+            "false", webroot="/ignored", default_server="true")
+    finally:
+        Setting.remove("EDGE_HTTP_ENABLED", group=None)
+
+    assert disabled["http"]["http_enabled"] is False, \
+        f"file false did not defeat the DB true row: {disabled['http']}"
+    assert "acme_webroot" not in disabled["http"], \
+        f"disabled state carried an ACME webroot: {disabled['http']}"
+    assert disabled["generation"] == disabled_other["generation"], \
+        "an unused disabled-mode ACME webroot moved the generation"
+    assert enabled["http"]["acme_webroot"] == "/one", \
+        f"enabled state omitted its webroot: {enabled['http']}"
+    assert enabled["generation"] != enabled_moved["generation"], \
+        "an enabled ACME webroot change did not move the generation"
+    assert enabled["generation"] != disabled["generation"], \
+        "disabling HTTP did not move the generation"
+    assert default_enabled["http"]["default_server"] is True, \
+        "string true did not enable the default server"
+    assert disabled["http"]["default_server"] is False, \
+        "string false unexpectedly enabled the default server"
+
+
 @th.django_unit_test("retiring an upstream moves the generation id")
 def test_retire_converges(opts):
     """`is_enabled` is in the upstream payload precisely so the installer's

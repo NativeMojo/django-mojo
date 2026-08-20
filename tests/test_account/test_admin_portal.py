@@ -85,6 +85,9 @@ def test_authenticated_admin_delivery(opts):
     assert data.get("user", {}).get("username") == ADMIN_EMAIL, \
         "Admin bootstrap omitted the signed-in username required for inline recent authentication"
     assert data.get("capabilities", {}).get("manage_network") is True, data
+    assert data.get("edge") == {
+        "http_enabled": True, "dnsman_issuance": "dns-01"}, \
+        f"Admin bootstrap omitted the edge certificate posture: {data.get('edge')}"
     assert tuple(data.get("features", {})) == (
         "dashboard", "people", "webapps", "activity", "platform", "advanced",
         "settings", "sms", "email"), data.get("features")
@@ -204,6 +207,26 @@ def test_bootstrap_publishes_infrastructure_mode(opts):
             for key, value in feature["capabilities"].items():
                 assert isinstance(value, bool), \
                     f"features.{name}.capabilities.{key} is not a bool: {value!r}"
+
+
+@th.django_unit_test("bootstrap publishes the file-only edge HTTP posture")
+def test_bootstrap_publishes_edge_http_posture(opts):
+    from mojo.apps.account.models.setting import Setting
+
+    Setting.set("EDGE_HTTP_ENABLED", True, group=None)
+    try:
+        with _override_setting("EDGE_HTTP_ENABLED", "false"):
+            disabled = _bootstrap(opts)
+        with _override_setting("EDGE_HTTP_ENABLED", "true"):
+            enabled = _bootstrap(opts)
+    finally:
+        Setting.remove("EDGE_HTTP_ENABLED", group=None)
+
+    assert disabled["edge"] == {
+        "http_enabled": False, "dnsman_issuance": "dns-01"}, \
+        f"file-disabled edge posture is wrong: {disabled['edge']}"
+    assert enabled["edge"]["http_enabled"] is True, \
+        f"file-enabled edge posture is wrong: {enabled['edge']}"
 
 
 @th.django_unit_test("the Platform lane never opens on the infrastructure flag alone")

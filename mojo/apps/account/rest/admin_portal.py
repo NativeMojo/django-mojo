@@ -127,6 +127,8 @@ def on_admin_session_revoke(request):
 @md.denies_key_backed_session()
 @md.requires_global_perms("view_admin", "manage_users", "manage_settings", "admin")
 def on_admin_bootstrap(request):
+    from mojo.apps.edge.services import render as edge_render
+
     memberships = request.user.members.filter(is_active=True).select_related("group")
     groups = [
         {"id": member.group_id, "name": member.group.name}
@@ -220,5 +222,9 @@ def on_admin_bootstrap(request):
         "capabilities": capabilities,
         "infrastructure": {"mode": mode,
                            "managed": mode == infrastructure.MANAGED},
+        "edge": {
+            "http_enabled": edge_render.http_enabled(),
+            "dnsman_issuance": "dns-01",
+        },
         "features": admin_features.bootstrap_features(request, capabilities),
     }
