@@ -1,8 +1,9 @@
 # Capacity actions
 
-Adding and removing an app node, an RDS reader, or a cache replica — from the
-Admin portal, with server-derived guards, an audit trail, and proof that an
-added node runs the code the rest of the fleet runs.
+Adding and removing an app node, an RDS reader, or a cache replica — and
+turning the fleet's stable outbound IPs on and off — from the Admin portal,
+with server-derived guards, an audit trail, and proof that an added node runs
+the code the rest of the fleet runs.
 
 The alternative this replaces is an operator in the AWS console at 2am, adding
 a node by hand and hoping they picked the same instance type, the same subnet,
@@ -113,6 +114,7 @@ ladder and writes each phase onto the record:
 | `booting` | Wait for `<node_id>-engine` on the `edge` channel | `runner_missing` after 20 min — running, unregistered, serving nothing |
 | `converging` | ONE targeted `_publish_deploy_node(runner_id, row.sha, row.framework_version, migrate=False, deployment_id=row.pk)` for `platform_deploy.last_converged_deployment()` | `no_converged_deployment` |
 | `proving` | Poll `readiness.local_node_proof` over `execute_on_runner` until `platform_deploy.proof_matches` accepts it | `proof_timeout` — **NOT registered** |
+| `addressing` | Only while stable outbound IPs are on: reuse a reserved `mojo:eip=stable-egress` address, else allocate one, associate it, before registration | `address_failed` / `address_quota` — **NOT registered**; `policy_unreadable` if the policy row cannot even be read |
 | `registering` | `register_target` into every group the source is in, then extend `EDGE_EXPECTED_TOPOLOGY` | topology failure is a warning, never a failure |
 | `settling` | Poll target health until healthy in every group, then trigger the combined pool convergence | `never_healthy` — the row offers Drain |
 
@@ -193,6 +195,114 @@ never "this is not me". A fleet that sets its own hostnames will not match the
 AWS-assigned DNS label, and absent evidence is not proof of safety. The
 confirmation copy says so out loud and asks the operator to check the instance
 id.
+
+
+## Stable outbound IPs
+
+Providers that allowlist caller IPs need the fleet's outbound addresses to
+never change. `enable_stable_ips` / `disable_stable_ips` are fleet-wide
+capacity actions on the same operation contract: single-flight claim, phased
+job, audit event, and **no success until the association state is re-read from
+AWS**.
+
+### The policy is a protected system setting
+
+`AWS_STABLE_OUTBOUND_IPS` (`{"enabled": bool}`), registered with its validator
+by the aws app's `AppConfig.ready()`. It lives in the database behind
+`system_settings.set_value` — superuser-only, refused on the generic settings
+REST plane — so API and job processes on **any** node read the same durable
+intent. The apply writes the policy in the request thread (the
+human-authenticated superuser) and the job merely converges it: a failed job
+leaves the report showing enabled-but-pending with the action still offered,
+and re-running it converges exactly what is missing.
+
+### Tags gate mutation; associations gate reporting
+
+The report's `egress.addresses` — the canonical vendor allowlist — is what is
+actually **attached** to fleet nodes, with unmanaged addresses labelled rather
+than hidden. Mutation is narrower: this feature creates, renames, or detaches
+only addresses carrying `mojo:eip=stable-egress`.
+
+- **Allocate**: tagged at creation (`Name`, `mojo:eip=stable-egress`,
+  `mojo:created-by=admin-capacity`) — an allocation that succeeded but could
+  not be tagged would be invisible to every later reuse pass.
+- **Reuse**: unassociated `stable-egress` reservations are consumed before
+  anything new is allocated. "Unassociated" requires no association, no
+  instance AND no network interface — an NLB's address has no instance id and
+  is very much in use.
+- **Adopt**: a node-attached address is claimed (tagged) only when it already
+  carries django-mojo ownership tags (`managed-by=django-mojo` /
+  `mojo:project`) — the pre-balancer provision case. An untagged attached
+  address satisfies its node and appears in the allowlist, but is never
+  tagged, renamed, or detached.
+- **Explicit assignment**: the apply's optional `assign`
+  (`{instance_id: allocation_id}`) hands a named eligible reservation to a
+  named node. Eligible = unassociated + django-mojo-tagged; anything else is
+  refused (`address_not_eligible`) before any mutation, with the remedy (tag
+  it in the console) in the message.
+- `associate_address` passes `AllowReassociation=False` **explicitly**: losing
+  a race errors and re-plans once; stealing an address in production would be
+  an outage.
+
+### Enable, disable, and the add_node leg
+
+**Enable** (`planning` → `associating` → `verifying`): fresh serving +
+address reads, adopt by tag, then per pending node assigned → reserved →
+allocated, and a final re-read proves every registered running node holds an
+address before `done`. Registered-but-not-running instances are warned
+(`node_not_running`) and skipped. **Disable** (`detaching` → `verifying`):
+disassociates only `stable-egress` associations, keeps every allocation
+(release is deliberately a console action, never a side effect), and the
+finish message reports each node's post-detach address — recovery onto an
+auto-assigned address is neither instant nor guaranteed.
+
+**add_node** gains the `addressing` leg between proving and registering, and
+it **fails closed**: a clone that cannot get its address is left running and
+unregistered, exactly like a clone that cannot prove its commit — an
+unregistered node costs money and serves nothing, while a registered node
+egressing from a non-allowlisted address fails provider calls in production.
+The leg reads the policy through a **raising** path
+(`_egress_enabled(strict=True)`): `Setting.get_from_db` swallows every
+exception into not-found, which is fine for a report and wrong for an
+admission gate, so an unreadable policy fails the add (`policy_unreadable`)
+rather than silently skipping the leg.
+
+### Claims release on provider failure — deliberately unlike add_node
+
+`run_operation`'s generic handler holds the claim whenever a mutation was
+attempted, because a retried add is a second live instance. Both stable-ips
+runners are **idempotent by construction** — satisfied nodes are skipped,
+decisions re-derive from fresh reads, and even an allocate whose response was
+lost left a tagged reservation the next planning pass reuses first — so they
+catch `ProviderCallError` themselves and fail with the claim **released**.
+Holding it would 409 the exact re-run the panel offers as the retry, for the
+rest of the 90-minute claim TTL. Enable and disable still serialize against
+each other on one fixed claim (`stable_ips:fleet`).
+
+### Cost, quota, and honest copy
+
+AWS bills every public IPv4 identically, attached or not. So **enable is net
+~zero per month** (an attached Elastic IP replaces the node's identical
+auto-assigned-IPv4 charge) and **disable is what adds cost**: each kept
+reservation bills (~$3.60/month, `EIP_MONTHLY_USD` — keep in agreement with
+provision's `COST_TABLE["eip"]`) beside the node's new auto-assigned address.
+There is no pre-flight quota read — servicequotas would be a new API and IAM
+grant for a number AWS enforces anyway; `AddressLimitExceeded` maps to
+`address_quota` naming how many nodes were addressed and how many remain
+(default quota: 5 public IPv4s per region).
+
+### Boundaries
+
+- The fleet is what `serving_map()` shows: **registered** instances. A fleet
+  with no balancer is invisible here — provision already gives those nodes
+  their addresses (the node is the DNS target). A node whose drain completed
+  is deregistered and will not be converged by a later enable; drain itself
+  never detaches an address, so enable-then-drain keeps the node allowlisted.
+- Provision-side, `spec.stable_node_ips` (env-file key, `--stable-node-ips`)
+  keeps `_ensure_addresses` running even behind an NLB — the birth-time form
+  of the same policy. The two do not fight: DNS's balancer branch never reads
+  node addresses, and an admin disable will be re-attached by the next
+  `provision apply`, so change both or expect that.
 
 ## RDS readers
 
@@ -275,6 +385,7 @@ request body.
 | `ADMIN_CAPACITY_NODE_ROOT` | `/opt/api` | `--root` passed to `node_setup` in the clone's user-data |
 | `PRIMARY_BALANCER_HOST` | unset | Read (not written) to prefer a non-primary clone source and to label the row |
 | `EDGE_NODE_ID` | unset | **If set, adding a node is refused** (`node_id_pinned`) — every node would report the same readiness identity, so a new node could never be proven |
+| `AWS_STABLE_OUTBOUND_IPS` | unset | **Protected system setting, not django.conf** — the durable stable-egress policy, `{"enabled": bool}`, written only through the capacity apply |
 | `INFRASTRUCTURE_MODE` | `managed` | `external` refuses every apply |
 
 ## IAM
@@ -285,6 +396,8 @@ Beyond what the dashboard already needs:
 ec2:DescribeInstances       ec2:CreateImage        ec2:DescribeImages
 ec2:RunInstances            ec2:TerminateInstances
 ec2:CreateTags              iam:PassRole            (for the cloned instance profile)
+ec2:DescribeAddresses       ec2:AllocateAddress
+ec2:AssociateAddress        ec2:DisassociateAddress (stable outbound IPs)
 elasticloadbalancing:DescribeLoadBalancers
 elasticloadbalancing:DescribeTargetGroups
 elasticloadbalancing:DescribeTargetHealth
