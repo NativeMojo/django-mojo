@@ -48,17 +48,20 @@ function actionFailed(title, error) {
 // closure, and the response so the value cannot be read back from memory.
 function oneTimeSecret(webapp, result, returnFocus) {
   let secret = result.token;
-  const secretField = h('textarea', {class: 'secret', readonly: true, rows: '2', text: secret});
+  const secretField = h('pre', {class: 'code-block is-inline', tabindex: '0', text: secret});
   const content = h('div', {},
     h('div', {class: 'callout warning'}, icon('alert'), h('div', {}, h('strong', {text: 'Copy this value now'}),
       h('p', {text: 'It can’t be shown again after you close this. If it’s lost, rotate the key to get a new one.'}))),
-    h('label', {class: 'field'}, h('span', {text: 'GitHub Actions secret: MOJO_DEPLOY_KEY'}), secretField),
+    // A div, not a label: a <label> with no labelable control inside labels
+    // nothing. tabindex on the block keeps the value Tab-reachable, which the
+    // textarea gave for free and a keyboard user needs to select and copy it.
+    h('div', {class: 'field'}, h('span', {text: 'GitHub Actions secret: MOJO_DEPLOY_KEY'}), secretField),
     // A function, not a string: onClose scrubs `secret`, and the button must
     // never be able to hand back a value the dialog has already forgotten.
     copyButton(() => secret, {label: 'Copy secret', className: 'button primary'}),
     h('div', {class: 'command'}, h('code', {text: 'gh secret set MOJO_DEPLOY_KEY --repo YOUR_ORG/YOUR_REPO'})));
   openModal({title: `${webapp.slug} deployment key`, subtitle: 'The previous key is already inactive.', content, returnFocus, onClose: () => {
-    secretField.value = ''; secretField.textContent = ''; secret = ''; result.token = null;
+    secretField.textContent = ''; secret = ''; result.token = null;
   }});
 }
 
@@ -120,14 +123,17 @@ function workflowPanel(webapp, keyAction = null) {
   loadInto(panel, async (current) => {
     const result = await api('/api/edge/webapp/onboarding/workflow', {method: 'POST', body: JSON.stringify({webapp: webapp.id})});
     if (!current()) return;
-    const text = h('textarea', {class: 'secret', readonly: true, rows: '18', text: result.yaml});
+    // A <pre>, not a <textarea>: this is text to read and copy, never to edit.
+    // A textarea gave it the browser's default form chrome — square corners, a
+    // resize grabber — in a page that is otherwise styled.
+    const text = h('pre', {class: 'code-block', tabindex: '0', text: result.yaml});
     panel.replaceChildren(
       h('p', {text: 'Two things set up deploys from GitHub: one secret, and one file.'}),
       h('ol', {class: 'setup-list'},
         h('li', {}, h('strong', {text: 'Add the secret. '}), 'In your repo’s Settings → Secrets, add ', h('code', {text: 'MOJO_DEPLOY_KEY'}), '. ', keyAction),
         h('li', {}, h('strong', {text: 'Add the file. '}), 'Save this as ', h('code', {text: result.filename}), ' and push:')),
       text,
-      copyButton(() => text.value, {label: 'Copy file', className: 'button primary'}));
+      copyButton(() => text.textContent, {label: 'Copy file', className: 'button primary'}));
   }, {message: 'Building your workflow file…'});
   return panel;
 }

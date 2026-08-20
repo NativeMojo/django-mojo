@@ -57,3 +57,14 @@ button,input,textarea,select{font:inherit;color:inherit}button,a{touch-action:ma
 .toast.is-leaving{opacity:0;transform:translateY(4px);transition:opacity .16s ease,transform .16s ease}
 @keyframes toast-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 @media(prefers-reduced-motion:reduce){.toast{animation:none}.toast.is-leaving{transition:none}}
+
+/* Read-only code: a block of text to read and copy, never to edit. Using a
+   <textarea> for this gave it the browser's default form chrome — square
+   corners and a resize grabber — inside an otherwise styled page. */
+.code-block{max-height:340px;overflow:auto;margin:0;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--text);font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;tab-size:2}
+.code-block.is-inline{max-height:none;white-space:pre-wrap;word-break:break-all}
+
+/* A row that describes something you can open, opens it. */
+.status-row.is-navigable{cursor:pointer}
+.status-row.is-navigable:hover{background:var(--surface-2)}
+.status-row.is-navigable:hover .row-link{text-decoration:underline}
