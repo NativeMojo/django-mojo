@@ -444,6 +444,58 @@ def test_webapp_upload_tab_contract(opts):
         "the caps refusal does not cite the server's limits plainly"
 
 
+@th.django_unit_test("the reveal-once deploy-key modal scrolls its body instead of clipping the command")
+def test_one_time_secret_modal_is_not_clipped(opts):
+    root = Path(__file__).resolve().parents[2]
+    assets = root / "mojo/apps/account/admin_portal/assets"
+    page = (assets / "features/webapps/page.js").read_text()
+    styles = (assets / "admin.css").read_text()
+
+    secret = page[page.index("function oneTimeSecret"):page.index("function keyDialog")]
+    # One opaque token does not need four rows of vertical space; the .secret
+    # word-break keeps it readable in two.
+    assert "rows: '4'" not in secret, \
+        "the one-time secret still reserves four rows for a single opaque token"
+    assert "class: 'secret', readonly: true, rows: '2'" in secret, \
+        "the secret field lost its compact two-row shape"
+    # Reveal-once behavior and copy are untouched.
+    assert "secretField.value = ''" in secret and "result.token = null" in secret \
+        and "secret = ''" in secret, \
+        "the reveal-once scrub changed"
+    assert "Copy this value now" in secret \
+        and "gh secret set MOJO_DEPLOY_KEY --repo YOUR_ORG/YOUR_REPO" in secret, \
+        "the modal copy or its gh command changed"
+
+    # The modal is a column that never scrolls itself: the header is pinned and
+    # the body owns the scrolling, so a tall body is reachable rather than clipped.
+    modal_rule = styles.split(".modal{", 1)[1].split("}", 1)[0]
+    for declaration in ("display:flex", "flex-direction:column", "overflow:hidden",
+                        "max-height:min(780px,calc(100vh - 36px))"):
+        assert declaration in modal_rule, \
+            f"the modal shell is missing {declaration!r} — it is still its own scroll container"
+    assert "overflow:auto" not in modal_rule, \
+        "the whole modal, header included, still scrolls"
+    assert ".modal>header{flex:0 0 auto;" in styles, \
+        "the modal header is not pinned against a scrolling body"
+    body_rule = styles.split(".modal-body{", 1)[1].split("}", 1)[0]
+    for declaration in ("flex:1 1 auto", "min-height:0", "overflow:auto"):
+        assert declaration in body_rule, \
+            f"the modal body is missing {declaration!r} and cannot shrink and scroll"
+
+    # The gh command wraps instead of hiding itself behind a sideways scroll.
+    command_rule = styles.split(".command{", 1)[1].split("}", 1)[0]
+    assert "white-space:pre-wrap" in command_rule and "word-break:break-all" in command_rule, \
+        "the gh command block does not wrap"
+    assert "overflow:auto" not in command_rule, \
+        "the gh command block still scrolls sideways"
+
+    # The narrow-viewport bottom sheet keeps its own sizing.
+    assert ".modal,.modal.wide{width:100%;max-height:92vh;border-radius:13px 13px 0 0}" in styles, \
+        "the narrow-viewport bottom-sheet modal lost its sizing"
+    assert ".modal.wide{width:min(760px,100%)}" in styles, \
+        "the wide modal lost its width"
+
+
 @th.django_unit_test("the app page lists every address and adds a custom one from server evidence")
 def test_webapp_addresses_card_and_add_domain_dialog(opts):
     root = Path(__file__).resolve().parents[2]

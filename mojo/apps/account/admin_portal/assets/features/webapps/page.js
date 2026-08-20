@@ -38,7 +38,7 @@ function httpsLink(origin) {
 // closure, and the response so the value cannot be read back from memory.
 function oneTimeSecret(webapp, result, returnFocus) {
   let secret = result.token;
-  const secretField = h('textarea', {class: 'secret', readonly: true, rows: '4', text: secret});
+  const secretField = h('textarea', {class: 'secret', readonly: true, rows: '2', text: secret});
   const content = h('div', {},
     h('div', {class: 'callout warning'}, icon('alert'), h('div', {}, h('strong', {text: 'Copy this value now'}),
       h('p', {text: 'It can’t be shown again after you close this. If it’s lost, rotate the key to get a new one.'}))),
