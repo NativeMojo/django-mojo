@@ -448,9 +448,13 @@ reasoning: [edge README](../edge/README.md#settings),
   `<EDGE_ROOT>/log`. App-owned log directory for the rendered base; it must
   stay writable by the app user or the unprivileged staged `nginx -t` cannot
   open it.
+- `EDGE_HTTP_ENABLED` — **file-only** (`settings.get_static`), bool, default
+  `True`. Set false on DNSMAN/DNS-01-only fleets to render HTTPS-only vhosts.
+  This controls nginx generation, not load-balancer listeners or firewall
+  ingress. False also means `EDGE_ACME_WEBROOT` is not read.
 - `EDGE_ACME_WEBROOT` — **file-only** (`settings.get_static`), default
-  `/var/www/certbot`. Filesystem root the per-name port-80 blocks serve the
-  HTTP-01 challenge path from.
+  `/var/www/certbot`. Filesystem root the optional per-name port-80 blocks
+  serve the HTTP-01 challenge path from when `EDGE_HTTP_ENABLED=True`.
 - `EDGE_WEBAPP_CNAME_TARGET` — **file-only** (`settings.get_static`), optional
   override for guided WebApp onboarding. Public FQDN used as the complete
   non-apex CNAME value the browser cannot supply. Unset by default: the

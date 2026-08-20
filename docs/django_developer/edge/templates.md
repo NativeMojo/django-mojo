@@ -25,10 +25,10 @@ Structural on **every** kind — rendered always, optional never:
 - A **443 + http2 server block** with the fleet TLS policy inlined
   (`EDGE_TLS_PROTOCOLS` / `EDGE_TLS_CIPHERS`, re-asserted against a
   whitelist at substitution — never certbot include files).
-- A **port-80 server block per name**: the ACME webroot location
-  (`EDGE_ACME_WEBROOT`) plus a 301 to https. This supersedes the original
-  "no port-80 block" stance — HTTP-01 issuance needs the challenge path
-  served on the exact name being validated.
+- When file-only **`EDGE_HTTP_ENABLED` is true** (the compatibility default),
+  a **port-80 server block per name**: the ACME webroot location
+  (`EDGE_ACME_WEBROOT`) plus a 301 to https. DNSMAN-only fleets set it false;
+  they render no public HTTP blocks because DNS-01 issuance needs no listener.
 - The **security headers** (HSTS, nosniff, `X-Frame-Options DENY`,
   Referrer-Policy, Permissions-Policy), re-emitted inside any location that
   declares its own `add_header` — nginx header inheritance is
@@ -40,8 +40,9 @@ Structural on **every** kind — rendered always, optional never:
   444), referencing maps the http base always defines.
 - The health-check log exclusion (`$loggable` map) on the main access log.
 
-The injection pin moved with the port-80 block: **exactly TWO `server {` per
-vhost**, asserted in `tests/test_edge/3_render_injection.py`.
+The injection pin covers both postures: exactly one `server {` per vhost in
+DNS-01-only mode and two when public HTTP is enabled, asserted in
+`tests/test_edge/3_render_injection.py`.
 
 ### Knob semantics
 
@@ -95,9 +96,9 @@ generations/<gen>/
                             blocklist maps + watch log, flag-gated catch-alls
   http.d/10_upstreams.conf  upstream edge_up_<pk> { server <target>; } blocks —
                             the ONLY place a literal host:port / socket appears
-  conf.d/<vhost-pk>.conf    exactly two server blocks per vhost
+  conf.d/<vhost-pk>.conf    HTTPS server, plus HTTP when enabled
   staging/http.d/           listen-remapped copies of the two trees above —
-  staging/conf.d/           identical bytes except 443/80 become the staged
+  staging/conf.d/           identical bytes except active listeners become staged
                             ports; ONLY the pre-filter reads them
   certs/<cert-pk>/          fullchain.pem + privkey.pem, 0600
   www/<vhost-pk>/           web roots (release symlinks)
@@ -159,11 +160,12 @@ harness deliberately carries no duplicate. The staged
 `nginx -t` runs unprivileged, and nginx attempts `bind()` on every `listen`
 during `-t` (only `EADDRINUSE` is tolerated in test mode; the `EACCES` an
 unprivileged process gets for 443/80 on Linux is fatal) — so the staged
-copies remap every listen port to `EDGE_STAGED_HTTP_PORT` /
+copies remap every active listen port to `EDGE_STAGED_HTTP_PORT` /
 `EDGE_STAGED_HTTPS_PORT` and change nothing else: `ssl` survives, so the
 staged certificates are still opened and validated. The authoritative check
 is still the real config, real ports included, after the swap — see README's
-install sequence.
+install sequence. In HTTPS-only mode the HTTP staged port is not resolved or
+validated, so an obsolete value cannot block a DNS-01-only generation.
 
 Those five names come from `mojo.deploy.nginx_runtime.TEMP_PATHS`, the same
 mapping that renders the persistent global production fragment. The installer
@@ -325,7 +327,7 @@ the fleet goes quiet in the places dashboards watch. nginx's own
 ## Settings this document adds
 
 See README's settings table for the full list; the template-plane knobs are
-`EDGE_ACME_WEBROOT`, `EDGE_LOG_DIR`, `EDGE_MIME_TYPES`,
+`EDGE_HTTP_ENABLED`, `EDGE_ACME_WEBROOT`, `EDGE_LOG_DIR`, `EDGE_MIME_TYPES`,
 `EDGE_DJANGO_STATIC_ROOT`, `EDGE_PROXY_READ_TIMEOUT`,
 `EDGE_HTTP_KEEPALIVE_TIMEOUT`, `EDGE_HTTP_DEFAULT_SERVER`,
 `EDGE_STAGED_HTTP_PORT`, `EDGE_STAGED_HTTPS_PORT`.

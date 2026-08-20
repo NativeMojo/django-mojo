@@ -93,9 +93,10 @@ shared house rows; it never includes another tenant's upstreams.
 `kind` is one of the four product shapes — **`api`** (whole-host proxy to
 the `upstream` FK), **`site`** (static/SPA via the `spa` flag),
 **`site_api`** (site plus `VhostRoute` proxied prefixes), **`redirect`**
-(host-to-host 301 to a validated FQDN). Each renders exactly TWO server
-blocks: the 443 contract and a per-name port-80 block (ACME webroot + 301) —
-the original "no port-80 block" stance is superseded. Per-kind knobs
+(host-to-host 301 to a validated FQDN). Every kind renders its 443 contract.
+When file-only `EDGE_HTTP_ENABLED` is true (the compatibility default), it
+also renders a per-name port-80 HTTP-01/redirect shell. DNSMAN-only fleets set
+it false and render HTTPS only. Per-kind knobs
 (`body_size_mb`, `quiet_paths`, `serve_static`, `redirect_to`) are
 whitelist-validated like everything else; the full contracts live in
 [templates.md](templates.md).
@@ -184,7 +185,7 @@ EDGE_ROOT (default /opt/api/var/edge)
       nginx.conf                     harness, pre-filter `nginx -t` only
       http.d/00_base.conf            rendered http context (maps, logs, knobs)
       http.d/10_upstreams.conf       upstream edge_up_<pk> blocks
-      conf.d/<vhost-id>.conf         two server blocks per vhost
+      conf.d/<vhost-id>.conf         HTTPS server, plus HTTP when enabled
       staging/{http.d,conf.d}/       listen-remapped copies — what the
                                      unprivileged pre-filter validates
       certs/<cert-id>/{fullchain.pem,privkey.pem}   0600, app-user owned
@@ -355,10 +356,12 @@ mojo ALL=(root) NOPASSWD: /usr/bin/systemctl reload nginx
 > `bind()` on every `listen` it parses.** Only `EADDRINUSE` is tolerated in
 > test mode (which is why `-t` famously "doesn't catch port conflicts");
 > any other errno, such as the `EACCES` an unprivileged process gets for
-> 443/80 on Linux, is a fatal `[emerg]`. So the harness includes the
+> privileged 443/80 ports on Linux, is a fatal `[emerg]`. So the harness includes the
 > generation's **`staging/`** trees — copies of `http.d/` and `conf.d/`
 > identical in every byte except that listen ports are remapped to
-> `EDGE_STAGED_HTTP_PORT`/`EDGE_STAGED_HTTPS_PORT` (61080/61443). The `ssl`
+> `EDGE_STAGED_HTTP_PORT`/`EDGE_STAGED_HTTPS_PORT` (61080/61443). With
+> `EDGE_HTTP_ENABLED=False`, no HTTP listener exists and the HTTP staged port
+> is neither read nor validated. The `ssl`
 > parameter survives the remap, so the staged certificate material is still
 > opened and validated; certificate, root and log paths are absolute into
 > the real generation. The real trees keep their real ports and are
@@ -396,7 +399,8 @@ installer can be unit-tested but cannot be exercised on a node.
 | `EDGE_SOCKET_BASE` | `/run/mojo` | Unix upstream sockets must resolve under this |
 | `EDGE_TLS_PROTOCOLS` | `TLSv1.2 TLSv1.3` | The TLS floor (whitelist re-asserted at render) |
 | `EDGE_TLS_CIPHERS` | modern suite | The TLS floor (same re-assertion) |
-| `EDGE_ACME_WEBROOT` | `/var/www/certbot` | Port-80 ACME challenge root (static) |
+| `EDGE_HTTP_ENABLED` | `True` | File-only public HTTP posture. False renders HTTPS-only vhosts and does not resolve `EDGE_ACME_WEBROOT` |
+| `EDGE_ACME_WEBROOT` | `/var/www/certbot` | Port-80 HTTP-01 challenge root when HTTP is enabled (static) |
 | `EDGE_LOG_DIR` | `<EDGE_ROOT>/log` | Main access log + edge watch log (static, app-owned) |
 | `EDGE_MIME_TYPES` | `/etc/nginx/mime.types` | The mime include in the rendered base (static) |
 | `EDGE_DJANGO_STATIC_ROOT` | `/opt/api/django/static` | The `serve_static` alias target (static) |
@@ -412,13 +416,22 @@ installer can be unit-tested but cannot be exercised on a node.
 | `EDGE_NGINX_TEST_CMD` | `["sudo","-n","nginx","-t"]` | Root check, no arguments |
 | `EDGE_NGINX_STAGED_TEST_CMD` | `["nginx","-e","stderr","-t","-c"]` | Staged check, **unprivileged** (`-e stderr` suppresses the default-error-log alert) |
 | `EDGE_NGINX_RELOAD_CMD` | `["sudo","-n","systemctl","reload","nginx"]` | Constant argv |
-| `EDGE_STAGED_HTTP_PORT` | `61080` | Port the `staging/` copies remap `listen 80` to (static; 1024–65535, must differ from the https port) |
+| `EDGE_STAGED_HTTP_PORT` | `61080` | Port the `staging/` copies remap `listen 80` to when HTTP is enabled (static; 1024–65535, must differ from the https port) |
 | `EDGE_STAGED_HTTPS_PORT` | `61443` | Port the `staging/` copies remap `listen 443` to (static; same bounds) |
 | `EDGE_COMMAND_TIMEOUT` | `60` | Seconds |
 
 ("static" = read with `settings.get_static`: a file-only setting a DB row
 cannot move. The clamped knobs are DB-settable tuning; their resolved values
 join the desired-state payload so changes converge.)
+
+`EDGE_HTTP_ENABLED=False` controls nginx generation only. Remove the load
+balancer listener and security-group ingress separately through the
+deployment's infrastructure control plane. `http.d/` remains required: it is
+the nginx `http {}` include tree for HTTPS maps, logs, upstreams, and defaults;
+its name does not mean a public HTTP listener exists. The new posture field is
+part of the desired-state hash, so the first framework update creates one new
+generation even when the default stays true; default rendered vhost bytes are
+otherwise unchanged.
 
 **There is no reserved-name list.** Naming a vhost is owning the `Domain` it
 sits under plus holding `manage_dns` — an admin decision, not something the
