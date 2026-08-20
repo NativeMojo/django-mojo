@@ -90,6 +90,43 @@ whitespace-separated parts), the server treats the request as unauthenticated ra
 erroring — a permission-gated endpoint responds normally with **401**, and a public endpoint
 still succeeds.
 
+## HTML Error Pages — and why they will not reach you
+
+The server ships styled HTML pages for 400, 403, 404, 500, 503 and the unconfigured
+root, so a person who mistypes a URL sees a readable page instead of a JSON blob.
+
+**Nothing about the JSON API changed.** The error envelope above, its fields, its
+status codes and its exact bytes are the same as before those pages existed. The
+server decides purely from your `Accept` header, and errs toward JSON in every
+ambiguous case:
+
+| `Accept` you send | What you get |
+|---|---|
+| *(no header)* | JSON |
+| `*/*` | JSON |
+| `application/json` (or any `*+json`) | JSON — **decisive, even alongside `text/html`** |
+| `application/json, text/plain, */*` (axios/fetch defaults) | JSON |
+| `text/html,*/*` (equal quality) | JSON |
+| `text/html,application/xhtml+xml,…,*/*;q=0.8` (a browser address bar) | HTML page |
+
+In short: you get an HTML page only when you ask for `text/html` **specifically** and
+name no JSON type. Every HTTP client that sends `*/*` — curl, `requests`, Go's
+`http`, most uptime monitors — keeps getting JSON. If you want to be certain, send
+`Accept: application/json`.
+
+Two consequences worth knowing:
+
+- **A browser tab pointed at an API URL now renders a page**, not raw JSON. That is
+  expected; it does not mean the endpoint changed.
+- **HTML pages always carry the true HTTP status**, even on deployments running
+  `MOJO_APP_STATUS_200_ON_ERROR` (which folds JSON error responses to HTTP 200 for
+  clients that can't handle error statuses). That shim still applies to your JSON
+  responses exactly as before.
+
+The 500 page shows a reference like `REF · 48213`. That is the incident id — quote it
+when reporting a failure. It is the only detail the page carries; the stack trace and
+request data live on the access-controlled incident record, not in the response.
+
 ## Dates
 
 All datetimes are returned in ISO 8601 UTC format: `"2024-01-15T10:30:00Z"`

@@ -2420,7 +2420,7 @@ class MojoModel:
                     context["group"] = instance_group
             except Exception:
                 pass
-        self.__class__.class_report_incident(
+        return self.__class__.class_report_incident(
             details, event_type=event_type, level=level, request=request, scope=scope, **context
         )
 
@@ -2484,7 +2484,10 @@ class MojoModel:
                 scope = cls._meta.app_config.label
             else:
                 scope = "global"
-        incident.report_event(
+        # Returned, not discarded: the 500 error page shows the incident id as
+        # its reference, and this is the only place that knows it. Callers that
+        # ignore the return value are unaffected — this used to return None.
+        return incident.report_event(
             details,
             title=details[:80],
             category=event_type,

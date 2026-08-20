@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+{% comment %}
+  The shared shell for every framework error page.
+
+  Rules that are load-bearing, not stylistic:
+
+  * Every byte is self-contained — no stylesheet link, no font link, no
+    script, no image. These pages render when the database is down, when
+    the static pipeline is unbuilt, and when collectstatic has never run.
+    An error page with an external dependency fails exactly when it is
+    needed.
+  * The palette is the shipped auth identity (mojo-auth-theme.css), copied
+    here as literal values rather than imported, for the reason above. Keep
+    the two in step by hand if the auth tokens ever move.
+  * Light/dark follows the visitor's system preference only. There is no
+    toggle and no cookie: an error page has no session to remember one in.
+  * Nothing here interpolates request data. The only context values are the
+    wordmark and, on 500, an incident reference.
+{% endcomment %}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{% block page_title %}{{ page_title|default:"Error" }}{% endblock %}</title>
+<style>
+:root {
+    --me-page: #f2efe8;
+    --me-card: #fffdf9;
+    --me-text: #171923;
+    --me-muted: #696b73;
+    --me-border: #d9d4ca;
+    --me-accent: #6384ff;
+    --me-radius: 24px;
+    --me-shadow: 0 24px 70px rgba(22, 24, 31, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --me-page: #090e16;
+        --me-card: #121925;
+        --me-text: #f5f7fb;
+        --me-muted: #9ca7ba;
+        --me-border: #263246;
+        --me-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+    }
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+    min-height: 100%;
+    font-family:
+        -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell,
+        "Helvetica Neue", sans-serif;
+    background: var(--me-page);
+    color: var(--me-text);
+    -webkit-font-smoothing: antialiased;
+}
+
+.me-page {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: clamp(1rem, 4vw, 3rem);
+}
+
+.me-card {
+    width: 100%;
+    max-width: 480px;
+    padding: clamp(2rem, 5vw, 3rem);
+    background: var(--me-card);
+    border-radius: var(--me-radius);
+    box-shadow: var(--me-shadow), 0 0 0 1px var(--me-border);
+}
+
+.me-brand {
+    display: block;
+    margin-bottom: 1.5rem;
+    color: var(--me-accent);
+    font-size: 1.125rem;
+    font-weight: 700;
+    letter-spacing: .5px;
+}
+
+.me-title {
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: clamp(1.9rem, 4.5vw, 2.6rem);
+    font-weight: 500;
+    line-height: 1.05;
+    letter-spacing: -.035em;
+}
+
+.me-body {
+    margin-top: .9rem;
+    max-width: 46ch;
+    color: var(--me-muted);
+    font-size: .9375rem;
+    line-height: 1.6;
+}
+
+.me-action {
+    display: inline-block;
+    margin-top: 1.75rem;
+    padding: .7rem 1.35rem;
+    border-radius: 12px;
+    background: var(--me-accent);
+    color: #fff;
+    font-size: .875rem;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.me-action:hover { background: color-mix(in srgb, var(--me-accent) 84%, #000); }
+
+.me-quiet {
+    display: inline-block;
+    margin-top: 1.75rem;
+    color: var(--me-muted);
+    font-size: .8125rem;
+    font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.me-quiet:hover { color: var(--me-accent); }
+
+.me-ref {
+    display: inline-block;
+    margin-top: 1.75rem;
+    padding: .5rem .85rem;
+    border: 1px solid var(--me-border);
+    border-radius: 999px;
+    color: var(--me-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .75rem;
+    letter-spacing: .06em;
+}
+
+@media (max-width: 560px) {
+    .me-page { padding: 0; }
+    .me-card {
+        max-width: none;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        border-radius: 0;
+        box-shadow: none;
+    }
+}
+</style>
+</head>
+<body>
+<div class="me-page">
+    <main class="me-card">
+        {% if brand_name %}<span class="me-brand">{{ brand_name }}</span>{% endif %}
+        <h1 class="me-title">{% block headline %}{% endblock %}</h1>
+        <p class="me-body">{% block body %}{% endblock %}</p>
+        {% block extra %}{% endblock %}
+    </main>
+</div>
+</body>
+</html>

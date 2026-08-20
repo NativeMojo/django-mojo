@@ -356,16 +356,37 @@ PYEOF
 
 # ---------- testproject/config/settings/urls.py ----------
 cat > "$TESTPROJECT/config/settings/urls.py" << 'PYEOF'
-from mojo.helpers.response import JsonResponse, HttpResponse
 from django.urls import path, include
 
+from mojo.helpers import error_pages
+
+# Mirrors what django-mojo-skeleton ships, so the framework's own test server
+# exercises the same root page and the same Django error handlers a real
+# project gets. See docs/django_developer/core/error_pages.md.
 urlpatterns = [
-    path("", lambda request: HttpResponse("<html><body><h1>django-mojo test server</h1></body></html>", content_type="text/html")),
+    path("", error_pages.render_root_page),
     path("", include("mojo.urls")),
 ]
 
-def handler404(request, exception):
-    return JsonResponse({"error": "Not found", "code": 404, "status": False}, status=404)
+
+def handler400(request, exception=None):
+    return error_pages.error_response(
+        request, {"error": "Bad request", "code": 400, "status": False}, 400)
+
+
+def handler403(request, exception=None):
+    return error_pages.error_response(
+        request, {"error": "Permission denied", "code": 403, "status": False}, 403)
+
+
+def handler404(request, exception=None):
+    return error_pages.error_response(
+        request, {"error": "Not found", "code": 404, "status": False}, 404)
+
+
+def handler500(request):
+    return error_pages.error_response(
+        request, {"error": "system error", "code": 500, "status": False}, 500)
 PYEOF
 
 # ---------- testproject/config/dev_server.conf ----------

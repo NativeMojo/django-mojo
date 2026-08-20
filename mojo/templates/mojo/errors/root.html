@@ -1,0 +1,9 @@
+{% extends "mojo/errors/_base.html" %}
+{% comment %}
+  The unconfigured root. Served at HTTP 200 — nothing is wrong here, the
+  project simply has no public site at "/". This is the first page a fresh
+  install shows an operator, so it must never read as a denial.
+{% endcomment %}
+{% block page_title %}Nothing published{% endblock %}
+{% block headline %}Nothing is published here yet{% endblock %}
+{% block body %}The API is running and healthy. This project just doesn&rsquo;t have a public site at its root address.{% endblock %}

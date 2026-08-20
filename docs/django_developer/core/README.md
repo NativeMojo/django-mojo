@@ -7,5 +7,6 @@ This section covers the foundational components of django-mojo:
 - [Rate Limiting & Endpoint Metrics](rate_limiting.md) — Fixed-window, sliding-window, and usage tracking decorators
 - [Middleware](middleware.md) — Request parsing, authentication, CORS middleware
 - [Serialization & Graphs](graphs.md) — GRAPHS system, serialization, response format
+- [Error Pages](error_pages.md) — The shipped 400/403/404/500/503 + unconfigured-root pages, content negotiation, per-project overrides
 - [REST Permissions](../rest/permissions.md) — VIEW_PERMS, SAVE_PERMS, OWNER_FIELD, CAN_DELETE, owner/group scoping
 - [Django Cache Backend](cache.md) — Mojo Redis-backed Django cache (`mojo.cache.MojoRedisCache`)
