@@ -1,4 +1,5 @@
 import {badge, h, icon, statusTone} from '../core.js';
+import {runAction} from './actions.js';
 import {confirmAction} from './overlays.js';
 
 export function allows(capability, context = {}) {
@@ -11,7 +12,17 @@ export function actionMenu({actions = [], context = {}, label = 'Record actions'
   if (!available.length) return null;
   const menu = h('div', {class: 'action-menu-list', role: 'menu', hidden: true}, ...available.map((action) => h('button', {
     type: 'button', role: 'menuitem', class: action.danger ? 'danger-text' : '', text: action.label,
-    onclick: async (event) => { event.stopPropagation(); menu.hidden = true; button.setAttribute('aria-expanded', 'false'); await action.run?.(context); },
+    // The menu is hidden before the action runs, so a pending state on this
+    // item would paint inside a hidden container and never be seen. It goes on
+    // the ••• trigger, which is the nearest node that survives the action.
+    onclick: (event) => {
+      event.stopPropagation(); menu.hidden = true; button.setAttribute('aria-expanded', 'false');
+      // Guard on the clicked item, paint on the trigger: every item shares the
+      // trigger, so keying on it would make one item's click return another's
+      // in-flight promise and never run.
+      runAction(button, () => action.run?.(context),
+        {key: event.currentTarget, announceLabel: `${action.label}…`});
+    },
   })));
   const button = h('button', {class: 'icon-button', type: 'button', 'aria-label': label, 'aria-haspopup': 'menu', 'aria-expanded': 'false'}, '•••');
   button.addEventListener('click', (event) => {
@@ -33,16 +44,24 @@ export function lifecycleControl({active, label = 'record', capability = true, o
   const nextActive = !active;
   const button = h('button', {class: `lifecycle-switch ${active ? 'active' : ''}`, type: 'button', role: 'switch', 'aria-checked': String(active),
     'aria-label': `${active ? 'Disable' : 'Reactivate'} ${label}`}, h('span', {class: 'lifecycle-switch-knob'}), h('span', {text: active ? 'Active' : 'Inactive'}));
+  // responsiveness-exempt: the await here is confirmAction — a human answering
+  // a dialog. Policy is that no affordance paints until they have answered; the
+  // work that follows is wrapped in runAction below.
   button.addEventListener('click', async () => {
     const callback = nextActive ? onReactivate : onDisable;
     if (typeof callback !== 'function') return;
+    // No affordance while the dialog is open: this await is for a human, and a
+    // cancelled confirm must leave the switch exactly as the operator found it.
     const result = await confirmAction({
       title: `${nextActive ? 'Reactivate' : 'Disable'} ${label}?`,
       copy: nextActive ? 'Access is restored through the supplied lifecycle action.' : 'Access is revoked through the supplied lifecycle action.',
       confirmLabel: nextActive ? 'Reactivate' : 'Disable', danger: !nextActive,
       requireReason: true,
     });
-    if (result.confirmed) await callback({reason: result.reason});
+    if (!result.confirmed) return;
+    // The pending state starts only once the human has answered.
+    await runAction(button, () => callback({reason: result.reason}),
+      {announceLabel: `${nextActive ? 'Reactivating' : 'Disabling'} ${label}…`});
   });
   return button;
 }

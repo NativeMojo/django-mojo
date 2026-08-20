@@ -8,6 +8,7 @@ import {api, badge, formatDate, h, icon, listData, pageHeader, statusTone, Table
 import {confirmAction, openModal} from '../../components/overlays.js';
 import {decodeRouteState, routeHref} from '../../components/routes.js';
 import {rowSection, statusHeadline, statusRow} from '../../components/rows.js';
+import {loadInto} from '../../components/actions.js';
 import {emptyState, errorState, sectionTabs} from '../../components/views.js';
 import {hasPendingWizard, resumeWizard, startChangeAddress, startWizard} from './wizard.js';
 import {
@@ -270,7 +271,10 @@ function addAddressDialog(app, reload) {
   input.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); run(false); } });
 }
 
-async function manageSection(ctx, app, summary, section, body, reload) {
+// `current` comes from loadInto's generation token: two fast tab clicks are
+// two different buttons, so the re-entry guard does not cover them. The
+// loser must not paint over the winner.
+async function manageSection(ctx, app, summary, section, body, reload, current = () => true) {
   const manage = ctx.capabilities.manage_webapps;
   const address = summary.address || {};
   if (section === 'overview') {
@@ -309,6 +313,7 @@ async function manageSection(ctx, app, summary, section, body, reload) {
     const currentId = summary.current_release?.id;
     const releases = listData(await api(`/api/edge/webapp/release?webapp=${encodeURIComponent(app.id)}&sort=-created&size=25`));
     const deployments = listData(await api(`/api/edge/webapp/deployment?webapp=${encodeURIComponent(app.id)}&graph=list&sort=-created&size=15`));
+    if (!current()) return;
     const releaseTable = new TableView({columns: [
       {label: 'Version', render: (r) => h('div', {}, h('strong', {text: r.version}), r.id === currentId ? badge('Live now', 'success') : null)},
       {label: 'State', render: (r) => badge(r.status, statusTone(r.status))},
@@ -329,6 +334,7 @@ async function manageSection(ctx, app, summary, section, body, reload) {
   }
   if (section === 'key') {
     const payload = await api(`/api/edge/webapp/key_status?webapp=${encodeURIComponent(app.id)}`);
+    if (!current()) return;
     const status = payload.status;
     const state = status.linked && status.active ? ['Active', 'success'] : status.last_action === 'revoke' ? ['Turned off', 'warning'] : ['Not set up', 'neutral'];
     body.replaceChildren(
@@ -691,17 +697,24 @@ async function webappDetailPage(ctx, webappId, signal = null) {
   function backLink() {
     return h('p', {class: 'back-link'}, h('a', {href: routeHref('deployments')}, '← All deployments'));
   }
-  function paint() {
+  async function paint() {
     const app = summary.webapp;
     const address = summary.address || {};
     const tabs = PAGE_TABS.filter(([id]) => id !== 'danger' || manage);
     let active = decodeRouteState().state.tab;
     if (!tabs.some(([id]) => id === active)) active = 'overview';
     const body = h('div', {class: 'inspector-section'});
-    const reload = async () => { await fetchSummary(); paint(); };
+    const reload = async () => { await fetchSummary(); await paint(); };
     async function section(id) {
+      // The setup panel is built synchronously — there is no await to cover,
+      // and scheduling a loading state for it would only ever be a flash.
       if (id === 'setup') { body.replaceChildren(setupPanel(ctx, app, summary, reload)); return; }
-      await manageSection(ctx, app, summary, id, body, reload);
+      // #2232: Deploys and Deploy key each fire reads before they paint. Until
+      // they land the panel showed the previous tab's content, and a rejection
+      // showed nothing at all. loadInto owns both states, and drops a render a
+      // newer tab click has already superseded.
+      await loadInto(body, (current) => manageSection(ctx, app, summary, id, body, reload, current),
+        {message: 'Loading…', retry: () => section(id)});
     }
     const nav = sectionTabs({items: tabs.map(([id, label]) => ({id, label})), active, onChange: async (id) => {
       active = id;
@@ -720,10 +733,10 @@ async function webappDetailPage(ctx, webappId, signal = null) {
         ].filter(Boolean)),
       nav, body);
     body.addEventListener('mojo-webapp-deleted', () => { location.hash = routeHref('deployments'); });
-    section(active);
+    await section(active);
   }
   async function load() {
-    try { await fetchSummary(); paint(); }
+    try { await fetchSummary(); await paint(); }
     catch (error) {
       if (error?.name === 'AbortError') return;
       root.replaceChildren(backLink(), errorState(error, load));
