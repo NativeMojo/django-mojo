@@ -198,7 +198,10 @@ address but nothing deployed, or its real status once something has shipped.
 
 - **Overview.** Your address, whether it's healthy (reachable right now), and
   which build is currently live. This is your "is everything okay?" glance. You
-  can re-check health on demand.
+  can re-check health on demand. Below it, **Addresses** lists every address
+  your app answers on — its own, plus any of your own you've added — with the
+  padlock status of each, a **Remove** next to the extra ones, and **Add a
+  custom domain** (see below).
 - **Deploys.** The history of every publish, newest first. Made a bad release?
   **Roll back** with one click puts an earlier, known-good build back in front
   of visitors — no rebuild, no GitHub round-trip. It takes effect right away.
@@ -221,9 +224,54 @@ address but nothing deployed, or its real status once something has shipped.
     current address keeps serving visitors until the new one is fully ready and
     secured, then the old one is retired — no gap where the site is down.
   - **Take offline.** Stop serving the address while keeping the app and all
-    its build history. You can put it back later.
+    its build history. Any custom addresses you added go quiet with it — an app
+    that's "offline" should not still be answering on your own domain. You can
+    put it back later.
   - **Delete.** Remove the app entirely. Its serving setup and deploy key are
     torn down together, cleanly.
+
+## Adding your own address to an app
+
+Your app has one address of its own from Step 1. You can point **more**
+addresses at it — `www.yourcompany.com`, `shop.yourcompany.com` — and every one
+of them serves exactly the same thing, the same build, with its own padlock.
+Your app's original address keeps working; nothing moves.
+
+On the app's **Overview** tab, press **Add a custom domain**, type the address,
+and press **Add address**. What happens next depends on your setup, and the
+screen tells you which one you're in:
+
+- **Your domain is already run here.** Nothing to do — the record is written
+  for you, the padlock is set up, and the address goes live. If HTTPS is still
+  being issued you'll see "Setting up HTTPS" and a **Check now** button; give it
+  a few minutes and press it.
+- **Your DNS lives somewhere else.** You get the exact record to add, with
+  **Copy** buttons, same as Step 3. Add it at your DNS host, come back, and
+  press **I've added them — check now**. Using Cloudflare? Set the record to
+  **DNS only** (grey cloud) or the check will fail.
+- **We don't know that domain yet.** You'll be told to connect the domain
+  first, with a link to the **Domains** page. That's deliberate — connecting a
+  domain is its own decision, and nothing here will reach into a domain you
+  haven't handed over.
+- **The padlock couldn't be issued.** You get the records to re-check plus an
+  explicit **Try again**. Only that button asks for a new certificate — pressing
+  **Check now** never does, so you can press it as often as you like.
+
+**Check is always safe to press.** It's the same request as adding, so an
+address that's already working just says so again.
+
+A few addresses won't be accepted, and the screen says why:
+
+- the bare domain on its own (`example.com`) — use `www.example.com`;
+- a deeper name like `a.b.example.com` — one level under your domain only, so
+  your existing padlock covers it;
+- an address already serving something else here.
+
+**Removing one** is the **Remove** button next to it. Visitors using that
+address stop reaching your app; everything else — your app, its original
+address, its builds, its padlock — is untouched. Taking the app fully offline
+is still the separate **Take offline** action under Danger, and that removes
+every address, including the custom ones.
 
 ## Adding a second app to the same domain
 

@@ -315,20 +315,62 @@ response.
 
 | Method | Endpoint | Purpose | Access |
 |---|---|---|---|
-| GET | `/api/edge/webapp/summary?webapp=<id>` | Frozen v1 read model: address + domain + `certificate` (`status`, `not_after`; null only without a vhost), `current_release`, `latest_deployment`, and deploy-key readiness. Secret-free — never a token, certificate key, or internal state. | Human-only; `view_dns` / `manage_dns` / `security` + object access |
+| GET | `/api/edge/webapp/summary?webapp=<id>` | Frozen v1 read model: address + domain + `certificate` (`status`, `not_after`; null only without a vhost) + `address.aliases` (the app's extra addresses, `{hostname, certificate}` each — always a list, never null), `current_release`, `latest_deployment`, and deploy-key readiness. Secret-free — never a token, certificate key, or internal state. `schema_version` stays `1`: v1 grows additively only. | Human-only; `view_dns` / `manage_dns` / `security` + object access |
 | GET | `/api/edge/webapp/summaries` | Bounded list projection for the merged Admin Deployments lane: one slim summary-v1-subset item per visible app (`webapp` identity, `address` + `certificate`, `current_release`, `latest_deployment`), ordered by slug, `{schema_version: 1, items, count, limit: 50, truncated}`. Scope is exactly the REST list's — global-or-group `VIEW_PERMS`, always intersected with a caller-supplied `?group=`. | Human-only (key-backed sessions refused); `view_dns` / `manage_dns` / `security` globally or in at least one group |
 | GET | `/api/edge/webapp/deployment?webapp=<id>` (and `/deployment/<pk>`) | Deployment (fleet-convergence) history, group-scoped. Read-only; a cross-tenant id is not readable. | `view_dns` / `manage_dns` / `security` |
 | POST | `/api/edge/webapp/rollback` | Repoint the app at an already-verified earlier release. Body `{webapp, release}`. A foreign release id 404s; a `pending` (unverified) release is refused. | Human-only (CI keys denied), fresh-auth; `manage_webapp` + explicit object check |
 | POST | `/api/edge/webapp/detach_address` | Take the app offline: unlink and delete its serving vhost, keep the app and its release history. Every extra ("alias") address is removed with it. | Human-only, fresh-auth; `manage_webapp` |
-| POST | `/api/edge/webapp/attach_domain` | Point one more address you own at this app. Body `{webapp, hostname, retry_certificate?}`. Returns `{status, reason, dns, ...}` where `status` is `needs_domain`, `records_needed` (with `records`: type/name/value/ttl to publish), `certificate_pending`, `certificate_failed` (with repair `records`) or `attached`; `dns` is `managed` (the platform writes the record) or `external` (you do). Safe to call again — that is the "check again" action — and it makes at most one provider write per call. `retry_certificate` must be a real boolean or `"true"`/`"1"`; anything else is False, and only it re-requests a failed certificate. An address that can never work here (the bare domain, a deeper name, one already serving something else) is an error, not a status. | Human-only (CI keys denied), fresh-auth; `manage_webapp` + explicit object check |
-| POST | `/api/edge/webapp/detach_domain` | Remove one extra address. Body `{webapp, vhost}` — the id from the address list. The app's own address and another app's address both 404. The app, its certificate and its releases are untouched. | Human-only, fresh-auth; `manage_webapp` + explicit object check |
-| GET | `/api/edge/webapp/aliases?webapp=<id>` | Every address this app answers on: `{addresses: [{role, vhost, hostname, domain, dns, enabled, certificate}]}`, the app's own address first. No step-up — it is a read. | `view_dns` / `manage_dns` / `security` + object access |
+| POST | `/api/edge/webapp/attach_domain` | Point one more address you own at this app. Body `{webapp, hostname, retry_certificate?}`. Returns `{webapp, status, hostname, reason, dns, ...}` — see [the status table](#attaching-your-own-domain-to-an-app) below. Safe to call again — that *is* the "check again" action — and it makes at most one provider write per call. An address that can never work here (a wildcard, the bare domain, a deeper name, one already serving something else) is an error, not a status. | Human-only (CI keys denied), fresh-auth; `manage_webapp` + explicit object check |
+| POST | `/api/edge/webapp/detach_domain` | Remove one extra address. Body `{webapp, vhost}` — the `vhost` id from the address list. Returns `{webapp, status: "detached", hostname}`. The app's own address and another app's address both 404 (the same non-disclosing answer either way). The app, its certificate and its releases are untouched — take the app's *own* address down with `detach_address` instead. | Human-only, fresh-auth; `manage_webapp` + explicit object check |
+| GET | `/api/edge/webapp/aliases?webapp=<id>` | Every address this app answers on: `{webapp, addresses: [{role, vhost, hostname, domain: {id, name, provider}, dns, enabled, certificate}]}`, the app's own address first (`role: "primary"`, then `"alias"`). `certificate` is `{status, not_after}` or null. No step-up — it is a read — and no live DNS lookup, so `dns` is the domain's mode, not a per-name probe. | Human-only; `view_dns` / `manage_dns` / `security` + object access |
 | GET | `/api/edge/webapp/health?webapp=<id>` | On-demand public HTTPS reachability of the live address: `healthy` / `unhealthy` / `not_configured`. Never echoes a raw probe error. | `view_dns` / `manage_dns` / `security` |
 
 Deleting a WebApp (`DELETE /api/edge/webapp/<pk>`) tears down its serving vhost
 and deactivates/unlinks its `MOJO_DEPLOY_KEY` in the **same** transaction as the
 row delete; release bytes in S3 are intentionally left. See the
 [backend day-2 reference](../../django_developer/edge/webapps.md#day-2-management).
+
+### Attaching your own domain to an app
+
+An app always has exactly **one** address of its own — the one onboarding gave
+it. `attach_domain` adds **extra** addresses ("aliases") that serve the
+identical release. The app's own address never moves; changing it is still the
+change-address flow.
+
+`attach_domain` is a **status machine you re-enter**, not a one-shot. Call it,
+render what comes back, and call it again with the same `hostname` when the
+user presses Check. Never poll it on a timer — a call can do provider work.
+
+| `status` | What it means | What to render |
+|---|---|---|
+| `needs_domain` | No domain connected here covers that hostname. | The `reason`, and a link to the Domains page. There are **no** `records` — nothing can be published until the domain itself is connected, and the API will not guess-and-delegate a parent zone on your behalf. |
+| `records_needed` | Your DNS is elsewhere and the record isn't published yet. | The `records` array — `{type, name, value, ttl}`, copy-paste verbatim — plus a Check button that re-calls with the same hostname. Behind a proxy (Cloudflare) the record must be **DNS only** / grey cloud or the check never passes. |
+| `certificate_pending` | HTTPS issuance is in flight. | The `reason` and a Check button. Minutes, not seconds. |
+| `certificate_failed` | Issuance failed. | The `reason`, the repair `records`, **and a separate explicit "Try again"** that re-calls with `retry_certificate: true`. |
+| `attached` | Live and serving. `created` is `false` when it already was. | Success. Re-calling is a no-op, which is why Check is free to press. |
+
+Every response also carries `hostname`, a plain-language `reason` (show it as
+written — it is the server's sentence, and a refusal comes back the same way),
+and `dns`: **`managed`** (the platform writes this domain's DNS records for
+you) or **`external`** (you publish them). Key your copy on `dns`, not on the
+shape of the hostname.
+
+**`retry_certificate` is the only thing that re-requests a failed
+certificate**, and only your explicit repair button should set it — a plain
+Check must never mint a new certificate order. It is parsed strictly: a real
+boolean `true`, or the strings `"1"` / `"true"` / `"yes"` / `"on"`. Anything
+else — including the string `"false"` — is False.
+
+What is refused outright (an error response, not a status), because retrying
+cannot help: a wildcard (`*.example.com`), the bare domain (use
+`www.example.com`), a deeper name (`a.b.example.com` — one label only, so every
+extra address stays inside the domain's existing certificate), a name already
+serving anything else here, and — on a managed domain — a name that already
+carries other DNS records or points somewhere else.
+
+If the domain belongs to a **parent** workspace rather than this app's own, you
+need manage authority in the workspace that owns the domain; reading it is not
+enough to write a record or request a certificate against it.
 
 ### Deploy key
 

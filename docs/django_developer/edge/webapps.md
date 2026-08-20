@@ -27,7 +27,8 @@ that installs vhosts and certificates — not a second mechanism.
 WebApp
   group            owns it
   slug             a LABEL, not a path
-  vhost            FK, nullable
+  vhost            FK, nullable — the PRIMARY address
+  alias_vhosts     reverse of Vhost.alias_of — extra addresses
   bucket           from EDGE_RELEASE_BUCKETS
   prefix           DERIVED: webapps/<group>/<id>
   api_key          the CI credential, one per site (OneToOne)
@@ -534,6 +535,8 @@ remains for recovery and pre-Admin installations.
 
 The desired-state payload gains a `webapps` key — **no second endpoint** — and
 the generation hash covers it, so a promote moves the hash and nodes reinstall.
+One row per serving vhost: the app's primary, plus one per
+[alias address](#extra-addresses-aliases) carrying the identical release.
 
 ```
 /opt/www/<vhost-id>/releases/<version>/           retained across generations
@@ -634,6 +637,156 @@ rollbackable, and is simply **absent from the desired-state payload** — nodes
 never hear about it. If CloudFront fronting is adopted it needs no model
 change; a delivery-mode enum would be a speculative second code path.
 
+## Extra addresses (aliases)
+
+An app answers on exactly **one primary address** — `WebApp.vhost`, the one
+onboarding mints and the one deploy, health, summary and take-offline already
+reason about. An **alias** is one more `Vhost` for the same app, marked by
+`Vhost.alias_of` (nullable FK to `WebApp`, `on_delete=CASCADE`, migration
+`0013_vhost_alias_of`). `www.customer.com` and the platform address then serve
+the identical release from the identical bytes.
+
+**The primary never moves.** Attaching an alias does not repoint
+`WebApp.vhost`; changing the address is still the onboarding change-address
+flow. That is what keeps every existing surface's meaning intact — one added
+column, no second code path.
+
+**`alias_of` is in `Vhost.RestMeta.NO_SAVE_FIELDS`.** Only
+`services/webapp_alias.py` sets it. A settable field would let a `manage_dns`
+holder graft any vhost they can see onto any WebApp they can see and skip
+domain ownership, conflict, DNS and certificate checks in one POST.
+
+### Invariants (`validators.validate_vhost_alias`)
+
+Called from `validate_vhost`, so `save()` enforces them on every path — no
+service can skip them, and a hand-written row cannot bypass them either:
+
+| Invariant | Why |
+|---|---|
+| `kind` is `site` or `site_api` | An alias serves an app, so it is never a redirect or a whole-host proxy. |
+| Alias **XOR** primary | A row that is both `WebApp.vhost` and someone's `alias_of` would be torn down twice and rendered under two owners. |
+| Domain owned by the app's group **or an ancestor** | The same rule `validate_web_app` applies to the primary. A **house** domain (`group_id` null) is nobody's ancestor, so the platform's own names stay unreachable — the identical finding the primary check was written for. |
+| `pool` matches the primary's | A different pool is a node fleet that installs the alias's server block but never the release bytes behind it. |
+
+### `attach()` is a re-enterable status machine
+
+`webapp_alias.attach(web_app, hostname, actor, retry_certificate=False)` is the
+whole flow. The UI's **Check** button is this same call, so it makes at most
+one provider write per call and none at all for an address that is already
+attached. A state the user can fix comes back as a status, never an exception:
+
+| Status | Meaning |
+|---|---|
+| `needs_domain` | No active, verified `Domain` here covers that hostname. Connect it on the Domains page first. |
+| `records_needed` | External DNS (`provider == "mojo"`) and the CNAME is not published yet. Carries `records` — `{type, name, value, ttl}` — including the `_acme-challenge` record when the delegation is missing or `broken`. |
+| `certificate_pending` | Issuance is in flight (an existing `pending`/`issuing` row, or one this call requested). |
+| `certificate_failed` | The domain's newest apex+wildcard certificate is `failed`. Carries repair `records`; only an explicit retry re-requests. |
+| `attached` | Live. `created` is `False` when it already was — that is what makes Check free to press. |
+
+Every result also carries `hostname`, `reason` (plain language, rendered
+verbatim by the UI) and `dns`: **`managed`** when the platform writes this
+zone's records, **`external`** when the customer does. `dns` is derived from
+`Domain.provider` — `mojo` means certificate-only delegated ACME, so it is the
+`external` case.
+
+**It never initiates a delegation.** There is no public-suffix list in this
+repo, so "the registrable parent of `shop.customer.co.uk`" is a guess, and
+`delegation.initiate` on a guessed name delegates ACME control of the wrong
+zone. `needs_domain` steers to the Domains page instead; connecting a domain
+stays its own deliberate flow.
+
+**A failed certificate is re-requested only on explicit retry.**
+`certs.request_certificate` reuses a row only while it is pending, issuing or
+active — a `failed` row matches nothing, so an auto-retrying Check would mint a
+brand-new ACME order on every click and burn the rate limit. `attach()` looks
+up the newest certificate matching the domain's apex+wildcard name set itself
+and returns `certificate_failed` until the caller passes `retry_certificate`.
+
+Four things are **refusals**, not statuses, because retrying will never help:
+
+- a wildcard (`*.…`) — one exact address only;
+- the bare apex — `www.<domain>` is suggested instead;
+- a deeper label (`a.b.example.com`). One label keeps every alias inside the
+  apex+wildcard certificate the domain already has; a deeper name would need
+  its own certificate;
+- **any** foreign enabled vhost at that name — another app's primary, another
+  app's alias, or an admin-created vhost of any kind. Refusing plainly is what
+  keeps the enabled-name uniqueness constraint from surfacing as an
+  `IntegrityError`;
+- managed DNS where the name already carries other records, or a CNAME pointing
+  somewhere else. (A `*.{domain}` CNAME already at the destination routes this
+  name too, so no per-host record is written.)
+
+**Ancestor domains need authority in the owning group.** Reading an ancestor's
+domain is the inheritance contract; *writing* to it (the CNAME, a certificate
+request) requires `webapp_authority.can_manage_group_webapps(actor,
+domain.group)` — checked before any provider read or write.
+
+On success the alias vhost is created as `kind="site_api"`, `spa=True`, the
+primary's `pool`, and the covering certificate, then
+`webapp_auth_routes.reconcile()` runs on it.
+
+`detach(web_app, vhost)` removes one alias — `Vhost.delete()` publishes fleet
+convergence on commit, so nodes drop the server block without waiting for the
+sweep. The certificate and the app are untouched, and the app's own address is
+refused (taking the site offline is the deliberately louder `detach_address`).
+
+`status_rows(web_app)` returns the primary first (`role: "primary"`) then
+aliases by pk, each with `vhost`, `hostname`, `domain` (`{id, name,
+provider}`), `dns`, `enabled` and certificate `status`/`not_after`. No provider
+round trip — a status list must not spend one per row.
+
+`webapp_onboarding.summary_for` gained an additive `address.aliases` list
+(hostname + certificate per alias). `schema_version` stays **1**: v1 is
+additive-only, and the list is `[]`, never null, so a reader never branches on
+absence.
+
+### Deploy fan-out
+
+`releases.desired_webapps` emits **one row per alias carrying the identical
+release** as the primary, keyed by the alias's own vhost id (that, not the
+slug, is what a node turns into a filesystem path). Rows are sorted by vhost id
+so the payload stays stable.
+
+Alias rows are emitted **only while the app still has a primary**
+(`alias_of__vhost__isnull=False`). Taking a site offline detaches the primary;
+an alias row surviving that would leave the customer's own domain serving
+content the operator just took down.
+
+The **primary keeps its hard proof** in `webapp_deploy.install_node`. A lagging
+alias — bytes still in `www_pending`, or a vhost excluded from this generation —
+is a **named warning** on that node's job result
+(`metadata.webapp_deployment.alias_warnings`, visible through `target_status`)
+and a log line. Failing the node instead would roll the whole release back, and
+because the identical check runs during **rollback**, one customer domain's
+transient problem would terminally fail every deploy for that app. The warnings
+are deliberately **not** written onto `WebAppDeployment.detail`: several nodes
+write concurrently, and `orchestrate` overwrites that field with the terminal
+outcome anyway.
+
+`webapp_auth_routes.owning_app(vhost)` resolves the owning app through *either*
+link — the `web_app` reverse of `WebApp.vhost`, or `alias_of`. `reconcile_all`
+now iterates serving **vhosts** rather than apps, and `rendered_contract` uses
+`owning_app`, so an alias serves the identical auth routes and honeypots. An
+alias without them would serve the SPA with no `/auth` route: logging in on the
+custom domain would 404 while the platform address worked.
+
+### Teardown
+
+Both teardown paths delete alias vhosts **in the same transaction** as the
+thing that owns them, one explicit `Vhost.delete()` each:
+
+- `WebApp.on_rest_delete` — `alias_of` cascades, but a bare cascade deletes the
+  *rows* without running `Vhost.delete()`, so nodes would keep serving every
+  custom domain until the next sweep.
+- `edge/webapp/detach_address` — "offline" that left the customer's own domain
+  serving is the opposite of what was asked.
+
+Onboarding's address step also refuses an existing vhost that is an alias —
+including **this** app's own alias. Adopting it as the primary would leave one
+vhost owned twice, which `validate_vhost` refuses outright, so the refusal is
+raised plainly where the operator can see it.
+
 ## Settings
 
 | Setting | Default | Purpose |
@@ -667,10 +820,10 @@ decorator gates the verb, never the specific row).
 | `edge/webapp/rollback` | POST | Repoint a site at an already-verified earlier release. **Human-only**: `denies_key_backed_session` keeps CI keys out, so "deployment starts only from release completion" still holds for automation. A foreign release id 404s; a `pending` release is refused. Returns `webapp_deploy.payload(...)`. |
 | `edge/webapp/health` | GET | On-demand public HTTPS reachability of the live address: `healthy` / `unhealthy` / `not_configured` (no vhost). Never echoes a raw probe exception. |
 | `edge/webapp/detach_address` | POST | Take a site offline: unlink and delete its serving vhost, keep the app. Every alias address goes with it. |
-| `edge/webapp/attach_domain` | POST | Point one more address (an **alias**) at this site. Body `{webapp, hostname, retry_certificate?}`; returns `webapp_alias.attach()` verbatim — `status` (`needs_domain` / `records_needed` / `certificate_pending` / `certificate_failed` / `attached`), a plain `reason`, `dns` (`managed` / `external`) and, when the caller has records to publish, `records`. Re-enterable: the UI's Check button is this same call, and an already-attached address makes no provider write. `retry_certificate` is parsed as a **strict** boolean (`bool("false")` is True, and a retry mints a fresh ACME order). Human-only, fresh-auth. |
-| `edge/webapp/detach_domain` | POST | Remove one alias address. Body `{webapp, vhost}`; the address is scoped to this app's **aliases**, so the app's own address and a foreign one both 404 rather than disclose. The certificate and the app are untouched. Human-only, fresh-auth. |
-| `edge/webapp/aliases` | GET | Every address this app answers on: the primary first (`role: "primary"`), then aliases — hostname, domain, `dns` mode, `enabled`, and certificate status. A read, so no step-up and no provider round trip. |
-| `DELETE edge/webapp/<pk>` | DELETE | **Safe delete.** `WebApp.on_rest_delete` runs the teardown — deactivate + unlink the `MOJO_DEPLOY_KEY` credential, delete the serving vhost — in the **same** transaction as the row delete. The framework's `on_rest_pre_delete` hook runs *outside* the delete transaction, so it is the wrong hook: teardown there could commit while the row delete fails. A bare cascade orphaned the vhost and left the CI key active. Release bytes in S3 are intentionally left. |
+| `edge/webapp/attach_domain` | POST | Point one more address (an **[alias](#extra-addresses-aliases)**) at this site. Body `{webapp, hostname, retry_certificate?}`; returns `webapp_alias.attach()` plus `webapp` — `status` (`needs_domain` / `records_needed` / `certificate_pending` / `certificate_failed` / `attached`), a plain `reason`, `dns` (`managed` / `external`) and, when the caller has records to publish, `records`. Re-enterable: the UI's Check button is this same call, and an already-attached address makes no provider write. `retry_certificate` goes through `_flag()`, not `bool()` — a browser sends form values as strings and `bool("false")` is True, so only a real `True` or `"1"`/`"true"`/`"yes"`/`"on"` counts; everything else, junk included, is False. Human-only, fresh-auth, plus the explicit object check. |
+| `edge/webapp/detach_domain` | POST | Remove one alias address. Body `{webapp, vhost}`; the address is scoped to this app's **aliases**, so the app's own address and a foreign one both 404 rather than disclose. The certificate and the app are untouched. Human-only, fresh-auth, plus the explicit object check. |
+| `edge/webapp/aliases` | GET | `webapp_alias.status_rows()`: every address this app answers on, primary first (`role: "primary"`), then aliases — `vhost`, `hostname`, `domain` (`{id, name, provider}`), `dns` mode, `enabled`, and certificate `status`/`not_after`. Human-only, but a read — so no step-up, `VIEW_PERMS`, and no provider round trip. |
+| `DELETE edge/webapp/<pk>` | DELETE | **Safe delete.** `WebApp.on_rest_delete` runs the teardown — deactivate + unlink the `MOJO_DEPLOY_KEY` credential, delete the serving vhost and every [alias](#extra-addresses-aliases) vhost — in the **same** transaction as the row delete. The framework's `on_rest_pre_delete` hook runs *outside* the delete transaction, so it is the wrong hook: teardown there could commit while the row delete fails. A bare cascade orphaned the vhost and left the CI key active. Release bytes in S3 are intentionally left. |
 
 `rollback` is `releases.promote` with an earlier release — the same idempotent,
 supersede-safe primitive as forward promotion, under a `select_for_update` row

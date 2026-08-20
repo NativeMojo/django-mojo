@@ -90,13 +90,21 @@ After a site is live, each app has its own **full page**
 share) with five tabs:
 **Overview** (address + domain, health, and current release, via
 `GET /api/edge/webapp/summary` and on-demand `GET /api/edge/webapp/health`,
-plus an **Addresses** card listing every address the app answers on from
-`GET /api/edge/webapp/aliases` — each extra one removable through
-`POST /api/edge/webapp/detach_domain`, and "Add a custom domain" opening a
-dialog that drives `POST /api/edge/webapp/attach_domain` and renders whatever
-the server returns: the records to publish with a Check button, a certificate
-in flight, a failed certificate with an explicit "Try again", or the plain
-reason a domain has to be connected on the Domains page first),
+plus — once the app has an address at all — an **Addresses** card listing every
+address it answers on from `GET /api/edge/webapp/aliases`: the app's own first,
+badged as such, then each extra ("alias") address with its certificate state.
+With `manage_webapps` those extra rows carry **Remove**
+(`POST /api/edge/webapp/detach_domain`, confirmed first) and the card offers
+**Add a custom domain**, a dialog driving `POST /api/edge/webapp/attach_domain`
+that renders whatever the server returned and nothing it decided itself: the
+`records` to publish with Copy buttons and an "I've added them — check now"
+button, a certificate in flight, a failed certificate with a separate explicit
+**Try again** (the only path that sets `retry_certificate`, so a Check can
+never mint an ACME order), or a `needs_domain` steer to the Domains page. Check
+re-issues the same `attach_domain` call, and a refusal is shown as the server
+worded it, never reworded client-side. The "we handle the records and HTTPS for
+you" copy keys on the response's `dns` field, not on the shape of the
+hostname),
 **Deploys** (deployment history from `GET /api/edge/webapp/deployment` with
 one-click `POST /api/edge/webapp/rollback`), **Set up deploys** (three honest
 sub-tabs — **GitHub Actions** re-shows the generated workflow and can mint a
@@ -108,6 +116,11 @@ CI uses, authenticated by the operator's own interactive session rather than
 **Any other CI / API** names the three calls any pipeline can make), **Deploy
 key** (rotate `MOJO_DEPLOY_KEY`), and a **Danger** area (change address, take
 offline via `POST /api/edge/webapp/detach_address`, and safe-delete the app).
+Take-offline and delete both remove every alias address in the same
+transaction — an app that is offline must not still answer on a customer's own
+domain — and `manage_webapp` on the app is not enough to attach an address
+under a **parent** workspace's domain: writing that record or requesting its
+certificate needs manage authority in the workspace that owns the domain.
 The list's row states are honest rather than always routing to "Open": an
 addressless app (setup abandoned before an address was chosen) reads "Setup
 never finished — not reachable" with inline **Finish setup** / **Delete**
