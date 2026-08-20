@@ -20,11 +20,15 @@ export function rowLink(label, href) {
   return h('a', {class: 'row-link', href}, label);
 }
 
-export function rowSection(label, rowNodes) {
+// `sub` is one plain sentence about the section as a whole — what the rows
+// under it have in common. Optional and third, so the ~19 two-argument call
+// sites across the portal keep working untouched.
+export function rowSection(label, rowNodes, {sub = ''} = {}) {
   const rows = (rowNodes || []).flat().filter(Boolean);
   if (!rows.length) return null;
   return h('section', {class: 'row-section'},
     label ? h('h2', {class: 'row-section-label', text: label}) : null,
+    sub ? h('p', {class: 'row-section-sub', text: sub}) : null,
     h('div', {class: 'row-list'}, ...rows));
 }
 
@@ -45,8 +49,14 @@ export function statusRow({tone = 'muted', name = '', value = '', valueNode = nu
     h('span', {class: 'row-right'}, ...right));
 }
 
+// `actions` are the one or two things to do about what the headline just
+// said, put where the operator is already looking. They are plain nodes the
+// caller has already wired: nothing here may add role="status", aria-live, or
+// a loading/error state, because onRefresh replaces this whole block and a
+// live region announced from inside it would be destroyed before it spoke.
 export function statusHeadline({tone = 'muted', message = '', sub = '',
-  observedAt = '', onRefresh = null} = {}) {
+  observedAt = '', onRefresh = null, actions = []} = {}) {
+  const acts = (actions || []).flat().filter(Boolean);
   // One timestamp for the whole page: a per-row time invites the reader to
   // compare freshness between rows that were all read in the same pass.
   const asof = [
@@ -67,5 +77,6 @@ export function statusHeadline({tone = 'muted', message = '', sub = '',
       h('span', {class: dotClass(tone)}),
       h('strong', {text: message}),
       asof.length ? h('span', {class: 'row-asof'}, ...asof) : null),
-    sub ? h('p', {class: 'status-sub', text: sub}) : null);
+    sub ? h('p', {class: 'status-sub', text: sub}) : null,
+    acts.length ? h('div', {class: 'status-headline-actions'}, ...acts) : null);
 }

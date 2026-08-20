@@ -8,6 +8,12 @@
   margin: 0; color: var(--muted); font-size: 10px; font-weight: 700;
   letter-spacing: .08em; text-transform: uppercase;
 }
+/* One sentence about what the rows below have in common. Same voice as
+   .status-sub, one level down. */
+.row-section-sub {
+  margin: 0 0 2px; color: var(--muted); font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .row-list { display: grid; }
 
 .status-row {
@@ -38,6 +44,11 @@
   font-size: clamp(18px, 2.4vw, 24px); letter-spacing: -.01em;
 }
 .status-sub { margin: 0; padding-left: 17px; color: var(--muted); font-size: 12px; }
+/* Aligned under the headline text, not the dot: 7px dot + 10px gap. */
+.status-headline-actions {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-top: 6px; padding-left: 17px;
+}
 
 .row-asof {
   display: flex; align-items: center; gap: 6px; margin-left: auto;
@@ -55,4 +66,8 @@
   .status-row > .row-name { grid-column: 2 / -1; }
   .status-row > .row-value { grid-column: 2; }
   .status-row > .row-right { grid-column: 3; }
+  /* The dot's indent buys nothing on a narrow screen, and the actions get the
+     full width so two of them do not wrap into a column of stubs. */
+  .status-headline-actions { padding-left: 0; }
+  .status-headline-actions > * { flex: 1 1 auto; text-align: center; }
 }

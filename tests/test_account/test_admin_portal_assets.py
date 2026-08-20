@@ -81,8 +81,26 @@ def test_row_component_contract(opts):
         assert builder in rows, f"rows.js does not expose {builder!r}"
     assert "valueNode" in rows and "detailNode" in rows and "action" in rows, \
         "statusRow lost the extension points sibling pages build on"
-    for rule in (".row-page", ".row-section-label", ".status-row", ".row-value",
-                 ".row-detail", ".row-link", ".status-headline", ".status-sub",
+    # A section can carry one sentence about what its rows have in common, and
+    # a headline can carry the one or two things to do about what it says.
+    # Both are OPTIONAL third/extra slots — the ~19 two-argument rowSection
+    # call sites across the portal must keep working untouched.
+    assert "export function rowSection(label, rowNodes, {sub = ''} = {})" in rows, \
+        "rowSection lost its optional sub slot, or made it non-optional"
+    assert "'row-section-sub'" in rows, \
+        "rowSection accepts a sub slot but never renders it"
+    assert "actions = []" in rows and "'status-headline-actions'" in rows, \
+        "statusHeadline cannot carry the actions that answer what it just said"
+    # The headline block is replaced wholesale by onRefresh, so anything that
+    # announces from inside it is destroyed before it speaks. runAction's
+    # document-level live region is the only place that survives.
+    headline = rows[rows.index("export function statusHeadline"):]
+    for forbidden in ("role: 'status'", "aria-live", "loadingState", "errorState"):
+        assert forbidden not in headline, \
+            f"statusHeadline grew {forbidden!r}, which its own repaint destroys"
+    for rule in (".row-page", ".row-section-label", ".row-section-sub",
+                 ".status-row", ".row-value", ".row-detail", ".row-link",
+                 ".status-headline", ".status-headline-actions", ".status-sub",
                  ".row-asof"):
         assert rule in row_styles, f"the shared row stylesheet is missing {rule}"
     assert "7px 130px minmax(0, 1fr) auto" in row_styles, \
