@@ -13,8 +13,9 @@ import {emptyState, errorState, sectionTabs} from '../../components/views.js';
 import {hasPendingWizard, recordPurpose, resumeWizard, startChangeAddress, startWizard} from './wizard.js';
 import {servingPanel} from './serving.js';
 import {
-  FRAMEWORK_PATH, PLATFORM_SECTIONS_PATH, apiServiceRow, applyFrameworkUpdate,
-  frameworkRow, openApiInspector, openFrameworkInspector,
+  FRAMEWORK_PATH, PLATFORM_SECTIONS_PATH, apiDeployFailure, apiServiceRow,
+  applyFrameworkUpdate, frameworkRow, openApiInspector, openFrameworkInspector,
+  retryApiDeploy,
 } from './api.js';
 
 const PAGE_TABS = [
@@ -918,6 +919,18 @@ function certState(certificate) {
   return {label: `SSL ${certificate.status}`, tone: 'danger'};
 }
 
+// How the live build arrived, in the operator's words. Declared above
+// webappRow so the row's own copy slice carries the lookup, not four
+// literals — and so there is exactly one place these sentences exist.
+// 'source not recorded' is the honest answer for a release registered before
+// the platform started recording this, never a guess at which way it came.
+const SOURCE_LABEL = {
+  github: 'via GitHub push',
+  api: 'via CLI or API',
+  upload: 'via upload',
+  unknown: 'source not recorded',
+};
+
 function webappRow(ctx, item, {reload}) {
   const app = item.webapp || {};
   const name = app.display_name || app.slug || `#${app.id}`;
@@ -948,9 +961,13 @@ function webappRow(ctx, item, {reload}) {
   }
   const ssl = certState(address.certificate);
   const deployedAt = formatDate(deployment?.finished || release.created);
+  const arrival = SOURCE_LABEL[release.source] || SOURCE_LABEL.unknown;
   let tone = ssl.tone;
-  let value = `${address.hostname} · ${ssl.label} · deployed ${deployedAt}`;
-  if (deployment && deployment.status === 'failed') {
+  let value = `${address.hostname} · ${ssl.label} · deployed ${deployedAt} · ${arrival}`;
+  // `rolled_back` is the NORMAL terminal state of a failed deploy — the fleet
+  // was put back. Reading only `failed` rendered a cheerful "deployed <date>"
+  // over exactly the outcome the operator most needs to see.
+  if (deployment && (deployment.status === 'failed' || deployment.status === 'rolled_back')) {
     tone = 'danger';
     value = `${address.hostname} · ${ssl.label} · last deploy failed ${formatDate(deployment.created)}`;
   }
@@ -1069,23 +1086,150 @@ export async function deploymentsPage(ctx, route = 'deployments', navigate = nul
     return items.map((item) => webappRow(ctx, item, {reload: render}));
   }
 
+  // WHICH thing is unhappy, in priority order — most specific evidence first.
+  // The two sentences this replaced named nothing at all, so they sent the
+  // operator hunting through the rows for an answer the page already held.
+  //
+  // 1. The API service's own failed deploy: real node counts and a retry.
+  // 2. A web app whose latest deploy failed: named by the payload.
+  // 3/4. Anything else red, then anything amber — an expired certificate is
+  //      not a deploy failure, and its row already says so precisely. These
+  //      two read the row's OWN name and value, so the banner can never
+  //      contradict the row it is pointing at.
+  function failureDescriptor(rowNodes) {
+    const failure = apiDeployFailure(deploymentsSection());
+    if (failure) return {kind: 'api', ...failure};
+    const items = state.apps?.items || [];
+    const broken = items.find((item) => ['failed', 'rolled_back']
+      .includes(item.latest_deployment?.status));
+    if (broken) {
+      const app = broken.webapp || {};
+      return {
+        kind: 'webapp',
+        name: app.display_name || app.slug || `#${app.id}`,
+        id: app.id,
+        status: broken.latest_deployment.status,
+        release: broken.current_release || null,
+      };
+    }
+    const pick = (tone) => rowNodes.find((row) => row.dataset?.tone === tone);
+    const node = pick('danger') || pick('warn');
+    if (!node) return null;
+    return {
+      kind: 'row',
+      tone: node.dataset.tone,
+      name: node.querySelector('.row-name')?.textContent || 'Something',
+      value: node.querySelector('.row-value')?.textContent || '',
+    };
+  }
+
+  // "…and everything else is fine" is the second thing an operator wants to
+  // know, and the only honest way to say it is to count the rest.
+  function othersClause(rowNodes) {
+    const unhappy = rowNodes.filter(
+      (row) => row.dataset?.tone === 'danger' || row.dataset?.tone === 'warn');
+    const others = Math.max(unhappy.length - 1, 0);
+    if (!others) return 'everything else is healthy';
+    return `${others} other thing${others === 1 ? '' : 's'} need${others === 1 ? 's' : ''} a look`;
+  }
+
+  function servingSub(serving) {
+    if (!serving?.sha) return 'No converged deployment on record — nothing is proven to be serving.';
+    return `Still serving ${String(serving.sha).slice(0, 10)}`
+      + ` · django-mojo ${serving.framework_version || 'unknown'}`
+      + ` · converged ${formatDate(serving.converged_at)}`;
+  }
+
+  // The banner's own actions. Built here, not in rows.js: they are wired to
+  // this page's reload, and statusHeadline only ever renders nodes.
+  function bannerAction(label, run) {
+    const button = h('button', {class: 'button compact', type: 'button'}, label);
+    button.addEventListener('click', () => runAction(null, () => run(), {key: button}));
+    return button;
+  }
+
   function headline(apiRowNodes, appRowNodes) {
-    const tones = [...apiRowNodes, ...appRowNodes]
-      .map((row) => row.dataset?.tone).filter(Boolean);
-    const truncated = state.apps?.truncated === true;
+    const rowNodes = [...apiRowNodes, ...appRowNodes];
+    const tones = rowNodes.map((row) => row.dataset?.tone).filter(Boolean);
     let tone = 'ok';
     let message = 'Everything running is current';
+    let sub = '';
+    let actions = [];
     if (!tones.length) {
-      tone = 'muted'; message = 'Nothing is deployed yet';
-    } else if (tones.includes('danger')) {
-      tone = 'danger'; message = 'Something on the fleet needs attention';
-    } else if (tones.includes('warn')) {
-      tone = 'warn'; message = 'Some of the fleet needs attention';
+      return statusHeadline({tone: 'muted', message: 'Nothing is deployed yet',
+        observedAt: state.observedAt, onRefresh: () => load(true)});
     }
-    return statusHeadline({tone, message,
-      sub: truncated ? `Showing the first ${state.apps.limit} apps by name — the fleet has more.` : '',
+    const failure = failureDescriptor(rowNodes);
+    if (failure?.kind === 'api') {
+      const {build, proven, expected} = failure;
+      const manage = ctx.features?.platform?.capabilities?.manage === true;
+      tone = 'danger';
+      message = `The API service failed to deploy — build ${build} `
+        + `${proven === 0 ? 'never reached the fleet' : `reached ${proven} of ${expected} nodes`}`
+        + ` · ${proven} of ${expected} nodes updated · ${othersClause(rowNodes)}`;
+      sub = servingSub(failure.serving);
+      actions = [
+        bannerAction('See what failed',
+          () => openApiInspector(ctx, deploymentsSection(), render, apiSection())),
+        // The retry is the platform's own deploy/retry verb, with the same
+        // capability gate the drill-in applies — surfaced, not reimplemented.
+        manage ? bannerAction('Retry same SHA',
+          () => retryApiDeploy(failure.deploymentId, render)) : null,
+      ].filter(Boolean);
+    } else if (failure?.kind === 'webapp') {
+      const serving = failure.release?.version || failure.release?.id;
+      tone = 'danger';
+      // No node counts here: a web-app deployment records {runner, job}
+      // targets, not a proven fleet roster, and inventing "2 of 3" from that
+      // would be a number nobody measured.
+      message = failure.status === 'rolled_back'
+        ? `${failure.name} failed to deploy — the fleet was put back on ${serving || 'the previous version'}`
+        : `${failure.name} failed to deploy — and the rollback did not finish, so the fleet may be mixed`;
+      sub = serving
+        ? `Still serving ${serving} · ${othersClause(rowNodes)}`
+        : `Nothing is recorded as serving · ${othersClause(rowNodes)}`;
+      // Rolling back is the only forward path here, and it needs fresh auth
+      // and a written reason — neither of which can ride a banner button. It
+      // already lives one click away, on the tab this link opens.
+      actions = [h('a', {class: 'button compact',
+        href: routeHref('deployments', {webapp: failure.id, tab: 'deploys'})}, 'See what failed')];
+    } else if (failure?.kind === 'row') {
+      tone = failure.tone;
+      message = `${failure.name} needs attention — ${failure.value}`;
+    }
+    return statusHeadline({tone, message, sub, actions,
       observedAt: state.observedAt,
       onRefresh: () => load(true)});
+  }
+
+  // One sentence about the apps as a whole: how many are live, where they
+  // answer, and what secures them. Every value is server-scoped to the rows
+  // in this response — see the endpoint's `_fleet`.
+  function appsSubhead() {
+    if (state.apps?.truncated === true) {
+      // A truncated list cannot claim to describe the fleet's domains or its
+      // certificates — it is not looking at all of them. What it CAN say is
+      // that it is showing a slice, which used to sit on the headline and
+      // read as if it were about the failure.
+      return `Showing the first ${state.apps.limit} apps by name — the fleet has more.`;
+    }
+    const fleet = state.apps?.fleet;
+    if (!fleet) return '';
+    const parts = [`${fleet.live} live`];
+    const domains = fleet.domains || [];
+    if (domains.length === 1) {
+      parts.push(fleet.certificate?.wildcard ? `on *.${domains[0]}` : `on ${domains[0]}`);
+    } else if (domains.length > 1) {
+      parts.push(`across ${domains.length} domains`);
+    }
+    if (fleet.certificate) {
+      const renews = fleet.certificate.renew_after || fleet.certificate.not_after;
+      parts.push(`one ${fleet.certificate.wildcard ? 'wildcard ' : ''}certificate`
+        + (renews ? `, renews ${formatDate(renews)}` : ''));
+    } else if (fleet.certificate_count > 1) {
+      parts.push(`${fleet.certificate_count} certificates`);
+    }
+    return parts.join(' · ');
   }
 
   function paint() {
@@ -1109,7 +1253,7 @@ export async function deploymentsPage(ctx, route = 'deployments', navigate = nul
         ? h('section', {class: 'row-section'},
           h('h2', {class: 'row-section-label', text: 'Web apps'}),
           emptyState('No web apps yet', 'Choose “New web app” to put your first one online.'))
-        : rowSection('Web apps', appRowNodes),
+        : rowSection('Web apps', appRowNodes, {sub: appsSubhead()}),
     ].filter(Boolean);
     root.replaceChildren(h('div', {class: 'row-page deployments-body'}, ...children));
     openLinkedInspector();

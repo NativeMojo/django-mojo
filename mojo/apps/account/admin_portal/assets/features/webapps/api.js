@@ -177,6 +177,51 @@ export function apiServiceRow(ctx, deployments, {onOpen}) {
   return wireAction(row, onOpen);
 }
 
+// ---------------------------------------------------------------------------
+// The failure facts the page's banner needs, and the one control it offers
+// ---------------------------------------------------------------------------
+
+// The API service's newest attempt, ONLY when it failed. Built from the same
+// server-computed evidence the row reads (nodeSummary, currently_serving), so
+// the banner can never disagree with the row it sits above. Null means there
+// is nothing to say — including when the evidence itself is degraded, because
+// "unavailable" is not a failed deploy.
+export function apiDeployFailure(deployments) {
+  if (!deployments || deployments.status === 'timeout'
+    || deployments.status === 'unavailable' || deployments.status === 'unauthorized') return null;
+  const latest = (deployments.data?.items || [])[0];
+  if (!latest || latest.status !== 'failed') return null;
+  const counts = nodeSummary(latest);
+  return {
+    name: 'The API service',
+    build: shortId(latest.sha),
+    proven: counts.proven,
+    expected: counts.expected,
+    serving: deployments.data?.currently_serving || null,
+    deploymentId: latest.id,
+  };
+}
+
+// Retry the SAME commit — the existing platform action, surfaced where the
+// operator already is. Headless (the applyFrameworkUpdate pattern): the
+// banner that carried the button is rebuilt by reload(), so there is nothing
+// left to restore a pending state onto, and never an `event.currentTarget`.
+export function retryApiDeploy(deploymentId, reload) {
+  return runAction(null, async () => {
+    await api(`${DEPLOY_ACTION_PATH}retry`, {
+      method: 'POST', body: JSON.stringify({deployment: deploymentId})});
+    await reload();
+  }, {
+    // Keyed by the attempt: two different failed deploys are two different
+    // retries, and INFLIGHT is one process-global Map.
+    key: `webapps:retry-deploy:${deploymentId}`,
+    busy: {title: 'Retrying the deploy…',
+      detail: 'The same commit, installed again — the canary first, then the fleet.'},
+    onError: (error) => openModal({title: 'The retry did not start',
+      content: h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: error.message}))}),
+  });
+}
+
 // The failure explanation, from the durable diagnosis journal. Rows written
 // before the journal existed fall back to the last failed transition's
 // detail plus the row detail — less precise, never blank.
