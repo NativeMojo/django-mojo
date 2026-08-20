@@ -17,7 +17,11 @@ export function actionMenu({actions = [], context = {}, label = 'Record actions'
     // the ••• trigger, which is the nearest node that survives the action.
     onclick: (event) => {
       event.stopPropagation(); menu.hidden = true; button.setAttribute('aria-expanded', 'false');
-      runAction(button, () => action.run?.(context), {announceLabel: `${action.label}…`});
+      // Guard on the clicked item, paint on the trigger: every item shares the
+      // trigger, so keying on it would make one item's click return another's
+      // in-flight promise and never run.
+      runAction(button, () => action.run?.(context),
+        {key: event.currentTarget, announceLabel: `${action.label}…`});
     },
   })));
   const button = h('button', {class: 'icon-button', type: 'button', 'aria-label': label, 'aria-haspopup': 'menu', 'aria-expanded': 'false'}, '•••');

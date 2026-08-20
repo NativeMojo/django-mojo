@@ -26,9 +26,15 @@ import {errorState, loadingState} from './views.js';
 export const PENDING_DELAY = 150;
 export const PENDING_HOLD = 250;
 
-// One in-flight task per target. The key is the element itself, so two
+// One in-flight task per key. The key defaults to the paint target, so two
 // different buttons are two different guards — a superseded *render* is the
 // generation token's job (see loadInto), not this one's.
+//
+// Target and key come apart whenever one control paints for several distinct
+// actions. actionMenu is the case: every item in a record's menu paints on the
+// shared ••• trigger, so keying on the target would make one menu item's click
+// silently return a different item's in-flight promise and never run. Those
+// callers pass the clicked item as `key` and keep the trigger as the target.
 const INFLIGHT = new Map();
 const GENERATION = new WeakMap();
 
@@ -142,14 +148,17 @@ async function execute(target, task, options) {
  * `target` may be null for a headless action — the guard, the busy scrim and
  * the error handling still apply, and no DOM write is attempted.
  *
- * Options: {busy, pendingLabel, announceLabel, onError, restoreOnSuccess = true, signal}
+ * Options: {key, busy, pendingLabel, announceLabel, onError,
+ *           restoreOnSuccess = true, signal}
+ * `key` identifies the action for the re-entry guard; it defaults to `target`
+ * and is only passed separately when one control paints for several actions.
  * `pendingLabel` swaps the control's own label; `announceLabel` is what a
  * screen reader hears when the control keeps its label (a tab, an icon).
  */
 export function runAction(target, task, options = {}) {
   // A headless call gets its own symbol so it is never blocked by an
   // unrelated headless call, and takes the identical code path.
-  const key = target || Symbol('headless action');
+  const key = options.key || target || Symbol('headless action');
   const running = INFLIGHT.get(key);
   // Registered synchronously — before the first await — so a second click in
   // the same turn gets the in-flight promise back instead of a second task.

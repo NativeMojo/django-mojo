@@ -234,6 +234,21 @@ def test_pending_state_survives_its_own_action_contract(opts):
     assert "runAction(menu" not in model and "runAction(event.currentTarget" not in menu_item, \
         "the action-menu pending state is attached to the menu item the handler hides"
 
+    # Painting on the shared trigger must not also GUARD on it. Every item in
+    # one record's menu paints on the same ••• button, so a guard keyed on the
+    # paint target makes the second item clicked return the first item's
+    # in-flight promise and never run — the operator sees a pending state for
+    # an action that was silently dropped. On the People inspector that menu
+    # holds "Revoke sessions" and "Send password-reset link", so the dropped
+    # action is one an admin will believe happened.
+    assert "key: event.currentTarget" in menu_item, \
+        "actionMenu guards on the shared ••• trigger, so one menu item's click " \
+        "returns another item's in-flight promise and never runs its own action; " \
+        "pass the clicked item as runAction's `key` and keep the trigger as the target"
+    assert "options.key || target" in actions, \
+        "runAction no longer lets a caller separate the guard key from the paint " \
+        "target — actionMenu needs that to guard per menu item"
+
     # --- rows.js: the refresh button lives inside the block its own onRefresh
     # replaces, so nothing rendered by statusHeadline can carry the
     # announcement. It has to come from the document-level live region.
