@@ -193,6 +193,61 @@ def on_webapp_summary(request):
 SUMMARIES_LIMIT = 50
 
 
+def _is_wildcard(certificate, domain_name):
+    """Whether this certificate covers `*.<domain>`.
+
+    Decided here rather than in the browser: the client would have to know
+    that a wildcard can be carried by either the common name or a SAN, and
+    two surfaces guessing that rule is one guess too many.
+    """
+    if certificate is None or not domain_name:
+        return False
+    wildcard = f"*.{domain_name}".lower()
+    names = [certificate.common_name or ""]
+    names.extend(certificate.sans or [])
+    return any(str(name).strip().lower() == wildcard for name in names)
+
+
+def _fleet(rows):
+    """What the LISTED apps, together, are serving on.
+
+    Scoped to exactly the rows in this response — never a fleet-wide read.
+    A subhead that counted apps the caller cannot see would be a leak, and a
+    subhead that disagreed with the rows under it would be worse than none.
+
+    Every value comes from the objects `select_related` already loaded, so
+    this block adds no query.
+
+    `certificate` is all-or-nothing on purpose: it is populated only when ONE
+    certificate backs EVERY listed address. Naming one of several would be a
+    claim about apps it does not cover.
+    """
+    primaries = [row.vhost for row in rows if row.vhost_id]
+    live = len([row for row in rows if row.vhost_id and row.current_release_id])
+    domains = sorted({vhost.domain.name for vhost in primaries if vhost.domain_id})
+    certificate_ids = {vhost.certificate_id for vhost in primaries
+                       if vhost.certificate_id}
+    certificate = None
+    # One certificate, and no listed address left uncovered by it.
+    if len(certificate_ids) == 1 and all(v.certificate_id for v in primaries):
+        covered = next(v for v in primaries if v.certificate_id)
+        found = covered.certificate
+        certificate = {
+            "wildcard": _is_wildcard(found, covered.domain.name
+                                     if covered.domain_id else ""),
+            "common_name": found.common_name,
+            "not_after": found.not_after.isoformat() if found.not_after else None,
+            "renew_after": (found.renew_after.isoformat()
+                            if found.renew_after else None),
+        }
+    return {
+        "live": live,
+        "domains": domains,
+        "certificate_count": len(certificate_ids),
+        "certificate": certificate,
+    }
+
+
 @md.GET("webapp/summaries")
 @md.denies_key_backed_session()
 @md.custom_security("interactive user; WebApp VIEW_PERMS list-path parity, "
@@ -217,6 +272,11 @@ def on_webapp_summaries(request):
 
     Invariant: returns rows for exactly the ids ``GET /api/edge/webapp`` would
     list for the same request.
+
+    Additive (item 2230), ``schema_version`` still 1: each row carries
+    ``current_release.source`` and ``latest_deployment.release``, and the
+    envelope carries a ``fleet`` block describing what the LISTED apps share —
+    see ``_fleet``.
     """
     from mojo.apps.edge.models import WebAppDeployment
 
@@ -243,8 +303,8 @@ def on_webapp_summaries(request):
     latest = {
         deployment.webapp_id: deployment
         for deployment in WebAppDeployment.objects.filter(
-            webapp__in=rows).order_by("webapp_id", "-created").distinct(
-                "webapp_id")
+            webapp__in=rows).select_related("release").order_by(
+                "webapp_id", "-created").distinct("webapp_id")
     }
 
     items = []
@@ -272,13 +332,23 @@ def on_webapp_summaries(request):
                 "id": release.pk, "version": release.version,
                 "status": release.status,
                 "created": release.created.isoformat(),
+                "source": release.source,
             } if release else None),
             "latest_deployment": ({
                 "id": deployment.pk, "status": deployment.status,
                 "created": deployment.created.isoformat(),
                 "finished": (deployment.finished.isoformat()
                              if deployment.finished else None),
+                # The release this DEPLOYMENT carried, which after a rollback
+                # is deliberately not the one `current_release` names. A
+                # failure banner reads this; what is still serving reads that.
+                "release": ({
+                    "id": deployment.release_id,
+                    "version": deployment.release.version,
+                    "source": deployment.release.source,
+                } if deployment.release_id else None),
             } if deployment else None),
         })
     return {"schema_version": 1, "items": items, "count": len(items),
-            "limit": SUMMARIES_LIMIT, "truncated": truncated}
+            "limit": SUMMARIES_LIMIT, "truncated": truncated,
+            "fleet": _fleet(rows)}

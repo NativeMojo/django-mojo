@@ -1361,7 +1361,8 @@ def summary_for(web_app):
     answer "is my app live and serving X?" in one call. Item 2158 added
     `address.certificate` ({status, not_after}; null only when there is no
     vhost) so the same view can answer "is SSL healthy?" without a second
-    read — Vhost.certificate is a non-null FK.
+    read — Vhost.certificate is a non-null FK. Item 2230 added
+    `current_release.source`, so the same view can say HOW that build got here.
     """
     from mojo.apps.edge.models import Vhost, WebAppDeployment
     from mojo.apps.edge.services import webapp_keys
@@ -1413,6 +1414,9 @@ def summary_for(web_app):
         "current_release": ({
             "id": release.pk, "version": release.version,
             "status": release.status, "created": release.created.isoformat(),
+            # Additive (item 2230): how this build arrived. Rows registered
+            # before the field existed read "unknown", never a guess.
+            "source": release.source,
         } if release else None),
         "latest_deployment": ({
             "id": deployment.pk, "status": deployment.status,
