@@ -100,9 +100,55 @@ error handling all still apply, and no DOM write is attempted.
 | `busy` | a title string, or the `openBusy` options object, for an action that must not be interrupted |
 | `pendingLabel` | swaps the control's own label while pending (`'Saving…'`) |
 | `announceLabel` | what a screen reader hears when the control keeps its label — a tab, an icon-only button |
-| `onError` | called with the error instead of rethrowing; use it to paint in-panel |
+| `onError` | called with the error; use it to paint the failure in-panel. Takes precedence over `failure` |
+| `success` | the confirmation toast — a string, or a function of the task's result. Raised after the pending state clears |
+| `failure` | default `true`; toasts the error when no `onError` is given. Set `false` to rethrow to the caller |
 | `restoreOnSuccess` | default `true`; set `false` when success destroys or navigates away from the control |
-| `signal` | the caller's `AbortController` signal. An `AbortError` is swallowed only when **this** signal aborted |
+| `signal` | the caller's `AbortController` signal, used to skip the pending paint on a superseded render |
+
+`runAction` does **not** rethrow by default. An error goes to `onError` if one
+is given, otherwise to a danger toast; an `AbortError` is always swallowed,
+whoever owns the signal, because a superseded request is not a failure. Pass
+`failure: false` when the caller genuinely wants the rejection.
+
+A success message is raised from the `finally` block, after the pending state
+has cleared, and a formatter that throws degrades to a plain "Done." — a broken
+message must never report a completed action as broken.
+
+
+## Saying that it finished
+
+A pending state can only ever say *working*. Until `toast()` existed the portal
+had no way to say *done*, so an action that succeeded left the screen silent —
+which reads exactly like a button that did nothing, and was the most common
+complaint about this admin.
+
+```js
+import {toast} from '../../components/actions.js';
+
+toast('Password reset link sent.');                    // success (default)
+toast('That address is already attached.', {tone: 'danger'});
+toast('Re-checking the fleet…', {tone: 'info'});
+```
+
+Toasts stack bottom-right, dismiss after ~4 seconds, pause while the pointer is
+over them, and carry a close button. They are announced through the same live
+region as the pending state, so the confirmation is not purely visual.
+
+Prefer `runAction`'s `success` option over calling `toast` by hand — it fires
+only when the task actually resolved, and only after the control has settled:
+
+```js
+runAction(button, () => post(`/api/user/${user.id}`, {send_invite: {}}),
+  {success: 'Invite sent.'});
+```
+
+An action-menu entry says it declaratively — `actionMenu` passes `done` through
+as `success`:
+
+```js
+{label: 'Resend invite', capability: manage, done: 'Invite sent.', run: …}
+```
 
 ```js
 // Scoped action, result lands next to the button.

@@ -11,10 +11,18 @@ Redis key, TTL or compare-and-set conventions in bash. It calls this instead:
     manage.py deploy_status get
     manage.py deploy_status set deploying --sha <target-sha> --deployment <uuid>
     manage.py deploy_status set failed --sha <target-sha> --deployment <uuid> --detail <phase>
+    manage.py deploy_status handoff --deployment <uuid>
 
 ``set`` is compare-and-set on the stamped SHA. Exit codes: 0 applied, 3 the
 write was ignored because the deploy was superseded (distinct from argparse's
 2, so the script can tell "stale, fine" from "I called this wrong").
+
+``handoff`` is the other half of the same structural fact: the script is about
+to stop the engine running this deployment's ``deploy_node`` job, so that job
+would otherwise sit ``running`` behind a lease nobody will ever release. It
+closes the job row and drops the in-flight entry, and does nothing else — no
+lease, no evidence. Every successful update calls it, including the fleet runs
+that deliberately report no status at all.
 """
 import json
 import os
@@ -26,6 +34,10 @@ from django.core.management.base import BaseCommand, CommandError
 from mojo.apps.edge.services import deploy
 from mojo.apps.edge.services import platform_deploy
 
+# The scripts write about two dozen short lines. The cap is a bound on a file
+# that lives in an application-writable directory, not a working limit.
+PHASES_MAX_BYTES = 8192
+
 
 class Command(BaseCommand):
     help = (
@@ -35,7 +47,7 @@ class Command(BaseCommand):
     )
 
     def add_arguments(self, parser):
-        parser.add_argument("action", choices=["get", "set"])
+        parser.add_argument("action", choices=["get", "set", "handoff"])
         parser.add_argument(
             "state", nargs="?", choices=[deploy.STATUS_DEPLOYING, deploy.STATUS_FAILED],
             help="Terminal state to report (set only).")
@@ -51,6 +63,10 @@ class Command(BaseCommand):
         parser.add_argument(
             "--evidence", action="store_true", default=False,
             help="Attach the sanitized tail captured by update.sh (failed only).")
+        parser.add_argument(
+            "--phases", default=None,
+            help="Optional path to update.sh's phase timings file. Omitting it "
+                 "is normal: an older node script does not write one.")
 
     def _read_var_line(self, name, limit=128):
         path = os.path.join(django_settings.PROJECT_ROOT, "var", name)
@@ -88,6 +104,24 @@ class Command(BaseCommand):
             detail["stderr_tail"] = tail
         return detail
 
+    def _read_phases(self, path):
+        """Where this node's seconds went, as the scripts recorded them.
+
+        Bounded read of a file the node wrote seconds ago. Anything unreadable
+        or unparseable is simply no timings — this is a diagnostic, and it may
+        never be the reason a deploy callback fails.
+        """
+        if not path:
+            return []
+        if not os.path.isabs(path):
+            path = os.path.join(django_settings.PROJECT_ROOT, path)
+        try:
+            with open(path, "r") as stream:
+                text = stream.read(PHASES_MAX_BYTES)
+        except OSError:
+            return []
+        return platform_deploy.parse_phases(text)
+
     def _report_failure_incident(self, deployment_id, sha, runner_id, phase):
         from mojo.apps.incident import reporter
 
@@ -110,6 +144,23 @@ class Command(BaseCommand):
         if options["action"] == "get":
             self.stdout.write(json.dumps(dict(
                 target=deploy.get_target(), status=deploy.get_status())))
+            return
+
+        if options["action"] == "handoff":
+            # The tail of EVERY successful update, canary and fleet alike:
+            # this node is about to stop the engine running its own deploy
+            # job. Close that job's row while the engine still exists.
+            # Touches no lease and writes no evidence — the terminal report
+            # (or its deliberate absence, on a fleet run) is the deploy's
+            # story; this is only the job row.
+            deployment_id = platform_deploy.deployment_id(
+                options.get("deployment"))
+            if not deployment_id:
+                raise CommandError(
+                    "handoff requires --deployment <platform deployment UUID>")
+            closed = platform_deploy.close_handoff_job(
+                deployment_id, "completed")
+            self.stdout.write(f"handoff: closed {closed} node job(s)")
             return
 
         state = options.get("state")
@@ -144,6 +195,11 @@ class Command(BaseCommand):
         record = platform_deploy.get(deployment_id)
         if record is None or record.sha != sha:
             raise CommandError("deployment UUID does not belong to --sha")
+
+        # Recorded before any of the terminal bookkeeping below, so a
+        # superseded or refused report still says where the time went.
+        platform_deploy.record_phases(
+            deployment_id, self._read_phases(options.get("phases")))
 
         runner_id = deploy.local_runner_id()
         failure_phase = deploy.failure_phase(options.get("detail"))
@@ -222,9 +278,14 @@ class Command(BaseCommand):
             platform_deploy.record_diagnosis(
                 deployment_id, runner_id, detail=failure_detail, kind=kind)
 
+        # This node's deploy job is over either way — the script is making its
+        # terminal report and will stop the engine running that job moments
+        # from now. Close the row while there is still an engine to close it.
+        job_state = ("failed" if state == deploy.STATUS_FAILED else "completed")
         if deploy.set_status(
                 state, sha, detail=options.get("detail"),
                 deployment_id=deployment_id):
+            platform_deploy.close_handoff_job(deployment_id, job_state)
             if state == deploy.STATUS_FAILED:
                 platform_deploy.transition(
                     deployment_id, "failed",
@@ -242,6 +303,10 @@ class Command(BaseCommand):
                     {"source": "legacy_identity_bridge", "sha": sha})
             self.stdout.write(self.style.SUCCESS(f"applied: {state} ({sha})"))
             return
+        # Superseded: this report is stale, but the run that produced it is
+        # still over and its engine is still about to die. Whoever owns the
+        # lease now, nothing is coming back to finish THIS node's job row.
+        platform_deploy.close_handoff_job(deployment_id, job_state)
         self.stderr.write(
             f"ignored: the armed deploy no longer belongs to {sha} "
             "(superseded, or nothing armed)")

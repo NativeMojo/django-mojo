@@ -16,23 +16,39 @@ export function actionMenu({actions = [], context = {}, label = 'Record actions'
     // item would paint inside a hidden container and never be seen. It goes on
     // the ••• trigger, which is the nearest node that survives the action.
     onclick: (event) => {
-      event.stopPropagation(); menu.hidden = true; button.setAttribute('aria-expanded', 'false');
+      event.stopPropagation(); setOpen(false);
       // Guard on the clicked item, paint on the trigger: every item shares the
       // trigger, so keying on it would make one item's click return another's
       // in-flight promise and never run.
       runAction(button, () => action.run?.(context),
-        {key: event.currentTarget, announceLabel: `${action.label}…`});
+        {key: event.currentTarget, announceLabel: `${action.label}…`,
+         success: action.done || ''});
     },
   })));
   const button = h('button', {class: 'icon-button', type: 'button', 'aria-label': label, 'aria-haspopup': 'menu', 'aria-expanded': 'false'}, '•••');
+  // Clicking anywhere else closes it, the way every other menu on the web does.
+  //
+  // The listener is bound only while the menu is open and removed on close, so
+  // a table that re-renders its rows does not accumulate one dead document
+  // listener per row for the life of the page.
+  const closeOnOutside = (event) => {
+    if (menu.contains(event.target) || button.contains(event.target)) return;
+    setOpen(false);
+  };
+  function setOpen(open) {
+    menu.hidden = !open;
+    button.setAttribute('aria-expanded', String(open));
+    if (open) document.addEventListener('click', closeOnOutside);
+    else document.removeEventListener('click', closeOnOutside);
+  }
   button.addEventListener('click', (event) => {
-    event.stopPropagation(); menu.hidden = !menu.hidden;
-    button.setAttribute('aria-expanded', String(!menu.hidden));
+    event.stopPropagation();
+    setOpen(menu.hidden);
     if (!menu.hidden) menu.querySelector('button')?.focus();
   });
   menu.addEventListener('keydown', (event) => {
     const items = [...menu.querySelectorAll('button')]; const index = items.indexOf(document.activeElement);
-    if (event.key === 'Escape') { menu.hidden = true; button.setAttribute('aria-expanded', 'false'); button.focus(); }
+    if (event.key === 'Escape') { setOpen(false); button.focus(); }
     if (event.key === 'ArrowDown') { event.preventDefault(); items[(index + 1) % items.length]?.focus(); }
     if (event.key === 'ArrowUp') { event.preventDefault(); items[(index - 1 + items.length) % items.length]?.focus(); }
   });
@@ -61,7 +77,8 @@ export function lifecycleControl({active, label = 'record', capability = true, o
     if (!result.confirmed) return;
     // The pending state starts only once the human has answered.
     await runAction(button, () => callback({reason: result.reason}),
-      {announceLabel: `${nextActive ? 'Reactivating' : 'Disabling'} ${label}…`});
+      {announceLabel: `${nextActive ? 'Reactivating' : 'Disabling'} ${label}…`,
+       success: `${label} ${nextActive ? 'reactivated' : 'disabled'}.`});
   });
   return button;
 }

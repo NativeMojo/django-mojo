@@ -44,7 +44,8 @@ def _assert_harness_green(done, name):
 @th.django_unit_test()
 def test_update_sh_harness(opts):
     """Orderings and absences of the packaged update.sh: report-before-
-    rollback, jobman stop last, flock modes, SANITY_URL default + override."""
+    rollback, the engine restart last and under the engine's own user, flock
+    modes, SANITY_URL default + override."""
     _assert_harness_green(_run_harness("test_update_sh.sh"), "test_update_sh.sh")
 
 

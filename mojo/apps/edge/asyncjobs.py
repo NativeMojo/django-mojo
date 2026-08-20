@@ -159,9 +159,16 @@ def _publish_deploy_node(runner_id, sha, framework, migrate, deployment_id):
     try:
         job_id = jobs.publish(
             func=deploy.DEPLOY_NODE_JOB,
+            # `runner` names the ONE node this row was published for. The
+            # channel already says it, but a channel is routing — it is what
+            # the engine claimed from, and `runner_id` is then overwritten by
+            # whichever engine did the claiming. The payload is the published
+            # intent and nothing rewrites it, so it is what
+            # platform_deploy.close_handoff_job matches on to close its own
+            # row and never a fleet peer's.
             payload=dict(
                 sha=sha, framework=framework, migrate=bool(migrate),
-                deployment=str(deployment_id)),
+                deployment=str(deployment_id), runner=str(runner_id)),
             channel=runner_id,
             max_retries=0,
             expires_in=deploy.canary_timeout())

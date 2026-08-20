@@ -5,8 +5,8 @@
 # Runs the REAL packaged script in a throwaway PROJ_PATH with every external
 # command stubbed on PATH — each stub appends its argv to a call log, and
 # per-command control files script exit codes. The properties under test are
-# mostly ORDERINGS (release failure reports BEFORE rollback, jobman stop LAST) and
-# ABSENCES (fleet runs never touch deploy_status, a short-circuit fetches
+# mostly ORDERINGS (release failure reports BEFORE rollback, the engine restart
+# LAST) and ABSENCES (fleet runs never touch deploy_status, a short-circuit fetches
 # nothing). Packaged delta under test: every sanity_check carries
 # --url "$SANITY_URL" — the skeleton default when the shim exports nothing,
 # the shim's override otherwise.
@@ -40,10 +40,18 @@ assert_eq() { # actual expected label
     if [ "$1" = "$2" ]; then ok "$3"; else fail "$3 (got: $1, want: $2)"; fi
 }
 assert_in_log() { # pattern label
-    if grep -q "$1" "$CALLLOG" 2>/dev/null; then ok "$2"; else fail "$2 (no '$1' in log)"; fi
+    if grep -q -e "$1" "$CALLLOG" 2>/dev/null; then ok "$2"; else fail "$2 (no '$1' in log)"; fi
 }
 assert_not_in_log() { # pattern label
-    if grep -q "$1" "$CALLLOG" 2>/dev/null; then fail "$2 ('$1' present)"; else ok "$2"; fi
+    if grep -q -e "$1" "$CALLLOG" 2>/dev/null; then fail "$2 ('$1' present)"; else ok "$2"; fi
+}
+assert_last_cmd() { # pattern label
+    local last
+    last="$(grep "^CMD" "$CALLLOG" | tail -1)"
+    case "$last" in
+        *"$1"*) ok "$2" ;;
+        *) fail "$2 (last command was: ${last:-none})" ;;
+    esac
 }
 assert_order() { # first_pattern second_pattern label
     local a b
@@ -94,6 +102,11 @@ EOF
 echo "CMD python3 $*" >> "$CALLLOG"
 case "$*" in
     *"import mojo"*) cat "$STUBCTL/framework.txt" 2>/dev/null || echo "0.0.0"; exit 0 ;;
+    *"deploy_status set --help"*)
+        # The probe update.sh runs before it dares pass --phases. A rollback
+        # can restore a deploy_status that has no such flag.
+        [ -f "$STUBCTL/deploy_status.no_phases" ] || echo "  --phases PHASES"
+        exit 0 ;;
     *deploy_status*)
         echo "ENV identity_ready=${MOJO_DEPLOY_IDENTITY_READY:-}" >> "$CALLLOG"
         if [[ "$*" == *"deploy_status set deploying"* ]] && \
@@ -115,6 +128,15 @@ EOF
     cat > "$STUB/sudo" <<'EOF'
 #!/bin/bash
 echo "CMD sudo $*" >> "$CALLLOG"
+# `sudo -n -u <user> <cmd>` is the restart tail dropping root. It is a real
+# privilege change on a node, so the harness performs the drop by running the
+# command — the tail's own stubs (jobman, python3) then record what ran. The
+# post_deploy boundary below is the one that must never execute.
+if [ "${1:-}" = "-n" ] && [ "${2:-}" = "-u" ] && [ -n "${3:-}" ]; then
+    if [ -f "$STUBCTL/sudo_u.fail" ]; then exit 1; fi
+    shift 3
+    exec "$@"
+fi
 [ -f "$STUBCTL/sudo.sleep" ] && sleep "$(cat "$STUBCTL/sudo.sleep")"
 if [ -f "$STUBCTL/sudo.fail_first" ] && [ ! -f "$STUBCTL/.sudo_failed_once" ]; then
     touch "$STUBCTL/.sudo_failed_once"
@@ -150,10 +172,66 @@ EOF
     cat > "$PROJ/bin/jobman" <<'EOF'
 #!/bin/bash
 echo "CMD jobman $*" >> "$CALLLOG"
+# A rollback can restore a jobman that predates --grace; argparse exits 2.
+case "$*" in
+    *--grace*) [ -f "$STUBCTL/jobman.no_grace" ] && exit 2 ;;
+esac
 exit 0
 EOF
 
-    chmod +x "$STUB/git" "$STUB/python3" "$STUB/sudo" "$STUB/mv" "$PROJ/bin/jobman"
+    # id: the uid seam. `id -un` is who the tail thinks it is (root on a real
+    # node, because the deploy plane execs this script through sudo); `id -u
+    # <name>` PRINTS that account's uid, which is what the root ban has to be
+    # decided on — a uid-0 alias is a different name with identical power.
+    # known_users.txt lists the accounts that exist; root_aliases.txt lists
+    # which of them are uid 0 (everyone else gets 1000).
+    #
+    # The dash handling is deliberately faithful to the real thing: without a
+    # `--`, `id -u -r` reads -r as ANOTHER FLAG and answers about the current
+    # user (root), which is exactly how a dashed "user name" validates if the
+    # resolver does not reject it first. After a `--`, it is a name like any
+    # other and simply does not exist.
+    cat > "$STUB/id" <<'EOF'
+#!/bin/bash
+case "${1:-}" in
+    -un) cat "$STUBCTL/whoami.txt" 2>/dev/null || echo root; exit 0 ;;
+    -u)
+        shift
+        dashdash=0
+        if [ "${1:-}" = "--" ]; then dashdash=1; shift; fi
+        name="${1:-}"
+        if [ "$dashdash" = "0" ]; then
+            case "$name" in
+                ""|-*) echo 0; exit 0 ;;   # no name, or a further flag: us
+            esac
+        fi
+        [ -n "$name" ] || { echo 0; exit 0; }
+        grep -qxF "$name" "$STUBCTL/known_users.txt" 2>/dev/null || exit 1
+        if grep -qxF "$name" "$STUBCTL/root_aliases.txt" 2>/dev/null; then
+            echo 0
+        else
+            echo 1000
+        fi
+        exit 0 ;;
+esac
+exit 1
+EOF
+
+    # stat: GNU (-c) or BSD (-f) depending on the fixture, so both branches of
+    # the last resolution step are reachable.
+    cat > "$STUB/stat" <<'EOF'
+#!/bin/bash
+case "${1:-}" in
+    -c) [ -f "$STUBCTL/stat_bsd" ] && exit 1 ;;
+    -f) [ -f "$STUBCTL/stat_bsd" ] || exit 1 ;;
+    *)  exit 1 ;;
+esac
+[ -s "$STUBCTL/pids_owner.txt" ] || exit 1
+cat "$STUBCTL/pids_owner.txt"
+EOF
+
+    chmod +x "$STUB/git" "$STUB/python3" "$STUB/sudo" "$STUB/mv" \
+             "$STUB/id" "$STUB/stat" "$PROJ/bin/jobman"
 
     # flock shim only where the real util is missing (macOS): fcntl.flock on
     # the inherited fd — the lock outlives the shim on the shared OFD. A bash
@@ -194,6 +272,24 @@ EOF
     # Deterministic defaults: an old HEAD, a matching installed framework.
     echo "1111111111111111111111111111111111111111" > "$CTL/head.txt"
     echo "1.5.0" > "$CTL/framework.txt"
+
+    # ...and a node shaped like production: this script running as root under
+    # sudo, an app user that exists, and a jobs cron entry naming it.
+    mkdir -p "$CTL/cron.d"
+    echo "root" > "$CTL/whoami.txt"
+    echo "$APP_USER" > "$CTL/sudo_user.txt"
+    printf '%s\n' "$APP_USER" > "$CTL/known_users.txt"
+    : > "$CTL/root_aliases.txt"
+    echo "$APP_USER" > "$CTL/pids_owner.txt"
+    write_jobs_cron "$APP_USER"
+}
+
+write_jobs_cron() { # user
+    cat > "$CTL/cron.d/3_mojo_jobs" <<EOF
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+* * * * * $1 $PROJ/bin/jobman start >> $PROJ/var/logs/jobman.log 2>&1
+EOF
 }
 
 run_update() { # args...
@@ -201,7 +297,10 @@ run_update() { # args...
     if [[ "$joined" == *" --sha "* ]] && [[ "$joined" != *" --deployment "* ]]; then
         args+=(--deployment "$DEPLOYMENT_UUID")
     fi
-    ( cd "$TMP" && PROJ_PATH="$PROJ" PATH="$STUB:$PATH" bash "$PROJ/aws/update.sh" "${args[@]}" )
+    ( cd "$TMP" && PROJ_PATH="$PROJ" PATH="$STUB:$PATH" \
+        CRON_ETC="$CTL/cron.d" \
+        SUDO_USER="$(cat "$CTL/sudo_user.txt" 2>/dev/null)" \
+        bash "$PROJ/aws/update.sh" "${args[@]}" )
 }
 
 run_update_with_url() { # url args...
@@ -210,9 +309,13 @@ run_update_with_url() { # url args...
     if [[ "$joined" == *" --sha "* ]] && [[ "$joined" != *" --deployment "* ]]; then
         args+=(--deployment "$DEPLOYMENT_UUID")
     fi
-    ( cd "$TMP" && SANITY_URL="$url" PROJ_PATH="$PROJ" PATH="$STUB:$PATH" bash "$PROJ/aws/update.sh" "${args[@]}" )
+    ( cd "$TMP" && SANITY_URL="$url" PROJ_PATH="$PROJ" PATH="$STUB:$PATH" \
+        CRON_ETC="$CTL/cron.d" \
+        SUDO_USER="$(cat "$CTL/sudo_user.txt" 2>/dev/null)" \
+        bash "$PROJ/aws/update.sh" "${args[@]}" )
 }
 
+APP_USER="mojo-app"
 SHA_NEW="2222222222222222222222222222222222222222"
 DEPLOYMENT_UUID="12345678-1234-4123-8123-123456789abc"
 PREVIOUS_UUID="87654321-4321-4321-8321-cba987654321"
@@ -248,15 +351,16 @@ printf '{"schema":2,"sha":"%s","deployment":"%s"}\n' \
 run_update --sha "deadbeef" --framework "1.5.0" >/dev/null 2>&1
 assert_eq "$?" 0 "short-circuit exits 0"
 assert_not_in_log "CMD git fetch" "no fetch on a short-circuit"
-assert_not_in_log "CMD sudo" "no post_deploy on a short-circuit"
+assert_not_in_log "CMD sudo bash ./aws/post_deploy.sh" \
+    "no post_deploy on a short-circuit"
 assert_in_log "deploy_status set deploying" \
     "same-SHA with a fresh UUID still reports terminal intent"
 assert_in_log "ENV identity_ready=2" \
     "same-SHA callback carries the fixed v2 identity-ready signal"
 assert_eq "$(manifest_value deployment "$PROJ/var/deploy_identity.json")" \
     "$DEPLOYMENT_UUID" "same-SHA publishes the fresh deployment UUID"
-assert_eq "$(grep "^CMD" "$CALLLOG" | tail -1 | grep -c "jobman stop")" 1 \
-    "same-SHA still reaches the normal jobman-last tail"
+assert_last_cmd "jobman start" \
+    "same-SHA still reaches the normal restart tail"
 
 echo "update.sh: same SHA/framework/UUID is a true duplicate"
 setup_env
@@ -332,8 +436,10 @@ assert_eq "$(manifest_value sha "$PROJ/var/deploy_identity.json")" \
     "$SHA_NEW" "the manifest records the full live HEAD"
 assert_eq "$(manifest_value deployment "$PROJ/var/deploy_identity.json")" \
     "$DEPLOYMENT_UUID" "the manifest records the deployment UUID"
-assert_eq "$(grep "^CMD" "$CALLLOG" | tail -1 | grep -c "jobman stop")" 1 \
-    "jobman stop is the LAST command"
+assert_last_cmd "jobman start" \
+    "the engine restart is the LAST thing that runs"
+assert_order "jobman stop engine" "jobman start" \
+    "the engine is stopped before it is started again"
 
 echo "update.sh: identity bookkeeping failure leaves the healthy candidate in place"
 setup_env
@@ -407,13 +513,17 @@ echo "update.sh: fleet run — no status writes; failure stops before jobman"
 setup_env
 run_update --sha "$SHA_NEW" --framework "1.6.0" >/dev/null 2>&1
 assert_eq "$?" 0 "fleet run exits 0"
-assert_not_in_log "deploy_status" "fleet runs never touch deploy_status"
+assert_not_in_log "deploy_status set" \
+    "fleet runs never report status — that is the canary's job"
+assert_in_log "deploy_status handoff --deployment $DEPLOYMENT_UUID" \
+    "a fleet run still closes its own node job before killing the engine"
 setup_env
 echo "1" > "$CTL/sudo.exit"
 run_update --sha "$SHA_NEW" --framework "1.6.0" >/dev/null 2>&1
 assert_eq "$?" 1 "failed fleet run exits 1"
 assert_not_in_log "jobman stop" "failed fleet run never reaches jobman stop"
-assert_not_in_log "deploy_status" "failed fleet run still writes no status"
+assert_not_in_log "deploy_status" \
+    "a failed fleet run reports nothing and never reaches the handoff"
 
 echo "update.sh: --manual is the legacy path, no status writes"
 setup_env
@@ -421,9 +531,10 @@ run_update --manual >/dev/null 2>&1
 assert_eq "$?" 0 "--manual exits 0"
 assert_in_log "CMD git reset --hard origin/main" "--manual deploys origin/main"
 assert_in_log "CMD sudo bash ./aws/post_deploy.sh$" "--manual runs post_deploy bare"
-assert_not_in_log "deploy_status" "--manual writes no status"
-assert_eq "$(grep "^CMD" "$CALLLOG" | tail -1 | grep -c "jobman stop")" 1 \
-    "--manual still stops jobman last"
+assert_not_in_log "deploy_status" \
+    "--manual writes no status and hands off no deployment it never had"
+assert_last_cmd "jobman start" \
+    "--manual still restarts the engine last"
 
 echo "update.sh: --contract prints the declared contract and touches nothing"
 setup_env
@@ -448,6 +559,296 @@ setup_env
 echo "3" > "$CTL/deploy_status.exit"
 run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
 assert_eq "$?" 0 "a superseded success report does not fail the run"
+
+# ── the engine restart tail ──────────────────────────────────────────────────
+#
+# On a real node this script IS root: the deploy plane execs it through
+# `sudo -n`. So the branch that matters — drop to the engine's own user before
+# touching jobman — is the one the harness could never reach by accident. It is
+# reached deliberately here, through the `id` stub.
+
+resolver() { # -> the resolved engine user, or empty
+    # The function is extracted rather than sourced: update.sh is a script that
+    # DOES things, and giving it a "source me and stop" mode would put an
+    # early exit on the live deploy path to serve a test.
+    awk '/^valid_engine_user\(\) \{/,/^\}/'  "$PROJ/aws/update.sh" >  "$TMP/resolver.sh"
+    awk '/^resolve_engine_user\(\) \{/,/^\}/' "$PROJ/aws/update.sh" >> "$TMP/resolver.sh"
+    ( cd "$PROJ" && PATH="$STUB:$PATH" CRON_ETC="$CTL/cron.d" \
+        SUDO_USER="$(cat "$CTL/sudo_user.txt" 2>/dev/null)" \
+        bash -c ". '$TMP/resolver.sh'; resolve_engine_user" 2>/dev/null )
+}
+
+echo "update.sh: resolve_engine_user — cron, then SUDO_USER, then var/pids"
+setup_env
+grep -q "^resolve_engine_user() {" "$PROJ/aws/update.sh" \
+    && ok "the resolver is a top-level function the harness can extract" \
+    || fail "resolve_engine_user is not extractable — the unit cases below are vacuous"
+
+assert_eq "$(resolver)" "$APP_USER" "the cron entry names the engine user"
+
+echo "$APP_USER-cron" > "$CTL/sudo_user.txt"
+printf '%s\n%s\n' "$APP_USER" "$APP_USER-cron" > "$CTL/known_users.txt"
+assert_eq "$(resolver)" "$APP_USER" \
+    "the cron entry outranks SUDO_USER when the two disagree"
+
+# The disagreement that matters: `sudo bash aws/update.sh --manual` from a
+# login account. Taking SUDO_USER there starts the engine as `ubuntu` and
+# leaves var/logs and var/pids ubuntu-owned — the same permanent brick the
+# root ban prevents, on an account that usually carries NOPASSWD:ALL.
+write_jobs_cron "$APP_USER"
+echo "ubuntu" > "$CTL/sudo_user.txt"
+printf '%s\n%s\n' "$APP_USER" "ubuntu" > "$CTL/known_users.txt"
+assert_eq "$(resolver)" "$APP_USER" \
+    "a manual run from a login account still starts the engine as the account \
+the cron entry names"
+
+# ...but SUDO_USER is still the fallback when the cron entry cannot answer.
+write_jobs_cron "root"
+assert_eq "$(resolver)" "ubuntu" \
+    "a cron entry naming root falls through to SUDO_USER"
+
+write_jobs_cron "someone-who-does-not-exist"
+assert_eq "$(resolver)" "ubuntu" \
+    "a cron user that has no account falls through to SUDO_USER"
+
+rm -f "$CTL/cron.d/3_mojo_jobs"
+assert_eq "$(resolver)" "ubuntu" "a missing cron file falls through to SUDO_USER"
+
+printf '%s\n' "$APP_USER" > "$CTL/known_users.txt"
+write_jobs_cron "$APP_USER"
+
+# root: the whole point. Starting the engine as root leaves root-owned logs the
+# app user can never append to again.
+echo "root" > "$CTL/sudo_user.txt"
+assert_eq "$(resolver)" "$APP_USER" "SUDO_USER=root is never used"
+
+echo "" > "$CTL/sudo_user.txt"
+assert_eq "$(resolver)" "$APP_USER" "an empty SUDO_USER is never used"
+
+# The root ban is a STRING test; a uid-0 alias is a different string with
+# identical power. Creating one already needs root, so this is depth, not a
+# reachable exploit — but the function states the invariant, so it holds it.
+printf '%s\n%s\n' "$APP_USER" "toor" > "$CTL/known_users.txt"
+printf '%s\n' "toor" > "$CTL/root_aliases.txt"
+write_jobs_cron "toor"
+assert_eq "$(resolver)" "$APP_USER" \
+    "a uid-0 alias in the cron entry is refused like root itself"
+echo "toor" > "$CTL/sudo_user.txt"
+rm -f "$CTL/cron.d/3_mojo_jobs"
+assert_eq "$(resolver)" "$APP_USER" \
+    "a uid-0 alias in SUDO_USER is refused like root itself"
+echo "toor" > "$CTL/pids_owner.txt"
+assert_eq "$(resolver)" "" "a uid-0 alias owning var/pids is refused too"
+
+# A leading dash is an option to `id`, not a name: unreachable through today's
+# sources, but `id -u -r` answers about the CURRENT user (root), so a resolver
+# that does not reject the dash would hand the tail a "user" called -r.
+setup_env
+rm -f "$CTL/cron.d/3_mojo_jobs"
+echo "" > "$CTL/sudo_user.txt"
+for dashed in -r -n -u -G; do
+    echo "$dashed" > "$CTL/pids_owner.txt"
+    printf '%s\n%s\n' "$APP_USER" "$dashed" > "$CTL/known_users.txt"
+    assert_eq "$(resolver)" "" "a candidate starting with a dash ($dashed) is refused"
+done
+
+setup_env
+echo "" > "$CTL/sudo_user.txt"
+rm -f "$CTL/cron.d/3_mojo_jobs"
+
+echo "UNKNOWN" > "$CTL/pids_owner.txt"
+assert_eq "$(resolver)" "" "GNU stat's UNKNOWN resolves to nothing, never to a user"
+
+echo "root" > "$CTL/pids_owner.txt"
+assert_eq "$(resolver)" "" "root-owned pids resolve to nothing — cron can have it"
+
+: > "$CTL/pids_owner.txt"
+assert_eq "$(resolver)" "" "no answer anywhere resolves to nothing"
+
+echo "$APP_USER" > "$CTL/pids_owner.txt"
+touch "$CTL/stat_bsd"
+assert_eq "$(resolver)" "$APP_USER" "the BSD stat spelling resolves too"
+rm -f "$CTL/stat_bsd"
+
+echo "1000" > "$CTL/pids_owner.txt"
+printf '%s\n%s\n' "$APP_USER" "1000" > "$CTL/known_users.txt"
+assert_eq "$(resolver)" "" "a bare uid is not a user name we were told to use"
+
+echo 'app;rm -rf /' > "$CTL/pids_owner.txt"
+assert_eq "$(resolver)" "" "an answer with shell metacharacters is refused outright"
+
+echo "update.sh: the tail drops root before touching the engine"
+setup_env
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_eq "$?" 0 "the canary run still exits 0"
+assert_in_log "CMD sudo -n -u $APP_USER python3 bin/manage.py deploy_status handoff" \
+    "the job handoff runs as the engine user"
+assert_in_log "CMD sudo -n -u $APP_USER ./bin/jobman stop engine --grace 2" \
+    "the engine is stopped as the engine user, with the short grace"
+assert_in_log "CMD sudo -n -u $APP_USER ./bin/jobman start" \
+    "the engine is started as the engine user — never as the root we are"
+assert_in_log "CMD jobman stop engine --grace 2" \
+    "the dropped-privilege command actually reaches jobman"
+assert_in_log "CMD jobman stop scheduler$" \
+    "the scheduler is stopped WITHOUT --grace: it has no deploy job to release"
+assert_order "deploy_status handoff" "jobman stop engine" \
+    "the job row is handed off while an engine still exists to do it"
+assert_order "jobman stop scheduler" "CMD jobman start" \
+    "both components are stopped before either is started"
+assert_last_cmd "jobman start" "the restart is the last thing that runs"
+assert_in_log "deploy_status handoff --deployment $DEPLOYMENT_UUID" \
+    "the handoff names this deployment"
+
+echo "update.sh: already the engine user — no sudo, same tail"
+setup_env
+echo "$APP_USER" > "$CTL/whoami.txt"
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_eq "$?" 0 "a run by the engine user itself exits 0"
+assert_not_in_log "CMD sudo -n -u" \
+    "no sudo when we are already the user we would sudo to"
+assert_in_log "CMD jobman stop engine --grace 2" "the engine is still stopped"
+assert_last_cmd "jobman start" "the engine is still started, last"
+
+echo "update.sh: an unresolvable engine user leaves the restart to cron"
+setup_env
+echo "" > "$CTL/sudo_user.txt"
+rm -f "$CTL/cron.d/3_mojo_jobs"
+echo "root" > "$CTL/pids_owner.txt"
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_eq "$?" 0 "an unresolved engine user is not a deploy failure"
+assert_not_in_log "jobman" \
+    "jobman is not touched at all — a root-started engine bricks the node, \
+and cron restarts it within the minute anyway"
+assert_not_in_log "deploy_status handoff" \
+    "no handoff either: the engine is not being killed"
+if grep -q "engine user unresolved" "$PROJ/var/update.log" 2>/dev/null; then
+    ok "the skip is recorded in var/update.log"
+else
+    fail "the skip left no trace in var/update.log"
+fi
+
+echo "update.sh: a jobman without --grace still gets stopped"
+setup_env
+touch "$CTL/jobman.no_grace"
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_eq "$?" 0 "the run still exits 0 when jobman rejects --grace"
+assert_in_log "CMD jobman stop engine --grace 2" "the graced stop is attempted first"
+assert_in_log "CMD jobman stop engine$" \
+    "an argparse refusal (exit 2) falls back to the plain stop — a rollback \
+can restore a jobman that predates the flag"
+assert_last_cmd "jobman start" "the fallback still reaches the start"
+
+echo "update.sh: a failing sudo never fails the deploy"
+setup_env
+touch "$CTL/sudo_u.fail"
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_eq "$?" 0 "a node that proved its release does not fail over the restart"
+assert_in_log "CMD sudo -n -u $APP_USER ./bin/jobman start" \
+    "every step is still attempted"
+
+echo "update.sh: --manual restarts the engine but hands off no deployment"
+setup_env
+run_update --manual >/dev/null 2>&1
+assert_eq "$?" 0 "--manual exits 0"
+assert_not_in_log "deploy_status handoff" \
+    "--manual has no deployment UUID and must not invent one"
+assert_in_log "CMD jobman stop engine --grace 2" "--manual still stops the engine"
+assert_last_cmd "jobman start" "--manual still starts it again"
+
+echo "update.sh: --manual from a login account still starts the fleet's engine"
+# The documented manual path is `sudo bash aws/update.sh --manual`, run from
+# whatever account the operator logged in on. That account is not the engine's.
+setup_env
+echo "ubuntu" > "$CTL/sudo_user.txt"
+printf '%s\n%s\n' "$APP_USER" "ubuntu" > "$CTL/known_users.txt"
+run_update --manual >/dev/null 2>&1
+assert_eq "$?" 0 "--manual from a login account exits 0"
+assert_in_log "CMD sudo -n -u $APP_USER ./bin/jobman start" \
+    "the engine is started as the account the cron entry names"
+assert_not_in_log "CMD sudo -n -u ubuntu" \
+    "never as the operator who typed sudo — that leaves ubuntu-owned var/logs \
+and var/pids, which cron cannot repair, and runs queued work as an account \
+that usually carries NOPASSWD:ALL"
+
+echo "update.sh: a canary rollback restarts the engine too"
+setup_env
+touch "$CTL/sudo.fail_first"
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_eq "$?" 1 "a failed canary still exits 1"
+assert_order "deploy_status set failed" "CMD jobman stop engine" \
+    "the failure is reported before the engine that would report it dies"
+assert_last_cmd "jobman start" \
+    "the replacement engine is what finalizes the terminal UUID — it has to \
+exist"
+
+# ── phase timings ────────────────────────────────────────────────────────────
+
+phase_field() { # field-number -> that column of every recorded line
+    awk -v n="$1" '{print $n}' "$PROJ/var/deploy/phase_timings" 2>/dev/null
+}
+
+echo "update.sh: every deploy records where its seconds went"
+setup_env
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_eq "$?" 0 "a timed canary run still exits 0"
+if [ -s "$PROJ/var/deploy/phase_timings" ]; then
+    ok "the run recorded phase timings"
+else
+    fail "no phase timings were recorded"
+fi
+assert_eq "$(phase_field 2 | tr '\n' ' ')" "git_sync post_deploy sanity_check identity total " \
+    "the phases are recorded in the order they happened"
+assert_eq "$(phase_field 1 | sort -u | tr '\n' ' ')" "deploy " \
+    "a clean deploy records exactly one pass"
+bad_values="$(phase_field 3 | grep -cv '^[0-9][0-9]*$')"
+assert_eq "$bad_values" "0" \
+    "every recorded value is all digits — a date without %3N echoes the \
+format literally, and that must never reach the platform"
+bad_units="$(phase_field 4 | grep -cv '^\(ms\|s\)$')"
+assert_eq "$bad_units" "0" "every recorded unit is one this parser knows"
+bad_names="$(phase_field 2 | grep -cv '^[a-z_]\{1,32\}$')"
+assert_eq "$bad_names" "0" "every recorded name matches the platform's charset"
+assert_eq "$(cat "$PROJ/var/deploy/phase_pass")" "deploy" \
+    "post_deploy.sh reads the pass from a file, never from an argv it may be \
+too old to understand"
+assert_in_log "deploy_status set deploying .*--phases var/deploy/phase_timings" \
+    "the timings travel with the terminal callback"
+assert_in_log "deploy_status set --help" \
+    "the flag is probed before it is used"
+
+echo "update.sh: a deploy_status without --phases is never passed one"
+setup_env
+touch "$CTL/deploy_status.no_phases"
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_eq "$?" 0 "an older deploy_status does not fail the deploy"
+assert_in_log "deploy_status set deploying" "the callback still happens"
+assert_not_in_log "phases" \
+    "a rollback can restore a deploy_status that argparse-exits 2 on --phases, \
+which report_status would report as a node failure on a healthy deploy"
+
+echo "update.sh: a rollback's phases are marked as the rollback's"
+setup_env
+touch "$CTL/sudo.fail_first"
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_eq "$?" 1 "the failed canary still exits 1"
+assert_eq "$(phase_field 1 | sort -u | tr '\n' ' ')" "deploy rollback " \
+    "the timings distinguish the deploy pass from the rollback pass"
+assert_eq "$(cat "$PROJ/var/deploy/phase_pass")" "rollback" \
+    "post_deploy.sh re-entered by the rollback is told which pass it is in"
+assert_in_log "deploy_status set failed .*--phases var/deploy/phase_timings" \
+    "a failure report carries the timings too — that is when they matter most"
+
+echo "update.sh: timings are this run's, not the last one's"
+setup_env
+mkdir -p "$PROJ/var/deploy"
+echo "deploy stale_entry 999 ms" > "$PROJ/var/deploy/phase_timings"
+run_update --sha "$SHA_NEW" --framework "1.6.0" --migrate >/dev/null 2>&1
+assert_not_in_log "stale_entry" "no leftover is reported"
+if grep -q "stale_entry" "$PROJ/var/deploy/phase_timings"; then
+    fail "a previous run's timings survived into this one"
+else
+    ok "the timings file is truncated at the start of every run"
+fi
 
 # ── result ───────────────────────────────────────────────────────────────────
 

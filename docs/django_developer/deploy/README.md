@@ -18,7 +18,7 @@ run on the node itself, outside Django:
 | `python3 -m mojo.deploy locate <name>` | Prints the absolute packaged path of `update.sh` / `post_deploy.sh` for the project shims |
 | `python3 -m mojo.deploy render --dest …` | Materializes the packaged cron/systemd templates into `${PROJ_PATH}/var/deploy`. **Not the same thing as `mojo.deploy.provision.render`**, which builds and publishes an environment's `django.conf` to S3 — same verb, opposite direction: this one writes files on a node, that one writes an object a node reads |
 | `mojo/deploy/scripts/update.sh` | The fleet update entry (deploy / manual modes) — packaged bash, run through a project shim |
-| `mojo/deploy/scripts/post_deploy.sh` | Post-checkout convergence: deps → framework → migrate → render → nginx/systemd/cron → restart + probe |
+| `mojo/deploy/scripts/post_deploy.sh` | Post-checkout convergence: deps → framework → migrate → render → nginx/systemd/cron → restart + probe (each timed into `var/deploy/phase_timings`) |
 | `mojo/deploy/provision/scripts/stage1.sh` | What a freshly launched EC2 node runs: untar the tree → `ec2_bootstrap.sh` → pin `django-mojo==<version>` → `ec2_deploy.sh` → `var/profile` → CloudWatch agent → `config_sync`. Published to the config bucket by `provision apply`, downloaded and exec'd by stage-0 user data. **Not** resolvable through `locate` — see below |
 | `mojo/deploy/provision/scripts/cloudwatch-agent.json` | The agent configuration template stage 1 installs, with this environment's three log-group names substituted in by the CLI |
 
@@ -472,7 +472,29 @@ serving, the attempt remains unproven and fleet progression stops, but the
 candidate is not rolled back. A delivery already on the
 requested SHA/framework with a different attempt UUID still publishes that
 fresh UUID, performs its sanity/callback path, and reaches the normal
-jobman-last tail. Only the same SHA/framework/UUID is a true duplicate no-op.
+restart tail. Only the same SHA/framework/UUID is a true duplicate no-op.
+
+## `var/deploy/phase_timings` — where the seconds went
+
+Both node scripts append one line per phase, and `update.sh` truncates the file
+behind the update lock at the start of every run:
+
+```
+<pass> <name> <value> <unit>          deploy post_deploy 41230 ms
+```
+
+`<pass>` is `deploy` or `rollback` and comes from `var/deploy/phase_pass`,
+which `update.sh` writes and `post_deploy.sh` reads — never from argv, because
+a rollback can leave `post_deploy.sh` OLDER than the `update.sh` calling it and
+an unknown argument is fatal there. The clock is probed once per run:
+`date +%s%3N` is a GNU extension, and where the `%3N` is echoed literally the
+scripts record whole seconds instead. Nothing in the timing path can fail a
+deploy — every write is `|| true`, and `post_deploy.sh`'s copy is written for
+`set -euo pipefail`.
+
+`update.sh` passes the file to its terminal callback as `--phases`, but only
+after probing `deploy_status set --help` for the flag. The phase table and the
+platform side live in `../edge/deploy.md`.
 
 ## The shim contract
 
@@ -798,6 +820,7 @@ Controls the **foreground** job engine and scheduler on one node.
 python3 -m mojo.deploy.jobman status                  # both components
 python3 -m mojo.deploy.jobman start engine
 python3 -m mojo.deploy.jobman stop --root /opt/api
+python3 -m mojo.deploy.jobman stop engine --grace 2   # shorter SIGTERM wait
 ```
 
 ## Two process planes, and why they stay separate
@@ -874,8 +897,46 @@ the root is refused (exit 1): the `../`-shaped pattern it would produce can
 never match a command line, so `status` would report not-running forever while
 the cron spawned a fresh duplicate every minute.
 
-**Every PID is a string.** A pidfile holding junk goes straight to `ps -p` and
+**Every PID is a string.** A pidfile holding junk goes straight to `ps` and
 reports not-running; nothing calls `int()` on a pidfile.
+
+**A zombie is dead.** Liveness is `ps -o stat= -p <pid>`, and a `Z` state reads
+as not running. Plain `ps -p` succeeds for a corpse whose parent has not reaped
+it, which is how a just-SIGKILLed engine kept its pidfile ("its PID is still
+alive, so the file is information, not litter") and made the next `start` print
+"already running" and start nothing.
+
+## `stop` waits, and `--grace` says how long
+
+`stop` sends SIGTERM, waits, escalates to SIGKILL, then **waits again** for the
+process to actually go before removing the pidfile. Signalling is not stopping:
+SIGKILL is not synchronous, and a `stop` that returns early is a `start` that
+finds a live PID.
+
+`--grace <seconds>` shortens only the SIGTERM wait; the default is the ten
+one-second polls the shell version used. `update.sh` passes `--grace 2` for the
+engine — the release is already proven, and ten polite seconds per component is
+ten seconds the node spends with no engine — and nothing for the scheduler,
+which has no deploy job to release. `--grace` on any verb other than `stop` is
+an argparse usage error (exit 2), which is exactly what `update.sh`'s fallback
+branch keys on when a rollback restores a jobman that predates the flag.
+
+`start` opens BOTH the log and the pidfile before it spawns anything, and
+refuses loudly (exit 1, stderr) if either cannot be written. The pidfile write
+used to happen after `Popen` and unguarded, so an ownership problem left a
+running engine that nothing tracked — unstoppable, and enough to make every
+later start refuse as well. If the write fails after the spawn anyway, the
+child is taken back down rather than left unmanaged.
+
+## Cron is the backstop, not the restarter
+
+`update.sh` stops and starts the engine itself, as the engine's own user (see
+`../edge/deploy.md`). The every-minute `3_mojo_jobs` cron entry remains the
+crash backstop and the recovery path for the cases the script deliberately
+skips — an engine user it could not resolve, a `sudo -n` that was refused, a
+node whose script died before its tail. `jobman start` is idempotent: on a
+healthy node it prints "already running" and exits 0, which is what makes the
+every-minute schedule safe.
 
 ## The project-side shim
 

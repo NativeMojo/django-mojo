@@ -111,7 +111,7 @@ function pendingPaint(target, pendingLabel, announceLabel) {
 
 async function execute(target, task, options) {
   const {busy = null, pendingLabel = '', announceLabel = '', onError = null,
-    restoreOnSuccess = true, signal = null} = options;
+    restoreOnSuccess = true, signal = null, success = '', failure = true} = options;
   const paint = target instanceof Element
     ? pendingPaint(target, pendingLabel, announceLabel) : null;
   const timer = paint ? setTimeout(() => paint.show(), PENDING_DELAY) : null;
@@ -121,9 +121,16 @@ async function execute(target, task, options) {
   // busy.close() already does.
   const scrim = busy ? openBusy(typeof busy === 'string' ? {title: busy} : busy) : null;
   let keep = false;
+  // Held so the confirmation is raised AFTER the try/catch: a success message
+  // built from the result must not be able to throw into the failure branch
+  // and report a completed action as broken.
+  let settled;
+  let ok = false;
   try {
     const result = await task();
     keep = !restoreOnSuccess;
+    settled = result;
+    ok = true;
     return result;
   } catch (error) {
     // Swallowed only when OUR signal is the one that aborted. Matching on the
@@ -134,11 +141,27 @@ async function execute(target, task, options) {
     // forever — restore it and render nothing.
     if (error?.code === 'fresh_auth_required') return undefined;
     if (typeof onError === 'function') { onError(error); return undefined; }
+    // An abort is a superseded request, not a failure — matching on the name
+    // alone here (rather than on signal ownership) keeps a task that owns its
+    // own AbortController from toasting "The user aborted a request."
+    if (error?.name === 'AbortError') return undefined;
+    // A failure with nowhere to render is still worth saying out loud, rather
+    // than dying in the console while the screen sits there looking fine.
+    if (failure) { toast(error?.message || 'That did not work.', {tone: 'danger'}); return undefined; }
     throw error;
   } finally {
     if (timer) clearTimeout(timer);
     scrim?.close();
     if (paint && !keep) paint.restore();
+    if (ok && success) {
+      try {
+        toast(typeof success === 'function' ? success(settled) : success);
+      } catch (_) {
+        // A broken message formatter must not turn a successful action into a
+        // visible error. Say the plain thing instead.
+        toast('Done.');
+      }
+    }
   }
 }
 
@@ -148,8 +171,10 @@ async function execute(target, task, options) {
  * `target` may be null for a headless action — the guard, the busy scrim and
  * the error handling still apply, and no DOM write is attempted.
  *
- * Options: {key, busy, pendingLabel, announceLabel, onError,
+ * Options: {key, busy, pendingLabel, announceLabel, onError, success, failure,
  *           restoreOnSuccess = true, signal}
+ * `success` is the confirmation toast (string, or a fn of the result); `failure`
+ * toasts the error unless a caller renders it somewhere better.
  * `key` identifies the action for the re-entry guard; it defaults to `target`
  * and is only passed separately when one control paints for several actions.
  * `pendingLabel` swaps the control's own label; `announceLabel` is what a
@@ -223,4 +248,59 @@ export function loadInto(target, loader, {message = 'Loading…', retry = null} 
       return undefined;
     })
     .finally(() => clearTimeout(timer));
+}
+
+
+// ---------------------------------------------------------------------------
+// Toasts
+//
+// A spinner can only ever say "working". It cannot say "done", and until this
+// existed the portal had no way to say it at all: an action succeeded and the
+// screen was silent, which reads exactly like a button that did nothing.
+//
+// Lives here rather than in its own module because it is action feedback, and
+// because a new asset file has to be declared in manifest.json or it 404s at
+// runtime with nothing failing server-side.
+
+const TOAST_MS = 4200;
+let toastHost = null;
+
+function host() {
+  if (!toastHost || !toastHost.isConnected) {
+    toastHost = h('div', {class: 'toast-host'});
+    document.body.append(toastHost);
+  }
+  return toastHost;
+}
+
+/**
+ * Say that something finished. `tone` is 'success' | 'danger' | 'info'.
+ *
+ * Announced to screen readers through the same live region as pending state,
+ * so the confirmation is not purely visual.
+ */
+export function toast(message, {tone = 'success', duration = TOAST_MS} = {}) {
+  if (!message) return () => {};
+  // No role="status" on the node: announce() below already writes the message
+  // into the shared live region, and a populated live node inserted at the same
+  // moment makes a screen reader say it twice.
+  const node = h('div', {class: `toast toast-${tone}`},
+    h('span', {class: 'toast-text', text: message}),
+    h('button', {class: 'toast-close', type: 'button', 'aria-label': 'Dismiss',
+      onclick: () => remove()}, '×'));
+  let timer = null;
+  const remove = () => {
+    clearTimeout(timer);
+    if (!node.isConnected) return;
+    node.classList.add('is-leaving');
+    setTimeout(() => node.remove(), 180);
+  };
+  host().append(node);
+  announce(message);
+  // Hovering pauses the countdown — a message you are still reading should not
+  // vanish mid-sentence.
+  node.addEventListener('mouseenter', () => clearTimeout(timer));
+  node.addEventListener('mouseleave', () => { timer = setTimeout(remove, 1500); });
+  timer = setTimeout(remove, duration);
+  return remove;
 }

@@ -333,8 +333,12 @@ def test_pending_state_survives_its_own_action_contract(opts):
     # be on the ••• trigger, which survives.
     menu_item = model.split("const menu = h('div', {class: 'action-menu-list'", 1)[1] \
         .split("const button = h('button', {class: 'icon-button'", 1)[0]
-    assert "menu.hidden = true" in menu_item, \
-        "actionMenu no longer hides its menu before running — re-check the placement"
+    assert "setOpen(false)" in menu_item, \
+        "actionMenu no longer closes its menu before running — re-check the placement, " \
+        "because a pending state on a hidden menu item is invisible"
+    assert "document.removeEventListener('click', closeOnOutside)" in model, \
+        "the action menu's outside-click listener is no longer removed on close — " \
+        "a re-rendering table would accumulate one dead document listener per row"
     assert "runAction(button," in menu_item, \
         "the action-menu pending state is not attached to the ••• trigger"
     assert "runAction(menu" not in model and "runAction(event.currentTarget" not in menu_item, \

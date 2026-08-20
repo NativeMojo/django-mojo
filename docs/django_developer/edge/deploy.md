@@ -32,7 +32,8 @@ orchestrator (whichever job runner takes it):
 ```
 
 Single-runner fleets degrade cleanly: no canary is possible, the one node
-updates itself with `--migrate`, then kills its own old job engine. On the new
+updates itself with `--migrate`, then closes its own deploy job row and
+restarts its own job engine. On the new
 engine's startup, a post-restart finalizer verifies the exact UUID/full-SHA
 identity, closes the durable row, compare-and-set clears that UUID's lease, and
 resumes at most one queued successor. Callback-time code records terminal
@@ -390,6 +391,12 @@ manage.py deploy_status set deploying --sha <target-sha> --deployment <uuid>
 manage.py deploy_status set failed    --sha <target-sha> --deployment <uuid> --detail <known-phase>
 ```
 
+There is a third verb, and it exists for the same structural reason:
+
+```
+manage.py deploy_status handoff --deployment <uuid>
+```
+
 `set` is compare-and-set on the stamped UUID and SHA. Exit 0 = applied; **exit 3** =
 ignored because the deploy was superseded (distinct from argparse's 2, so the
 script can tell "stale, fine" from "called wrong"). `--detail` is reduced to
@@ -429,6 +436,127 @@ The command accepts that callback only when Redis still holds the same SHA in
 an empty-UUID legacy lease, and writes no journal evidence for it. A lease that
 contains a UUID always requires the matching `--deployment`; the bridge cannot
 claim or settle a new attempt.
+
+## The node job is closed before its engine is
+
+The script is about to stop the engine that is running this deployment's
+`deploy_node` job. That job therefore never ends on its own: the row sat
+`running` behind a live in-flight lease, and the only thing that ever spoke
+about it again was a reaper timing the lease out — long after the node had
+finished, and with a story about retries for a job published `max_retries=0`.
+
+`platform_deploy.close_handoff_job(deployment, state)` writes what the node
+already knows:
+
+- the job row's status becomes `completed` or `failed`, stamped `finished_at`,
+  with `metadata["handoff"] = True` so the closure is distinguishable from one
+  the engine performed itself;
+- a `JobEvent` records `details={"reason": "deploy_engine_handoff"}`;
+- the Redis in-flight entry is dropped through
+  `JobManager.release_inflight(channel, job_id)` — a ZREM with **no requeue**,
+  because the caller is stating the job is finished, not abandoned.
+
+Three properties are deliberate and easy to break:
+
+- **It closes THIS node's row only, and every match is node-scoped.** A fleet
+  deploy publishes one deployment UUID to *every* node, and every node reaches
+  this call, so `func` + `status="running"` + `payload__deployment` alone
+  identifies up to a whole fleet of sibling rows. Closing those records peers
+  terminal before they have finished and deletes the in-flight leases whose
+  expiry is the only detector of a node deploy that hung — and on the failure
+  path it rewrites healthy peers to `failed`. Two matches run, in order:
+  1. `payload["runner"] == local_runner_id()` — the node the row was
+     *published* for (`asyncjobs._publish_deploy_node` stamps it). Published
+     intent, which nothing rewrites, unlike `runner_id`, which is stamped by
+     whichever engine claimed the row.
+  2. `runner_id == local_runner_id()` **or** `channel == local_runner_id()` —
+     compatibility only, for rows published *before* the payload carried
+     `runner`. That is the deploy which ships this code, and no later one.
+
+  Each matched row's OWN channel is what gets released.
+- **No match closes nothing. There is no unscoped fallback — do not add one.**
+  Finding no row is not a signal that this node's row is somewhere else; it is
+  the ordinary state *after* this node has already closed its own row.
+  `close_handoff_job` runs **twice** per node per deploy — `deploy_status set`,
+  then the `handoff` verb in update.sh's restart tail, which cannot know the
+  first ran. A fallback that widens on "no rows found" therefore fires on the
+  second call, when the only rows still `running` on that deployment are the
+  **peers**: the original bug, through a different door. On a same-release
+  fleet re-deploy every node makes both calls, so it is deterministic, not a
+  race. A node started with an explicit `--runner-id` (`mojo.apps.jobs.cli`
+  daemon mode — `jobman start` passes none) has a runner id
+  `local_runner_id()` cannot predict and closes nothing here. That is
+  accepted: one job row left for the reaper to time out is far cheaper than
+  destroying the only detector of a hung peer.
+- **It never raises.** It runs on the deploy callback and on the rollback
+  report; a jobs-plane or Redis problem must not block either. Failures are
+  logged and swallowed, exactly as the incident reporter's are.
+
+`deploy_status set` calls it after the CAS on both terminal paths **and on exit
+3** — a superseded report is a stale report of a run that is still over. The
+`handoff` verb is for the runs that report no status at all: a fleet
+(non-migrate) node writes no deploy status by design, and still has a job row
+to close. The verb touches no lease and writes no evidence.
+
+Correspondingly, the reaper no longer rewrites a row that is already
+`completed`, `canceled`, `failed` or `expired` — it only clears the stale
+Redis entry. It could never have requeued such a row anyway; widening the check
+just stops it inventing a max-retries story on the way past.
+
+## Where a deploy's seconds went — `detail.phases`
+
+Both node scripts append a line per phase to `var/deploy/phase_timings`:
+
+```
+<pass> <name> <value> <unit>          deploy post_deploy 41230 ms
+```
+
+`update.sh` truncates it behind the lock at the start of every run and passes
+it to the terminal callback as `--phases`; `deploy_status` parses it into
+`row.detail["phases"]` as `{"phase", "pass", "ms"}` entries (`"approx": true`
+when the node could only offer seconds). It is parsed as hostile input —
+fixed shape, `^[a-z_]{1,32}$` names, digits only, known units, a hard entry
+cap — and anything that does not fit is dropped. A malformed line is a missing
+timing, never a failed callback.
+
+| phase | script | covers |
+|---|---|---|
+| `git_sync` | update.sh | fetch, reset to the named SHA, clean |
+| `post_deploy` | update.sh | the whole `post_deploy.sh` child |
+| `deps` | post_deploy.sh | `pip install -r requirements.txt` |
+| `framework` | post_deploy.sh | the pinned (or latest) django-mojo install |
+| `migrate` | post_deploy.sh | `migrate_locked` — canary runs only |
+| `collectstatic` | post_deploy.sh | `collectstatic --noinput` |
+| `render` | post_deploy.sh | templates into `var/deploy` |
+| `nginx` | post_deploy.sh | installing the rendered web configuration |
+| `mojosec` | post_deploy.sh | the MojoSec converge |
+| `restart` | post_deploy.sh | `systemctl restart mojo-asgi` |
+| `probe` | post_deploy.sh | waiting for `PROBE_URL` to answer |
+| `sanity_check` | update.sh | the canary's own `sanity_check` |
+| `identity` | update.sh | publishing the atomic v2 identity |
+| `total` | update.sh | the whole run up to the callback |
+| `rollback` | update.sh | reset + reinstall + sanity, on the failed path |
+| `engine_restart` | **platform** | the `verified` transition to `converged` |
+
+Two of those rows are the interesting ones.
+
+**`pass` is a file, not a flag.** `fail_deploy` re-enters `post_deploy.sh` for
+the rollback, so the entries need to say which half of the run they belong to.
+That discriminator travels in `var/deploy/phase_pass`, because a rollback is
+the one case where a NEWER `update.sh` can call an OLDER `post_deploy.sh`: pip
+has already downgraded the framework, so the shim locates the old copy. A new
+argv flag would `die "unknown argument"` there and turn a rollback into an
+unknown-state node. An old copy simply does not read the file. **This is the
+old-inode rule applied to a new feature: anything added to the argv between the
+two scripts must survive being sent to a copy that predates it.** The same
+reasoning is why `--phases` is *probed* (`deploy_status set --help`) before it
+is passed — a restored older `deploy_status` argparse-exits 2, and
+`report_status` would propagate that as a node failure on a deploy that worked.
+
+**`engine_restart` is measured on the platform.** The node cannot time it: its
+last act is to kill the process that would have. `finalize_post_restart`
+appends it from the `verified` transition the dying node wrote to the moment
+its replacement engine converges the row.
 
 ## Settings
 
@@ -526,7 +654,35 @@ because a **fork** owns all of it, and because the deploy plane depends on it:
   may reinstall a framework version that predates `deploy_status`, so the
   report must happen while the reporting tool is guaranteed to exist. It
   restores old proof only after every rollback step succeeds and always leaves
-  `jobman stop` last on a migrate terminal.
+  the engine restart last on a migrate terminal.
+- **The restart tail owns the engine, and runs as the engine's user.** It hands
+  the `deploy_node` row off (`deploy_status handoff`) while an engine still
+  exists to do it, stops the engine (`--grace 2`, falling back to a plain
+  `stop` when an older jobman argparse-errors), stops the scheduler, and starts
+  both again. `update.sh` is executed as **root** (`EDGE_DEPLOY_SCRIPT` is
+  `sudo -n ...`) and the engine must not be: a root-started engine is the first
+  writer of `var/logs`, leaves those files root-owned, and every later
+  app-user start fails on the log open — permanently. `APP_USER` is
+  `post_deploy.sh`'s input and is not in `update.sh`'s environment, so the
+  owner is discovered, **cron entry first**: field 6 of `/etc/cron.d/3_mojo_jobs`
+  (the fleet's own statement of which account owns the engine, and what will own
+  it a minute from now regardless), else `$SUDO_USER`, else the owner of
+  `var/pids`. `$SUDO_USER` is only a fallback on purpose — on the `--manual`
+  path it names whoever logged in (`ubuntu`), and starting the engine as that
+  account leaves `var/logs` and `var/pids` owned by it (the same permanent brick
+  the root ban prevents, and one cron cannot repair because it sees a live
+  pidfile) while running arbitrary queued work as an account that usually
+  carries `NOPASSWD:ALL`. A candidate is rejected unless it is a real account
+  whose **uid is not 0** — the check is on the uid, not on the name, so a uid-0
+  alias is refused like `root` itself — and a name beginning with `-` is refused
+  outright rather than handed to `id` as a flag. `root`, an empty answer and GNU
+  stat's `UNKNOWN` all
+  resolve to nothing, and **nothing means skip the restart entirely** — cron's
+  every-minute `jobman start` is still the backstop, and sixty seconds without
+  an engine beats a node nobody can start one on. Every command in the tail is
+  redirected to `var/update.log` (stdout is a pipe to the engine being killed)
+  and `|| true` (a node that proved its release must not fail its deploy over
+  the restart).
 - `post_deploy.sh` runs `manage.py migrate_locked --noinput` (never a
   `var/allow_migrate` flag file, which is not a lock) and installs
   `pip install django-mojo==<the --framework value>` — pinned, never
