@@ -39,7 +39,7 @@ def setup_admin_portal_webapps(opts):
     from django.utils import timezone
     from mojo.apps.account.models import Group, User
     from mojo.apps.dnsman.models import Certificate, Domain
-    from mojo.apps.edge.models import Vhost, WebApp
+    from mojo.apps.edge.models import Vhost, WebApp, WebAppRelease
 
     User.objects.filter(email__in=[ADMIN_EMAIL, SCOPED_EMAIL, VIEWER_EMAIL]).delete()
     WebApp.objects.filter(slug__startswith="summaries-").delete()
@@ -127,6 +127,16 @@ def setup_admin_portal_webapps(opts):
             site.prefix = site.storage_prefix()
             site.save()
             fixtures[slug] = site.pk
+        # One live release on the addressed app, arrived by hand upload. It
+        # makes the green row the fleet's one LIVE app and gives the row copy
+        # a source to name. WebAppRelease.webapp is CASCADE, so the setup's
+        # own WebApp delete above clears it on the next run.
+        green = WebApp.objects.get(pk=fixtures["summaries-green"])
+        release = WebAppRelease.objects.create(
+            webapp=green, version="portal-1", status="live", source="upload",
+            manifest=[{"path": "index.html", "sha256": "ab" * 32, "size": 5}])
+        green.current_release = release
+        green.save()
     opts.summaries_green = fixtures["summaries-green"]
     opts.summaries_bare = fixtures["summaries-bare"]
     opts.summaries_foreign = fixtures["summaries-foreign"]
@@ -734,6 +744,24 @@ def test_webapp_row_copy_and_jargon_gate(opts):
     serving = (assets / "serving.js").read_text()
 
     row = page[page.index("function webappRow"):page.index("export async function deploymentsPage")]
+    # A live row says how the build that is serving arrived. The four
+    # sentences live in SOURCE_LABEL, declared ABOVE the row so there is one
+    # copy of each and the row slice carries the lookup, not the literals.
+    assert page.index("const SOURCE_LABEL") < page.index("function webappRow"), \
+        "SOURCE_LABEL is not declared above the row that reads it"
+    assert "SOURCE_LABEL[release.source]" in row and "· ${arrival}" in row, \
+        "a live row no longer says how its build arrived"
+    for label in ("via GitHub push", "via CLI or API", "via upload",
+                  "source not recorded"):
+        assert label in page, f"the source vocabulary lost {label!r}"
+    # A pre-existing release must read as unrecorded, never be guessed into a
+    # class it was never stamped with.
+    assert "SOURCE_LABEL.unknown" in row, \
+        "an unrecognized source falls through to no label at all"
+    # `rolled_back` is the normal terminal state of a failed deploy; reading
+    # only `failed` renders a cheerful "deployed <date>" over it.
+    assert "deployment.status === 'rolled_back'" in row, \
+        "a rolled-back deploy still renders as a healthy row"
     # Live on the placeholder page only: honest state plus a way forward that
     # lands on the app page's Set up deploys tab.
     assert "live with a welcome page — nothing deployed yet" in row \
@@ -822,6 +850,67 @@ def test_deployments_failure_surface_browser_contract(opts):
     assert page.index("clearPoll();") < page.index("const reads = []"), \
         "a reload does not clear the pending poll timer first"
 
+    # The headline names the failing thing. The two sentences it replaced named
+    # nothing, so the operator had to hunt the rows for what the page knew.
+    for vague in ("Something on the fleet needs attention",
+                  "Some of the fleet needs attention"):
+        assert vague not in page, f"the headline still says {vague!r} and names nothing"
+    for said in ("failed to deploy", "nodes updated", "everything else is healthy",
+                 "the fleet was put back on", "the rollback did not finish",
+                 "See what failed", "No converged deployment on record"):
+        assert said in page, f"the failure banner cannot say {said!r}"
+    # A web-app deployment records runner/job targets, not a proven fleet
+    # roster — its banner must not invent node counts.
+    banner = page[page.index("} else if (failure?.kind === 'webapp')"):
+                  page.index("} else if (failure?.kind === 'row')")]
+    for invented in ("nodes updated", "of ${expected}", "proven"):
+        assert invented not in banner, \
+            f"the web-app failure banner invented {invented!r} from targets it does not have"
+    assert "Retry" not in banner, (
+        "the web-app banner offers a retry; the only path is the fresh-auth, "
+        "reason-required rollback, which cannot ride a banner button")
+    assert "tab: 'deploys'" in banner, \
+        "the web-app banner does not link to the tab that explains the failure"
+    # Cases 3 and 4 read the ROW's own name and value, so the banner can never
+    # contradict the row it is pointing at.
+    descriptor = page[page.index("function failureDescriptor"):
+                      page.index("function othersClause")]
+    assert "'.row-name'" in descriptor and "'.row-value'" in descriptor, \
+        "the banner re-words a row instead of quoting it"
+
+    # The banner's Retry is the platform's own deploy/retry verb, gated on the
+    # same manage capability the drill-in applies, and headless: the banner
+    # that carried the button is gone by the time the work finishes.
+    assert "export function apiDeployFailure" in api_side \
+        and "export function retryApiDeploy" in api_side, \
+        "the API-side failure facts and retry are not exported for the banner"
+    assert "apiDeployFailure" in page and "retryApiDeploy" in page, \
+        "the page does not build its banner from the API-side facts"
+    retry = api_side[api_side.index("export function retryApiDeploy"):]
+    retry = retry[:retry.index("// The failure explanation")]
+    assert "runAction(null," in retry and "busy: {" in retry, \
+        "the banner retry is not a headless action with its own busy state"
+    assert "event.currentTarget" not in retry, \
+        "the retry pins a pending state to a button its own reload destroys"
+    assert "key: `webapps:retry-deploy:" in retry, \
+        "two different failed deploys share one in-flight retry key"
+    assert "capabilities?.manage === true" in page, \
+        "the banner offers Retry without the platform manage gate"
+
+    # The Web apps section carries one sentence about the apps as a whole, from
+    # the server-scoped fleet block — and a truncated list drops every claim it
+    # can no longer make.
+    assert "rowSection('Web apps', appRowNodes, {sub: appsSubhead()})" in page, \
+        "the Web apps section lost its subhead"
+    # Anchored forward from appsSubhead: an earlier panel has its own paint().
+    subhead_at = page.index("function appsSubhead")
+    subhead = page[subhead_at:page.index("function paint()", subhead_at)]
+    assert "truncated === true" in subhead \
+        and subhead.index("truncated === true") < subhead.index("fleet.domains || []"), \
+        "a truncated list still claims to describe the fleet's domains"
+    assert "Showing the first ${state.apps.limit} apps by name" in subhead, \
+        "the truncation sentence did not move onto the section subhead"
+
 
 @th.django_unit_test("literal admin and partial globals do not grant backend WebApp authority")
 def test_webapp_authority_rejects_frontend_admin_and_partial_grants(opts):
@@ -891,6 +980,26 @@ def test_webapp_summaries_scope_and_shape(opts):
             "the certificate expiry did not serialize"
         assert green["webapp"]["slug"] == "summaries-green", \
             "the slim webapp identity block is wrong"
+        # How the live build arrived travels with the row: without it the list
+        # can say a version is live but not how it got there.
+        assert green["current_release"]["source"] == "upload", \
+            f"the live release lost how it arrived: {green['current_release']}"
+
+        # The fleet block describes the LISTED apps and nothing else: the two
+        # this caller may see, one of them addressed and live.
+        fleet = data.get("fleet") or {}
+        assert fleet.get("live") == 1, \
+            f"the fleet block miscounted the live apps: {fleet}"
+        assert fleet.get("domains") == [SUMMARIES_DOMAIN], \
+            f"the fleet block named the wrong domains: {fleet}"
+        assert fleet.get("certificate_count") == 1, \
+            f"the fleet block miscounted its certificates: {fleet}"
+        assert fleet["certificate"]["wildcard"] is True, (
+            "the server did not recognize the *.domain SAN as a wildcard — "
+            f"the browser must never be left to work that out: {fleet}")
+        assert fleet["certificate"]["common_name"] == f"portal.{SUMMARIES_DOMAIN}", \
+            f"the fleet certificate is not the one backing the listed address: {fleet}"
+
         bare = next(row for row in items
                     if row["webapp"]["id"] == opts.summaries_bare)
         assert bare["address"] is None, \
