@@ -277,6 +277,23 @@ run_stage1; rc=$?
 if [ "$rc" -ne 0 ]; then ok "no bootstrap.conf exits non-zero"; else fail "no bootstrap.conf was tolerated"; fi
 assert_lacks "$CALLLOG" "CMD pip" "and nothing was installed"
 
+echo "stage1.sh: a failing config_sync does not fail first boot"
+# On a fresh account the node always boots before `configure` has published
+# django.conf, so config_sync 404s. That must be a warning, never a cloud-init
+# failure — the live MojoLand run proved every first boot dies here otherwise.
+setup_tree
+setup_stubs
+cat > "$STUB/python3" <<'EOF'
+#!/bin/bash
+echo "CMD python3 $*" >> "$CALLLOG"
+case "$*" in *config_sync*) exit 1 ;; esac
+EOF
+chmod +x "$STUB/python3"
+run_stage1; rc=$?
+assert_eq "$rc" 0 "an unpublished django.conf must not fail stage 1"
+assert_has "$CALLLOG" "CMD python3 -m mojo.deploy.config_sync" "config_sync was still attempted"
+assert_has "$OUT" "not published yet" "and the log says why it went on without it"
+
 # ── result ───────────────────────────────────────────────────────────────────
 
 echo
