@@ -87,7 +87,7 @@ are automatic and do not appear as onboarding decisions.
 
 After a site is live, each app has its own **full page**
 (`#/deployments?webapp=<id>`, not a modal — a link anyone can follow or
-share) with five tabs:
+share) with six tabs:
 **Overview** (address + domain, health, and current release, via
 `GET /api/edge/webapp/summary` and on-demand `GET /api/edge/webapp/health`,
 plus — once the app has an address at all — an **Addresses** card listing every
@@ -113,14 +113,53 @@ browser (`crypto.subtle`, SHA-256) and PUTs it straight to storage through the
 same `POST /api/edge/release` → PUT → `POST /api/edge/release/complete` flow
 CI uses, authenticated by the operator's own interactive session rather than
 `MOJO_DEPLOY_KEY` — see [Releasing a site build § An interactive session works too](../edge/releases.md#an-interactive-session-works-too);
-**Any other CI / API** names the three calls any pipeline can make), **Deploy
-key** (rotate `MOJO_DEPLOY_KEY`), and a **Danger** area (change address, take
-offline via `POST /api/edge/webapp/detach_address`, and safe-delete the app).
+**Any other CI / API** names the three calls any pipeline can make),
+**Serving** (below), **Deploy
+key** (rotate `MOJO_DEPLOY_KEY`), and a **Danger** area (take
+offline via `POST /api/edge/webapp/detach_address`, and safe-delete the app —
+**change address moved to Serving**, beside the address it changes; Danger is
+destructive actions only).
 Take-offline and delete both remove every alias address in the same
 transaction — an app that is offline must not still answer on a customer's own
 domain — and `manage_webapp` on the app is not enough to attach an address
 under a **parent** workspace's domain: writing that record or requesting its
 certificate needs manage authority in the workspace that owns the domain.
+
+The **Serving** tab is one read, `GET /api/edge/webapp/serving`, painted as
+four cards — Address, Certificate, How it's served, Routes:
+
+- **Address** repeats the hostname with a live badge from
+  `GET /api/edge/webapp/health`, says when a wildcard already covers the name
+  (only when the response's `wildcard.covered` **and** `dns === 'managed'` —
+  never inferred from the hostname), and carries **Change address** plus the
+  same Addresses card and **Add a custom domain** as Overview.
+- **Certificate** names the certificate serving this app with its status,
+  renewal date and days remaining, says whether it is shared with every app on
+  the domain or used only by this one, links through to the domain page, and
+  offers **Use a dedicated certificate…** (`POST /api/edge/webapp/certificate`)
+  *only* when the server's `dedicated_supported` is true — otherwise it renders
+  the server's `dedicated_reason` where the button would have been, rather than
+  a control the issuer would refuse. Ordering and switching are two steps: the
+  **Switch to it** action (`POST /api/edge/webapp/serving {certificate}`)
+  appears only once `certificate.dedicated.ready` is true.
+- **How it's served** shows the serving shape read-only with the reason it is
+  fixed, plus a serving-pool select and the unknown-path fallback checkbox
+  behind one **Save** (`POST /api/edge/webapp/serving {pool, spa}`). `kind` is
+  ignored on the wire, not merely hidden.
+- **Routes** lists each path with its destination. Platform-managed paths (the
+  resolved sign-in and account prefixes) are badged **Managed for you** and
+  carry no Remove; the rest have **Add route**
+  (`POST /api/edge/webapp/add_route`) and a confirmed **Remove**
+  (`POST /api/edge/webapp/remove_route`).
+
+Every write on this tab applies to the app's own address **and** every extra
+address it answers on, in one transaction. A caller who may read but not save
+gets the same four cards with values and no controls: the read evaluates
+`SAVE_PERMS` non-raisingly and returns `serving.pools: null` and
+`upstreams: null`, so the deployment's fleet inventory is never handed to a
+viewer. With `manage_network` the tab also links to the control-plane
+**Serving** and **Routes** pages.
+
 The list's row states are honest rather than always routing to "Open": an
 addressless app (setup abandoned before an address was chosen) reads "Setup
 never finished — not reachable" with inline **Finish setup** / **Delete**
@@ -181,10 +220,13 @@ mode remains the correct way to exercise write, busy, 440, error, and
 ambiguous-response states without mutating a live installation.
 
 The packaged portal is divided into seven fixed, capability-gated feature lanes.
-Primary navigation is Dashboard, Deployments, Domains & DNS, People, Activity,
-Metrics, Maintenance, and Settings, then literal-superuser System Setup in its
-own **System** group at the bottom. Domains & DNS appears only with DNS
-read/manage authority. Activity owns the bounded Incidents, Events, Logs, and
+Primary navigation is Dashboard, Deployments, Domains & DNS, Serving, People,
+Activity, Metrics, Maintenance, and Settings, then literal-superuser System
+Setup in its own **System** group at the bottom. Domains & DNS appears only
+with DNS read/manage authority. **Serving** (`#/vhosts`, also matching
+`#/routes` and `#/upstreams`) appears only with `manage_network` — the pages
+behind it create, retire and repoint serving rows fleet-wide, so a read grant
+does not open them. Activity owns the bounded Incidents, Events, Logs, and
 Tickets operator journey.
 
 There is **no Platform destination and no Advanced diagnostics destination**.
@@ -217,9 +259,12 @@ integer redirects to that web app's own page (`?webapp=<id>`), a deployment
 UUID opens the API drill-in — so pre-merge Activity links keep working. The
 Platform lane is now System Setup, Metrics and
 Maintenance only; its public/local health and fleet evidence read from the
-Dashboard rows and their drill-ins. Advanced owns the Domains & DNS destination
-and the raw Domains, Credentials, DNS, Certificates, Upstreams, Vhosts, and
-Routes pages — its own evidence endpoint is still served but has no page.
+Dashboard rows and their drill-ins. Advanced owns the Domains & DNS and
+Serving destinations plus the raw Domains, Credentials, DNS, Certificates,
+Upstreams, Vhosts, and Routes pages — its own evidence endpoint is still served
+but has no page. The Vhosts page is titled **Serving**; it and Routes had no
+navigation entry at all before, and are now the `manage_network`-gated Serving
+destination.
 Bootstrap returns both the stable flat `capabilities` object and a namespaced
 `features` object:
 
@@ -546,6 +591,10 @@ This prevents non-admin users from escalating their own access.
 | WebApp rollback | `POST /api/edge/webapp/rollback` | `manage_webapp` plus object access; human-only (CI keys denied), recent interactive auth |
 | WebApp take offline | `POST /api/edge/webapp/detach_address` | `manage_webapp` plus object access; human-only, recent interactive auth |
 | WebApp health | `GET /api/edge/webapp/health?webapp=<id>` | `view_dns`, `manage_dns`, or `security`, plus object access |
+| WebApp serving (read) | `GET /api/edge/webapp/serving?webapp=<id>` | `view_dns`, `manage_dns`, or `security`, plus object access. `serving.pools` and `upstreams` are returned only to a caller who also passes `SAVE_PERMS`; a viewer gets `null` |
+| WebApp serving (save) | `POST /api/edge/webapp/serving` | `manage_webapp` plus object access; human-only, recent interactive auth. Body `{webapp, pool?, spa?, certificate?}` — everything else is ignored |
+| WebApp dedicated certificate | `POST /api/edge/webapp/certificate` | As above, **plus** manage authority in the group that owns the domain when the address sits on a parent workspace's domain |
+| WebApp add/remove route | `POST /api/edge/webapp/add_route`, `POST /api/edge/webapp/remove_route` | As WebApp serving (save). Platform-managed sign-in prefixes are refused |
 | Domains and live DNS | `/api/dnsman/domain`, `/api/dnsman/dns*`, `/api/dnsman/registrar/*` | `view_dns` / `manage_dns`; adopt/discover are literal superuser only |
 | DNS provider credentials | `/api/dnsman/credential`, `/api/dnsman/credential/link` | `view_dns` / `manage_dns`; secrets are write-only |
 | Certificates | `/api/dnsman/certificate`, `/api/dnsman/certificate/request`, `/api/dnsman/certificate/remove-failed` | `view_dns` / `manage_dns`; failed-attempt cleanup is status-gated and the portal never calls material |

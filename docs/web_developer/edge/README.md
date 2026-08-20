@@ -11,6 +11,17 @@ Backend reference: [django_developer/edge](../../django_developer/edge/README.md
 > then shows the day-2 management screen. This page is the endpoint reference
 > behind it.
 
+> **Serving one web app? You probably want the app-scoped endpoints instead.**
+> `GET/POST /api/edge/webapp/serving`, `POST /api/edge/webapp/certificate`,
+> `POST /api/edge/webapp/add_route` and `POST /api/edge/webapp/remove_route`
+> express the same changes in terms of **the app** rather than the rows below,
+> and — crucially — apply each one to the app's own address *and* every extra
+> address it answers on, in one transaction. Editing the vhost and route rows
+> here by hand does not: a pool moved on the primary alone leaves a custom
+> domain on a node fleet that never installs that app's build. See
+> [Put your web app online → Serving](deploy_your_webapp.md#managing-your-app-afterward)
+> and the [backend reference](../../django_developer/edge/webapps.md#day-2-management).
+
 Deploying site builds from GitHub (register, verify, converge, roll back):
 [releases.md](releases.md).
 

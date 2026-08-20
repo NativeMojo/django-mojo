@@ -823,6 +823,11 @@ decorator gates the verb, never the specific row).
 | `edge/webapp/attach_domain` | POST | Point one more address (an **[alias](#extra-addresses-aliases)**) at this site. Body `{webapp, hostname, retry_certificate?}`; returns `webapp_alias.attach()` plus `webapp` — `status` (`needs_domain` / `records_needed` / `certificate_pending` / `certificate_failed` / `attached`), a plain `reason`, `dns` (`managed` / `external`) and, when the caller has records to publish, `records`. Re-enterable: the UI's Check button is this same call, and an already-attached address makes no provider write. `retry_certificate` goes through `_flag()`, not `bool()` — a browser sends form values as strings and `bool("false")` is True, so only a real `True` or `"1"`/`"true"`/`"yes"`/`"on"` counts; everything else, junk included, is False. Human-only, fresh-auth, plus the explicit object check. |
 | `edge/webapp/detach_domain` | POST | Remove one alias address. Body `{webapp, vhost}`; the address is scoped to this app's **aliases**, so the app's own address and a foreign one both 404 rather than disclose. The certificate and the app are untouched. Human-only, fresh-auth, plus the explicit object check. |
 | `edge/webapp/aliases` | GET | `webapp_alias.status_rows()`: every address this app answers on, primary first (`role: "primary"`), then aliases — `vhost`, `hostname`, `domain` (`{id, name, provider}`), `dns` mode, `enabled`, and certificate `status`/`not_after`. Human-only, but a read — so no step-up, `VIEW_PERMS`, and no provider round trip. |
+| `edge/webapp/serving` | GET | Everything about how this app is served, as one payload — see [Serving](#serving-address-certificate-shape-and-paths). A read: `VIEW_PERMS`, no step-up. `serving.pools` and `upstreams` are populated **only** when the caller also passes `SAVE_PERMS` (evaluated non-raisingly with `rest_check_permission`); a viewer gets `null` for both. |
+| `edge/webapp/serving` | POST | Change `pool`, `spa` and/or `certificate`. Everything else in the body is ignored — `kind` in particular, because the serving shape decides which fields the renderer has a branch for at all. Applies to the primary **and every alias**, primary first. Human-only, fresh-auth, plus the explicit object check. Returns the same payload as the GET, with editables. |
+| `edge/webapp/certificate` | POST | Request a certificate covering this app's address **alone**. Requesting only — switching is a separate `serving` save. Body `{webapp}`. Human-only, fresh-auth, plus the explicit object check *and* the domain-owning-group authority check below. |
+| `edge/webapp/add_route` | POST | Send one path to a declared destination, on the primary and every alias. Body `{webapp, path_prefix, upstream}`. Refuses a [managed prefix](#managed-prefixes-are-derived), a prefix already pointing elsewhere, a destination outside `webapp_auth_routes._accessible_upstreams`, and any app whose primary is not `site_api`. |
+| `edge/webapp/remove_route` | POST | Stop sending one path elsewhere, on the primary and every alias. Body `{webapp, path_prefix}`. Refuses a managed prefix, and a prefix that is not set up. |
 | `DELETE edge/webapp/<pk>` | DELETE | **Safe delete.** `WebApp.on_rest_delete` runs the teardown — deactivate + unlink the `MOJO_DEPLOY_KEY` credential, delete the serving vhost and every [alias](#extra-addresses-aliases) vhost — in the **same** transaction as the row delete. The framework's `on_rest_pre_delete` hook runs *outside* the delete transaction, so it is the wrong hook: teardown there could commit while the row delete fails. A bare cascade orphaned the vhost and left the CI key active. Release bytes in S3 are intentionally left. |
 
 `rollback` is `releases.promote` with an earlier release — the same idempotent,
@@ -830,6 +835,109 @@ supersede-safe primitive as forward promotion, under a `select_for_update` row
 lock. A deployment row cascade-deleted with its WebApp (safe-delete racing an
 in-flight deploy) makes `webapp_deploy.orchestrate` a superseded no-op rather
 than a crashing `DoesNotExist`.
+
+### Serving: address, certificate, shape, and paths
+
+`services/webapp_serving.py` is the whole domain layer behind the five
+endpoints above. It answers one question — how is **this app** served — and it
+is expressed in terms of the app, never of a vhost.
+
+`serving_for(web_app, include_editables=False)` returns one payload:
+
+```
+{schema_version: 1,
+ webapp:      {id, slug, display_name},
+ address:     {vhost, hostname, https_origin, domain: {id, name, provider},
+               dns, wildcard: {covered, name}},
+ certificate: {id, common_name, sans, status, not_after, renew_after,
+               days_remaining, wildcard, dedicated: {id, status, ready}|null,
+               dedicated_supported, dedicated_reason},
+ serving:     {kind, pool, pools, spa, routes_supported},
+ routes:      [{id, path_prefix, upstream: {id, name}, managed}],
+ upstreams:   [{id, name}],
+ aliases:     [{vhost, hostname}]}
+```
+
+An app with no address returns the same shape with nulls, not an error.
+
+#### Managed prefixes are derived
+
+A route is `managed: true` when its `path_prefix` is in
+`webapp_serving.managed_prefixes()` — `tuple(webapp_auth_routes.auth_route_prefixes())`,
+the resolved hosted-auth contract (`/auth`, `/register`, `/passkey` from the
+`BOUNCER_*` settings, plus `/api/auth`, `/api/account`, `/api/login`,
+`/api/refresh_token`).
+
+There is **no model field and no migration**. A stored flag would let the two
+disagree the moment a bouncer path setting changed, and the stored answer would
+win — an app would show `/auth` as editable while the renderer still owned it,
+or show a stale prefix as managed after the setting moved. The writes refuse
+these prefixes outright, so there is nothing to keep in step.
+
+#### Every serving write applies to every address, primary first
+
+`apply`, `add_route` and `remove_route` each touch `WebApp.vhost` **and** every
+`Vhost.objects.filter(alias_of=web_app)` in one `transaction.atomic()`.
+
+The order is not cosmetic. `validators.validate_vhost_alias` re-reads the
+primary's pool on **every** alias save and refuses an alias whose pool differs,
+so saving an alias into the new pool before the primary moved is refused by the
+app's own invariant. Primary first, always.
+
+Each `Vhost.save()` publishes convergence for the pool it left and the pool it
+joined (`convergence.publish_after_commit(previous_pool, self.pool)`), so a
+pool move republishes both fleets without a bespoke path.
+
+Two refusals `apply` raises before it writes anything:
+
+- an **undeclared pool** (`validators.validate_pool`), refused before the
+  transaction so nothing publishes for a pool no node serves;
+- an **SPA toggle on a `kind="site"` vhost carrying a `mojosec_policy`**. That
+  policy pins the expected `response_class` to `spa_fallback` or `static_site`
+  depending on `spa`, so flipping it would raise a renderer-contract error deep
+  inside `validate_vhost`. `apply` says the plain thing instead: *"This app has
+  a security policy tied to its current mode — update the policy first, then
+  change this."*
+
+`certificate` is **primary-only** — an alias serves a different name and holds
+whatever certificate covers it — and must belong to the primary's domain, be
+`active`, and pass `validate_certificate_covers`.
+
+#### The dedicated certificate is two phases, and actor-gated
+
+`dedicated_supported` is `delegation.for_domain(domain) is None and
+domain.provider != PROVIDER_MOJO`. Both excluded cases route through
+`certs._require_delegated_profile`, which allows **exactly** the apex plus
+wildcard profile, so an exact-name order there is refused by the issuer.
+`dedicated_reason` carries the plain sentence the UI renders in place of the
+control.
+
+`request_dedicated_certificate(web_app, actor)`:
+
+1. **Authority.** When `domain.group_id != web_app.group_id`, require
+   `webapp_authority.can_manage_group_webapps(actor, domain.group)` before any
+   provider action — the same gate `webapp_alias.attach()` applies. Reading an
+   ancestor's domain is the inheritance contract; an ACME order against that
+   zone is a write, and needs authority in the group that owns it.
+2. **Pre-scan.** Return an existing exact-name row in `pending`, `issuing` or
+   `active` rather than calling the issuer. `certs.request_certificate` RAISES
+   on an active row that is not due for renewal, so a second press on a
+   finished request would report an error over a perfectly good certificate.
+3. Only with no such row: `certs.request_certificate(domain, names=[hostname])`.
+
+Switching the app onto it is a **separate** `apply(certificate=...)`, allowed
+only once the row is active and really covers the name — a vhost pointed at a
+pending certificate would serve nothing at all.
+
+#### Fleet inventory is a writer's fact
+
+`serving.pools` (`validators.declared_pools()`) and `upstreams`
+(`webapp_auth_routes._accessible_upstreams`, enabled only) are the deployment's
+own topology: which node pools exist, and which upstream names an ancestor org
+declared. They are populated only when `include_editables` is true, which the
+REST layer sets from a non-raising `SAVE_PERMS` check. A read-only viewer of
+one app gets `pools: null, upstreams: null` and the same four cards with values
+and no controls.
 
 ## Scope boundary
 

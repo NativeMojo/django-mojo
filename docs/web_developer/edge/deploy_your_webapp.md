@@ -214,15 +214,37 @@ address but nothing deployed, or its real status once something has shipped.
     does, using your own sign-in rather than a deploy key.
   - **Any other CI / API** — the three-call contract (register, upload,
     complete) for a pipeline that isn't GitHub Actions.
+- **Serving.** Everything about *how* your app is reached, in four cards:
+  - **Address.** The address itself, whether it's responding right now, and —
+    when your domain is run here and a wildcard already covers the name — a
+    plain note that DNS and HTTPS need nothing from you. **Change address**
+    lives here: it moves the app to a different web address, and your current
+    one keeps serving visitors until the new one is fully ready and secured, so
+    there is no gap where the site is down. The full list of addresses and
+    **Add a custom domain** are here too.
+  - **Certificate.** Which certificate makes your address https, when it
+    renews, how long it has left, and whether it's shared with every app on the
+    domain or used only by this app. If a certificate just for this app can be
+    issued, **Use a dedicated certificate…** orders one; it doesn't change
+    anything until you press **Switch to it**, which only appears once the new
+    certificate is really ready. Where one can't be issued — because your
+    domain's https is set up as a single certificate for the whole domain — the
+    card says so instead of showing a button that would fail.
+  - **How it's served.** What shape your app is served in (fixed when the app
+    is created, and it says so), which serving pool runs it, and whether
+    unknown paths go to your app instead of showing a 404. One **Save**; a pool
+    move takes every address this app answers on with it.
+  - **Routes.** Paths that go somewhere other than your build — your API, for
+    example. Sign-in and account paths are set up for you, marked **Managed for
+    you**, and can't be changed. Adding or removing a path applies to every
+    address your app answers on at once.
 - **Deploy key.** The `MOJO_DEPLOY_KEY` from Step 5. If it ever leaks, or you
   just want a fresh one, **rotate** it here. The old key stops working the
   instant the new one is made, so update your GitHub secret with the new value
   right after.
-- **Danger.** The changes you should make deliberately, each spelled out before
-  it runs:
-  - **Change the address.** Move the app to a different web address. Your
-    current address keeps serving visitors until the new one is fully ready and
-    secured, then the old one is retired — no gap where the site is down.
+- **Danger.** The destructive changes, each spelled out before it runs.
+  (**Change the address** used to live here; it moved to **Serving**, beside
+  the address it changes — it was never destructive.)
   - **Take offline.** Stop serving the address while keeping the app and all
     its build history. Any custom addresses you added go quiet with it — an app
     that's "offline" should not still be answering on your own domain. You can
@@ -237,8 +259,8 @@ addresses at it — `www.yourcompany.com`, `shop.yourcompany.com` — and every 
 of them serves exactly the same thing, the same build, with its own padlock.
 Your app's original address keeps working; nothing moves.
 
-On the app's **Overview** tab, press **Add a custom domain**, type the address,
-and press **Add address**. What happens next depends on your setup, and the
+On the app's **Overview** or **Serving** tab, press **Add a custom domain**,
+type the address, and press **Add address**. What happens next depends on your setup, and the
 screen tells you which one you're in:
 
 - **Your domain is already run here.** Nothing to do — the record is written

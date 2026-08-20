@@ -58,14 +58,17 @@ stylesheet, title, capability check, and one
 exactly one DOM `Node`; an optional `node.dispose()` releases feature-local
 listeners or work.
 
-Primary navigation is Dashboard, Deployments, Domains & DNS, People, Activity,
-Metrics, Maintenance, and Settings, then System Setup in its own **System**
-group at the bottom. A feature contributes as many sidebar entries as its own
-capabilities allow, so the entry count is not the feature count: Domains & DNS
-is a permission-gated Advanced entry and stays beside Deployments because
-domains and public records are ongoing application controls, while Metrics,
-Maintenance and System Setup are three separate Platform entries on three
-different grants. Deployments (the `webapps` feature — the id is unchanged,
+Primary navigation is Dashboard, Deployments, Domains & DNS, Serving, People,
+Activity, Metrics, Maintenance, and Settings, then System Setup in its own
+**System** group at the bottom. A feature contributes as many sidebar entries
+as its own capabilities allow, so the entry count is not the feature count:
+Domains & DNS and Serving are two permission-gated Advanced entries and stay
+beside Deployments because domains, public records and serving shapes are
+ongoing application controls, while Metrics, Maintenance and System Setup are
+three separate Platform entries on three different grants. **Serving** is gated
+on `manage_network` alone — the pages behind it create, retire and repoint
+serving rows across every tenant, which a read grant must not see — and it
+covers the `vhosts`, `routes` and `upstreams` routes. Deployments (the `webapps` feature — the id is unchanged,
 only its routes and label) is the one place for everything running on the
 fleet: the API service and django-mojo framework rows on top, one row per web
 app below. It owns the `deployments` and legacy `webapps` routes; `#/webapps`
@@ -171,8 +174,14 @@ and ElastiCache, gated on `manage_aws` and rendered by
 See [Platform and Advanced Admin controls](admin_portal/platform.md) for the
 dedicated permissions and bounded evidence contract.
 
-The Advanced feature owns the first-class Domains & DNS destination plus the
-raw Credentials, Certificates, Upstreams, Vhosts, and Routes pages. Its
+The Advanced feature owns two first-class destinations — Domains & DNS, and
+**Serving** (`#/vhosts`, labelled "Serving" and gated on `manage_network`
+alone) — plus the raw Credentials, Certificates, Upstreams and Routes pages.
+Serving and Routes had no navigation entry at all until the app-scoped Serving
+tab shipped; they were reachable only by typing the URL, and the app page's
+Serving tab now links into them for operators. These are operator surfaces:
+their inner copy uses the platform's own vocabulary, which the customer-facing
+WebApps vocabulary gate deliberately does not police. Its
 raw-evidence `advanced` route is gone with the Platform page that linked to it;
 `advanced_overview()` and `GET /api/account/admin/advanced` are unchanged and
 still served, but no portal surface reads them, so `view_advanced`,
