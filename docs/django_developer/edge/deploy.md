@@ -458,21 +458,36 @@ already knows:
 
 Three properties are deliberate and easy to break:
 
-- **It closes THIS node's row only.** A fleet deploy publishes one deployment
-  UUID to *every* node, and every node reaches this call, so `func` +
-  `status="running"` + `payload__deployment` alone identifies up to a whole
-  fleet of sibling rows. Closing those would record peers terminal before they
-  had finished and delete the in-flight leases whose expiry is the only
-  detector of a node deploy that hung — and on the failure path it would
-  rewrite healthy peers to `failed`. The match is therefore
-  `runner_id == local_runner_id()` **or** `channel == local_runner_id()`.
-- **...with a deployment-only fallback.** `JobEngine` accepts an explicit
-  `--runner-id`, so a node started that way has a runner id, and therefore a
-  channel, that `local_runner_id()` cannot predict; the node-scoped pass
-  matches nothing there. Only when it matches **nothing at all** does the
-  deployment-only match run, capped at `MAX_HANDOFF_JOBS`. On such a node it is
-  the one row that can be meant; on a normal node the scoped pass has already
-  answered. Each matched row's OWN channel is what gets released.
+- **It closes THIS node's row only, and every match is node-scoped.** A fleet
+  deploy publishes one deployment UUID to *every* node, and every node reaches
+  this call, so `func` + `status="running"` + `payload__deployment` alone
+  identifies up to a whole fleet of sibling rows. Closing those records peers
+  terminal before they have finished and deletes the in-flight leases whose
+  expiry is the only detector of a node deploy that hung — and on the failure
+  path it rewrites healthy peers to `failed`. Two matches run, in order:
+  1. `payload["runner"] == local_runner_id()` — the node the row was
+     *published* for (`asyncjobs._publish_deploy_node` stamps it). Published
+     intent, which nothing rewrites, unlike `runner_id`, which is stamped by
+     whichever engine claimed the row.
+  2. `runner_id == local_runner_id()` **or** `channel == local_runner_id()` —
+     compatibility only, for rows published *before* the payload carried
+     `runner`. That is the deploy which ships this code, and no later one.
+
+  Each matched row's OWN channel is what gets released.
+- **No match closes nothing. There is no unscoped fallback — do not add one.**
+  Finding no row is not a signal that this node's row is somewhere else; it is
+  the ordinary state *after* this node has already closed its own row.
+  `close_handoff_job` runs **twice** per node per deploy — `deploy_status set`,
+  then the `handoff` verb in update.sh's restart tail, which cannot know the
+  first ran. A fallback that widens on "no rows found" therefore fires on the
+  second call, when the only rows still `running` on that deployment are the
+  **peers**: the original bug, through a different door. On a same-release
+  fleet re-deploy every node makes both calls, so it is deterministic, not a
+  race. A node started with an explicit `--runner-id` (`mojo.apps.jobs.cli`
+  daemon mode — `jobman start` passes none) has a runner id
+  `local_runner_id()` cannot predict and closes nothing here. That is
+  accepted: one job row left for the reaper to time out is far cheaper than
+  destroying the only detector of a hung peer.
 - **It never raises.** It runs on the deploy callback and on the rollback
   report; a jobs-plane or Redis problem must not block either. Failures are
   logged and swallowed, exactly as the incident reporter's are.

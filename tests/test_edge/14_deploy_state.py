@@ -641,18 +641,24 @@ def test_sha_validation(opts):
 # have is exactly the process being killed.
 
 
-def _node_job(deployment, channel="edge-handoff-runner"):
+def _node_job(deployment, channel=None):
     from mojo.apps.jobs.adapters import get_adapter
     from mojo.apps.jobs.keys import JobKeys
     from mojo.apps.jobs.models import Job
     from mojo.apps.edge.services import deploy
 
+    # The row belongs to THIS node — that is the only kind the handoff closes,
+    # and `payload["runner"]` is what it matches on (see
+    # asyncjobs._publish_deploy_node).
+    if channel is None:
+        channel = deploy.local_runner_id()
     # Long-lived Redis: clear this channel's in-flight set before adding to it.
     get_adapter().delete(JobKeys().processing(channel))
     job = Job.objects.create(
         id=uuid.uuid4().hex, channel=channel, func=deploy.DEPLOY_NODE_JOB,
         status="running", runner_id=channel,
-        payload={"sha": SHA_C, "deployment": str(deployment)})
+        payload={"sha": SHA_C, "deployment": str(deployment),
+                 "runner": channel})
     get_adapter().zadd(JobKeys().processing(channel), {job.id: 1})
     return job
 

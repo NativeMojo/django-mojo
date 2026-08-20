@@ -1013,24 +1013,38 @@ def test_node_summary_buckets(opts):
 # ---------------------------------------------------------------------------
 
 
-def _node_job(deployment, channel="edge-a-engine", status="running",
-              runner_id=None):
+_SAME_AS_CHANNEL = object()
+
+
+def _node_job(deployment, channel=None, status="running", runner_id=None,
+              payload_runner=_SAME_AS_CHANNEL):
     """A `deploy_node` job as the orchestrator publishes it, plus the in-flight
     ZSET entry the engine would normally remove when the job ends.
 
-    `runner_id` defaults to the channel — the orchestrator publishes to the
-    target runner's own channel, and the engine that claims the row stamps its
-    own id — but the two are separable so the node scoping can be exercised on
-    each column alone."""
+    `channel` defaults to this box's runner id — that is what a row belonging
+    to this node looks like — and `runner_id` defaults to the channel, since
+    the orchestrator publishes to the target runner's own channel and the
+    engine that claims the row stamps its own id. All three of channel,
+    `runner_id` and `payload["runner"]` are separable so each matcher can be
+    exercised alone; `payload_runner=None` publishes a row from BEFORE the
+    payload carried a runner, which is what the compatibility match exists
+    for."""
     from mojo.apps.jobs.adapters import get_adapter
     from mojo.apps.jobs.keys import JobKeys
     from mojo.apps.jobs.models import Job
     from mojo.apps.edge.services import deploy
 
+    if channel is None:
+        channel = deploy.local_runner_id()
+    payload = {"sha": SHA, "deployment": str(deployment)}
+    if payload_runner is _SAME_AS_CHANNEL:
+        payload_runner = channel
+    if payload_runner is not None:
+        payload["runner"] = payload_runner
     job = Job.objects.create(
         id=uuid.uuid4().hex, channel=channel, func=deploy.DEPLOY_NODE_JOB,
         status=status, runner_id=channel if runner_id is None else runner_id,
-        payload={"sha": SHA, "deployment": str(deployment)})
+        payload=payload)
     get_adapter().zadd(JobKeys().processing(channel), {job.id: 1})
     return job
 
@@ -1052,26 +1066,29 @@ def _clean_node_jobs():
 
 
 @th.django_unit_test(
-    "close_handoff_job still closes the row of a node named by --runner-id")
-def test_close_handoff_job_ignores_the_channel(opts):
-    """A node started with an explicit --runner-id consumes a channel named
-    after that id, and `deploy_node` is published to it. `local_runner_id()`
-    cannot predict that name, so the node-scoped pass matches nothing there and
-    the deployment-only fallback has to answer — otherwise exactly those nodes
-    close nothing."""
-    from mojo.apps.jobs.models import Job, JobEvent
-    from mojo.apps.edge.services import platform_deploy
+    "close_handoff_job closes this node's row, matched on payload['runner']")
+def test_close_handoff_job_closes_this_nodes_row(opts):
+    """The single-node case this whole mechanism exists for, and the matcher
+    it uses to find the row: `payload["runner"]`, the node the orchestrator
+    PUBLISHED for. `runner_id` is stamped by whichever engine claimed the row
+    and the channel is routing; the payload is published intent, and nothing
+    rewrites it."""
+    from mojo.apps.jobs.models import JobEvent
+    from mojo.apps.edge.services import deploy, platform_deploy
 
     _clean_deploy_state()
     _clean_node_jobs()
     row = _attempt("canary")
-    job = _node_job(row.pk, channel="operator-named-runner")
+    me = deploy.local_runner_id()
+    # Neither column names this box — only the payload does.
+    job = _node_job(row.pk, channel="edge-published-elsewhere",
+                    runner_id="some-other-engine", payload_runner=me)
 
     closed = platform_deploy.close_handoff_job(row.pk, "completed")
 
     th.assert_eq(closed, 1,
-                 f"the node job must be closed regardless of its channel, "
-                 f"got {closed}")
+                 f"the row published for this node is this node's row, got "
+                 f"{closed}")
     job.refresh_from_db()
     th.assert_eq(job.status, "completed",
                  f"the handoff writes the terminal status the node reported, "
@@ -1086,10 +1103,98 @@ def test_close_handoff_job_ignores_the_channel(opts):
     th.assert_eq(event.details.get("reason"), "deploy_engine_handoff",
                  f"the event must name the handoff, got {event.details!r}")
     th.assert_true(
-        not _inflight("operator-named-runner", job.id),
+        not _inflight("edge-published-elsewhere", job.id),
         "the in-flight lease must be released on the job's OWN channel — "
         "otherwise the next engine's reaper is the only thing that ever "
         "clears it, a visibility timeout later")
+    _clean_node_jobs()
+    _clean_deploy_state()
+
+
+@th.django_unit_test(
+    "close_handoff_job still closes a row published before payload['runner']")
+def test_close_handoff_job_compat_match(opts):
+    """One deploy's worth of rows exist without the payload stamp: the deploy
+    that ships the stamp published its own `deploy_node` jobs from the OLD
+    framework. Those still close, on `runner_id`/`channel` — and this match is
+    node-scoped too, which is the whole point."""
+    from mojo.apps.edge.services import deploy, platform_deploy
+
+    _clean_deploy_state()
+    _clean_node_jobs()
+    row = _attempt("canary")
+    me = deploy.local_runner_id()
+    mine = _node_job(row.pk, channel=me, payload_runner=None)
+    peer = _node_job(row.pk, channel="edge-peer-engine", payload_runner=None)
+
+    closed = platform_deploy.close_handoff_job(row.pk, "completed")
+
+    th.assert_eq(closed, 1,
+                 f"an unstamped row on this node's channel must still close, "
+                 f"got {closed}")
+    mine.refresh_from_db()
+    th.assert_eq(mine.status, "completed",
+                 f"the compatibility match closes the row, got {mine.status!r}")
+    peer.refresh_from_db()
+    th.assert_eq(peer.status, "running",
+                 f"the compatibility match is node-scoped as well — an "
+                 f"unstamped PEER is still a peer, got {peer.status!r}")
+    th.assert_true(_inflight("edge-peer-engine", peer.id),
+                   "the peer's in-flight lease must survive the compat match")
+    _clean_node_jobs()
+    _clean_deploy_state()
+
+
+@th.django_unit_test(
+    "a second close_handoff_job call closes nothing, never the fleet's rows")
+def test_close_handoff_job_second_call_closes_nothing(opts):
+    """`close_handoff_job` runs TWICE per node per deploy: `deploy_status set`
+    closes the row (leaving it `completed`, so it drops out of the candidate
+    set), and then update.sh's restart tail runs `deploy_status handoff`,
+    which cannot know the first call happened.
+
+    A fallback that widens its match on "no rows found" therefore fires on
+    that second call — at which point the only rows still `running` on this
+    deployment are the PEERS. That is the original bug, reached by a different
+    door, and on a same-release fleet re-deploy every node does it at once."""
+    from mojo.apps.jobs.models import JobEvent
+    from mojo.apps.edge.services import deploy, platform_deploy
+
+    _clean_deploy_state()
+    _clean_node_jobs()
+    row = _attempt("canary")
+    me = deploy.local_runner_id()
+    mine = _node_job(row.pk, channel=me)
+    peers = [_node_job(row.pk, channel=f"edge-peer-{index}-engine")
+             for index in range(3)]
+
+    first = platform_deploy.close_handoff_job(row.pk, "completed")
+    second = platform_deploy.close_handoff_job(row.pk, "completed")
+
+    th.assert_eq(first, 1,
+                 f"the first call closes this node's own row, got {first}")
+    th.assert_eq(second, 0,
+                 f"this node's row is already closed and every other running "
+                 f"row on this deployment belongs to a peer — the second call "
+                 f"must close NOTHING, got {second}")
+    mine.refresh_from_db()
+    th.assert_eq(mine.status, "completed",
+                 f"the row closed by the first call keeps its outcome, got "
+                 f"{mine.status!r}")
+    for peer in peers:
+        peer.refresh_from_db()
+        th.assert_eq(peer.status, "running",
+                     f"{peer.channel} is still deploying and must stay "
+                     f"`running` — a peer recorded terminal here is a peer "
+                     f"whose hang nobody will ever notice, got "
+                     f"{peer.status!r}")
+        th.assert_eq(JobEvent.objects.filter(job=peer).count(), 0,
+                     f"{peer.channel} collects no handoff event from another "
+                     f"node's restart tail")
+        th.assert_true(_inflight(peer.channel, peer.id),
+                       f"{peer.channel}'s in-flight lease must survive — its "
+                       f"expiry is the reaper's only evidence of an abandoned "
+                       f"node deploy")
     _clean_node_jobs()
     _clean_deploy_state()
 
@@ -1147,16 +1252,19 @@ def test_close_handoff_job_is_scoped_to_this_node(opts):
 @th.django_unit_test(
     "close_handoff_job matches this node on runner_id as well as on channel")
 def test_close_handoff_job_scopes_on_runner_id(opts):
-    """`runner_id` is stamped by the engine that claimed the row; `channel` is
-    what the orchestrator published to. Either one naming this box is this
-    box's row, and neither alone may be trusted to be populated."""
+    """The compatibility match reads two columns, not one. `runner_id` is
+    stamped by the engine that claimed the row; `channel` is what the
+    orchestrator published to. Either one naming this box, on a row with no
+    payload stamp, is this box's row — and neither alone may be trusted to be
+    populated."""
     from mojo.apps.edge.services import deploy, platform_deploy
 
     _clean_deploy_state()
     _clean_node_jobs()
     row = _attempt("canary")
     me = deploy.local_runner_id()
-    mine = _node_job(row.pk, channel="edge-published-elsewhere", runner_id=me)
+    mine = _node_job(row.pk, channel="edge-published-elsewhere", runner_id=me,
+                     payload_runner=None)
     peer = _node_job(row.pk, channel="edge-peer-engine")
 
     closed = platform_deploy.close_handoff_job(row.pk, "completed")
@@ -1201,14 +1309,16 @@ def test_close_handoff_job_normalizes_uuid(opts):
 @th.django_unit_test("close_handoff_job leaves already-terminal and foreign rows alone")
 def test_close_handoff_job_is_narrow(opts):
     from mojo.apps.jobs.models import JobEvent
-    from mojo.apps.edge.services import platform_deploy
+    from mojo.apps.edge.services import deploy, platform_deploy
 
     _clean_deploy_state()
     _clean_node_jobs()
     row = _attempt("canary")
     other = _attempt("canary")
-    done = _node_job(row.pk, channel="edge-done", status="completed")
-    foreign = _node_job(other.pk, channel="edge-foreign")
+    # This node's OWN row, already terminal: the status filter, not the node
+    # scoping, is what has to refuse it.
+    done = _node_job(row.pk, status="completed")
+    foreign = _node_job(other.pk, channel=deploy.local_runner_id())
 
     closed = platform_deploy.close_handoff_job(row.pk, "failed")
 
@@ -1222,9 +1332,9 @@ def test_close_handoff_job_is_narrow(opts):
                  "an untouched job collects no handoff event")
     foreign.refresh_from_db()
     th.assert_eq(foreign.status, "running",
-                 f"another deployment's node job must not be touched, got "
-                 f"{foreign.status!r}")
-    th.assert_true(_inflight("edge-foreign", foreign.id),
+                 f"another deployment's node job must not be touched, even on "
+                 f"this node's own channel, got {foreign.status!r}")
+    th.assert_true(_inflight(foreign.channel, foreign.id),
                    "another deployment's in-flight lease must be left alone")
 
     th.assert_eq(platform_deploy.close_handoff_job(None, "completed"), 0,

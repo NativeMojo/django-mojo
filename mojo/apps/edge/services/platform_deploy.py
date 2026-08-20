@@ -434,23 +434,36 @@ def close_handoff_job(value, state="completed"):
     callback time — it is the thing reporting it — so it writes the terminal
     status here, and drops the in-flight entry the dying engine will not.
 
-    SCOPED TO THIS NODE, WITH A FALLBACK. A fleet deploy publishes ONE
-    deployment UUID to EVERY node (`asyncjobs._publish_deploy_node`), and every
-    node reaches this call, so the deployment alone identifies up to a whole
-    fleet of sibling rows. Closing those would record peers `completed` before
-    they have finished and delete the in-flight leases whose expiry is the only
-    thing that ever detects an abandoned node deploy — and on the failure path
-    it would rewrite healthy peers to `failed`. So the first pass matches this
-    box: `runner_id` (stamped by the engine that claimed the row) or `channel`
-    (what the orchestrator published to), against `deploy.local_runner_id()`.
+    EVERY MATCH IS SCOPED TO THIS NODE. There is no unscoped path, and none
+    may be added. A fleet deploy publishes ONE deployment UUID to EVERY node
+    (`asyncjobs._publish_deploy_node`), and every node reaches this call, so
+    the deployment alone identifies up to a whole fleet of sibling rows.
+    Closing those records peers `completed` before they have finished and
+    deletes the in-flight leases whose expiry is the only thing that ever
+    detects an abandoned node deploy — and on the failure path it rewrites
+    healthy peers to `failed`. Two matches run, in order:
 
-    The fallback is what keeps the ORIGINAL bug closed. `JobEngine` accepts an
-    explicit `--runner-id` (see mojo.apps.jobs.cli), and a node started that
-    way has a runner id — and therefore a channel — that `local_runner_id()`
-    cannot predict, so the scoped pass matches nothing there. Only when it
-    matches NOTHING do we fall back to the deployment-only match: on such a
-    node it is the one row that can be meant, and on a normal node the scoped
-    pass has already answered. Each matched row's OWN channel is released.
+    1. `payload["runner"]` — the node the row was PUBLISHED for. Published
+       intent, which nothing rewrites, unlike `runner_id` (stamped by
+       whichever engine claimed the row).
+    2. `runner_id` or `channel` equal to `deploy.local_runner_id()` — for rows
+       published BEFORE the payload carried `runner`, which is the deploy that
+       ships this code and no later one.
+
+    No match closes NOTHING. It is not a signal that this node's row is
+    somewhere else; it is the ordinary state after this node has ALREADY
+    closed its own row, because `close_handoff_job` runs twice per node per
+    deploy — once from `deploy_status set` and once from the `handoff` verb in
+    update.sh's restart tail, which cannot know the first ran. A fallback that
+    widens on "no rows" therefore fires on the second call, when the only
+    remaining `running` rows on that deployment are the PEERS. That is how
+    this bug shipped twice.
+
+    A node started with an explicit `--runner-id` (mojo.apps.jobs.cli daemon
+    mode; `jobman start` passes none) has a runner id `local_runner_id()`
+    cannot predict, and closes nothing here. That is deliberate and is the
+    cheaper of the two errors: one job row left for the reaper to time out,
+    against destroying the only detector of a hung peer.
 
     Every failure is logged and swallowed. This runs on the deploy callback
     and on the rollback report; neither may be blocked by a jobs-plane
@@ -471,16 +484,27 @@ def close_handoff_job(value, state="completed"):
         from mojo.apps.jobs.models import Job, JobEvent
         from mojo.apps.edge.services import deploy
 
+        local = deploy.local_runner_id()
+        if not local:
+            logit.warn(
+                f"edge deploy {value}: no local runner id — closing no node "
+                "job rather than guessing which of the fleet's is ours")
+            return 0
         candidates = Job.objects.filter(
             func=deploy.DEPLOY_NODE_JOB, status="running",
             payload__deployment=owner)
-        local = deploy.local_runner_id()
-        rows = []
-        if local:
+        # The slice is a hostile-input guard only: a node owns at most one
+        # running deploy_node row per deployment, and both matches are already
+        # scoped to this node, so it can never span peers.
+        rows = list(candidates.filter(payload__runner=local)[:MAX_HANDOFF_JOBS])
+        if not rows:
             rows = list(candidates.filter(
                 Q(runner_id=local) | Q(channel=local))[:MAX_HANDOFF_JOBS])
         if not rows:
-            rows = list(candidates[:MAX_HANDOFF_JOBS])
+            logit.info(
+                f"edge deploy {value}: no running node job for {local} — "
+                "already closed, or this engine was named with --runner-id")
+            return 0
         closed = 0
         for job in rows:
             metadata = dict(job.metadata or {})
