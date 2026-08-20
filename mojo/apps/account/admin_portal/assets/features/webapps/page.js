@@ -1179,9 +1179,9 @@ export async function deploymentsPage(ctx, route = 'deployments', navigate = nul
     } else if (failure?.kind === 'webapp') {
       const serving = failure.release?.version || failure.release?.id;
       tone = 'danger';
-      // No node counts here: a web-app deployment records {runner, job}
-      // targets, not a proven fleet roster, and inventing "2 of 3" from that
-      // would be a number nobody measured.
+      // No node counts here. A web-app deployment records {runner, job}
+      // targets — not a fleet roster anyone measured — so "2 of 3" built
+      // from those would be a number nobody actually took.
       message = failure.status === 'rolled_back'
         ? `${failure.name} failed to deploy — the fleet was put back on ${serving || 'the previous version'}`
         : `${failure.name} failed to deploy — and the rollback did not finish, so the fleet may be mixed`;
