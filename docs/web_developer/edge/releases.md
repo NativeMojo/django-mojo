@@ -29,6 +29,24 @@ It is intentionally an example path, not django-mojo's own `.github/actions`
 directory: application repositories reference the released framework action
 and keep only their build-and-trigger workflow locally.
 
+**GitHub Actions is the primary, documented path** — one secret
+(`MOJO_DEPLOY_KEY`) and one workflow file, generated for you. Everything below
+is that same contract either way.
+
+### An interactive session works too
+
+Every endpoint below also accepts a plain interactive user session with
+`manage_dns` on the WebApp — not only the `MOJO_DEPLOY_KEY` (`SAVE_PERMS`/
+`VIEW_PERMS` on the model, checked after the ApiKey identity check fails to
+match). That is what the built-in Admin portal's **Upload a build** tab uses:
+it hashes every file in the browser (`crypto.subtle`, SHA-256), calls the same
+three endpoints below with the logged-in operator's own session — no
+`MOJO_DEPLOY_KEY` involved — and PUTs each file straight to storage with the
+`x-amz-checksum-sha256` header its signed URL was bound to. It is a hand
+deploy, not a second API: build the release yourself, drop the built folder on
+that tab, and it ships through the identical register → PUT → complete flow a
+CI pipeline follows.
+
 ## The flow
 
 ### 1. Register the release and get upload URLs
@@ -172,8 +190,15 @@ currently serving.
 
 ## Onboarding and workflow handoff
 
-The built-in Admin portal creates sites through App → Address → Connect GitHub
-→ Verify. The browser may resume an operation with:
+The built-in Admin portal creates a **new** site by asking for a name only,
+when the group already resolves an "apps domain" (a writable domain it or an
+ancestor owns, with zero per-app DNS work) — the wizard fills in an address
+under that domain and drives the run through to `Verify` on its own: `github`
+auto-submits `{"skip": true}` (deploys are set up afterward, from the app's
+own page) and `verify` auto-submits `{}`. Repair and change-address flows, and
+a group with no apps domain, still walk App → Address → Connect GitHub →
+Verify, choosing an address explicitly. Either way the browser resumes an
+operation with the same calls:
 
 - `GET /api/edge/webapp/onboarding/options?group=<id>`
 - `GET /api/edge/webapp/onboarding/options?group_intent=new`
@@ -265,8 +290,12 @@ if the response was lost. The endpoint requires 600-second fresh interactive
 auth and the same two-part WebApp+DNS authority in that WebApp's effectively
 active Group. Its request is `{"webapp":42}` for the secret-free workflow, or adds
 `"action":"mint|rotate"` and `"operation_id":"<uuid>"` for a one-time key
-receipt. The response contains `schema_version:1`, repository, filename, and
-validated YAML, plus `deployment_key` only when a key action was requested.
+receipt. The response contains `schema_version:1`, `repository`, `filename`,
+and validated YAML, plus `deployment_key` only when a key action was
+requested. **`repository` is `null` when the WebApp has none set** — a
+repository is not required to fetch the workflow; the YAML itself never names
+one, since it is a file the user drops into whichever repository they later
+connect.
 
 `GET /api/edge/webapp/summary?webapp=<id>` is the secret-free, group-scoped v1
 read model. It includes profile, public address, onboarding evidence, and

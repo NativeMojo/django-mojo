@@ -255,6 +255,15 @@ leave their failed savepoint before reconciling the winner; concrete-group
 callers separately retain the existing live `(group, replay_fingerprint)`
 reconciliation and may still omit a UUID.
 
+`options()` additionally carries `apps_domain` — `{id, name, provider}` for
+the group's [apps domain](#the-apps-domain) (`webapp_apps_domain.resolve`), or
+`None` — and `apps_domain_error`, a plain-language reason (`no_domain_reason`)
+when it is `None`: no domain owned by the group or an ancestor, or more than
+one candidate with no `BASE_URL`-suffix tiebreaker. This is what the quick-create
+name field checks before offering "Create app" — a group with neither a
+resolved apps domain nor an existing one still onboards through the
+address-first path.
+
 Serialized operations add `group: {id, name}`. Numeric floats are not accepted
 as group identifiers. Replaying a UUID requires the same actor, origin,
 normalized profile, and group intent; otherwise it fails. Admin persists the
@@ -368,6 +377,97 @@ machine. `workflow(web_app, api_origin)` takes the platform origin from the
 same-origin request so `api-url` is concrete. (The earlier generator emitted
 `python -m mojo_webapp deploy`, a module that exists nowhere; that is fixed.)
 
+**GitHub is optional at both ends of that contract.** `_advance_github`
+accepts choice `{"skip": true}`, or simply no repository anywhere (choice nor
+profile) — either moves the cursor straight to `verify` with
+`evidence.github = {"status": "skipped"}` and leaves the WebApp's `github_*`
+fields untouched, so connecting a repository later starts clean.
+`workflow(web_app, api_origin)` mirrors this: `web_app.github_repository`
+being unset is not an error — `repository` is validated only when present, and
+the serialized response carries `repository: null`. The generated YAML itself
+is unaffected either way; it names no repository, only `ref`/`output`/
+`api-url`/`webapp-id`, since the repository is wherever the user drops the
+file.
+
+### Quick create: name only
+
+A new app under a group that already resolves an apps domain (below) needs
+exactly one input — its name. The Admin wizard seeds the run precisely like a
+resolved managed-domain address (`domain`, `label` under that domain) and then
+drives the operation through two steps with no further input:
+
+1. **`github` auto-submits `{"skip": true}`** the moment the operation parks
+   there with no repository configured. Deploys are set up afterward from the
+   app's own page.
+2. **`verify` auto-submits `{}`.** The final "is it serving?" probe needs no
+   choice from the user — same self-completing model as the address step for
+   a wildcard-covered domain.
+
+So the whole run is: create → (address resolves against the apps domain,
+possibly converging it) → github skip → verify → `complete`, entirely without
+the operator answering anything after the name. The public address the app
+lands on serves the [placeholder page](#the-release-less-placeholder-page)
+below the moment its vhost is enabled — which is what lets the automatic
+`verify` step succeed with nothing deployed yet.
+
+### The apps domain
+
+`mojo.apps.edge.services.webapp_apps_domain` names the one domain new apps in
+a group can go live under with **zero per-app DNS work** — the same
+`*.{domain}` wildcard invariant the address step already exploited for a
+single managed domain, generalized into a resolvable, convergeable concept of
+its own.
+
+- **`resolve(group)`** — the writable (`active`, `verified`, non-`mojo`
+  provider) domain owned by `group` or any of its ancestors
+  (`owned_by_group_or_ancestor`, the same ancestor walk
+  `validators._group_at_or_below` uses — ancestors only, never siblings or
+  another branch's descendants). When more than one domain qualifies, the one the
+  platform's own `BASE_URL` hostname sits under (or exactly matches) wins —
+  the longest suffix match if several nest; with no `BASE_URL` suffix match,
+  a single remaining candidate is used, and more than one is ambiguous
+  (`resolve` returns `None`, `no_domain_reason` reports which case it was).
+  `installation_domain()` is the group-less flavor readiness uses: across
+  every domain in the installation, same preference rule.
+- **`converge(domain)`** — makes the domain's wildcard coverage exist:
+  `status(domain)` checks for a `*.{domain}` CNAME at
+  `webapp_destination.resolve()`'s target and an active-or-in-flight
+  certificate covering a one-label probe host; `converge` writes whichever is
+  missing (`dns.upsert_record` for the CNAME, `certs.request_certificate` for
+  the apex-plus-wildcard cert) and does nothing when both already hold.
+  Idempotent by construction — a second call finds everything in place.
+
+**Actuation.** The address-advance step calls `converge(domain)` in place of
+its ordinary per-host CNAME write whenever the resolved onboarding domain
+**is** the group's apps domain — the first app onboarded under it pays the
+one-time convergence cost and every later app reuses the wildcard. Setup's
+readiness row (`apps_domain`, order 45 — see below) is the other caller: it
+only *reports* pass/pending/fail, but its `pending` copy names the same lazy
+path ("onboard a web app under this domain, or converge it from Domains") as
+the backstop for an operator who wants the domain ready before anyone
+onboards.
+
+`owned_by_group_or_ancestor` also replaced the flat
+`Domain.objects.filter(group=group)` scan in `precheck` and in the
+address-choice `domain` validation, so a child group's guided address can
+resolve against, and explicitly choose, an ancestor's domain — not only its
+own.
+
+### Apps-domain readiness
+
+System Setup's `apps_domain` section (order 45, registered alongside the other
+hosting sections — see
+[Hosting readiness sections](../account/system_setup.md#hosting-readiness-sections))
+reports the installation-level answer: `pass` with the domain and destination
+once `installation_domain()` resolves one whose wildcard CNAME and certificate
+both already exist; `pending` when no domain qualifies yet, or when one does
+but convergence hasn't run (naming which of the record/certificate is
+missing, and that onboarding the first app under it — or a manual converge
+from Domains — creates it); `fail` only when reading the domain's DNS records
+itself errors (a credential problem to fix, not a pending state). There is no
+generic fixer button, matching the other hosting sections — convergence is
+either lazy (onboarding) or an explicit Domains action.
+
 Final verification makes one DNS-pinned HTTPS request to exactly `/`. Every
 resolved address must be globally routable, SNI and `Host` retain the owned
 hostname, redirects are not followed, and timeout/body size are bounded.
@@ -446,6 +546,24 @@ rollback reverts both. An earlier design put a `current` symlink next to the
 release, outside the atomic swap — so a failed `nginx -t` abandoned the config
 change but left the content already moved, and the node served a new bundle
 under old config.
+
+### The release-less placeholder page
+
+A vhost with no release row (`stage_web_roots`'s `row is None` branch) no
+longer gets an empty directory that answers 404. It gets a real directory —
+inside the generation, so the same atomic swap replaces it once a release
+exists — holding one static `index.html` written by `installer._placeholder_page`:
+fully self-contained (inline styles, no scripts, no external assets), whose
+only dynamic value (the vhost's `server_name`) is `html.escape`d, never
+trusted as markup. It tells the visitor HTTPS works and nothing is deployed
+yet.
+
+This is load-bearing for [quick create](#quick-create-name-only): a brand-new
+app's address is live and answers `200` on `/` the instant its vhost is
+enabled, which is what lets the onboarding run's automatic `verify` step
+succeed with zero deploys. It is also what the Admin portal's app list and
+detail page read as "live with a welcome page — nothing deployed yet",
+distinct from "not reachable" (no vhost at all).
 
 ### The app fetches the bytes
 

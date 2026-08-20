@@ -47,42 +47,68 @@ keeps the quote token in the confirmation modal only and requires the operator
 to type the exact domain and price. Provider credentials are write-only and
 cleared from the form after verification.
 
-WebApp onboarding is **URL-first**. The operator types the web address they
-want (`https://myapp.example.com`) and the wizard walks **address → domain
-choice → records (only if the domain lives elsewhere) → name → deploy setup →
-go live**. A stateless pre-check normalizes the address and steers gently — a
-path like `example.com/myapp` becomes `myapp.example.com`, a bare apex becomes
-`www`, and `http` becomes `https` — returning a `verdict` before any operation
-is created. An installation with no serving destination configured yet
-(System Setup incomplete) gets a `configuration_required` verdict and a link
-into System Setup instead of a domain choice — never a fabricated record to
-publish. At the domain step the operator either keeps DNS where it is (the
-common path: the wizard shows the exact records to publish and verifies them —
-no provider credentials handed over, nothing purchased), moves the domain under
-platform management, or buys a new one with typed domain/price confirmation. A
+**Creating a new WebApp is name-first when the group has an apps domain.**
+`GET /api/edge/webapp/onboarding/options` reports a non-null `apps_domain` —
+a writable domain the group or an ancestor owns, wildcard-covered with zero
+per-app DNS work — and when it does, the wizard asks for exactly one thing: a
+name. Availability of `<slug>.<apps domain>` is checked live via `precheck` as
+the operator types; workspace, environment, and release storage sit under
+**Advanced** with sensible defaults. Pressing **Create app** seeds the run
+exactly as if that address had been chosen explicitly, and the run then
+**completes itself**: the `address` choice is auto-submitted against the
+resolved apps domain, `github` auto-submits `{"skip": true}` (deploys are set
+up afterward, from the app's own page), and `verify` auto-submits `{}` — the
+final "is it serving?" probe needs no input, since the app's address already
+answers with the [placeholder page](../../django_developer/edge/webapps.md#the-release-less-placeholder-page)
+the moment its vhost is enabled. The operator sees each of those as a busy
+state, not a form. A group with `apps_domain: null` (`apps_domain_error`
+explains why), or the change-address/repair flow for an existing app, still
+walks the full **address → domain choice → records (only if the domain lives
+elsewhere) → name → deploy setup → go live** path: a stateless pre-check
+normalizes the typed address and steers gently — a path like
+`example.com/myapp` becomes `myapp.example.com`, a bare apex becomes `www`,
+`http` becomes `https` — returning a `verdict` before any operation is
+created. Either path shares the same underlying mechanics: an installation
+with no serving destination configured yet (System Setup incomplete) gets a
+`configuration_required` verdict and a link into System Setup instead of a
+domain choice; the domain step (when shown) lets the operator keep DNS where
+it is (the wizard shows the exact records to publish and verifies them — no
+provider credentials handed over, nothing purchased), move the domain under
+platform management, or buy a new one with typed domain/price confirmation; a
 domain whose DNS lives at an outside host works end to end through the
-delegated-ACME flow, with one apex-plus-wildcard certificate covering every app
-on it. The identity screen does not ask for repository details; those wait
-until deploy setup, which generates a single GitHub workflow referencing the
-public `NativeMojo/django-mojo/examples/github/actions/deploy-webapp@main`
-action and mints `MOJO_DEPLOY_KEY` once. Choosing a managed domain shows a
-confirmation of what will happen — the required CNAME is created and HTTPS
-issued automatically, no DNS changes from the operator — while the permanent
-Domains & DNS page handles adding, adopting, purchasing, and inspecting names.
-Users need both WebApp and DNS authority to own an existing WebApp group;
-adding a managed domain remains a DNS administrator action. HTTPS issuance and
-renewal are automatic and do not appear as onboarding decisions.
+delegated-ACME flow, with one apex-plus-wildcard certificate covering every
+app on it. Choosing a managed domain shows a confirmation of what will happen
+— the required CNAME (or, for the apps domain, the one-time wildcard) is
+created and HTTPS issued automatically — while the permanent Domains & DNS
+page handles adding, adopting, purchasing, and inspecting names. Users need
+both WebApp and DNS authority to own an existing WebApp group; adding a
+managed domain remains a DNS administrator action. HTTPS issuance and renewal
+are automatic and do not appear as onboarding decisions.
 
-After a site is live, each app has a single **management view** with
+After a site is live, each app has its own **full page**
+(`#/deployments?webapp=<id>`, not a modal — a link anyone can follow or
+share) with five tabs:
 **Overview** (address + domain, health, and current release, via
 `GET /api/edge/webapp/summary` and on-demand `GET /api/edge/webapp/health`),
 **Deploys** (deployment history from `GET /api/edge/webapp/deployment` with
-one-click `POST /api/edge/webapp/rollback`), **Deploy key** (rotate
-`MOJO_DEPLOY_KEY`), **Setup** (re-show the generated workflow and mint a fresh
-key), and a **Danger** area (change address, take offline via
-`POST /api/edge/webapp/detach_address`, and safe-delete the app). The
-user-facing tour is the [Put your web app online](../edge/deploy_your_webapp.md)
-walkthrough; the endpoint-by-endpoint reference is
+one-click `POST /api/edge/webapp/rollback`), **Set up deploys** (three honest
+sub-tabs — **GitHub Actions** re-shows the generated workflow and can mint a
+fresh key; **Upload a build** hashes a picked or dropped build folder in the
+browser (`crypto.subtle`, SHA-256) and PUTs it straight to storage through the
+same `POST /api/edge/release` → PUT → `POST /api/edge/release/complete` flow
+CI uses, authenticated by the operator's own interactive session rather than
+`MOJO_DEPLOY_KEY` — see [Releasing a site build § An interactive session works too](../edge/releases.md#an-interactive-session-works-too);
+**Any other CI / API** names the three calls any pipeline can make), **Deploy
+key** (rotate `MOJO_DEPLOY_KEY`), and a **Danger** area (change address, take
+offline via `POST /api/edge/webapp/detach_address`, and safe-delete the app).
+The list's row states are honest rather than always routing to "Open": an
+addressless app (setup abandoned before an address was chosen) reads "Setup
+never finished — not reachable" with inline **Finish setup** / **Delete**
+actions; an addressed app with no release yet reads "live with a welcome page
+— nothing deployed yet" with a **Deploy something** link straight to Set up
+deploys. The user-facing tour is the
+[Put your web app online](../edge/deploy_your_webapp.md) walkthrough; the
+endpoint-by-endpoint reference is
 [edge/README § WebApp onboarding and day-2 API](../edge/README.md#webapp-onboarding-and-day-2-api).
 
 `GET /api/account/admin/bootstrap` includes additive `webapp_groups` and
@@ -153,11 +179,15 @@ actions), and a django-mojo row whose Update calls
 `confirm_version` echo, with Hold/Resume surfacing the advanced-settings
 `framework_pin` writer at the owner tier. The Web apps section reads
 `GET /api/edge/webapp/summaries`; each row leads with the address (a missing
-address is amber "No address yet — not reachable" with **Set address**), SSL
-state, and last deploy, with the release id as short muted metadata. Deep links
-`#/deployments?inspector=<id>` type-dispatch — an integer opens that web app's
-inspector, a deployment UUID opens the API drill-in — so pre-merge Activity
-links keep working. The Platform lane is now System Setup, Metrics and
+address is amber "Setup never finished — not reachable" with inline **Finish
+setup** / **Delete**, a present address with no release yet is amber "live
+with a welcome page — nothing deployed yet" with **Deploy something**), SSL
+state, and last deploy, with the release id as short muted metadata. Every row
+opens the app's own page at `#/deployments?webapp=<id>`. Deep links
+`#/deployments?inspector=<id>` type-dispatch for backward compatibility — an
+integer redirects to that web app's own page (`?webapp=<id>`), a deployment
+UUID opens the API drill-in — so pre-merge Activity links keep working. The
+Platform lane is now System Setup, Metrics and
 Maintenance only; its public/local health and fleet evidence read from the
 Dashboard rows and their drill-ins. Advanced owns the Domains & DNS destination
 and the raw Domains, Credentials, DNS, Certificates, Upstreams, Vhosts, and

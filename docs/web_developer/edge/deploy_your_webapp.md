@@ -32,6 +32,15 @@ is in [Releasing a site build](releases.md).
 
 That is the whole list. Now let's walk it.
 
+> **Already have other apps here? You may only need a name.** If your
+> workspace already has a domain set up for apps, **New web app** asks for
+> just a name — no address to type, no records to copy. Your app opens at
+> `<name>.<that domain>` automatically, with HTTPS and a starter page live
+> before you've deployed anything; **Set up deploys** waits until afterward,
+> on the app's own page. You'll see this fast path offered first; if it's not
+> available yet (a first app, or no domain set up), the wizard falls back to
+> the full walk below — pick up at Step 1.
+
 ## Step 1 — Type the address you want
 
 Type the exact web address you have in mind, the way you'd say it out loud:
@@ -178,12 +187,14 @@ That's it. You went from an address you had in mind to a working, secured site.
 
 ## Managing your app afterward
 
-Open any app from **Deployments** and you get one management screen, organized
-into
-a few tabs. Every action explains itself in plain words before it does anything.
-The same page also shows what the platform itself is running — the API service
-and the django-mojo framework — to operators with platform access; your app
-rows sit right below them.
+Open any app from **Deployments** and it opens its own page — a link you can
+bookmark or share, not a popup — organized into a few tabs. Every action
+explains itself in plain words before it does anything. The **Deployments**
+list itself also shows what the platform is running — the API service and the
+django-mojo framework — to operators with platform access; your app rows sit
+right below them, and each one says plainly where it stands: "Setup never
+finished" if it has no address yet, "live with a welcome page" if it has an
+address but nothing deployed, or its real status once something has shipped.
 
 - **Overview.** Your address, whether it's healthy (reachable right now), and
   which build is currently live. This is your "is everything okay?" glance. You
@@ -191,13 +202,19 @@ rows sit right below them.
 - **Deploys.** The history of every publish, newest first. Made a bad release?
   **Roll back** with one click puts an earlier, known-good build back in front
   of visitors — no rebuild, no GitHub round-trip. It takes effect right away.
+- **Set up deploys.** Three ways to get a build here, each on its own tab:
+  - **GitHub Actions** — the workflow file and the `MOJO_DEPLOY_KEY` secret
+    from Step 5. Wiring up a second repository, or lost the key? This re-shows
+    the workflow and can mint a fresh key.
+  - **Upload a build** — no GitHub involved. Drop (or pick) the folder your
+    build produced right on this tab, and it ships the same way a CI deploy
+    does, using your own sign-in rather than a deploy key.
+  - **Any other CI / API** — the three-call contract (register, upload,
+    complete) for a pipeline that isn't GitHub Actions.
 - **Deploy key.** The `MOJO_DEPLOY_KEY` from Step 5. If it ever leaks, or you
   just want a fresh one, **rotate** it here. The old key stops working the
   instant the new one is made, so update your GitHub secret with the new value
   right after.
-- **Setup.** Need the workflow file or the key again — say you're wiring up a
-  second repository, or you lost the key? This re-shows the generated workflow
-  and can mint a fresh key for you.
 - **Danger.** The changes you should make deliberately, each spelled out before
   it runs:
   - **Change the address.** Move the app to a different web address. Your

@@ -166,6 +166,45 @@ only `failed` rows and never deletes active material. The Dashboard groups
 lifecycle history by domain and SAN set and reports only the newest row, so a
 superseded attempt cannot claim that serving TLS is down.
 
+## Retirement
+
+`remove-failed` cleans up a dead attempt; **retirement** (`certs.retire_certificate`)
+removes a live one — a certificate an operator no longer needs because another
+active certificate on the same domain can fully take over its duty (the common
+case: a per-app certificate a domain's later apex-plus-wildcard cert now
+covers). It repoints every `Vhost` still referencing the target at the
+replacement — `vhost.save()`, never `update()`, so enabled rows re-validate
+coverage and publish fleet convergence — then deletes the target row inside
+one transaction; `Vhost.certificate` is `PROTECT`, satisfied only once nothing
+references it.
+
+`certs.retire_eligibility(domain)` is the DB-only companion the portal calls on
+every domain page load: for each `Certificate` on the domain, the id of the
+**active**, not-renewal-due certificate that covers every name the candidate
+lists (CN + SANs) **and** every enabled vhost still pointed at it, or `None`.
+No provider calls, so it is safe on a hot path. `retire_certificate` reruns
+that same coverage test authoritatively (via `edge.validators.certificate_covers`
+— the exact rule the vhost layer enforces at enable time) and refuses,
+naming the reason, when: no other active certificate on the domain covers
+every name the target lists; the only candidate that does is itself due for
+renewal; or the candidate cannot serve a specific enabled vhost's name. A
+retirement can never leave a serving name that nginx would then refuse to
+enable.
+
+### `GET /api/dnsman/certificate/retire-eligibility?domain=<pk>`
+
+Returns `{domain, eligibility: {"<certificate id>": <replacement id or null>}}`
+for every certificate on that domain. Same guards as the detail route — model
+`VIEW_PERMS` first, then the house-domain platform-admin gate for a
+group-less domain.
+
+### `POST /api/dnsman/certificate/retire`
+
+`{"certificate": 7}`. Same guards as `remove-failed`/`revoke` — model
+`SAVE_PERMS`+`VIEW_PERMS`, then the house-domain guard, since this is
+destructive. Returns `{retired, replaced_by, vhosts_repointed}` and logs the
+outcome, including the acting user and IP.
+
 dnsman never pushes into a serving box. There is no SSH, no shared filesystem,
 and no second auth surface — the job channel already exists.
 

@@ -135,7 +135,7 @@ the protected topology's nodes.
 
 ## Hosting readiness sections
 
-The edge app registers five read-only sections. They deliberately have no
+The edge app registers six read-only sections. They deliberately have no
 generic setup fixer: domain purchase/adoption, certificate issuance, Vhost
 design, and reveal-once deployment-key handling remain explicit operator
 actions through their existing guarded services.
@@ -147,6 +147,7 @@ actions through their existing guarded services.
 | `edge_fleet` | Every protected topology node answers on an `edge`-channel runner with the installed django-mojo version, matching per-pool desired generation, and a combined serving generation that equals the live generation, with zero excluded/pending content or certificates |
 | `webapp_keys` | Safe WebApp key metadata and latest mint/rotate/revoke receipt; no token or recoverable credential material |
 | `webapp_destination` | Where a guided WebApp address will point (`webapp_destination.resolve()`'s result and provenance) and whether it resolves at all |
+| `apps_domain` (order 45) | Whether the installation-level [apps domain](../edge/webapps.md#the-apps-domain) (`webapp_apps_domain.installation_domain()`) already has its wildcard CNAME and covering certificate, so new web apps go live with zero per-app DNS work |
 
 Missing topology, runner, node response, pool evidence, or generation never
 reports green. Fleet proof calls only live runners returned for channel
@@ -156,7 +157,12 @@ The destination check is `pass` with the resolved value once `BASE_URL` (or
 the `EDGE_WEBAPP_CNAME_TARGET` override) yields a usable hostname; `pending`
 when nothing is configured yet (Setup simply isn't finished); `fail` only when
 the override is set but unusable (a misconfiguration to fix now, not a
-pending state). Each hosting section scans its complete queryset and puts
+pending state). `apps_domain` is `pass` once the resolved domain's `*.{domain}`
+CNAME and certificate both exist, `pending` when no domain qualifies yet or
+one does but hasn't converged (naming which piece is missing — the first app
+onboarded under it, or a manual converge from Domains, creates it lazily),
+and `fail` only when reading the domain's DNS records itself errors. Each
+hosting section scans its complete queryset and puts
 global status counts in the first check; only the following problem details
 are bounded to 16. A failure anywhere after that detail limit therefore still
 makes the section fail. WebApp key summaries retain only counts by status and

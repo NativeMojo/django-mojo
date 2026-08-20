@@ -668,6 +668,30 @@ and any status other than `failed` is refused. Successful issuance removes
 older failed attempts for the same domain and exact name set automatically.
 Failure evidence remains in job and application logs.
 
+### `GET /api/dnsman/certificate/retire-eligibility?domain=<pk>`
+```json
+{ "domain": 12, "eligibility": { "7": 9, "8": null } }
+```
+For every certificate on the domain, the id of the active certificate that
+could take over its duty, or `null`. DB-only — no provider calls — so it's
+safe to call on every domain page load. Same permission shape as the domain
+route (`VIEW_PERMS`, plus the house-domain platform-admin gate for a
+group-less domain).
+
+### `POST /api/dnsman/certificate/retire`
+```json
+{ "certificate": 7 }
+```
+Retires a certificate another active certificate on the same domain can fully
+replace: every vhost still using it is repointed to the replacement, then the
+row is deleted. Refused, naming the reason, when no active certificate covers
+every name the target lists, the only one that does is itself due for
+renewal, or the replacement cannot serve a specific vhost still enabled on the
+target. Same guards as `remove-failed`/revoke — this is destructive. Returns:
+```json
+{ "retired": 7, "replaced_by": 9, "vhosts_repointed": 2 }
+```
+
 ### `GET /api/dnsman/certificate/material/<pk>`
 The only way to obtain key material. Requires `manage_dns`; every release is
 logged.
@@ -740,4 +764,10 @@ reloads authoritative inventory. If the outcome cannot be proved, the set is
 marked refresh-required and remains write-locked until the operator refreshes.
 Clients implementing another console should preserve that behavior. The
 Certificates page polls list/detail metadata only; it does not request PEM or
-private-key material.
+private-key material. Per-domain certificate management — including
+**Retire** — lives on the domain's own detail panel, not the flat Certificates
+list: it calls `retire-eligibility` alongside the domain's certificate list to
+decide which rows can offer a retire button (only those with a covering
+replacement), shows how many addresses move to the replacement before
+confirming, and calls `certificate/retire`. The flat list stays read-only
+metadata plus `remove-failed` for dead attempts.

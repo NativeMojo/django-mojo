@@ -332,12 +332,14 @@ as an error:
   operator seeing three unresolved AWS sections next to one green one has a
   correct report, not a broken one.
 
-Hosting integration adds five non-fixable readiness sections. Their
+Hosting integration adds six non-fixable readiness sections. Their
 remediation links should open the normal guarded Domains, Certificates,
 Vhosts/Routes, Fleet, or WebApp key workflows — except `webapp_destination`,
 whose own remediation is completing System Setup's `BASE_URL` step (or, for a
-split serving topology, the file-only `EDGE_WEBAPP_CNAME_TARGET` override).
-System Setup never mints a reveal-once deployment token in a report.
+split serving topology, the file-only `EDGE_WEBAPP_CNAME_TARGET` override), and
+`apps_domain`, whose remediation is onboarding a web app under the resolved
+domain (or converging it by hand from Domains). System Setup never mints a
+reveal-once deployment token in a report.
 
 | Code | Ready only when |
 |---|---|
@@ -346,6 +348,7 @@ System Setup never mints a reveal-once deployment token in a report.
 | `edge_fleet` | Every node/pool in `EDGE_EXPECTED_TOPOLOGY` answers from an `edge`-channel runner with the expected django-mojo version and desired generation, and its combined serving generation equals the live generation, with no excluded or pending material |
 | `webapp_keys` | Every WebApp's safe key metadata is active; missing is `pending`, inactive is `fail`, and revoked is `warn` |
 | `webapp_destination` | A guided WebApp address has somewhere to point: the `EDGE_WEBAPP_CNAME_TARGET` override or the platform's own `BASE_URL` hostname resolves. Unconfigured is `pending`; a set-but-unusable override is `fail` |
+| `apps_domain` | The installation's [apps domain](../../django_developer/edge/webapps.md#the-apps-domain) — the domain new web apps go live under with zero per-app DNS work — already has its wildcard CNAME and covering certificate. No qualifying domain yet, or one that hasn't converged, is `pending`; a DNS-read error is `fail` |
 
 The fleet section never treats a missing topology, node, response, pool, or
 generation as green. WebApp checks return only bounded metadata such as
