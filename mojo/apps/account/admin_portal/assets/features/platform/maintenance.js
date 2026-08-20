@@ -368,7 +368,9 @@ export async function maintenancePage(ctx, signal = null) {
       const link = row.querySelector('.row-link');
       link?.addEventListener('click', (event) => {
         event.preventDefault();
-        runAction(null, () => applyFrameworkUpdate(), {key: 'framework-update'});
+        // Feature-scoped: features/webapps/api.js exports a different
+        // applyFrameworkUpdate with its own guard, and INFLIGHT is global.
+        runAction(null, () => applyFrameworkUpdate(), {key: 'platform:framework-update'});
       });
       return row;
     }

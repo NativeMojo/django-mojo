@@ -191,13 +191,14 @@ tomorrow. The walk is **filtered to `.js`** on purpose. The same tree carries
 files, and `read_text()` on the PNG raises `UnicodeDecodeError`: an unfiltered
 walk does not fail the test, it crashes it.
 
-Three assertions run over that walk:
+Four assertions run over that walk:
 
 | Test | What it holds |
 |---|---|
 | `test_no_raw_async_handlers_contract` | the banned spellings, the exemption comment, the cap. Also asserts the walk found the tree at all — a glob matching nothing would make every other assertion vacuous |
 | `test_pending_states_are_never_pinned_to_a_closed_container_contract` | the placement rule: no `runAction` paints on `event.currentTarget`, or on the very container, within three lines of a `.close()` / `.hidden = true` |
 | `test_local_action_wrappers_are_retired_contract` | one action wrapper in the portal, no local `actionError`, and every module calling `runAction` / `loadInto` / `copyButton` actually imports it |
+| `test_guard_keys_are_unique_contract` | the namespace rule: a bare literal `key:` is used by exactly one `runAction` call site tree-wide, and no tab nav guards its tabs on one shared literal |
 
 There is exactly one `runAction`, in `components/actions.js`. The two local
 wrappers the sweep started from are gone: `features/platform/page.js` had its
@@ -223,13 +224,43 @@ Two details worth copying:
 
 - **Pass an explicit `key` for a headless action.** `runAction(null, …)` with no
   `key` mints a fresh symbol, so two clicks are two runs. A stable string —
-  `` `webapp-rollback:${app.id}` `` — is what makes the guard real. A DOM node
-  works as a key too, and is the right one for a per-row trigger.
+  `` `webapps:rollback:${app.id}:${release.id}` `` — is what makes the guard
+  real. A DOM node works as a key too, and is the right one for a per-row
+  trigger.
 - **A panel's skeleton goes into a body node, not the panel.** `loadInto(panel, …)`
   would replace the panel heading and the Refresh button sitting beside it. The
   Domains, Credentials, Upstreams and Vhosts panels each append a plain
   `<div>` and load into that; so do the People list and the Group inspector's
   Members and API Keys tabs.
+
+### The guard key is a portal-wide namespace
+
+`INFLIGHT` is **one process-global `Map`**. A key is not scoped to the module
+that wrote it, to the page, or to the record — two modules that both pass
+`'framework-update'` are guarding each other, and one of them silently returns
+the other's promise and never runs. Spell every string key:
+
+```
+<feature>:<action>[:<id>…]
+```
+
+`<feature>` is the feature directory (`webapps`, `settings`, `platform`,
+`advanced`, `people`, `activity`), `<action>` is the verb, and every `<id>`
+needed to make **one key mean exactly one action** follows. Two rules:
+
+- **Include every discriminator the action varies on.** A rollback varies on
+  the app *and the release*; a pin write varies on the value being written; an
+  owner-settings save varies on the payload, not on its field names. If two
+  clicks would legitimately do different work, they must not share a key —
+  the second one appears to succeed and never runs.
+- **A bare literal key must be unique across the whole asset tree**, and
+  `test_guard_keys_are_unique_contract` enforces it. Interpolated keys are
+  exempt from uniqueness: their whole point is one prefix over many ids.
+
+Keys predating this convention are spelled `<noun>-<action>:<id>`
+(`certificate-retire:${row.id}`). They are unique and were left alone; the
+convention above governs new and changed keys, and the uniqueness test covers
+every key regardless of spelling.
 
 ### When NOT to reach for the guard
 
@@ -245,6 +276,52 @@ and the affordance is the skeleton `loadSeries` paints into `chartSlot` — a no
 no repaint there destroys, carrying `role="status"` so it is announced.
 
 The rule of thumb: **guard what queues, do not guard what supersedes.**
+
+**A tab nav supersedes.** `features/people/page.js`'s Users/Groups nav is the
+second case, and it is the one that shows what the mistake costs. Both tabs
+called `runAction(null, () => render(), {key: 'people-view'})` — one key for two
+different actions. `active` and the URL are written synchronously outside the
+guard, so clicking Users and then Groups before the first list landed set both
+to *groups*, then handed back the *Users* render's promise: `render()` never ran
+for Groups, and the operator was left on a users table under a URL that said
+groups, with nothing repainting. Keying per tab would only push the same failure
+out to the third click. The nav calls `render()` directly now. Nothing is lost:
+`render()` takes `mine = ++generation` and drops a superseded paint, and each
+pass builds a fresh `listBody`, so `loadInto`'s generation token cannot
+cross-write either.
+
+`components/views.js` `sectionTabs` — every other tab nav in the portal — was
+never exposed: it guards on `event.currentTarget`, so each tab button is already
+its own key.
+
+### A single-use credential outlives the restore
+
+`runAction` restores the control on the error path — correct almost everywhere,
+and wrong for a control holding something the failure consumed. The Domains
+purchase button (`features/advanced/page.js` `renderConfirm`) spends a
+single-use quote token on one non-retried attempt. A refusal used to leave
+"Register domain" live directly beneath the message saying the quote was spent;
+the server refuses the retry (a `select_for_update` CAS on the quote's status
+plus a confirm-token match), so the only thing a second click buys is a second,
+more confusing refusal.
+
+Such a control **latches off inside the task**, synchronously, before the first
+await — so the guard and the latch agree — and stays latched:
+
+```js
+let spent = false;
+const buy = h('button', {class: 'button danger', disabled: true, onclick: () => runAction(buy, async () => {
+  spent = true; buy.disabled = true;   // synchronous: no await above this line
+  …
+}, {busy: {…}, restoreOnSuccess: false, onError: …})}, 'Register domain');
+// validate() re-derives `disabled` on every keystroke, so it must honour the latch.
+const validate = () => { buy.disabled = spent || …; };
+```
+
+`disabled`, not `aria-disabled`, is deliberate here and is the one exception to
+the rule above it: the control is meant to leave the tab order, the busy scrim
+is managing focus anyway, and the way back is a new quote, not this button.
+Taking a fresh quote rebuilds the confirm step, and with it an unlatched button.
 
 ## Styling
 

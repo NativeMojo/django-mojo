@@ -324,9 +324,19 @@ export async function peoplePage(ctx, route) {
       canManage ? h('button', {class: 'button primary', onclick: () => isUsers ? inviteUser(render) : newGroup(render)}, icon('plus'), isUsers ? 'Invite user' : 'New group') : null,
     ]));
     // † render() replaces the whole page, tab bar included, so a pending state
-    // on the clicked tab would be detached before it painted. Headless, with
-    // one key for the pair: the skeleton loadInto paints below is the feedback.
-    const tabs = h('nav', {class: 'tabs', 'aria-label': 'People views'}, ...available.map(([id, label]) => h('button', {class: id === active ? 'active' : '', onclick: () => { active = id; history.replaceState({}, '', routeHref(id)); return runAction(null, () => render(), {key: 'people-view'}); }, text: label})));
+    // on the clicked tab would be detached before it painted — and a tab switch
+    // SUPERSEDES rather than queues, so it must not be guarded at all. One key
+    // for both tabs was worse than no key: `active` and the URL are set
+    // synchronously here, then runAction found the key in flight and handed
+    // back the *Users* render's promise, so render() never ran for Groups and
+    // the screen kept showing users under a URL that said groups.
+    //
+    // render() already handles the race by itself: it takes `mine = ++generation`
+    // and drops a superseded paint, and each pass builds a fresh `listBody`, so
+    // loadInto's generation token cannot cross-write either. The affordance is
+    // the skeleton loadInto paints below — the same answer metrics.js reaches.
+    // See responsiveness.md: guard what queues, do not guard what supersedes.
+    const tabs = h('nav', {class: 'tabs', 'aria-label': 'People views'}, ...available.map(([id, label]) => h('button', {class: id === active ? 'active' : '', onclick: () => { active = id; history.replaceState({}, '', routeHref(id)); return render(); }, text: label})));
     const input = h('input', {placeholder: `Search ${active}`, 'aria-label': `Search ${active}`, value: term});
     const panel = h('section', {class: 'panel'}, h('div', {class: 'panel-heading'}, h('div', {}, h('h2', {text: isUsers ? 'Users' : 'Groups'}), h('p', {text: 'Select a row to open the standard inspector.'})), h('label', {class: 'search'}, icon('search'), input)));
     // The table loads into a body node, never over the panel: the heading and

@@ -512,3 +512,159 @@ def test_shared_controls_are_responsive_contract(opts):
         "a form submit is still silent to assistive technology"
     assert "pending.textContent = `${this.submitLabel}…`;" in form, \
         "the submit announcement is never populated"
+
+
+# `INFLIGHT` is one process-global Map, so a guard key is a portal-wide name,
+# not a module-local one. These two patterns read the key back off a call site.
+CALL = re.compile(r"runAction\(")
+KEY_LITERAL = re.compile(r"(?<![\w$])key:\s*(['\"`])(.*?)\1", re.DOTALL)
+# How far past `runAction(` its own options object can reasonably sit. Every
+# call in the tree today puts the key within a few lines; the bound is what
+# stops one call's window from swallowing an unrelated `key:` far below it.
+KEY_WINDOW = 1500
+
+
+def _guard_keys(text):
+    """Every string `key:` an actual runAction call site passes.
+
+    Read forward from each `runAction(`, never backwards, and stop at the next
+    one. Bare `key:` literals elsewhere in the tree are not guard keys at all —
+    `core.js` has an SVG path under that name in its icon map, and
+    `features/settings/panels.js` writes `{action: 'set', key: row.key}` at the
+    settings API — and a naive scan for `key:` would report all of them.
+    """
+    starts = [match.start() for match in CALL.finditer(text)]
+    found = []
+    for index, start in enumerate(starts):
+        stop = min(starts[index + 1] if index + 1 < len(starts) else len(text),
+                   start + KEY_WINDOW)
+        match = KEY_LITERAL.search(text, start, stop)
+        if match:
+            found.append((text.count("\n", 0, match.start()) + 1, match.group(2)))
+    return found
+
+
+@th.django_unit_test("one guard key names exactly one action, portal-wide")
+def test_guard_keys_are_unique_contract(opts):
+    # #2242 phase 3 review, F1/F2. `runAction`'s re-entry guard is only correct
+    # when a key means ONE action: a second click on a key already in flight is
+    # handed the first click's promise and its own task never runs. That failure
+    # is silent and it looks like success — the control restores, the screen does
+    # not move, and whatever the handler already wrote outside the guard (a URL,
+    # an `active` flag) now describes work that never happened.
+    #
+    # The check is tree-wide rather than per-file on purpose: INFLIGHT is a
+    # single process-global Map, so the namespace is flat across the whole
+    # portal. A per-file check would have missed the real collision in this
+    # tree — `features/webapps/api.js` and `features/platform/maintenance.js`
+    # both spelled a *different* framework-update action `'framework-update'`.
+    sites = {}
+    for path in swept():
+        for line, key in _guard_keys(path.read_text()):
+            # An interpolated key is exempt: one prefix over many ids is exactly
+            # what it is for, and `webapps:rollback:${app.id}:${release.id}` is
+            # shared by design across every row that renders it.
+            if "${" in key:
+                continue
+            sites.setdefault(key, []).append(f"{_name(path)}:{line}")
+
+    shared = {key: where for key, where in sites.items() if len(where) > 1}
+    assert not shared, (
+        "a guard key is used by more than one runAction call site, so one of "
+        "them silently returns the other's in-flight promise and never runs: "
+        + "; ".join(f"{key!r} at {', '.join(where)}" for key, where in sorted(shared.items()))
+        + " — give each action its own key, spelled <feature>:<action>[:<id>], "
+          "or interpolate the discriminator the two calls differ on")
+
+    # A key that matched nothing would make the assertion above vacuous.
+    assert len(sites) >= 4, \
+        f"only {len(sites)} literal guard keys were read off runAction call " \
+        f"sites under {ASSETS} — the scan is not finding them, so this guard " \
+        f"proves nothing"
+
+
+# A tab nav is the shape where a shared key does the most damage: the handler
+# writes `active` and the URL synchronously, outside the guard, before the guard
+# drops the render on the floor.
+TABS = "class: 'tabs'"
+TABS_WINDOW = 800
+
+
+@th.django_unit_test("a tab nav never guards every tab on one shared key")
+def test_tab_navs_do_not_share_a_guard_key_contract(opts):
+    # #2242 phase 3 review, F1. features/people/page.js gave Users and Groups
+    # one key, `'people-view'`. Click Users, then Groups before the slow list
+    # lands: `active` and the URL are already 'groups', runAction finds the key
+    # in flight and hands back the *Users* render's promise, render() never runs
+    # for Groups, and the screen keeps showing users under a URL saying groups.
+    #
+    # A tab switch supersedes; it does not queue. See responsiveness.md.
+    for path in swept():
+        text = path.read_text()
+        for match in re.finditer(re.escape(TABS), text):
+            window = text[match.start():match.start() + TABS_WINDOW]
+            bare = [key for _, key in _guard_keys(window) if "${" not in key]
+            assert not bare, (
+                f"{_name(path)} builds a tab nav whose tabs all guard on the "
+                f"same literal key {bare[0]!r} — the second tab clicked gets the "
+                f"first tab's in-flight promise and never renders, while `active` "
+                f"and the URL (written synchronously, outside the guard) already "
+                f"say otherwise. Key per tab, or drop the guard: a tab switch "
+                f"supersedes rather than queues")
+
+    people = (ASSETS / "features/people/page.js").read_text()
+    # The People nav dropped its guard rather than keying per tab: keying per
+    # tab only moves the same failure out to the third click (Users, Groups,
+    # Users — the third finds the first still in flight).
+    assert "{key: 'people-view'}" not in people, \
+        "the People tab nav is back on one shared guard key for Users and Groups"
+    assert "history.replaceState({}, '', routeHref(id)); return render(); }" in people, \
+        "the People tab nav no longer calls render() directly — if it was " \
+        "re-wrapped in runAction, the guard must be per tab, and the reason " \
+        "the guard is wrong here belongs in responsiveness.md"
+
+    # Dropping the guard is only safe because render() supersedes correctly.
+    render_body = _window(people, "  async function render(term = '')", "  await render(); return root;")
+    assert "const mine = ++generation;" in render_body and "mine !== generation" in render_body, \
+        "render() lost its generation token — with the tab nav's guard gone, " \
+        "that token is the only thing dropping a superseded paint"
+    assert "const listBody = h('div', {});" in render_body, \
+        "render() no longer builds a fresh listBody each pass, so two renders " \
+        "share one loadInto generation target and can cross-write"
+
+    # components/views.js sectionTabs is every other tab nav in the portal. It
+    # was never exposed — it guards on the clicked button — and must stay that way.
+    views = (ASSETS / "components/views.js").read_text()
+    tabs = views.split("export function sectionTabs", 1)[1].split("export function timelineView", 1)[0]
+    assert "runAction(event.currentTarget," in tabs, \
+        "sectionTabs stopped keying on the clicked tab — every caller's tabs " \
+        "would then share one guard key"
+
+
+@th.django_unit_test("a spent quote cannot be spent again from the same button")
+def test_domain_purchase_latches_its_control_contract(opts):
+    # #2242 phase 3 review, F3. Before the sweep the handler set
+    # `buy.disabled = true` at the top and never re-enabled it, so a spent quote
+    # was terminal. runAction restores the control on the error path, which put
+    # a live "Register domain" directly under the message saying the quote was
+    # spent. The server refuses the retry (a select_for_update CAS on the quote
+    # status plus a confirm-token match), so it is a second confusing refusal
+    # rather than a double charge — but the operator should never get there.
+    advanced = (ASSETS / "features/advanced/page.js").read_text()
+    confirm = _window(advanced, "  function renderConfirm(groupId)",
+                      "async function loadDomainCertificates")
+
+    assert "let spent = false;" in confirm, \
+        "the domain purchase has no latch, so runAction's error-path restore " \
+        "hands the operator back a live button for a quote that is spent"
+    assert "spent = true; buy.disabled = true;" in confirm, \
+        "the purchase does not latch its control off inside the task"
+    # Synchronous, before the first await: the guard and the latch must agree.
+    assert confirm.index("spent = true; buy.disabled = true;") < confirm.index("await apiOnce('/api/dnsman/registrar/purchase'"), \
+        "the latch is set after the spend has already started, so a click in " \
+        "the same turn still finds the control live"
+    # validate() re-derives `disabled` on every keystroke; without the flag it
+    # would hand the button straight back the moment the operator retyped.
+    assert "buy.disabled = spent ||" in confirm, \
+        "validate() ignores the latch — typing in either confirmation field " \
+        "re-enables a button whose quote has already been spent"

@@ -457,7 +457,9 @@ export async function applyFrameworkUpdate(ctx, framework, reload) {
     }
     await reload();
   }, {
-    key: 'framework-update',
+    // Feature-scoped: features/platform/maintenance.js has its own, different
+    // framework-update action, and INFLIGHT is one process-global Map.
+    key: 'webapps:framework-update',
     busy: {title: 'Updating django-mojo…', detail: 'The canary migrates first, then the fleet rolls.'},
     onError: (error) => openModal({title: 'Update not started',
       content: h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: error.message}))}),
@@ -481,7 +483,9 @@ async function writeFrameworkPin(value, reload) {
     }
     await reload();
   }, {
-    key: 'framework-pin',
+    // Hold and Resume are two different writes, so they are two different
+    // actions — keyed by the value, not by the endpoint they share.
+    key: `webapps:framework-pin:${value || 'latest'}`,
     busy: {title: value === 'hold' ? 'Pausing updates…' : 'Resuming the latest policy…',
       detail: 'Writing the fleet-wide update policy.'},
     onError: (error) => openModal({title: 'Hold not changed',

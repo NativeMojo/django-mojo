@@ -434,7 +434,9 @@ function rollbackTo(app, release, reload) {
       await api('/api/edge/webapp/rollback', {method: 'POST', body: JSON.stringify({webapp: app.id, release: release.id})});
       await reload();
     }, {
-      key: `webapp-rollback:${app.id}`,
+      // Two releases are two actions: keying on the app alone made a rollback
+      // to 1.2 return an in-flight rollback to 1.1 and never run.
+      key: `webapps:rollback:${app.id}:${release.id}`,
       busy: {title: `Rolling back to ${release.version}…`, detail: 'Visitors will see that version within a few minutes.'},
       onError: (error) => actionFailed('The rollback did not start', error),
     });

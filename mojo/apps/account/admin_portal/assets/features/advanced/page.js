@@ -266,7 +266,19 @@ async function purchaseDomain(ctx, reload) {
     // This spends money on a single non-retried attempt. The scrim is the
     // point: nothing else on the page is clickable — least of all this button
     // a second time — while the registrar is deciding.
+    //
+    // And the quote is single-use, so the control latches off the moment the
+    // spend starts and never comes back. `runAction` restores an errored
+    // control, which on its own would leave "Register domain" live directly
+    // under the message saying the quote was spent; the server refuses that
+    // retry (a select_for_update CAS on status plus the confirm token), so the
+    // operator would just collect a second, more confusing refusal. The latch
+    // is its own flag rather than a bare `disabled = true` because validate()
+    // re-derives `disabled` on every keystroke and would undo it.
+    let spent = false;
     const buy = h('button', {class: 'button danger', disabled: true, onclick: () => runAction(buy, async () => {
+      // Synchronous, before the first await: the guard and the latch agree.
+      spent = true; buy.disabled = true;
       let purchaseToken = token; token = null;
       try {
         await apiOnce('/api/dnsman/registrar/purchase', {method: 'POST', body: JSON.stringify({group: groupId, purchase: quote.purchase, confirm_token: purchaseToken, confirm_domain: typedDomain.value, confirm_price: typedPrice.value})});
@@ -280,7 +292,7 @@ async function purchaseDomain(ctx, reload) {
         message.textContent = `${error.message} The quote was spent; take a new quote before trying again.`;
       },
     })}, 'Register domain');
-    const validate = () => { buy.disabled = typedDomain.value.trim().toLowerCase() !== quote.name || typedPrice.value.trim() !== String(quote.price); };
+    const validate = () => { buy.disabled = spent || typedDomain.value.trim().toLowerCase() !== quote.name || typedPrice.value.trim() !== String(quote.price); };
     typedDomain.addEventListener('input', validate); typedPrice.addEventListener('input', validate);
     body.replaceChildren(h('div', {class: 'wizard-steps'}, badge('1 Search', 'success'), badge('2 Quote', 'success'), badge('3 Confirm', 'warning')),
       h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: `This spends ${quote.price} ${quote.currency} to register ${quote.name}. The quote expires ${formatDate(quote.expires)}.`})),

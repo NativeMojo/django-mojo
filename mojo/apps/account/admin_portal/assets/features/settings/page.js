@@ -190,11 +190,16 @@ export async function settingsPage(ctx, route, signal) {
         await load();
       }, {key: `settings-mutate:${payload.action || 'set'}:${payload.key}`,
         busy: {title: 'Saving setting…', detail: 'The database override is being applied.'}});
+      // Keyed on the write, not on the field names it writes: there are only
+      // two owner payload shapes (`auth`, `edge_topology`), so keying on
+      // Object.keys() made every auth save collide with every other auth save,
+      // and a correction typed while the first was in flight silently returned
+      // the first's promise and never ran.
       const owner = (payload) => runAction(null, async () => {
         await apiOnce('/api/account/admin/advanced/settings', {method: 'POST', body: JSON.stringify(payload)});
         statusText = 'Configuration saved.';
         await load();
-      }, {key: `settings-owner:${Object.keys(payload).join(',')}`,
+      }, {key: `settings:owner:${JSON.stringify(payload)}`,
         busy: {title: 'Saving configuration…', detail: 'The typed owner is validating this change.'}});
       const configureProviders = (topic, providers) => runAction(null, async () => {
         await apiOnce('/api/account/admin/settings', {method: 'POST',
