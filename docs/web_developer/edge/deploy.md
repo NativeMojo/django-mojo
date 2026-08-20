@@ -64,3 +64,41 @@ transition and per-runner evidence. The incident stream (`category
 "edge_deploy"`) remains the alerting trail: level 7 for a canary failure,
 timeout, or a node that failed to converge. Operational state on a node is
 readable with `manage.py deploy_status get`.
+
+### `detail.phases` — where the deploy's time went
+
+Each deployment in that section carries a `detail` object, and on any node that
+reported one it holds `phases`: an ordered, bounded list of what the update
+spent its seconds on.
+
+```json
+"detail": {
+  "phases": [
+    {"phase": "git_sync",       "pass": "deploy", "ms": 1204},
+    {"phase": "deps",           "pass": "deploy", "ms": 8130},
+    {"phase": "framework",      "pass": "deploy", "ms": 18042},
+    {"phase": "restart",        "pass": "deploy", "ms": 2233},
+    {"phase": "total",          "pass": "deploy", "ms": 41230},
+    {"phase": "engine_restart", "pass": "deploy", "ms": 9600}
+  ]
+}
+```
+
+- `phase` — a short `[a-z_]` name. The set is documented in the framework
+  guide; treat it as open and render an unknown name as-is.
+- `pass` — `"deploy"` or `"rollback"`. A failed canary that rolled back reports
+  both, in the order they happened, so the same phase name can legitimately
+  appear twice.
+- `ms` — milliseconds. `"approx": true` appears when the node could only
+  measure whole seconds; the value is still in ms.
+
+Everything about this list is optional and best-effort. An older node script
+sends none, a node whose `date` cannot do milliseconds sends approximations,
+and a malformed line is dropped rather than reported. **Never treat a missing
+or short `phases` list as a failed deploy** — the deployment's `status`,
+`transitions` and `node_evidence` remain the record of what happened.
+
+Two entries are worth knowing about: `total` is the whole node run up to its
+terminal callback, and `engine_restart` is measured by the platform rather than
+the node — it covers the window in which the node had no job engine to measure
+anything with — so it appears only once the deployment converges.

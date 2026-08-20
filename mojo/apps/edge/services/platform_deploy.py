@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import uuid
 from datetime import timedelta
 
@@ -29,6 +30,13 @@ TERMINAL_EVIDENCE_STATES = {"failed", "identity_mismatch"}
 # failed attempts are worth asking the node about, and only a handful.
 ROLLBACK_OUTCOME_WINDOW = 48 * 3600
 ROLLBACK_OUTCOME_SCAN = 5
+# One node deploy job per runner, and the roster is capped. The bound exists so
+# a malformed payload can never turn a callback into an unbounded scan.
+MAX_HANDOFF_JOBS = 8
+# Phase timings: a deploy pass emits about fourteen and a rollback pass adds
+# ten more, so the cap is a bound on hostile input, not a working limit.
+MAX_PHASES = 32
+PHASE_NAME_PATTERN = re.compile(r"^[a-z_]{1,32}$")
 
 
 def _text(value, limit=MAX_TEXT):
@@ -306,6 +314,228 @@ def evidence(value, runner, state, proof=None, detail=None):
         return True
 
 
+def parse_phases(text):
+    """Phase timings as the node scripts append them, as bounded entries.
+
+        <pass> <name> <value> <unit>        deploy post_deploy 41230 ms
+
+    This is data written by a shell script on a box, read by the platform, so
+    it is parsed as hostile input: fixed shape, a name charset, digits only,
+    a known unit, and a hard entry cap. Anything that does not fit is dropped
+    silently — a malformed line is a missing timing, never an error and never
+    a reason to fail a deploy callback.
+
+    Seconds normalise to milliseconds and are marked `approx`: `date +%s%3N`
+    is a GNU extension, and a node whose date does not support it still has
+    something worth reporting.
+    """
+    entries = []
+    for line in (text or "").splitlines():
+        if len(entries) >= MAX_PHASES:
+            break
+        parts = line.split()
+        if len(parts) != 4:
+            continue
+        pass_name, name, value, unit = parts
+        if pass_name not in ("deploy", "rollback"):
+            continue
+        if not PHASE_NAME_PATTERN.match(name):
+            continue
+        if not value.isdigit() or len(value) > 12:
+            continue
+        if unit not in ("ms", "s"):
+            continue
+        entry = {"phase": name, "pass": pass_name,
+                 "ms": int(value) * (1000 if unit == "s" else 1)}
+        if unit == "s":
+            entry["approx"] = True
+        entries.append(entry)
+    return entries
+
+
+def record_engine_restart(value):
+    """Close the phase table with the one gap the node cannot time itself.
+
+    update.sh's last act is to stop the engine that is running the deploy job,
+    so nothing on the node is alive to time what happens next: the engine
+    coming back on the new code and proving the release. That interval is
+    measured HERE instead — from the `verified` transition the dying node
+    wrote to the moment its replacement converges the row — and appended as a
+    normal phase entry, so the table reads end to end.
+
+    Idempotent, and silent about every failure: a missing timing is a missing
+    timing.
+    """
+    from django.utils.dateparse import parse_datetime
+    from mojo.helpers import logit
+
+    try:
+        with transaction.atomic():
+            row = get(value, for_update=True)
+            if row is None:
+                return False
+            at = None
+            for entry in reversed(list(row.transitions or [])):
+                if (isinstance(entry, dict)
+                        and entry.get("status") == PlatformDeployment.STATUS_VERIFIED):
+                    at = entry.get("at")
+                    break
+            started = parse_datetime(at) if at else None
+            if started is None:
+                return False
+            elapsed = (timezone.now() - started).total_seconds()
+            if elapsed < 0:
+                return False
+            detail = dict(row.detail or {})
+            phases = [item for item in (detail.get("phases") or [])
+                      if isinstance(item, dict)]
+            if any(item.get("phase") == "engine_restart" for item in phases):
+                return False
+            phases.append({"phase": "engine_restart", "pass": "deploy",
+                           "ms": int(elapsed * 1000)})
+            detail["phases"] = phases[:MAX_PHASES]
+            row.detail = detail
+            row.save(update_fields=["detail", "modified"])
+            return True
+    except Exception:
+        logit.exception(
+            f"edge deploy {value}: failed to record the engine restart phase")
+        return False
+
+
+def record_phases(value, entries):
+    """Store a node's phase timings on the durable row's `detail`."""
+    from mojo.helpers import logit
+
+    try:
+        if not entries:
+            return False
+        with transaction.atomic():
+            row = get(value, for_update=True)
+            if row is None:
+                return False
+            detail = dict(row.detail or {})
+            detail["phases"] = _safe(list(entries)[:MAX_PHASES])
+            row.detail = detail
+            row.save(update_fields=["detail", "modified"])
+            return True
+    except Exception:
+        logit.exception(f"edge deploy {value}: failed to record phase timings")
+        return False
+
+
+def close_handoff_job(value, state="completed"):
+    """Close this deployment's node job before its engine is killed.
+
+    update.sh stops the engine that is running `deploy_node` for this exact
+    deployment, so that job never ends on its own: the row stays `running`
+    with a live in-flight lease, and the story of the deploy is told by a
+    later reaper timing the lease out. The node knows the real outcome at
+    callback time — it is the thing reporting it — so it writes the terminal
+    status here, and drops the in-flight entry the dying engine will not.
+
+    EVERY MATCH IS SCOPED TO THIS NODE. There is no unscoped path, and none
+    may be added. A fleet deploy publishes ONE deployment UUID to EVERY node
+    (`asyncjobs._publish_deploy_node`), and every node reaches this call, so
+    the deployment alone identifies up to a whole fleet of sibling rows.
+    Closing those records peers `completed` before they have finished and
+    deletes the in-flight leases whose expiry is the only thing that ever
+    detects an abandoned node deploy — and on the failure path it rewrites
+    healthy peers to `failed`. Two matches run, in order:
+
+    1. `payload["runner"]` — the node the row was PUBLISHED for. Published
+       intent, which nothing rewrites, unlike `runner_id` (stamped by
+       whichever engine claimed the row).
+    2. `runner_id` or `channel` equal to `deploy.local_runner_id()` — for rows
+       published BEFORE the payload carried `runner`, which is the deploy that
+       ships this code and no later one.
+
+    No match closes NOTHING. It is not a signal that this node's row is
+    somewhere else; it is the ordinary state after this node has ALREADY
+    closed its own row, because `close_handoff_job` runs twice per node per
+    deploy — once from `deploy_status set` and once from the `handoff` verb in
+    update.sh's restart tail, which cannot know the first ran. A fallback that
+    widens on "no rows" therefore fires on the second call, when the only
+    remaining `running` rows on that deployment are the PEERS. That is how
+    this bug shipped twice.
+
+    A node started with an explicit `--runner-id` (mojo.apps.jobs.cli daemon
+    mode; `jobman start` passes none) has a runner id `local_runner_id()`
+    cannot predict, and closes nothing here. That is deliberate and is the
+    cheaper of the two errors: one job row left for the reaper to time out,
+    against destroying the only detector of a hung peer.
+
+    Every failure is logged and swallowed. This runs on the deploy callback
+    and on the rollback report; neither may be blocked by a jobs-plane
+    problem, the same rule `_report_failure_incident` follows.
+
+    Returns the number of rows closed.
+    """
+    from django.db.models import Q
+    from mojo.helpers import logit
+
+    try:
+        if state not in ("completed", "failed"):
+            raise ValueError(f"invalid handoff job state: {state}")
+        owner = deployment_id(value)
+        if not owner:
+            return 0
+        from mojo.apps.jobs.manager import get_manager
+        from mojo.apps.jobs.models import Job, JobEvent
+        from mojo.apps.edge.services import deploy
+
+        local = deploy.local_runner_id()
+        if not local:
+            logit.warn(
+                f"edge deploy {value}: no local runner id — closing no node "
+                "job rather than guessing which of the fleet's is ours")
+            return 0
+        candidates = Job.objects.filter(
+            func=deploy.DEPLOY_NODE_JOB, status="running",
+            payload__deployment=owner)
+        # The slice is a hostile-input guard only. A node USUALLY owns one
+        # running deploy_node row per deployment, but not always: a capacity
+        # converge retry after proof_timeout republishes under a previous
+        # deployment's uuid (aws/services/capacity.py), so two can be live at
+        # once. Both are still THIS node's, and both should close — the bound
+        # caps a hostile row count, it does not paper over an anomaly. What
+        # makes it safe is that each match below is scoped to this node, so
+        # the slice can never span peers. Ordered so the bound is
+        # deterministic rather than whatever the planner returned.
+        rows = list(candidates.filter(
+            payload__runner=local).order_by("created")[:MAX_HANDOFF_JOBS])
+        if not rows:
+            rows = list(candidates.filter(
+                Q(runner_id=local) | Q(channel=local)
+            ).order_by("created")[:MAX_HANDOFF_JOBS])
+        if not rows:
+            logit.info(
+                f"edge deploy {value}: no running node job for {local} — "
+                "already closed, or this engine was named with --runner-id")
+            return 0
+        closed = 0
+        for job in rows:
+            metadata = dict(job.metadata or {})
+            metadata["handoff"] = True
+            # Compare-and-set on `running`: a job the engine somehow DID
+            # finish keeps the outcome it reported for itself.
+            if not Job.objects.filter(pk=job.pk, status="running").update(
+                    status=state, finished_at=timezone.now(),
+                    metadata=metadata, modified=timezone.now()):
+                continue
+            JobEvent.objects.create(
+                job=job, channel=job.channel, event=state,
+                runner_id=job.runner_id, attempt=job.attempt,
+                details={"reason": "deploy_engine_handoff"})
+            get_manager().release_inflight(job.channel, job.pk)
+            closed += 1
+        return closed
+    except Exception:
+        logit.exception(
+            f"edge deploy {value}: failed to close the handoff job")
+        return 0
+
+
 _DESIRED_UNSET = object()
 
 
@@ -574,6 +804,8 @@ def finalize_post_restart():
                     row.pk, PlatformDeployment.STATUS_CONVERGED,
                     {"source": "post_restart", "proven": 1, "expected": 1}):
                 return None
+        # The node timed everything up to its own death; this is the rest.
+        record_engine_restart(row.pk)
 
     if not deploy.clear_status(row.pk):
         return None

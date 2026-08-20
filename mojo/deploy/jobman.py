@@ -7,6 +7,13 @@
     python3 -m mojo.deploy.jobman status          # both components
     python3 -m mojo.deploy.jobman start engine
     python3 -m mojo.deploy.jobman stop  --root /opt/api
+    python3 -m mojo.deploy.jobman stop engine --grace 2   # shorter TERM wait
+
+`stop` DOES NOT RETURN UNTIL THE PROCESSES ARE GONE — SIGTERM, then SIGKILL,
+then a bounded wait for the corpse. update.sh stops and immediately restarts
+this engine, and a `stop` that returned early made the following `start` print
+"already running" and start nothing, leaving the node with no engine until the
+next cron minute.
 
 WHAT THIS MANAGES, AND WHAT IT DELIBERATELY DOES NOT. There are two job process
 planes on a node and they are disjoint:
@@ -76,6 +83,7 @@ See `docs/django_developer/deploy/README.md`.
 """
 
 import argparse
+import functools
 import os
 import re
 import signal
@@ -91,9 +99,18 @@ VAR_LOGS = ("var", "logs")
 VAR_PIDS = ("var", "pids")
 
 # How long `stop` waits for a SIGTERM to land before escalating: ten one-second
-# polls, matching the shell loop it replaces.
+# polls, matching the shell loop it replaces. `--grace` overrides the total for
+# one call; the product below stays the default.
 TERM_POLLS = 10
 TERM_POLL_SECONDS = 1
+
+# And how long it waits AFTER SIGKILL for the corpse to actually go. SIGKILL is
+# not synchronous: the process is gone when the kernel says so, not when kill(2)
+# returns. Short polls because this is normally over in milliseconds — but it is
+# waited on, because `stop` returning early is `start` finding a live PID and
+# printing "already running" while nothing runs.
+KILL_WAIT_SECONDS = 2
+KILL_POLL_SECONDS = 0.1
 
 # Logging: the repo's standard graceful-fallback idiom. On a node the except
 # branch ALWAYS fires — mojo.helpers.logit reads paths.LOG_ROOT at module level
@@ -242,15 +259,39 @@ def pgrep_matches(pattern):
 
 
 def pid_alive(pid):
-    """`ps -p <pid>` succeeded. Takes a STRING; garbage reports dead."""
+    """`ps` still lists a RUNNABLE process. Takes a STRING; garbage reports dead.
+
+    A ZOMBIE IS DEAD. `ps -p <pid>` succeeds for a corpse whose parent has not
+    reaped it, which is how the old probe read one: as a live process. That is
+    not a philosophical distinction here — it kept the pidfile of a
+    just-SIGKILLed engine ("its PID is still alive, so the file is information,
+    not litter"), and the following `cmd_start` then saw a managed PID and
+    refused to start anything. The state column is asked for with an empty
+    header (`stat=`) so nothing but the state itself is printed; a `ps` that
+    prints nothing at all still counts as alive, which keeps every stubbed
+    `ps -p` in the test suite meaning what it always meant.
+    """
     if not pid:
         return False
     try:
-        done = subprocess.run(["ps", "-p", pid], capture_output=True)
+        done = subprocess.run(["ps", "-o", "stat=", "-p", pid],
+                              capture_output=True, text=True)
     except OSError as err:
         log.debug("ps unavailable (%s) — treating %r as dead", err, pid)
         return False
-    return done.returncode == 0
+    if done.returncode != 0:
+        return False
+    return not (done.stdout or "").strip().startswith("Z")
+
+
+def wait_gone(pids, seconds, interval):
+    """Poll until every PID is gone, or `seconds` elapse. Returns the survivors."""
+    deadline = time.monotonic() + max(0, seconds)
+    while True:
+        remaining = [pid for pid in pids if pid_alive(pid)]
+        if not remaining or time.monotonic() >= deadline:
+            return remaining
+        time.sleep(interval)
 
 
 def read_pidfile(path):
@@ -335,6 +376,20 @@ def cmd_start(root, runner_path, comp):
         print("jobman: cannot open %s: %s" % (log_path, err), file=sys.stderr)
         return 1
 
+    # THE PIDFILE IS OPENED BEFORE THE SPAWN, for the same reason the log is.
+    # An engine started as root (update.sh runs under sudo) leaves both files
+    # root-owned, and the next start as the app user cannot write either. The
+    # log open already refused loudly; the pidfile write did not — it raised
+    # AFTER Popen, leaving a running engine with no pidfile, which nothing can
+    # ever stop again and which makes every later start refuse as well.
+    try:
+        pid_handle = open(path, "w")
+    except OSError as err:
+        handle.close()
+        print("jobman: cannot write the pidfile %s: %s" % (path, err),
+              file=sys.stderr)
+        return 1
+
     print("Starting %s (foreground mode, backgrounded by shell)..." % comp)
     child_env = dict(os.environ)
     # DJANGO_SETTINGS_MODULE is deliberately NOT set here — bin/jobs.py
@@ -350,18 +405,39 @@ def cmd_start(root, runner_path, comp):
             [runner_path, comp, "foreground"],
             cwd=root, stdin=subprocess.DEVNULL, stdout=handle,
             stderr=subprocess.STDOUT, start_new_session=True, env=child_env)
+    except OSError as err:
+        pid_handle.close()
+        remove_file(path)
+        print("jobman: cannot start %s: %s" % (runner_path, err),
+              file=sys.stderr)
+        return 1
     finally:
         handle.close()
 
-    with open(path, "w") as pid_handle:
+    try:
         pid_handle.write("%d\n" % proc.pid)
+        pid_handle.close()
+    except OSError as err:
+        # The child is already running. An unrecorded engine is worse than no
+        # engine — cron starts a fresh one within the minute, but nothing will
+        # ever stop this one — so take it back down before failing.
+        signal_pids([str(proc.pid)], signal.SIGTERM)
+        if wait_gone([str(proc.pid)], KILL_WAIT_SECONDS, KILL_POLL_SECONDS):
+            signal_pids([str(proc.pid)], signal.SIGKILL)
+            wait_gone([str(proc.pid)], KILL_WAIT_SECONDS, KILL_POLL_SECONDS)
+        remove_file(path)
+        print("jobman: cannot write the pidfile %s: %s" % (path, err),
+              file=sys.stderr)
+        return 1
     print("%s PID: %d, log: %s" % (name, proc.pid, log_path))
     return 0
 
 
-def cmd_stop(root, runner_path, comp):
+def cmd_stop(root, runner_path, comp, grace=None):
     name = COMPONENTS[comp]
     path, present, managed, matches = probe(root, runner_path, comp)
+    if grace is None:
+        grace = TERM_POLLS * TERM_POLL_SECONDS
 
     # Union of the managed PID and everything pgrep found. sorted(set(...)) is a
     # LEXICAL sort over strings, which is what `sort -u` did.
@@ -380,15 +456,19 @@ def cmd_stop(root, runner_path, comp):
     print("Stopping %s (PIDs: %s)..." % (name, " ".join(pids)))
     signal_pids(pids, signal.SIGTERM)
 
-    for _ in range(TERM_POLLS):
-        if not any(pid_alive(pid) for pid in pids):
-            break
-        time.sleep(TERM_POLL_SECONDS)
-
-    remaining = [pid for pid in pids if pid_alive(pid)]
+    remaining = wait_gone(pids, grace, TERM_POLL_SECONDS)
     if remaining:
         print("Force killing %s (PIDs: %s)..." % (name, " ".join(remaining)))
         signal_pids(remaining, signal.SIGKILL)
+        # WAIT FOR THE KILL. Signalling is not stopping: this used to fall
+        # straight through, so `stop` returned with the process still dying,
+        # the pidfile still naming it, and the caller's next `start` reporting
+        # "already running" and starting nothing. update.sh now restarts the
+        # engine itself, which makes that failure a node with no engine.
+        survivors = wait_gone(remaining, KILL_WAIT_SECONDS, KILL_POLL_SECONDS)
+        if survivors:
+            print("%s did not exit after SIGKILL (PIDs: %s)"
+                  % (name, " ".join(survivors)))
 
     # Only remove the pidfile once ITS pid is gone. A pidfile naming a process
     # that survived the kill is information, not litter.
@@ -422,9 +502,21 @@ def main(argv):
                              "(default: $MOJO_PROJECT_ROOT, else cwd)")
     parser.add_argument("--runner", default=None,
                         help="the jobs runner (default: <root>/bin/jobs.py)")
+    parser.add_argument("--grace", type=float, default=None,
+                        help="stop only: seconds to wait for SIGTERM before "
+                             "escalating to SIGKILL (default: %d)"
+                             % (TERM_POLLS * TERM_POLL_SECONDS))
     parser.add_argument("--verbose", action="store_true",
                         help="log diagnostics to stderr")
     args = parser.parse_args(argv)
+    if args.grace is not None:
+        # A usage error, not a silently ignored flag. It is also exit 2, which
+        # is what update.sh's fallback branch keys on when a rollback restores
+        # a jobman that predates --grace entirely.
+        if args.command != "stop":
+            parser.error("--grace applies to `stop` only")
+        if args.grace < 0:
+            parser.error("--grace must not be negative")
 
     import logging
     # WARNING, not INFO: `status` is grepped through `2>&1`, so a routine log
@@ -452,7 +544,12 @@ def main(argv):
               file=sys.stderr)
         return 1
 
+    # Every verb dispatches uniformly as handler(root, runner_path, comp); the
+    # partial is how --grace reaches cmd_stop without giving the other two a
+    # parameter they have no use for.
     handler = VERBS[args.command]
+    if args.command == "stop" and args.grace is not None:
+        handler = functools.partial(cmd_stop, grace=args.grace)
     components = [args.component] if args.component else list(COMPONENTS)
     result = 0
     for comp in components:

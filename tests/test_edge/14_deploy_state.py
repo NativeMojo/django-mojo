@@ -7,6 +7,7 @@ mocked Redis would prove nothing about them. Keys are cleared in setup and
 per-test where armed state matters; the database and Redis are long-lived.
 """
 import json
+import uuid
 from unittest import mock
 
 from testit import helpers as th
@@ -628,3 +629,252 @@ def test_sha_validation(opts):
                    "a branch name is not a sha and must be refused")
     th.assert_true(not deploy.is_valid_sha("abc123; rm -rf /"),
                    "shell metacharacters must be refused")
+
+
+# ---------------------------------------------------------------------------
+# the node job's handoff (maestro item #2246)
+# ---------------------------------------------------------------------------
+#
+# The script is about to stop the engine that is running this deployment's
+# `deploy_node` job. Whatever the command reports about the DEPLOY, the JOB is
+# over — and nothing else is coming to say so, because the thing that would
+# have is exactly the process being killed.
+
+
+def _node_job(deployment, channel=None):
+    from mojo.apps.jobs.adapters import get_adapter
+    from mojo.apps.jobs.keys import JobKeys
+    from mojo.apps.jobs.models import Job
+    from mojo.apps.edge.services import deploy
+
+    # The row belongs to THIS node — that is the only kind the handoff closes,
+    # and `payload["runner"]` is what it matches on (see
+    # asyncjobs._publish_deploy_node).
+    if channel is None:
+        channel = deploy.local_runner_id()
+    # Long-lived Redis: clear this channel's in-flight set before adding to it.
+    get_adapter().delete(JobKeys().processing(channel))
+    job = Job.objects.create(
+        id=uuid.uuid4().hex, channel=channel, func=deploy.DEPLOY_NODE_JOB,
+        status="running", runner_id=channel,
+        payload={"sha": SHA_C, "deployment": str(deployment),
+                 "runner": channel})
+    get_adapter().zadd(JobKeys().processing(channel), {job.id: 1})
+    return job
+
+
+def _inflight(channel, job_id):
+    from mojo.apps.jobs.adapters import get_adapter
+    from mojo.apps.jobs.keys import JobKeys
+
+    return job_id in (get_adapter().zrangebyscore(
+        JobKeys().processing(channel), float("-inf"), float("inf")) or [])
+
+
+def _armed_attempt(sha=SHA_C):
+    """A durable attempt owned by THIS runner, armed on the coordination
+    lease, with its node job in flight."""
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import deploy
+
+    deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
+    row = PlatformDeployment.objects.create(
+        sha=sha, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=[deploy.local_runner_id()], transitions=[])
+    deploy.set_target(sha, actor="test", deployment_id=row.pk)
+    deploy.arm_status(sha, deployment_id=row.pk)
+    return row, _node_job(row.pk)
+
+
+@th.django_unit_test("a `deploying` report closes this node's deploy job")
+def test_deploy_status_deploying_closes_the_node_job(opts):
+    from django.core.management import call_command
+    from mojo.apps.edge.services import deploy, platform_deploy
+
+    row, job = _armed_attempt()
+    try:
+        with mock.patch.object(platform_deploy, "evidence"):
+            call_command("deploy_status", "set", "deploying", sha=SHA_C,
+                         deployment=str(row.pk))
+
+        job.refresh_from_db()
+        th.assert_eq(job.status, "completed",
+                     f"the node job must be closed by the report that "
+                     f"precedes the engine's death, got {job.status!r}")
+        th.assert_eq((job.metadata or {}).get("handoff"), True,
+                     f"the closure must be marked as a handoff, got "
+                     f"{job.metadata!r}")
+        th.assert_true(not _inflight(job.channel, job.id),
+                       "the in-flight lease must not outlive the engine")
+    finally:
+        deploy.clear_status(row.pk)
+
+
+@th.django_unit_test("a `failed` report closes this node's deploy job failed")
+def test_deploy_status_failed_closes_the_node_job(opts):
+    from django.core.management import call_command
+    from mojo.apps.edge.services import deploy
+
+    row, job = _armed_attempt()
+    try:
+        with mock.patch("mojo.apps.incident.reporter.report_event",
+                        mock.Mock(return_value=mock.Mock(pk=1))):
+            call_command("deploy_status", "set", "failed", sha=SHA_C,
+                         deployment=str(row.pk), detail="post_deploy")
+
+        job.refresh_from_db()
+        th.assert_eq(job.status, "failed",
+                     f"a failed deploy closes its node job failed, got "
+                     f"{job.status!r}")
+        th.assert_true(not _inflight(job.channel, job.id),
+                       "a failed deploy releases its lease too")
+    finally:
+        deploy.clear_status(row.pk)
+
+
+@th.django_unit_test("a superseded (exit 3) report still closes this node's job")
+def test_deploy_status_superseded_closes_the_node_job(opts):
+    """Exit 3 says the REPORT is stale. The run that produced it is still
+    over, and its engine is still about to be killed — leaving the job row
+    `running` behind a lease nobody owns."""
+    from django.core.management import call_command
+    from mojo.apps.edge.models import PlatformDeployment
+    from mojo.apps.edge.services import deploy
+
+    row, job = _armed_attempt()
+    other = PlatformDeployment.objects.create(
+        sha=SHA_B, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=[deploy.local_runner_id()], transitions=[])
+    deploy.arm_status(SHA_B, force=True, deployment_id=other.pk)
+    try:
+        call_command("deploy_status", "set", "deploying", sha=SHA_C,
+                     deployment=str(row.pk))
+        raise AssertionError("a superseded set must exit 3")
+    except SystemExit as err:
+        th.assert_eq(err.code, 3,
+                     f"a superseded set must exit 3, got {err.code}")
+    finally:
+        deploy.clear_status(other.pk)
+
+    job.refresh_from_db()
+    th.assert_eq(job.status, "completed",
+                 f"a superseded report still ends this node's job, got "
+                 f"{job.status!r}")
+    th.assert_true(not _inflight(job.channel, job.id),
+                   "a superseded report still releases the lease")
+
+
+@th.django_unit_test("the handoff verb closes the job and touches nothing else")
+def test_deploy_status_handoff_verb(opts):
+    """The tail of every successful update, including the fleet runs that
+    deliberately write no status at all."""
+    from django.core.management import call_command
+    from mojo.apps.edge.services import deploy
+
+    row, job = _armed_attempt()
+    try:
+        before = deploy.get_status()
+        call_command("deploy_status", "handoff", deployment=str(row.pk))
+
+        job.refresh_from_db()
+        th.assert_eq(job.status, "completed",
+                     f"the handoff verb must close the node job, got "
+                     f"{job.status!r}")
+        th.assert_true(not _inflight(job.channel, job.id),
+                       "the handoff verb must release the in-flight lease")
+        th.assert_eq(deploy.get_status(), before,
+                     "the handoff verb must not touch the coordination lease "
+                     "— a fleet run reaches it having reported nothing, and "
+                     "must keep reporting nothing")
+        row.refresh_from_db()
+        th.assert_eq(list(row.node_evidence or []), [],
+                     f"the handoff verb writes no evidence, got "
+                     f"{row.node_evidence!r}")
+        th.assert_eq(list(row.transitions or []), [],
+                     f"the handoff verb records no transition, got "
+                     f"{row.transitions!r}")
+    finally:
+        deploy.clear_status(row.pk)
+
+
+@th.django_unit_test("a handoff failure never fails the deploy report")
+def test_deploy_status_handoff_failure_is_swallowed(opts):
+    from django.core.management import call_command
+    from mojo.apps.jobs.manager import JobManager
+    from mojo.apps.edge.services import deploy, platform_deploy
+
+    row, job = _armed_attempt()
+    try:
+        with mock.patch.object(JobManager, "release_inflight",
+                               side_effect=RuntimeError("redis is down")):
+            with mock.patch.object(platform_deploy, "evidence"):
+                call_command("deploy_status", "set", "deploying", sha=SHA_C,
+                             deployment=str(row.pk))
+
+        status = deploy.get_status() or {}
+        th.assert_eq(status.get("state"), deploy.STATUS_DEPLOYING,
+                     f"the deploy report is the command's job and must still "
+                     f"have applied, got {status!r}")
+    finally:
+        deploy.clear_status(row.pk)
+
+
+@th.django_unit_test("deploy_status set carries the node's phase timings, or none")
+def test_deploy_status_phases(opts):
+    """`--phases` is optional in both directions: a node script that predates
+    it passes nothing, and this command must keep working — that is why
+    update.sh probes for the flag before passing it."""
+    import os
+
+    from django.conf import settings as django_settings
+    from django.core.management import call_command
+    from mojo.apps.edge.services import deploy, platform_deploy
+
+    var_root = os.path.join(django_settings.PROJECT_ROOT, "var", "deploy")
+    os.makedirs(var_root, exist_ok=True)
+    path = os.path.join(var_root, "phase_timings")
+    with open(path, "w") as stream:
+        stream.write("deploy git_sync 1200 ms\n")
+        stream.write("deploy post_deploy 41230 ms\n")
+        stream.write("deploy nonsense not-a-number ms\n")
+
+    row, _job = _armed_attempt()
+    try:
+        with mock.patch.object(platform_deploy, "evidence"):
+            call_command("deploy_status", "set", "deploying", sha=SHA_C,
+                         deployment=str(row.pk),
+                         phases="var/deploy/phase_timings")
+        row.refresh_from_db()
+        th.assert_eq(
+            [item["phase"] for item in (row.detail.get("phases") or [])],
+            ["git_sync", "post_deploy"],
+            f"the node's timings must reach the durable row, and the "
+            f"malformed line must not, got {row.detail!r}")
+    finally:
+        deploy.clear_status(row.pk)
+
+    second, _second_job = _armed_attempt()
+    try:
+        with mock.patch.object(platform_deploy, "evidence"):
+            call_command("deploy_status", "set", "deploying", sha=SHA_C,
+                         deployment=str(second.pk))
+        second.refresh_from_db()
+        th.assert_true("phases" not in (second.detail or {}),
+                       f"an older node script passes no --phases and must "
+                       f"still report normally, got {second.detail!r}")
+    finally:
+        deploy.clear_status(second.pk)
+        os.unlink(path)
+
+    third, _third_job = _armed_attempt()
+    try:
+        with mock.patch.object(platform_deploy, "evidence"):
+            call_command("deploy_status", "set", "deploying", sha=SHA_C,
+                         deployment=str(third.pk),
+                         phases="var/deploy/does-not-exist")
+        third.refresh_from_db()
+        th.assert_true("phases" not in (third.detail or {}),
+                       f"an unreadable timings file is no timings, never a "
+                       f"failed callback, got {third.detail!r}")
+    finally:
+        deploy.clear_status(third.pk)
