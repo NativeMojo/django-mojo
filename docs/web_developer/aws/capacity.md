@@ -69,6 +69,7 @@ retry.
       "fleet_available": true,
       "addresses_available": true,
       "policy_available": true,
+      "fallback_attached": [],
       "addresses": ["203.0.113.10", "203.0.113.11"],
       "attached": [
         {"instance": "i-0a1b…", "public_ip": "203.0.113.10",
@@ -130,7 +131,15 @@ addresses read: when either failed, the fleet is **unknown, not empty**, and a
 client must render the list as unavailable — never as an empty allowlist. The
 policy read gets the same honesty: when `policy_available` is false, `enabled`
 is unknown — render "Unknown", never "off" — and both actions come back
-blocked `policy_unavailable`. Cost
+blocked `policy_unavailable`.
+
+**Balancer-less installs** get a read-only answer instead of a dead end: when
+the serving read succeeds but no instance is registered behind any balancer,
+`fallback_attached` lists every Elastic IP attached to an EC2 instance in the
+region — `{instance, instance_name, public_ip, allocation_id, managed}` — so a
+single-node estate still shows the address to give providers. These rows are
+report-only: they never feed the allowlist in `addresses`, never make either
+action available, and the panel renders them "managed outside this portal". Cost
 has a sign worth stating correctly: AWS bills every public IPv4 identically,
 so an ATTACHED stable address replaces the node's auto-assigned-IPv4 charge
 (enable is net ~zero/month), and the additive `monthly_usd_per_address`

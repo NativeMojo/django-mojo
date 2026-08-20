@@ -308,6 +308,20 @@ grant for a number AWS enforces anyway; `AddressLimitExceeded` maps to
 - A dispatch failure on these two actions says the truth: the policy IS
   recorded, only the convergence did not start.
 
+### Balancer-less installs: read-only fallback
+
+Fleet discovery is the serving map, so an install with no load balancer has no
+fleet here and the toggle is deliberately absent (`no_fleet_nodes`). But the
+report still answers the question the operator came with: when the serving
+read succeeds and finds nothing registered, `egress.fallback_attached` lists
+every Elastic IP attached to an EC2 instance in the region (instance
+association is the filter — balancer- and NAT-held addresses are inbound
+plumbing and excluded), with the instance name resolved through the same
+describe. `_fallback_attached` fills a separate key on purpose: the offers and
+both runners read only the fleet-scoped facts, so a fallback row can never
+make a mutation look available. Single-node provisioned or tofu-era estates
+therefore show their vendor-allowlist address with no control attached.
+
 ### Boundaries
 
 - The fleet is what `serving_map()` shows: **registered** instances. A fleet
