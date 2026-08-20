@@ -21,6 +21,11 @@ Statuses:
 - ``certificate_failed``    issuance failed; repair the records, then retry
 - ``attached``              the alias is live (or already was — idempotent)
 
+`preview()` is the same question asked without doing anything: it runs
+`_resolve_target` — attach's own pre-write gates — and reports `ready` (with
+who publishes the DNS), `needs_domain`, or `unusable`. No provider read, no
+probe, no certificate, no write, so the dialog can call it on every keystroke.
+
 **Why `needs_domain` never delegates.** There is no public-suffix list in this
 repo, so "the registrable parent of `shop.customer.co.uk`" is a guess, and
 `delegation.initiate` on a guessed name delegates ACME control of the wrong
@@ -53,6 +58,104 @@ def _domain_for(web_app, hostname):
             if matched is None or len(base) > len(matched.name):
                 matched = candidate
     return matched
+
+
+def _needs_domain_reason(hostname):
+    """The one sentence a hostname no Domain here covers gets told.
+
+    Written once so `attach()` and `preview()` cannot drift into telling the
+    same person two different things about the same address.
+    """
+    return (f"{hostname} isn't connected here yet. Connect it on the "
+            f"Domains page, then add this address.")
+
+
+def _resolve_target(web_app, hostname, actor):
+    """Every gate `attach()` clears BEFORE it touches a provider or the db.
+
+    Extracted verbatim, in its original order, so the pre-submit `preview()`
+    below reaches its verdict through the identical code rather than a second
+    implementation that agrees today and drifts tomorrow. Raises exactly what
+    attach raised: `ValueException` for an address that can never work here,
+    `PermissionDeniedException` for one that belongs to a workspace the actor
+    has no authority in.
+
+    Returns `objict(domain, label, hostname)` with the hostname normalized.
+    `domain` is None when no Domain here covers the name — the caller turns
+    that into the needs_domain steer.
+    """
+    from mojo.apps.dnsman.services import naming
+    from mojo.apps.edge import validators
+
+    primary = web_app.vhost if web_app.vhost_id else None
+    if primary is None:
+        raise me.ValueException(
+            "Give this app its own address first, then add a custom one.")
+
+    raw = str(hostname or "").strip().lower().rstrip(".")
+    if raw.startswith("*"):
+        raise me.ValueException(
+            "A wildcard address can't be added; use one exact address.")
+    hostname = naming.normalize_domain(raw)
+
+    domain = _domain_for(web_app, hostname)
+    if domain is None:
+        return objict(domain=None, label=None, hostname=hostname)
+
+    if hostname == domain.name:
+        raise me.ValueException(
+            f"The bare domain can't point here. Use www.{domain.name} instead.")
+    label = hostname[: -(len(domain.name) + 1)]
+    if "." in label:
+        # One label keeps every alias inside the apex+wildcard certificate the
+        # domain already has. A deeper name would need its own certificate.
+        raise me.ValueException(
+            f"Use one label under {domain.name}, like "
+            f"{label.split('.')[-1]}.{domain.name}.")
+    validators.validate_label(label)
+
+    if domain.group_id != web_app.group_id:
+        # Reading an ancestor's domain is the inheritance contract; WRITING to
+        # it (this CNAME, a certificate request) needs authority in the group
+        # that OWNS it. Checked before any provider read or write.
+        if not webapp_authority.can_manage_group_webapps(actor, domain.group):
+            raise me.PermissionDeniedException(
+                f"Managing DNS for {domain.name} requires access in the "
+                "workspace that owns it")
+
+    return objict(domain=domain, label=label, hostname=hostname)
+
+
+def preview(web_app, hostname, actor):
+    """What adding this address WOULD do, decided without doing any of it.
+
+    The add-an-address dialog calls this while someone is still typing, so it
+    must be free: no provider read, no DNS probe, no certificate lookup, no
+    write. Everything it reports comes from `_resolve_target` — the same gates
+    the write runs, so the answer cannot disagree with what Add then does.
+
+    Occupancy is deliberately NOT reported. "That address is already serving
+    something else" is a fact about another tenant's vhost, and a keystroke-fast
+    endpoint that answered it would be a probe for which names are taken.
+
+    Only `ValueException` is caught. An authorization denial is the same denial
+    the write raises — it propagates, so the preview 403s exactly like Add and
+    the security incident still fires.
+    """
+    try:
+        resolved = _resolve_target(web_app, hostname, actor)
+    except me.ValueException as err:
+        return objict(
+            status="unusable",
+            hostname=str(hostname or "").strip().lower().rstrip("."),
+            reason=str(err))
+    if resolved.domain is None:
+        return objict(status="needs_domain", hostname=resolved.hostname,
+                      reason=_needs_domain_reason(resolved.hostname))
+    return objict(
+        status="ready", hostname=resolved.hostname,
+        dns=_dns_mode(resolved.domain),
+        domain={"id": resolved.domain.pk, "name": resolved.domain.name})
 
 
 def _covering_certificate(domain, hostname):
@@ -177,51 +280,23 @@ def _write_managed_cname(domain, hostname, target):
 def attach(web_app, hostname, actor, retry_certificate=False):
     """Point one more address at this app. Safe to call again at any point."""
     from mojo.apps.dnsman.models.domain import PROVIDER_MOJO
-    from mojo.apps.dnsman.services import certs, naming
-    from mojo.apps.edge import validators
+    from mojo.apps.dnsman.services import certs
     from mojo.apps.edge.models import Vhost
     from mojo.apps.edge.services import (
         webapp_auth_routes, webapp_destination, webapp_onboarding,
     )
 
-    primary = web_app.vhost if web_app.vhost_id else None
-    if primary is None:
-        raise me.ValueException(
-            "Give this app its own address first, then add a custom one.")
-
-    raw = str(hostname or "").strip().lower().rstrip(".")
-    if raw.startswith("*"):
-        raise me.ValueException(
-            "A wildcard address can't be added; use one exact address.")
-    hostname = naming.normalize_domain(raw)
-
-    domain = _domain_for(web_app, hostname)
+    # Every pre-write gate, in its original order, shared with preview().
+    resolved = _resolve_target(web_app, hostname, actor)
+    hostname = resolved.hostname
+    domain = resolved.domain
     if domain is None:
-        return objict(
-            status="needs_domain", hostname=hostname,
-            reason=f"{hostname} isn't connected here yet. Connect it on the "
-                   f"Domains page, then add this address.")
-
-    if hostname == domain.name:
-        raise me.ValueException(
-            f"The bare domain can't point here. Use www.{domain.name} instead.")
-    label = hostname[: -(len(domain.name) + 1)]
-    if "." in label:
-        # One label keeps every alias inside the apex+wildcard certificate the
-        # domain already has. A deeper name would need its own certificate.
-        raise me.ValueException(
-            f"Use one label under {domain.name}, like "
-            f"{label.split('.')[-1]}.{domain.name}.")
-    validators.validate_label(label)
-
-    if domain.group_id != web_app.group_id:
-        # Reading an ancestor's domain is the inheritance contract; WRITING to
-        # it (this CNAME, a certificate request) needs authority in the group
-        # that OWNS it. Checked before any provider read or write.
-        if not webapp_authority.can_manage_group_webapps(actor, domain.group):
-            raise me.PermissionDeniedException(
-                f"Managing DNS for {domain.name} requires access in the "
-                "workspace that owns it")
+        return objict(status="needs_domain", hostname=hostname,
+                      reason=_needs_domain_reason(hostname))
+    label = resolved.label
+    # `_resolve_target` already refused an app with no address of its own, so
+    # the FK is set — and its own read left it cached on the instance.
+    primary = web_app.vhost
 
     # Every row at this name, ENABLED OR NOT. Scanning only enabled rows
     # matched the partial unique constraint but missed a PARKED one — another

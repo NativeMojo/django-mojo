@@ -210,6 +210,38 @@ def on_webapp_attach_domain(request):
     return dict(webapp=web_app.pk, **result)
 
 
+@md.GET('webapp/attach_preview')
+@md.denies_key_backed_session()
+@md.requires_params("webapp", "hostname")
+@md.requires_perms("manage_webapp")
+def on_webapp_attach_preview(request):
+    """What `attach_domain` WOULD do with this address, without doing any of it.
+
+    Deliberately not the read idiom the rest of this file's GETs use. The other
+    reads answer "what is this site doing", and a viewer is entitled to that;
+    this one answers "what would happen if you pressed Add", which is a fact
+    about a write. It therefore carries the WRITE's permission
+    (`manage_webapp`), and its only client is the add-an-address dialog behind
+    the same manager gate.
+
+    No `requires_fresh_auth`: nothing changes here. The step-up belongs on the
+    write it precedes, which still has it.
+
+    The service does no provider read, no DNS probe and no certificate lookup,
+    so the dialog can call this on every keystroke. An authorization denial
+    propagates as a denial rather than a 200 verdict — the same refusal the
+    write gives, from the same code.
+    """
+    from mojo.apps.edge.services import webapp_alias
+
+    web_app = WebApp.get_instance_or_404(request.DATA.get("webapp"))
+    WebApp.rest_check_permission_or_raise(
+        request, ["SAVE_PERMS", "VIEW_PERMS"], web_app)
+    result = webapp_alias.preview(
+        web_app, request.DATA.get("hostname"), request.user)
+    return dict(webapp=web_app.pk, **result)
+
+
 @md.POST('webapp/detach_domain')
 @md.denies_key_backed_session()
 @md.requires_fresh_auth(600)
