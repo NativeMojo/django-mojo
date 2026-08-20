@@ -45,7 +45,15 @@ MIGRATE_TIMEOUT = 1800
 
 # The local health probe, polled rather than assumed: systemd returns as soon as
 # it has forked, and uvicorn takes a moment to bind.
-PROBE_URL = "http://127.0.0.1/api/version"
+#
+# HTTPS with -k, deliberately. The shipped :80 vhost 301s everything except the
+# ACME path to HTTPS, so a plain-http probe can only ever see nginx's redirect —
+# never the app (the live MojoLand run failed convergence on exactly that). The
+# :443 vhost serves the snakeoil certificate until the certificate step runs,
+# so -k is a fact of this moment in the sequence, not a shortcut: the probe's
+# subject is "does nginx reach uvicorn's socket and does the app answer",
+# certificate validity is the NEXT step's subject.
+PROBE_URL = "https://127.0.0.1/api/version"
 PROBE_ATTEMPTS = 30
 PROBE_SLEEP = 4
 
@@ -166,7 +174,7 @@ def wait_for_api(run, host, findings, attempts=PROBE_ATTEMPTS,
     """
     for attempt in range(attempts):
         rc, out, _ = run(
-            f"curl -fsS -o /dev/null -w '%{{http_code}}' {PROBE_URL}",
+            f"curl -fsSk -o /dev/null -w '%{{http_code}}' {PROBE_URL}",
             timeout=30)
         if rc == 0 and out.strip() == "200":
             findings.append(report.existing(

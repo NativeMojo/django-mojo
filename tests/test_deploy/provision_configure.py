@@ -320,3 +320,19 @@ def test_multi_node_skips_the_certificate_block(opts):
                    f"from instead — got: {printed}")
     th.assert_true(APEX in printed,
                    "and the hand-off must name the domain it is about")
+
+
+@th.unit_test("the convergence probe goes through nginx's https, not the :80 redirect")
+def test_probe_is_https_with_snakeoil_tolerance(opts):
+    import inspect
+    from mojo.deploy.provision import remote
+
+    th.assert_true(remote.PROBE_URL.startswith("https://127.0.0.1"),
+                   "the shipped :80 vhost 301s everything except ACME, so a "
+                   "plain-http probe can only ever see nginx's redirect — the "
+                   "live MojoLand run failed convergence on exactly this")
+    source = inspect.getsource(remote)
+    th.assert_true("-fsSk" in source,
+                   "the probe must tolerate the snakeoil certificate (-k): "
+                   "certificate validity is the NEXT step's subject, and "
+                   "pre-certbot the :443 vhost can only serve self-signed")
