@@ -85,6 +85,16 @@ both WebApp and DNS authority to own an existing WebApp group; adding a
 managed domain remains a DNS administrator action. HTTPS issuance and renewal
 are automatic and do not appear as onboarding decisions.
 
+A **name-only run has one decision in it, so it neither counts steps nor stops
+to congratulate**: the four-step progress bar is not rendered at all (the
+address-first repair and change-address runs still render it, unchanged), and
+when the operation completes the wizard clears its durable draft, closes
+itself, and lands on `#/deployments?webapp=<id>&tab=setup` — the app's own
+**Set up deploys** tab, whose live-now banner says what the congratulations
+screen used to. The landing is guarded once per run, so the run panel's polling
+cannot fire it twice. The adopt/repair path keeps the explicit **Set up
+deploys** / **Done** buttons: that run was not about a new app.
+
 After a site is live, each app has its own **full page**
 (`#/deployments?webapp=<id>`, not a modal — a link anyone can follow or
 share) with six tabs:
@@ -104,7 +114,18 @@ never mint an ACME order), or a `needs_domain` steer to the Domains page. Check
 re-issues the same `attach_domain` call, and a refusal is shown as the server
 worded it, never reworded client-side. The "we handle the records and HTTPS for
 you" copy keys on the response's `dns` field, not on the shape of the
-hostname),
+hostname. **Before Add is pressed**, the dialog debounces the typed address by
+350 ms (and answers immediately on blur) against
+`GET /api/edge/webapp/attach_preview`, painting the same verdict the write
+would give: `ready` says whether this domain is managed here or its DNS is at
+the operator's own host, while `needs_domain` and `unusable` reuse the write
+painter's own nodes so each sentence exists once. One sequence counter covers
+the hint and the submit, so a late preview can never paint over a real result;
+the hint fires no `runAction` and swallows its own failures — it triggers
+nothing, so there is no pending state to pin. A **Cancel** button sits first in
+the action row and is removed once the address is attached. The records table
+now leads with a **What it does** column carrying the wizard's own
+`recordPurpose` sentences, so two near-identical CNAMEs are never a guess),
 **Deploys** (deployment history from `GET /api/edge/webapp/deployment` with
 one-click `POST /api/edge/webapp/rollback`), **Set up deploys** (three honest
 sub-tabs — **GitHub Actions** re-shows the generated workflow and can mint a
@@ -113,7 +134,13 @@ browser (`crypto.subtle`, SHA-256) and PUTs it straight to storage through the
 same `POST /api/edge/release` → PUT → `POST /api/edge/release/complete` flow
 CI uses, authenticated by the operator's own interactive session rather than
 `MOJO_DEPLOY_KEY` — see [Releasing a site build § An interactive session works too](../edge/releases.md#an-interactive-session-works-too);
-**Any other CI / API** names the three calls any pipeline can make),
+**Any other CI / API** names the three calls any pipeline can make — and, for an
+app with an address but no release yet, the tab **opens with a live-now
+banner**: the app is already serving the welcome page it came with, deploying
+only replaces that page, and there is nothing to fix first. The HTTPS clause is
+the certificate's own state via `certState` — a pending certificate drops the
+clause and gains "still being issued — that finishes on its own" — and the
+banner carries the app's `https_origin` as an **Open** link),
 **Serving** (below), **Deploy
 key** (rotate `MOJO_DEPLOY_KEY`), and a **Danger** area (take
 offline via `POST /api/edge/webapp/detach_address`, and safe-delete the app —
@@ -184,6 +211,31 @@ submission freezes the exact payload. Reopen first queries detail for that UUID
 and mounts the authoritative operation when it exists; otherwise the UI permits
 only exact replay with every identity field disabled. **Start over** is the
 explicit abandonment boundary before any edits or a new UUID.
+
+One domain is its own page (`#/domains?domain=<id>`), and it now says what the
+domain is **for** and what is already **on** it — both read-only, both from
+reads the portal already makes:
+
+- A **role line** under the header. When the domain belongs to a workspace and
+  the operator holds `manage_webapps`, the page reads
+  `GET /api/edge/webapp/onboarding/options?group=<id>` and, if that workspace's
+  `apps_domain` is this domain, badges it **Apps domain** with the plain reason:
+  new apps in this workspace go live under it, and one wildcard record plus one
+  certificate cover every one of them. A platform-scoped domain makes no call;
+  a DNS-only operator makes no call and sees no badge, which is deliberate — a
+  permission error on a page about DNS would be worse than silence.
+- A **What's on this domain** panel: the `*.<domain>` CNAME and why a new app
+  needs no record of its own; every address on the domain joined by **exact
+  domain id** from `GET /api/edge/vhost?graph=default&size=200` and linked to
+  its app through `GET /api/edge/webapp?graph=default&size=200` (an address no
+  app claims as its own is shown honestly as an extra address rather than
+  hidden); and the MX/TXT records with the sentence that matters — putting an
+  app live never adds, changes, or removes anything there. The zone read
+  (`GET /api/dnsman/dns?domain=<id>`) is **skipped outright** when the domain's
+  provider is `mojo` or its status is not `active`: there is no zone here to
+  read, and asking anyway is a guaranteed provider error rendered as a broken
+  domain. Each read is caught on its own, so one failure still leaves the other
+  blocks standing.
 
 Certificates poll list/detail metadata only. Upstreams are declared or retired,
 never repointed. The Vhost wizard exposes only the four structured edge shapes;

@@ -197,6 +197,21 @@ a four-shape wizard (`api`, `site`, `site_api`, `redirect`); `site_api` routes
 are created sequentially so a partial result can be repaired without replaying
 successful rows.
 
+The domain detail page adds two read-only surfaces and **no portal-only
+endpoints**. A capability-gated **role line** reads
+`GET /api/edge/webapp/onboarding/options?group=<id>` — only for a
+group-scoped domain, and only with `manage_webapps` — and badges the domain
+**Apps domain** when that workspace's `apps_domain` is this one; a DNS-only
+operator never makes the call and simply sees no badge. A **What's on this
+domain** overview panel joins the existing `GET /api/dnsman/dns`,
+`GET /api/edge/vhost` and `GET /api/edge/webapp` reads into the wildcard
+record, the addresses on the domain (matched by exact `domain.id`, never a name
+suffix) and the MX/TXT rows an app going live never touches. The zone read is
+skipped outright for a `mojo`-provider or non-`active` domain — there is no
+zone here to read — and each read is caught independently so one failure leaves
+the other blocks standing. Its loading state renders into a body node, not over
+the panel heading, like every other panel-scoped load in the lane.
+
 The Settings feature owns ongoing framework configuration and the typed
 AUTH_CONFIG/expected-fleet browser controls. See
 [Admin Settings catalog](admin_portal/settings.md). Advanced contributes only

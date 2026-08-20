@@ -141,6 +141,14 @@ build produces.
 
 ## Step 5 — Set up deploys
 
+**Your app is already live before you deploy anything.** Its address, its
+padlock and a welcome page all went up during setup — the tab says so at the
+top, with a link to open it. Deploying replaces that welcome page with your
+build. There is nothing broken to fix first, and nothing here is a repair.
+
+(If the padlock is still being issued, the banner says that too. It finishes on
+its own; nothing on this page is waiting on it.)
+
 "Deploying" just means: whenever your app changes, its new files get published
 to your address automatically. Pick how your files reach us.
 
@@ -184,6 +192,14 @@ that comes back green, you're live: your address works, the padlock is real,
 and your latest build is what visitors see.
 
 That's it. You went from an address you had in mind to a working, secured site.
+
+**Where it leaves you.** When you created the app from just a name, the wizard
+does not stop to congratulate you — it closes itself and drops you on your
+app's own page, on its **Set up deploys** tab, where a banner repeats that the
+app is live and the three ways to ship a build are waiting. When you were
+*changing* an existing app's address instead, the wizard finishes with an
+explicit **Set up deploys** button and a **Done** button, because that run was
+not about a new app.
 
 ## Managing your app afterward
 
@@ -259,8 +275,24 @@ addresses at it — `www.yourcompany.com`, `shop.yourcompany.com` — and every 
 of them serves exactly the same thing, the same build, with its own padlock.
 Your app's original address keeps working; nothing moves.
 
-On the app's **Overview** or **Serving** tab, press **Add a custom domain**,
-type the address, and press **Add address**. What happens next depends on your setup, and the
+On the app's **Overview** or **Serving** tab, press **Add a custom domain** and
+type the address. **You are told which case you are in before you press
+anything.** As you type, the dialog checks the address and says one of:
+
+- **"<yourdomain> is managed here"** — we'll point the address at your app and
+  issue its padlock. Nothing to add at your DNS host.
+- **"<yourdomain>'s DNS is at your own host"** — add the address and we'll show
+  you the exact record to publish, then check it for you.
+- **the domain isn't connected here yet** — with a link to the **Domains** page,
+  because connecting a domain is its own decision.
+- **the address can't be used at all** — the bare domain, a deeper name, a
+  wildcard — with the reason, so you can fix it before submitting.
+
+This check writes nothing and costs nothing; it deliberately does not tell you
+whether the address is already taken, which only pressing **Add address** can
+settle. **Cancel** closes the dialog without doing anything.
+
+Then press **Add address**. What happens next depends on your setup, and the
 screen tells you which one you're in:
 
 - **Your domain is already run here.** Nothing to do — the record is written
@@ -268,7 +300,9 @@ screen tells you which one you're in:
   being issued you'll see "Setting up HTTPS" and a **Check now** button; give it
   a few minutes and press it.
 - **Your DNS lives somewhere else.** You get the exact record to add, with
-  **Copy** buttons, same as Step 3. Add it at your DNS host, come back, and
+  **Copy** buttons, same as Step 3 — and each row leads with *what it does*
+  ("Points your address at us", "Lets us issue your HTTPS certificate"), so two
+  near-identical records are never a guess. Add it at your DNS host, come back, and
   press **I've added them — check now**. Using Cloudflare? Set the record to
   **DNS only** (grey cloud) or the check will fail.
 - **We don't know that domain yet.** You'll be told to connect the domain

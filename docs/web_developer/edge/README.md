@@ -337,6 +337,7 @@ response.
 | POST | `/api/edge/webapp/rollback` | Repoint the app at an already-verified earlier release. Body `{webapp, release}`. A foreign release id 404s; a `pending` (unverified) release is refused. | Human-only (CI keys denied), fresh-auth; `manage_webapp` + explicit object check |
 | POST | `/api/edge/webapp/detach_address` | Take the app offline: unlink and delete its serving vhost, keep the app and its release history. Every extra ("alias") address is removed with it. | Human-only, fresh-auth; `manage_webapp` |
 | POST | `/api/edge/webapp/attach_domain` | Point one more address you own at this app. Body `{webapp, hostname, retry_certificate?}`. Returns `{webapp, status, hostname, reason, dns, ...}` — see [the status table](#attaching-your-own-domain-to-an-app) below. Safe to call again — that *is* the "check again" action — and it makes at most one provider write per call. An address that can never work here (a wildcard, the bare domain, a deeper name, one already serving something else) is an error, not a status. | Human-only (CI keys denied), fresh-auth; `manage_webapp` + explicit object check |
+| GET | `/api/edge/webapp/attach_preview?webapp=<id>&hostname=<name>` | What `attach_domain` **would** do with that hostname, without doing any of it. Returns `{webapp, status, hostname, ...}`: `ready` (plus `dns` and `domain: {id, name}`), `needs_domain` (plus the same `reason` the write returns), or `unusable` (plus the sentence the write would have refused with). Free to call on every keystroke — no DNS lookup, no certificate work, no write — and it deliberately does **not** say whether the address is already taken; the write answers that at submit. **No step-up — it is a read**, but it carries the *write's* permission because it is a question about a write. | Human-only (CI keys denied); `manage_webapp` + explicit object check |
 | POST | `/api/edge/webapp/detach_domain` | Remove one extra address. Body `{webapp, vhost}` — the `vhost` id from the address list. Returns `{webapp, status: "detached", hostname}`. The app's own address and another app's address both 404 (the same non-disclosing answer either way). The app, its certificate and its releases are untouched — take the app's *own* address down with `detach_address` instead. | Human-only, fresh-auth; `manage_webapp` + explicit object check |
 | GET | `/api/edge/webapp/aliases?webapp=<id>` | Every address this app answers on: `{webapp, addresses: [{role, vhost, hostname, domain: {id, name, provider}, dns, enabled, certificate}]}`, the app's own address first (`role: "primary"`, then `"alias"`). `certificate` is `{status, not_after}` or null. No step-up — it is a read — and no live DNS lookup, so `dns` is the domain's mode, not a per-name probe. | Human-only; `view_dns` / `manage_dns` / `security` + object access |
 | GET | `/api/edge/webapp/health?webapp=<id>` | On-demand public HTTPS reachability of the live address: `healthy` / `unhealthy` / `not_configured`. Never echoes a raw probe error. | `view_dns` / `manage_dns` / `security` |
@@ -387,6 +388,16 @@ carries other DNS records or points somewhere else.
 If the domain belongs to a **parent** workspace rather than this app's own, you
 need manage authority in the workspace that owns the domain; reading it is not
 enough to write a record or request a certificate against it.
+
+**Tell the user which case they are in before they submit.** `attach_preview`
+is the same decision without the write, so the built-in Admin's add-an-address
+dialog calls it as the address is typed and says whether the platform will
+publish the record (`dns: "managed"`), whether the user will (`"external"`),
+whether the domain needs connecting first (`needs_domain`), or whether the
+address can never work (`unusable`) — all before Add is pressed. It never
+claims the address is free; only the write knows that. If your own client does
+the same, key the copy on `status` and `dns`, exactly as you would for the
+write's response.
 
 ### Deploy key
 

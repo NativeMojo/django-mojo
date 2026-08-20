@@ -741,6 +741,41 @@ round trip — a status list must not spend one per row.
 additive-only, and the list is `[]`, never null, so a reader never branches on
 absence.
 
+### The pre-write gate, and asking without doing
+
+Every check `attach()` clears **before** it touches a provider or the database
+lives in `_resolve_target(web_app, hostname, actor)`, in the order it always
+ran: address-first precondition → wildcard refusal →
+`naming.normalize_domain` → `_domain_for` → apex refusal → deep-label refusal →
+`validators.validate_label` → ancestor-group write authority. It returns
+`objict(domain, label, hostname)` with the hostname normalized, and `domain`
+`None` when nothing here covers the name. `attach()` calls it and carries on;
+the `needs_domain` sentence itself is `_needs_domain_reason(hostname)`, so both
+callers say one thing about one fact.
+
+`preview(web_app, hostname, actor)` is that gate and **nothing else**:
+
+| Status | Carries |
+|---|---|
+| `ready` | `hostname`, `dns` (`managed` / `external`), `domain` (`{id, name}`) |
+| `needs_domain` | `hostname`, the same `reason` `attach()` returns |
+| `unusable` | the raw lowered/stripped `hostname`, and `reason` = the sentence `attach()` would have raised |
+
+Three properties are load-bearing:
+
+- **It is free.** No `dns.list_records`, no `dns.upsert_record`, no
+  `certs.request_certificate`, no `probe.query_cname`, no certificate lookup,
+  no write. The dialog calls it while someone is typing, so one provider round
+  trip here is a round trip per keystroke.
+- **It reports no occupancy.** "That address is already serving something else"
+  is a fact about another tenant's vhost; a keystroke-fast endpoint that
+  answered it would be a probe for which names are taken. The write still
+  refuses, plainly, at submit.
+- **Only `ValueException` is caught.** `PermissionDeniedException` from the
+  ancestor-authority check **propagates**, so the preview refuses exactly as the
+  write does and the security incident still fires. Turning it into a 200
+  `unusable` would launder a denial into a hint.
+
 ### Deploy fan-out
 
 `releases.desired_webapps` emits **one row per alias carrying the identical
@@ -821,6 +856,7 @@ decorator gates the verb, never the specific row).
 | `edge/webapp/health` | GET | On-demand public HTTPS reachability of the live address: `healthy` / `unhealthy` / `not_configured` (no vhost). Never echoes a raw probe exception. |
 | `edge/webapp/detach_address` | POST | Take a site offline: unlink and delete its serving vhost, keep the app. Every alias address goes with it. |
 | `edge/webapp/attach_domain` | POST | Point one more address (an **[alias](#extra-addresses-aliases)**) at this site. Body `{webapp, hostname, retry_certificate?}`; returns `webapp_alias.attach()` plus `webapp` — `status` (`needs_domain` / `records_needed` / `certificate_pending` / `certificate_failed` / `attached`), a plain `reason`, `dns` (`managed` / `external`) and, when the caller has records to publish, `records`. Re-enterable: the UI's Check button is this same call, and an already-attached address makes no provider write. `retry_certificate` goes through `_flag()`, not `bool()` — a browser sends form values as strings and `bool("false")` is True, so only a real `True` or `"1"`/`"true"`/`"yes"`/`"on"` counts; everything else, junk included, is False. Human-only, fresh-auth, plus the explicit object check. |
+| `edge/webapp/attach_preview` | GET | What `attach_domain` **would** do with `{webapp, hostname}`, without doing any of it — `webapp_alias.preview()` plus `webapp`: `status` (`ready` / `needs_domain` / `unusable`), `hostname`, and for `ready` the `dns` mode and `domain` (`{id, name}`). Deliberately **not** this file's read idiom: it answers a question about a write, so it carries the write's `manage_webapp` and the same explicit object check — but **no** step-up, because it changes nothing. Its only client is the manager-gated add-an-address dialog, which calls it as you type. Reports no occupancy, and an ancestor-authority denial propagates as a denial rather than a verdict. |
 | `edge/webapp/detach_domain` | POST | Remove one alias address. Body `{webapp, vhost}`; the address is scoped to this app's **aliases**, so the app's own address and a foreign one both 404 rather than disclose. The certificate and the app are untouched. Human-only, fresh-auth, plus the explicit object check. |
 | `edge/webapp/aliases` | GET | `webapp_alias.status_rows()`: every address this app answers on, primary first (`role: "primary"`), then aliases — `vhost`, `hostname`, `domain` (`{id, name, provider}`), `dns` mode, `enabled`, and certificate `status`/`not_after`. Human-only, but a read — so no step-up, `VIEW_PERMS`, and no provider round trip. |
 | `edge/webapp/serving` | GET | Everything about how this app is served, as one payload — see [Serving](#serving-address-certificate-shape-and-paths). A read: `VIEW_PERMS`, no step-up. `serving.pools` and `upstreams` are populated **only** when the caller also passes `SAVE_PERMS` (evaluated non-raisingly with `rest_check_permission`); a viewer gets `null` for both. |
