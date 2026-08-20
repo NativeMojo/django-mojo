@@ -548,6 +548,26 @@ export async function capacityPanel(ctx, signal = null) {
             : BLOCKED_COPY.policy_unavailable,
         detailTone: 'warning'})];
     }
+    // Balancer-less install: no fleet for the toggle to manage, but a node
+    // holding an address is still the answer an operator came for. Read-only —
+    // no control is offered, and the rows never feed the offers.
+    const fallback = egress.fallback_attached || [];
+    const fleetless = !(egress.attached || []).length
+      && !(egress.pending_nodes || []).length;
+    if (fleetless && fallback.length) {
+      const ips = [...new Set(fallback.map((row) => row.public_ip)
+        .filter(Boolean))].join('  ');
+      return [
+        statusRow({tone: 'ok', name: 'Stable outbound IPs', value: 'external',
+          detail: `give providers: ${ips} · managed outside this portal — no `
+            + 'load balancer here, so there is nothing for this control to do',
+          mono: true}),
+        ...fallback.map((row) => statusRow({
+          tone: 'muted', name: row.instance_name || row.instance,
+          value: row.public_ip || '', mono: true,
+          detail: 'stable address · attach or detach in the AWS console'})),
+      ];
+    }
     const rows = [];
     const pending = egress.pending_nodes || [];
     const list = (egress.addresses || []).join('  ');

@@ -830,6 +830,9 @@ def _build(elbv2_client=None, ec2_client=None, rds_client=None, cache_client=Non
     addresses = _collect(envelope, "addresses", "ec2:DescribeAddresses",
                          lambda: ec2_helper.address_map(client=ec2_client))
     envelope["egress"] = _egress_envelope(serving, addresses)
+    if serving is not None and addresses is not None and not _fleet_ids(serving):
+        envelope["egress"]["fallback_attached"] = _fallback_attached(
+            addresses, envelope, ec2_client=ec2_client)
     held = {row.get("instance") for row in envelope["egress"]["attached"]}
     for row in envelope["nodes"]["instances"]:
         row["stable_ip"] = row["id"] in held
@@ -874,7 +877,43 @@ def _egress_envelope(serving, addresses):
         "reserved": view["reserved"],
         "to_allocate": max(0, len(view["pending"]) - len(view["reserved"])),
         "monthly_usd_per_address": EIP_MONTHLY_USD,
+        # Balancer-less installs: filled by _build from _fallback_attached.
+        # Deliberately a separate key — the offers and both runners read only
+        # the fleet-scoped facts above, so a read-only fallback row can never
+        # make a mutation look available.
+        "fallback_attached": [],
     }
+
+
+def _fallback_attached(addresses, envelope, ec2_client=None):
+    """Balancer-less installs: what holds a stable address anyway. Read-only.
+
+    With no registered fleet there is nothing for the toggle to manage — but
+    an operator on a single-node install still needs the address vendors must
+    allow, and "no load balancer" must not read as "no stable address".
+    Association to an EC2 INSTANCE is the filter: an address held by a load
+    balancer or a NAT gateway is inbound plumbing, not node egress.
+    """
+    held = [row for row in addresses or [] if row.get("instance_id")]
+    if not held:
+        return []
+    ids = sorted({row["instance_id"] for row in held})
+    facts = _collect(envelope, "instances", "ec2:DescribeInstances",
+                     lambda: ec2_helper.instance_map(
+                         ids, client=ec2_client)) or {}
+    rows = []
+    for row in held:
+        instance = row["instance_id"]
+        rows.append({
+            "instance": instance,
+            "instance_name": (facts.get(instance) or {}).get("name") or instance,
+            "public_ip": row.get("public_ip"),
+            "allocation_id": row.get("allocation_id"),
+            "managed": _stable_tagged(row.get("tags")),
+        })
+    rows.sort(key=lambda row: (str(row.get("instance_name") or ""),
+                               str(row.get("instance") or "")))
+    return rows
 
 
 def report(refresh=False, elbv2_client=None, ec2_client=None, rds_client=None,

@@ -1152,3 +1152,53 @@ def test_rest_fleet_resource_is_ignored(opts):
             f"{applied.call_args!r}"
         assert audited.call_args[0][2] == "fleet:op-9", \
             f"the audit subject was steerable: {audited.call_args!r}"
+
+
+# ── balancer-less read-only fallback ────────────────────────────────────────
+
+@th.django_unit_test("a balancer-less install still shows who holds a stable address")
+def test_report_fallback_for_balancerless_install(opts):
+    # A stage-shaped estate: one node, no registered fleet, an EIP attached
+    # by an external tool (opentofu tags), plus an NLB-held address and a free
+    # reservation that must both stay out of the fallback.
+    ec2 = _ec2_client(
+        instances=[_instance(NODE_A, "wmx1", public_ip=IP_A)],
+        addresses=[
+            _eip(ALLOC_A, IP_A, instance_id=NODE_A,
+                 tags={"Env": "stage", "ManagedBy": "opentofu"}),
+            _eip("eipalloc-000000000000n1b00", "198.51.100.44",
+                 association_id="eipassoc-nlb", network_interface_id="eni-nlb"),
+            _eip(ALLOC_FREE, IP_FREE, tags=_stable_tags()),
+        ])
+    envelope = _report(elbv2=_elbv2_client(targets=[]), ec2=ec2)
+    egress = envelope["egress"]
+
+    assert egress["fallback_attached"] == [{
+        "instance": NODE_A, "instance_name": "wmx1", "public_ip": IP_A,
+        "allocation_id": ALLOC_A, "managed": False,
+    }], f"the externally managed address was not surfaced: " \
+        f"{egress['fallback_attached']!r}"
+    assert egress["addresses"] == [] and egress["attached"] == [], \
+        "fallback rows must never leak into the fleet-scoped allowlist"
+    assert envelope["actions"]["enable_stable_ips"]["blocked_reason"] \
+        == "no_fleet_nodes", \
+        "the toggle must stay absent — the fallback is read-only"
+
+
+@th.django_unit_test("a managed-tagged fallback address never makes disable available")
+def test_report_fallback_never_reaches_offers(opts):
+    # Even wearing this feature's own tag, an address on an unregistered
+    # instance is outside the fleet: disable must stay blocked, because the
+    # runner (fleet-scoped) would detach nothing and must not be offered.
+    ec2 = _ec2_client(
+        instances=[_instance(NODE_A, "wmx1", public_ip=IP_A)],
+        addresses=[_eip(ALLOC_A, IP_A, instance_id=NODE_A,
+                        tags=_stable_tags("wmx1"))])
+    envelope = _report(elbv2=_elbv2_client(targets=[]), ec2=ec2)
+
+    assert envelope["egress"]["fallback_attached"][0]["managed"] is True, \
+        "the managed flag should still report the tag truthfully"
+    assert envelope["actions"]["disable_stable_ips"] == {
+        "offered": False, "blocked_reason": "not_enabled"}, \
+        f"a fallback row reached the offers: " \
+        f"{envelope['actions']['disable_stable_ips']!r}"
