@@ -1,17 +1,21 @@
-// URL-first WebApp onboarding. The person types the web address they want and
-// everything else is worked out for them: an un-serveable shape is steered, a
-// domain hosted somewhere else is handled by showing the exact records to add,
-// and the first deployment is set up step by step. No framework words in the
-// primary copy — the raw record type appears only where someone types it at
-// their own DNS host, and technical identifiers live under "Advanced".
+// Name-first WebApp onboarding. A NEW app asks for exactly one thing — its
+// name — and goes live on the workspace's apps domain with an address, HTTPS,
+// and a starter page, all automatic; the first deploy is set up afterwards on
+// the app's own page. The address-first machinery below (addressPhase and
+// friends) still powers the repair and change-address flows, where the person
+// really is choosing an address. No framework words in the primary copy — the
+// raw record type appears only where someone types it at their own DNS host,
+// and technical identifiers live under "Advanced".
 import {api, apiOnce, badge, formatDate, h, icon, listData, openModal} from '../../core.js';
 import {routeHref} from '../../components/routes.js';
 
 const ONBOARDING_DRAFT_KEY = 'mojo-admin:webapp-onboarding-draft:v1';
+const LAST_GROUP_KEY = 'mojo-admin:webapp-last-group:v1';
 const NEW_GROUP_VALUE = 'new';
 // The four things a newcomer moves through. Records and certificate work live
-// inside "Set up"; the address steering lives inside "Address".
-const WIZARD_STEPS = ['Address', 'Set up', 'Deploy', 'Go live'];
+// inside "Set up"; naming (new apps) and address steering (repair) both live
+// inside the first step.
+const WIZARD_STEPS = ['Name & address', 'Set up', 'Deploy', 'Go live'];
 
 function pendingDraft() {
   try {
@@ -38,6 +42,21 @@ function initialGroup(ctx) {
   if (groups.length) return String(groups[0].id);
   if (ctx.can_create_webapp_group) return NEW_GROUP_VALUE;
   return '';
+}
+
+function rememberGroup(groupId) {
+  try { sessionStorage.setItem(LAST_GROUP_KEY, String(groupId)); } catch (_) { /* storage unavailable */ }
+}
+
+// The workspace a new app defaults into: the last one used here (the options
+// payload does not say which workspace owns the apps domain), else the first
+// eligible one.
+function defaultGroup(ctx) {
+  const groups = ctx.webapp_groups || [];
+  let saved = null;
+  try { saved = sessionStorage.getItem(LAST_GROUP_KEY); } catch (_) { saved = null; }
+  if (saved && groups.some((row) => String(row.id) === String(saved))) return String(saved);
+  return groups.length ? String(groups[0].id) : '';
 }
 
 function field(label, input, help = '') {
@@ -95,9 +114,15 @@ export function startChangeAddress(ctx, reloadApps, adopt) {
 }
 
 function runWizard(ctx, reloadApps, resumeDraft, adopt) {
+  // A new app starts at the one-input name phase. The address-first phases
+  // remain the machinery for change-address/repair (adopt), and the only path
+  // for someone whose sole option is creating a brand-new workspace — a new
+  // workspace can have no apps domain yet, so name-only creation can't apply.
+  const newAppEntry = (ctx.webapp_groups || []).length ? 'name' : 'address';
   const state = {
     ctx, reloadApps, disposed: false, pollTimer: null, adopt: adopt || null,
-    phase: 'address', groupId: adopt ? String(adopt.group_id) : initialGroup(ctx),
+    phase: adopt ? 'address' : newAppEntry,
+    groupId: adopt ? String(adopt.group_id) : (defaultGroup(ctx) || initialGroup(ctx)),
     url: '', precheck: null, resolved: null, options: null,
     operation: null, message: '',
   };
@@ -105,7 +130,7 @@ function runWizard(ctx, reloadApps, resumeDraft, adopt) {
   const close = openModal({
     title: adopt ? `Change the address for ${adopt.display_name || 'your app'}` : 'New web app',
     subtitle: adopt ? 'Pick the new address. The current one keeps serving until the new one is ready.'
-      : 'Start with the address you want. We work out the rest.',
+      : 'Pick a name. We handle the address, HTTPS, and a starter page — deploys come after.',
     content: body, wide: true,
     onClose: () => { state.disposed = true; if (state.pollTimer) clearTimeout(state.pollTimer); },
   });
@@ -114,7 +139,8 @@ function runWizard(ctx, reloadApps, resumeDraft, adopt) {
   function render() {
     if (state.disposed) return;
     let node;
-    if (state.phase === 'address') node = addressPhase(state, render, finish);
+    if (state.phase === 'name') node = namePhase(state, render, finish);
+    else if (state.phase === 'address') node = addressPhase(state, render, finish);
     else if (state.phase === 'domain') node = domainPhase(state, render);
     else if (state.phase === 'external') node = externalPhase(state, render);
     else if (state.phase === 'identity') node = identityPhase(state, render, finish);
@@ -134,10 +160,166 @@ function runWizard(ctx, reloadApps, resumeDraft, adopt) {
     body.replaceChildren(h('div', {class: 'wizard-loading'}, icon('refresh'), h('p', {text: 'Picking up where you left off…'})));
     api(`/api/edge/webapp/onboarding/detail?operation=${encodeURIComponent(resumeDraft.operation_id)}`)
       .then((operation) => { state.operation = operation; state.phase = 'run'; render(); driveRun(state, render); })
-      .catch(() => { clearPendingDraft(); state.phase = 'address'; render(); });
+      .catch(() => { clearPendingDraft(); state.phase = state.adopt ? 'address' : newAppEntry; render(); });
     return;
   }
   render();
+}
+
+// ---- phase 1 (new apps): just a name ----------------------------------------
+// One decision: what the app is called. Its address is `${slug}.${apps domain}`
+// derived live from the name; availability is checked as you type; workspace,
+// environment, and release storage sit under Advanced. When the workspace has
+// no apps domain, say why in plain words and point at the places that fix it.
+
+function namePhase(state, render, finish) {
+  const ctx = state.ctx;
+  const groups = ctx.webapp_groups || [];
+  const main = h('div', {class: 'wizard-name-area'});
+  const message = h('div', {class: 'form-message', role: 'alert'});
+  const verdict = h('div', {class: 'verdict-area'});
+  const name = h('input', {value: state.appName || '', placeholder: 'My app', autocomplete: 'off', 'aria-label': 'App name', autofocus: true});
+  const preview = h('strong', {class: 'hostname-value', text: '—'});
+  const create = h('button', {class: 'button primary', type: 'button', disabled: true}, 'Create app');
+  const environment = h('select', {}, ...['production', 'staging', 'preview', 'development'].map((value) => h('option', {value, text: value})));
+  const bucket = h('select');
+  const group = h('select', {}, ...groups.map((row) => h('option', {value: String(row.id), text: row.name, selected: String(row.id) === state.groupId || null})));
+  // Workspace and environment are choices most people never make: they live
+  // under Advanced, and the workspace select is hidden outright when there is
+  // only one to choose.
+  const advanced = h('details', {class: 'wizard-advanced'}, h('summary', {text: 'Advanced'}),
+    groups.length > 1 ? field('Workspace', group, 'Which workspace this app belongs to.') : null,
+    field('Environment', environment),
+    field('Release storage', bucket, 'Chosen automatically when only one is available.'));
+
+  let checkTimer = null;
+  let checkSeq = 0;
+  let available = false;
+
+  const appsDomain = () => state.options?.apps_domain || null;
+  const currentSlug = () => slugify(name.value);
+
+  function updateCreate() {
+    create.disabled = !(appsDomain() && name.value.trim() && currentSlug()
+      && available && (state.options?.buckets || []).length);
+  }
+
+  function availabilityLine(kind, iconName, text) {
+    verdict.replaceChildren(h('div', {class: `verdict ${kind}`}, icon(iconName),
+      h('div', {}, h('p', {text}))));
+  }
+
+  async function checkAvailability() {
+    const slug = currentSlug();
+    available = false; updateCreate();
+    if (!appsDomain()) return;
+    if (!slug) { verdict.replaceChildren(); return; }
+    const host = `${slug}.${appsDomain().name}`;
+    const seq = ++checkSeq;
+    availabilityLine('steer', 'refresh', `Checking ${host}…`);
+    try {
+      const result = await api(`/api/edge/webapp/onboarding/precheck?group=${encodeURIComponent(state.groupId)}&url=${encodeURIComponent(host)}`);
+      if (seq !== checkSeq || state.disposed) return;
+      state.precheck = result;
+      const kind = result.verdict;
+      if (kind === 'ready' || kind === 'records_needed') {
+        available = true;
+        availabilityLine('ready', 'check', `${host} is available.`);
+      } else if (kind === 'taken') {
+        const who = result.app ? `your app “${result.app}”` : 'another site';
+        availabilityLine('blocked', 'alert', `${host} is already used by ${who}. Pick a different name.`);
+      } else if (kind === 'conflict') {
+        availabilityLine('blocked', 'alert', `${host} already points somewhere else. Pick a different name.`);
+      } else if (kind === 'configuration_required') {
+        showNotReady(result.reason);
+        return;
+      } else {
+        availabilityLine('blocked', 'alert', result.reason || 'That name cannot be used.');
+      }
+    } catch (error) { if (seq === checkSeq && !state.disposed) availabilityLine('blocked', 'alert', error.message); }
+    updateCreate();
+  }
+
+  function scheduleCheck() {
+    if (checkTimer) clearTimeout(checkTimer);
+    checkTimer = setTimeout(checkAvailability, 350);
+  }
+
+  function updatePreview() {
+    const active = appsDomain();
+    preview.textContent = active ? `${currentSlug() || 'your-app'}.${active.name}` : '—';
+  }
+
+  function showNotReady(reason) {
+    main.replaceChildren(
+      h('div', {class: 'verdict blocked'}, icon('alert'),
+        h('div', {}, h('strong', {text: 'New apps can’t go live here yet'}),
+          h('p', {text: reason || state.options?.apps_domain_error || 'This workspace has no domain managed here yet.'}),
+          h('div', {class: 'form-actions'},
+            h('a', {class: 'button ghost compact', href: routeHref('setup'), onclick: () => finish()}, 'Open System Setup'),
+            h('a', {class: 'button ghost compact', href: routeHref('domains'), onclick: () => finish()}, 'Open Domains')))),
+      h('div', {class: 'form-actions'}, h('button', {class: 'button ghost', type: 'button', onclick: finish}, 'Close')));
+  }
+
+  function paintReady() {
+    main.replaceChildren(
+      field('App name', name, 'The only thing you need to pick. Everything else is set up for you.'),
+      h('div', {class: 'hostname-preview'}, h('span', {text: 'Your app will open at'}), preview),
+      verdict, advanced, message,
+      h('div', {class: 'form-actions'},
+        h('button', {class: 'button ghost', type: 'button', onclick: finish}, 'Cancel'), create));
+    updatePreview();
+  }
+
+  async function loadOptions() {
+    create.disabled = true;
+    try {
+      // options — including the apps domain the preview suffix comes from —
+      // are per workspace, so a workspace change re-fetches them.
+      const data = await api(`/api/edge/webapp/onboarding/options?group=${encodeURIComponent(state.groupId)}`);
+      if (state.disposed) return;
+      state.options = data;
+      bucket.replaceChildren(...(data.buckets || []).map((value) => h('option', {value, text: value})));
+      if (!data.apps_domain) { showNotReady(data.apps_domain_error); return; }
+      paintReady();
+      if (!(data.buckets || []).length) { message.textContent = 'No release storage is configured for this installation.'; return; }
+      if (currentSlug()) scheduleCheck();
+    } catch (error) { if (!state.disposed) { paintReady(); message.textContent = error.message; } }
+  }
+
+  name.addEventListener('input', () => {
+    state.appName = name.value;
+    available = false; updatePreview(); updateCreate(); scheduleCheck();
+  });
+  group.addEventListener('change', () => {
+    state.groupId = group.value; rememberGroup(group.value);
+    state.options = null; available = false; verdict.replaceChildren(); updateCreate();
+    main.replaceChildren(h('div', {class: 'wizard-loading'}, icon('refresh'), h('p', {text: 'Loading workspace…'})));
+    loadOptions();
+  });
+  create.addEventListener('click', async () => {
+    const slug = currentSlug();
+    const domain = appsDomain();
+    if (!domain || !slug) return;
+    create.disabled = true; message.textContent = '';
+    rememberGroup(state.groupId);
+    // Seed the run machine exactly like a resolved managed domain: the address
+    // choice auto-submits from the run loop once the fetched state reaches it.
+    state.resolved = {
+      domainId: domain.id, label: slug, hostname: `${slug}.${domain.name}`,
+      domainName: domain.name, provider: domain.provider, records: [],
+    };
+    const identity = {display_name: name.value.trim(), slug,
+      environment: environment.value, bucket: bucket.value};
+    try { await createOperation(state, identity, render); }
+    catch (error) { message.textContent = error.message; updateCreate(); }
+  });
+
+  main.replaceChildren(h('div', {class: 'wizard-loading'}, icon('refresh'), h('p', {text: 'Getting things ready…'})));
+  loadOptions();
+  return h('div', {class: 'wizard-panel'}, stepBar(0),
+    intro('deploy', 'What’s your app called?', 'Pick a name and we put it online — its own address, HTTPS, and a starter page, ready for your first deploy.'),
+    main);
 }
 
 // ---- phase 1: the address --------------------------------------------------
@@ -468,7 +650,8 @@ async function createOperation(state, identity, render) {
   savePendingDraft({operation_id: operationId, submitted: true, payload: frozenPayload});
   const result = await apiOnce('/api/edge/webapp/onboarding/create', {method: 'POST', body: JSON.stringify(frozenPayload)});
   state.operation = result.operation || result;
-  state.addressSubmitted = false;
+  state.githubSkipSubmitted = false;
+  state.verifySubmitted = false;
   state.choiceError = '';
   // Kick the app step so the worker starts advancing. The address choice is NOT
   // submitted here: for an existing workspace the create response is still at
@@ -525,13 +708,42 @@ function pendingAutoAddress(state) {
     && state.resolved?.domainId && !(op.choices || {}).address);
 }
 
+function pendingAutoGithubSkip(state) {
+  // GitHub is optional, and a new app configures deploys later on its own
+  // page. When the fetched state parks at the github step with no repository
+  // configured and no recorded choice, record the explicit skip — the server
+  // only retries a step whose choice is recorded, so without this submit the
+  // setup would sit waiting forever. Submitted once: the guard flag (and the
+  // recorded choice itself) stop repeats; a wait-state refusal leaves the flag
+  // unset so polling retries with fresh state, exactly like the address one.
+  const op = state.operation;
+  return Boolean(op && !state.choiceError && !state.githubSkipSubmitted
+    && op.cursor === 'github' && !(op.choices || {}).github
+    && !(op.profile || {}).github_repository);
+}
+
+function pendingAutoVerify(state) {
+  // The final "is it serving?" check needs no input from the person. Record
+  // it as soon as the fetched state reaches the verify step so setup finishes
+  // on its own — same once-guard and wait-state handling as the github skip.
+  const op = state.operation;
+  return Boolean(op && !state.choiceError && !state.verifySubmitted
+    && op.cursor === 'verify' && !(op.choices || {}).verify);
+}
+
 async function maybeAutoAdvance(state) {
-  if (!pendingAutoAddress(state) || state.submittingAddress) return;
-  state.submittingAddress = true;
+  if (state.submittingChoice) return;
+  state.submittingChoice = true;
   try {
-    await submitChoiceRecovering(state, 'address',
-      {domain: state.resolved.domainId, label: state.resolved.label});
-  } finally { state.submittingAddress = false; }
+    if (pendingAutoAddress(state)) {
+      await submitChoiceRecovering(state, 'address',
+        {domain: state.resolved.domainId, label: state.resolved.label});
+    } else if (pendingAutoGithubSkip(state)) {
+      if (await submitChoiceRecovering(state, 'github', {skip: true})) state.githubSkipSubmitted = true;
+    } else if (pendingAutoVerify(state)) {
+      if (await submitChoiceRecovering(state, 'verify', {})) state.verifySubmitted = true;
+    }
+  } finally { state.submittingChoice = false; }
 }
 
 function isAdvancing(op) {
@@ -546,10 +758,12 @@ function isAdvancing(op) {
 
 async function driveRun(state, render) {
   if (state.pollTimer) { clearTimeout(state.pollTimer); state.pollTimer = null; }
-  // Poll while the server is reconciling OR while the resolved-domain address
-  // choice still needs auto-submitting (the worker moves the cursor to
-  // 'address' after the create response, so this is where that submit fires).
-  const keepPolling = () => isAdvancing(state.operation) || pendingAutoAddress(state);
+  // Poll while the server is reconciling OR while any auto-submitted choice is
+  // still pending — the resolved-domain address, the github skip, or the final
+  // verify (the worker moves the cursor after the create response, so this
+  // loop is where each of those submits fires).
+  const keepPolling = () => isAdvancing(state.operation) || pendingAutoAddress(state)
+    || pendingAutoGithubSkip(state) || pendingAutoVerify(state);
   const step = async (fetchFirst) => {
     if (state.disposed || !state.operation) return;
     if (fetchFirst) {
@@ -573,12 +787,22 @@ function runPhase(state, render, finish) {
   if (op.status === 'failed') return failedPanel(state, render, finish);
 
   const index = op.cursor === 'github' ? 2 : op.cursor === 'verify' ? 3 : 1;
+  // A step the run loop advances by itself renders as progress, not a form:
+  // the github form appears only when a repository question actually needs the
+  // person, and the verify button only when an automatic check parked.
+  const parked = op.status === 'waiting' && !op.next_attempt_at;
   let body;
   if (op.cursor === 'app') body = appStep(state, render);
   else if (op.cursor === 'address') body = addressStep(state, render);
-  else if (op.cursor === 'github') body = githubStep(state, render);
-  else if (op.cursor === 'verify') body = verifyStep(state, render);
-  else body = h('p', {text: 'Setting things up…'});
+  else if (op.cursor === 'github') {
+    body = pendingAutoGithubSkip(state) || (op.choices || {}).github?.skip
+      ? busyRow('Finishing setup', 'Getting your app ready to go live…')
+      : githubStep(state, render);
+  } else if (op.cursor === 'verify') {
+    body = pendingAutoVerify(state) || ((op.choices || {}).verify && !parked)
+      ? busyRow('Checking your address', 'Making sure your app answers securely at its new address…')
+      : verifyStep(state, render);
+  } else body = h('p', {text: 'Setting things up…'});
 
   // Technical details for support: a status badge per evidence key, plus the
   // address specifics (destination + provenance, provider, write capability,
@@ -770,9 +994,9 @@ function donePanel(state, finish) {
   return h('div', {class: 'wizard-panel'}, stepBar(4),
     h('div', {class: 'result-state success'}, icon('check'),
       h('div', {}, h('strong', {text: 'You’re live!'}),
-        h('p', {}, 'Your app is up', host ? h('span', {}, ' at ', h('code', {text: host})) : null, '. Push to your repository to deploy new versions.'))),
+        h('p', {}, 'Your app is up', host ? h('span', {}, ' at ', h('code', {text: host})) : null, ', serving a welcome page until your first deploy.'))),
     h('div', {class: 'form-actions'},
-      h('button', {class: 'button primary', type: 'button', onclick: () => { const app = op.resources?.webapp; finish(); if (app) location.hash = routeHref('webapps', {inspector: app}); }}, 'Manage this app'),
+      h('button', {class: 'button primary', type: 'button', onclick: () => { const app = op.resources?.webapp; finish(); if (app) location.hash = routeHref('deployments', {webapp: app, tab: 'setup'}); }}, 'Set up deploys'),
       h('button', {class: 'button ghost', type: 'button', onclick: finish}, 'Done')));
 }
 
@@ -784,7 +1008,9 @@ function failedPanel(state, render, finish) {
     h('div', {class: 'form-actions'},
       h('button', {class: 'button ghost', type: 'button', onclick: async () => {
         try { await apiOnce('/api/edge/webapp/onboarding/cancel', {method: 'POST', body: JSON.stringify({operation: state.operation.operation_id})}); } catch (_) { /* best effort */ }
-        clearPendingDraft(); state.operation = null; state.phase = 'address'; state.resolved = null; render();
+        clearPendingDraft(); state.operation = null;
+        state.phase = state.adopt || !(state.ctx.webapp_groups || []).length ? 'address' : 'name';
+        state.resolved = null; render();
       }}, 'Start over'),
       h('button', {class: 'button ghost', type: 'button', onclick: finish}, 'Close')));
 }

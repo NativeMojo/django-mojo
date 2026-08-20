@@ -105,6 +105,13 @@
 .danger-row .button { flex: 0 0 auto; }
 .resume-banner { border-color: var(--accent); }
 
+/* ---- name-first creation + app page ---- */
+.wizard-name-area { display: grid; gap: .9rem; }
+.row-inline-actions { display: inline-flex; align-items: center; gap: .4rem; }
+.back-link { margin: 0 0 .35rem; font-size: .82rem; }
+.setup-ways { display: grid; gap: .85rem; }
+.setup-way { display: grid; gap: .7rem; }
+
 /* ---- table action spacing (pinned contract) ---- */
 .domain-actions, .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: .5rem; flex-wrap: wrap; }
 .row-actions { white-space: nowrap; }

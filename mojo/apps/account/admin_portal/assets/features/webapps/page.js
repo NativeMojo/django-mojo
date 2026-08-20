@@ -1,12 +1,12 @@
 // Deployments: one page for everything running on the fleet — the API
 // service and the django-mojo framework on top (platform-gated, built in
-// api.js), one row per web app below. Onboarding lives in wizard.js; the
-// per-app management inspector (openManage) stays here with its five tabs.
-// No framework words in the primary copy.
+// api.js), one row per web app below. Onboarding lives in wizard.js; each app
+// has its own full page (webappDetailPage, keyed on ?webapp=<id>) with five
+// tabs, of which "Set up deploys" carries the three honest ways to ship a
+// build. No framework words in the primary copy.
 import {api, badge, formatDate, h, icon, listData, pageHeader, statusTone, TableView} from '../../core.js';
-import {modelHeader} from '../../components/model.js';
-import {confirmAction, openInspector, openModal} from '../../components/overlays.js';
-import {activityHref, decodeRouteState, returnLocation, routeHref} from '../../components/routes.js';
+import {confirmAction, openModal} from '../../components/overlays.js';
+import {decodeRouteState, routeHref} from '../../components/routes.js';
 import {rowSection, statusHeadline, statusRow} from '../../components/rows.js';
 import {emptyState, errorState, sectionTabs} from '../../components/views.js';
 import {hasPendingWizard, resumeWizard, startChangeAddress, startWizard} from './wizard.js';
@@ -15,9 +15,9 @@ import {
   frameworkRow, openApiInspector, openFrameworkInspector,
 } from './api.js';
 
-const MANAGE_SECTIONS = [
+const PAGE_TABS = [
   ['overview', 'Overview'], ['deploys', 'Deploys'],
-  ['key', 'Deploy key'], ['setup', 'Setup'], ['danger', 'Danger'],
+  ['setup', 'Set up deploys'], ['key', 'Deploy key'], ['danger', 'Danger'],
 ];
 const PROMOTABLE = new Set(['uploaded', 'live', 'superseded']);
 
@@ -90,7 +90,7 @@ function revokeKey(webapp, reload) {
   });
 }
 
-function workflowPanel(webapp) {
+function workflowPanel(webapp, keyAction = null) {
   const message = h('div', {class: 'form-message', role: 'alert'});
   const panel = h('div', {class: 'setup-block'}, message);
   api('/api/edge/webapp/onboarding/workflow', {method: 'POST', body: JSON.stringify({webapp: webapp.id})})
@@ -99,7 +99,7 @@ function workflowPanel(webapp) {
       panel.replaceChildren(
         h('p', {text: 'Two things set up deploys from GitHub: one secret, and one file.'}),
         h('ol', {class: 'setup-list'},
-          h('li', {}, h('strong', {text: 'Add the secret. '}), 'In your repo’s Settings → Secrets, add ', h('code', {text: 'MOJO_DEPLOY_KEY'}), ' (create it in the Deploy key tab).'),
+          h('li', {}, h('strong', {text: 'Add the secret. '}), 'In your repo’s Settings → Secrets, add ', h('code', {text: 'MOJO_DEPLOY_KEY'}), '. ', keyAction),
           h('li', {}, h('strong', {text: 'Add the file. '}), 'Save this as ', h('code', {text: result.filename}), ' and push:')),
         text,
         h('button', {class: 'button primary', onclick: async (event) => { await navigator.clipboard.writeText(text.value); event.currentTarget.textContent = 'Copied'; }}, 'Copy file'));
@@ -187,16 +187,7 @@ async function manageSection(ctx, app, summary, section, body, reload) {
         status.linked ? h('button', {class: 'button ghost', onclick: () => revokeKey(app, reload)}, 'Turn off') : null) : null);
     return;
   }
-  if (section === 'setup') {
-    body.replaceChildren(
-      workflowPanel(app),
-      h('details', {class: 'wizard-advanced'}, h('summary', {text: 'Not using GitHub?'}),
-        h('p', {class: 'muted small'}, 'You can deploy from any CI or by hand. Follow the release instructions in ',
-          h('a', {href: '#', onclick: (e) => e.preventDefault(), title: 'docs/web_developer/edge/releases.md'}, 'the release guide'),
-          ' — register a release with your ', h('code', {text: 'MOJO_DEPLOY_KEY'}), ' against this app’s id (', h('code', {text: `#${app.id}`}), ').')));
-    return;
-  }
-  // danger
+  // danger ('setup' renders through setupPanel, not here)
   if (!manage) { body.replaceChildren(h('p', {class: 'muted', text: 'You don’t have permission to change this app.'})); return; }
   const changeAddress = h('button', {class: 'button', onclick: () => changeAddressFor(ctx, app, reload)}, icon('globe'), 'Change address');
   const takeOffline = address.hostname ? h('button', {class: 'button', onclick: () => {
@@ -206,18 +197,24 @@ async function manageSection(ctx, app, summary, section, body, reload) {
       await api('/api/edge/webapp/detach_address', {method: 'POST', body: JSON.stringify({webapp: app.id})}); await reload();
     });
   }}, 'Take offline') : null;
-  const deleteApp = h('button', {class: 'button danger', onclick: () => {
-    confirmAction({title: `Delete ${app.slug}?`, danger: true, confirmLabel: 'Delete app', requireReason: true, reasonLabel: 'Why?',
-      copy: 'This removes the app, its address, its deploy key, and its deploy history for good. This cannot be undone.'}).then(async (answer) => {
-      if (!answer.confirmed) return;
-      await api(`/api/edge/webapp/${encodeURIComponent(app.id)}`, {method: 'DELETE'});
-      body.dispatchEvent(new CustomEvent('mojo-webapp-deleted', {bubbles: true}));
-    });
-  }}, icon('trash'), 'Delete app');
+  const deleteApp = h('button', {class: 'button danger', onclick: () => deleteWebApp(app, async () => {
+    body.dispatchEvent(new CustomEvent('mojo-webapp-deleted', {bubbles: true}));
+  })}, icon('trash'), 'Delete app');
   body.replaceChildren(
     h('div', {class: 'danger-row'}, h('div', {}, h('strong', {text: 'Change address'}), h('p', {class: 'muted small', text: 'Move this app to a different address. The current one keeps serving until the new one is ready.'})), changeAddress),
     takeOffline ? h('div', {class: 'danger-row'}, h('div', {}, h('strong', {text: 'Take offline'}), h('p', {class: 'muted small', text: 'Stop serving the app without deleting it.'})), takeOffline) : null,
     h('div', {class: 'danger-row danger'}, h('div', {}, h('strong', {text: 'Delete this app'}), h('p', {class: 'muted small', text: 'Remove the app and everything about it. Permanent.'})), deleteApp));
+}
+
+// The one delete flow, shared by the app page's Danger tab and the list row's
+// inline Delete for an app whose setup never finished.
+function deleteWebApp(app, onDeleted) {
+  confirmAction({title: `Delete ${app.slug}?`, danger: true, confirmLabel: 'Delete app', requireReason: true, reasonLabel: 'Why?',
+    copy: 'This removes the app, its address, its deploy key, and its deploy history for good. This cannot be undone.'}).then(async (answer) => {
+    if (!answer.confirmed) return;
+    await api(`/api/edge/webapp/${encodeURIComponent(app.id)}`, {method: 'DELETE'});
+    await onDeleted();
+  });
 }
 
 function rollbackTo(app, release, reload) {
@@ -229,30 +226,106 @@ function rollbackTo(app, release, reload) {
   });
 }
 
-async function openManage(ctx, webapp, reloadList) {
-  const summary = await api(`/api/edge/webapp/summary?webapp=${encodeURIComponent(webapp.id)}`);
+// "Set up deploys": the ways a first (or next) build actually reaches this
+// app. GitHub Actions is the default because it is the one we can generate
+// outright; the other two stay honest — the upload panel promises only what
+// exists today, and the API panel names the three calls any CI can make.
+const SETUP_WAYS = [
+  ['github', 'GitHub Actions'], ['upload', 'Upload a build'],
+  ['api', 'Any other CI / API'],
+];
+
+function setupPanel(ctx, app, summary, reload) {
   const manage = ctx.capabilities.manage_webapps;
-  const sections = MANAGE_SECTIONS.filter(([id]) => id !== 'danger' || manage);
-  let active = 'overview';
-  const body = h('div', {class: 'inspector-section'});
-  const tabs = sectionTabs({items: sections.map(([id, label]) => ({id, label})), active, onChange: async (id) => {
-    active = id; [...tabs.querySelectorAll('button')].forEach((button, index) => button.classList.toggle('active', sections[index][0] === id));
-    await manageSection(ctx, webapp, summary, id, body, reload);
+  const body = h('div', {class: 'setup-way'});
+  let active = 'github';
+  const keyButton = () => (manage
+    ? h('button', {class: 'button compact', type: 'button', onclick: () => keyDialog(app, reload)}, icon('key'),
+      summary.deployment_key?.linked ? 'Rotate key — shown once' : 'Create key — shown once')
+    : null);
+  function paint() {
+    if (active === 'github') { body.replaceChildren(workflowPanel(app, keyButton())); return; }
+    if (active === 'upload') {
+      body.replaceChildren(h('div', {class: 'setup-block'},
+        h('p', {text: 'Uploading a build straight from this page — drag and drop — is landing here shortly.'}),
+        h('p', {class: 'muted small', text: 'Until it does, deploy with GitHub Actions or from any CI using the API instructions in the next tab.'})));
+      return;
+    }
+    body.replaceChildren(h('div', {class: 'setup-block'},
+      h('p', {text: 'Deploy from any CI — or by hand — with one credential and three calls.'}),
+      h('ol', {class: 'setup-list'},
+        h('li', {}, h('strong', {text: 'Create a deploy key. '}), 'It’s shown once; keep it wherever your CI keeps secrets. ', keyButton()),
+        h('li', {}, h('strong', {text: 'Register a release. '}), 'Send the manifest of files your build produced.'),
+        h('li', {}, h('strong', {text: 'Upload and complete. '}), 'PUT each file, mark the release complete, and it deploys on its own.')),
+      h('p', {class: 'muted small'}, 'Request-by-request details are in ',
+        h('a', {href: '#', onclick: (e) => e.preventDefault(), title: 'docs/web_developer/edge/releases.md'}, 'the release guide'),
+        ' — releases register against this app’s id (', h('code', {text: `#${app.id}`}), ').')));
+  }
+  const tabs = sectionTabs({items: SETUP_WAYS.map(([id, label]) => ({id, label})), active, label: 'Ways to deploy', onChange: (id) => {
+    active = id;
+    [...tabs.querySelectorAll('button')].forEach((button, index) => button.classList.toggle('active', SETUP_WAYS[index][0] === id));
+    paint();
   }});
-  const reload = async () => {
-    Object.assign(summary, await api(`/api/edge/webapp/summary?webapp=${encodeURIComponent(webapp.id)}`));
-    await manageSection(ctx, webapp, summary, active, body, reload); await reloadList();
-  };
-  const address = summary.address || {};
-  const status = summary.current_release ? 'Live' : address.hostname ? 'Ready' : 'Setup';
-  const header = modelHeader({iconName: 'deploy', primary: webapp.display_name || webapp.slug,
-    secondary: address.hostname || 'No address yet', status, actions: [
-      {label: 'Open in a new tab', capability: Boolean(httpsLink(address.https_origin)), run: () => { const safe = httpsLink(address.https_origin); if (safe) window.open(safe, '_blank', 'noopener'); }},
-      {label: 'Related activity', run: () => { location.hash = activityHref('events', {type: 'model', id: webapp.id, model: 'WebApp'}, {return: returnLocation()}); }},
-    ], context: {webapp}});
-  const inspector = openInspector({title: `Web app · ${webapp.display_name || webapp.slug}`, content: h('div', {class: 'webapp-inspector'}, header, tabs, body), wide: true});
-  body.addEventListener('mojo-webapp-deleted', async () => { inspector.close(); await reloadList(); });
-  await manageSection(ctx, webapp, summary, active, body, reload);
+  paint();
+  return h('div', {class: 'setup-ways'}, tabs, body);
+}
+
+// ---------------------------------------------------------------------------
+// the app's own page
+// ---------------------------------------------------------------------------
+
+// Full-page view keyed on ?webapp=<id> (tab in ?tab=), so "go set up deploys"
+// is a link anyone can follow or share — no drawer to re-open.
+async function webappDetailPage(ctx, webappId, signal = null) {
+  const root = h('div', {class: 'page'});
+  const manage = ctx.capabilities.manage_webapps;
+  let summary = null;
+  async function fetchSummary() {
+    summary = await api(`/api/edge/webapp/summary?webapp=${encodeURIComponent(webappId)}`, {signal});
+  }
+  function backLink() {
+    return h('p', {class: 'back-link'}, h('a', {href: routeHref('deployments')}, '← All deployments'));
+  }
+  function paint() {
+    const app = summary.webapp;
+    const address = summary.address || {};
+    const tabs = PAGE_TABS.filter(([id]) => id !== 'danger' || manage);
+    let active = decodeRouteState().state.tab;
+    if (!tabs.some(([id]) => id === active)) active = 'overview';
+    const body = h('div', {class: 'inspector-section'});
+    const reload = async () => { await fetchSummary(); paint(); };
+    async function section(id) {
+      if (id === 'setup') { body.replaceChildren(setupPanel(ctx, app, summary, reload)); return; }
+      await manageSection(ctx, app, summary, id, body, reload);
+    }
+    const nav = sectionTabs({items: tabs.map(([id, label]) => ({id, label})), active, onChange: async (id) => {
+      active = id;
+      [...nav.querySelectorAll('button')].forEach((button, index) => button.classList.toggle('active', tabs[index][0] === id));
+      history.replaceState({}, '', routeHref('deployments', {webapp: webappId, tab: id === 'overview' ? '' : id}));
+      await section(id);
+    }});
+    const standing = summary.current_release ? 'serving your latest deploy'
+      : address.hostname ? 'serving a welcome page — nothing deployed yet'
+        : 'not reachable — setup never finished';
+    root.replaceChildren(
+      backLink(),
+      pageHeader('Control plane', app.display_name || app.slug,
+        address.hostname ? `${address.hostname} — ${standing}` : `This app is ${standing}.`, [
+          httpsLink(address.https_origin) ? h('a', {class: 'button ghost', href: httpsLink(address.https_origin), target: '_blank', rel: 'noopener'}, 'Open') : null,
+        ].filter(Boolean)),
+      nav, body);
+    body.addEventListener('mojo-webapp-deleted', () => { location.hash = routeHref('deployments'); });
+    section(active);
+  }
+  async function load() {
+    try { await fetchSummary(); paint(); }
+    catch (error) {
+      if (error?.name === 'AbortError') return;
+      root.replaceChildren(backLink(), errorState(error, load));
+    }
+  }
+  await load();
+  return root;
 }
 
 function resumeBanner(ctx, reloadApps) {
@@ -276,34 +349,32 @@ function certState(certificate) {
   return {label: `SSL ${certificate.status}`, tone: 'danger'};
 }
 
-function wireRowAction(row, run) {
-  const link = row.querySelector('.row-link');
-  if (link) {
-    link.addEventListener('click', (event) => { event.preventDefault(); run(); });
-  }
-  return row;
-}
-
-function webappRow(ctx, item, {onOpen}) {
+function webappRow(ctx, item, {reload}) {
   const app = item.webapp || {};
   const name = app.display_name || app.slug || `#${app.id}`;
   const address = item.address;
   const release = item.current_release;
   const deployment = item.latest_deployment;
+  const manage = ctx.capabilities.manage_webapps;
+  // Every row opens the app's own page — its Danger tab still carries "Set
+  // address" and "Delete app", and Overview offers "Set address" directly.
+  const openHref = routeHref('deployments', {webapp: app.id});
   if (!address) {
-    // Always open the management inspector — its Danger tab carries both "Set
-    // address" and "Delete app", and Overview offers "Set address" directly.
-    // Routing a manager straight to the address wizard here used to trap an
-    // addressless app (a half-finished onboarding) with no way to delete it.
-    return wireRowAction(statusRow({tone: 'warn', name,
-      value: 'No address yet — not reachable',
-      action: {label: ctx.capabilities.manage_webapps ? 'Set up' : 'Open', href: '#'}}),
-    onOpen);
+    // Setup was abandoned before the app got an address. Say so plainly and
+    // keep both ways out inline: finish it, or delete it.
+    return statusRow({tone: 'warn', name,
+      value: 'Setup never finished — not reachable',
+      detailNode: manage ? h('span', {class: 'row-inline-actions'},
+        h('button', {class: 'button ghost compact', type: 'button', onclick: () => changeAddressFor(ctx, app, reload)}, 'Finish setup'),
+        h('button', {class: 'button ghost compact danger-text', type: 'button', onclick: () => deleteWebApp(app, reload)}, 'Delete')) : null,
+      action: {label: 'Open', href: openHref}});
   }
   if (!release) {
-    return wireRowAction(statusRow({tone: 'warn', name,
-      value: `${address.hostname} · No deploys yet — push to ${app.deployment_ref || 'main'} to go live`,
-      action: {label: 'Open', href: '#'}}), onOpen);
+    // The address serves the built-in welcome page until a first deploy lands.
+    return statusRow({tone: 'warn', name,
+      value: `${address.hostname} · live with a welcome page — nothing deployed yet`,
+      detailNode: h('a', {class: 'row-link', href: routeHref('deployments', {webapp: app.id, tab: 'setup'})}, 'Deploy something'),
+      action: {label: 'Open', href: openHref}});
   }
   const ssl = certState(address.certificate);
   const deployedAt = formatDate(deployment?.finished || release.created);
@@ -314,9 +385,9 @@ function webappRow(ctx, item, {onOpen}) {
     value = `${address.hostname} · ${ssl.label} · last deploy failed ${formatDate(deployment.created)}`;
   }
   const version = release.version || String(release.id);
-  return wireRowAction(statusRow({tone, name, value,
+  return statusRow({tone, name, value,
     detailNode: h('span', {class: 'row-detail mono', text: String(version).slice(0, 10)}),
-    action: {label: 'Open', href: '#'}}), onOpen);
+    action: {label: 'Open', href: openHref}});
 }
 
 export async function deploymentsPage(ctx, route = 'deployments', navigate = null, signal = null) {
@@ -328,6 +399,18 @@ export async function deploymentsPage(ctx, route = 'deployments', navigate = nul
   }
   const wantPlatform = ctx.features?.platform?.capabilities?.view === true;
   const wantApps = ctx.features?.webapps?.enabled === true;
+  // ?webapp=<id> is a page of its own, not a drawer over the list. Legacy
+  // ?inspector=<id> deep links for apps (WebApp pks are ints; platform
+  // deployment pks are UUIDs) redirect to it.
+  const linkedState = decodeRouteState().state;
+  const linkedWebapp = linkedState.webapp
+    || (/^\d+$/.test(String(linkedState.inspector || '')) ? linkedState.inspector : null);
+  if (wantApps && linkedWebapp) {
+    if (!linkedState.webapp) {
+      history.replaceState({}, '', routeHref('deployments', {webapp: linkedWebapp, tab: linkedState.tab}));
+    }
+    return webappDetailPage(ctx, linkedWebapp, signal);
+  }
   const root = h('div', {class: 'page'});
   const state = {
     report: null, reportError: null,
@@ -388,9 +471,7 @@ export async function deploymentsPage(ctx, route = 'deployments', navigate = nul
 
   function appRows() {
     const items = state.apps?.items || [];
-    return items.map((item) => webappRow(ctx, item, {
-      onOpen: () => openManage(ctx, item.webapp, render),
-    }));
+    return items.map((item) => webappRow(ctx, item, {reload: render}));
   }
 
   function headline(apiRowNodes, appRowNodes) {
@@ -439,24 +520,14 @@ export async function deploymentsPage(ctx, route = 'deployments', navigate = nul
     openLinkedInspector();
   }
 
-  // Legacy deep links type-dispatch: WebApp pks are ints, PlatformDeployment
-  // pks are UUIDs, so `inspector` resolves without collision; the reserved
-  // `webapp`/`deployment` keys address each drill-in directly.
+  // Legacy platform deep links: PlatformDeployment pks are UUIDs, so a
+  // non-numeric `inspector` (or the reserved `deployment` key) opens the API
+  // drill-in. WebApp links were dispatched to their own page above.
   function openLinkedInspector() {
     if (linkedInspectorOpened) return;
     const routeState = decodeRouteState().state;
-    const webappKey = routeState.webapp
-      || (/^\d+$/.test(String(routeState.inspector || '')) ? routeState.inspector : null);
     const deployKey = routeState.deployment
       || (routeState.inspector && !/^\d+$/.test(String(routeState.inspector)) ? routeState.inspector : null);
-    if (webappKey && state.apps) {
-      const linked = (state.apps.items || []).find((item) => String(item.webapp?.id) === String(webappKey));
-      if (linked) {
-        linkedInspectorOpened = true;
-        openManage(ctx, linked.webapp, render);
-      }
-      return;
-    }
     if (deployKey && state.report) {
       linkedInspectorOpened = true;
       openApiInspector(ctx, deploymentsSection(), render);

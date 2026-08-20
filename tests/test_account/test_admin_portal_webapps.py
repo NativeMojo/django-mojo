@@ -250,21 +250,180 @@ def test_addressless_webapp_row_reaches_management(opts):
     root = Path(__file__).resolve().parents[2]
     page = (root / "mojo/apps/account/admin_portal/assets/features/webapps/page.js").read_text()
 
-    # Every list row must open the management inspector — its Danger tab is the
-    # only path to Delete. An addressless app (a half-finished onboarding) used
-    # to route straight to the address wizard (onSetAddress), trapping it with
-    # no way to delete it. The state-gated wizard routing must be gone.
+    # Every list row opens the app's own page — its Danger tab still carries
+    # Delete. An addressless app (a half-finished onboarding) used to route
+    # straight to the address wizard (onSetAddress), trapping it with no way to
+    # delete it; now the row also says plainly what happened and keeps both
+    # ways out inline: finish setup, or delete.
     assert "onSetAddress" not in page, \
         "an addressless WebApp row still routes to the wizard instead of management"
-    window = page[page.index("function webappRow"):page.index("function webappRow") + 1000]
-    assert "No address yet" in window and "onOpen)" in window, \
-        "the addressless WebApp row does not open the management inspector"
+    window = page[page.index("function webappRow"):page.index("export async function deploymentsPage")]
+    assert "Setup never finished — not reachable" in window \
+        and "routeHref('deployments', {webapp: app.id})" in window, \
+        "the addressless WebApp row does not say so plainly or open the app page"
+    assert "'Finish setup'" in window and "changeAddressFor(ctx, app, reload)" in window \
+        and "deleteWebApp(app, reload)" in window, \
+        "the addressless row lost its inline finish-setup and delete actions"
     # Setup stays one click away: the Overview tab offers Set address for an
-    # addressless app, so reaching the inspector doesn't hide the common action.
+    # addressless app, so reaching the app page doesn't hide the common action.
     overview = page[page.index("section === 'overview'"):page.index("section === 'deploys'")]
     assert "!address.hostname && manage" in overview and "changeAddressFor" in overview \
         and "Set address" in overview, \
         "the Overview tab does not offer Set address for an addressless app"
+
+
+@th.django_unit_test("a new WebApp is created from one name on the workspace apps domain")
+def test_name_only_creation_contract(opts):
+    root = Path(__file__).resolve().parents[2]
+    wizard = (root / "mojo/apps/account/admin_portal/assets/features/webapps/wizard.js").read_text()
+
+    # The new-app flow enters at the one-input name phase; the address-first
+    # machinery survives only for adopt (change address / repair) and for the
+    # no-eligible-workspace case, never as the creation entry.
+    assert "function namePhase" in wizard and \
+        "phase: adopt ? 'address' : newAppEntry" in wizard, \
+        "the new-app flow does not enter at the name-only phase"
+    assert "function addressPhase" in wizard and "startChangeAddress" in wizard \
+        and "resumeWizard" in wizard, \
+        "the repair and change-address flows lost their address-phase machinery"
+    name_phase = wizard[wizard.index("function namePhase"):wizard.index("function addressPhase")]
+    # No web-address input in the creation flow: the address is composed from
+    # the workspace's apps domain, previewed live from the slugified name.
+    assert "myapp.example.com" not in name_phase, \
+        "the name-only creation phase still asks for a web address"
+    assert "${slug}.${appsDomain().name}" in name_phase \
+        and "${currentSlug() || 'your-app'}.${active.name}" in name_phase, \
+        "the address preview is not composed from the apps domain"
+    # Availability is a debounced precheck of the composed hostname, reusing
+    # the precheck verdicts (ready / taken / invalid...), and Create is gated
+    # on a passing check.
+    assert "setTimeout(checkAvailability, 350)" in name_phase \
+        and "/api/edge/webapp/onboarding/precheck?group=" in name_phase, \
+        "the composed hostname is not prechecked as the name is typed"
+    assert "kind === 'ready' || kind === 'records_needed'" in name_phase \
+        and "kind === 'taken'" in name_phase and "available = true" in name_phase, \
+        "the availability line does not reuse the precheck verdicts"
+    assert "available && (state.options?.buckets || []).length" in name_phase, \
+        "Create is not gated on a passing availability check"
+    # Workspace and environment live under Advanced; the workspace select is
+    # hidden outright when there is only one choice, and defaults to the
+    # last-used workspace (options are per group, so changing it re-fetches).
+    assert "wizard-advanced" in name_phase and "field('Workspace', group" in name_phase \
+        and "field('Environment', environment" in name_phase \
+        and "groups.length > 1 ?" in name_phase, \
+        "workspace and environment did not move under the Advanced disclosure"
+    assert "function defaultGroup" in wizard and "LAST_GROUP_KEY" in wizard, \
+        "the workspace default does not remember the last-used group"
+    assert "state.groupId = group.value; rememberGroup(group.value);" in name_phase \
+        and "loadOptions();" in name_phase, \
+        "changing the workspace does not re-fetch its options and address suffix"
+    # No apps domain -> the plain-language reason plus links to the two places
+    # that fix it; Create stays disabled (the ready panel is never painted).
+    assert "apps_domain_error" in name_phase and "routeHref('setup')" in name_phase \
+        and "routeHref('domains')" in name_phase, \
+        "a workspace without an apps domain is not steered to Setup and Domains"
+    # The create payload keeps its shape: group + slug + display_name from the
+    # name + environment, through the same frozen createOperation path.
+    assert "display_name: name.value.trim(), slug," in name_phase \
+        and "environment: environment.value, bucket: bucket.value" in name_phase \
+        and "await createOperation(state, identity, render)" in name_phase, \
+        "name-only creation does not reuse the frozen createOperation payload"
+
+
+@th.django_unit_test("the run panel drives github-skip and verify itself, keyed on the fetched step")
+def test_wizard_auto_run_contract(opts):
+    root = Path(__file__).resolve().parents[2]
+    wizard = (root / "mojo/apps/account/admin_portal/assets/features/webapps/wizard.js").read_text()
+
+    # Both auto-submits are run-loop transitions keyed on the FETCHED cursor
+    # with a recorded-choice check and a once-guard; the backend only retries a
+    # step whose choice is recorded, so without them the setup parks forever.
+    github = wizard[wizard.index("function pendingAutoGithubSkip"):wizard.index("function pendingAutoVerify")]
+    assert "op.cursor === 'github'" in github and "!(op.choices || {}).github" in github \
+        and "githubSkipSubmitted" in github and "github_repository" in github, \
+        "the github skip is not keyed on the fetched cursor with a once-guard"
+    verify = wizard[wizard.index("function pendingAutoVerify"):wizard.index("async function maybeAutoAdvance")]
+    assert "op.cursor === 'verify'" in verify and "!(op.choices || {}).verify" in verify \
+        and "verifySubmitted" in verify, \
+        "the verify submit is not keyed on the fetched cursor with a once-guard"
+    advance = wizard[wizard.index("async function maybeAutoAdvance"):wizard.index("function isAdvancing")]
+    assert "submitChoiceRecovering(state, 'github', {skip: true})" in advance \
+        and "submitChoiceRecovering(state, 'verify', {})" in advance, \
+        "the auto choices do not classify wait-state refusals like the address one"
+    assert "|| pendingAutoGithubSkip(state) || pendingAutoVerify(state)" in wizard, \
+        "polling stops before the pending auto choices have been recorded"
+    # Success hands off to the app page's Set up deploys tab, not an inspector.
+    done = wizard[wizard.index("function donePanel"):wizard.index("function failedPanel")]
+    assert "routeHref('deployments', {webapp: app, tab: 'setup'})" in done, \
+        "the done panel does not open the app page's Set up deploys tab"
+    assert "inspector" not in done, \
+        "the done panel still routes to the retired inspector drawer"
+
+
+@th.django_unit_test("each WebApp has its own page with a promoted Set up deploys tab")
+def test_webapp_detail_page_contract(opts):
+    root = Path(__file__).resolve().parents[2]
+    page = (root / "mojo/apps/account/admin_portal/assets/features/webapps/page.js").read_text()
+
+    # ?webapp=<id> renders a full page, not a drawer over the list; legacy
+    # numeric ?inspector= deep links redirect to it.
+    assert "async function webappDetailPage" in page \
+        and "return webappDetailPage(ctx, linkedWebapp" in page, \
+        "?webapp= does not open a full app page"
+    assert r"/^\d+$/.test(String(linkedState.inspector" in page \
+        and "routeHref('deployments', {webapp: linkedWebapp" in page, \
+        "legacy numeric ?inspector= deep links do not redirect to the app page"
+    # The five tabs re-home the existing sections; Setup is promoted to
+    # "Set up deploys" with three honest sub-tabs.
+    assert "['setup', 'Set up deploys']" in page and "manageSection(ctx, app, summary, id, body, reload)" in page, \
+        "the app page does not re-home the existing management sections"
+    assert "'GitHub Actions'" in page and "'Upload a build'" in page \
+        and "'Any other CI / API'" in page, \
+        "the Set up deploys tab lost one of its three ways to deploy"
+    assert "Create key — shown once" in page and "keyDialog(app, reload)" in page, \
+        "the GitHub Actions steps lost the inline reveal-once key creation"
+    assert "workflowPanel(app, keyButton())" in page, \
+        "the GitHub Actions steps do not reuse the generated workflow panel"
+    # The upload way stays honest until it exists: copy only, no dead controls.
+    upload = page[page.index("if (active === 'upload')"):page.index("if (active === 'upload')") + 500]
+    assert "landing here shortly" in upload and "h('button'" not in upload, \
+        "the upload placeholder grew dead controls or dishonest copy"
+    # The list page stays, and every row opens the app page by link.
+    assert "startWizard(ctx, render)" in page \
+        and "action: {label: 'Open', href: openHref}" in page, \
+        "the deployments list no longer links each app to its own page"
+
+
+@th.django_unit_test("WebApp list rows state their health plainly and the copy carries no plumbing words")
+def test_webapp_row_copy_and_jargon_gate(opts):
+    import re
+
+    root = Path(__file__).resolve().parents[2]
+    assets = root / "mojo/apps/account/admin_portal/assets/features/webapps"
+    wizard = (assets / "wizard.js").read_text()
+    page = (assets / "page.js").read_text()
+
+    row = page[page.index("function webappRow"):page.index("export async function deploymentsPage")]
+    # Live on the placeholder page only: honest state plus a way forward that
+    # lands on the app page's Set up deploys tab.
+    assert "live with a welcome page — nothing deployed yet" in row \
+        and "'Deploy something'" in row and "tab: 'setup'" in row, \
+        "a placeholder-only app does not say so or offer Deploy something"
+    # The stale push-to-branch promise is gone (deploys may not use GitHub).
+    assert "push to" not in row, \
+        "the placeholder row still promises a GitHub push flow"
+    # No plumbing vocabulary in any user-facing literal of either file: scan
+    # every quoted/template literal that reads as copy (contains a space) for
+    # the words a person should never see.
+    for name, src in (("wizard.js", wizard), ("page.js", page)):
+        literals = [lit for lit in
+                    re.findall(r"'([^'\n]*)'", src) + re.findall(r"`([^`\n]*)`", src)
+                    if " " in lit and "/api/" not in lit]
+        offenders = sorted({lit for lit in literals
+                            for word in ("vhost", "cursor", "operation")
+                            if word in lit.lower()})
+        assert not offenders, \
+            f"{name} user-facing copy leaks plumbing words: {offenders}"
 
 
 @th.django_unit_test("literal admin and partial globals do not grant backend WebApp authority")
