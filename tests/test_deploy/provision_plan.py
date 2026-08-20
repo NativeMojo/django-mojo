@@ -371,6 +371,21 @@ def _converged(spec):
     }
     observed.secrets = secrets
 
+    # The edge plane's two prerequisites. An account missing either is not
+    # converged — apply creates them, correctly, and this fixture would then be
+    # asserting that a real create does not happen.
+    observed.releases_bucket = names["releases_bucket"]
+    observed.releases_bucket_state = {
+        "versioning": "Enabled",
+        "encryption": {"ServerSideEncryptionConfiguration": {"Rules": []}},
+        "public_access_block": {"PublicAccessBlockConfiguration": {
+            "BlockPublicAcls": True, "IgnorePublicAcls": True,
+            "BlockPublicPolicy": True, "RestrictPublicBuckets": True}},
+        "policy": storage.secure_transport_policy(names["releases_bucket"]),
+    }
+    observed.kms_key_id = "1234abcd-12ab-34cd-56ef-1234567890ab"
+    observed.kms_key_rotation = True
+
     observed.db_subnet_group = {"DBSubnetGroupName": names["db_subnet_group"]}
     observed.db_cluster = {
         "DBClusterIdentifier": names["db_cluster"], "Status": "available",
@@ -443,7 +458,7 @@ def test_a_second_apply_against_a_converged_account_creates_nothing(opts):
     spec = _spec()
     observed = _converged(spec)
     services = ("ec2", "iam", "s3", "rds", "elasticache", "elbv2", "logs",
-                "cloudtrail", "guardduty", "route53", "ssm", "sts")
+                "cloudtrail", "guardduty", "route53", "ssm", "sts", "kms")
     clients, stubbers = {}, []
     for service in services:
         client, stubber = _stub(service)
@@ -488,7 +503,7 @@ def test_observe_on_an_empty_account_plans_without_touching_it(opts):
 
     spec = _spec()
     services = ("ec2", "iam", "s3", "rds", "elasticache", "elbv2", "logs",
-                "cloudtrail", "guardduty", "route53", "ssm", "sts")
+                "cloudtrail", "guardduty", "route53", "ssm", "sts", "kms")
     clients, stubbers = {}, []
     for service in services:
         client, stubber = _stub(service)

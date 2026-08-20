@@ -127,6 +127,17 @@ def django_conf(spec, answers, observed, secrets):
             _quote(observed.get("config_bucket") or names["config_bucket"]))
     setting("AWS_CONFIG_PREFIX", _quote(names["config_prefix"]))
 
+    section("edge plane")
+    # The allowlist a WebApp release is checked against at mint time AND at
+    # fetch time. A list literal, not a bare string: `validators.release_buckets`
+    # reads it with kind="list".
+    setting("EDGE_RELEASE_BUCKETS",
+            "[%s]" % _quote(observed.get("releases_bucket")
+                            or names["releases_bucket"]))
+    # KSMSecrets refuses to load without this, and dnsman's Certificate is a
+    # KSMSecrets model — so an edge vhost cannot serve TLS without it.
+    setting("KMS_KEY_ID", _quote(observed.get("kms_key_id") or ""))
+
     section("config plane")
     setting("CONFIG_SYNC_RESTART", "True")
     # The one line in this file that must never be a literal.

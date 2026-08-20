@@ -94,6 +94,15 @@ case "$_phase_pass" in
     deploy|rollback) PHASE_PASS="$_phase_pass" ;;
 esac
 mkdir -p "$PHASE_DIR" 2>/dev/null || true
+# BOTH scripts append here, and they run as different users: post_deploy.sh is
+# root (sudo), update.sh is the app user. Root touching the file first left it
+# 0644 root:<web group>, so every one of update.sh's own timings was a
+# "Permission denied" on the redirection — and the phase table reaching the
+# platform was missing exactly the half that wraps the deploy. var/deploy is
+# setgid to the web group and the app user is a member, so group-writable is
+# all it takes.
+touch "$PHASE_FILE" 2>/dev/null || true
+chmod 0664 "$PHASE_FILE" 2>/dev/null || true
 
 phase_now() {
     if [ "$PHASE_MS" = "1" ]; then

@@ -198,6 +198,8 @@ def blank():
         key_pair=None, node_role=None, node_role_policy=None,
         instance_profile=None,
         config_bucket=None, config_bucket_state=None, secrets=None,
+        releases_bucket=None, releases_bucket_state=None,
+        kms_key_id=None, kms_key_rotation=None,
         stage1=None,
         db_subnet_group=None, db_cluster=None, db_instances=[],
         cache_subnet_group=None, cache_group=None,
@@ -227,6 +229,7 @@ def observe(clients, spec):
     _observe_account(clients, spec, observed, findings)
     _observe_network(clients, spec, observed, findings)
     _observe_identity(clients, spec, observed, findings)
+    _observe_encryption(clients, spec, observed, findings)
     _observe_storage(clients, spec, observed, findings)
     _observe_data(clients, spec, observed, findings)
     _observe_nodes(clients, spec, observed, findings)
@@ -380,19 +383,13 @@ def _decode_policy(document):
 
 # ── storage ─────────────────────────────────────────────────────────────────
 
-def _observe_storage(clients, spec, observed, findings):
-    import json
+def _bucket_state(s3, bucket, findings, json):
+    """The four settings `_converge_bucket_settings` judges, plus its tags.
 
-    s3 = clients.get("s3")
-    names = spec_module.names(spec)
-    bucket = names["config_bucket"]
-
-    head = optional(findings, STEP, "s3.head_bucket",
-                    lambda: s3.head_bucket(Bucket=bucket), None)
-    if head is None:
-        return
-    observed.config_bucket = bucket
-
+    One reader for every bucket this package manages, so the config bucket and
+    the releases bucket cannot be observed to different depths — a difference
+    there shows up as one of them silently never converging.
+    """
     state = objict()
     state.tags = tags_of({"Tags": (optional(
         findings, STEP, "s3.get_bucket_tagging",
@@ -415,7 +412,58 @@ def _observe_storage(clients, spec, observed, findings):
             state.policy = json.loads(policy["Policy"])
         except (ValueError, TypeError):
             state.policy = None
-    observed.config_bucket_state = state
+    return state
+
+
+def _observe_encryption(clients, spec, observed, findings):
+    """The environment's KMS key, found by the alias this package names.
+
+    A key id is AWS's to invent and nothing derives it from the spec, so the
+    alias is the resume anchor — see provision/encryption.py.
+    """
+    kms = clients.get("kms")
+    alias = spec_module.names(spec)["kms_alias"]
+    described = optional(findings, STEP, "kms.describe_key",
+                         lambda: kms.describe_key(KeyId=alias), None)
+    if not described:
+        return
+    metadata = described.get("KeyMetadata") or {}
+    # A key already scheduled for deletion is not a key this environment can
+    # use, and adopting one would write secrets that become unreadable on a
+    # date already fixed. Leaving it unobserved makes `ensure_key` report it
+    # missing, which is the honest answer.
+    if metadata.get("KeyState") in ("PendingDeletion", "PendingReplicaDeletion"):
+        return
+    observed.kms_key_id = metadata.get("KeyId")
+    rotation = optional(
+        findings, STEP, "kms.get_key_rotation_status",
+        lambda: kms.get_key_rotation_status(KeyId=metadata.get("KeyId")), None)
+    if rotation is not None:
+        observed.kms_key_rotation = bool(rotation.get("KeyRotationEnabled"))
+
+
+def _observe_storage(clients, spec, observed, findings):
+    import json
+
+    s3 = clients.get("s3")
+    names = spec_module.names(spec)
+    bucket = names["config_bucket"]
+
+    # The releases bucket is read the same way and is independent of this one:
+    # a config bucket that does not exist yet must not hide it.
+    releases = names["releases_bucket"]
+    if optional(findings, STEP, "s3.head_bucket",
+                lambda: s3.head_bucket(Bucket=releases), None) is not None:
+        observed.releases_bucket = releases
+        observed.releases_bucket_state = _bucket_state(
+            s3, releases, findings, json)
+
+    head = optional(findings, STEP, "s3.head_bucket",
+                    lambda: s3.head_bucket(Bucket=bucket), None)
+    if head is None:
+        return
+    observed.config_bucket = bucket
+    observed.config_bucket_state = _bucket_state(s3, bucket, findings, json)
 
     body = optional(
         findings, STEP, "s3.get_object",

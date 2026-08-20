@@ -330,6 +330,15 @@ def names(spec):
         "node_policy": "django-mojo-setup",
         "instance_profile": f"{base}-node",
         "config_bucket": spec.config_bucket or f"{base}-config",
+        # Where a WebApp's built artifacts are uploaded and where every node
+        # fetches them from. Separate from the config bucket on purpose: this
+        # one receives writes from a GitHub Actions credential, and the config
+        # bucket holds the environment's secrets.
+        "releases_bucket": f"{base}-releases",
+        # KMS_KEY_ID. `KSMSecrets` models — dnsman certificates above all —
+        # refuse to load without one, so the edge plane cannot serve TLS in an
+        # environment that has no key.
+        "kms_alias": f"alias/{base}",
         "secrets_object": "bootstrap-secrets.json",
         "bootstrap_prefix": BOOTSTRAP_PREFIX,
         "stage1_object": f"{BOOTSTRAP_PREFIX}/stage1.json",

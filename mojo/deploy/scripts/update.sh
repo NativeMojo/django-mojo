@@ -142,13 +142,13 @@ phase_now() {
 phase_reset() { # pass — which half of the run the following phases belong to
     PHASE_PASS="$1"
     mkdir -p "$PHASE_DIR" 2>/dev/null || true
-    printf '%s\n' "$1" > "$PHASE_PASS_FILE" 2>/dev/null || true
+    printf '%s\n' "$1" 2>/dev/null > "$PHASE_PASS_FILE" || true
     return 0
 }
 
 phase_truncate() {
     mkdir -p "$PHASE_DIR" 2>/dev/null || true
-    : > "$PHASE_FILE" 2>/dev/null || true
+    : 2>/dev/null > "$PHASE_FILE" || true
     return 0
 }
 
@@ -166,8 +166,13 @@ phase_record() { # name start — for a span whose start was kept elsewhere
     if [ "$PHASE_MS" = "1" ]; then unit="ms"; fi
     delta=$(( end - start ))
     [ "$delta" -ge 0 ] 2>/dev/null || delta=0
+    # 2>/dev/null FIRST. Redirections apply left to right, so with the append
+    # first, a failure to OPEN the file is reported by the shell to a stderr
+    # that has not been silenced yet — which is how an unwritable timings file
+    # printed "Permission denied" into the middle of every deploy's output
+    # despite the `|| true` this line already had.
     printf '%s %s %s %s\n' "$PHASE_PASS" "$name" "$delta" "$unit" \
-        >> "$PHASE_FILE" 2>/dev/null || true
+        2>/dev/null >> "$PHASE_FILE" || true
     return 0
 }
 

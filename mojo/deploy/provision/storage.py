@@ -29,6 +29,7 @@ from mojo.deploy.provision import spec as spec_module
 
 
 BUCKET_STEP = "config_bucket"
+RELEASES_STEP = "releases_bucket"
 SECRETS_STEP = "secrets"
 STAGE1_STEP = "stage1_payload"
 PAYLOAD_STEP = "bootstrap_payload"
@@ -100,6 +101,60 @@ def ensure_config_bucket(clients, spec, observed, apply=False):
         state = observed.get("config_bucket_state") or {}
 
     _converge_bucket_settings(s3, spec, bucket, state, BUCKET_STEP,
+                              findings, actions, apply)
+    return findings, actions, result
+
+
+def ensure_releases_bucket(clients, spec, observed, apply=False):
+    """Where WebApp artifacts are uploaded and where nodes fetch them.
+
+    Its own bucket rather than a prefix in the config bucket, for one reason
+    that settles it: a GitHub Actions run holds a credential that writes here,
+    and the config bucket holds this environment's `bootstrap-secrets.json`.
+    Those two facts must not meet.
+
+    Same hardening as the config bucket — versioning, encryption, public-access
+    block, deny-insecure-transport — through the same helper, so the two cannot
+    drift apart.
+    """
+    findings, actions = [], []
+    result = report.Result()
+    names = spec_module.names(spec)
+    bucket = names["releases_bucket"]
+    s3 = clients.get("s3")
+    result.set("releases_bucket", bucket)
+
+    if not observed.get("releases_bucket"):
+        findings.append(report.missing(
+            RELEASES_STEP, "releases.missing",
+            f"bucket {bucket} does not exist",
+            "apply creates it — it is the only bucket EDGE_RELEASE_BUCKETS "
+            "declares, and a WebApp release cannot be registered without one"))
+        actions.append(report.Action(RELEASES_STEP, "create", bucket))
+        if not apply:
+            return findings, actions, result
+
+        request = {"Bucket": bucket}
+        if spec.region != "us-east-1":
+            request["CreateBucketConfiguration"] = {
+                "LocationConstraint": spec.region}
+        created = report.safe(findings, RELEASES_STEP, "s3.create_bucket",
+                              lambda: s3.create_bucket(**request))
+        if created is None:
+            return findings, actions, result
+        report.safe(
+            findings, RELEASES_STEP, "s3.put_bucket_tagging",
+            lambda: s3.put_bucket_tagging(
+                Bucket=bucket,
+                Tagging={"TagSet": spec_module.tag_list(spec, "storage",
+                                                        name=bucket)}))
+        state = {}
+    else:
+        findings.append(report.existing(
+            RELEASES_STEP, "releases.ok", f"bucket {bucket} is in place"))
+        state = observed.get("releases_bucket_state") or {}
+
+    _converge_bucket_settings(s3, spec, bucket, state, RELEASES_STEP,
                               findings, actions, apply)
     return findings, actions, result
 
