@@ -344,12 +344,14 @@ def test_settings_catalog_redaction(opts):
     sensitive = admin_settings.Descriptor(
         "TEST_SECRET", "Test secret", "Security & operations", "Test only.",
         "configured", sensitivity="configured_only")
-    with mock.patch.object(admin_settings.settings, "get_static", return_value=None):
-        value, source, ignored = admin_settings._static_state(sensitive, [])
+    value, source, ignored = admin_settings._static_state(sensitive, [])
     assert value == {"configured": False} and source == "default" and not ignored, \
         "an absent sensitive setting reported false deployment provenance"
-    with mock.patch.object(admin_settings.settings, "get_static", return_value="secret"):
-        value, source, ignored = admin_settings._static_state(sensitive, [])
+    configured_sensitive = admin_settings.Descriptor(
+        "SECRET_KEY", "Test configured secret", "Security & operations",
+        "Test only.", "configured", sensitivity="configured_only")
+    value, source, ignored = admin_settings._static_state(
+        configured_sensitive, [])
     assert value == {"configured": True} and source == "deployment" and not ignored, \
         "a configured sensitive setting exposed its value or lost provenance"
     assert "raw_value" not in rows[key], "the catalog exposed raw ignored override material"
