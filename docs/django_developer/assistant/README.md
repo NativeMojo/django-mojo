@@ -577,6 +577,49 @@ All four tools are `core=True` — always available without calling `load_tools`
 
 See [skills.md](skills.md) for the full model reference, service API, step format, and settings.
 
+### WebApp Domain (`view_admin` + group WebApp authority)
+
+Loaded on demand with `load_tools(domain="webapp")`. 26 tools — 12 reads, 14
+mutating — each a thin wrapper over the service the matching Admin endpoint
+already calls. The registry gate is `view_admin` because WebApp authority is
+group-scoped and `user.has_permission()` reads global grants only; every tool
+also declares `authorize=`, so the domain is listed only for operators who
+manage apps somewhere, and the exact per-group check runs in `preview` and
+again in the handler.
+
+| Tool | Mutates | Fresh auth | Description |
+|---|---|---|---|
+| `list_webapp_groups` | No | — | Workspaces where this operator can create and manage apps. |
+| `get_webapp_setup_options` | No | — | Server-owned setup choices: buckets, environments, destination, apps domain. |
+| `precheck_new_webapp_address` | No | — | Verdict for a typed address before any app exists. Purchase options stripped. |
+| `list_webapps` | No | — | Apps the caller may list, with address, certificate, version, last deploy, fleet summary. |
+| `get_webapp` | No | — | One app's full summary. Secret-free; the deploy key is `{linked, active}`. |
+| `get_webapp_serving` | No | — | Address, certificate, shape, routes, every address. Pools/upstreams `null` for a viewer. |
+| `preview_webapp_alias` | No | — | What adding an address would do. Carries the WRITE authority, as its twin does. |
+| `check_webapp_health` | No | — | Live HTTPS probe. Never a raw probe exception. |
+| `get_webapp_deploy_history` | No | — | Recent versions and deployments. Fleet targets stay out. |
+| `get_webapp_deployment` | No | — | Node counts for everyone; per-node detail and 5 truncated errors for a writer; runner ids for nobody. |
+| `get_webapp_deploy_setup` | No | — | Safe key status plus the GitHub Actions workflow file. Never mints or reveals a key. |
+| `get_webapp_setup_status` | No | — | A setup's step, revision, evidence and activity. Readable across surfaces. |
+| `start_webapp_setup` | Yes | — | Create an app and open its guided setup in an existing workspace. |
+| `answer_webapp_setup_step` | Yes | 600 | Answer the current step. Binds the numeric revision, the cursor and a choice hash. |
+| `cancel_webapp_setup` | Yes | 600 | Stop a setup; anything already created is kept. |
+| `attach_webapp_address` | Yes | 600 | Add one more address. Re-enterable, one provider write at most. |
+| `detach_webapp_address` | Yes | 600 | Remove one EXTRA address. |
+| `take_webapp_offline` | Yes | 600 | Stop serving every address. The app and its versions are kept. |
+| `set_webapp_serving` | Yes | 600 | Change node pool or single-page fallback, on every address. |
+| `switch_webapp_certificate` | Yes | 600 | Switch onto an active certificate that really covers the address. |
+| `request_webapp_certificate` | Yes | 600 | Request a certificate for this address alone. Requesting only. |
+| `add_webapp_route` / `remove_webapp_route` | Yes | 600 | Send one path elsewhere, or stop. Managed auth paths refused. |
+| `rollback_webapp` | Yes | 600 | Roll back to an earlier verified version. |
+| `revoke_webapp_deploy_key` | Yes | 300 | Turn the deploy key off. Never reads or returns a key. |
+| `delete_webapp` | Yes | 600 | Permanent delete. Escalated: the REST delete carries no step-up. |
+
+Minting or rotating a deploy key, buying a domain, and uploading a build are
+**excluded by design** and are handoffs — see
+[webapp_tools.md](webapp_tools.md) for why, plus the `ASSISTANT_ORIGIN` seam
+that keeps a chat setup and a portal setup from ever crossing.
+
 ## Incident Event Reporting
 
 The assistant reports security-relevant actions and errors to the incident system via `incident.report_event()`. Events flow through the rule engine for automated response (blocking, ticketing, notifications).

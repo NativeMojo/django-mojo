@@ -544,7 +544,7 @@ The assistant uses a two-tier system to manage which tools are active in each co
 
 **Core tools** are always available from the first message: memory, models, docs, web, logs, and file tools. These handle general queries.
 
-**Domain tools** (security, jobs, users, groups, metrics, docit) are loaded on demand. When the assistant needs domain-specific capabilities, it calls the built-in `load_tools` tool first. You will see this reflected in `tool_calls_made`:
+**Domain tools** (security, jobs, users, groups, metrics, docit, webapp) are loaded on demand. When the assistant needs domain-specific capabilities, it calls the built-in `load_tools` tool first. You will see this reflected in `tool_calls_made`:
 
 ```json
 "tool_calls_made": [
@@ -573,6 +573,7 @@ The assistant checks the user's permissions before executing each tool. The tool
 | `view_groups` | Query groups, group detail, group members, group activity |
 | `view_logs` | Query the audit log trail (logit.Log) — request history, model changes, API errors, custom events |
 | `assistant` | Read, write, and delete memory entries and skills across all tiers (subject to per-tier access rules) |
+| WebApp authority in any workspace (group `security`, or `manage_webapp` + `manage_dns`) | The `webapp` domain: guided app setup, addresses and certificates, serving and routes, deployment history and evidence, rollback, take offline, delete, and turning a deploy key off. Listed only for operators who hold that authority somewhere, on top of `view_admin` — see [webapp_tools.md](webapp_tools.md) |
 | *(any authenticated user)* | `search_docs` — search the documentation knowledge base (docit domain, `permission: "all"`). Load it with `load_tools(domain="docit")`, which itself requires `view_admin`. Every authenticated user may **call** it, but results are scoped to the asking user's own groups — same rule as `GET /api/docit/search` (see [docit/README.md](../docit/README.md#knowledge-base-search)). |
 
 Users without any of these permissions will receive: `"You don't have permissions for any assistant tools."`
