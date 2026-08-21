@@ -39,7 +39,9 @@ const DISABLE_STABLE_IPS = 'disable_stable_ips';
 
 // Never a dead control: when the server would refuse, the row says which thing
 // is in the way instead of offering a button that fails.
-const BLOCKED_COPY = {
+// Exported: the Fleet Scaling page (fleet.js) renders the same server offers
+// and must say the same words for the same blocked_reason.
+export const BLOCKED_COPY = {
   infrastructure_external: 'external infrastructure mode — capacity is applied by your infrastructure team\'s IaC',
   node_id_pinned: 'this fleet pins EDGE_NODE_ID, so a new node could never prove its own identity — remove the pin first',
   no_source_node: 'no healthy, running node is available to clone',
@@ -56,7 +58,7 @@ const BLOCKED_COPY = {
   policy_unavailable: 'the stable-IPs policy could not be read — its state is unknown, not off',
 };
 
-const PHASE_COPY = {
+export const PHASE_COPY = {
   capturing: 'capturing an image of a healthy node (no reboot)',
   launching: 'launching the new node',
   booting: 'waiting for it to join the job fleet',

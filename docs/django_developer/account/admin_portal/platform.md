@@ -128,13 +128,16 @@ and group-token sessions, and require authentication no older than 600 seconds.
 Typed AUTH_CONFIG/topology owner writes additionally re-read an active literal
 `account.User` superuser.
 
-The feature owns three routes: `setup`, `metrics`, and `maintenance` (the
-dissolved `platform` route is gone; `deployments` belongs to the merged
+The feature owns four routes: `setup`, `metrics`, `maintenance`, and `fleet`
+(the dissolved `platform` route is gone; `deployments` belongs to the merged
 Deployments lane). `setup` requires an active literal superuser, published as
-`features.platform.capabilities.setup`. The other two are gated separately on
-`manage_aws`, published as `features.platform.capabilities.metrics` and
+`features.platform.capabilities.setup`. `metrics` and `maintenance` are gated
+separately on `manage_aws`, published as
+`features.platform.capabilities.metrics` and
 `features.platform.capabilities.maintenance` and enforced on `/api/aws/*` by
-`@md.requires_global_perms("manage_aws")`. An operator holding only
+`@md.requires_global_perms("manage_aws")`. `fleet` rides
+`features.platform.capabilities.capacity` — superuser AND `manage_aws`, the
+same gate as the Dashboard's capacity drill-in. An operator holding only
 `manage_aws` therefore sees the Metrics and Maintenance sidebar entries and
 nothing else in this lane. See [Admin Metrics](metrics.md).
 
@@ -143,6 +146,28 @@ only for a superuser on an installation with no `BASE_URL`. It badges the
 System Setup sidebar entry, which is the one unmissable reason to open Setup
 now that it is a destination rather than a page-grid card. It is computed in
 `on_admin_bootstrap` and is always `false` when `setup` is false.
+
+### Fleet Scaling
+
+`fleet` puts the whole fleet on one page — app nodes, the Redis replication
+group, and the database with its readers — as steppers over a staged desired
+state. Nothing mutates while the operator edits: the bottom bar lists the
+staged steps in plain words, one confirmation applies them, and the page then
+runs the steps **one at a time through the existing capacity actions**
+(`add_node`, `drain_node` + `terminate_node`, `set_cache_replicas`,
+`add_reader`, `remove_reader`), polling each to a terminal state before
+starting the next. Adds always run before removes. Every step is re-validated
+server-side at execution time, so this page adds no new authority: the
+`/api/aws/capacity/apply` gates (superuser AND `manage_aws`, key denial,
+600-second fresh auth, `INFRASTRUCTURE_MODE` refusal) apply per step exactly
+as they do for the capacity drill-in, and a control the server's report does
+not offer is disabled with the server's `blocked_reason` in plain words.
+
+Deliberately present but disabled, so the page's final shape is visible before
+its server sides ship: instance-size dropdowns (the resize actions), and the
+plan is assembled client-side from the server's offers until the plan/apply
+batch endpoint exists to write it server-side with exact costs and timings.
+On an `external`-mode installation the page renders read-only.
 
 ### Maintenance
 
