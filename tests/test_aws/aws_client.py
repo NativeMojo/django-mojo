@@ -1,5 +1,7 @@
 from unittest import mock
+from urllib.parse import urlsplit
 
+from botocore.config import Config
 from testit import helpers as th
 
 
@@ -32,10 +34,11 @@ def test_aws_client_applies_bounded_config(opts):
     assert config.connect_timeout == 7, "The connect timeout must be bounded by the caller"
     assert config.read_timeout == 7, "The read timeout must be bounded by the caller"
     assert config.retries["max_attempts"] == 2, "The retry budget must be bounded"
+    assert config.s3 is None, "Non-S3 clients must not inherit S3 addressing configuration"
 
 
 @th.django_unit_test()
-def test_s3_presigned_urls_are_sigv4(opts):
+def test_s3_presigned_urls_are_sigv4_and_regional(opts):
     """Item #1770 (second defect): with no pinned signature version botocore's
     presigner falls back to SigV2 for S3. SigV2 signs Content-Type, and the
     server presigns without one, so any uploader whose HTTP client adds a
@@ -45,15 +48,63 @@ def test_s3_presigned_urls_are_sigv4(opts):
 
     client = get_client(
         "s3", access_key="AKIAPRESIGNTEST", secret_key="presign-test-secret",
-        region="us-east-1")
+        region="us-west-2")
     url = client.generate_presigned_url(
         "put_object", ExpiresIn=60, Params={"Bucket": "bucket", "Key": "key"})
+    parsed = urlsplit(url)
 
     assert "X-Amz-Signature=" in url, \
         f"S3 presigned PUT is not SigV4-signed: {url}"
     assert "AWSAccessKeyId=" not in url, (
         "S3 presigning fell back to SigV2, which signs Content-Type and "
         f"breaks any uploader that sends one: {url}")
+    assert parsed.netloc == "bucket.s3.us-west-2.amazonaws.com", (
+        "Default S3 presigns must target the selected AWS region instead of "
+        f"the legacy global endpoint, got {parsed.netloc}")
+
+
+@th.django_unit_test()
+def test_s3_explicit_endpoint_keeps_compatible_path_addressing(opts):
+    from mojo.helpers.aws.client import get_client
+
+    client = get_client(
+        "s3", access_key="AKIAPRESIGNTEST", secret_key="presign-test-secret",
+        region="us-west-2", endpoint_url="https://storage.example.test")
+    url = client.generate_presigned_url(
+        "put_object", ExpiresIn=60, Params={"Bucket": "bucket", "Key": "key"})
+    parsed = urlsplit(url)
+
+    assert parsed.netloc == "storage.example.test", (
+        "An explicit S3-compatible endpoint must remain the request host, "
+        f"got {parsed.netloc}")
+    assert parsed.path == "/bucket/key", (
+        "An explicit S3-compatible endpoint must retain botocore's path-style "
+        f"addressing, got {parsed.path}")
+    assert "X-Amz-Signature=" in url, \
+        f"An explicit S3-compatible endpoint must retain SigV4 signing: {url}"
+
+
+@th.django_unit_test()
+def test_s3_caller_config_is_authoritative(opts):
+    from mojo.helpers.aws.client import get_client
+
+    supplied = Config(
+        connect_timeout=11,
+        signature_version="s3v4",
+        s3={"addressing_style": "path"},
+    )
+    session = mock.Mock()
+    get_client(
+        "s3", session=session, region="us-west-2", timeout=1,
+        max_attempts=1, config=supplied)
+
+    kwargs = session.client.call_args.kwargs
+    assert kwargs["config"] is supplied, (
+        "A caller-supplied Config must be passed through without replacement")
+    assert kwargs["config"].s3["addressing_style"] == "path", (
+        "A caller-supplied S3 addressing style must remain authoritative")
+    assert kwargs["config"].connect_timeout == 11, (
+        "Default timeout arguments must not overwrite a caller-supplied Config")
 
 
 @th.django_unit_test()

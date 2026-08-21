@@ -106,6 +106,12 @@ def get_client(service, access_key=None, secret_key=None, region=None,
             # platform presigns without one, so any uploader whose HTTP
             # client adds a Content-Type gets 403 SignatureDoesNotMatch.
             config_kwargs["signature_version"] = "s3v4"
+            if not endpoint_url:
+                # Botocore may presign non-us-east-1 buckets through the
+                # legacy global S3 endpoint unless virtual-host addressing is
+                # explicit. Do not impose this on S3-compatible endpoints,
+                # whose path/host contract is provider-specific.
+                config_kwargs["s3"] = {"addressing_style": "virtual"}
         config = Config(**config_kwargs)
     kwargs = {"config": config}
     if region:
