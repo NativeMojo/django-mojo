@@ -538,7 +538,14 @@ function renderAlertBlock(block) {
 
 ## `progress` — Plan Tracker
 
-Rendered when the assistant creates a multi-step plan. Shows which steps are complete, in progress, or pending. Updates in real time via WebSocket events.
+Rendered when the assistant creates a multi-step plan. Shows which steps are complete, in progress, or pending.
+
+> **No `progress` block is ever emitted.** The type is accepted by the server's
+> block validator, but nothing produces one: the tracker arrives **only** as the
+> `assistant_plan` and `assistant_plan_update` WebSocket events described below.
+> Build the tracker from those events. A client that waits for a `progress`
+> block in a `blocks` array waits forever; the schema here is the shape those
+> events carry, and is worth honouring defensively.
 
 ### Schema
 
@@ -577,6 +584,28 @@ Rendered when the assistant creates a multi-step plan. Shows which steps are com
 - Card with title header and a progress bar or fraction ("3 of 5 complete").
 - Vertical step list. Each step shows status icon, description, and summary (when done).
 - The `in_progress` step should have subtle animation (spinner or pulse) to indicate activity.
+
+### Reference client bounds
+
+The built-in Admin panel is the reference implementation
+([backend notes](../../django_developer/account/admin_portal/assistant.md)). Its
+validators are a reasonable default for any client, because every block is
+language-model output and an unbounded one is a hang rather than a rendering
+problem:
+
+| Type | Bound |
+|---|---|
+| `table` | ≤ 12 columns, ≤ 200 rows with a "showing the first 200 of N" note |
+| `chart` | ≤ 60 labels, ≤ 8 series, every series length must equal the label count; non-finite values are **gaps, never zeros**; a `color`/`colors` entry is honoured only when it matches `/^#[0-9a-f]{3,8}$/i`, because it lands in an attribute |
+| `stat` | ≤ 12 items |
+| `list` | ≤ 60 items |
+| `file` | The link is drawn only for an absolute `https:` URL with no embedded credentials, and the destination hostname is shown beside the filename |
+| `context` | ≤ 40 references, rendered inert — no route is guessed from a model name |
+| `progress` | ≤ 40 steps |
+
+A block that fails validation renders as one muted line naming its type, rather
+than being silently dropped: an operator who is told nothing cannot tell "the
+assistant said nothing" from "the client ate it".
 
 ### Real-Time Updates via WebSocket
 

@@ -1,0 +1,344 @@
+"""Static contracts for the built-in Admin Assistant.
+
+Read-only: nothing here writes a Setting row, patches a shared production
+object, or touches installation-wide configuration. The writer matrix (secret
+storage, precedence, the enable/disable cache flip, the 440) lives in
+tests/test_account_admin_extended_serial/test_assistant_setup.py.
+"""
+
+import re
+from pathlib import Path
+
+from testit import helpers as th
+
+
+ROOT = Path(__file__).resolve().parents[2]
+ASSETS = ROOT / "mojo/apps/account/admin_portal/assets"
+PANEL = ASSETS / "assistant"
+
+ASSISTANT_ASSETS = (
+    "panel.js", "transport.js", "conversation.js", "blocks.js", "markdown.js",
+    "plan.js", "approval.js", "setup.js", "assistant.css",
+)
+
+
+def _modules():
+    return sorted(PANEL.glob("*.js"))
+
+
+def _code(text):
+    """The source with whole-line // comments dropped.
+
+    A negative assertion has to be about what the module DOES; the comment
+    explaining why it does not do a thing names that thing.
+    """
+    return "\n".join(line for line in text.splitlines()
+                     if not line.strip().startswith("//"))
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap capability and feature descriptor
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("the Assistant namespace fails closed and follows authority alone")
+def test_assistant_feature_provider_contract(opts):
+    from mojo.apps.account.services import admin_features
+
+    assert "assistant" in admin_features.FEATURE_NAMES, \
+        "the assistant feature namespace is not in the fixed roster"
+
+    # The provider must not read `request`: bootstrap_features(None, {}) is a
+    # real call path (tests/test_account/test_admin_portal.py).
+    closed = admin_features.bootstrap_features(None, {})["assistant"]
+    assert closed["enabled"] is False and closed["capabilities"]["view"] is False, \
+        f"an empty capability set produced an enabled Assistant: {closed!r}"
+
+    granted = admin_features.bootstrap_features(None, {
+        "assistant": True, "assistant_ready": True, "assistant_setup": True,
+    })["assistant"]
+    assert granted["enabled"] is True and granted["capabilities"] == {
+        "view": True, "ready": True, "setup": True}, \
+        f"a fully granted caller did not get the Assistant panel: {granted!r}"
+
+    # `ready` is installation state, not authority. Folding it into `enabled`
+    # would mount a panel whose every message the WebSocket handler refuses.
+    ready_only = admin_features.bootstrap_features(None, {
+        "assistant": False, "assistant_ready": True, "assistant_setup": True,
+    })["assistant"]
+    assert ready_only["enabled"] is False, \
+        f"installation readiness enabled the panel without authority: {ready_only!r}"
+
+
+@th.django_unit_test("the Admin bootstrap gates the Assistant on view_admin alone")
+def test_assistant_bootstrap_capabilities(opts):
+    source = (ROOT / "mojo/apps/account/rest/admin_portal.py").read_text()
+    assert '"assistant": has(["view_admin"])' in source, \
+        "the Assistant launcher is not gated on view_admin alone — the " \
+        "WebSocket handler admits nothing else"
+    assert '"assistant_ready": assistant_setup.is_ready()' in source, \
+        "readiness is not read from the setup service"
+    assert '"assistant_setup": bool(request.user.is_superuser)' in source, \
+        "the setup capability is not the literal-superuser predicate the writer enforces"
+
+
+# ---------------------------------------------------------------------------
+# REST boundary
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("Assistant setup is owner-tier, fresh, human, and same-Origin")
+def test_admin_assistant_rest_decorators(opts):
+    from mojo.decorators.auth import SECURITY_REGISTRY
+    from mojo.apps.account.rest import admin_assistant as views
+
+    for func in (views.on_admin_assistant, views.on_admin_assistant_mutate):
+        assert getattr(func, "_mojo_denies_key_backed_session", False), \
+            f"{func.__name__} accepts a key-backed session"
+        assert getattr(func, "_mojo_requires_perms", False), \
+            f"{func.__name__} carries no permission requirement"
+        entry = SECURITY_REGISTRY.get(f"{func.__module__}.{func.__name__}", {})
+        assert entry.get("global_only") is True, \
+            f"{func.__name__} does not require GLOBAL permissions: {entry!r}"
+
+    mutate = views.on_admin_assistant_mutate
+    assert getattr(mutate, "_mojo_requires_fresh_auth", False), \
+        "the Assistant setup writer lacks recent interactive authentication"
+    assert getattr(mutate, "_mojo_fresh_auth_seconds", None) == 600, \
+        "the Assistant recent-authentication window is not 600 seconds"
+
+    source = (ROOT / "mojo/apps/account/rest/admin_assistant.py").read_text()
+    assert source.count("system_setup.require_request_admin(request)") == 2, \
+        "both Assistant setup endpoints must prove an interactive live superuser"
+    assert "system_setup.request_origin(request)" in source, \
+        "the Assistant setup writer lacks the same-Origin gate"
+    assert "request.POST" not in source and "request.GET" not in source, \
+        "the Assistant setup endpoints read input from something other than request.DATA"
+
+
+# ---------------------------------------------------------------------------
+# Key protection
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("every Assistant key is catalog-protected from the generic writers")
+def test_assistant_keys_are_catalog_protected(opts):
+    from mojo import errors as merrors
+    from mojo.apps.account.models import Setting
+    from mojo.apps.account.services import admin_settings
+
+    for key in ("LLM_ADMIN_ENABLED", "LLM_ADMIN_API_KEY", "LLM_ADMIN_MODEL",
+                "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY"):
+        assert admin_settings.is_catalog_protected(key), \
+            f"{key} can still be written through the generic settings API"
+
+    # The one dedicated writer names the key it is saving, and the row must
+    # carry that same key — so a writer cannot smuggle a different one past it.
+    assert admin_settings.ASSISTANT_WRITABLE_KEYS <= admin_settings.PROTECTED_WRITER_KEYS, \
+        "the assistant keys have no dedicated-writer escape, so their own writer is blocked"
+    assert "GEOIP_API_KEY_MOJO" in admin_settings.PROTECTED_WRITER_KEYS, \
+        "the pre-existing provider-setup escape was dropped"
+    assert "LLM_HANDLER_API_KEY" not in admin_settings.PROTECTED_WRITER_KEYS, \
+        "the deployment fallback gained a database writer — it must stay file-owned"
+
+    with th.assert_raises(merrors.PermissionDeniedException):
+        Setting.set("LLM_ADMIN_API_KEY", "sk-should-never-store")
+
+    model = (ROOT / "mojo/apps/account/models/setting.py").read_text()
+    assert "protected_writer != self.key" in model, \
+        "the protected-writer escape no longer requires the writer to name this row's key"
+
+
+@th.django_unit_test("the picker never goes empty when the model catalogue is unavailable")
+def test_model_choices_fallback(opts):
+    from mojo.helpers import llm
+
+    # A locally injected loader: nothing shared is patched, so this is safe in
+    # the parallel default tier.
+    empty = llm.model_choices(loader=lambda: None)
+    assert len(empty) == 3, f"an unavailable catalogue produced {empty!r}"
+    assert {row["id"] for row in empty} == set(llm._FALLBACKS.values()), \
+        f"the fallback picker does not offer the three resolution aliases: {empty!r}"
+
+    broken = llm.model_choices(loader=lambda: (_ for _ in ()).throw(RuntimeError("down")))
+    assert len(broken) == 3, f"a raising loader did not fall back: {broken!r}"
+
+    live = llm.model_choices(loader=lambda: [
+        {"id": "claude-sonnet-5", "display_name": "Claude Sonnet 5",
+         "created_at": "2026-01-01T00:00:00Z"},
+        {"id": "claude-opus-4-8", "created_at": "2025-01-01T00:00:00Z"},
+        {"id": "text-embedding-3", "created_at": "2026-06-01T00:00:00Z"},
+    ])
+    assert [row["id"] for row in live] == ["claude-sonnet-5", "claude-opus-4-8"], \
+        f"the picker did not rank by recency or dropped a family filter: {live!r}"
+    assert live[0]["label"] == "Claude Sonnet 5" and live[1]["label"] == "claude-opus-4-8", \
+        f"a missing display_name did not fall back to the id: {live!r}"
+
+
+# ---------------------------------------------------------------------------
+# Packaging
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("the Assistant ships as a shell slot, not a navigation lane")
+def test_assistant_assets_are_declared(opts):
+    from mojo.apps.account.services import admin_assets
+
+    assets = admin_assets.load_manifest()
+    for name in ASSISTANT_ASSETS:
+        assert f"assets/assistant/{name}" in assets, \
+            f"assets/assistant/{name} is not a declared package asset — it would 404"
+
+    registry = (ASSETS / "features/registry.js").read_text()
+    assert "assistant" not in registry, \
+        "the Assistant was added to the navigation registry — it is a shell slot " \
+        "with no route and no lane"
+    assert "[dashboard, webapps, advanced, people, activity, platform, settings, sms, email]" in registry, \
+        "the approved navigation lane order changed"
+    assert "assistant" not in admin_assets.FEATURES, \
+        "the Assistant was added to the feature asset roster — those are lane directories"
+
+    index = (ROOT / "mojo/apps/account/admin_portal/index.html").read_text()
+    assert '<link rel="stylesheet" href="assets/assistant/assistant.css">' in index, \
+        "the Assistant stylesheet has no load path"
+
+    app = (ASSETS / "app.js").read_text()
+    assert "context.features?.assistant?.enabled === true" in app, \
+        "the shell mounts the Assistant without checking its feature namespace"
+    assert "disposeAssistant" in app, \
+        "the panel's disposer shares the page disposer, which every navigation nulls"
+
+
+# ---------------------------------------------------------------------------
+# Static JavaScript contracts
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("no Assistant module hands model output to innerHTML")
+def test_assistant_modules_never_use_innerhtml(opts):
+    modules = _modules()
+    assert len(modules) == 8, \
+        f"the Assistant module walk found {len(modules)} files under {PANEL}"
+    for path in modules:
+        assert "innerHTML" not in _code(path.read_text()), \
+            f"{path.name} writes innerHTML — block and markdown content is model output"
+
+
+@th.django_unit_test("Assistant controls route through the one shared action helper")
+def test_assistant_modules_follow_the_responsiveness_contract(opts):
+    banned = ("onclick: async", "onchange: async", "onsubmit: async") + tuple(
+        f"addEventListener('{event}', async"
+        for event in ("click", "change", "submit", "keydown", "input"))
+    for path in _modules():
+        text = path.read_text()
+        code = _code(text)
+        for pattern in banned:
+            assert pattern not in code, \
+                f"{path.name} attaches a raw async handler ({pattern})"
+        assert "function runAction" not in code, \
+            f"{path.name} defines its own runAction instead of using the shared helper"
+        if "runAction(" in code:
+            assert re.search(r"import \{[^}]*\brunAction\b[^}]*\} from '[^']*actions\.js'", text), \
+                f"{path.name} calls runAction() without importing it from components/actions.js"
+
+
+@th.django_unit_test("the transport owns one turn, one outcome, and no stop button")
+def test_assistant_transport_contract(opts):
+    transport = (PANEL / "transport.js").read_text()
+    code = _code(transport)
+
+    assert "if (pendingTurn) throw new Error" in code, \
+        "the transport does not refuse a second turn while one is pending"
+    assert "pendingTurn = null" in code and "assistant_response" in code \
+        and "assistant_error" in code, \
+        "the terminal event pair does not resolve the pending turn"
+    assert "BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000]" in code, \
+        "the reconnect backoff ladder changed"
+    assert "RATE_LIMITED_CODE = 4429" in code and "code === RATE_LIMITED_CODE" in code, \
+        "a 4429 close is not treated as a deliberate rejection"
+    assert "PING_MS = 12000" in code and "action: 'ping'" in code, \
+        "the keep-alive is gone — the server closes an idle socket after 30 seconds"
+    assert "MISSED_PONG_LIMIT" in code, \
+        "missing pongs no longer trigger a reconnect"
+    assert "TURN_WATCHDOG_MS = 240000" in code, \
+        "the silent-turn watchdog changed"
+    assert not re.search(r"cancel", code, re.IGNORECASE), \
+        "the transport gained a cancel path — the server exposes no way to abort " \
+        "a turn, so no control here may claim to"
+    assert "isOwned(requestId)" in code, \
+        "inbound events are not filtered by a request_id this transport minted; " \
+        "send_event_to_user fans out to every socket the user holds"
+
+
+@th.django_unit_test("markdown renders no links, images, or raw HTML")
+def test_assistant_markdown_contract(opts):
+    markdown = _code((PANEL / "markdown.js").read_text())
+    for banned in ("createElement('a')", "createElement('img')", 'createElement("a")',
+                   "setAttribute('href'", "setAttribute('src'"):
+        assert banned not in markdown, \
+            f"markdown.js builds {banned} — assistant prose must not become a click target"
+    assert "MAX_INPUT = 100000" in markdown and "MAX_INLINE_LINE = 4000" in markdown, \
+        "the markdown input bounds are gone"
+    assert "textContent" in markdown and "createElement" in markdown, \
+        "markdown.js no longer builds nodes explicitly"
+
+
+@th.django_unit_test("the panel is a docked region, a narrow dialog, and never on top")
+def test_assistant_panel_contract(opts):
+    panel = (PANEL / "panel.js").read_text()
+    styles = (PANEL / "assistant.css").read_text()
+
+    assert "'role', 'complementary'" in panel, \
+        "the docked panel is not a complementary region"
+    assert "'aria-modal', 'true'" in panel and "'role', 'dialog'" in panel, \
+        "the narrow sheet is not a modal dialog"
+    assert "'aria-live': 'off'" in panel, \
+        "the panel does not silence #app's polite live region — a screen reader " \
+        "would narrate every streamed token"
+    assert "matchMedia(DOCKED_QUERY)" in panel and "(min-width: 1101px)" in panel, \
+        "the docked/sheet mode switch is gone"
+    assert "mojo-admin-assistant-open" in panel, \
+        "the open/closed state is no longer remembered"
+    assert "sessionStorage" in panel and "conversation" not in panel.split("sessionStorage")[1][:200], \
+        "something other than a single boolean is being persisted in the browser"
+
+    assert "grid-column: 3" in styles, \
+        "the panel does not claim the third grid column explicitly — the sidebar " \
+        "is position:fixed, so auto-placement lands it in column 1"
+    assert "#app.assistant-open { grid-template-columns: 228px minmax(0, 1fr) 380px; }" in styles, \
+        "the docked layout no longer widens the shell grid"
+    assert "z-index: 60;" in styles, \
+        "the panel z-index left the band below the busy (90) and modal (100/110/120) scrims"
+    assert "@media (prefers-reduced-motion: reduce)" in styles, \
+        "the typing indicator ignores prefers-reduced-motion"
+
+
+@th.django_unit_test("approvals are decided in one module and framed in one transport")
+def test_assistant_approval_seam(opts):
+    approval = (PANEL / "approval.js").read_text()
+    blocks = _code((PANEL / "blocks.js").read_text())
+    transport = _code((PANEL / "transport.js").read_text())
+
+    # The socket frame is built by the ONE socket owner (that is the whole
+    # point of a single correlation owner); the DECISION lives in approval.js
+    # and nowhere else.
+    for module in _modules():
+        code = _code(module.read_text())
+        if module.name == "transport.js":
+            continue
+        assert "type: 'assistant_approval'" not in code and "type: 'assistant_action'" not in code, \
+            f"{module.name} frames an approval message itself instead of going " \
+            f"through the single socket owner"
+    assert "type: 'assistant_approval'" in transport and "type: 'assistant_action'" in transport, \
+        "the socket owner no longer frames the approval and quick-reply messages"
+
+    assert "renderApprovalBlock" in blocks and "renderActionBlock" in blocks, \
+        "blocks.js no longer delegates the approval and quick-reply cards"
+    assert "'/api/assistant/action'" in approval, \
+        "approval.js cannot resolve a fresh-auth card over REST"
+    assert "mojo-admin:fresh-auth" in approval, \
+        "the WebSocket reauth_required handoff does not raise the shell's step-up"
+    assert "reauth_required" in approval, \
+        "approval.js does not handle the step-up refusal"
+    assert "state === LIVE" in approval or "block?.state === LIVE" in approval, \
+        "the card is actionable in states other than pending"
+    for module in _modules():
+        if module.name == "approval.js":
+            continue
+        assert "/api/assistant/action" not in _code(module.read_text()), \
+            f"{module.name} resolves approvals itself — that is approval.js's job"
