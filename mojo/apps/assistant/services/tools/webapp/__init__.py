@@ -9,3 +9,4 @@ money-moving confirmation), and uploading a build from a laptop.
 """
 from . import reads  # noqa: F401
 from . import onboarding  # noqa: F401
+from . import day2  # noqa: F401
