@@ -16,7 +16,9 @@
 
 import {api, apiEnvelope, h, icon} from '../../core.js';
 import {runAction} from '../../components/actions.js';
+import {routeHref} from '../../components/routes.js';
 import {errorState, loadingState} from '../../components/views.js';
+import {activityTabVisible} from './activity.js';
 import {
   list as listOperations, remove as removeOperation,
   subscribe as subscribeOperations, upsert as upsertOperation,
@@ -150,6 +152,17 @@ function v2Action(ctx, label, route, fallback) {
   return fallback ? v1Action(ctx, label, fallback) : null;
 }
 
+// Activity is Home's own sub-page, so it takes a tab rather than a route: the
+// link opens the view that carries the evidence for the thing being reported.
+// A tab this caller cannot read is not offered here — the link falls back to
+// the current Admin, which refuses it in exactly the words it does today.
+function activityAction(ctx, label, tab) {
+  if (activityTabVisible(ctx, tab)) {
+    return {label, href: routeHref('activity', {tab}), external: false};
+  }
+  return v1Action(ctx, label, `activity?tab=${tab}`);
+}
+
 // ── blockers ───────────────────────────────────────────────────────────────
 
 // One entry per thing that is actually wrong, each derived from a single fact
@@ -187,7 +200,7 @@ function blockersFrom(ctx, report) {
       copy: `${sentence(first)} The balancer can still be sending it traffic `
         + 'while it is in this state.',
       action: ctx.features?.activity?.capabilities?.view_logs === true
-        ? v1Action(ctx, 'See the logs', 'activity?tab=logs') : null});
+        ? activityAction(ctx, 'See the logs', 'logs') : null});
   }
 
   const database = reported(sources.database);
@@ -266,7 +279,7 @@ function blockersFrom(ctx, report) {
   const jobs = reported(sources.jobs);
   const queue = jobs?.data || {};
   const logsAction = ctx.features?.activity?.capabilities?.view_logs === true
-    ? v1Action(ctx, 'See the logs', 'activity?tab=logs') : null;
+    ? activityAction(ctx, 'See the logs', 'logs') : null;
   if (jobs && queue.jobs) {
     if (queue.scheduler_active === false) {
       add({tone: 'warn', name: 'The job scheduler is not running',
@@ -328,7 +341,7 @@ function blockersFrom(ctx, report) {
       copy: age == null
         ? 'Incidents stay open until somebody reads them and decides.'
         : `The oldest has been open for ${age} ${plural(age, 'day', 'days')}.`,
-      action: v1Action(ctx, 'Review incidents', 'activity?tab=incidents')});
+      action: activityAction(ctx, 'Review incidents', 'incidents')});
   }
 
   const tickets = reported(sources.tickets);
@@ -337,7 +350,7 @@ function blockersFrom(ctx, report) {
     add({tone: 'warn',
       name: `${openTickets} ${plural(openTickets, 'ticket is', 'tickets are')} open`,
       copy: 'Work someone raised here is still waiting on an answer.',
-      action: v1Action(ctx, 'Review tickets', 'activity?tab=tickets')});
+      action: activityAction(ctx, 'Review tickets', 'tickets')});
   }
 
   // Not a dashboard source: the bootstrap payload's own flag, the same one v1's
@@ -594,10 +607,14 @@ function activityModel(ctx) {
 
 function activityPanel(ctx, model, state) {
   if (!model) return null;
+  // The panel's own tab: the preview reads whichever source this caller can
+  // read, so "All activity" opens the full viewer on that same source rather
+  // than on a tab they would be refused.
+  const all = activityAction(ctx, 'All activity →', model.tab);
   const head = h('div', {class: 'panel-head'},
     h('h2', {text: 'Recent activity'}),
-    h('a', {class: 'panel-link', href: v1Href(ctx, `activity?tab=${model.tab}`)},
-      'All activity →'));
+    h('a', {class: 'panel-link', href: all.href},
+      all.label, all.external ? h('span', {class: 'leaves-v2', text: ' · current Admin'}) : null));
   if (state.activityError) {
     return h('section', {class: 'panel'}, head,
       h('div', {class: 'panel-body'}, errorState(state.activityError, state.retry)));

@@ -111,9 +111,11 @@
 /* Said out loud on every link that leaves v2: the operator is about to land in
    a portal with different chrome, and that should never be a surprise. */
 .blocker-note,
+.panel-link .leaves-v2,
 .tile small .leaves-v2 {
   color: var(--muted);
   font-size: 9px;
+  font-weight: 400;
 }
 
 .activity-row {
@@ -161,5 +163,265 @@
   .blocker-action {
     align-items: flex-start;
     padding-left: 19px;
+  }
+}
+
+/* ── Activity & logs ────────────────────────────────────────────────────────
+   Home's sub-page: the four-view evidence reader. Same shapes as the rest of
+   the portal — panel, tabs, table, field — with the query toolbar, the count
+   strip and the inspector's evidence blocks defined here because nothing else
+   uses them. `.activity-row` above belongs to Home's preview panel; every rule
+   below is scoped to the sub-page's own classes and never touches it. */
+.activity-page {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.activity-page .page-header {
+  margin: 0;
+}
+
+/* One count per readable source, so the strip never claims a number for a view
+   this caller cannot open. A source that did not answer says "Unavailable" —
+   it is never rounded down to zero. */
+.activity-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.activity-count {
+  padding: 12px 15px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.activity-count span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.activity-count strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 19px;
+  letter-spacing: -.02em;
+}
+
+.activity-count[data-tone="warning"] strong {
+  color: var(--warning);
+  font-size: 12px;
+}
+
+.activity-count[data-tone="neutral"] strong {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.activity-stream {
+  min-height: 240px;
+}
+
+/* Search always visible, everything else behind one disclosure with a count on
+   it: a filter that is on must be visible from the closed state, or a narrowed
+   table reads as an empty one. */
+.activity-query {
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.activity-toolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+}
+
+.activity-search {
+  min-width: 0;
+  background: var(--surface);
+}
+
+.activity-search input {
+  width: 100%;
+}
+
+.activity-filter-toggle {
+  white-space: nowrap;
+}
+
+.activity-filter-count {
+  display: grid;
+  place-items: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9px;
+  line-height: 1;
+}
+
+.activity-filter-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 9px;
+  padding: 0 14px 13px;
+}
+
+.activity-filter-panel[hidden] {
+  display: none;
+}
+
+.activity-filter-panel .field {
+  margin: 0;
+}
+
+/* A subject link narrows every tab to one record's evidence. Said in words,
+   with the one control that drops it — the address bar alone was not enough. */
+.activity-subject {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.activity-subject > span:nth-child(2) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.activity-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.activity-pagination > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* The inspector: the whole record, then whatever evidence blobs it carries. */
+.activity-inspector-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+.activity-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px 14px;
+  margin: 0;
+}
+
+.activity-field {
+  min-width: 0;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+}
+
+.activity-field dt {
+  color: var(--muted);
+  font-size: 9px;
+  text-transform: capitalize;
+}
+
+.activity-field dd {
+  margin: 3px 0 0;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.activity-reference {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.activity-reference small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+/* Evidence renders exactly as stored. The bounds are size caps against a
+   pathological blob, never redaction, and Copy hands over the raw value. */
+.activity-evidence,
+.activity-action {
+  margin-top: 14px;
+  padding-top: 13px;
+  border-top: 1px solid var(--line);
+}
+
+.activity-evidence header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.activity-evidence h3,
+.activity-action h3 {
+  margin: 0;
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.activity-evidence pre {
+  max-height: 300px;
+  margin: 8px 0 0;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 7px;
+  background: var(--surface-2);
+  font-size: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.activity-action {
+  display: grid;
+  gap: 9px;
+}
+
+.activity-action p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.activity-action select {
+  max-width: 200px;
+}
+
+@media (max-width: 620px) {
+  .activity-toolbar {
+    grid-template-columns: 1fr auto;
+  }
+
+  .activity-search {
+    grid-column: 1 / -1;
+  }
+
+  .activity-pagination {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
