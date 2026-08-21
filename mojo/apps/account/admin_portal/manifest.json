@@ -16,6 +16,8 @@
     "assets/components/rows.css",
     "assets/components/rows.js",
     "assets/components/views.js",
-    "assets/features/registry.js"
+    "assets/features/registry.js",
+    "assets/assistant/panel.js",
+    "assets/assistant/assistant.css"
   ]
 }
