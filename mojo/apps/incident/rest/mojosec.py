@@ -153,14 +153,20 @@ def _bounded_positive(value, default, maximum, name="value"):
     return value
 
 
+def _iso(value):
+    # The plain-dict response path (objict.to_json) cannot serialize
+    # datetimes nested inside lists — bounded ISO strings, explicitly.
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
 def _case_row(case, detail=False):
     row = {
         "id": case.pk,
-        "created": case.created,
-        "first_seen": case.first_seen,
-        "last_seen": case.last_seen,
-        "window_start": case.window_start,
-        "window_end": case.window_end,
+        "created": _iso(case.created),
+        "first_seen": _iso(case.first_seen),
+        "last_seen": _iso(case.last_seen),
+        "window_start": _iso(case.window_start),
+        "window_end": _iso(case.window_end),
         "sensor_kind": case.sensor_kind,
         "resource_id": case.resource_id,
         "family": case.family,
@@ -184,7 +190,7 @@ def _case_row(case, detail=False):
         row["transitions"] = [
             {
                 "id": item.pk,
-                "created": item.created,
+                "created": _iso(item.created),
                 "transition": item.transition,
                 "reason": item.reason,
                 "from_state": item.from_state,
