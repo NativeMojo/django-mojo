@@ -252,6 +252,10 @@ html[data-theme="dark"] .assistant-panel {
 
 /* Sheet mode: a dialog, right-anchored, full width on a phone. */
 @media (max-width: 1100px) {
+  /* The grid is corrected by CSS, not by the mode listener. A missed
+     matchMedia change event would otherwise leave a dead 380px column beside a
+     panel that is already position:fixed. */
+  #app.assistant-open { grid-template-columns: 228px minmax(0, 1fr); }
   .assistant-panel {
     position: fixed;
     inset: 0 0 0 auto;

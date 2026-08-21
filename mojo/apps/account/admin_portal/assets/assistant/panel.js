@@ -143,15 +143,24 @@ export function install({ctx, app}) {
     return () => mounted.dispose();
   }
 
+  // Both, deliberately. matchMedia is the right signal, but a missed change
+  // event would strand the sheet with a docked panel's role and no focus trap,
+  // and `docked` is read fresh on every call so the resize listener is a
+  // no-op whenever nothing actually changed.
+  let docked = media.matches;
   const onModeChange = () => {
-    app.classList.toggle('assistant-open', open && media.matches);
+    if (media.matches === docked) return;
+    docked = media.matches;
+    app.classList.toggle('assistant-open', open && docked);
     applyMode();
   };
   media.addEventListener('change', onModeChange);
+  window.addEventListener('resize', onModeChange);
   aside.addEventListener('keydown', trapFocus);
 
   function teardown() {
     media.removeEventListener('change', onModeChange);
+    window.removeEventListener('resize', onModeChange);
     aside.removeEventListener('keydown', trapFocus);
     if (typeof disposeBody === 'function') disposeBody();
     disposeBody = null;
