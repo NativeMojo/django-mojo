@@ -201,6 +201,25 @@ surface, because reporting on a setup is not continuing it.
 | `group_intent=new` | Creating an `account.Group` as a side effect makes "the exact group" unbindable at proposal time — the group does not exist yet. `start_webapp_setup` requires a concrete, already-eligible `group`. |
 | Verify / retry / converge | Those are platform-fleet verbs, not WebApp verbs. A WebApp's only recovery verb is rollback. |
 
+## Limitations
+
+### `take_webapp_offline` does not stop an API-backed address
+
+`webapp_lifecycle.take_offline` deletes the primary vhost only when its kind is
+`site`. A `site_api` primary is unlinked from the app, but its enabled `Vhost`
+row survives — and desired state selects every enabled vhost in the pool, so
+nodes keep rendering it and the address goes on answering from its upstream
+routes. Only the extra (alias) addresses stop.
+
+That is the REST detach handler's long-standing behaviour, lifted verbatim into
+the shared service; changing it belongs in its own item. What this domain does
+is refuse to overclaim about it: `_preview_offline` branches on the kind, binds
+`kind:<kind>` into the approval revision, sets
+`details.address_stops_serving`, and the card says the address "KEEPS serving
+its upstream routes until they are removed". The tool description and the
+execution result say the same. To actually stop an API-backed address, remove
+its routes (`remove_webapp_route`) or delete the app.
+
 ## Context links
 
 `_extract_context_refs` keys on the tool name (`agent.py`), so a tool cannot

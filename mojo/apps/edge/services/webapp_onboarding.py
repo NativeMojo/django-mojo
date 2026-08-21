@@ -201,6 +201,14 @@ def assert_read_authority(operation, actor):
     ``webapp/onboarding/detail`` enforces today: the same administrator may
     report on a setup they started on the other surface, from either surface.
     CONTINUING one stays origin-bound — see :func:`assert_continue_authority`.
+
+    ``has_group_token=False`` is an assumption about the CALLER, and what
+    upholds it is that every assistant entry point carries
+    ``@md.requires_global_perms('view_admin', 'assistant')``
+    (``assistant/rest/assistant.py``), whose wrapper refuses a
+    ``GroupScopedToken`` unconditionally — before any tool runs. A future
+    caller reached from a surface WITHOUT that decorator must pass its own
+    flag through :func:`assert_continue_authority` instead of using this.
     """
     _assert_actor_authority(operation, actor, has_group_token=False)
 

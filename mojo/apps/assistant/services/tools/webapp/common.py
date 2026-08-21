@@ -126,10 +126,15 @@ def as_int(value):
 def authorized(user):
     """The cheap ``authorize`` predicate: does this user manage apps ANYWHERE?
 
-    One EXISTS query plus the global check. Deliberately not
-    ``eligible_webapp_groups``, which filters every active group through a
-    nine-deep ``select_related`` — that answer is only worth computing when it
-    IS the answer, which is ``list_webapp_groups`` and nowhere else.
+    Cheap RELATIVE to the alternative, not free. ``get_groups_with_permission``
+    short-circuits on a global grant, and otherwise walks the caller's own
+    memberships in Python and resolves their effectively-active ancestor chains
+    — bounded by how many groups this one user belongs to. Deliberately not
+    ``eligible_webapp_groups``, which filters EVERY active group in the
+    installation through a nine-deep ``select_related``; that answer is only
+    worth computing where it IS the answer, which is ``list_webapp_groups`` and
+    nowhere else. This predicate runs at every listing, dispatch, proposal and
+    execution, so the difference matters.
     """
     from mojo.apps.account.services import webapp_authority
 
@@ -277,13 +282,32 @@ def alias_for(web_app, value):
 
 
 def operation_for(user, value):
-    """An onboarding operation this actor may READ, from either surface."""
+    """An onboarding operation this actor may READ, from either surface.
+
+    The id is parsed BEFORE the query. ``operation_id`` is a ``UUIDField``, and
+    handing its ``to_python`` an arbitrary model-supplied string raises
+    ``django.core.exceptions.ValidationError`` — which is neither a builtin nor
+    a ``MojoException``, so it would escape both :func:`safe_read` and
+    :func:`translated`: a severity-6 ``assistant:error`` incident with a
+    traceback on every malformed call (an LLM-triggerable firehose), and on the
+    preview path a generic precondition message distinguishable from
+    :data:`NO_OPERATION` — an oracle for "is this a real id shape". Parsing here
+    makes malformed and unknown ids indistinguishable and keeps both inside the
+    normal refusal path.
+    """
+    import uuid as uuid_module
+
     from mojo.apps.edge.models import WebAppOnboardingOperation
     from mojo.apps.edge.services import webapp_onboarding
 
+    try:
+        parsed = uuid_module.UUID(str(value).strip())
+    except (AttributeError, TypeError, ValueError):
+        raise Refused(NO_OPERATION)
+
     row = WebAppOnboardingOperation.objects.select_related(
         "group", "actor", "web_app", "domain", "certificate", "vhost").filter(
-            operation_id=str(value or "").strip()).first() if value else None
+            operation_id=parsed).first()
     if row is None:
         raise Refused(NO_OPERATION)
     try:

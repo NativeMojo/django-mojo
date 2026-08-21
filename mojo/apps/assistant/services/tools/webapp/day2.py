@@ -196,9 +196,42 @@ def _tool_detach_webapp_address(params, user, approval=None):
     return dict(result, webapp=web_app.pk)
 
 
+def _offline_effect(primary):
+    """What ``take_offline`` really does to THIS primary address.
+
+    ``webapp_lifecycle.take_offline`` deletes the primary vhost only when its
+    kind is ``site``. A ``site_api`` primary is unlinked from the app, but its
+    enabled ``Vhost`` row survives — and desired state selects every enabled
+    vhost in the pool, so nodes keep rendering it and the address goes on
+    answering from its upstream routes. A card that said "the address stops
+    serving" would be false for that kind, so the wording branches on it and
+    the kind is bound into the approval.
+
+    The behaviour itself is deliberately untouched here: it is the REST detach
+    handler's long-standing behaviour, lifted verbatim into the shared service,
+    and changing it belongs in its own item.
+    """
+    if primary is None:
+        return "", True
+    return primary.kind, primary.kind == "site"
+
+
 def _summarize_offline(params, user):
-    return ("Visitors will stop reaching this app. The app and its versions "
-            "are kept.")
+    stops = True
+    try:
+        web_app = _writable(user, params)
+        _kind, stops = _offline_effect(
+            web_app.vhost if web_app.vhost_id else None)
+    except Exception:
+        # Unresolvable here means the preview is about to refuse and no card
+        # will exist; fall back to the plain sentence.
+        pass
+    if stops:
+        return ("Visitors will stop reaching this app. The app and its versions "
+                "are kept.")
+    return ("This app is unlinked from its address, and its extra addresses "
+            "stop serving. Its own address KEEPS serving its upstream routes "
+            "until they are removed. The app and its versions are kept.")
 
 
 def _preview_offline(params, user):
@@ -212,15 +245,23 @@ def _preview_offline(params, user):
         raise common.Refused(
             "This app has no address, so there is nothing to take offline.")
     hostname = primary.server_name if primary is not None else ""
+    kind, stops = _offline_effect(primary)
+    if stops:
+        effect = (f"its address {hostname or '(none)'} and {len(aliases)} extra "
+                  f"address(es) stop serving")
+    else:
+        effect = (f"{len(aliases)} extra address(es) stop serving and the app is "
+                  f"unlinked from {hostname}, which KEEPS serving its upstream "
+                  f"routes until they are removed")
     return {
-        "summary": (f"Takes '{web_app.slug}' offline: its address "
-                    f"{hostname or '(none)'} and {len(aliases)} extra "
-                    f"address(es) stop serving. The app and its versions are kept."),
-        "details": {"hostname": hostname, "extra_addresses": len(aliases),
-                    "reason": reason},
+        "summary": (f"Takes '{web_app.slug}' offline: {effect}. The app and its "
+                    f"versions are kept."),
+        "details": {"hostname": hostname, "address_kind": kind,
+                    "address_stops_serving": stops,
+                    "extra_addresses": len(aliases), "reason": reason},
         "revision": common.revision(
             ("app", web_app.pk), ("vhost", web_app.vhost_id or 0),
-            ("host", hostname), ("aliases", len(aliases))),
+            ("host", hostname), ("kind", kind), ("aliases", len(aliases))),
     }
 
 
@@ -234,10 +275,13 @@ def _preview_offline(params, user):
     summarize=_summarize_offline,
     preview=_preview_offline,
     description=(
-        "Take an app offline: its own address AND every extra address stop "
-        "serving. The app, its versions and its deploy key are kept, so it can "
-        "be given an address again later. Requires operator approval: calling "
-        "this tool creates an approval card and does not execute."),
+        "Take an app offline: every extra address stops serving, and the app "
+        "is unlinked from its own address. For an app served straight from its "
+        "build that address stops serving too; for an API-backed app the "
+        "address keeps answering from its upstream routes until they are "
+        "removed, and the approval card says which case this is. The app, its "
+        "versions and its deploy key are kept. Requires operator approval: "
+        "calling this tool creates an approval card and does not execute."),
     input_schema={
         "type": "object",
         "properties": {
@@ -252,6 +296,9 @@ def _tool_take_webapp_offline(params, user, approval=None):
 
     web_app = _writable(user, params)
     reason = common.reason_text(params)
+    # Read the effect BEFORE the teardown: afterwards the primary vhost may be
+    # gone, and the card's claim is about the address that WAS there.
+    _kind, stops = _offline_effect(web_app.vhost if web_app.vhost_id else None)
     try:
         result = common.translated(webapp_lifecycle.take_offline, web_app)
     except me.MojoException as err:
@@ -260,7 +307,11 @@ def _tool_take_webapp_offline(params, user, approval=None):
                  payload={"reason": reason,
                           "bound": (approval.revision if approval else "")})
     return dict(result, status="offline",
-                kept="The app and its versions are kept.")
+                address_stopped_serving=stops,
+                kept="The app and its versions are kept.",
+                note=(None if stops else
+                      "The app's own address is API-backed and keeps serving "
+                      "its upstream routes; remove them to stop it."))
 
 
 # ---------------------------------------------------------------------------
