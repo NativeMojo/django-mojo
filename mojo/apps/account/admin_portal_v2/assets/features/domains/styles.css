@@ -1,1 +1,45 @@
-/* Domains owns no styles yet — the destination renders the shared placeholder. */
+/* Domains — names, DNS, certificates and credentials.
+ *
+ * The card, wizard and record-value rules below are v1's, ported rather than
+ * imported: a feature stylesheet is only installed when its feature is enabled,
+ * so the copy in features/apps/styles.css cannot be relied on here (and vice
+ * versa). The pair is small and stable; sharing it would mean a third file
+ * loaded on every page for eight rules.
+ */
+
+.domains-body { display: grid; gap: 14px; }
+.domains-tab { display: grid; gap: 14px; }
+.domains-detail-name { margin: 0; font-size: 18px; }
+
+/* the at-a-glance strip */
+.glance-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.glance-tile { padding: 11px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+.glance-tile[data-tone="ok"] { border-left: 3px solid var(--success); }
+.glance-tile[data-tone="warn"] { border-left: 3px solid var(--warning); }
+.glance-tile[data-tone="danger"] { border-left: 3px solid var(--danger); }
+.glance-label { display: block; font-size: 9px; letter-spacing: .065em; text-transform: uppercase; color: var(--muted); }
+.glance-value { display: block; margin-top: 3px; font-size: 20px; font-weight: 700; }
+.glance-detail { display: block; margin-top: 2px; font-size: 10px; color: var(--muted); }
+
+/* email identity */
+.domains-email .row-section { margin: 0; }
+.domains-email p { margin: 10px 0 0; }
+
+/* the advanced disclosure line */
+.domains-advanced { margin: 2px 0 0; font-size: .82rem; }
+
+/* v1 rules the ported pages depend on */
+.result-card { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 12px; padding: 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+.result-card span { display: block; color: var(--muted); font-size: 10px; }
+.record-values { display: flex; flex-direction: column; gap: 2px; max-width: 520px; }
+.record-values code { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10px; color: var(--text); }
+.cert-headline { margin: 12px 0; }
+.back-link { margin: 0 0 .35rem; font-size: .82rem; }
+.domain-role { display: flex; align-items: center; gap: .5rem; margin: 0 0 .35rem; color: var(--muted); font-size: .82rem; }
+.section-subhead { margin: .5rem 0 0; font-size: .85rem; }
+
+@media (max-width: 600px) {
+  .result-card { grid-template-columns: 1fr auto; }
+  .result-card > strong { grid-column: 1 / -1; }
+  .field-grid { grid-template-columns: 1fr; }
+}

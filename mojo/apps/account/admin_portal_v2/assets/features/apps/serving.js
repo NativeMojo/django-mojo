@@ -9,20 +9,17 @@
 // the fleet's inventory (`pools` and `upstreams` come back null).
 //
 // Vocabulary rule: this is a customer-facing tab. It says address, certificate,
-// path and destination. The control-plane pages under #/vhosts are the operator
-// surface and keep their own words; the footer links there, gated on
+// path and destination. Apps ▸ Serving (advanced) is the operator surface over
+// the same records and keeps its own words; the footer links there, gated on
 // manage_network.
 //
-// Ported from v1 unchanged except for where the operator links point: v2 has no
-// serving-configuration or per-address routes page, so those two links open the
-// current Admin and say so, rather than pointing at a v2 route that is not
-// there. Everything else — the four cards, every refusal, every consequence
-// sentence — is v1's, verbatim.
+// Ported from v1 unchanged — the four cards, every refusal, every consequence
+// sentence. The only edit is where the two operator links point: at v2's own
+// Serving (advanced) sub-page rather than at v1's #/vhosts and #/routes.
 import {api, badge, formatDate, h, icon, TableView} from '../../core.js';
 import {confirmAction, openModal} from '../../components/overlays.js';
 import {routeHref} from '../../components/routes.js';
 import {runAction} from '../../components/actions.js';
-import {v1Href} from './shared.js';
 
 // What each serving shape means in plain words, and why it is not a toggle.
 // The shape decides which knobs the renderer has a branch for at all, so
@@ -328,16 +325,15 @@ function routesCard(ctx, app, data, reload) {
 function operatorLinks(ctx, data) {
   if (!ctx.capabilities.manage_network) return null;
   const primary = (data.address || {}).vhost;
-  // Both destinations are v1 pages — v2 has no fleet serving-configuration
-  // screen. They open the current Admin, labelled so nobody is dropped into
-  // different chrome unannounced.
+  // Both destinations are now v2's own: Apps ▸ Serving (advanced) is the
+  // fleet-wide view of exactly these records, so the links stay in this portal
+  // and the "opens the current Admin" note is gone.
   return h('p', {class: 'muted small serving-operator'},
     'Fleet tools: ',
-    h('a', {href: v1Href(ctx, 'vhosts')}, 'Serving configuration'),
+    h('a', {href: routeHref('apps-serving', {tab: 'vhosts'})}, 'Serving configuration'),
     primary ? ' · ' : null,
-    primary ? h('a', {href: v1Href(ctx, `routes?vhost=${encodeURIComponent(primary)}`)},
-      'Routes for this address') : null,
-    h('span', {class: 'apps-note', text: ' · opens the current Admin'}));
+    primary ? h('a', {href: routeHref('apps-serving', {tab: 'routes', vhost: primary})},
+      'Routes for this address') : null);
 }
 
 /**

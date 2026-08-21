@@ -184,7 +184,8 @@ export function toneFor(row) {
 // naming one of those must open the current Admin, not a v2 hash that resolves
 // to Home and silently loses the reader.
 const V2_ROUTES = new Set([
-  'home', 'apps', 'infrastructure', 'domains', 'access',
+  'home', 'apps', 'apps-serving', 'infrastructure',
+  'domains', 'dns', 'certificates', 'credentials', 'access',
   'settings', 'settings-sms', 'settings-email',
 ]);
 

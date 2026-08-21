@@ -165,6 +165,37 @@
 .domain-actions, .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: .5rem; flex-wrap: wrap; }
 .row-actions { white-space: nowrap; }
 
+/* ---------------------------------------------------------------------------
+   Serving (advanced) — the operator sub-page.
+
+   The shape-card, convergence-card and record-values rules are v1's, ported
+   rather than shared: a feature stylesheet only loads when its feature is
+   enabled, so Domains' copy of the neighbouring card rules cannot be relied on
+   here.
+   --------------------------------------------------------------------------- */
+.serving-body, .serving-tab { display: grid; gap: 14px; }
+.serving-filter { margin: 10px 16px 0; }
+
+.shape-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; }
+.shape-card { display: flex; align-items: flex-start; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); text-align: left; cursor: pointer; }
+.shape-card:hover { border-color: var(--accent); background: var(--accent-soft); }
+.shape-card > .icon { color: var(--accent); margin-top: 2px; }
+.shape-card strong { display: block; font-size: 12px; }
+.shape-card p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
+
+.convergence-card { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 11px; padding: 11px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+.convergence-card > .icon { color: var(--accent); }
+.convergence-card span, .convergence-card strong { display: block; }
+.convergence-card span { font-size: 9px; color: var(--muted); text-transform: uppercase; }
+.convergence-card strong { margin-top: 2px; font-size: 10px; font-weight: 600; }
+
+.record-values { display: flex; flex-direction: column; gap: 2px; max-width: 520px; }
+.record-values code { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10px; color: var(--text); }
+
+@media (max-width: 600px) {
+  .shape-grid { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 540px) {
   .wizard-steps { grid-template-columns: 1fr 1fr; }
   .record-line { grid-template-columns: 4rem 1fr; }

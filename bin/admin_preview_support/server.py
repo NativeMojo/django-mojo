@@ -145,6 +145,10 @@ CREDENTIALS = [
     {"id": 31, "name": "GoDaddy production", "provider": "godaddy", "is_active": True, "verified": True, "verified_at": "2026-08-08T19:00:00Z", "modified": "2026-08-08T19:00:00Z", "domain_count": 1, "api_key_masked": "********7F2A", "group": {"id": 9, "name": "Web Operations"}},
 ]
 RECORDS = [
+    # A real zone always carries its own delegation records at the apex. They
+    # are here so the DNS editor's apex NS/SOA refusal has something to refuse.
+    {"type": "NS", "name": "nativemojo.com", "record_values": ["ns-1.awsdns-00.org.", "ns-2.awsdns-11.co.uk."], "ttl": 172800},
+    {"type": "SOA", "name": "nativemojo.com", "record_values": ["ns-1.awsdns-00.org. awsdns-hostmaster.amazon.com. 1 7200 900 1209600 86400"], "ttl": 900},
     {"type": "A", "name": "nativemojo.com", "record_values": ["203.0.113.42"], "ttl": 300},
     {"type": "CNAME", "name": "www.nativemojo.com", "record_values": ["nativemojo.com"], "ttl": 300},
     {"type": "MX", "name": "nativemojo.com", "record_values": ["10 inbound-smtp.us-west-2.amazonaws.com"], "ttl": 600},

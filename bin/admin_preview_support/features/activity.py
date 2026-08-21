@@ -33,6 +33,11 @@ LOGS = [
     {"id": 502, "created": "2026-08-10T14:01:01Z", "level": "info",
      "kind": "deploy", "method": "POST", "path": "/api/edge/deploy", "gid": 7,
      "model_name": "WebApp", "model_id": 42, "log": "Deployment retry queued"},
+    # A Domain-subject row, so the log inspector's cross-link to the domain page
+    # has something to link to.
+    {"id": 503, "created": "2026-08-10T13:30:00Z", "level": "info",
+     "kind": "dns", "method": "POST", "path": "/api/dnsman/dns", "gid": 7,
+     "model_name": "Domain", "model_id": 11, "log": "Record set replaced"},
 ]
 TICKETS = [
     {"id": 601, "created": "2026-08-10T16:22:00Z", "modified": "2026-08-10T16:30:00Z",

@@ -10,6 +10,7 @@
     "assets/components/actions.js",
     "assets/components/components.css",
     "assets/components/model.js",
+    "assets/components/network.js",
     "assets/components/operations.js",
     "assets/components/overlays.js",
     "assets/components/placeholder.js",

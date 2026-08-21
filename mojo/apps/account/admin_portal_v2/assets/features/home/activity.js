@@ -254,11 +254,11 @@ function copyRecordButton(row) {
  * A record this row names, if the portal has somewhere to open it.
  *
  * Incidents, events, tickets and logs are other tabs of this very page, so
- * those links stay in v2. So does a WebApp: Apps is built, and the app's own
- * page takes `?webapp=<id>` — the link carries this view's location in
- * `?return=` so the app page can offer the way back. Users, groups and domains
- * are screens v2 has not built yet; those open in the current Admin, and the
- * button says so rather than dropping the operator into different chrome
+ * those links stay in v2. So do a WebApp and a Domain: Apps and Domains are
+ * built, and each takes an id in route state — the link carries this view's
+ * location in `?return=` so the destination can offer the way back. Users and
+ * groups are screens v2 has not built yet; those open in the current Admin, and
+ * the button says so rather than dropping the operator into different chrome
  * unannounced.
  */
 // Whether v2's Apps destination is open to this caller. Same predicate as
@@ -278,6 +278,15 @@ function knownReference(ctx, row) {
       h('a', {class: 'button ghost compact', href: routeHref('apps', {
         webapp: rawId, return: returnLocation(),
       })}, `Open WebApp ${rawId}`));
+  }
+  // Domains is built now, and a domain is a page of its own under `?domain=`.
+  // Same shape as the WebApp link above: v2's own route, carrying the way back.
+  if (name === 'domain' && /^\d+$/.test(rawId)
+    && ctx.features?.advanced?.enabled === true) {
+    return h('div', {class: 'activity-reference'},
+      h('a', {class: 'button ghost compact', href: routeHref('domains', {
+        domain: rawId, return: returnLocation(),
+      })}, `Open Domain ${rawId}`));
   }
   const destinations = {
     user: ['users', 'User'], group: ['groups', 'Group'], webapp: ['deployments', 'WebApp'],

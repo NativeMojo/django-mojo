@@ -147,6 +147,9 @@ function v2Action(ctx, label, route, fallback) {
       && ['capacity', 'metrics', 'maintenance'].some(
         (name) => ctx.features.platform.capabilities?.[name] === true),
     domains: ctx.features?.advanced?.enabled === true,
+    // The Certificates tab is its own route under the Domains destination, so
+    // a certificate blocker links straight at it rather than at the name list.
+    certificates: ctx.features?.advanced?.enabled === true,
     access: ctx.features?.people?.enabled === true,
     settings: ctx.features?.settings?.enabled === true,
     // The two integration sub-pages of Settings. Each is gated on its OWN
@@ -286,13 +289,13 @@ function blockersFrom(ctx, report) {
       add({tone: 'danger',
         name: `${certs.failing} ${plural(certs.failing, 'certificate is', 'certificates are')} not valid`,
         copy: 'Browsers refuse the addresses those certificates cover.',
-        action: v2Action(ctx, 'Open Domains', 'domains', 'certificates')});
+        action: v2Action(ctx, 'Open Certificates', 'certificates', 'certificates')});
     } else if (certs.expiring_within_30_days) {
       const count = certs.expiring_within_30_days;
       add({tone: 'warn',
         name: `${count} ${plural(count, 'certificate expires', 'certificates expire')} within 30 days`,
         copy: 'Renewal is automatic while DNS still resolves the way it did at issue.',
-        action: v2Action(ctx, 'Open Domains', 'domains', 'certificates')});
+        action: v2Action(ctx, 'Open Certificates', 'certificates', 'certificates')});
     }
   }
 
@@ -477,7 +480,7 @@ function tilesFrom(ctx, report, apps) {
         value: !data.total ? 'Not managed here'
           : data.failing ? `${data.active || 0} valid · ${data.failing} not valid`
             : `${data.active || data.total} valid`,
-        action: v2Action(ctx, 'Certificates', 'domains', 'certificates')});
+        action: v2Action(ctx, 'Certificates', 'certificates', 'certificates')});
     }
   }
 
