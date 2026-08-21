@@ -302,6 +302,14 @@ def _reconcile_routes(web_app, alias):
         alias = Vhost.objects.select_for_update().select_related(
             "domain").get(pk=alias.pk, alias_of=web_app)
 
+        # Change-address may also move the app between pools. An enabled alias
+        # must follow the current primary before its route contract converges;
+        # keeping this save in the same transaction makes a later route
+        # conflict roll the pool repair back too.
+        if alias.pool != primary.pool:
+            alias.pool = primary.pool
+            alias.save(update_fields=["pool", "modified"])
+
         # Heal a lone trailing-slash spelling before the auth reconciler looks
         # for exact canonical prefixes. Duplicate logical rows stay a refusal.
         webapp_serving._canonical_route_contract(primary, lock=True)

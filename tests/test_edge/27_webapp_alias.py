@@ -833,6 +833,7 @@ def test_alias_copies_complete_primary_route_contract(opts):
         "rechecking an alias duplicated an application route"
 
     other = make_upstream(group=opts.group)
+    Vhost.objects.filter(pk=alias.pk).update(pool="staging")
     copied.update(upstream=other)
     _, error, _, _, _, _ = _attach(
         opts, web_app, f"routes.{domain.name}")
@@ -841,6 +842,9 @@ def test_alias_copies_complete_primary_route_contract(opts):
     copied = VhostRoute.objects.get(vhost=alias, path_prefix="/reports")
     assert copied.upstream_id == other.pk, \
         "the refused alias reconcile still rewrote the conflicting route"
+    alias.refresh_from_db()
+    assert alias.pool == "staging", \
+        "a refused route reconcile committed its earlier pool repair"
 
 
 @th.django_unit_test("attach uses the current locked primary after an address race")
@@ -882,7 +886,7 @@ def test_attach_relocks_current_primary_for_pool_and_routes(opts):
     # The already-enabled Check path has the same race boundary.
     latest_primary = make_vhost(
         domain, certificate, label="latest", kind="site_api",
-        pool="staging")
+        pool="default")
     latest_upstream = make_upstream(group=opts.group)
     make_route(latest_primary, "/latest", latest_upstream)
     WebApp.objects.filter(pk=web_app.pk).update(vhost=latest_primary)
@@ -892,6 +896,9 @@ def test_attach_relocks_current_primary_for_pool_and_routes(opts):
         opts, web_app, f"race.{domain.name}")
     assert error is None and result.created is False, \
         f"rechecking an alias trusted the stale primary: {error or result}"
+    alias.refresh_from_db()
+    assert alias.pool == "default", \
+        f"enabled alias did not follow the current primary's pool: {alias.pool}"
     assert VhostRoute.objects.filter(
         vhost=alias, path_prefix="/latest",
         upstream=latest_upstream).exists(), \

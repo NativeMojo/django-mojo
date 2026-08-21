@@ -162,10 +162,10 @@ def on_webapp_detach_address(request):
             vhost = Vhost.objects.select_for_update().get(pk=locked.vhost_id)
         aliases = list(Vhost.objects.select_for_update().filter(
             alias_of=locked).order_by("pk"))
-        conflicting_owners = list(WebApp.objects.select_for_update().filter(
+        conflicting_owner = WebApp.objects.filter(
             vhost_id__in=[alias.pk for alias in aliases],
-        ).exclude(pk=locked.pk).order_by("pk"))
-        if conflicting_owners:
+        ).exclude(pk=locked.pk).exists()
+        if conflicting_owner:
             raise me.ValueException(
                 "This WebApp has an alias also used as another app's primary "
                 "address and cannot be taken offline safely.")
