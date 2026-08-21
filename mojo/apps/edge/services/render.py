@@ -32,6 +32,7 @@ import json
 import os
 import re
 
+from mojo import __version__ as FRAMEWORK_VERSION
 from mojo import errors as me
 from mojo.helpers.settings import settings
 from mojo.deploy.mojosec_nginx import (
@@ -876,7 +877,8 @@ def _mojosec_vhost_evidence(vhosts):
     return rows
 
 
-def render_http_base(knobs=None, security=None, vhosts=None):
+def render_http_base(knobs=None, security=None, vhosts=None,
+                     carry_upgrade_map=False):
     """`http.d/00_base.conf` — everything the server blocks lean on.
 
     Rendered per generation from `http_knobs()` and the blocklist rows, so
@@ -887,6 +889,13 @@ def render_http_base(knobs=None, security=None, vhosts=None):
     the provision-time bootstrap (see
     docs/django_developer/edge/templates.md), and a second copy at the same
     http level would be a duplicate-directive [emerg].
+
+    `carry_upgrade_map` is the installer's per-node exception to that split:
+    on a node whose bootstrap predates the bootstrap-owned contract nothing
+    declares the map at all, and the generation must carry it or it can never
+    activate. The REAL `nginx -t` verdict decides (services/installer.py),
+    and `render_nginx_harness` mirrors the flag so the staged graph always
+    declares it exactly once too.
     """
     knobs = knobs or http_knobs()
     if security is None:
@@ -915,15 +924,27 @@ def render_http_base(knobs=None, security=None, vhosts=None):
             _mojosec_vhost_evidence(vhosts),
         ).rstrip().splitlines())
         parts.append("")
+    if carry_upgrade_map:
+        parts.extend([
+            "# this node's bootstrap declares no $connection_upgrade map, so",
+            "# this generation carries it — see services/installer.py",
+            "map $http_upgrade $connection_upgrade {",
+            "    default upgrade;",
+            "    '' close;",
+            "}",
+            "",
+        ])
     parts.extend([
-        # `$connection_upgrade` is NOT rendered here. It belongs to the node
-        # bootstrap, alongside `default_type` and `types_hash_max_size`, and
-        # for the same reason: a node that also serves a classic vhost needs
-        # the map defined BEFORE any generation exists. Rendering it here too
-        # would be a duplicate-directive [emerg] on such a node, and leaving
-        # only this copy would mean a fresh box cannot start nginx at all
-        # until its first convergence — a bootstrap that depends on the thing
-        # it is bootstrapping. See docs/django_developer/edge/templates.md.
+        # `$connection_upgrade` is normally NOT rendered here. It belongs to
+        # the node bootstrap, alongside `default_type` and
+        # `types_hash_max_size`, and for the same reason: a node that also
+        # serves a classic vhost needs the map defined BEFORE any generation
+        # exists. Rendering it here too would be a duplicate-directive [emerg]
+        # on such a node, and leaving only this copy would mean a fresh box
+        # cannot start nginx at all until its first convergence — a bootstrap
+        # that depends on the thing it is bootstrapping. `carry_upgrade_map`
+        # above is the probed per-node exception for bootstraps that predate
+        # the contract. See docs/django_developer/edge/templates.md.
         "sendfile on;",
         f"keepalive_timeout {int(knobs['keepalive_timeout'])};",
         "server_tokens off;",
@@ -1095,7 +1116,7 @@ def render_staged_variant(text, temp_root=None):
     return staged
 
 
-def render_nginx_harness(generation):
+def render_nginx_harness(generation, carry_upgrade_map=False):
     """A minimal wrapper used ONLY by the staging `nginx -t` pre-filter.
 
     This approximates the real bootstrap and is documented as such — but
@@ -1105,7 +1126,9 @@ def render_nginx_harness(generation):
     `types_hash_max_size` and the `$connection_upgrade` map. That list must
     track `render_http_base`'s exclusions exactly: anything the base stops
     rendering has to appear here too, or the pre-filter fails on a variable
-    the real node would have had. It includes the `staging/`
+    the real node would have had — and with `carry_upgrade_map` the base
+    declares the map itself, so the harness must NOT, or the pre-filter fails
+    on a duplicate the real node does not have. It includes the `staging/`
     listen-remapped copies rather than the real trees: `nginx -t` attempts
     `bind()` on every listen (EADDRINUSE tolerated in test mode, anything
     else fatal), and the unprivileged check cannot bind 443/80. Certificate,
@@ -1131,15 +1154,20 @@ def render_nginx_harness(generation):
         "http {",
         "    default_type application/octet-stream;",
         "    types_hash_max_size 4096;",
-        "    map $http_upgrade $connection_upgrade {",
-        "        default upgrade;",
-        "        '' close;",
-        "    }",
+    ]
+    if not carry_upgrade_map:
+        lines.extend([
+            "    map $http_upgrade $connection_upgrade {",
+            "        default upgrade;",
+            "        '' close;",
+            "    }",
+        ])
+    lines.extend([
         f"    include {gen}/staging/http.d/*.conf;",
         f"    include {gen}/staging/conf.d/*.conf;",
         "}",
         "",
-    ]
+    ])
     return "\n".join(lines)
 
 
@@ -1220,10 +1248,30 @@ def generation_id(payload):
     # Renderer-owned inputs participate without becoming a new node-facing
     # REST field. A mapping change must re-stage Edge's scratch graph, while
     # first rollout remains owned by the synchronous global fragment repair.
-    hashed = dict(payload, nginx_temp_paths=nginx_temp_paths())
+    # The framework version is such an input too: a renderer change moves
+    # every rendered byte, and an id that stands still while the bytes move
+    # re-stages a framework upgrade INTO the directory the node is serving
+    # (the retry paths legitimately re-stage an unchanged id in place).
+    hashed = dict(payload, nginx_temp_paths=nginx_temp_paths(),
+                  framework=FRAMEWORK_VERSION)
     canonical = json.dumps(hashed, sort_keys=True, separators=(",", ":"),
                            default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def local_generation_id(generation, carry_upgrade_map=False):
+    """The directory id THIS node installs for a fleet generation.
+
+    The fleet id is pure desired state; whether the generation must declare
+    the `$connection_upgrade` map itself is a per-node fact, probed against
+    the node's own bootstrap by the installer. Folding the bit in here keeps
+    the two variants in two directories, so flipping it can never rewrite a
+    tree the other answer is serving.
+    """
+    if not carry_upgrade_map:
+        return generation
+    return hashlib.sha256(
+        ("%s:carry-upgrade-map" % generation).encode("utf-8")).hexdigest()
 
 
 def desired_state(vhosts, webapps=None):
@@ -1240,7 +1288,7 @@ def desired_state(vhosts, webapps=None):
     return payload
 
 
-def render_generation(vhosts, generation, knobs=None):
+def render_generation(vhosts, generation, knobs=None, carry_upgrade_map=False):
     """Every enabled vhost plus the generation's http base and upstreams,
     rendered into `{relative_path: text}`.
 
@@ -1252,7 +1300,7 @@ def render_generation(vhosts, generation, knobs=None):
     knobs = knobs or http_knobs()
     files = {
         "http.d/00_base.conf": render_http_base(
-            knobs=knobs, vhosts=vhosts),
+            knobs=knobs, vhosts=vhosts, carry_upgrade_map=carry_upgrade_map),
         "http.d/10_upstreams.conf": render_upstreams(
             referenced_upstreams(vhosts)),
     }

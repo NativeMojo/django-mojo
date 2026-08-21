@@ -384,3 +384,55 @@ def test_bootstrap_owned_directives_appear_in_the_harness(opts):
         assert directive in harness, (
             f"{directive!r} is missing from the staging harness, so the "
             f"pre-filter validates a graph the real node would not have")
+
+
+@th.django_unit_test("a carried upgrade map moves from the harness into the base")
+def test_carry_upgrade_map_swaps_declaration_sides(opts):
+    """Regression for the api-wmwx-stage wedge's second population: a node
+    whose bootstrap predates the bootstrap-owned contract declares NO map, so
+    a generation that omits it can never activate there. When the installer
+    probes that state, the generation carries the map itself — and the staging
+    harness must then NOT declare it, or the pre-filter fails on a duplicate
+    the real node does not have. Exactly one side declares it, always."""
+    from mojo.apps.edge.services import render
+
+    declaration = "map $http_upgrade $connection_upgrade"
+    base = render.render_http_base(carry_upgrade_map=True)
+    harness = render.render_nginx_harness("a" * 64, carry_upgrade_map=True)
+    assert declaration in base, (
+        "a carrying generation must declare the map in its own http base")
+    assert declaration not in harness, (
+        "the harness must yield the declaration to a carrying base — both "
+        "sides at once is a duplicate-variable [emerg] in the pre-filter")
+
+
+@th.django_unit_test("the framework version moves every generation id")
+def test_renderer_version_participates_in_the_generation_id(opts):
+    """The wedge's root enabler: the id hashes desired-state INPUTS, so a
+    framework upgrade changed every rendered byte while the id stood still —
+    and the re-stage of an unchanged id rewrote the LIVE generation directory
+    in place. The renderer's version is an input like any other."""
+    from unittest import mock
+
+    from mojo.apps.edge.services import render
+
+    payload = {"vhosts": [], "webapps": [], "http": {}, "security": []}
+    before = render.generation_id(payload)
+    with mock.patch.object(render, "FRAMEWORK_VERSION", "0.0.0-regression"):
+        after = render.generation_id(payload)
+    assert before != after, (
+        "two renderer versions produced one generation id — an upgrade would "
+        "re-stage changed bytes into the directory a node is serving")
+
+
+@th.django_unit_test("the carry bit gets its own generation directory")
+def test_carry_bit_moves_the_local_generation_id(opts):
+    from mojo.apps.edge.services import render
+
+    fleet = "b" * 64
+    th.assert_eq(render.local_generation_id(fleet, False), fleet,
+                 "the plain local id must remain the fleet id")
+    carried = render.local_generation_id(fleet, True)
+    assert carried != fleet, (
+        "a carrying generation must land in its own directory — flipping the "
+        "bit must never rewrite the tree the other variant is serving")
