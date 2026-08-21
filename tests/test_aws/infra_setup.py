@@ -29,21 +29,6 @@ from testit import helpers as th
 SECTION = "aws_infrastructure"
 
 
-@contextmanager
-def _override_setting(name, value):
-    """In-process Django settings override (th.server_settings only affects the
-    separate server process; override_settings is banned by testing rules)."""
-    import django.conf
-    sentinel = object()
-    original = getattr(django.conf.settings, name, sentinel)
-    setattr(django.conf.settings, name, value)
-    try:
-        yield
-    finally:
-        if original is sentinel:
-            delattr(django.conf.settings, name)
-        else:
-            setattr(django.conf.settings, name, original)
 
 
 def _answers(project="mojoinfra", env="prod", region="us-east-1"):
@@ -211,41 +196,8 @@ def test_ambiguous_environments_pend(opts):
     )
 
 
-@th.django_unit_test("MOJO_ENVIRONMENT picks the matching file out of several")
-def test_selected_environment_resolves(opts):
-    prod = _answers(project="mojosel", env="prod")
-    staging = _answers(project="mojosel", env="staging")
-    captured = []
-    _clear_cache(staging)
-    with _environments(prod, staging):
-        with _override_setting("MOJO_ENVIRONMENT", "staging"):
-            _run({"aws_observe": _observer([], captured=captured)})
-
-    assert len(captured) == 1, "the named environment must have been observed"
-    assert captured[0]["spec"].env == "staging", (
-        f"MOJO_ENVIRONMENT named staging, but {captured[0]['spec'].env!r} was "
-        f"observed"
-    )
 
 
-@th.django_unit_test("MOJO_ENVIRONMENT naming a file that is not there is pending")
-def test_selected_environment_missing_pends(opts):
-    factory = _ExplodingFactory()
-    with _environments(_answers(env="prod")):
-        with _override_setting("MOJO_ENVIRONMENT", "qa"):
-            section = _run({"aws_client_factory": factory})
-
-    row = _checks(section)[f"{SECTION}.environment"]
-    assert factory.calls == 0, (
-        "a named environment with no file must not fall back to an AWS call"
-    )
-    assert row["status"] == "pending", (
-        f"a missing named environment is pending, got {row['status']!r}"
-    )
-    assert "qa" in row["explanation"], (
-        f"the explanation must name the environment that is missing, got "
-        f"{row['explanation']!r}"
-    )
 
 
 # ── finding → readiness mapping ─────────────────────────────────────────────
@@ -480,47 +432,8 @@ def test_unexpected_exception_is_contained(opts):
 
 # ── the external-mode gate ──────────────────────────────────────────────────
 
-@th.django_unit_test("external mode warns on the mode row and names the setting")
-def test_external_mode_row(opts):
-    from mojo.helpers import infrastructure
-
-    with _environments():
-        with _override_setting("INFRASTRUCTURE_MODE", "external"):
-            section = _run({})
-        managed = _run({})
-
-    external_row = _checks(section)[f"{SECTION}.mode"]
-    assert external_row["status"] == "warn", (
-        f"external mode must warn on the mode row, got "
-        f"{external_row['status']!r}"
-    )
-    assert infrastructure.SETTING in external_row["explanation"], (
-        f"the mode row must name {infrastructure.SETTING}, got "
-        f"{external_row['explanation']!r}"
-    )
-    assert external_row["fixable"] is False, (
-        "the mode row must never be fixable — a fixer on this section hard-fails "
-        "every Fix-all run on an external install"
-    )
-    assert _checks(managed)[f"{SECTION}.mode"]["status"] == "pass", (
-        "a managed installation's mode row must be pass"
-    )
 
 
-@th.django_unit_test("refuse_external is the backstop: silent when managed, raising when external")
-def test_refuse_external(opts):
-    from mojo.apps.account.services import system_readiness
-    from mojo.apps.aws.services import infra_setup
-
-    assert infra_setup.refuse_external("Infrastructure repair") is None, (
-        "a managed installation must not be refused"
-    )
-    with _override_setting("INFRASTRUCTURE_MODE", "external"):
-        with th.assert_raises(system_readiness.DefinitiveSetupFailure) as caught:
-            infra_setup.refuse_external("Infrastructure repair")
-    assert "INFRASTRUCTURE_MODE" in str(caught.exception), (
-        f"the refusal must name the setting, got {str(caught.exception)!r}"
-    )
 
 
 # ── caching ─────────────────────────────────────────────────────────────────

@@ -457,29 +457,8 @@ def test_oauth_autolink_creates_user(opts):
     user.delete()
 
 
-@th.django_unit_test("oauth: OAUTH_ALLOW_REGISTRATION=False blocks new user creation")
-def test_oauth_registration_gate(opts):
-    from django.conf import settings as django_settings
-    from mojo.apps.account.models import User
-    from mojo.apps.account.rest.oauth import _find_or_create_user
-    from mojo import errors as merrors
-
-    gated_email = "blocked_registration@example.com"
-    User.objects.filter(email=gated_email).delete()
-
-    original = getattr(django_settings, "OAUTH_ALLOW_REGISTRATION", True)
-    django_settings.OAUTH_ALLOW_REGISTRATION = False
-    try:
-        profile = {"uid": "google_uid_gated", "email": gated_email, "display_name": "Blocked"}
-        raised = False
-        try:
-            _find_or_create_user(PROVIDER, profile)
-        except merrors.PermissionDeniedException:
-            raised = True
-        assert raised, "Should raise PermissionDeniedException when registration is disabled"
-        assert not User.objects.filter(email=gated_email).exists(), "User should not have been created"
-    finally:
-        django_settings.OAUTH_ALLOW_REGISTRATION = original
+# test_oauth_registration_gate moved to tests/test_oauth_extended_serial/oauth.py —
+# it mutates django.conf.settings in-process (maestro item #1839).
 
 
 @th.django_unit_test("oauth: MFA is bypassed — OAuth is a trusted second factor")

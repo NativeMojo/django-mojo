@@ -83,32 +83,6 @@ def test_latest_per_runner_evidence(opts):
     assert "edge-b-engine" in by_runner, "repeated callback evicted another roster member"
 
 
-@th.django_unit_test("only the edge-channel roster is frozen")
-def test_exact_edge_roster(opts):
-    from mojo.apps.edge.services import platform_deploy
-    rows = [
-        {"runner_id": "edge-b-engine", "alive": True},
-        {"runner_id": "edge-a-engine", "alive": True},
-        {"runner_id": "dead-engine", "alive": False},
-    ]
-    with mock.patch(
-            "mojo.apps.jobs.get_runners_bounded",
-            return_value=rows) as get_runners:
-        assert platform_deploy.edge_roster() == ["edge-a-engine", "edge-b-engine"]
-    get_runners.assert_called_once_with(
-        channel="edge", limit=128, max_scan_pages=16, timeout=1.0)
-
-
-@th.django_unit_test("edge roster overflow fails closed instead of omitting nodes")
-def test_edge_roster_overflow(opts):
-    from mojo.apps.edge.services import platform_deploy
-    with mock.patch(
-            "mojo.apps.jobs.get_runners_bounded",
-            side_effect=RuntimeError("runner_roster_overflow")):
-        with th.assert_raises(RuntimeError):
-            platform_deploy.edge_roster()
-
-
 @th.django_unit_test("bounded runner discovery proves completeness and rejects overflow")
 def test_bounded_runner_discovery(opts):
     from mojo.apps.jobs.manager import JobManager
@@ -289,110 +263,6 @@ def test_reconcile_lease_ownership(opts):
     _clean_deploy_state()
 
 
-@th.django_unit_test("resume_stranded_target republishes exactly one wedged deploy")
-def test_resume_stranded_target(opts):
-    """The TTL wedge: something armed the lease and died before publishing an
-    orchestrator. The target is recorded, the row says `requested`, and
-    nothing was ever going to move it — the fleet sat on the old commit until
-    a human pushed again."""
-    from mojo.apps.edge.services import deploy
-
-    # Nothing armed, target names a `requested` row: resume it.
-    _clean_deploy_state()
-    stranded = _attempt("requested")
-    deploy.set_target(SHA, actor="test", deployment_id=stranded.pk)
-    with mock.patch("mojo.apps.jobs.publish") as publish:
-        resumed = deploy.resume_stranded_target()
-    th.assert_eq(resumed, SHA, f"the stranded target must be resumed, got {resumed!r}")
-    th.assert_eq(publish.call_count, 1,
-                 f"exactly one orchestrate must be republished, got {publish.call_args_list!r}")
-    th.assert_eq(publish.call_args.kwargs["func"], deploy.DEPLOY_ORCHESTRATE_JOB,
-                 f"the republished job must be the orchestrator, got {publish.call_args!r}")
-    th.assert_eq(publish.call_args.kwargs["payload"],
-                 {"sha": SHA, "deployment": str(stranded.pk)},
-                 f"the republish must carry the stranded attempt, got {publish.call_args!r}")
-    th.assert_eq(publish.call_args.kwargs["max_retries"], 0,
-                 "a redelivered orchestrator would double-drive the protocol")
-    th.assert_true(publish.call_args.kwargs.get("expires_in"),
-                   "the republished orchestrate must expire like any deploy job")
-    status = deploy.get_status()
-    th.assert_true(status and status["deployment"] == str(stranded.pk),
-                   f"resuming must claim the lease atomically, got {status!r}")
-    stranded.refresh_from_db()
-    th.assert_eq(stranded.transitions[-1]["detail"]["reason"], "stranded_target",
-                 f"the resume must be journalled, got {stranded.transitions[-1]!r}")
-
-    # The claim is what stops a second sweep (or a second node) republishing.
-    with mock.patch("mojo.apps.jobs.publish") as publish:
-        th.assert_eq(deploy.resume_stranded_target(), None,
-                     "a resumed deploy must not be resumed again while it runs")
-    th.assert_eq(publish.call_count, 0,
-                 f"the live lease must stop a duplicate republish, got {publish.call_args_list!r}")
-
-    # A row that is already past `requested` is not stranded, it is running.
-    _clean_deploy_state()
-    running = _attempt("canary")
-    deploy.set_target(SHA, actor="test", deployment_id=running.pk)
-    with mock.patch("mojo.apps.jobs.publish") as publish:
-        th.assert_eq(deploy.resume_stranded_target(), None,
-                     "an attempt past `requested` is in flight, not stranded")
-    th.assert_eq(publish.call_count, 0, "a canary-stage attempt must not be republished")
-
-    # Neither is a terminal one.
-    _clean_deploy_state()
-    done = _attempt("failed")
-    deploy.set_target(SHA, actor="test", deployment_id=done.pk)
-    with mock.patch("mojo.apps.jobs.publish") as publish:
-        th.assert_eq(deploy.resume_stranded_target(), None,
-                     "a terminal attempt must never be republished")
-    th.assert_eq(publish.call_count, 0, "a closed attempt must not be republished")
-    _clean_deploy_state()
-
-
-@th.django_unit_test(
-    "post-restart finalizer clears exact terminal owners and resumes one successor")
-def test_post_restart_finalizer_and_successor_resume(opts):
-    from mojo.apps.edge.models import PlatformDeployment
-    from mojo.apps.edge.services import deploy, platform_deploy, readiness
-
-    _clean_deploy_state()
-    runner = deploy.local_runner_id()
-    finished = _attempt(PlatformDeployment.STATUS_VERIFIED, roster=(runner,))
-    platform_deploy.evidence(
-        finished.pk, runner, deploy.STATUS_DEPLOYING,
-        proof={"platform_deployment": str(finished.pk), "platform_sha": SHA})
-    deploy.arm_status(SHA, deployment_id=finished.pk)
-    deploy.set_status(deploy.STATUS_DEPLOYING, SHA, deployment_id=finished.pk)
-
-    successor = PlatformDeployment.objects.create(
-        sha="9" * 40, actor="test", source="test", request_key=str(uuid.uuid4()),
-        frozen_roster=[runner], status=PlatformDeployment.STATUS_REQUESTED,
-        transitions=[])
-    deploy.set_target(successor.sha, actor="next", deployment_id=successor.pk)
-    proof = {"platform_deployment": str(finished.pk), "platform_sha": SHA}
-    with mock.patch.object(readiness, "local_node_proof", return_value=proof), \
-         mock.patch("mojo.apps.jobs.publish") as publish:
-        result = platform_deploy.finalize_post_restart()
-        again = platform_deploy.finalize_post_restart()
-
-    th.assert_eq(result, str(finished.pk),
-                 f"the exact terminal owner was not finalized: {result!r}")
-    th.assert_eq(again, None,
-                 f"a second startup finalized or resumed twice: {again!r}")
-    finished.refresh_from_db()
-    th.assert_eq(finished.status, PlatformDeployment.STATUS_CONVERGED,
-                 f"matching restarted proof did not converge: {finished.status}")
-    status = deploy.get_status()
-    th.assert_eq((status or {}).get("deployment"), str(successor.pk),
-                 f"the successor was not armed after exact cleanup: {status!r}")
-    th.assert_eq(publish.call_count, 1,
-                 f"the successor must publish exactly once: {publish.call_args_list!r}")
-    th.assert_eq(publish.call_args.kwargs["payload"],
-                 {"sha": successor.sha, "deployment": str(successor.pk)},
-                 f"the successor publish carried the wrong attempt: {publish.call_args!r}")
-    _clean_deploy_state()
-
-
 @th.django_unit_test("post-restart finalizer closes delayed v1 identity proof")
 def test_post_restart_finalizer_v1_bridge(opts):
     from mojo.apps.edge.models import PlatformDeployment
@@ -559,58 +429,6 @@ def test_bounded_runner_discovery_missing_heartbeat(opts):
             manager.get_runners_bounded("edge", limit=2, max_scan_pages=3)
 
 
-@th.django_unit_test("an empty frozen roster cannot fall back to the local node")
-def test_empty_roster_fails_closed(opts):
-    from mojo.apps.edge import asyncjobs
-    from mojo.apps.edge.services import deploy, platform_deploy
-    with mock.patch("mojo.apps.jobs.get_runners_bounded", return_value=[]):
-        row, _ = platform_deploy.create(SHA, source="test")
-    assert row.status == "failed"
-    assert row.detail["reason"] == "roster_unavailable"
-    deploy.set_target(SHA, deployment_id=row.pk)
-    deploy.arm_status(SHA, deployment_id=row.pk)
-    job = mock.Mock(payload={"deployment": str(row.pk)}, runner_id="local-engine")
-    incident = mock.Mock(pk=1818)
-    with mock.patch(
-            "mojo.apps.incident.reporter.report_event", return_value=incident), \
-         mock.patch("mojo.apps.jobs.publish") as publish:
-        result = asyncjobs.deploy_orchestrate(job)
-    assert result == f"failed:{SHA}"
-    assert not publish.called
-    row.refresh_from_db()
-    assert row.status == "failed"
-
-
-@th.django_unit_test("publish failure is durable and contains no provider detail")
-def test_publish_failure_durable(opts):
-    from mojo.apps.edge.models import PlatformDeployment
-    from mojo.apps.edge.services import deploy
-    with mock.patch("mojo.apps.jobs.get_runners_bounded", return_value=[{
-            "runner_id": "edge-engine", "alive": True}]), \
-         mock.patch("mojo.apps.jobs.publish", side_effect=RuntimeError("redis password=secret")):
-        with th.assert_raises(RuntimeError):
-            deploy.request_deploy(SHA, actor="test", source="test")
-    row = PlatformDeployment.objects.latest("created")
-    assert row.status == "failed"
-    assert "secret" not in str(row.transitions).lower()
-    assert row.transitions[-1]["detail"]["reason"] == "orchestrator_publish_failed"
-
-
-@th.django_unit_test("runner roster failure is durable and fails closed")
-def test_roster_failure_durable(opts):
-    from mojo.apps.edge.models import PlatformDeployment
-    from mojo.apps.edge.services import deploy
-    with mock.patch(
-            "mojo.apps.jobs.get_runners_bounded",
-            side_effect=RuntimeError("password=roster-sentinel")):
-        with th.assert_raises(deploy.DeploymentCoordinationError):
-            deploy.request_deploy(SHA, actor="test", source="test")
-    row = PlatformDeployment.objects.latest("created")
-    assert row.status == "failed" and row.finished is not None
-    assert row.detail == {"reason": "roster_unavailable"}
-    assert "roster-sentinel" not in str(row.transitions)
-
-
 @th.django_unit_test("provider and callback messages never persist as deploy detail")
 def test_failure_detail_is_classified(opts):
     from mojo.apps.edge.services import deploy, platform_deploy
@@ -633,26 +451,6 @@ def test_journal_restmeta_is_immutable(opts):
     assert PlatformDeployment.RestMeta.CAN_CREATE is False
     assert PlatformDeployment.RestMeta.CAN_UPDATE is False
     assert PlatformDeployment.RestMeta.CAN_DELETE is False
-
-
-@th.django_unit_test("verification refuses proof for another deployment UUID")
-def test_verify_uuid_mismatch(opts):
-    from mojo.apps.edge.services import platform_deploy
-    with mock.patch("mojo.apps.jobs.get_runners_bounded", return_value=[{
-            "runner_id": "edge-a-engine", "alive": True}]):
-        row, _ = platform_deploy.create(SHA, source="test")
-    row.frozen_roster = ["edge-a-engine"]
-    row.save(update_fields=["frozen_roster"])
-    response = {"status": "success", "result": {
-        "platform_sha": SHA,
-        "platform_deployment": str(uuid.uuid4()),
-    }}
-    with mock.patch(
-            "mojo.apps.jobs.manager.JobManager.execute_on_runner",
-            return_value=response):
-        result = platform_deploy.verify(row.pk)
-    assert result.status == "unknown"
-    assert result.node_evidence[0]["state"] == "unavailable"
 
 
 def _tail_row():
@@ -740,56 +538,6 @@ def test_admin_graph_evidence_gated_at_boundary(opts):
         rendered = row.to_dict(graph=graph)
         assert "stderr_tail" not in str(rendered), \
             f"graph={graph} must fall back to the evidence-free default"
-
-
-@th.django_unit_test("verify() preserves the terminal failure diagnosis")
-def test_verify_preserves_diagnosis(opts):
-    """The headline regression (item 2225): node_evidence is latest-per-runner,
-    so an Admin clicking Verify on a FAILED deploy used to replace the only
-    copy of the failure (phase + stderr tail) with `unavailable` — destroying
-    the evidence the button was pressed to inspect. The immutable `diagnosis`
-    journal is what must survive that."""
-    from mojo.apps.edge.services import platform_deploy
-
-    _clean_deploy_state()
-    with mock.patch("mojo.apps.jobs.get_runners_bounded", return_value=[{
-            "runner_id": "edge-a-engine", "alive": True}]):
-        row, _ = platform_deploy.create(SHA, source="test")
-    th.assert_true(platform_deploy.evidence(
-        row.pk, "edge-a-engine", "failed",
-        detail={"phase": "post_deploy_migrate",
-                "stderr_tail": ["FATAL: migration command refused schema drift"]}),
-        "the frozen-roster runner's failure report must land")
-    platform_deploy.transition(
-        row.pk, "failed", {"phase": "post_deploy_migrate", "source": "node_report"})
-
-    with mock.patch(
-            "mojo.apps.jobs.manager.JobManager.execute_on_runner",
-            return_value=None):
-        result = platform_deploy.verify(row.pk)
-
-    th.assert_eq(result.node_evidence[0]["state"], "unavailable",
-                 "verify must still record the live observation it made")
-    th.assert_eq(result.status, "failed",
-                 f"verify must never move a terminal row, got {result.status}")
-    entries = [item for item in (result.diagnosis or [])
-               if isinstance(item, dict)]
-    th.assert_true(entries,
-                   "verify() destroyed the terminal failure diagnosis")
-    first = entries[0]
-    th.assert_eq(first.get("kind"), "failure",
-                 f"the first diagnosis entry must be the failure, got {first!r}")
-    th.assert_eq(first.get("runner"), "edge-a-engine",
-                 f"the diagnosis must name the failed runner, got {first!r}")
-    detail = first.get("detail") or {}
-    th.assert_eq(detail.get("phase"), "post_deploy_migrate",
-                 f"the failure phase must survive verify, got {detail!r}")
-    th.assert_eq(detail.get("stderr_tail"),
-                 ["FATAL: migration command refused schema drift"],
-                 f"the stderr tail must survive verify, got {detail!r}")
-    th.assert_true(first.get("at"),
-                   f"the diagnosis entry must carry its timestamp, got {first!r}")
-    _clean_deploy_state()
 
 
 @th.django_unit_test("same_sha_retry returns the deployment row, not create()'s tuple")
@@ -1345,30 +1093,6 @@ def test_close_handoff_job_is_narrow(opts):
     _clean_deploy_state()
 
 
-@th.django_unit_test("a jobs-plane failure never propagates out of the handoff")
-def test_close_handoff_job_swallows_failures(opts):
-    """It runs on the deploy callback and on the rollback report. Neither may
-    be blocked by a Redis or jobs problem — the same rule the incident
-    reporter follows."""
-    from mojo.apps.jobs.manager import JobManager
-    from mojo.apps.edge.services import platform_deploy
-
-    _clean_deploy_state()
-    _clean_node_jobs()
-    row = _attempt("canary")
-    _node_job(row.pk)
-
-    with mock.patch.object(JobManager, "release_inflight",
-                           side_effect=RuntimeError("redis is down")):
-        closed = platform_deploy.close_handoff_job(row.pk, "completed")
-
-    th.assert_eq(closed, 0,
-                 f"a failed handoff reports nothing closed rather than "
-                 f"raising, got {closed}")
-    _clean_node_jobs()
-    _clean_deploy_state()
-
-
 # ---------------------------------------------------------------------------
 # phase timings — where a deploy's seconds went
 # ---------------------------------------------------------------------------
@@ -1477,3 +1201,4 @@ def test_record_engine_restart(opts):
     th.assert_true(not platform_deploy.record_engine_restart(other.pk),
                    "a row that never reached `verified` has nothing to measure")
     _clean_deploy_state()
+

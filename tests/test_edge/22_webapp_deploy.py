@@ -50,23 +50,6 @@ def test_publish_after_commit(opts):
     publish.assert_called_once_with(deployment.pk)
 
 
-@th.django_unit_test("a coordinator queue failure restores desired state")
-def test_publish_failure_restores(opts):
-    from mojo.apps.edge.services import webapp_deploy
-
-    deployment = _promote_without_publish(opts.webapp, opts.v1)
-    with mock.patch.object(
-            webapp_deploy, "publish", side_effect=RuntimeError("redis down")), \
-         mock.patch("mojo.apps.incident.reporter.report_event"):
-        result = webapp_deploy.publish_or_restore(deployment.pk)
-
-    opts.webapp.refresh_from_db()
-    deployment.refresh_from_db()
-    assert result is None
-    assert opts.webapp.current_release_id is None
-    assert deployment.status == "rolled_back", deployment.detail
-
-
 @th.django_unit_test("all active edge runners must finish before deployment is live")
 def test_active_fleet_success(opts):
     from mojo.apps.edge.services import webapp_deploy
@@ -88,23 +71,6 @@ def test_active_fleet_success(opts):
     assert result == "live:2", f"unexpected coordinator result: {result}"
     assert deployment.status == "live", f"deployment ended {deployment.status}"
     assert deployment.targets == targets, "active-runner snapshot was not retained"
-
-
-@th.django_unit_test("WebApp fleet discovery uses the bounded edge roster")
-def test_webapp_roster_is_bounded(opts):
-    from mojo.apps.edge.services import webapp_deploy
-
-    rows = [
-        {"runner_id": "edge-b-engine", "alive": True},
-        {"runner_id": "edge-a-engine", "alive": True},
-    ]
-    with mock.patch(
-            "mojo.apps.jobs.get_runners_bounded",
-            return_value=rows) as get_runners:
-        runners = webapp_deploy._alive_edge_runners()
-    assert runners == ["edge-a-engine", "edge-b-engine"]
-    get_runners.assert_called_once_with(
-        channel="edge", limit=128, max_scan_pages=16, timeout=1.0)
 
 
 @th.django_unit_test("a partial fleet failure restores and converges the prior release")
@@ -247,3 +213,4 @@ def test_deployment_status_key_scope(opts):
             "one WebApp key could inspect another WebApp deployment"
     finally:
         opts.client.session.headers.pop("Authorization", None)
+

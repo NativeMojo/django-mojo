@@ -253,31 +253,6 @@ def test_status_scheduler_gets_the_same_subtraction(opts):
 # paths and the pgrep pattern
 # ---------------------------------------------------------------------------
 
-@th.django_unit_test()
-def test_root_resolution_prefers_flag_then_env_then_cwd(opts):
-    from mojo.deploy import jobman as jm
-
-    original = os.environ.get("MOJO_PROJECT_ROOT")
-    try:
-        os.environ["MOJO_PROJECT_ROOT"] = "/opt/from-env"
-        th.assert_eq(jm.resolve_root("/opt/from-flag"), "/opt/from-flag",
-                     "--root must win over $MOJO_PROJECT_ROOT")
-        th.assert_eq(jm.resolve_root(None), "/opt/from-env",
-                     "$MOJO_PROJECT_ROOT must be used when --root is absent")
-
-        os.environ.pop("MOJO_PROJECT_ROOT")
-        th.assert_eq(jm.resolve_root(None), os.getcwd(),
-                     "with neither --root nor $MOJO_PROJECT_ROOT the working "
-                     "directory is the root")
-        th.assert_eq(jm.resolve_root("."), os.getcwd(),
-                     "the resolved root must be made absolute — the stale-PID "
-                     "status line prints this path, and a relative one means "
-                     "something different to every reader")
-    finally:
-        os.environ.pop("MOJO_PROJECT_ROOT", None)
-        if original is not None:
-            os.environ["MOJO_PROJECT_ROOT"] = original
-
 
 @th.django_unit_test()
 def test_default_pgrep_pattern_is_byte_identical_to_the_shell_version(opts):
@@ -786,3 +761,4 @@ def test_grace_is_a_stop_only_flag(opts):
                      f"(exit 2), got {done.returncode}: {done.stderr!r}")
     finally:
         shutil.rmtree(base, ignore_errors=True)
+

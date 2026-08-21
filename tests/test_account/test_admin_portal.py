@@ -1,26 +1,14 @@
-"""Private Admin delivery, feature bootstrap, and asset-boundary regressions."""
+"""Private Admin delivery, feature bootstrap, and asset-boundary regressions.
 
-from contextlib import contextmanager
+The bootstrap tests that override django.conf.settings in-process live in
+tests/test_account_admin_extended_serial/test_admin_portal.py (maestro item
+#1839) — process-global settings mutation is unsafe under the parallel
+default tier.
+"""
+
 from unittest import mock
 
 from testit import helpers as th
-
-
-@contextmanager
-def _override_setting(name, value):
-    """In-process Django settings override (th.server_settings only affects the
-    separate server process; override_settings is banned by testing rules)."""
-    import django.conf
-    sentinel = object()
-    original = getattr(django.conf.settings, name, sentinel)
-    setattr(django.conf.settings, name, value)
-    try:
-        yield
-    finally:
-        if original is sentinel:
-            delattr(django.conf.settings, name)
-        else:
-            setattr(django.conf.settings, name, original)
 
 
 ADMIN_EMAIL = "admin_portal@test.com"
@@ -175,69 +163,6 @@ def test_private_asset_manifest_is_exact(opts):
 
 
 # ── INFRASTRUCTURE_MODE ─────────────────────────────────────────────────────
-
-def _bootstrap(opts):
-    import inspect
-    from mojo.apps.account.models import User
-    from mojo.apps.account.rest import admin_portal as views
-
-    user = User.objects.get(pk=opts.portal_user_id)
-    return inspect.unwrap(views.on_admin_bootstrap)(mock.Mock(user=user))
-
-
-@th.django_unit_test("bootstrap publishes the infrastructure mode as a fact and a capability")
-def test_bootstrap_publishes_infrastructure_mode(opts):
-    managed = _bootstrap(opts)
-    with _override_setting("INFRASTRUCTURE_MODE", "external"):
-        external = _bootstrap(opts)
-
-    assert managed["infrastructure"] == {"mode": "managed", "managed": True}, \
-        f"a default installation is not published as managed: {managed['infrastructure']}"
-    assert managed["capabilities"]["infrastructure_managed"] is True, \
-        "the managed capability is missing from a default installation"
-    assert external["infrastructure"] == {"mode": "external", "managed": False}, \
-        f"external mode is not published: {external['infrastructure']}"
-    assert external["capabilities"]["infrastructure_managed"] is False, \
-        "the capability did not flip with the mode"
-
-    # The feature validator accepts named booleans only, so the mode STRING
-    # must never ride inside a feature's capabilities — it would disable the
-    # whole lane rather than describe it.
-    for payload in (managed, external):
-        for name, feature in payload["features"].items():
-            for key, value in feature["capabilities"].items():
-                assert isinstance(value, bool), \
-                    f"features.{name}.capabilities.{key} is not a bool: {value!r}"
-
-
-@th.django_unit_test("bootstrap publishes the file-only edge HTTP posture")
-def test_bootstrap_publishes_edge_http_posture(opts):
-    from mojo.apps.account.models.setting import Setting
-
-    Setting.set("EDGE_HTTP_ENABLED", True, group=None)
-    try:
-        with _override_setting("EDGE_HTTP_ENABLED", "false"):
-            disabled = _bootstrap(opts)
-        with _override_setting("EDGE_HTTP_ENABLED", "true"):
-            enabled = _bootstrap(opts)
-    finally:
-        Setting.remove("EDGE_HTTP_ENABLED", group=None)
-
-    assert disabled["edge"] == {
-        "available": True, "http_enabled": False,
-        "dnsman_issuance": "dns-01"}, \
-        f"file-disabled edge posture is wrong: {disabled['edge']}"
-    assert enabled["edge"]["http_enabled"] is True, \
-        f"file-enabled edge posture is wrong: {enabled['edge']}"
-
-    from mojo.apps.account.rest import admin_portal as views
-    with mock.patch.object(views.apps, "is_installed", return_value=False):
-        absent = _bootstrap(opts)
-    assert absent["edge"] == {
-        "available": False, "http_enabled": None,
-        "dnsman_issuance": None}, \
-        f"an installation without optional Edge did not degrade safely: {absent['edge']}"
-
 
 @th.django_unit_test("the Platform lane never opens on the infrastructure flag alone")
 def test_platform_feature_enabled_ignores_infrastructure_flag(opts):

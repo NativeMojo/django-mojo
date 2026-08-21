@@ -1,7 +1,6 @@
 """Isolation contracts for testit's in-process job executor."""
 
 import uuid
-from unittest import mock
 
 from testit import helpers as th
 
@@ -22,12 +21,15 @@ def test_run_pending_jobs_isolation(opts):
     def _delete_while_running(job):
         job.delete()
 
+    def _local_loader(name):
+        # Injected via the loader= seam so no shared module attribute is
+        # patched — parallel modules never see this stand-in.
+        return _delete_while_running
+
     try:
-        with mock.patch(
-                "mojo.apps.jobs.job_engine.load_job_function",
-                return_value=_delete_while_running):
-            executed = th.run_pending_jobs(
-                func=owned.func, payload={"owner": "one"})
+        executed = th.run_pending_jobs(
+            func=owned.func, payload={"owner": "one"},
+            loader=_local_loader)
 
         assert executed == 1, f"only the owned job should execute, got {executed}"
         other.refresh_from_db()

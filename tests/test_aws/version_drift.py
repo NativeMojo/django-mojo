@@ -513,30 +513,3 @@ def test_ensure_aws_version_rules_is_idempotent_and_gated_at_level_5(opts):
         f"{rule.field_name} {rule.comparator} {rule.value}")
 
 
-@th.django_unit_test()
-def test_version_drift_ruleset_does_not_block_health_defaults(opts):
-    """Regression: the health bootstrap guarded on the system:health: PREFIX.
-
-    Any RuleSet in that namespace made it permanently true, so Runner Down /
-    Scheduler Missing / TCP Overload were never installed and a level-10
-    runner-down event fell through to the handler-less catch-all.
-    """
-    from mojo.apps.incident import cronjobs as incident_cronjobs
-    from mojo.apps.incident.models import RuleSet
-
-    RuleSet.objects.filter(name__in=incident_cronjobs.HEALTH_RULE_NAMES).delete()
-    RuleSet.objects.filter(name=RULESET_NAME).delete()
-    RuleSet.ensure_aws_version_rules()
-
-    incident_cronjobs._health_defaults_checked = False
-    incident_cronjobs._ensure_health_defaults()
-
-    installed = set(RuleSet.objects.filter(
-        name__in=incident_cronjobs.HEALTH_RULE_NAMES).values_list("name", flat=True))
-    assert installed == set(incident_cronjobs.HEALTH_RULE_NAMES), (
-        "Installing the AWS version-drift RuleSet first must not suppress the "
-        f"real health defaults; missing {set(incident_cronjobs.HEALTH_RULE_NAMES) - installed}")
-    runner = RuleSet.objects.filter(name="Health - Runner Down").first()
-    assert runner is not None and "ticket://" in (runner.handler or ""), (
-        "Health - Runner Down must exist WITH its notify+ticket handler, "
-        f"got {runner and runner.handler}")

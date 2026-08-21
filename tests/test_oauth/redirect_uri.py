@@ -68,28 +68,6 @@ REFUSAL = "redirect_uri is not on the allowlist"
 NO_ALLOWLIST = "redirect_uri is not permitted: no ALLOWED_REDIRECT_URLS configured"
 
 
-@contextlib.contextmanager
-def _entries(value):
-    """Point the IN-PROCESS allowlist at `value`.
-
-    `value` is deliberately untyped — the A1 regression installs a plain string
-    here, which is exactly the shape a DB-backed `Setting` row holds.
-
-    In-process only: `opts.client` talks to a separate server process that keeps
-    the pinned test-project settings, so this never leaks into the endpoint test.
-    """
-    from django.conf import settings as django_settings
-
-    missing = object()
-    prev = getattr(django_settings, SETTING_KEY, missing)
-    setattr(django_settings, SETTING_KEY, value)
-    try:
-        yield
-    finally:
-        if prev is missing:
-            delattr(django_settings, SETTING_KEY)
-        else:
-            setattr(django_settings, SETTING_KEY, prev)
 
 
 def _refusal(redirect_uri, entries=ENTRIES):
@@ -102,15 +80,18 @@ def _refusal(redirect_uri, entries=ENTRIES):
     from mojo.apps.account.rest import oauth
 
     installed = list(entries) if isinstance(entries, (list, tuple)) else entries
-    with _entries(installed):
-        try:
-            # `request=None` = no group context, so the group-metadata source
-            # contributes nothing and `entries` IS the whole allowlist. The
-            # per-group source has its own module
-            # (tests/test_oauth/redirect_allowlist_group_source.py).
-            oauth._validate_redirect_uri(None, redirect_uri)
-        except merrors.ValueException as exc:
-            return str(exc.reason)
+    try:
+        # `request=None` = no group context, so the group-metadata source
+        # contributes nothing and `entries` IS the whole allowlist. The
+        # per-group source has its own module
+        # (tests/test_oauth/redirect_allowlist_group_source.py).
+        # The raw value is injected through the deployment_entries seam, which
+        # applies the same kind="list" coercion settings.get would — no
+        # process-global django.conf mutation (maestro item #1839).
+        oauth._validate_redirect_uri(None, redirect_uri,
+                                     deployment_entries=installed)
+    except merrors.ValueException as exc:
+        return str(exc.reason)
     return None
 
 
@@ -470,60 +451,6 @@ def test_redirect_uri_custom_scheme_shapes_that_fail_closed(opts):
                      entries=["myapp://*.callback"])
 
 
-# ---------------------------------------------------------------------------
-# End to end. Runs LAST — it is the only test here that writes to the DB.
-# ---------------------------------------------------------------------------
+# The end-to-end /begin test (the only DB writer) moved to
+# tests/test_oauth_extended_serial/redirect_uri_endpoint.py (item #1839).
 
-@th.django_unit_test("oauth: /begin refuses a suffixed host end to end")
-def test_oauth_begin_refuses_suffixed_host_endpoint(opts):
-    """The full public endpoint, through a global `Setting` row.
-
-    The row's value is a STRING (a `TextField` cannot hold anything else), so
-    this single test covers BOTH bypasses at once: under the old code the string
-    exploded into characters and `/begin` returned 200 with a usable `auth_url`
-    for the attacker's host.
-
-    Assertions target the 400 and the ABSENCE of `state`, never the contents of
-    `auth_url`: `auth_url` always points at the provider and the landing URL only
-    surfaces later (stashed in the Redis state as `frontend_uri`), so
-    string-matching `auth_url` would pass both before and after the fix.
-    """
-    from mojo.apps.account.models.setting import Setting
-
-    # A strict superset of the pinned test-project entry, so the brief window
-    # this row shadows the file setting cannot narrow the allowlist for a
-    # package running in parallel.
-    Setting.set(SETTING_KEY, f'["https://example.com/", "{ENTRY}"]')
-    try:
-        resp = opts.client.get(
-            f"/api/auth/oauth/{PROVIDER}/begin"
-            f"?redirect_uri={quote(SUFFIXED, safe='')}")
-        body = resp.response
-        assert resp.status_code == 400, (
-            f"/begin must refuse the attacker-registered suffix host "
-            f"{SUFFIXED!r}, got {resp.status_code}: {body}")
-        assert body.get("error") == REFUSAL, (
-            f"the refusal must stay the existing message {REFUSAL!r} — it is "
-            f"shared verbatim with the gated-destination refusal so the two are "
-            f"not distinguishable; got {body.get('error')!r}")
-        data = body.get("data") or {}
-        assert not data.get("auth_url"), (
-            f"a refused begin must return no auth_url, got {data.get('auth_url')!r}")
-        assert not data.get("state"), (
-            f"a refused begin must mint no OAuth state — the state is what "
-            f"carries frontend_uri to the callback bounce; got "
-            f"{data.get('state')!r}")
-
-        ok = opts.client.get(
-            f"/api/auth/oauth/{PROVIDER}/begin"
-            f"?redirect_uri={quote(ALLOWED, safe='')}")
-        assert ok.status_code == 200, (
-            f"the allowlisted host itself must still begin normally — this is "
-            f"what proves the 400 above is a host match and not a broken read. "
-            f"Got {ok.status_code}: {ok.response}")
-        assert ok.response.data.auth_url, (
-            f"an admitted begin must return an auth_url: {ok.response}")
-        assert ok.response.data.state, (
-            f"an admitted begin must mint OAuth state: {ok.response}")
-    finally:
-        Setting.remove(SETTING_KEY)

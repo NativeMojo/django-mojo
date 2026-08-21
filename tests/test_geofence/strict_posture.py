@@ -11,7 +11,8 @@ Parallel-safety:
   - DB-backed strict is only ever exercised through a per-group override —
     a global GEOFENCE_STRICT_POSTURE=true row would 403 every unheadered
     request from other modules (no rules → no_rules_strict). The /api/settings
-    validation test therefore writes "false", never "true";
+    validation test lives in tests/test_geofence_extended_serial/ (maestro
+    item #1839) and writes "false", never "true";
   - evidence tests use the no_rules_strict reason — unique to this module, so
     the hourly (ip, reason) dedupe can't race other modules.
 """
@@ -333,45 +334,10 @@ def test_group_strict_flip_audited(opts):
         grp.delete()
 
 
-@th.django_unit_test("strict: /api/settings write path validates GEOFENCE_STRICT_POSTURE")
-def test_setting_write_validation(opts):
-    from mojo.apps.account.models.setting import Setting
-    _admin_login(opts)
-    try:
-        # NOTE: only "false" is ever persisted here — a global strict=true row
-        # would deny unheadered requests from parallel test modules.
-        resp = opts.client.post(
-            "/api/settings", {"key": "GEOFENCE_STRICT_POSTURE", "value": "maybe"})
-        assert resp.status_code == 400, \
-            f"non-JSON value must 400, got {resp.status_code}"
-        resp = opts.client.post(
-            "/api/settings", {"key": "GEOFENCE_STRICT_POSTURE", "value": "1"})
-        assert resp.status_code == 400, \
-            f"non-boolean JSON must 400 (kind=bool coerces garbage truthy), got {resp.status_code}"
-        assert Setting.objects.filter(
-            key="GEOFENCE_STRICT_POSTURE", group=None).first() is None, \
-            "rejected writes must not persist"
-
-        resp = opts.client.post(
-            "/api/settings", {"key": "GEOFENCE_STRICT_POSTURE", "value": "false"})
-        assert resp.status_code == 200, \
-            f"boolean value must save, got {resp.status_code}: {opts.client.last_response.body}"
-
-        # group-scoped rows are dead config for this key — reject loudly
-        grp = _make_group("GF StrictScope")
-        try:
-            resp = opts.client.post(
-                "/api/settings",
-                {"key": "GEOFENCE_STRICT_POSTURE", "value": "false", "group": grp.pk})
-            assert resp.status_code == 400, \
-                f"group-scoped strict setting must 400, got {resp.status_code}"
-            assert "global-only" in str(opts.client.last_response.body), \
-                f"rejection must explain why: {opts.client.last_response.body}"
-        finally:
-            grp.delete()
-    finally:
-        _cleanup_strict_setting()
-        opts.client.logout()
+# test_setting_write_validation moved to
+# tests/test_geofence_extended_serial/strict_posture.py — it writes the
+# protected GEOFENCE_STRICT_POSTURE key through the generic /api/settings
+# REST path (maestro item #1839).
 
 
 @th.django_unit_test("strict: group posture flip invalidates cached decisions")

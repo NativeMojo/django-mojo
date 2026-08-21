@@ -16,6 +16,10 @@ works so dev ergonomics are preserved. Style mirrors
 tests/test_geofence/test_override_file_only.py (the DM-031 precedent for the
 same class of bug); django.conf overrides use direct setattr + try/finally,
 NOT th.server_settings — these are in-process reads.
+
+Moved wholesale out of tests/test_register/ (maestro item #1839): every test
+here mutates process-global django.conf.settings via setattr/delattr, which is
+unsafe under the parallel default tier.
 """
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
