@@ -286,10 +286,17 @@ def _reconcile_routes(web_app, alias):
     missing row is repaired; any extra route, duplicate logical identity, or
     different destination is refused without rewriting it.
     """
-    from mojo.apps.edge.models import Vhost, VhostRoute
+    from mojo.apps.edge.models import Vhost, VhostRoute, WebApp
     from mojo.apps.edge.services import webapp_auth_routes, webapp_serving
 
     with transaction.atomic():
+        # The caller may have held this instance across provider work. Re-read
+        # and lock the app before trusting its primary pointer: change-address
+        # is allowed to replace that pointer while attach is in flight.
+        web_app = WebApp.objects.select_for_update().get(pk=web_app.pk)
+        if not web_app.vhost_id:
+            raise me.ValueException(
+                "Give this app its own address first, then add a custom one.")
         primary = Vhost.objects.select_for_update().select_related(
             "domain").get(pk=web_app.vhost_id)
         alias = Vhost.objects.select_for_update().select_related(
@@ -327,7 +334,7 @@ def attach(web_app, hostname, actor, retry_certificate=False):
     """Point one more address at this app. Safe to call again at any point."""
     from mojo.apps.dnsman.models.domain import PROVIDER_MOJO
     from mojo.apps.dnsman.services import certs
-    from mojo.apps.edge.models import Vhost
+    from mojo.apps.edge.models import Vhost, WebApp
     from mojo.apps.edge.services import webapp_destination, webapp_onboarding
 
     # Every pre-write gate, in its original order, shared with preview().
@@ -338,10 +345,6 @@ def attach(web_app, hostname, actor, retry_certificate=False):
         return objict(status="needs_domain", hostname=hostname,
                       reason=_needs_domain_reason(hostname))
     label = resolved.label
-    # `_resolve_target` already refused an app with no address of its own, so
-    # the FK is set — and its own read left it cached on the instance.
-    primary = web_app.vhost
-
     # Every row at this name, ENABLED OR NOT. Scanning only enabled rows
     # matched the partial unique constraint but missed a PARKED one — another
     # app's disabled address, or one an admin took down. Attach would then mint
@@ -429,8 +432,18 @@ def attach(web_app, hostname, actor, retry_certificate=False):
     # the next Check would take the "already ours" path above and report
     # `attached` over the top of it.
     with transaction.atomic():
+        # Provider work above can overlap a change-address operation. The
+        # in-memory instance is only intake context now: lock and re-read the
+        # WebApp, then derive the current primary under that same lock.
+        current = WebApp.objects.select_for_update().get(pk=web_app.pk)
+        if not current.vhost_id:
+            raise me.ValueException(
+                "Give this app its own address first, then add a custom one.")
+        primary = Vhost.objects.select_for_update().get(pk=current.vhost_id)
         if existing is not None:
             # This app's own parked address, revived — never a duplicate row.
+            existing = Vhost.objects.select_for_update().get(
+                pk=existing.pk, alias_of=current)
             existing.certificate = certificate
             existing.pool = primary.pool
             existing.spa = True
@@ -441,8 +454,8 @@ def attach(web_app, hostname, actor, retry_certificate=False):
             vhost = Vhost.objects.create(
                 domain=domain, label=label, kind="site_api",
                 certificate=certificate, pool=primary.pool, spa=True,
-                alias_of=web_app)
-        vhost = _reconcile_routes(web_app, vhost)
+                alias_of=current)
+        vhost = _reconcile_routes(current, vhost)
     return objict(status="attached", hostname=hostname, vhost=vhost.pk,
                   domain=domain.pk, certificate=certificate.pk,
                   dns=_dns_mode(domain), created=existing is None)

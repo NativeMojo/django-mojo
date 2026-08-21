@@ -843,6 +843,93 @@ def test_alias_copies_complete_primary_route_contract(opts):
         "the refused alias reconcile still rewrote the conflicting route"
 
 
+@th.django_unit_test("attach uses the current locked primary after an address race")
+def test_attach_relocks_current_primary_for_pool_and_routes(opts):
+    from mojo.apps.edge.models import Vhost, VhostRoute, WebApp
+
+    web_app, domain, certificate, stale_primary = _app_with_primary(opts)
+    stale_upstream = make_upstream(group=opts.group)
+    make_route(stale_primary, "/stale", stale_upstream)
+
+    current_primary = make_vhost(
+        domain, certificate, label="current", kind="site_api",
+        pool="staging")
+    current_upstream = make_upstream(group=opts.group)
+    make_route(current_primary, "/current", current_upstream)
+
+    def swap_primary(_domain, _hostname):
+        WebApp.objects.filter(pk=web_app.pk).update(vhost=current_primary)
+        return certificate
+
+    with mock.patch(
+            "mojo.apps.edge.services.webapp_alias._covering_certificate",
+            side_effect=swap_primary):
+        result, error, _, _, _, _ = _attach(
+            opts, web_app, f"race.{domain.name}")
+    assert error is None, \
+        f"attach used stale primary state after change-address: {error}"
+    alias = Vhost.objects.get(pk=result.vhost)
+    assert alias.pool == "staging", \
+        f"the alias used the stale primary's pool: {alias.pool}"
+    assert VhostRoute.objects.filter(
+        vhost=alias, path_prefix="/current",
+        upstream=current_upstream).exists(), \
+        "the alias did not copy routes from the locked current primary"
+    assert not VhostRoute.objects.filter(
+        vhost=alias, path_prefix="/stale").exists(), \
+        "the alias copied a route from the stale in-memory primary"
+
+    # The already-enabled Check path has the same race boundary.
+    latest_primary = make_vhost(
+        domain, certificate, label="latest", kind="site_api",
+        pool="staging")
+    latest_upstream = make_upstream(group=opts.group)
+    make_route(latest_primary, "/latest", latest_upstream)
+    WebApp.objects.filter(pk=web_app.pk).update(vhost=latest_primary)
+    VhostRoute.objects.filter(vhost=alias, path_prefix="/current").delete()
+
+    result, error, _, _, _, _ = _attach(
+        opts, web_app, f"race.{domain.name}")
+    assert error is None and result.created is False, \
+        f"rechecking an alias trusted the stale primary: {error or result}"
+    assert VhostRoute.objects.filter(
+        vhost=alias, path_prefix="/latest",
+        upstream=latest_upstream).exists(), \
+        "the enabled-alias reconcile did not use the locked current primary"
+    assert not VhostRoute.objects.filter(
+        vhost=alias, path_prefix="/stale").exists(), \
+        "the enabled-alias reconcile copied stale primary routes"
+
+
+@th.django_unit_test("offline refuses an alias also claimed as another app's primary")
+def test_detach_address_refuses_dual_owned_alias(opts):
+    from mojo.apps.edge.models import Vhost, WebApp
+
+    web_app, domain, _, primary = _app_with_primary(opts)
+    result, error, _, _, _, _ = _attach(
+        opts, web_app, f"dual.{domain.name}")
+    assert error is None, f"setup attach failed: {error}"
+    alias = Vhost.objects.get(pk=result.vhost)
+    conflicting = make_webapp(
+        opts.group, slug=f"conflict{uuid.uuid4().hex[:8]}")
+    # Deliberately bypass WebApp.save(), which normally enforces alias XOR
+    # primary, to reproduce a corrupted legacy/imported relationship.
+    WebApp.objects.filter(pk=conflicting.pk).update(vhost=alias)
+
+    login(opts, opts.admin_email, opts.admin_password)
+    response = opts.client.post(
+        "/api/edge/webapp/detach_address", {"webapp": web_app.pk})
+    assert response.status_code == 400, \
+        f"dual-owned alias teardown did not fail closed: {response.body}"
+    web_app.refresh_from_db()
+    conflicting.refresh_from_db()
+    assert web_app.vhost_id == primary.pk and \
+        conflicting.vhost_id == alias.pk, \
+        "the refused teardown still changed one of the conflicting owners"
+    assert Vhost.objects.filter(pk__in=(primary.pk, alias.pk)).count() == 2, \
+        "the refused teardown still deleted a dual-owned serving address"
+
+
 @th.django_unit_test("an alias renders and heals exactly like a primary address")
 def test_alias_gets_the_same_auth_contract(opts):
     from mojo.apps.edge.models import Vhost, VhostRoute
