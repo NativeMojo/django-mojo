@@ -173,16 +173,26 @@ def _collect_rate_limits(redis_connection):
     """Collect a fair, bounded sample of active Redis rate-limit keys."""
     # rl:* = fixed-window counters, srl:* = sliding-window zsets
     # (see mojo/decorators/limits.py)
-    families = [
-        {
-            "pattern": pattern,
-            "cursor": 0,
-            "exhausted": False,
-            "pending": deque(),
-            "discarded": False,
-        }
-        for pattern in ("rl:*", "srl:*")
-    ]
+    get_primaries = getattr(redis_connection, "get_primaries", None)
+    primaries = list(get_primaries()) if callable(get_primaries) else []
+    is_cluster = callable(get_primaries)
+    if is_cluster and not primaries:
+        raise ValueError("Redis cluster has no primary nodes")
+
+    lanes = []
+    lane_nodes = primaries if is_cluster else [None]
+    for primary in lane_nodes:
+        for pattern in ("rl:*", "srl:*"):
+            lanes.append({
+                "pattern": pattern,
+                "cursor": 0,
+                "target": primary,
+                "node_name": getattr(primary, "name", None),
+                "exhausted": False,
+                "pending": deque(),
+                "discarded": False,
+            })
+    lane_buffer_limit = max(1, MAX_RATE_LIMIT_KEYS_INSPECTED // len(lanes))
     keys = []
     inspected = 0
     scan_calls = 0
@@ -190,35 +200,48 @@ def _collect_rate_limits(redis_connection):
     while (
         len(keys) < MAX_RESULTS
         and inspected < MAX_RATE_LIMIT_KEYS_INSPECTED
-        and any(not family["exhausted"] or family["pending"] for family in families)
+        and any(not lane["exhausted"] or lane["pending"] for lane in lanes)
     ):
         progressed = False
-        for family in families:
+        for lane in lanes:
             if len(keys) >= MAX_RESULTS or inspected >= MAX_RATE_LIMIT_KEYS_INSPECTED:
                 break
 
-            if not family["pending"] and not family["exhausted"]:
+            if not lane["pending"] and not lane["exhausted"]:
                 if scan_calls >= MAX_RATE_LIMIT_SCAN_CALLS:
                     continue
-                cursor, batch = redis_connection.scan(
-                    cursor=family["cursor"],
-                    match=family["pattern"],
-                    count=RATE_LIMIT_SCAN_COUNT,
-                )
+                scan_kwargs = {
+                    "cursor": lane["cursor"],
+                    "match": lane["pattern"],
+                    "count": min(RATE_LIMIT_SCAN_COUNT, lane_buffer_limit),
+                }
+                if lane["target"] is not None:
+                    scan_kwargs["target_nodes"] = lane["target"]
                 scan_calls += 1
+                cursor_result, batch = redis_connection.scan(**scan_kwargs)
                 progressed = True
-                family["cursor"] = cursor
-                family["exhausted"] = cursor == 0
-                buffer_room = MAX_RATE_LIMIT_KEYS_INSPECTED - len(family["pending"])
+                if lane["target"] is not None:
+                    if not isinstance(cursor_result, dict):
+                        raise ValueError("Redis cluster SCAN did not return node cursors")
+                    if lane["node_name"] not in cursor_result:
+                        raise ValueError(
+                            f"Redis cluster SCAN omitted cursor for {lane['node_name']}"
+                        )
+                    cursor = cursor_result[lane["node_name"]]
+                else:
+                    cursor = cursor_result
+                lane["cursor"] = cursor
+                lane["exhausted"] = cursor == 0
+                buffer_room = lane_buffer_limit - len(lane["pending"])
                 if len(batch) > buffer_room:
-                    family["discarded"] = True
+                    lane["discarded"] = True
                     batch = batch[:buffer_room]
-                family["pending"].extend(batch)
+                lane["pending"].extend(batch)
 
-            if not family["pending"]:
+            if not lane["pending"]:
                 continue
 
-            key = family["pending"].popleft()
+            key = lane["pending"].popleft()
             inspected += 1
             progressed = True
             ttl = redis_connection.ttl(key)
@@ -239,8 +262,8 @@ def _collect_rate_limits(redis_connection):
             break
 
     more_possible = any(
-        family["pending"] or not family["exhausted"] or family["discarded"]
-        for family in families
+        lane["pending"] or not lane["exhausted"] or lane["discarded"]
+        for lane in lanes
     )
     return {
         "rate_limits": keys,

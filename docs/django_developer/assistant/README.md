@@ -260,9 +260,12 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 
 `query_rate_limits` returns at most 50 entries and shares its bounded Redis
 inspection work fairly between fixed-window (`rl:*`) and sliding-window
-(`srl:*`) keys. Its `truncated` boolean is `true` when the result, inspected-key,
-or SCAN-call limit stopped the query before Redis was proven exhausted; callers
-must not treat a truncated response as a complete inventory.
+(`srl:*`) keys. On Redis Cluster it scans each primary explicitly and allocates
+the same global command budget across family/primary lanes; it never uses
+cluster SCAN's all-primary fanout. Its `truncated` boolean is `true` when the
+result, inspected-key, or SCAN-call limit stopped the query before Redis was
+proven exhausted; callers must not treat a truncated response as a complete
+inventory.
 
 ### Groups Domain (`view_groups`)
 
