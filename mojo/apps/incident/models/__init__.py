@@ -14,3 +14,8 @@ from .mojosec_policy_proposal import MojoSecPolicyProposal
 from .mojosec_policy_evaluation import MojoSecPolicyEvaluation
 from .mojosec_case import MojoSecCase
 from .mojosec_case_transition import MojoSecCaseTransition
+from .mojosec_recommendation import MojoSecRecommendation
+from .mojosec_recommendation_target import MojoSecRecommendationTarget
+from .mojosec_recommendation_transition import MojoSecRecommendationTransition
+from .mojosec_execution_attempt import MojoSecExecutionAttempt
+from .mojosec_deployment import MojoSecDeployment
