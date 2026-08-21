@@ -1,2 +1,165 @@
-/* Home owns no styles yet: the scaffold page uses only the foundation
-   vocabulary in assets/admin.css. */
+/* Home's own vocabulary. Everything reusable — panels, badges, dots, buttons,
+   callouts, tiles — lives in assets/admin.css; only the three shapes that are
+   Home-shaped are here. */
+
+/* The headline is the one place a severity dot sits beside a heading. */
+.home-headline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.home-headline h1 {
+  margin: 0;
+  font-size: 21px;
+  line-height: 1.15;
+  letter-spacing: -.02em;
+  outline: 0;
+}
+
+.home-sub {
+  max-width: 700px;
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* "as of <time> · Refresh" — one timestamp for the whole page. A per-panel
+   time would invite comparing freshness between panels read in one pass. */
+.home-asof {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* Running operations: an accent panel, never a toast. Anything that outlives a
+   click has to survive a page change, and the operator has to be able to leave. */
+.op-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+}
+
+.op-strip + .op-strip {
+  border-top: 1px solid var(--line);
+}
+
+.op-strip > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.op-strip strong {
+  font-size: 12px;
+}
+
+.op-strip small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+/* A blocker names one thing that is wrong, what it costs, and the one place
+   that fixes it. Never two actions: a second one is a decision the operator
+   did not ask to make. */
+.blocker {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.blocker:last-child {
+  border-bottom: 0;
+}
+
+.blocker > .dot {
+  margin-top: 5px;
+}
+
+.blocker-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.blocker-body strong {
+  font-size: 12px;
+}
+
+.blocker-body p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.blocker-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+/* Said out loud on every link that leaves v2: the operator is about to land in
+   a portal with different chrome, and that should never be a surprise. */
+.blocker-note,
+.tile small .leaves-v2 {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.activity-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+}
+
+.activity-row:last-child {
+  border-bottom: 0;
+}
+
+.activity-row .icon {
+  width: 14px;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.activity-row .activity-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.activity-row .activity-when {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.panel-link {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+@media (max-width: 600px) {
+  .blocker {
+    flex-wrap: wrap;
+  }
+
+  .blocker-action {
+    align-items: flex-start;
+    padding-left: 19px;
+  }
+}

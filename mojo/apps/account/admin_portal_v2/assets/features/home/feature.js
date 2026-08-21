@@ -10,5 +10,8 @@ export default {
   enabled: (ctx) => ctx.features?.dashboard?.enabled === true,
   navigation: () => [{route: 'home', label: 'Home', icon: 'home'}],
   title: () => 'Home',
-  render: ({ctx, navigate}) => homePage(ctx, navigate),
+  // The signal is the page's own abort: Home polls while the platform reports a
+  // running deployment, and a route change must stop that poll, not let it
+  // repaint a page that is no longer on screen.
+  render: ({ctx, signal}) => homePage(ctx, signal),
 };

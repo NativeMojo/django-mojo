@@ -528,6 +528,33 @@ select:focus-visible,
   height: 9px;
 }
 
+/* `components/rows.js` names its dot `.status-dot` so a row's dot can be
+   targeted without catching every `.dot` inside the row. It is the same mark:
+   same size, same four severities, one definition. */
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: 0 0 auto;
+}
+
+.status-dot.success {
+  background: var(--success);
+}
+
+.status-dot.warning {
+  background: var(--warning);
+}
+
+.status-dot.danger {
+  background: var(--danger);
+}
+
+.status-dot.accent {
+  background: var(--accent);
+}
+
 .chip {
   display: inline-flex;
   align-items: center;
@@ -694,6 +721,57 @@ select:focus-visible,
 .stat-strip small {
   display: block;
   font-size: 9px;
+  color: var(--muted);
+}
+
+/* ── 8b. Tiles ───────────────────────────────────────────────────────────── */
+
+/* A tile is one resource at a glance: severity, what it is, one line of what
+   it is doing, and the way in. It never carries a control — a tile that could
+   change something would be a panel. */
+.tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.tile {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 13px 15px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+a.tile:hover {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+}
+
+.tile > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tile strong {
+  display: block;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.tile small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.tile .icon {
+  width: 14px;
   color: var(--muted);
 }
 
