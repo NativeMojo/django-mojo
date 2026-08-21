@@ -231,7 +231,7 @@ def _tool_get_permission_summary(params, user):
     name="disable_user",
     domain="users",
     permission="manage_users",
-    description="Disable a user account and invalidate all active sessions. Cannot disable yourself. IMPORTANT: Confirm with the user before executing.",
+    description="Disable a user account and invalidate all active sessions. Cannot disable yourself. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -241,6 +241,10 @@ def _tool_get_permission_summary(params, user):
         "required": ["user_id", "reason"],
     },
     mutates=True,
+    # Admin twin: account/admin/people/permission-bundles and the other
+    # People writes in mojo/apps/account/rest/admin_people.py, all gated
+    # @md.requires_fresh_auth(seconds=600). Same operation, same proof.
+    fresh_auth_seconds=600,
 )
 def _tool_disable_user(params, user):
     from mojo.apps.account.models import User
@@ -282,7 +286,7 @@ def _tool_disable_user(params, user):
     name="enable_user",
     domain="users",
     permission="manage_users",
-    description="Re-enable a disabled user account. IMPORTANT: Confirm with the user before executing.",
+    description="Re-enable a disabled user account. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -292,6 +296,10 @@ def _tool_disable_user(params, user):
         "required": ["user_id", "reason"],
     },
     mutates=True,
+    # Admin twin: account/admin/people/permission-bundles and the other
+    # People writes in mojo/apps/account/rest/admin_people.py, all gated
+    # @md.requires_fresh_auth(seconds=600). Same operation, same proof.
+    fresh_auth_seconds=600,
 )
 def _tool_enable_user(params, user):
     from mojo.apps.account.models import User
@@ -327,7 +335,7 @@ def _tool_enable_user(params, user):
     name="force_logout",
     domain="users",
     permission="manage_users",
-    description="Invalidate all active sessions for a user by rotating their auth key. Account stays active — user can log back in. IMPORTANT: Confirm with the user before executing.",
+    description="Invalidate all active sessions for a user by rotating their auth key. Account stays active — user can log back in. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -337,6 +345,10 @@ def _tool_enable_user(params, user):
         "required": ["user_id", "reason"],
     },
     mutates=True,
+    # Admin twin: account/admin/people/permission-bundles and the other
+    # People writes in mojo/apps/account/rest/admin_people.py, all gated
+    # @md.requires_fresh_auth(seconds=600). Same operation, same proof.
+    fresh_auth_seconds=600,
 )
 def _tool_force_logout(params, user):
     from mojo.apps.account.models import User
@@ -374,7 +386,7 @@ def _tool_force_logout(params, user):
     name="update_user_permission",
     domain="users",
     permission="manage_users",
-    description="Add or remove a permission from a user. IMPORTANT: Confirm with the user before executing.",
+    description="Add or remove a permission from a user. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -385,6 +397,10 @@ def _tool_force_logout(params, user):
         "required": ["user_id", "permission", "action"],
     },
     mutates=True,
+    # Admin twin: account/admin/people/permission-bundles and the other
+    # People writes in mojo/apps/account/rest/admin_people.py, all gated
+    # @md.requires_fresh_auth(seconds=600). Same operation, same proof.
+    fresh_auth_seconds=600,
 )
 def _tool_update_user_permission(params, user):
     from mojo.apps.account.models import User
