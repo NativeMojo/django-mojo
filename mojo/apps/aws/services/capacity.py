@@ -842,8 +842,63 @@ def _build(elbv2_client=None, ec2_client=None, rds_client=None, cache_client=Non
     caches = _collect(envelope, "caches", "elasticache:DescribeReplicationGroups",
                       lambda: _cache_rows(cache_client=cache_client))
     envelope["caches"] = caches or []
+    envelope["reader_routing"] = _reader_routing(envelope)
     envelope["actions"] = _offers(envelope)
     return envelope
+
+
+def _reader_routing(envelope, django_databases=None, django_routers=None,
+                    skip_reason=None, redis_reader_on=None):
+    """What THIS process actually does with readers, self-reported.
+
+    The reader settings are file-only and read at boot, so no admin surface
+    can see them by querying anything — except the serving process itself,
+    which IS the thing the question is about. The answer is per-node: a node
+    that has not restarted since the config line was added still runs without
+    routing, so the panel labels this "this node", and fleet-wide convergence
+    stays a deployments question.
+
+    The keyword arguments exist for tests (no process-global settings
+    mutation); production callers pass none of them.
+    """
+    from django.conf import settings as django_settings
+    from mojo.db import config as db_reader_config
+    from mojo.helpers.redis import client as redis_client
+
+    if django_databases is None:
+        django_databases = getattr(django_settings, "DATABASES", None)
+    if django_routers is None:
+        django_routers = getattr(django_settings, "DATABASE_ROUTERS", None)
+    if skip_reason is None:
+        skip_reason = db_reader_config.LAST_SKIP_REASON
+    if redis_reader_on is None:
+        redis_reader_on = redis_client.reader_configured()
+
+    databases = django_databases if isinstance(django_databases, dict) else {}
+    reader = databases.get("reader")
+    host = reader.get("HOST") if isinstance(reader, dict) else None
+    active = bool(reader) and db_reader_config._ROUTER in list(django_routers or [])
+
+    # The one check that catches a paste error: the configured host against
+    # the cluster reader endpoints AWS itself reports. None when there is
+    # nothing to compare — unknown, never a false alarm.
+    endpoints = [row.get("reader_endpoint")
+                 for row in envelope.get("databases") or []]
+    endpoints = [value for value in endpoints if value]
+    matches = None
+    if active and host and endpoints:
+        matches = host in endpoints
+
+    return {
+        "database": {
+            "active": active,
+            # Host only — the alias carries credentials this report must not.
+            "host": host,
+            "skip_reason": skip_reason,
+            "matches_reader_endpoint": matches,
+        },
+        "redis": {"active": bool(redis_reader_on)},
+    }
 
 
 def _egress_envelope(serving, addresses):

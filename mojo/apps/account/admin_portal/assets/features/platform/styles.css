@@ -58,3 +58,88 @@ html[data-theme="dark"] {
 .capacity-body .status-row { grid-template-columns: 7px auto minmax(0, 1fr) minmax(0, 50%); }
 .capacity-body .row-value { white-space: nowrap; }
 .capacity-body .row-detail { white-space: normal; }
+
+/* ── Fleet Scaling ─────────────────────────────────────────────────────────
+   One page for the whole fleet: summary strip, one card per tier, staged
+   changes reviewed in a bottom bar. Geometry ports the approved mockup;
+   colors and type ride the portal's own tokens so both themes hold. */
+.fleet-page{display:flex;flex-direction:column;gap:14px;padding-bottom:96px}
+.fleet-label{font-size:9px;font-weight:750;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.fleet-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.fleet-tile{display:flex;flex-direction:column;gap:3px;padding:13px 15px;background:var(--surface)}
+.fleet-tile-value{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.fleet-tile-value small{font-size:11px;font-weight:500;color:var(--muted)}
+.fleet-tile-meta{font-size:10px;color:var(--muted)}
+.fleet-card{background:var(--surface);border:1px solid var(--line);border-radius:11px;overflow:hidden;transition:border-color .18s ease,box-shadow .18s ease}
+.fleet-card.changed{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));box-shadow:0 6px 24px -14px color-mix(in srgb,var(--accent) 40%,transparent)}
+.fleet-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:14px 16px 10px}
+.fleet-card-title h3{margin:0;font-size:14px}
+.fleet-card-title p{margin:3px 0 0;color:var(--muted);font-size:11px}
+.fleet-cost{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--muted);white-space:nowrap}
+.fleet-controls{display:flex;align-items:flex-start;gap:18px;flex-wrap:wrap;padding:4px 16px 14px}
+.fleet-control{display:flex;flex-direction:column;gap:5px}
+.fleet-control select{width:auto;min-width:150px;height:34px}
+.fleet-control select:disabled{opacity:.55;cursor:not-allowed}
+.fleet-floor{max-width:34ch;font-size:10px;color:var(--muted)}
+.fleet-stepper{display:inline-flex;align-items:stretch;height:34px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);overflow:hidden}
+.fleet-stepper button{width:36px;border:0;background:transparent;color:var(--text);font-size:16px;line-height:1;cursor:pointer}
+.fleet-stepper button:hover:not(:disabled){background:var(--surface-3)}
+.fleet-stepper button:disabled{opacity:.35;cursor:not-allowed}
+.fleet-stepper-num{min-width:46px;display:grid;place-items:center;font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;background:var(--surface);border-left:1px solid var(--line);border-right:1px solid var(--line)}
+.fleet-stepper-num.up{color:var(--accent)}
+.fleet-stepper-num.down{color:var(--warning)}
+.fleet-note{display:flex;gap:8px;align-items:flex-start;margin:0 16px 12px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--muted);font-size:11px;line-height:1.5}
+.fleet-note .icon{width:14px;margin-top:1px;flex:0 0 auto}
+.fleet-note.warn-text,.warn-text{color:var(--warning)}
+.fleet-group+.fleet-group{border-top:1px solid var(--line)}
+.fleet-rows{border-top:1px solid var(--line);background:var(--surface-2)}
+.fleet-row{display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--line);font-size:11.5px}
+.fleet-row:last-child{border-bottom:0}
+.fleet-row.ghost{background:var(--accent-soft)}
+.fleet-row.leaving .fleet-name{text-decoration:line-through;opacity:.55}
+.fleet-name{font-size:11px;font-weight:600}
+.fleet-tag{font-size:9.5px;color:var(--muted);padding:2px 7px;border-radius:5px;background:var(--surface-3)}
+.fleet-row-side{margin-left:auto;display:flex;align-items:center;gap:10px}
+.fleet-link{border:0;background:transparent;color:var(--muted);font-size:10.5px;cursor:pointer;padding:3px 6px;border-radius:5px;text-decoration:underline;text-underline-offset:2px}
+.fleet-link:hover{color:var(--danger);background:color-mix(in srgb,var(--danger) 9%,var(--surface))}
+.fleet-link.undo:hover{color:var(--accent);background:var(--accent-soft)}
+.fleet-pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px 3px 7px;border-radius:999px;font-size:10px;font-weight:700;white-space:nowrap}
+.fleet-pill-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:0 0 auto}
+.fleet-pill.ok{color:var(--success);background:color-mix(in srgb,var(--success) 10%,var(--surface))}
+.fleet-pill.warn{color:var(--warning);background:color-mix(in srgb,var(--warning) 10%,var(--surface))}
+.fleet-pill.pend{color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--surface))}
+.fleet-tech{border-top:1px solid var(--line);padding-top:12px}
+.fleet-tech summary{cursor:pointer;font-size:11px;font-weight:700;color:var(--muted)}
+.fleet-tech-body p{max-width:72ch;margin:8px 0 0;color:var(--muted);font-size:11px;line-height:1.55}
+.fleet-bar{position:sticky;bottom:0;z-index:9;margin:0 -2px;background:var(--surface);border:1px solid var(--line);border-radius:11px 11px 0 0;box-shadow:0 -10px 30px -18px rgba(6,10,18,.5);transform:translateY(110%);transition:transform .25s cubic-bezier(.22,1,.36,1)}
+.fleet-bar.show{transform:none}
+.fleet-bar-in{display:flex;gap:18px;align-items:center;flex-wrap:wrap;padding:12px 16px 14px}
+.fleet-bar-list{flex:1;min-width:260px}
+.fleet-bar-list h4{margin:0 0 6px;font-size:9px;font-weight:750;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.fleet-bar-list ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px}
+.fleet-bar-list li{display:flex;gap:8px;align-items:baseline;font-size:11.5px}
+.fleet-bar-note{color:var(--muted);font-size:10.5px}
+.fleet-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);flex:0 0 auto;transform:translateY(-1px)}
+.fleet-dot.remove{background:var(--warning)}
+.fleet-bar-actions{display:flex;gap:8px;align-items:center}
+.fleet-confirm-list{margin:10px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:5px}
+.fleet-confirm-list li{display:flex;gap:8px;align-items:baseline;font-size:12px}
+.fleet-progress{display:flex;flex-direction:column;gap:7px;padding:13px 16px 15px}
+.fleet-pstep{display:flex;align-items:center;gap:9px;font-size:11.5px;color:var(--muted)}
+.fleet-pstep.active{color:var(--text);font-weight:600}
+.fleet-pstep.done{color:var(--success)}
+.fleet-pstep.failed{color:var(--danger)}
+.fleet-tick{width:13px;display:grid;place-items:center;font-size:10px;flex:0 0 auto}
+.fleet-phase{font-size:10.5px;font-weight:400;color:var(--muted)}
+@media (max-width:700px){.fleet-strip{grid-template-columns:1fr}.fleet-controls{gap:12px}.fleet-tag{display:none}}
+@media (prefers-reduced-motion:reduce){.fleet-bar{transition:none}}
+.fleet-chip{align-self:flex-start;white-space:nowrap;padding:3px 9px;border-radius:999px;font-size:9.5px;font-weight:750;background:var(--surface-3);color:var(--muted)}
+.fleet-chip.on{color:var(--success);background:color-mix(in srgb,var(--success) 10%,var(--surface))}
+.fleet-chip.warn{color:var(--warning);background:color-mix(in srgb,var(--warning) 12%,var(--surface))}
+/* A column flex parent stretches children cross-axis by default, which turned
+   the stepper and the placeholder select into full-label-width boxes with dead
+   space after the + button. They size to their content, not their caption. */
+.fleet-stepper,.fleet-control select{align-self:flex-start}
+/* The instance type is an identifier, not a label: mono, and tinted so it
+   reads as a distinct fact from the role/status tags beside it. */
+.fleet-tag.fleet-type{color:var(--text);background:var(--surface);border:1px solid var(--line);font-size:9.5px;letter-spacing:.01em}

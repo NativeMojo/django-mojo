@@ -59,8 +59,8 @@ exactly one DOM `Node`; an optional `node.dispose()` releases feature-local
 listeners or work.
 
 Primary navigation is Dashboard, Deployments, Domains & DNS, Serving, People,
-Activity, Metrics, Maintenance, and Settings, then System Setup in its own
-**System** group at the bottom. A feature contributes as many sidebar entries
+Activity, Metrics, Maintenance, Fleet Scaling, and Settings, then System Setup
+in its own **System** group at the bottom. A feature contributes as many sidebar entries
 as its own capabilities allow, so the entry count is not the feature count:
 Domains & DNS and Serving are two permission-gated Advanced entries and stay
 beside Deployments because domains, public records and serving shapes are

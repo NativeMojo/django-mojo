@@ -39,7 +39,9 @@ const DISABLE_STABLE_IPS = 'disable_stable_ips';
 
 // Never a dead control: when the server would refuse, the row says which thing
 // is in the way instead of offering a button that fails.
-const BLOCKED_COPY = {
+// Exported: the Fleet Scaling page (fleet.js) renders the same server offers
+// and must say the same words for the same blocked_reason.
+export const BLOCKED_COPY = {
   infrastructure_external: 'external infrastructure mode — capacity is applied by your infrastructure team\'s IaC',
   node_id_pinned: 'this fleet pins EDGE_NODE_ID, so a new node could never prove its own identity — remove the pin first',
   no_source_node: 'no healthy, running node is available to clone',
@@ -56,7 +58,7 @@ const BLOCKED_COPY = {
   policy_unavailable: 'the stable-IPs policy could not be read — its state is unknown, not off',
 };
 
-const PHASE_COPY = {
+export const PHASE_COPY = {
   capturing: 'capturing an image of a healthy node (no reboot)',
   launching: 'launching the new node',
   booting: 'waiting for it to join the job fleet',
@@ -322,10 +324,13 @@ export async function capacityPanel(ctx, signal = null) {
         'A new database instance is created and kept in sync. It bills by the hour '
         + 'from the moment it exists, whether or not anything reads from it.',
       notes: [
-        'django-mojo does NOT read from a reader endpoint today: every query goes '
-        + 'to the primary. This adds standby read capacity and an endpoint string — '
-        + 'nothing in this application gets faster until the project wires that '
-        + 'endpoint into its own DATABASES configuration.',
+        report?.reader_routing?.database?.active
+          ? 'Reader routing is on: once this reader is available, safe reads '
+            + 'spread across the cluster\'s replicas automatically.'
+          : 'Reader routing is OFF on this node: every query goes to the primary. '
+            + 'This adds standby read capacity and an endpoint string — nothing '
+            + 'gets faster until DATABASE_READER_HOST is configured and the '
+            + 'fleet restarts onto it.',
         row.reader_endpoint ? `This cluster's reader endpoint is ${row.reader_endpoint}.` : '',
       ],
     });
@@ -368,9 +373,13 @@ export async function capacityPanel(ctx, signal = null) {
         + 'maintenance-window option for it. Adding a replica syncs a new node; '
         + 'removing one takes a node away now.',
       notes: [
-        'A replica in this group is FAILOVER capacity, not read throughput: '
-        + 'django-mojo talks to the primary endpoint only, so adding one does not '
-        + 'make anything faster.',
+        report?.reader_routing?.redis?.active
+          ? 'A replica in this group is failover capacity first. Reader reads are '
+            + 'on, so lag-tolerant reads (metrics, dashboards) also use the '
+            + 'reader endpoint — writes never get faster.'
+          : 'A replica in this group is FAILOVER capacity, not read throughput: '
+            + 'reader reads are off on this node, so adding one does not make '
+            + 'anything faster.',
         min > 0 ? 'Automatic failover is on, so this group must keep at least one '
           + 'replica — zero is not offered.'
           : 'Automatic failover is off on this group. Going to zero leaves nothing '
