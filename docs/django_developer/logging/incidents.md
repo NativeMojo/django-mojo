@@ -168,12 +168,14 @@ command apply the matching upper bound of server time plus allowed skew.
 ### Read-only case API and metrics
 
 The custom case endpoints require a human JWT with global `view_security` or
-`security`. API keys and group/member grants are rejected. There are no create,
-update, delete, approve, recommend, acknowledge, or execute endpoints.
+`security`. API keys and group/member grants are rejected. There are no case
+create, update, delete, or direct-execute endpoints — case-driven enforcement
+runs exclusively through the recommendation lifecycle (below), a separate
+read/act surface gated by its own permissions.
 
 | Method | Path | Input | Response |
 |---|---|---|---|
-| `GET` | `/api/incident/mojosec/case` | `page` (default 1, maximum 100), `page_size` (default 50, maximum 100), and exact `state` (`observing`/`elevated`/`settled`), `urgency`, `sensor_kind`, `resource_id`, `family`, or `deployment_id` filters | `{status, data, page, page_size, has_more}`; `data` is a bounded list of case summaries |
+| `GET` | `/api/incident/mojosec/case` | `page` (default 1, maximum 100), `page_size` (default 50, maximum 100), and exact `state` (`observing`/`elevated`/`settled`), `urgency`, `sensor_kind`, `resource_id`, `family`, `deployment_id`, or `campaign_id` filters | `{status, data, page, page_size, has_more}`; `data` is a bounded list of case summaries |
 | `GET` | `/api/incident/mojosec/case/<id>` | Case id in the path | `{status, data}`; `data` is one case with at most 8 normalized samples and the latest 50 transition snapshots |
 | `GET` | `/api/incident/mojosec/case-metrics` | `days` (default 1, range 1–90) and optional exact `resource_id` | `{status, data}` with bounded aggregate counters and no evidence arrays |
 
@@ -206,7 +208,8 @@ legacy path. The contribution path also records operational metrics under
 `cases_opened`, `cases_updated`, `deploy_cases_opened`,
 `deploy_cases_settled`, `events_suppressed`, `ack_retries`,
 `route_conversions`, `case_events_projected`, `projection_failures`,
-`urgency:<level>`, `promotions`, `overflow`, and `failures`. The `overflow`
+`urgency:<level>`, `promotions`, `corroborations`, `campaigns_opened`,
+`overflow`, and `failures`. The `overflow`
 metric counts updates to cases whose bounded sample overflow is nonzero; the
 case's `overflow_count` is the durable distinct sample count.
 

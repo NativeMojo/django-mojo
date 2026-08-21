@@ -349,7 +349,9 @@ rather than an unbounded total scan. A list response has this envelope:
     "overflow_count": 0,
     "policy_version": 1,
     "evaluator_version": 1,
-    "deployment_id": ""
+    "deployment_id": "",
+    "campaign_id": null,
+    "distinct_source_count": 1
   }],
   "page": 1,
   "page_size": 50,
