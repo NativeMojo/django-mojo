@@ -137,8 +137,10 @@ A section whose every source is denied collapses to one Restricted row.
 ## Drill-ins
 
 `assets/features/dashboard/inspectors.js` owns every row's **Details** link.
-The affordance rule is one line: Details takes the row's `action` slot, unless
-that slot already holds a cross-page link (Certificates, Review, the
+Each drill-in opens the shared centered modal (`openModal`), never the
+side-drawer inspector — the EC2 one `wide`, since it embeds the capacity
+panel. The affordance rule is one line: Details takes the row's `action` slot,
+unless that slot already holds a cross-page link (Certificates, Review, the
 `#/maintenance` upgrade link), in which case it rides in `detailNode`. No row
 lost a destination when the drill-ins landed.
 
@@ -166,6 +168,26 @@ maps each check name to a sentence (`migrations` → "database migrations are no
 applied"); the row shows the first failure plus ` · +N more`, and **never** an
 "N of M checks passing" count — a count tells an operator to go and count.
 A version mismatch is only reported when sanity is clean or absent.
+
+## Public API setup, in place
+
+An unconfigured Public API row offers **Set it up** (gated on
+`capabilities.setup`), which opens `assets/features/dashboard/setup.js` — a
+modal that runs the *same* durable fix operation System Setup runs, scoped to
+the `django` section: `setup/create` (`mode: fix`, `section: django`, with a
+held `replay_key`), drive via `setup/advance`, answer the `base_url` choice
+with the typed origin, drive to the verified end. No new write path exists —
+the modal is a client of the operation contract, so identity freeze,
+`validate_base_url`, and the final readiness proof all still run. A lost
+create response reconciles through `options.active_fix` exactly like the Setup
+page; an operation that waits on any choice other than `base_url` is left
+active with a message pointing at System Setup, which resumes it. Success
+toasts and reloads the Dashboard with `?refresh=1` so every collector sees the
+new value. The modal prefills `suggestedBaseUrl` (exported from
+`features/platform/page.js`) and keeps an **Open System Setup** link as the
+escape hatch. Preview: `bin/admin_preview --dashboard-state unconfigured`, and
+the preview setup fixture now drives fix operations through the BASE_URL
+choice before completing, matching the real sequence.
 
 ## Refresh
 

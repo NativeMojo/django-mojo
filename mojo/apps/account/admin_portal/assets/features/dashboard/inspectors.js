@@ -12,9 +12,11 @@ const FLEET_PATH = '/api/account/admin/platform?sections=fleet';
 const SECURITY_PATH = '/api/account/admin/platform?sections=security';
 
 // statusRow renders its action as a .row-link anchor; wire the handler onto it
-// (same pattern as the Deployments lane).
+// (same pattern as the Deployments lane). The action link is appended after
+// the detail slot, so when both slots hold links the LAST one is the action —
+// querySelector would bind the handler to a detail-slot Details link instead.
 export function wireAction(row, run) {
-  const link = row.querySelector('.row-link');
+  const link = [...row.querySelectorAll('.row-link')].at(-1);
   if (link) {
     link.addEventListener('click', (event) => {
       event.preventDefault();

@@ -144,6 +144,12 @@ def get(handler, parsed):
                        for name in SANITY_CHECKS],
             "local_target_source": "configured_static",
             "migration_check": False}, "sanity_check_failed")
+    elif handler.dashboard_state == "unconfigured":
+        # No BASE_URL yet: the Public API row offers in-place setup. Mirrors
+        # the _api() collector's unconfigured envelope exactly.
+        sources["public_api"] = _source("unconfigured", {
+            "configured": False, "public_origin": None,
+            "django_mojo_version": "1.12.3", "node_version": "1.9.0"})
     elif handler.dashboard_state == "denied":
         for name in PLATFORM_SOURCES:
             sources[name] = _source("permission_denied", reason="permission_required")
