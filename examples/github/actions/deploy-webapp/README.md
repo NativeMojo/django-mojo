@@ -42,15 +42,17 @@ key** on the WebApp detail screen.
     api-url: ${{ vars.MOJO_API_URL }}
     webapp-id: ${{ vars.MOJO_WEBAPP_ID }}
     artifact-dir: dist
-    version: ${{ github.sha }}
+    version: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
   env:
     MOJO_DEPLOY_KEY: ${{ secrets.MOJO_DEPLOY_KEY }}
 ```
 
 The action deliberately does not build the app. The calling repository owns
-its checkout, dependency install, tests, and build. Using the full Git commit
-SHA as `version` makes reruns idempotent: the same manifest is reused, while a
-different artifact under the same SHA is rejected.
+its checkout, dependency install, tests, and build. Include the full commit
+SHA, workflow run id, and run-attempt number in `version`. The SHA prefix keeps
+the source commit readable, while the run and attempt make every build output
+a distinct immutable release. A rerun can legitimately produce a different
+manifest because dependency registries and build inputs may have changed.
 
 ## How the release is labelled
 
@@ -74,4 +76,6 @@ tag that includes this change, is what starts the GitHub labelling.
 
 Verified completion always starts deployment. There is no separate promotion
 approval or manual hold: the protected GitHub branch is the human control
-plane. To roll back intentionally, rerun the workflow for the older commit.
+plane. Roll back in Admin by selecting an existing verified release. Rerunning
+an older commit is a new deployment attempt and therefore creates a new
+immutable release; it does not repoint to the earlier release row.

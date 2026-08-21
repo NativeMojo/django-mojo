@@ -146,6 +146,19 @@ def test_secret_free_workflow(opts):
         "generated workflow embedded credential material"
 
 
+@th.django_unit_test("generated workflow versions every GitHub Actions attempt")
+def test_workflow_uses_unique_attempt_version(opts):
+    from mojo.apps.edge.services import webapp_onboarding
+
+    web_app = make_webapp(opts.group, slug="appattemptversion")
+    yaml = webapp_onboarding.workflow(web_app, "https://api.example.com")["yaml"]
+
+    assert "version: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}" in yaml, \
+        "workflow reruns would reuse the commit-only immutable release version"
+    assert "version: ${{ github.sha }}\n" not in yaml, \
+        "workflow retained the commit-only release version"
+
+
 @th.django_unit_test("public verification rejects mixed private DNS before connecting")
 def test_public_probe_rejects_mixed_dns(opts):
     from mojo.apps.edge.services import public_probe
