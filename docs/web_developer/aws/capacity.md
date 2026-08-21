@@ -445,44 +445,58 @@ Exactly one of `operation` and `batch` per request (both or neither is a
     "plan_id": "5b0c…",
     "actor": 1,
     "state": "running",
+    "started": "2026-08-20T18:05:03+00:00",
     "current_index": 1,
     "message": "step 2 of 3: Resize reader mojo-prod-aurora-2 to db.r6g.large",
     "error_code": null,
-    "stalled": false,
     "steps": [
-      {"index": 0, "action": "add_node", "resource": "", "kind": "add",
-       "description": "Add an app node", "state": "done",
+      {"index": 0, "action": "add_node", "resource": "", "params": {},
+       "kind": "add", "description": "Add an app node", "state": "done",
        "operation": "9f1c…", "phase": "complete",
        "message": "i-0c3d… is serving as mojo-api-a-0c3d…", "error_code": null},
       {"index": 1, "action": "resize_database", "resource": "mojo-prod-aurora-2",
+       "params": {"size": "medium", "apply_immediately": true},
        "kind": "change", "description": "Resize reader … to db.r6g.large",
        "state": "running", "operation": "8e2a…", "phase": "settling",
        "message": "mojo-prod-aurora-2 is modifying", "error_code": null},
-      {"index": 2, "action": "drain_node", "resource": "i-0a1b…",
+      {"index": 2, "action": "drain_node", "resource": "i-0a1b…", "params": {},
        "kind": "remove", "description": "Drain mojo-api-b — traffic moves off it first",
        "state": "pending", "operation": null, "phase": null,
        "message": null, "error_code": null}
-    ]
+    ],
+    "updated": "2026-08-20T18:07:41+00:00",
+    "stalled": false
   }
 }
 ```
 
 Step `state`: `pending` → `running` → `done` / `failed` / `not_attempted`.
-Each step's `operation` is a full child operation id — pollable via
-`?operation=` for the complete detail. The runner mirrors the child's
-`phase`/`message` onto the step, so one batch poll answers everything.
+Each step also carries the `params` it will run (or ran) with — same shape as
+the plan's step object. Each step's `operation` is a full child operation id
+— pollable via `?operation=` for the complete detail. The runner mirrors the
+child's `phase`/`message` onto the step, so one batch poll answers
+everything. `started` is when the batch began; `updated` is the last write —
+`stalled` (below) is derived from how stale it is.
 
 **Mid-batch failure**: the failed step carries the child's `error_code` and
 message, every later step is `not_attempted`, the batch is `failed`, and its
 `message` says exactly where things stand ("Step N of M failed: …; the
 remaining K step(s) were not attempted."). **Nothing is rolled back** — the
-completed steps happened.
+completed steps happened. Two failure codes exist only on a batch step, never
+on a plain operation: `operation_vanished` (the child operation's record
+disappeared from the coordination cache mid-poll — check the AWS console; the
+operation id is in the message) and `operation_timeout` (the child gave no
+terminal answer within the batch's backstop ceiling and may still be working
+— poll `?operation=` and check the AWS console). Both land as the step's
+(and the batch's) `error_code` inside an ordinary `200` status response —
+neither is an HTTP error of its own.
 
 `stalled: true` on a running batch means it has reported no progress for a
 few minutes — the runner thread is gone (job-engine death or a deploy
 mid-batch). Nothing auto-resumes; show "check the jobs runner". An unknown
 batch id is **404 `batch_not_found`** (batch records live in the
-coordination cache).
+coordination cache). `stalled` is computed by `/status` only — the immediate
+`POST /plan/apply` response (above) does not carry it.
 
 ## Error codes
 

@@ -609,7 +609,9 @@ converts a succeeding mutation into a reported failure.
 
 First failure — a guard refusal, a claim conflict (`capacity_in_progress`
 from a concurrent single apply; per-step claims arbitrate both directions),
-a failed/vanished/over-ceiling child — fails that step with the child's
+a failed/vanished/over-ceiling child (`operation_vanished` when the child's
+record disappears from the cache mid-poll, `operation_timeout` when it is
+still running past the backstop ceiling) — fails that step with the child's
 code, marks every later step `not_attempted`, fails the batch with "Step N
 of M failed: …; the remaining K step(s) were not attempted.", and stops.
 **No rollback.** No claims of its own to release — each child releases its
