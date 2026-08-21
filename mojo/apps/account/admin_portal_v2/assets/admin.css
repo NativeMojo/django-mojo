@@ -1,0 +1,1551 @@
+/* MOJO Admin v2 — foundation stylesheet.
+ *
+ * Tokens are identical to v1's admin.css (light + dark). The component
+ * vocabulary is the one drawn in the v2 mockups: shell, nav, panel, badge,
+ * button, dot, chip, summary strip, member row, status row, callout, tabs,
+ * back pill, toast, operation banner.
+ *
+ * Written one declaration block per selector group on purpose. v1's stylesheet
+ * is minified-by-hand and unreadable; v2's is meant to be edited.
+ *
+ * Sections
+ *   1.  Tokens
+ *   2.  Base + reset
+ *   3.  Shell: sidebar, nav, topbar, content
+ *   4.  Page header
+ *   5.  Panels
+ *   6.  Badges, dots, chips
+ *   7.  Buttons
+ *   8.  Summary strip
+ *   9.  Member rows, status rows
+ *   10. Callouts
+ *   11. Tabs, back pill, disclosure
+ *   12. Operation banner
+ *   13. Tables
+ *   14. Forms and fields
+ *   15. Overlays: modal, busy scrim
+ *   16. States: loading, empty, error, fatal
+ *   17. Toasts
+ *   18. Responsive
+ */
+
+/* ── 1. Tokens ───────────────────────────────────────────────────────────── */
+
+:root {
+  --bg: #f4f6f9;
+  --surface: #fff;
+  --surface-2: #f7f9fc;
+  --surface-3: #edf1f7;
+  --text: #182133;
+  --muted: #687386;
+  --line: #dfe5ee;
+  --accent: #536be5;
+  --accent-soft: #eef1ff;
+  --success: #16815d;
+  --danger: #c53d47;
+  --warning: #a96a16;
+  --shadow: 0 18px 50px rgba(22, 32, 54, .14);
+  --sidebar: #101727;
+  --sidebar-text: #c7d0df;
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  --bg: #0c111d;
+  --surface: #141b2a;
+  --surface-2: #101725;
+  --surface-3: #1b2538;
+  --text: #e8ecf4;
+  --muted: #9da9bb;
+  --line: #293448;
+  --accent: #8999ff;
+  --accent-soft: #202a49;
+  --success: #4dc398;
+  --danger: #f07a82;
+  --warning: #e9ad59;
+  --sidebar: #080d17;
+  --sidebar-text: #bbc6d8;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  html[data-theme="system"] {
+    --bg: #0c111d;
+    --surface: #141b2a;
+    --surface-2: #101725;
+    --surface-3: #1b2538;
+    --text: #e8ecf4;
+    --muted: #9da9bb;
+    --line: #293448;
+    --accent: #8999ff;
+    --accent-soft: #202a49;
+    --success: #4dc398;
+    --danger: #f07a82;
+    --warning: #e9ad59;
+    --sidebar: #080d17;
+    --sidebar-text: #bbc6d8;
+    color-scheme: dark;
+  }
+}
+
+/* ── 2. Base + reset ─────────────────────────────────────────────────────── */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button,
+a {
+  touch-action: manipulation;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.page-header h1[tabindex]:focus-visible {
+  outline: 0;
+}
+
+.icon {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+}
+
+.locked {
+  overflow: hidden;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.sr-only {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── 3. Shell ────────────────────────────────────────────────────────────── */
+
+#app {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: 232px;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 11px 12px;
+  background: var(--sidebar);
+  color: var(--sidebar-text);
+  z-index: 10;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 8px 15px;
+}
+
+.brand-mark {
+  display: block;
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+.brand strong {
+  display: block;
+  color: #fff;
+  font-size: 13px;
+  letter-spacing: .08em;
+}
+
+.brand small {
+  display: block;
+  font-size: 9px;
+  letter-spacing: .16em;
+  color: #8491a8;
+}
+
+/* Six destinations, one flat level, never scrolls: v2 has no section labels. */
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav a {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 34px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  color: inherit;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.nav a:hover {
+  background: #19233a;
+  color: #fff;
+}
+
+.nav a.active {
+  background: #253452;
+  color: #fff;
+  box-shadow: inset 2px 0 #8090ff;
+}
+
+.nav a .icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* A destination's dot mirrors the worst state inside it. No dot means there is
+   genuinely nothing to do there. */
+.nav-badge {
+  margin-left: auto;
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+.nav-badge.danger {
+  background: var(--danger);
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding: 10px 9px 0;
+  border-top: 1px solid #202a3e;
+  color: #718099;
+  font-size: 10px;
+}
+
+.main {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.topbar {
+  height: 54px;
+  padding: 0 26px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  backdrop-filter: blur(12px);
+}
+
+.topbar-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-left: auto;
+}
+
+.user-menu {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+}
+
+.user-menu strong,
+.user-menu small {
+  display: block;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-menu strong {
+  font-size: 11px;
+}
+
+.user-menu small {
+  font-size: 9px;
+  color: var(--muted);
+}
+
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.avatar.small {
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+}
+
+.mobile-menu {
+  display: none;
+}
+
+.content {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  padding: 22px 28px 40px;
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ── 4. Page header ──────────────────────────────────────────────────────── */
+
+.page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 22px;
+  padding: 1px 0 4px;
+}
+
+.eyebrow {
+  margin-bottom: 4px;
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: 21px;
+  line-height: 1.15;
+  letter-spacing: -.02em;
+  outline: 0;
+}
+
+.page-header p {
+  max-width: 700px;
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.page-actions,
+.section-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+/* ── 5. Panels ───────────────────────────────────────────────────────────── */
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  overflow: hidden;
+}
+
+.panel.accent {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 52px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.panel-head h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.panel-head p {
+  max-width: 700px;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.panel-body {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.panel-body p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+/* ── 6. Badges, dots, chips ──────────────────────────────────────────────── */
+
+/* Dot = state at a glance. Badge = state named. Chip = a fact (size, role,
+   owner). One fact carries one severity on every screen. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: capitalize;
+}
+
+.badge.success {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 9%, var(--surface));
+  border-color: color-mix(in srgb, var(--success) 27%, var(--line));
+}
+
+.badge.warning {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 9%, var(--surface));
+  border-color: color-mix(in srgb, var(--warning) 27%, var(--line));
+}
+
+.badge.danger {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  border-color: color-mix(in srgb, var(--danger) 25%, var(--line));
+}
+
+.badge.accent {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: 0 0 auto;
+}
+
+.dot.success {
+  background: var(--success);
+}
+
+.dot.warning {
+  background: var(--warning);
+}
+
+.dot.danger {
+  background: var(--danger);
+}
+
+.dot.accent {
+  background: var(--accent);
+}
+
+.dot.large {
+  width: 9px;
+  height: 9px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font: 9px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+}
+
+/* ── 7. Buttons ──────────────────────────────────────────────────────────── */
+
+/* One primary per view. Danger only on destructive confirms. */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: none;
+  color: var(--text);
+}
+
+.button .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.button.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.button.ghost {
+  background: transparent;
+}
+
+.button.compact {
+  min-height: 27px;
+  padding: 4px 9px;
+  font-size: 10px;
+}
+
+.button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 31px;
+  height: 31px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+
+/* Pending state: aria-disabled, never `disabled`. A disabled element is blurred
+   by the browser and Tab restarts from the top of the document; the re-entry
+   guard in components/actions.js is what stops the second submit. */
+[aria-disabled="true"] {
+  cursor: progress;
+}
+
+.button[aria-disabled="true"],
+.icon-button[aria-disabled="true"],
+.row-refresh[aria-disabled="true"] {
+  opacity: .6;
+}
+
+.button[aria-disabled="true"]:hover,
+.icon-button[aria-disabled="true"]:hover {
+  background: inherit;
+}
+
+.is-pending {
+  cursor: progress;
+}
+
+.pending-spinner,
+.spin {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: busy-spin .8s linear infinite;
+  flex: 0 0 auto;
+}
+
+.is-pending-icon {
+  display: inline-flex;
+  animation: busy-spin .9s linear infinite;
+}
+
+@keyframes busy-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── 8. Summary strip ────────────────────────────────────────────────────── */
+
+/* Tops every destination. Counts only provider-confirmed resources;
+   transitional members are named as such, never rounded to a number. */
+.stat-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.stat-strip > div {
+  padding: 10px 13px;
+  border-right: 1px solid var(--line);
+}
+
+.stat-strip > div:last-child {
+  border-right: 0;
+}
+
+.stat-strip .stat-key {
+  display: block;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.stat-strip strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 15px;
+  letter-spacing: -.02em;
+}
+
+.stat-strip small {
+  display: block;
+  font-size: 9px;
+  color: var(--muted);
+}
+
+/* ── 9. Member rows, status rows ─────────────────────────────────────────── */
+
+/* One row per live thing: state badge, mono name, fact chips, right-aligned
+   action. Unconfirmed members get no actions and no Healthy label. */
+.member {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid var(--surface-3);
+  border-radius: 7px;
+}
+
+.member + .member {
+  margin-top: 7px;
+}
+
+.member.pending {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+
+.member .name {
+  font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 700;
+}
+
+.member .member-action {
+  margin-left: auto;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+/* A row that describes something you can open, opens it. */
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.status-row:last-child {
+  border-bottom: 0;
+}
+
+/* A navigable status row is an anchor, but only its trailing link reads as a
+   link — the name and value stay body text, exactly as in a static row. */
+a.status-row {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.status-row strong {
+  font-size: 11px;
+}
+
+.status-row .status-value {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.status-row .row-link {
+  margin-left: auto;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.status-row.is-navigable {
+  cursor: pointer;
+}
+
+.status-row.is-navigable:hover {
+  background: var(--surface-2);
+}
+
+.status-row.is-navigable:hover .row-link {
+  text-decoration: underline;
+}
+
+/* ── 10. Callouts ────────────────────────────────────────────────────────── */
+
+/* Neutral explains behavior; danger restates a blocker where it bites. The
+   severity always matches what the same fact carries elsewhere. */
+.callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.callout .icon {
+  width: 16px;
+}
+
+.callout strong {
+  display: block;
+  color: var(--text);
+}
+
+.callout p {
+  margin: 0;
+  font-size: 11px;
+}
+
+.callout .button {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.callout.danger {
+  border-color: color-mix(in srgb, var(--danger) 27%, var(--line));
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+  color: var(--danger);
+}
+
+.callout.danger strong {
+  color: var(--danger);
+}
+
+.callout.warning {
+  border-color: color-mix(in srgb, var(--warning) 27%, var(--line));
+  background: color-mix(in srgb, var(--warning) 7%, var(--surface));
+  color: var(--warning);
+}
+
+.callout.warning strong {
+  color: var(--warning);
+}
+
+/* ── 11. Tabs, back pill, disclosure ─────────────────────────────────────── */
+
+/* Tabs split one destination's sibling modes. They never hide prerequisites or
+   blockers — those surface on Home regardless of tab. */
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tabs button {
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.tabs button.active {
+  border-color: var(--accent);
+  color: var(--text);
+  font-weight: 700;
+}
+
+/* The one way down from a sub-page — same shape on every screen. */
+.back-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  padding: 4px 11px 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.back-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.back-pill .icon {
+  width: 12px;
+  height: 12px;
+}
+
+/* KISS by layering, not amputation: every simple surface keeps its raw truth
+   behind the same disclosure. */
+.disclosure > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  list-style: none;
+}
+
+.disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure > summary::before {
+  content: "\25B8";
+  margin-right: 6px;
+}
+
+.disclosure[open] > summary::before {
+  content: "\25BE";
+}
+
+/* ── 12. Operation banner ────────────────────────────────────────────────── */
+
+/* Global: fed by one operation store, rendered under the topbar on every page
+   while anything runs. No page has private knowledge of a running operation. */
+.op-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.op-banner .spin {
+  color: var(--accent);
+}
+
+.op-banner .op-detail {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.op-banner .op-view {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.op-banner-host:not(:empty) {
+  display: block;
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  padding: 14px 28px 0;
+}
+
+/* ── 13. Tables ──────────────────────────────────────────────────────────── */
+
+.table-wrap {
+  overflow: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 9px 15px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  vertical-align: middle;
+}
+
+th {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: .065em;
+  text-transform: uppercase;
+}
+
+tbody tr[tabindex] {
+  cursor: pointer;
+}
+
+tbody tr[tabindex]:hover {
+  background: var(--surface-2);
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+td:last-child {
+  text-align: right;
+  color: var(--muted);
+}
+
+td small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.identity strong {
+  display: block;
+}
+
+/* ── 14. Forms and fields ────────────────────────────────────────────────── */
+
+/* Controls carry the portal's own chrome whether or not they sit in a .field —
+   a control built by hand otherwise falls through to the browser's default form
+   styling. Deliberately still native: checkbox, radio, file, color and range.
+   The exclusions sit inside :where() so they cost NO specificity, and every
+   container style (.search input, .toolbar-select select) still wins. */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+
+.field > span {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.field input,
+.field textarea,
+.field select,
+input:where(:not([type=checkbox], [type=radio], [type=file], [type=color], [type=range], [type=hidden], [type=submit], [type=reset], [type=button], [type=image])),
+textarea,
+select {
+  width: 100%;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  outline: 0;
+  background: var(--surface-2);
+  font-size: 12px;
+}
+
+.field input:focus,
+.field textarea:focus,
+.field select:focus,
+input:where(:not([type=checkbox], [type=radio], [type=file], [type=color], [type=range], [type=hidden], [type=submit], [type=reset], [type=button], [type=image])):focus,
+textarea:focus,
+select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+/* Help text says what happens, not what to type. Every control that changes
+   capacity or money carries its consequence microcopy directly beneath it. */
+.field small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 10px;
+}
+
+.check-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 0;
+  font-size: 11px;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 16px;
+}
+
+.form-message {
+  min-height: 16px;
+  color: var(--danger);
+  font-size: 10px;
+}
+
+.search,
+.toolbar-select {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-2);
+}
+
+.search .icon,
+.toolbar-select .icon {
+  width: 14px;
+  color: var(--muted);
+}
+
+.search input,
+.toolbar-select select {
+  width: 180px;
+  padding: 6px 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-size: 11px;
+}
+
+.toolbar-select select {
+  width: auto;
+  min-width: 150px;
+}
+
+/* Read-only code: a block of text to read and copy, never to edit. */
+.code-block {
+  max-height: 340px;
+  overflow: auto;
+  margin: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.code-block.is-inline {
+  max-height: none;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.secret {
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+}
+
+/* ── 15. Overlays ────────────────────────────────────────────────────────── */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: rgba(6, 10, 18, .6);
+  z-index: 100;
+  backdrop-filter: blur(3px);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(500px, 100%);
+  max-height: min(780px, calc(100vh - 36px));
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  box-shadow: var(--shadow);
+}
+
+.modal.wide {
+  width: min(760px, 100%);
+}
+
+.modal > header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.modal header p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 18px;
+}
+
+.modal-copy {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.busy-scrim {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  z-index: 90;
+  backdrop-filter: blur(8px);
+}
+
+.busy-panel {
+  display: grid;
+  justify-items: center;
+  width: min(390px, 100%);
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.busy-panel strong {
+  margin-top: 14px;
+  font-size: 16px;
+}
+
+.busy-panel p {
+  margin: 5px 0 16px;
+  color: var(--muted);
+}
+
+.busy-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--surface-3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: busy-spin .8s linear infinite;
+}
+
+.busy-progress {
+  width: 100%;
+  height: 6px;
+  accent-color: var(--accent);
+}
+
+/* ── 16. States ──────────────────────────────────────────────────────────── */
+
+.empty,
+.error-state,
+.loading {
+  padding: 32px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.error-state .icon {
+  color: var(--danger);
+}
+
+.skeleton-state {
+  display: grid;
+  gap: 10px;
+  text-align: left;
+}
+
+.skeleton {
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--surface-3) 20%, color-mix(in srgb, var(--surface-3) 45%, var(--surface)) 40%, var(--surface-3) 60%);
+  background-size: 300% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton-heading {
+  width: 34%;
+  height: 24px;
+  margin-bottom: 8px;
+}
+
+.skeleton-row {
+  height: 48px;
+}
+
+.skeleton-row-2 {
+  width: 92%;
+}
+
+.skeleton-row-3 {
+  width: 78%;
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}
+
+.fatal {
+  max-width: 430px;
+  margin: 16vh auto;
+  padding: 28px;
+  text-align: center;
+}
+
+.fatal > .icon {
+  width: 26px;
+  height: 26px;
+  color: var(--danger);
+}
+
+.fatal h1 {
+  font-size: 20px;
+}
+
+.danger-text {
+  color: var(--danger);
+}
+
+/* ── 17. Toasts ──────────────────────────────────────────────────────────── */
+
+/* Toast = a click's work finished, one sentence. Anything longer than a click
+   lives in the operation store and its banner — never a toast that can be
+   missed. Bottom-right, above the busy scrim (z-index 100). */
+.toast-host {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 10px 12px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  font-size: 13.5px;
+  line-height: 1.45;
+  animation: toast-in .18s ease-out;
+}
+
+.toast-success {
+  border-left-color: var(--success);
+}
+
+.toast-danger {
+  border-left-color: var(--danger);
+}
+
+.toast-info {
+  border-left-color: var(--accent);
+}
+
+.toast-text {
+  flex: 1 1 auto;
+}
+
+.toast-close {
+  flex: 0 0 auto;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.toast-close:hover {
+  color: var(--text);
+}
+
+.toast.is-leaving {
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity .16s ease, transform .16s ease;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ── 18. Responsive ──────────────────────────────────────────────────────── */
+
+@media (max-width: 1000px) {
+  .field-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Under 900px the sidebar becomes a drawer toggled from the topbar. */
+@media (max-width: 900px) {
+  #app {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    transform: translateX(-100%);
+    transition: transform .2s;
+  }
+
+  .sidebar.open {
+    transform: none;
+  }
+
+  .main {
+    grid-column: 1;
+  }
+
+  .mobile-menu {
+    display: block;
+    border: 0;
+    background: transparent;
+  }
+
+  .content {
+    padding: 20px 17px 32px;
+  }
+
+  .op-banner-host:not(:empty) {
+    padding: 14px 17px 0;
+  }
+
+  .user-menu div {
+    display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .topbar {
+    padding: 0 12px;
+  }
+
+  .topbar-title {
+    display: none;
+  }
+
+  .content {
+    padding: 15px 11px 28px;
+  }
+
+  .op-banner-host:not(:empty) {
+    padding: 12px 11px 0;
+  }
+
+  .page-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .page-header h1 {
+    font-size: 19px;
+  }
+
+  .page-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .stat-strip {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .member {
+    flex-wrap: wrap;
+  }
+
+  .callout {
+    flex-wrap: wrap;
+  }
+
+  .field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .scrim {
+    padding: 0;
+    align-items: end;
+  }
+
+  .modal,
+  .modal.wide {
+    width: 100%;
+    max-height: 92vh;
+    border-radius: 13px 13px 0 0;
+  }
+
+  .user-menu {
+    border: 0;
+    padding: 0;
+  }
+
+  th,
+  td {
+    padding: 8px 11px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton,
+  .busy-spinner,
+  .pending-spinner,
+  .spin,
+  .is-pending-icon {
+    animation: none;
+  }
+
+  .toast {
+    animation: none;
+  }
+
+  .toast.is-leaving {
+    transition: none;
+  }
+}

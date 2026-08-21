@@ -22,6 +22,7 @@ from .features import dashboard
 
 
 ROOT = Path(__file__).resolve().parents[2] / "mojo/apps/account/admin_portal"
+ROOT_V2 = Path(__file__).resolve().parents[2] / "mojo/apps/account/admin_portal_v2"
 HOST = "127.0.0.1"
 PREVIEW_COOKIE = "mojo_admin_preview"
 MAX_REQUEST_BODY = 2 * 1024 * 1024
@@ -539,14 +540,29 @@ class PreviewHandler(BaseHTTPRequestHandler):
         except PreviewProxyError as error:
             return self._send({"error": str(error)}, status=403)
 
+    @staticmethod
+    def _admin_target(path):
+        """Map one request path to a portal root and a file inside it.
+
+        Admin v2 is served from its own package under `/v2/` (and `/admin/v2/`
+        in live-QA mode), exactly like production serves it beside v1. Every
+        other path stays v1's, unchanged.
+        """
+        for prefix in ("/admin/v2", "/v2"):
+            if path == prefix or path == prefix + "/":
+                return ROOT_V2 / "index.html", ROOT_V2
+            if path.startswith(prefix + "/"):
+                relative = path[len(prefix) + 1:]
+                return (ROOT_V2 / relative).resolve(), ROOT_V2
+        if path in ("/", "/admin", "/admin/"):
+            return ROOT / "index.html", ROOT
+        relative = path.removeprefix("/admin/").lstrip("/")
+        return (ROOT / relative).resolve(), ROOT
+
     def _serve_admin(self, parsed):
-        if parsed.path in ("/", "/admin", "/admin/"):
-            target = ROOT / "index.html"
-        else:
-            relative = parsed.path.removeprefix("/admin/").lstrip("/")
-            target = (ROOT / relative).resolve()
-            if ROOT.resolve() not in target.parents:
-                return self._send("Not found", "text/plain", 404)
+        target, root = self._admin_target(parsed.path)
+        if target != root / "index.html" and root.resolve() not in target.parents:
+            return self._send("Not found", "text/plain", 404)
         if not target.is_file():
             return self._send("Not found", "text/plain", 404)
         headers = None
@@ -716,7 +732,9 @@ class PreviewHandler(BaseHTTPRequestHandler):
                                   {"Location": "/admin/"})
             if parsed.path == "/__preview__/context":
                 return self._serve_preview_context()
-            if parsed.path in ("/admin", "/admin/") or parsed.path.startswith("/admin/assets/"):
+            if (parsed.path in ("/admin", "/admin/", "/admin/v2", "/admin/v2/")
+                    or parsed.path.startswith("/admin/assets/")
+                    or parsed.path.startswith("/admin/v2/assets/")):
                 return self._serve_admin(parsed)
             return self._proxy()
         if parsed.path == "/__preview__/events":
@@ -984,6 +1002,7 @@ def main():
         print("Password authentication is supported; external OAuth callbacks are not bridged.", flush=True)
     else:
         print(f"Admin visual fixture ({args.key_state} key): http://{HOST}:{args.port}/", flush=True)
+        print(f"Admin v2: http://{HOST}:{args.port}/v2/", flush=True)
     try:
         ThreadingHTTPServer((HOST, args.port), PreviewHandler).serve_forever()
     except KeyboardInterrupt:

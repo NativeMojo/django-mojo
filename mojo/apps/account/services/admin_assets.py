@@ -1,4 +1,13 @@
-"""Exact private-asset manifest for the built-in Admin portal."""
+"""Exact private-asset manifests for the built-in Admin portals.
+
+Two portals ship side by side and neither imports the other's code: v1 under
+`admin_portal/`, and v2 under `admin_portal_v2/` reached at `<admin>/v2/`.
+An asset whose relative path starts with `v2/` resolves against the v2 root;
+everything else is v1, exactly as before.
+
+Both manifests are proven at import time, so a file that is not declared — or
+is declared and missing — fails the process rather than 404ing in a browser.
+"""
 
 import json
 from pathlib import Path, PurePosixPath
@@ -8,6 +17,11 @@ ROOT = Path(__file__).resolve().parents[1] / "admin_portal"
 FEATURES = (
     "dashboard", "people", "webapps", "activity", "platform", "advanced",
     "settings", "sms", "email")
+
+ROOT_V2 = Path(__file__).resolve().parents[1] / "admin_portal_v2"
+V2_FEATURES = (
+    "home", "apps", "infrastructure", "domains", "access", "settings")
+V2_PREFIX = "v2/"
 
 
 def _read_json(path):
@@ -31,7 +45,7 @@ def _safe_relative(value):
     return path.as_posix()
 
 
-def load_manifest(root=ROOT):
+def load_manifest(root=ROOT, features=FEATURES):
     """Load, validate, and prove every exactly deliverable package asset."""
     root = Path(root)
     base = _read_json(root / "manifest.json")
@@ -54,7 +68,7 @@ def load_manifest(root=ROOT):
     for relative in entries:
         add(relative)
 
-    for feature in FEATURES:
+    for feature in features:
         feature_root = root / "assets" / "features" / feature
         manifest = _read_json(feature_root / "manifest.json")
         if manifest.get("version") != 1 or manifest.get("owner") != feature:
@@ -72,19 +86,29 @@ def load_manifest(root=ROOT):
 
 
 PRIVATE_ASSETS = load_manifest()
+PRIVATE_ASSETS_V2 = load_manifest(ROOT_V2, V2_FEATURES)
 
 
 def asset_path(asset):
-    """Return an allowed real file path, or None for unknown/traversal input."""
+    """Return an allowed real file path, or None for unknown/traversal input.
+
+    A `v2/`-prefixed asset is resolved against the v2 portal's own root and its
+    own manifest. The prefix is stripped only after the whole path has passed
+    the canonical-path check, so `v2/../…` is already rejected by then.
+    """
     try:
         relative = _safe_relative(asset)
     except RuntimeError:
         return None
-    if relative not in PRIVATE_ASSETS:
+    root, allowed = ROOT, PRIVATE_ASSETS
+    if relative.startswith(V2_PREFIX):
+        relative = relative[len(V2_PREFIX):]
+        root, allowed = ROOT_V2, PRIVATE_ASSETS_V2
+    if relative not in allowed:
         return None
-    path = ROOT / relative
+    path = root / relative
     try:
-        path.resolve().relative_to(ROOT.resolve())
+        path.resolve().relative_to(root.resolve())
     except (OSError, ValueError):
         return None
     return path if path.is_file() else None

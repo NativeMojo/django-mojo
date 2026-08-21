@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "owner": "foundation",
+  "assets": [
+    "index.html",
+    "assets/admin.css",
+    "assets/app.js",
+    "assets/core.js",
+    "assets/mojo-logo.png",
+    "assets/components/actions.js",
+    "assets/components/components.css",
+    "assets/components/model.js",
+    "assets/components/operations.js",
+    "assets/components/overlays.js",
+    "assets/components/placeholder.js",
+    "assets/components/relationship.js",
+    "assets/components/routes.js",
+    "assets/components/rows.css",
+    "assets/components/rows.js",
+    "assets/components/views.js",
+    "assets/features/registry.js"
+  ]
+}
