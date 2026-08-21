@@ -47,6 +47,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | [filevault/](filevault/README.md) | Encrypted file vault |
 | [docit/](docit/README.md) | Documentation system |
 | [assistant/](assistant/README.md) | LLM admin assistant — architecture, tools, extensibility, custom tool registration |
+| [assistant/approvals](assistant/approvals.md) | The approval boundary in front of every mutating assistant tool — `PendingAction`, the gate arguments, the transports, the audit trail |
 | [github/](github/README.md) | GitHub App integration — GitHubInstall model, JWT/token service, webhook verification, OAuth login |
 | [testit/](testit/Overview.md) | Testing framework and patterns for django-mojo projects |
 | [testit/Isolation](testit/Isolation.md) | Per-checkout test isolation — how two worktrees run suites without colliding |

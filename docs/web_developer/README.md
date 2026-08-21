@@ -46,6 +46,7 @@ Companion track for framework developers: [docs/django_developer/README.md](../d
 | [edge/](edge/README.md) | nginx vhosts and declared upstreams — how a domain gets served |
 | [filevault/](filevault/README.md) | Encrypted file vault |
 | [assistant/](assistant/README.md) | LLM admin assistant — natural language queries, conversations |
+| [assistant/approvals](assistant/approvals.md) | Resolving a mutating assistant action — the `approval` block, both transports, the one failure contract |
 | [github/](github/README.md) | GitHub App installations — list, create, update, delete |
 | [docit/](docit/README.md) | Documentation system |
 

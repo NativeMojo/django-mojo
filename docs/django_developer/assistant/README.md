@@ -20,9 +20,19 @@ User sends message via REST
         → Separate meta-tools from regular tools
         → Meta-tools (load_tools, create_plan, update_plan) run first, serially
         → Regular tools run in parallel via ThreadPoolExecutor (LLM_ADMIN_MAX_PARALLEL_TOOLS)
-        → Permission gate per tool: user.has_permission(tool.permission)?
+        → Permission gate per tool: user.has_permission(tool.permission)
+          AND tool.authorize(user) when declared?
           → No: return permission error to LLM
-          → Yes: execute handler(params, user), return result to LLM
+          → Yes, and tool.mutates:
+              → APPROVAL GATE — the handler is NOT called.
+                approvals.propose() stores a PendingAction, returns an
+                approval card, fires "assistant_approval_required".
+                The operator resolves it later over
+                POST /api/assistant/action or the WS assistant_approval
+                message; only approvals.resolve() ever calls the handler.
+                See approvals.md.
+          → Yes, and not mutating: execute handler(params, user), return
+            result to LLM
         → If tool == load_tools with domain arg:
             → Persist domain in conversation.metadata["active_domains"]
             → Inject new domain tools into active tool list immediately
@@ -35,8 +45,15 @@ User sends message via REST
             → Publish WS event "assistant_plan_update"
         → Repeat until LLM stops calling tools
     → Store assistant response as Message
-    → Return response + conversation_id
+    → Return response + conversation_id + pending_actions
 ```
+
+> **Mutating tools do not execute on the model's call.** See
+> [Approvals](approvals.md) for the boundary, the `PendingAction` state machine,
+> the gate arguments (`fresh_auth_seconds`, `requires_superuser`,
+> `requires_managed_infrastructure`, `summarize`, `preview`, `authorize`), the
+> transports, and the tool → Admin-twin → gates table for all 38 built-in
+> mutating tools.
 
 ## Two-Tier Tool Loading
 
@@ -188,6 +205,7 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | `LLM_ADMIN_MAX_PARALLEL_TOOLS` | `4` | Max concurrent threads for parallel tool execution |
 | `LLM_ADMIN_SYSTEM_PROMPT` | (built-in) | Override the default system prompt |
 | `LLM_ADMIN_PROMPT_CACHE_ENABLED` | `True` | Enable Anthropic prompt caching on assistant LLM calls (see [Prompt Caching](#prompt-caching)) |
+| `LLM_ADMIN_APPROVAL_TTL` | `600` | Seconds an operator has to approve a mutating action before it expires. Clamped to 60–3600. See [Approvals](approvals.md). |
 | `LLM_BROWSE_MAX_LENGTH` | `20000` | Max character length of content returned by `browse_url` and `read_docs` |
 | `LLM_BROWSE_TIMEOUT` | `10` | HTTP request timeout in seconds for `browse_url` |
 | `LLM_DOCS_BASE_URL` | `https://raw.githubusercontent.com/NativeMojo/django-mojo/refs/heads/main/docs/` | Base URL for fetching framework docs via `read_docs` |
@@ -560,7 +578,12 @@ The assistant reports security-relevant actions and errors to the incident syste
 |---|---|---|
 | `assistant:permission_denied` | 5 | User's tool call blocked by permission gate |
 | `assistant:permission_denied` | 6 | LLM requested a tool not in the registry |
-| `assistant:tool:<name>` | 5 | Successful mutating tool execution (block_ip, disable_user, etc.) |
+| `assistant:approval:proposed` | 4 | A mutating tool call created a pending action |
+| `assistant:approval:approved` | 5 | Operator approved; the action was consumed and execution started |
+| `assistant:approval:canceled` | 4 | Operator declined |
+| `assistant:approval:denied` | 6 | A resolution was refused (suppressed + budgeted — see [Approvals](approvals.md)) |
+| `assistant:approval:failed` | 6 | An approved handler raised or returned an error |
+| `assistant:tool:<name>` | 5 | Successful mutating tool execution (block_ip, disable_user, etc.). Unchanged — it now fires from `approvals.resolve()`, so existing RuleSets keep working. |
 | `assistant:error` | 6 | Tool handler raised an unhandled exception |
 | `assistant:error` | 7 | Agent loop crashed |
 | `assistant:error` | 5 | Max tool turns exhausted |
@@ -573,7 +596,8 @@ The assistant reports security-relevant actions and errors to the incident syste
 ### Design
 
 - **Permission denied = always an event.** These are security signals for probing/brute-force detection.
-- **Mutating tools = event on success only.** No event when the tool returns an error dict (operation failed).
+- **Mutating tools = event on success only.** No event when the tool returns an error dict (operation failed) — that files `assistant:approval:failed` instead.
+- **Approval lifecycle = evidence at every point.** Proposal, approval, cancel, denial and failure all file bounded events carrying actor, tool, conversation and a secret-free argument fingerprint — never argument values.
 - **Read-only tools = no events.** Too high volume, low signal.
 - **Events supplement, not replace, file logging.** Existing `logger` calls remain for debug.
 - **`_report_event()` never raises** — wrapped in try/except to avoid breaking the assistant if the incident system is down.
@@ -588,6 +612,7 @@ The model mutation tools (`save_model_instance`, `delete_model_instance`) write 
 | `assistant:model:updated` | `save_model_instance` — existing row updated successfully |
 | `assistant:model:deleted` | `delete_model_instance` — row deleted successfully |
 | `assistant:model:save_failed` | `save_model_instance` — `on_rest_save()` raised an exception |
+| `assistant:approval:<state>` | Every approval lifecycle point, against `assistant.PendingAction` |
 
 **What is recorded:**
 
@@ -782,8 +807,14 @@ Every tool call passes through a permission gate before execution. The gate chec
 - Even if Claude somehow requests a tool the user can't use, execution is blocked
 - Permission changes mid-conversation are reflected immediately
 - Mutating tools require `manage_*` permissions, never just `view_*`
+- A tool may declare `authorize(user)` for a rule `has_permission` cannot express (a compound grant, group-scoped authority). It is an ADDITIONAL check, never a substitute, and a `False` result is indistinguishable from a missing permission.
 
 Sensitive fields (`password`, `auth_key`, `onetime_code`) are never included in tool results.
+
+**Permission is necessary but not sufficient for a mutating tool.** Holding
+`manage_security` lets the model *propose* `block_ip`; only an operator approving
+that specific proposal executes it, and the permission is re-checked against a
+freshly reloaded `User` immediately before dispatch. See [Approvals](approvals.md).
 
 ## Adding Custom Tools
 
@@ -842,8 +873,18 @@ def _tool_query_orders(params, user):
 | `permission` | Yes | Permission string checked via `user.has_permission()` |
 | `description` | Yes | Human-readable description shown to the LLM |
 | `input_schema` | Yes | JSON Schema dict for the tool's parameters |
-| `mutates` | No | Default `False`. If True, LLM is told to confirm before executing |
+| `mutates` | No | Default `False`. If `True`, the tool **cannot execute on the model's call** — it produces an approval the operator must resolve. See [Approvals](approvals.md). |
 | `core` | No | Default `False`. If `True`, tool is always sent to the LLM (two-tier tier 1). Set this for tools that should be available in every conversation without loading a domain. |
+| `fresh_auth_seconds` | No | Mutating only. Recency window mirroring `@md.requires_fresh_auth(seconds=N)` on the Admin twin. Forces REST-only resolution. |
+| `requires_superuser` | No | Mutating only. AND-check for a live literal `User.is_superuser`. |
+| `requires_managed_infrastructure` | No | Mutating only. Hidden and refused when `INFRASTRUCTURE_MODE=external`. |
+| `summarize` | No | Mutating only. `(params, user) -> str` — the card's one sentence. |
+| `preview` | No | Mutating only. `(params, user) -> {"summary", "details", "revision"}`, read-only; the revision is bound and re-checked. Raising it refuses the proposal. |
+| `authorize` | No | **Any** tool. `(user) -> bool`, evaluated in addition to `permission` wherever that check runs. |
+
+> Passing any of the five mutating-only gates without `mutates=True` raises
+> `ValueError` **at import time** — a misdeclared tool breaks the import rather
+> than degrading into a silent no-op.
 
 #### Organizing Tools in Modules
 
@@ -892,9 +933,11 @@ register_tool(
 | `input_schema` | Yes | JSON Schema dict for the tool's parameters |
 | `handler` | Yes | Callable `(params, user) -> dict or list` |
 | `permission` | Yes | Permission string checked via `user.has_permission()` |
-| `mutates` | No | Default `False`. If True, LLM is told to confirm before executing |
+| `mutates` | No | Default `False`. If `True`, the tool is gated behind an operator approval. See [Approvals](approvals.md). |
 | `domain` | No | Default `"custom"`. Logical grouping for the tool |
 | `core` | No | Default `False`. If `True`, always included in every conversation (tier 1). |
+| `fresh_auth_seconds`, `requires_superuser`, `requires_managed_infrastructure`, `summarize`, `preview` | No | Mutating-only approval gates — same meaning as on `@tool`. |
+| `authorize` | No | `(user) -> bool`, allowed on any tool. |
 
 ### Tool Handler Guidelines
 
@@ -912,8 +955,9 @@ The dispatcher inspects handler signatures at first call (result is cached). Han
 |---|---|---|
 | `request_meta` | `objict` or `None` | Slim HTTP context from the originating request: `ip`, `user_agent`, `path`, `method`. `None` when there is no HTTP request (e.g. WS path or programmatic call). |
 | `conversation` | `Conversation` instance | The active Conversation model instance. Use to read metadata or to associate audit records with the conversation. |
+| `approval` | `PendingAction` or `None` | The consumed approval record, on the approval path only (`None` for read-only tools, which never have one). `str(approval.uuid)` is the idempotency key to hand the underlying service; `approval.revision` is the bound `preview` revision. See [Approvals](approvals.md). |
 
-Both kwargs are keyword-only (`*` in the signature):
+All three kwargs are keyword-only (`*` in the signature):
 
 ```python
 @tool(name="my_tool", domain="myapp", permission="view_admin", mutates=True,

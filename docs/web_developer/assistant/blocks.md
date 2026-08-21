@@ -9,7 +9,8 @@ Implementation guide for rendering all assistant block types in the frontend. Bl
 | `table` | Query results, record lists | `title`, `columns`, `rows` |
 | `chart` | Time-series, trends | `chart_type`, `title`, `labels`, `series`, plus optional render hints (see [Chart Block](#chart--seriesschart--piechart-options) below) |
 | `stat` | Dashboard key metrics | `items` (label/value pairs) |
-| `action` | Confirmation cards with buttons | `action_id`, `title`, `description`, `actions` |
+| `action` | Quick-reply cards with buttons — **no authority** | `action_id`, `title`, `description`, `actions` |
+| `approval` | Server-issued approval card for a mutating operation | `action_id`, `tool`, `title`, `description`, `args`, `state`, `expires_at` |
 | `list` | Single-record key/value detail | `title`, `items` (label/value pairs) |
 | `alert` | Severity-colored status banners | `level`, `title`, `message` |
 | `progress` | Multi-step plan tracker | `plan_id`, `title`, `steps` |
@@ -95,9 +96,11 @@ The renderer can rely on the shape being well-formed for the validated fields.
 
 ---
 
-## `action` — Confirmation Cards
+## `action` — Quick-Reply Cards
 
-Rendered when the assistant needs user confirmation before a mutating operation (block IP, disable user, cancel job, etc.).
+A card with preset answers to a question the assistant asked. Clicking a button sends its `value` back as an ordinary chat message and nothing else happens.
+
+> **This block carries no authority.** It cannot execute anything, and the server discards its `action_id`. Never use it — and never build UI around it — as the confirmation for a mutating operation. Mutations are gated by the server-issued [`approval` block](#approval--operator-approval-cards) below, which the model cannot emit.
 
 ### Schema
 
@@ -131,8 +134,8 @@ Rendered when the assistant needs user confirmation before a mutating operation 
 
 1. User clicks a button.
 2. Disable all buttons immediately (prevent double-submit).
-3. Visually mark the clicked button (highlight, checkmark, or change to "Confirmed"/"Cancelled").
-4. Send the user's choice via WebSocket:
+3. Visually mark the clicked button (highlight or checkmark).
+4. Send the user's choice via WebSocket (`action_id` is accepted for backward compatibility and ignored server-side):
 
 ```javascript
 ws.send(JSON.stringify({
@@ -235,6 +238,79 @@ function renderActionBlock(block, conversationId) {
     outline: 2px solid #3b82f6;
 }
 ```
+
+---
+
+## `approval` — Operator Approval Cards
+
+**Server-issued only.** A mutating assistant tool produced a pending action and is waiting for a human decision. A model-generated block claiming `type: "approval"` is dropped server-side before it reaches you, so a card in your UI is always genuine.
+
+### Schema
+
+```json
+{
+    "type": "approval",
+    "action_id": "9f1c6a2e-3d47-4b8a-9c11-8f0d2e5b7a34",
+    "conversation_id": 812,
+    "tool": "block_ip",
+    "title": "Block Ip",
+    "description": "block_ip will run with the arguments below.",
+    "args": {"ip": "203.0.113.10", "reason": "brute force", "ttl": 3600},
+    "preview": {"summary": "3 nodes -> 4 nodes", "details": {"pool": "app"}},
+    "requires_fresh_auth": false,
+    "requires_superuser": false,
+    "expires_at": "2026-08-21T18:30:00Z",
+    "state": "pending",
+    "result": null,
+    "failure_code": ""
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `action_id` | string | Opaque UUID — the only thing you send back. Not a bearer capability: it is resolvable only by the session it was issued to. |
+| `conversation_id` | integer | The conversation this action belongs to. |
+| `tool` | string | Server-side tool name. |
+| `title`, `description` | string | Card header and one-sentence summary. |
+| `args` | object | The exact arguments that will run, redacted. |
+| `preview` | object or null | `{summary, details, revision}` when the tool provides one. |
+| `requires_fresh_auth` | boolean | `true` ⇒ REST-only, after a step-up. |
+| `requires_superuser` | boolean | Informational; the server enforces it regardless. |
+| `expires_at` | string | ISO 8601. Past this the card is dead. |
+| `state` | string | `pending` \| `executing` \| `completed` \| `failed` \| `canceled` \| `expired` \| `superseded` |
+| `result` | object or null | Bounded, redacted outcome. Terminal states only. |
+| `failure_code` | string | Machine token when `state` is `failed`. |
+
+There is deliberately **no `actions` array** — the panel draws fixed Approve / Cancel controls, which is what keeps this from being confused with the `action` quick-reply block above.
+
+### Rendering
+
+- Show `args`. The operator is approving *these arguments*; that is the whole point of the card.
+- Render `description`, `args` and `preview` values as **text, never HTML** — they originate from a language model and are untrusted.
+- Only `state: "pending"` is actionable, and re-check `expires_at` at render time. Every other state renders inert: disabled controls plus a status line.
+- Surface `requires_fresh_auth` on the card so the re-authentication prompt is not a surprise.
+
+### Interaction Flow
+
+1. Operator clicks Approve or Cancel.
+2. Disable both controls immediately.
+3. `POST /api/assistant/action` with `{action_id, decision}` — or, for a card with `requires_fresh_auth: false`, send `assistant_approval` over the WebSocket.
+4. Replace the card with the resolved block from the response (or from `assistant_approval_result`).
+5. On `440` / `reauth_required`, run your step-up flow and re-submit the **same** `action_id` over REST.
+
+### States
+
+| State | Visual |
+|---|---|
+| **pending** | Controls enabled |
+| **executing** | Controls disabled, spinner — a terminal event is coming |
+| **completed** | Success styling, show `result` |
+| **failed** | Error styling, show `failure_code` and `result.error`. This is a `200`, not a network error — the operation was attempted. |
+| **canceled** / **expired** / **superseded** | Muted, controls removed, status line only |
+
+Every unresolvable case returns one identical body — `409 action_unavailable`, "This action is no longer available." — regardless of which case it was. Render the card inert and refresh from `GET /api/assistant/action`.
+
+Full contract, both transports, and the code → status table: **[Approvals](approvals.md)**.
 
 ---
 
@@ -942,6 +1018,9 @@ function renderBlocks(blocks, conversationId) {
             case 'action':
                 container.appendChild(renderActionBlock(block, conversationId));
                 break;
+            case 'approval':
+                container.appendChild(renderApprovalBlock(block, conversationId));
+                break;
             case 'list':
                 container.appendChild(renderListBlock(block));
                 break;
@@ -987,13 +1066,34 @@ ws.on('assistant_plan_update', (data) => {
     updateProgressBar(data.plan_id, plan.steps);
 });
 
-// Action responses — send via WS when user clicks an action button
+// Quick replies — send via WS when the user clicks an action button.
+// This carries no authority; `action_id` is ignored server-side.
 function sendActionResponse(conversationId, actionId, value) {
     ws.send(JSON.stringify({
         type: 'assistant_action',
         conversation_id: conversationId,
         action_id: actionId,
         value: value,
+    }));
+}
+
+// Approval cards (new)
+ws.on('assistant_approval_required', (data) => {
+    appendBlock(data.block, data.conversation_id);
+});
+
+ws.on('assistant_approval_result', (data) => {
+    replaceApprovalCard(data.block);   // resolved state, including "failed"
+});
+
+// A step-up card cannot resolve over the socket — re-submit it over REST.
+function sendApprovalDecision(conversationId, actionId, decision) {
+    ws.send(JSON.stringify({
+        type: 'assistant_approval',
+        conversation_id: conversationId,
+        action_id: actionId,
+        decision: decision,           // "approve" | "cancel"
+        request_id: crypto.randomUUID(),
     }));
 }
 ```
@@ -1005,7 +1105,8 @@ function sendActionResponse(conversationId, actionId, value) {
 | Type | When | Required Fields |
 |---|---|---|
 | `assistant_message` | User sends a chat message | `message`, recommended `request_id`, optional `conversation_id` |
-| `assistant_action` | User clicks an action button | `conversation_id`, `action_id`, `value`, recommended `request_id` |
+| `assistant_action` | User clicks a quick-reply button (no authority) | `conversation_id`, `action_id`, `value`, recommended `request_id` |
+| `assistant_approval` | Operator approves/cancels an approval card (non-step-up only) | `conversation_id`, `action_id`, `decision`, recommended `request_id` |
 
 ### Server → Client
 
@@ -1017,6 +1118,9 @@ function sendActionResponse(conversationId, actionId, value) {
 | `assistant_error` | Failure | `conversation_id`, `request_id`, `error` |
 | `assistant_plan` | Plan created | `conversation_id`, `request_id`, `plan` (full plan object) |
 | `assistant_plan_update` | Step status changed | `conversation_id`, `request_id`, `plan_id`, `step_id`, `status`, `summary` |
+| `assistant_approval_required` | A mutating tool produced an approval card | `conversation_id`, `request_id`, `action_id`, `block` |
+| `assistant_approval_ack` | An approval decision was accepted | `conversation_id`, `request_id`, `action_id` |
+| `assistant_approval_result` | The action was resolved | `conversation_id`, `request_id`, `action_id`, `block`, `message_id` |
 
 Generate a fresh canonical UUID `request_id` for every action or message and
 ignore server events whose ID does not match the active turn. The field remains
