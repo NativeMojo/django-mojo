@@ -355,3 +355,32 @@ def test_staged_ports_refused(opts):
                      "server {\n    listen 443 ssl;\n}\n")
     assert isinstance(err, me.ValueException), (
         "the real staged-render path bypassed the active HTTPS port bounds")
+
+
+@th.django_unit_test("what the base stops rendering, the staging harness must declare")
+def test_bootstrap_owned_directives_appear_in_the_harness(opts):
+    """The invariant that broke the pre-filter once.
+
+    `render_http_base` deliberately omits the directives a node's own
+    nginx.conf owns. The staging harness stands in for that nginx.conf, so
+    every omission has to be mirrored there — otherwise `nginx -t` fails on the
+    staged copy for a variable the real node would have had, and the whole
+    convergence aborts with an error that names nginx rather than the split.
+
+    Moving `$connection_upgrade` out of the base did exactly that: the base
+    stopped declaring it, the harness never started, and every generation
+    failed its pre-filter with `unknown "connection_upgrade" variable`.
+    """
+    from mojo.apps.edge.services import render
+
+    base = render.render_http_base()
+    harness = render.render_nginx_harness("a" * 64)
+
+    for directive in ("default_type", "types_hash_max_size",
+                      "map $http_upgrade $connection_upgrade"):
+        assert directive not in base, (
+            f"{directive!r} is bootstrap-owned — rendering it in the base too "
+            f"is a duplicate-directive [emerg] on any node that declares it")
+        assert directive in harness, (
+            f"{directive!r} is missing from the staging harness, so the "
+            f"pre-filter validates a graph the real node would not have")

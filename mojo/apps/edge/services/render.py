@@ -1101,8 +1101,11 @@ def render_nginx_harness(generation):
     This approximates the real bootstrap and is documented as such — but
     since the generation now carries its own http base (maps, log format,
     upstreams), the approximation is close: the harness contributes only the
-    main context and the two directives the bootstrap
-    owns (`default_type`, `types_hash_max_size`). It includes the `staging/`
+    main context and the three things the bootstrap owns — `default_type`,
+    `types_hash_max_size` and the `$connection_upgrade` map. That list must
+    track `render_http_base`'s exclusions exactly: anything the base stops
+    rendering has to appear here too, or the pre-filter fails on a variable
+    the real node would have had. It includes the `staging/`
     listen-remapped copies rather than the real trees: `nginx -t` attempts
     `bind()` on every listen (EADDRINUSE tolerated in test mode, anything
     else fatal), and the unprivileged check cannot bind 443/80. Certificate,
@@ -1128,6 +1131,10 @@ def render_nginx_harness(generation):
         "http {",
         "    default_type application/octet-stream;",
         "    types_hash_max_size 4096;",
+        "    map $http_upgrade $connection_upgrade {",
+        "        default upgrade;",
+        "        '' close;",
+        "    }",
         f"    include {gen}/staging/http.d/*.conf;",
         f"    include {gen}/staging/conf.d/*.conf;",
         "}",
