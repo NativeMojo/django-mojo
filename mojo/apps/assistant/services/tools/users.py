@@ -163,25 +163,35 @@ def _tool_query_rate_limits(params, user):
         # rl:* = fixed-window counters, srl:* = sliding-window zsets
         # (see mojo/decorators/limits.py)
         keys = []
-        for pattern in ("rl:*", "srl:*"):
-            for key in r.scan_iter(match=pattern, count=100):
-                ttl = r.ttl(key)
-                if ttl <= 0:
+        scanners = [
+            iter(r.scan_iter(match=pattern, count=100))
+            for pattern in ("rl:*", "srl:*")
+        ]
+        active_scanners = [True] * len(scanners)
+        while len(keys) < MAX_RESULTS and any(active_scanners):
+            for index, scanner in enumerate(scanners):
+                if not active_scanners[index]:
                     continue
-                if r.type(key) == "zset":
-                    count = r.zcard(key)
+                for key in scanner:
+                    ttl = r.ttl(key)
+                    if ttl <= 0:
+                        continue
+                    if r.type(key) == "zset":
+                        count = r.zcard(key)
+                    else:
+                        val = r.get(key)
+                        count = int(val) if val else 0
+                    keys.append({
+                        "key": key,
+                        "count": count,
+                        "ttl_seconds": ttl,
+                    })
+                    break
                 else:
-                    val = r.get(key)
-                    count = int(val) if val else 0
-                keys.append({
-                    "key": key,
-                    "count": count,
-                    "ttl_seconds": ttl,
-                })
+                    active_scanners[index] = False
+
                 if len(keys) >= MAX_RESULTS:
                     break
-            if len(keys) >= MAX_RESULTS:
-                break
 
         return {"rate_limits": keys, "count": len(keys)}
     except Exception as e:
