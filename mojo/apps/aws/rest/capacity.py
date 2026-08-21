@@ -20,8 +20,11 @@ arguments can express "manage_aws AND is_superuser".
 
 Confirmation is server-verified, not client-decorated: ``confirm_resource``
 must echo the identifier exactly, and the mismatch is refused BEFORE any
-provider call. ``count`` and ``apply_immediately`` have no defaults — a
-missing field is a question that was never asked, not a "no".
+provider call. ``count``, ``size`` and ``apply_immediately`` have no defaults
+— a missing field is a question that was never asked, not a "no". The two
+resize actions take a curated size KEY (``small``/``medium``/``large``/
+``xlarge``), never a raw instance type; the service refuses anything off the
+ladder before any provider call.
 
 ``INFRASTRUCTURE_MODE`` is checked before all of it. It is a property of the
 INSTALLATION, not of the caller — on an install whose AWS estate is applied by
@@ -51,6 +54,8 @@ AUDIT_ACTIONS = {
     capacity_service.ACTION_SET_CACHE_REPLICAS: "aws_capacity_set_cache_replicas",
     capacity_service.ACTION_ENABLE_STABLE_IPS: "aws_capacity_enable_stable_ips",
     capacity_service.ACTION_DISABLE_STABLE_IPS: "aws_capacity_disable_stable_ips",
+    capacity_service.ACTION_RESIZE_CACHE: "aws_capacity_resize_cache",
+    capacity_service.ACTION_RESIZE_DATABASE: "aws_capacity_resize_database",
 }
 
 # Actions that operate on the whole fleet rather than one named resource. The
@@ -183,6 +188,18 @@ def on_capacity_apply(request):
         if type(apply_immediately) is not bool:
             raise me.ValueException("apply_immediately must be a boolean")
         params = {"count": count, "apply_immediately": apply_immediately}
+    if action in (capacity_service.ACTION_RESIZE_CACHE,
+                  capacity_service.ACTION_RESIZE_DATABASE):
+        size = _text(data, "size")
+        if "apply_immediately" not in data:
+            raise me.ValueException(
+                "apply_immediately is required: a resize applied now is an "
+                "observed change with a settle check, and a deferral to the "
+                "maintenance window is a different decision with no default")
+        apply_immediately = data.get("apply_immediately")
+        if type(apply_immediately) is not bool:
+            raise me.ValueException("apply_immediately must be a boolean")
+        params = {"size": size, "apply_immediately": apply_immediately}
 
     try:
         result = capacity_service.apply(request.user, action, resource, **params)

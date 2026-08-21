@@ -1171,3 +1171,63 @@ def test_report_reader_routing(opts):
     # Nothing to compare against: unknown, never a false alarm.
     assert skipped["database"]["matches_reader_endpoint"] is None, \
         "an inactive config produced an endpoint verdict"
+
+
+@th.django_unit_test("the report carries a per-instance class for every database row")
+def test_report_carries_instance_classes(opts):
+    from mojo.apps.aws.services import capacity
+
+    # Filter-aware on purpose: instance_role describes ONE instance by
+    # identifier, and a mock answering every filter with the same first row
+    # would fold every replica onto the wrong source.
+    instances = {
+        f"{CLUSTER}-1": {
+            "DBInstanceIdentifier": f"{CLUSTER}-1", "DBInstanceStatus": "available",
+            "Engine": "aurora-postgresql", "EngineVersion": "16.4",
+            "DBInstanceClass": "db.r6g.xlarge", "DBClusterIdentifier": CLUSTER},
+        f"{CLUSTER}-2": {
+            "DBInstanceIdentifier": f"{CLUSTER}-2", "DBInstanceStatus": "available",
+            "Engine": "aurora-postgresql", "EngineVersion": "16.4",
+            "DBInstanceClass": "db.t4g.medium", "DBClusterIdentifier": CLUSTER},
+        STANDALONE: {
+            "DBInstanceIdentifier": STANDALONE, "DBInstanceStatus": "available",
+            "Engine": "postgres", "EngineVersion": "16.4",
+            "DBInstanceClass": "db.m6g.large"},
+        f"{STANDALONE}-replica": {
+            "DBInstanceIdentifier": f"{STANDALONE}-replica",
+            "DBInstanceStatus": "available", "Engine": "postgres",
+            "EngineVersion": "16.4", "DBInstanceClass": "db.t4g.medium",
+            "ReadReplicaSourceDBInstanceIdentifier": STANDALONE},
+    }
+    rds_client = mock.Mock()
+    rds_client.describe_db_instances.side_effect = lambda **kwargs: {
+        "DBInstances": ([instances[kwargs["DBInstanceIdentifier"]]]
+                        if kwargs.get("DBInstanceIdentifier") in instances
+                        else list(instances.values())
+                        if not kwargs.get("DBInstanceIdentifier") else [])}
+    rds_client.describe_db_clusters.return_value = {"DBClusters": [{
+        "DBClusterIdentifier": CLUSTER, "Engine": "aurora-postgresql",
+        "Status": "available", "DBClusterMembers": [
+            {"DBInstanceIdentifier": f"{CLUSTER}-1", "IsClusterWriter": True},
+            {"DBInstanceIdentifier": f"{CLUSTER}-2", "IsClusterWriter": False}]}]}
+
+    envelope = capacity.report(
+        elbv2_client=_elbv2_client(), ec2_client=_ec2_client(),
+        rds_client=rds_client, cache_client=_cache_client())
+    rows = {row["identifier"]: row for row in envelope["databases"]}
+
+    aurora = rows[CLUSTER]
+    assert aurora["writer_instance_class"] == "db.r6g.xlarge", \
+        f"the aurora writer's class is missing from its row: {aurora}"
+    assert aurora["reader_instance_classes"] == {
+        f"{CLUSTER}-2": "db.t4g.medium"}, \
+        f"the aurora readers' classes are missing from their row: {aurora}"
+
+    standalone = rows[STANDALONE]
+    assert standalone["instance_class"] == "db.m6g.large", \
+        f"the standalone primary's class is missing: {standalone}"
+    assert standalone["readers"] == [f"{STANDALONE}-replica"], \
+        f"the folded replica is missing from its source: {standalone}"
+    assert standalone["reader_instance_classes"] == {
+        f"{STANDALONE}-replica": "db.t4g.medium"}, \
+        f"the folded replica's class is missing from its source: {standalone}"

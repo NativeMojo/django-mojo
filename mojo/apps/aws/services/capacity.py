@@ -1,4 +1,5 @@
-"""Admin capacity actions: add/remove an app node, an RDS reader, a cache replica.
+"""Admin capacity actions: add/remove an app node, an RDS reader, a cache
+replica — and resize the cache group or a database instance to a curated size.
 
 The alternative to this module is an operator in the AWS console at 2am, adding
 a node by hand and hoping they picked the same instance type, the same subnet,
@@ -47,6 +48,7 @@ import uuid
 
 from django.core.cache import cache
 
+from mojo.deploy.provision import spec as provision_spec
 from mojo.helpers import infrastructure
 from mojo.helpers import logit
 from mojo.helpers.aws import ec2 as ec2_helper
@@ -75,9 +77,12 @@ ACTION_REMOVE_READER = "remove_reader"
 ACTION_SET_CACHE_REPLICAS = "set_cache_replicas"
 ACTION_ENABLE_STABLE_IPS = "enable_stable_ips"
 ACTION_DISABLE_STABLE_IPS = "disable_stable_ips"
+ACTION_RESIZE_CACHE = "resize_cache"
+ACTION_RESIZE_DATABASE = "resize_database"
 ACTIONS = (ACTION_ADD_NODE, ACTION_DRAIN_NODE, ACTION_TERMINATE_NODE,
            ACTION_ADD_READER, ACTION_REMOVE_READER, ACTION_SET_CACHE_REPLICAS,
-           ACTION_ENABLE_STABLE_IPS, ACTION_DISABLE_STABLE_IPS)
+           ACTION_ENABLE_STABLE_IPS, ACTION_DISABLE_STABLE_IPS,
+           ACTION_RESIZE_CACHE, ACTION_RESIZE_DATABASE)
 
 # Adds serialize on ONE fixed key, never on the resource: two concurrent adds
 # name different resources (or none at all), so a per-resource key would let
@@ -117,6 +122,8 @@ PHASES = {
     ACTION_SET_CACHE_REPLICAS: ("scaling", "settling"),
     ACTION_ENABLE_STABLE_IPS: ("planning", "associating", "verifying"),
     ACTION_DISABLE_STABLE_IPS: ("detaching", "verifying"),
+    ACTION_RESIZE_CACHE: ("resizing", "settling"),
+    ACTION_RESIZE_DATABASE: ("resizing", "settling"),
 }
 
 STATE_RUNNING = "running"
@@ -134,6 +141,10 @@ HEALTH_TIMEOUT = 900        # registered but never healthy -> offer Drain
 DRAIN_MARGIN = 300          # on top of the group's deregistration_delay
 RDS_TIMEOUT = 3600          # a reader can genuinely take this long
 CACHE_TIMEOUT = 1800
+# A node-type change replaces EVERY node in the group sequentially (rolling),
+# so a 1+2 group is three replacements. 3600 would sit exactly at the portal's
+# old one-hour follow cap and double-fail slow-but-succeeding resizes.
+CACHE_RESIZE_TIMEOUT = 5400
 
 DEFAULT_IMAGE_MAX_AGE_DAYS = 14
 DEFAULT_NODE_ROOT = "/opt/api"
@@ -203,6 +214,12 @@ def _claim_key(action, resource):
         return f"{CACHE_PREFIX}:claim:{ADD_NODE_CLAIM}"
     if action in (ACTION_ENABLE_STABLE_IPS, ACTION_DISABLE_STABLE_IPS):
         return f"{CACHE_PREFIX}:claim:{STABLE_IPS_CLAIM}"
+    if action == ACTION_RESIZE_CACHE:
+        # ONE claim per replication group, shared with set_cache_replicas: a
+        # resize and a replica-count change mutate the same AWS object and must
+        # serialize. The deployed key literal is reused (rather than renaming
+        # both) so a claim held across a deploy stays honored.
+        return f"{CACHE_PREFIX}:claim:{ACTION_SET_CACHE_REPLICAS}:{resource}"
     return f"{CACHE_PREFIX}:claim:{action}:{resource}"
 
 
@@ -628,6 +645,14 @@ def _database_rows(rds_client=None, region=None):
             "status": clusters[identifier].get("status"),
             "writer": detail.get("writer"),
             "readers": list(detail.get("readers") or []),
+            # Per-instance classes out of the ONE describe `instances` already
+            # holds — the writer and each reader carry independent sizes, and
+            # that asymmetry (big writer, smaller readers) is the point.
+            "writer_instance_class": (
+                instances.get(detail.get("writer")) or {}).get("instance_class"),
+            "reader_instance_classes": {
+                reader: (instances.get(reader) or {}).get("instance_class")
+                for reader in detail.get("readers") or []},
             "reader_endpoint": detail.get("reader_endpoint"),
             "endpoint": detail.get("endpoint"),
         })
@@ -649,6 +674,7 @@ def _database_rows(rds_client=None, region=None):
             "is_replica": bool(detail.get("is_replica")),
             "instance_class": detail.get("instance_class"),
             "readers": [],
+            "reader_instance_classes": {},
             "endpoint": detail.get("endpoint"),
         })
     # A standalone replica belongs to its source's row, not its own.
@@ -657,6 +683,8 @@ def _database_rows(rds_client=None, region=None):
         source = sources.get(row.get("replica_of"))
         if source is not None:
             source["readers"].append(row["identifier"])
+            source["reader_instance_classes"][row["identifier"]] = \
+                row.get("instance_class")
     return [row for row in rows if not row.get("is_replica")]
 
 
@@ -675,6 +703,15 @@ def _cache_rows(cache_client=None, region=None):
             "cluster_enabled": facts.get("cluster_enabled"),
             "automatic_failover_on": facts.get("automatic_failover_on"),
             "multi_az_on": facts.get("multi_az_on"),
+            "node_type": facts.get("node_type"),
+            # Which interruption a node-type change means for THIS group,
+            # stated before apply: failover with a replica rolls (replicas
+            # first, then a brief failover); without one the primary is down
+            # for the duration.
+            "resize_impact": ("rolling"
+                              if (facts.get("automatic_failover_on")
+                                  and int(facts.get("replica_count") or 0) >= 1)
+                              else "downtime"),
             "members": facts.get("members"),
             # The lowest count this group may be moved to. One, not zero, when
             # anything would fail over onto a replica that would no longer be
@@ -708,6 +745,51 @@ def _collect(envelope, code, iam_action, loader):
                        f"not be read"})
         logger.exception("capacity report read failed %s", code)
         return None
+
+
+# ── curated sizes ───────────────────────────────────────────────────────────
+
+def _size_catalog():
+    """The resize allowlist, with the price beside each rung.
+
+    The ladders live in provision's ``spec.py`` beside COST_TABLE so ONE file
+    answers "what sizes exist and what do they cost". The panel renders
+    exactly this and hardcodes nothing.
+    """
+    def rows(ladder):
+        return [{"size": key, "label": label, "type": itype,
+                 "monthly_usd": provision_spec.COST_TABLE.get(itype)}
+                for key, label, itype in ladder]
+    return {"cache": rows(provision_spec.CACHE_SIZES),
+            "database": rows(provision_spec.DB_SIZES)}
+
+
+def _resolve_size(ladder, size):
+    """A curated size KEY to its instance type — anything else is refused.
+
+    Refused before any provider call, and a raw type string is therefore
+    never accepted: the ladder can be re-pointed at new instance families
+    without breaking callers, and a client cannot smuggle a type the
+    allowlist does not carry.
+    """
+    wanted = str(size or "").strip().lower()
+    for key, _label, itype in ladder:
+        if key == wanted:
+            return itype
+    raise CapacityError(
+        "size must be one of: small, medium, large, xlarge", "invalid_request")
+
+
+def _ladder_index(ladder, itype):
+    """Position of ``itype`` on the ladder, or None when it is not curated.
+
+    None means the direction of a resize is unknown — the completion note
+    softens its memory caution instead of pretending to know.
+    """
+    for index, (_key, _label, rung_type) in enumerate(ladder):
+        if rung_type == itype:
+            return index
+    return None
 
 
 def _offers(envelope):
@@ -749,6 +831,12 @@ def _offers(envelope):
     cache_block = infrastructure.ERROR_CODE if external else (
         None if envelope.get("caches") else "no_cache_group")
     offer(ACTION_SET_CACHE_REPLICAS, cache_block)
+
+    # The resizes share their family's availability: a region with a cache
+    # group can resize it, a region with a database can resize an instance.
+    # Per-group cluster-mode blocking rides on each cache row's blocked_reason.
+    offer(ACTION_RESIZE_CACHE, cache_block)
+    offer(ACTION_RESIZE_DATABASE, database_block)
 
     egress = envelope.get("egress") or {}
 
@@ -843,6 +931,8 @@ def _build(elbv2_client=None, ec2_client=None, rds_client=None, cache_client=Non
                       lambda: _cache_rows(cache_client=cache_client))
     envelope["caches"] = caches or []
     envelope["reader_routing"] = _reader_routing(envelope)
+    # Static data, no provider read — no _collect wrapper needed.
+    envelope["sizes"] = _size_catalog()
     envelope["actions"] = _offers(envelope)
     return envelope
 
@@ -1138,6 +1228,10 @@ def apply(actor, action, resource="", **params):
         return _apply_reader(actor, action, resource, **params)
     if action in (ACTION_ENABLE_STABLE_IPS, ACTION_DISABLE_STABLE_IPS):
         return _apply_stable_ips(actor, action, **params)
+    if action == ACTION_RESIZE_CACHE:
+        return _apply_resize_cache(actor, resource, **params)
+    if action == ACTION_RESIZE_DATABASE:
+        return _apply_resize_database(actor, resource, **params)
     return _apply_cache(actor, resource, **params)
 
 
@@ -1348,6 +1442,143 @@ def _apply_cache(actor, resource, count=None, apply_immediately=None,
     return record
 
 
+def _require_immediate(apply_immediately, deferral):
+    """Both resizes demand a literal True — no default, no silent rewrite.
+
+    These are observed operations with a settle check; a change deferred to
+    the maintenance window has nothing to observe and would report a timeout
+    for a change that is merely queued.
+    """
+    if apply_immediately is not True:
+        raise CapacityError(
+            f"apply_immediately must be true: this control makes observed, "
+            f"immediate changes with a settle check. {deferral} Schedule a "
+            f"deferred change in the AWS console instead.",
+            "invalid_request")
+
+
+def _apply_resize_cache(actor, resource, size=None, apply_immediately=None,
+                        cache_client=None, **_ignored):
+    if not resource:
+        raise CapacityError("A cache group identifier is required", "invalid_request")
+    size_key = str(size or "").strip().lower()
+    to_type = _resolve_size(provision_spec.CACHE_SIZES, size_key)
+    _require_immediate(apply_immediately,
+                       "A deferred node-type change has nothing to observe.")
+    try:
+        facts = elasticache_helper.replication_group_facts(resource, client=cache_client)
+    except ProviderCallError as err:
+        raise _provider_error(
+            err, "AWS did not report this cache group, so no change was made."
+        ) from None
+    if facts is None:
+        raise CapacityError(
+            f"AWS reports no replication group called {resource}.",
+            "resource_not_found", 404)
+    if facts.get("cluster_enabled"):
+        raise CapacityError(
+            f"{resource} is cluster-mode enabled. Sizing a sharded group is a "
+            f"resharding decision, not a capacity change, and this control "
+            f"does not make it.",
+            elasticache_helper.CLUSTER_MODE_UNSUPPORTED, 409)
+    status = str(facts.get("status") or "").lower()
+    # "snapshotting" is the nightly backup — routine background work, never a
+    # conflict. Anything else short of available may equally be AWS's own
+    # background activity, so the refusal quotes the state verbatim and never
+    # claims another change is in flight.
+    if status not in (elasticache_helper.SETTLED, "snapshotting"):
+        raise CapacityError(
+            f"{resource} is {status}; a resize needs it settled — try again "
+            f"when it reports available.",
+            "not_settled", 409)
+    from_type = facts.get("node_type")
+    if from_type == to_type:
+        raise CapacityError(f"{resource} already runs {to_type}.", "no_change", 409)
+    replica_count = int(facts.get("replica_count") or 0)
+    failover_on = bool(facts.get("automatic_failover_on"))
+    from_index = _ladder_index(provision_spec.CACHE_SIZES, from_type)
+    to_index = _ladder_index(provision_spec.CACHE_SIZES, to_type)
+    claim = _claim(ACTION_RESIZE_CACHE, resource, getattr(actor, "pk", None))
+    record = _new_operation(ACTION_RESIZE_CACHE, resource, actor, claim, {
+        "from_type": from_type, "to_type": to_type, "size": size_key,
+        # The same rule the report's resize_impact states, re-derived from the
+        # fresh facts this apply is acting on.
+        "impact": ("rolling" if (failover_on and replica_count >= 1)
+                   else "downtime"),
+        "replica_count": replica_count,
+        "automatic_failover_on": failover_on,
+        "apply_immediately": True,
+        "monthly_usd": provision_spec.COST_TABLE.get(to_type),
+        # True/False by ladder position; None when the current type is not
+        # curated and the direction is unknown.
+        "downsize": None if from_index is None else to_index < from_index,
+    })
+    _dispatch(record)
+    return record
+
+
+def _apply_resize_database(actor, resource, size=None, apply_immediately=None,
+                           rds_client=None, **_ignored):
+    if not resource:
+        raise CapacityError("A database instance identifier is required",
+                            "invalid_request")
+    size_key = str(size or "").strip().lower()
+    to_class = _resolve_size(provision_spec.DB_SIZES, size_key)
+    _require_immediate(apply_immediately,
+                       "A deferred class change parks silently until the "
+                       "maintenance window.")
+    try:
+        role = rds_helper.instance_role(resource, client=rds_client)
+        if role is None:
+            raise CapacityError(
+                f"AWS reports no database instance called {resource}.",
+                "resource_not_found", 404)
+        status = str(role.get("status") or "").lower()
+        # backing-up / storage-optimization / maintenance are routine RDS
+        # background windows in which a class change is permitted. Anything
+        # else — modifying, rebooting, creating, and above all deleting (the
+        # remove_reader race) — is refused with the provider state quoted
+        # verbatim, attributing nothing.
+        if status not in (RDS_SETTLED, "backing-up", "storage-optimization",
+                          "maintenance"):
+            raise CapacityError(
+                f"{resource} is {status}; a resize needs it settled — try "
+                f"again when it reports available.",
+                "not_settled", 409)
+        from_class = role.get("instance_class")
+        if from_class == to_class:
+            raise CapacityError(
+                f"{resource} already runs {to_class}.", "no_change", 409)
+        cluster_id = role.get("cluster")
+        if cluster_id:
+            # Aurora member: the writer is known ONLY through IsClusterWriter.
+            # The tier rides in the same ModifyDBInstance call — writer at 0,
+            # readers at 1, so a failover prefers the big box — and this item
+            # never moves the writer role itself.
+            cluster = rds_helper.cluster_members(cluster_id, client=rds_client) or {}
+            role_name = "writer" if resource == cluster.get("writer") else "reader"
+            promotion_tier = 0 if role_name == "writer" else 1
+        else:
+            role_name = "reader" if role.get("is_replica") else "writer"
+            # PromotionTier is an Aurora concept; never sent off-Aurora.
+            promotion_tier = None
+    except ProviderCallError as err:
+        raise _provider_error(
+            err, "AWS did not report this database, so no change was made."
+        ) from None
+    claim = _claim(ACTION_RESIZE_DATABASE, resource, getattr(actor, "pk", None))
+    record = _new_operation(ACTION_RESIZE_DATABASE, resource, actor, claim, {
+        "kind": "aurora" if cluster_id else "standalone",
+        "cluster": cluster_id, "role": role_name,
+        "from_class": from_class, "to_class": to_class, "size": size_key,
+        "promotion_tier": promotion_tier,
+        "apply_immediately": True,
+        "monthly_usd": provision_spec.COST_TABLE.get(to_class),
+    })
+    _dispatch(record)
+    return record
+
+
 def _write_policy(actor, enabled):
     """Persist the desired policy through the only allowed writer.
 
@@ -1500,10 +1731,13 @@ def _deadline_for(action):
                 + PROOF_MARGIN + HEALTH_TIMEOUT)
     if action == ACTION_DRAIN_NODE:
         return 3600
-    if action in (ACTION_ADD_READER, ACTION_REMOVE_READER):
+    if action in (ACTION_ADD_READER, ACTION_REMOVE_READER,
+                  ACTION_RESIZE_DATABASE):
         return RDS_TIMEOUT
     if action == ACTION_SET_CACHE_REPLICAS:
         return CACHE_TIMEOUT
+    if action == ACTION_RESIZE_CACHE:
+        return CACHE_RESIZE_TIMEOUT
     return 900
 
 
@@ -1544,6 +1778,8 @@ def run_operation(operation_id):
         ACTION_SET_CACHE_REPLICAS: _run_set_cache_replicas,
         ACTION_ENABLE_STABLE_IPS: _run_enable_stable_ips,
         ACTION_DISABLE_STABLE_IPS: _run_disable_stable_ips,
+        ACTION_RESIZE_CACHE: _run_resize_cache,
+        ACTION_RESIZE_DATABASE: _run_resize_database,
     }
     runner = runners.get(record.get("action"))
     if runner is None:
@@ -2214,3 +2450,93 @@ def _run_set_cache_replicas(record):
     return _fail(record, "cache_timeout",
                  f"{resource} did not settle at {wanted} replica(s). Check the "
                  f"ElastiCache console.")
+
+
+# Provider failures in both resize runners deliberately ride the generic
+# handler in run_operation: the claim is held while the mutation state is
+# unknown, which is right here — a retried modify is a second mutation.
+
+def _memory_caution(downsize):
+    """The honest downsize note. Stated, never measured: the report carries no
+    bytes-used figure, so the note names the risk without pretending to."""
+    if downsize is True:
+        return (" The node is smaller — if the working set no longer fits, "
+                "Redis evicts under its maxmemory policy; check cache memory "
+                "metrics.")
+    if downsize is None:
+        return (" If the new node is smaller than the old one and the working "
+                "set no longer fits, Redis evicts under its maxmemory policy; "
+                "check cache memory metrics.")
+    return ""
+
+
+def _run_resize_cache(record):
+    resource = record["resource"]
+    detail = record["detail"]
+    to_type = detail["to_type"]
+    _advance(record, "resizing",
+             f"moving {resource} from {detail['from_type']} to {to_type}")
+    elasticache_helper.modify_replication_group_node_type(resource, to_type, True)
+    invalidate()
+    _advance(record, "settling", "waiting for every node to run the new type")
+    deadline = time.time() + CACHE_RESIZE_TIMEOUT
+    while time.time() < deadline:
+        _sleep(30)
+        facts = elasticache_helper.replication_group_facts(resource)
+        if facts is None:
+            continue
+        _advance(record, "settling",
+                 f"{resource} is {facts.get('status')} on "
+                 f"{facts.get('node_type')}")
+        if (facts.get("status") == elasticache_helper.SETTLED
+                and facts.get("node_type") == to_type):
+            invalidate()
+            note = ("Replicas were replaced first, then a brief failover "
+                    "swapped the primary — one short interruption, not an "
+                    "outage." if detail.get("impact") == "rolling" else
+                    "With no replica, the cache was down while its node was "
+                    "replaced.")
+            note += _memory_caution(detail.get("downsize"))
+            return _finish(record, f"{resource} now runs {to_type}. {note}")
+    return _fail(record, "resize_timeout",
+                 f"{resource} did not settle on {to_type}. Check the "
+                 f"ElastiCache console.")
+
+
+def _run_resize_database(record):
+    resource = record["resource"]
+    detail = record["detail"]
+    to_class = detail["to_class"]
+    _advance(record, "resizing",
+             f"moving {resource} from {detail['from_class']} to {to_class}")
+    rds_helper.modify_instance_class(
+        resource, to_class, True, promotion_tier=detail.get("promotion_tier"))
+    invalidate()
+    _advance(record, "settling", "waiting for the instance to settle")
+    deadline = time.time() + RDS_TIMEOUT
+    while time.time() < deadline:
+        _sleep(30)
+        row = rds_helper.instance_role(resource)
+        if row is None:
+            continue
+        _advance(record, "settling", f"{resource} is {row.get('status')}")
+        if (row.get("status") == RDS_SETTLED
+                and row.get("instance_class") == to_class):
+            invalidate()
+            note = ("The instance restarted to change class — that was the "
+                    "few minutes of downtime this action warned about."
+                    if detail.get("role") == "writer" else
+                    "The writer kept serving; this reader paused while it "
+                    "changed class.")
+            # Keyed on the tier VALUE, never on role wording: a standalone
+            # primary or replica (tier None) has no tier to claim.
+            tier = detail.get("promotion_tier")
+            if tier == 0:
+                note += " Failover preference: tier 0."
+            elif tier is not None:
+                note += (f" It sits at failover tier {tier}, so the "
+                         f"writer-class box stays preferred.")
+            return _finish(record, f"{resource} now runs {to_class}. {note}")
+    return _fail(record, "resize_timeout",
+                 f"{resource} did not settle on {to_class}. Check the RDS "
+                 f"console.")
