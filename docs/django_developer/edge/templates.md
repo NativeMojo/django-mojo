@@ -92,8 +92,9 @@ Per generation:
 ```
 generations/<gen>/
   http.d/00_base.conf       mime include, log_format + $loggable + access_log,
-                            $connection_upgrade, sendfile/keepalive/server_tokens/gzip,
+                            sendfile/keepalive/server_tokens/gzip,
                             blocklist maps + watch log, flag-gated catch-alls
+                            (NOT $connection_upgrade — bootstrap owns it)
   http.d/10_upstreams.conf  upstream edge_up_<pk> { server <target>; } blocks —
                             the ONLY place a literal host:port / socket appears
   conf.d/<vhost-pk>.conf    HTTPS server, plus HTTP when enabled
@@ -121,6 +122,12 @@ events { worker_connections 5024; }
 http {
     default_type        application/octet-stream;
     types_hash_max_size 4096;
+
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        ''      close;
+    }
+
     include /etc/nginx/conf.d/00_django_mojo_runtime[.]conf;
     include /opt/api/var/edge/current/http.d/*.conf;
     include /opt/api/var/edge/current/conf.d/*.conf;
@@ -129,9 +136,17 @@ http {
 
 Notes that bite:
 
-- **`default_type` and `types_hash_max_size` live HERE, not in the rendered
-  base.** Both at the same http level twice is a duplicate-directive
-  `[emerg]`. The rendered base deliberately does not emit them.
+- **`default_type`, `types_hash_max_size` and the `$connection_upgrade` map
+  live HERE, not in the rendered base.** Any of them at the same http level
+  twice is a duplicate-directive `[emerg]`. The rendered base deliberately
+  does not emit them.
+- **The upgrade map is in that set for a second reason**: a node that also
+  serves a classic `conf.d` vhost — one proxying to the app through
+  `asgi.inc` — references `$connection_upgrade` *before* the first
+  convergence, when `current/` does not exist and both globs below match
+  nothing. Owned only by the rendered base, such a node could not start nginx
+  until it had converged, and could not converge without serving. Owned here,
+  day 0 works and a hybrid node is possible at all.
 - **The runtime include is glob-bracketed on purpose.**
   `00_django_mojo_runtime[.]conf` is a one-file glob, so it matches when the
   root deploy render has installed the fragment and matches *nothing* — rather

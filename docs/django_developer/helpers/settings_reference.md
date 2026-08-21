@@ -6,6 +6,18 @@ This reference lists framework-recognized setting keys (names only, no values).
 
 These are read while URL/module bootstrap happens, so changes require a process restart.
 
+- `DATABASE_READER_HOST` — **file-only** reader database hostname. When set,
+  django-mojo derives a `reader` alias from `DATABASES["default"]` (unless one
+  is explicitly declared) and installs the database router and request
+  middleware that route safe, unpinned reads to it. Unset, no reader alias or
+  routing is installed. A database-backed `Setting` row is ignored.
+- `DATABASE_READER_PORT` — **file-only** optional reader port. When django-mojo
+  derives the `reader` alias, it replaces the copied primary port; unset, the
+  primary port is retained. Ignored when the application explicitly declares
+  `DATABASES["reader"]`.
+- `DATABASE_READER_CONN_MAX_AGE` — **file-only** connection lifetime in seconds
+  for a django-mojo-derived `reader` alias, default `60`. Ignored when the
+  application explicitly declares `DATABASES["reader"]`.
 - `MOJO_API_MODULE`
 - `MOJO_APPEND_SLASH`
 - `MOJO_PREFIX`
@@ -905,6 +917,25 @@ restart. See
 - `REDIS_PASSWORD`
 - `REDIS_PORT`
 - `REDIS_READ_FROM_REPLICAS`
+- `REDIS_READER_URL` — **file-only** full URL for the opt-in standalone reader
+  client. With `get_connection(reader=True)`, it takes precedence over all
+  other reader parts and creates a separate pooled client; in cluster mode it
+  is ignored and the primary cluster client is returned.
+- `REDIS_READER_SERVER` — **file-only** standalone reader hostname. Used only
+  when `REDIS_READER_URL` is unset; configuring either activates the separate
+  reader client for `get_connection(reader=True)` outside cluster mode. With
+  neither configured, that call returns the primary client.
+- `REDIS_READER_PORT` — **file-only** reader port; defaults to the primary's
+  effective port when a standalone reader is configured.
+- `REDIS_READER_DB_INDEX` — **file-only** reader database index; defaults to
+  the primary's effective database index.
+- `REDIS_READER_USERNAME` — **file-only** reader ACL username; defaults to the
+  primary's effective username.
+- `REDIS_READER_PASSWORD` — **file-only** reader ACL password; defaults to the
+  primary's effective password.
+- `REDIS_READER_SCHEME` — **file-only** reader `redis`/`rediss` scheme; defaults
+  to the primary's effective scheme (and is forced to `redis` for a host
+  containing `localhost`).
 - `REDIS_SCHEME`
 - `REDIS_SERVER`
 - `REDIS_SOCKET_TIMEOUT`

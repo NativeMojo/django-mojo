@@ -184,3 +184,9 @@ def load_settings_config(context):
     # and the whole stale-worker guard rests on "advertised sha == loaded
     # settings" being true by construction.
     CONF_FINGERPRINT = loader.load_config(context)
+
+    # This runs while the settings module is still importing, before Django
+    # can cache DATABASES or construct the middleware stack. The local import
+    # keeps the parser's normal import path independent of the routing feature.
+    from mojo.db.config import apply_reader_database
+    apply_reader_database(context)

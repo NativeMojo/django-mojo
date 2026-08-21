@@ -2146,11 +2146,13 @@ def _run_set_cache_replicas(record):
         if (facts.get("status") == elasticache_helper.SETTLED
                 and int(facts.get("replica_count") or 0) == wanted):
             invalidate()
-            note = ("A replica is failover capacity, not read throughput — "
-                    "django-mojo talks to the primary endpoint only."
+            note = ("Lag-tolerant reads can use the group's reader endpoint "
+                    "when REDIS_READER_SERVER points at it."
                     if wanted > int(detail["from_count"]) else
                     "Automatic failover is off on this group, so it now has no "
-                    "standby to fail over to." if wanted == 0 else
+                    "standby to fail over to. Unset REDIS_READER_SERVER when "
+                    "removing the last replica; AWS does not document how the "
+                    "reader endpoint resolves at zero replicas." if wanted == 0 else
                     "The group is smaller; the primary endpoint is unchanged.")
             return _finish(record,
                            f"{resource} now has {wanted} replica(s). {note}")

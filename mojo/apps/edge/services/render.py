@@ -451,7 +451,8 @@ def _proxy_location_body(upstream, knobs, indent="        "):
 
     The literal `proxy_pass` lives here and nowhere else. WebSocket upgrade
     headers ride on every proxied location — the `$connection_upgrade` map is
-    defined once in the rendered http base. The no-cache posture declares
+    defined once in the NODE BOOTSTRAP, not here (see `render_http_base`).
+    The no-cache posture declares
     `add_header`, which is why the security headers are re-emitted first.
     """
     destination = _proxy_destination(upstream)
@@ -879,10 +880,10 @@ def render_http_base(knobs=None, security=None, vhosts=None):
     """`http.d/00_base.conf` — everything the server blocks lean on.
 
     Rendered per generation from `http_knobs()` and the blocklist rows, so
-    the maps every server block references (`$connection_upgrade`, the
-    blocklist guards), the log plumbing, and the hardening knobs converge
-    with the vhosts instead of living in a hand-managed file. `default_type`
-    and `types_hash_max_size` deliberately do NOT render here: they live in
+    the maps every server block references (the blocklist guards), the log
+    plumbing, and the hardening knobs converge with the vhosts instead of
+    living in a hand-managed file. `default_type`, `types_hash_max_size`
+    and `$connection_upgrade` deliberately do NOT render here: they live in
     the provision-time bootstrap (see
     docs/django_developer/edge/templates.md), and a second copy at the same
     http level would be a duplicate-directive [emerg].
@@ -915,11 +916,14 @@ def render_http_base(knobs=None, security=None, vhosts=None):
         ).rstrip().splitlines())
         parts.append("")
     parts.extend([
-        "map $http_upgrade $connection_upgrade {",
-        "    default upgrade;",
-        "    '' close;",
-        "}",
-        "",
+        # `$connection_upgrade` is NOT rendered here. It belongs to the node
+        # bootstrap, alongside `default_type` and `types_hash_max_size`, and
+        # for the same reason: a node that also serves a classic vhost needs
+        # the map defined BEFORE any generation exists. Rendering it here too
+        # would be a duplicate-directive [emerg] on such a node, and leaving
+        # only this copy would mean a fresh box cannot start nginx at all
+        # until its first convergence — a bootstrap that depends on the thing
+        # it is bootstrapping. See docs/django_developer/edge/templates.md.
         "sendfile on;",
         f"keepalive_timeout {int(knobs['keepalive_timeout'])};",
         "server_tokens off;",
@@ -1097,8 +1101,11 @@ def render_nginx_harness(generation):
     This approximates the real bootstrap and is documented as such — but
     since the generation now carries its own http base (maps, log format,
     upstreams), the approximation is close: the harness contributes only the
-    main context and the two directives the bootstrap
-    owns (`default_type`, `types_hash_max_size`). It includes the `staging/`
+    main context and the three things the bootstrap owns — `default_type`,
+    `types_hash_max_size` and the `$connection_upgrade` map. That list must
+    track `render_http_base`'s exclusions exactly: anything the base stops
+    rendering has to appear here too, or the pre-filter fails on a variable
+    the real node would have had. It includes the `staging/`
     listen-remapped copies rather than the real trees: `nginx -t` attempts
     `bind()` on every listen (EADDRINUSE tolerated in test mode, anything
     else fatal), and the unprivileged check cannot bind 443/80. Certificate,
@@ -1124,6 +1131,10 @@ def render_nginx_harness(generation):
         "http {",
         "    default_type application/octet-stream;",
         "    types_hash_max_size 4096;",
+        "    map $http_upgrade $connection_upgrade {",
+        "        default upgrade;",
+        "        '' close;",
+        "    }",
         f"    include {gen}/staging/http.d/*.conf;",
         f"    include {gen}/staging/conf.d/*.conf;",
         "}",

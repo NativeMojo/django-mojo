@@ -8,6 +8,7 @@ from mojo.helpers.settings import settings
 from mojo.helpers import modules
 from objict import objict
 from mojo.helpers import logit
+from mojo.db import use_primary
 
 AUTH_BEARER_HANDLER_PATHS = settings.get_static("AUTH_BEARER_HANDLERS", {})
 
@@ -48,7 +49,8 @@ class AuthenticationMiddleware(MiddlewareMixin):
         request.auth_token = objict(prefix=prefix, token=token)
 
         # decode data to find the instance
-        instance, error = handler(token, request)
+        with use_primary():
+            instance, error = handler(token, request)
         if error is not None:
             return JsonResponse({'error': error}, status=401)
         key = AUTH_BEARER_NAME_MAP.get(prefix, prefix)

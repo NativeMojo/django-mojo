@@ -1,5 +1,6 @@
 from mojo import decorators as md
 from mojo.apps import metrics
+from mojo.helpers import redis
 from mojo.helpers.response import JsonResponse
 import mojo.errors
 
@@ -169,6 +170,8 @@ def on_metrics_data(request):
 
     if len(slugs) == 1:
         slugs = slugs[0]
+    # Dashboard reads tolerate replica lag; permission reads above stay primary.
     records = metrics.fetch(slugs, dt_start=dt_start, dt_end=dt_end,
-        granularity=granularity, account=account, with_labels=True, allow_empty=allow_empty)
+        granularity=granularity, account=account, with_labels=True,
+        allow_empty=allow_empty, redis_con=redis.get_connection(reader=True))
     return JsonResponse(dict(status=True, data=records))

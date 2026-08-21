@@ -157,24 +157,29 @@ def _tool_get_user_activity(params, user):
 )
 def _tool_query_rate_limits(params, user):
     """Query currently rate-limited keys from Redis."""
-    from mojo.helpers.settings import settings
+    from mojo.helpers.redis import get_connection
     try:
-        from mojo.helpers.redis import get_redis
-        r = get_redis()
-        if r is None:
-            return {"error": "Redis not available"}
-
-        pattern = "ratelimit:*"
+        r = get_connection()
+        # rl:* = fixed-window counters, srl:* = sliding-window zsets
+        # (see mojo/decorators/limits.py)
         keys = []
-        for key in r.scan_iter(match=pattern, count=100):
-            ttl = r.ttl(key)
-            if ttl > 0:
-                val = r.get(key)
+        for pattern in ("rl:*", "srl:*"):
+            for key in r.scan_iter(match=pattern, count=100):
+                ttl = r.ttl(key)
+                if ttl <= 0:
+                    continue
+                if r.type(key) == "zset":
+                    count = r.zcard(key)
+                else:
+                    val = r.get(key)
+                    count = int(val) if val else 0
                 keys.append({
-                    "key": key.decode() if isinstance(key, bytes) else key,
-                    "count": int(val) if val else 0,
+                    "key": key,
+                    "count": count,
                     "ttl_seconds": ttl,
                 })
+                if len(keys) >= MAX_RESULTS:
+                    break
             if len(keys) >= MAX_RESULTS:
                 break
 

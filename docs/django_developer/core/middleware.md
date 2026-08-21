@@ -13,6 +13,14 @@ MIDDLEWARE = [
 ]
 ```
 
+When `DATABASE_READER_HOST` is configured, django-mojo automatically prepends
+`mojo.middleware.db_reader.ReaderPinMiddleware` as the outermost middleware.
+Do not add it manually. It creates the context-local routing scope used by the
+[database reader router](db_reader.md), starts mutating requests on primary,
+and clears the scope in `finally` after every response or exception. With no
+reader host configured, it is not inserted and the middleware stack is
+unchanged.
+
 ---
 
 ## MojoMiddleware

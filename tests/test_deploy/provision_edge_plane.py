@@ -258,3 +258,25 @@ def test_conf_publishes_the_edge_plane_settings(opts):
                  "framework's own mojo-asgi.service binds "
                  "<PROJ_PATH>/var/asgi.sock — unpublished, no edge vhost can "
                  "declare an upstream to the app running beside it")
+
+
+@th.django_unit_test("an account with no key yet observes clean, not blind")
+def test_absent_kms_alias_is_not_a_failure(opts):
+    from mojo.deploy.provision import discover, report
+
+    client, stubber = _stub("kms")
+    # What EVERY account answers before its first apply.
+    stubber.add_client_error("describe_key",
+                             service_error_code="NotFoundException")
+    findings = []
+    observed = _observed()
+    with stubber:
+        discover._observe_encryption(
+            _clients(kms=client), _spec(), observed, findings)
+
+    th.assert_eq(observed.kms_key_id, None, "there is no key to observe")
+    blind = [f.code for f in findings if f.status == report.BLIND]
+    th.assert_eq(blind, [],
+                 "a missing alias reported as BLIND makes the observation "
+                 "blocking, which stops the very apply that would create the "
+                 "key — an empty account could never be provisioned")
