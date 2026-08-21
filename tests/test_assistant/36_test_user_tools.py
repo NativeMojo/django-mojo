@@ -55,6 +55,8 @@ def test_query_rate_limits_reads_redis(opts):
                   "Reported count should match the returned entries")
         assert_true(result["count"] <= MAX_RESULTS,
                     "Rate-limit results must stay within the global cap")
+        assert_true(result["truncated"],
+                    "A full capped result must report that more keys may exist")
         by_key = {e["key"]: e for e in result["rate_limits"]}
         returned_fixed = [key for key in fixed_keys if key in by_key]
         assert_true(returned_fixed,
@@ -76,3 +78,78 @@ def test_query_rate_limits_reads_redis(opts):
                   "Rate-limit inspection must remain behind view_admin")
     finally:
         r.delete(*cleanup_keys)
+
+
+@th.django_unit_test()
+def test_query_rate_limits_bounds_inspection_and_scan_work(opts):
+    """Ineligible keys and empty SCAN pages must not create unbounded work."""
+    from mojo.apps.assistant.services.tools.users import (
+        MAX_RATE_LIMIT_KEYS_INSPECTED,
+        MAX_RATE_LIMIT_SCAN_CALLS,
+        _collect_rate_limits,
+    )
+
+    class IneligibleFloodRedis:
+        def __init__(self):
+            self.scan_calls = 0
+            self.ttl_calls = 0
+
+        def scan(self, cursor, match, count):
+            self.scan_calls += 1
+            keys = [
+                f"{match[:-1]}ineligible:{self.scan_calls}:{index}"
+                for index in range(count)
+            ]
+            return 1, keys
+
+        def ttl(self, key):
+            self.ttl_calls += 1
+            return -1
+
+    flood = IneligibleFloodRedis()
+    flooded_result = _collect_rate_limits(flood)
+    assert_eq(flood.ttl_calls, MAX_RATE_LIMIT_KEYS_INSPECTED,
+              "Ineligible keys must stop at the hard inspection budget")
+    assert_true(flood.scan_calls <= MAX_RATE_LIMIT_SCAN_CALLS,
+                "Inspection must also remain inside the global SCAN-call budget")
+    assert_eq(flooded_result["count"], 0,
+              "No-TTL keys must not become active rate-limit results")
+    assert_true(flooded_result["truncated"],
+                "Hitting the inspection budget must report truncation")
+
+    class EmptyScanRedis:
+        def __init__(self):
+            self.scan_calls = 0
+
+        def scan(self, cursor, match, count):
+            self.scan_calls += 1
+            return 1, []
+
+    empty = EmptyScanRedis()
+    empty_result = _collect_rate_limits(empty)
+    assert_eq(empty.scan_calls, MAX_RATE_LIMIT_SCAN_CALLS,
+              "Empty cursor pages must stop at the hard SCAN-call budget")
+    assert_true(empty_result["truncated"],
+                "An unfinished cursor at the SCAN budget must report truncation")
+
+    class FiniteRedis:
+        def scan(self, cursor, match, count):
+            return 0, [f"{match[:-1]}finite"]
+
+        def ttl(self, key):
+            return 60
+
+        def type(self, key):
+            return "zset" if key.startswith("srl:") else "string"
+
+        def zcard(self, key):
+            return 2
+
+        def get(self, key):
+            return "3"
+
+    finite_result = _collect_rate_limits(FiniteRedis())
+    assert_eq(finite_result["count"], 2,
+              "A fully scanned finite keyspace should return both families")
+    assert_true(not finite_result["truncated"],
+                "Exhausted cursors with no buffered keys must be complete")

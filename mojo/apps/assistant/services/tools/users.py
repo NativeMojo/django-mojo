@@ -1,8 +1,13 @@
 """Users domain tools — query users, activity, permissions, rate limits."""
+from collections import deque
+
 from mojo.apps.assistant import tool
 
 
 MAX_RESULTS = 50
+MAX_RATE_LIMIT_KEYS_INSPECTED = 200
+MAX_RATE_LIMIT_SCAN_CALLS = 200
+RATE_LIMIT_SCAN_COUNT = 50
 MAX_MINUTES = 43200  # 30 days
 
 # Fields to never expose in tool results
@@ -159,43 +164,89 @@ def _tool_query_rate_limits(params, user):
     """Query currently rate-limited keys from Redis."""
     from mojo.helpers.redis import get_connection
     try:
-        r = get_connection()
-        # rl:* = fixed-window counters, srl:* = sliding-window zsets
-        # (see mojo/decorators/limits.py)
-        keys = []
-        scanners = [
-            iter(r.scan_iter(match=pattern, count=100))
-            for pattern in ("rl:*", "srl:*")
-        ]
-        active_scanners = [True] * len(scanners)
-        while len(keys) < MAX_RESULTS and any(active_scanners):
-            for index, scanner in enumerate(scanners):
-                if not active_scanners[index]:
-                    continue
-                for key in scanner:
-                    ttl = r.ttl(key)
-                    if ttl <= 0:
-                        continue
-                    if r.type(key) == "zset":
-                        count = r.zcard(key)
-                    else:
-                        val = r.get(key)
-                        count = int(val) if val else 0
-                    keys.append({
-                        "key": key,
-                        "count": count,
-                        "ttl_seconds": ttl,
-                    })
-                    break
-                else:
-                    active_scanners[index] = False
-
-                if len(keys) >= MAX_RESULTS:
-                    break
-
-        return {"rate_limits": keys, "count": len(keys)}
+        return _collect_rate_limits(get_connection())
     except Exception as e:
         return {"error": str(e)}
+
+
+def _collect_rate_limits(redis_connection):
+    """Collect a fair, bounded sample of active Redis rate-limit keys."""
+    # rl:* = fixed-window counters, srl:* = sliding-window zsets
+    # (see mojo/decorators/limits.py)
+    families = [
+        {
+            "pattern": pattern,
+            "cursor": 0,
+            "exhausted": False,
+            "pending": deque(),
+            "discarded": False,
+        }
+        for pattern in ("rl:*", "srl:*")
+    ]
+    keys = []
+    inspected = 0
+    scan_calls = 0
+
+    while (
+        len(keys) < MAX_RESULTS
+        and inspected < MAX_RATE_LIMIT_KEYS_INSPECTED
+        and any(not family["exhausted"] or family["pending"] for family in families)
+    ):
+        progressed = False
+        for family in families:
+            if len(keys) >= MAX_RESULTS or inspected >= MAX_RATE_LIMIT_KEYS_INSPECTED:
+                break
+
+            if not family["pending"] and not family["exhausted"]:
+                if scan_calls >= MAX_RATE_LIMIT_SCAN_CALLS:
+                    continue
+                cursor, batch = redis_connection.scan(
+                    cursor=family["cursor"],
+                    match=family["pattern"],
+                    count=RATE_LIMIT_SCAN_COUNT,
+                )
+                scan_calls += 1
+                progressed = True
+                family["cursor"] = cursor
+                family["exhausted"] = cursor == 0
+                buffer_room = MAX_RATE_LIMIT_KEYS_INSPECTED - len(family["pending"])
+                if len(batch) > buffer_room:
+                    family["discarded"] = True
+                    batch = batch[:buffer_room]
+                family["pending"].extend(batch)
+
+            if not family["pending"]:
+                continue
+
+            key = family["pending"].popleft()
+            inspected += 1
+            progressed = True
+            ttl = redis_connection.ttl(key)
+            if ttl <= 0:
+                continue
+            if redis_connection.type(key) == "zset":
+                count = redis_connection.zcard(key)
+            else:
+                val = redis_connection.get(key)
+                count = int(val) if val else 0
+            keys.append({
+                "key": key,
+                "count": count,
+                "ttl_seconds": ttl,
+            })
+
+        if not progressed:
+            break
+
+    more_possible = any(
+        family["pending"] or not family["exhausted"] or family["discarded"]
+        for family in families
+    )
+    return {
+        "rate_limits": keys,
+        "count": len(keys),
+        "truncated": bool(more_possible),
+    }
 
 
 @tool(
