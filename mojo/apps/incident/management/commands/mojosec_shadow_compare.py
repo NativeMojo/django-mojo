@@ -12,6 +12,11 @@ ROUTED_CATEGORIES = (
     "mojosec.web.probe", "mojosec.web.denied", "mojosec.web.error",
     "mojosec.fim.change",
 )
+# Additionally silenced when the enrollment also sets include_host.
+HOST_ROUTED_CATEGORIES = (
+    "mojosec.auth.ssh_failure", "mojosec.auth.ssh_login",
+    "mojosec.auth.sudo_command", "mojosec.system.service_error",
+)
 
 
 class Command(BaseCommand):
@@ -71,12 +76,25 @@ class Command(BaseCommand):
                 "sensor_id", "deployment_id").annotate(
                 count=Count("id")).order_by("-count")[:32]
         ]
+        enrollment = mojosec_correlation.installation_enrollment(
+            options["installation_key"])
+        silenced_categories = list(ROUTED_CATEGORIES)
+        if enrollment is not None and enrollment.get("include_host"):
+            silenced_categories += list(HOST_ROUTED_CATEGORIES)
         silenced_rule_sets = [
             {"name": name, "category": category, "handler": (handler or "")[:96]}
             for name, category, handler in RuleSet.objects.filter(
-                category__in=ROUTED_CATEGORIES, is_active=True,
+                category__in=silenced_categories, is_active=True,
             ).order_by("category", "priority").values_list(
                 "name", "category", "handler")[:32]
+        ]
+        host_cases = [
+            {"sensor_kind": row["sensor_kind"], "family": row["family"],
+             "cases": row["count"], "occurrences": row["occurrences"]}
+            for row in cases.filter(sensor_kind__in=("auth", "host")).values(
+                "sensor_kind", "family").annotate(
+                count=Count("id"), occurrences=Sum("occurrence_count"))
+            .order_by("-count")[:32]
         ]
         occurrences = totals["occurrences"] or 0
         case_count = totals["cases"] or 0
@@ -96,6 +114,9 @@ class Command(BaseCommand):
             "overflows": totals["overflows"] or 0,
             "suppressed_events": suppressed_events,
             "deployment_cases": deployment_cases,
+            "host_cases": host_cases,
+            "include_host": bool(
+                enrollment is not None and enrollment.get("include_host")),
             "silenced_rule_sets": silenced_rule_sets,
             "compression_ratio": compression,
             "bounds": {

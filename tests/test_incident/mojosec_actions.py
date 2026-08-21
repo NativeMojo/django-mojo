@@ -85,11 +85,14 @@ def setup_mojosec_actions(opts):
     from mojo.apps.account.models import ApiKey, GeoLocatedIP, Group, User
     from mojo.apps.incident.models import (
         Event, Incident, MojoSecCase, MojoSecCaseTransition,
-        MojoSecExecutionAttempt, MojoSecRecommendation,
+        MojoSecDeployment, MojoSecExecutionAttempt, MojoSecRecommendation,
         MojoSecRecommendationTarget, MojoSecRecommendationTransition,
         MojoSecReceipt, Ticket)
 
     stem = "mojosec_action_test_"
+    # PROTECT FKs: deployments and recommendation rows must go before keys.
+    MojoSecDeployment.objects.filter(
+        installation_key__name__startswith=stem).delete()
     MojoSecExecutionAttempt.maintenance_objects.filter(
         recommendation__installation_key__name__startswith=stem).delete()
     MojoSecRecommendationTransition.maintenance_objects.filter(
@@ -122,12 +125,17 @@ def setup_mojosec_actions(opts):
         f"{stem}approver@example.test", "MojoSecAction##1",
         username=f"{stem}approver")
     approver.is_active = True
+    approver.is_email_verified = True
+    approver.requires_mfa = False
     approver.add_permission("manage_security")
     approver.save()
     bystander = User.objects.create_user(
         f"{stem}bystander@example.test", "MojoSecAction##1",
         username=f"{stem}bystander")
     bystander.is_active = True
+    bystander.is_email_verified = True
+    bystander.requires_mfa = False
+    bystander.add_permission("view_security")
     bystander.save()
     whitelisted = GeoLocatedIP.geolocate(WHITELISTED_IP, auto_refresh=False)
     whitelisted.whitelist(reason="operator egress")
@@ -406,6 +414,85 @@ def test_block_handler_suppression_is_scoped_to_routed_categories(opts):
         th.assert_eq(
             mojosec_actions.owns_enforcement(routed), False,
             "shadow installations keep today's per-receipt blocking")
+
+
+@th.django_unit_test()
+def test_recommendation_rest_contract_and_permissions(opts):
+    from mojo.decorators.limits import clear_rate_limits
+    from mojo.apps.incident.models import MojoSecRecommendation
+    from mojo.apps.incident.services import mojosec_actions
+
+    case = _case(opts, sources=[SECOND_IP], key_suffix="rest",
+                 resource_id="vhost:5157")
+    recommendation, _created = mojosec_actions.propose(
+        case, MojoSecRecommendation.ACTION_BLOCK_IP,
+        "repeated_impossible_paths", "rest fixture", "high", [SECOND_IP])
+
+    opts.client.logout()
+    clear_rate_limits(ip="127.0.0.1", key="login")
+    th.assert_true(
+        opts.client.login(
+            f"mojosec_action_test_bystander@example.test", "MojoSecAction##1"),
+        "the view-only fixture must log in")
+    listed = opts.client.get("/api/incident/mojosec/recommendation?state=proposed")
+    th.assert_eq(listed.status_code, 200,
+                 f"view_security must read recommendations: {listed.response}")
+    th.assert_true(any(row["id"] == recommendation.pk
+                       for row in listed.response.data),
+                   "the proposed recommendation must be listed")
+    detail = opts.client.get(
+        f"/api/incident/mojosec/recommendation/{recommendation.pk}")
+    th.assert_eq(detail.status_code, 200,
+                 f"detail must serialize: {detail.response}")
+    th.assert_eq(detail.response.data["targets"][0]["ip"], SECOND_IP,
+                 "detail must expose the bounded target rows")
+    denied = opts.client.post(
+        "/api/incident/mojosec/recommendation-action",
+        {"recommendation_id": recommendation.pk, "action": "approve"})
+    th.assert_true(denied.status_code in (401, 403),
+                   f"view-only users must never approve: {denied.status_code}")
+    recommendation.refresh_from_db()
+    th.assert_eq(recommendation.state, "proposed",
+                 "a denied approval must not move the state machine")
+
+    opts.client.logout()
+    clear_rate_limits(ip="127.0.0.1", key="login")
+    th.assert_true(
+        opts.client.login(
+            f"mojosec_action_test_approver@example.test", "MojoSecAction##1"),
+        "the approver fixture must log in")
+    bad = opts.client.post(
+        "/api/incident/mojosec/recommendation-action",
+        {"recommendation_id": recommendation.pk, "action": "widen"})
+    th.assert_true(bad.status_code >= 400,
+                   "unknown actions must be rejected")
+    approved = opts.client.post(
+        "/api/incident/mojosec/recommendation-action",
+        {"recommendation_id": recommendation.pk, "action": "approve",
+         "note": "ok"})
+    th.assert_eq(approved.status_code, 200,
+                 f"manage_security may approve: {approved.response}")
+    th.assert_true(approved.response.data["state"] in
+                   ("approved", "executing", "executed"),
+                   "approval must advance the lifecycle")
+    th.assert_eq(approved.response.data["approved_by"],
+                 opts.action_approver.username,
+                 "the approver identity must be recorded and exposed")
+
+    registered = opts.client.post(
+        "/api/incident/mojosec/deployment",
+        {"installation_key_id": opts.action_key.pk,
+         "deployment_id": "promo-rest-deploy-1", "ttl_seconds": 3600})
+    th.assert_eq(registered.status_code, 200,
+                 f"manage_security may pre-register deployments: {registered.response}")
+    rows = opts.client.get(
+        f"/api/incident/mojosec/deployment?installation_key_id={opts.action_key.pk}")
+    th.assert_eq(rows.status_code, 200,
+                 f"deployment list must serialize: {rows.response}")
+    th.assert_true(any(row["deployment_id"] == "promo-rest-deploy-1"
+                       for row in rows.response.data),
+                   "the registered deployment must be listed")
+    opts.client.logout()
 
 
 @th.django_unit_test()
