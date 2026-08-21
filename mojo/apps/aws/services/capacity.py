@@ -2470,7 +2470,9 @@ def apply_batch(actor, plan_id):
             "nothing was changed.", "batch_dispatch_failed", 503) from None
     logger.info("capacity batch %s dispatched plan=%s steps=%d actor=%s",
                 batch_id, plan_id, len(steps), batch["actor"])
-    return batch
+    # The stored record keeps its TTL; the wire answer, like batch_status,
+    # does not carry bookkeeping.
+    return {key: value for key, value in batch.items() if key != "ttl"}
 
 
 def batch_status(batch_id):
