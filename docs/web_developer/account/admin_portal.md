@@ -177,10 +177,15 @@ four cards — Address, Certificate, How it's served, Routes:
   resolved sign-in and account prefixes) are badged **Managed for you** and
   carry no Remove; the rest have **Add route**
   (`POST /api/edge/webapp/add_route`) and a confirmed **Remove**
-  (`POST /api/edge/webapp/remove_route`).
+  (`POST /api/edge/webapp/remove_route`). `/path` and a legacy stored `/path/`
+  are one identity: a lone legacy row heals to canonical on add, either single
+  spelling is removable, and a duplicate pair is refused as ambiguous.
 
 Every write on this tab applies to the app's own address **and** every extra
-address it answers on, in one transaction. A caller who may read but not save
+address it answers on, in one transaction. Attaching an extra address copies
+this same complete route contract, including application routes as well as the
+platform-managed auth paths, and refuses any conflicting alias route rather
+than silently repointing it. A caller who may read but not save
 gets the same four cards with values and no controls: the read evaluates
 `SAVE_PERMS` non-raisingly and returns `serving.pools: null` and
 `upstreams: null`, so the deployment's fleet inventory is never handed to a

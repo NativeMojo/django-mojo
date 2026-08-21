@@ -277,14 +277,58 @@ def _write_managed_cname(domain, hostname, target):
     return True
 
 
+def _reconcile_routes(web_app, alias):
+    """Make an alias serve the primary's complete route contract.
+
+    Hosted-auth routes are first proven on the primary, and that proven
+    upstream is passed explicitly to the alias. Application routes then copy
+    from primary rows rather than being re-resolved from configuration. A
+    missing row is repaired; any extra route, duplicate logical identity, or
+    different destination is refused without rewriting it.
+    """
+    from mojo.apps.edge.models import Vhost, VhostRoute
+    from mojo.apps.edge.services import webapp_auth_routes, webapp_serving
+
+    with transaction.atomic():
+        primary = Vhost.objects.select_for_update().select_related(
+            "domain").get(pk=web_app.vhost_id)
+        alias = Vhost.objects.select_for_update().select_related(
+            "domain").get(pk=alias.pk, alias_of=web_app)
+
+        # Heal a lone trailing-slash spelling before the auth reconciler looks
+        # for exact canonical prefixes. Duplicate logical rows stay a refusal.
+        webapp_serving._canonical_route_contract(primary, lock=True)
+        primary, auth_upstream, _ = webapp_auth_routes.reconcile(primary)
+        source = webapp_serving._canonical_route_contract(primary, lock=True)
+        target = webapp_serving._canonical_route_contract(alias, lock=True)
+
+        extras = sorted(set(target) - set(source))
+        if extras:
+            raise me.ValueException(
+                f"The alias has a route the primary does not: {extras[0]}")
+        for prefix, route in target.items():
+            if route.upstream_id != source[prefix].upstream_id:
+                raise me.ValueException(
+                    f"Alias route {prefix} already uses another upstream")
+
+        alias, _, _ = webapp_auth_routes.reconcile(
+            alias, upstream=auth_upstream)
+        target = webapp_serving._canonical_route_contract(alias, lock=True)
+        for prefix, source_route in source.items():
+            if prefix in target:
+                continue
+            VhostRoute.objects.create(
+                vhost=alias, path_prefix=prefix,
+                upstream=source_route.upstream)
+        return alias
+
+
 def attach(web_app, hostname, actor, retry_certificate=False):
     """Point one more address at this app. Safe to call again at any point."""
     from mojo.apps.dnsman.models.domain import PROVIDER_MOJO
     from mojo.apps.dnsman.services import certs
     from mojo.apps.edge.models import Vhost
-    from mojo.apps.edge.services import (
-        webapp_auth_routes, webapp_destination, webapp_onboarding,
-    )
+    from mojo.apps.edge.services import webapp_destination, webapp_onboarding
 
     # Every pre-write gate, in its original order, shared with preview().
     resolved = _resolve_target(web_app, hostname, actor)
@@ -324,7 +368,7 @@ def attach(web_app, hostname, actor, retry_certificate=False):
         # landed (see the create+reconcile transaction below). Without it a
         # half-configured alias would report `attached` forever while serving
         # the SPA with no /auth routes and no honeypots.
-        webapp_auth_routes.reconcile(existing)
+        _reconcile_routes(web_app, existing)
         return objict(status="attached", hostname=hostname,
                       vhost=existing.pk, domain=domain.pk,
                       dns=_dns_mode(domain), created=False)
@@ -398,7 +442,7 @@ def attach(web_app, hostname, actor, retry_certificate=False):
                 domain=domain, label=label, kind="site_api",
                 certificate=certificate, pool=primary.pool, spa=True,
                 alias_of=web_app)
-        vhost, _, _ = webapp_auth_routes.reconcile(vhost)
+        vhost = _reconcile_routes(web_app, vhost)
     return objict(status="attached", hostname=hostname, vhost=vhost.pk,
                   domain=domain.pk, certificate=certificate.pk,
                   dns=_dns_mode(domain), created=existing is None)

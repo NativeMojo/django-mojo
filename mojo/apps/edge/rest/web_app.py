@@ -157,13 +157,25 @@ def on_webapp_detach_address(request):
         request, ["SAVE_PERMS", "VIEW_PERMS"], web_app)
     with transaction.atomic():
         locked = WebApp.objects.select_for_update().get(pk=web_app.pk)
-        vhost = locked.vhost
+        vhost = None
+        if locked.vhost_id:
+            vhost = Vhost.objects.select_for_update().get(pk=locked.vhost_id)
+        aliases = list(Vhost.objects.select_for_update().filter(
+            alias_of=locked).order_by("pk"))
+        if any(alias.kind not in ("site", "site_api")
+               for alias in aliases):
+            raise me.ValueException(
+                "This WebApp has an invalid alias address and cannot be "
+                "taken offline safely.")
         if vhost is not None:
+            if (vhost.kind not in ("site", "site_api") or
+                    vhost.alias_of_id is not None):
+                raise me.ValueException(
+                    "Only a site address can be taken offline from a WebApp.")
             locked.vhost = None
             locked.save(update_fields=["vhost", "modified"])
-            if vhost.kind == "site":
-                vhost.delete()
-        for alias in Vhost.objects.filter(alias_of=locked):
+            vhost.delete()
+        for alias in aliases:
             alias.delete()
     return dict(webapp=web_app.pk, address=None)
 

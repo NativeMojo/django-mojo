@@ -19,7 +19,7 @@ from testit import helpers as th
 from tests.test_edge._helpers import (
     declare_pools, declare_release_buckets, login, make_certificate,
     make_domain, make_group, make_group_member, make_release, make_upstream,
-    make_user, make_vhost, make_webapp, raises, with_setting,
+    make_route, make_user, make_vhost, make_webapp, raises, with_setting,
 )
 
 
@@ -756,7 +756,9 @@ def test_delete_and_detach_address_remove_aliases(opts):
     from mojo.apps.edge.models import Vhost
 
     # take-a-site-offline
-    web_app, domain, _, _ = _app_with_primary(opts)
+    web_app, domain, certificate, primary = _app_with_primary(opts)
+    unrelated = make_vhost(
+        domain, certificate, label="unrelated", kind="site_api")
     result, error, _, _, _, _ = _attach(opts, web_app, f"off.{domain.name}")
     assert error is None, f"setup attach failed: {error}"
     offline_alias = result.vhost
@@ -767,6 +769,10 @@ def test_delete_and_detach_address_remove_aliases(opts):
         f"detach_address failed: {response.status_code} {response.body}"
     assert not Vhost.objects.filter(pk=offline_alias).exists(), \
         "taking a site offline left its custom domain serving"
+    assert not Vhost.objects.filter(pk=primary.pk).exists(), \
+        "taking a site_api app offline left its primary address serving"
+    assert Vhost.objects.filter(pk=unrelated.pk).exists(), \
+        "taking one app offline removed an unrelated vhost"
 
     # delete the app
     other, other_domain, _, _ = _app_with_primary(opts)
@@ -779,6 +785,62 @@ def test_delete_and_detach_address_remove_aliases(opts):
         f"webapp delete failed: {response.status_code} {response.body}"
     assert not Vhost.objects.filter(pk=deleted_alias).exists(), \
         "deleting an app left its custom domain serving"
+
+    # A malformed WebApp link must fail closed instead of unlinking a vhost
+    # that is not a framework-owned site address.
+    invalid_domain = make_domain(group=opts.group, provider="route53")
+    invalid_certificate = make_certificate(invalid_domain)
+    invalid_upstream = make_upstream(group=opts.group)
+    invalid_vhost = make_vhost(
+        invalid_domain, invalid_certificate, label="api", kind="api",
+        upstream=invalid_upstream)
+    invalid_app = make_webapp(
+        opts.group, slug=f"invalid{uuid.uuid4().hex[:8]}",
+        vhost=invalid_vhost)
+    refused = opts.client.post(
+        "/api/edge/webapp/detach_address", {"webapp": invalid_app.pk})
+    assert refused.status_code == 400, \
+        f"taking a non-site vhost offline did not fail closed: {refused.body}"
+    invalid_app.refresh_from_db()
+    assert invalid_app.vhost_id == invalid_vhost.pk and \
+        Vhost.objects.filter(pk=invalid_vhost.pk).exists(), \
+        "the refused non-site teardown still unlinked or deleted its vhost"
+
+
+@th.django_unit_test("an alias copies the primary's complete route contract")
+def test_alias_copies_complete_primary_route_contract(opts):
+    from mojo.apps.edge.models import Vhost, VhostRoute
+
+    web_app, domain, _, primary = _app_with_primary(opts)
+    reports = make_upstream(group=opts.group)
+    make_route(primary, "/reports", reports)
+
+    result, error, _, _, _, _ = _attach(
+        opts, web_app, f"routes.{domain.name}")
+    assert error is None, f"setup attach failed: {error}"
+    alias = Vhost.objects.get(pk=result.vhost)
+    copied = VhostRoute.objects.filter(
+        vhost=alias, path_prefix="/reports", upstream=reports)
+    assert copied.count() == 1, \
+        "the alias did not copy the primary's application route"
+
+    # Check is an idempotent reconcile, not a source of duplicate rows.
+    result, error, _, _, _, _ = _attach(
+        opts, web_app, f"routes.{domain.name}")
+    assert error is None and result.created is False, \
+        f"rechecking the attached alias failed: {error or result}"
+    assert copied.count() == 1, \
+        "rechecking an alias duplicated an application route"
+
+    other = make_upstream(group=opts.group)
+    copied.update(upstream=other)
+    _, error, _, _, _, _ = _attach(
+        opts, web_app, f"routes.{domain.name}")
+    assert error is not None, \
+        "an alias route conflicting with its primary was silently repointed"
+    copied = VhostRoute.objects.get(vhost=alias, path_prefix="/reports")
+    assert copied.upstream_id == other.pk, \
+        "the refused alias reconcile still rewrote the conflicting route"
 
 
 @th.django_unit_test("an alias renders and heals exactly like a primary address")
