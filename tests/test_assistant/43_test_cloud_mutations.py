@@ -245,3 +245,67 @@ def test_verify_and_converge_summaries(opts):
                     f"{converge['preview']['summary']}")
     finally:
         _cleanup(opts, conv)
+
+
+# ---------------------------------------------------------------------------
+# The capacity revision must survive the 128-character column
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("a 63-character resource id cannot clip the bound fleet "
+                     "fingerprint")
+def test_capacity_revision_survives_a_long_resource_id(opts):
+    from mojo.apps.assistant.services import approvals
+    from mojo.apps.assistant.services.tools.cloud import actions
+
+    # The longest identifier AWS will hand out for an RDS instance. Composed
+    # AFTER the 64-character digest it would push the digest past the
+    # PendingAction.revision column's 128 characters, and the clipped prefix
+    # would then never match the live fingerprint the handler re-derives — so
+    # every approval would burn with a false "the fleet changed".
+    resource = "m" * 63
+    fingerprint = "a" * 64
+    revision = f"{fingerprint}:set_cache_replicas:{resource}"
+    assert_true(len(revision) > 128,
+                f"the fixture is not exercising the cap: {len(revision)}")
+
+    stored = str(revision)[:128]
+    assert_eq(actions._fingerprint_of(stored), fingerprint,
+              f"the bound fingerprint did not survive the column: "
+              f"{actions._fingerprint_of(stored)!r}")
+
+    # And the same value as the registry would really store it.
+    rendered = approvals.run_preview(
+        {"definition": {"name": "fixture"},
+         "preview": lambda params, user: {
+             "summary": "s", "details": {}, "revision": revision}},
+        {}, opts.admin)
+    assert_eq(actions._fingerprint_of(rendered["revision"]), fingerprint,
+              f"the fingerprint was clipped by the registry's own store: "
+              f"{rendered['revision']!r}")
+
+
+@th.django_unit_test("an unchanged fleet is not reported as moved")
+def test_fleet_moved_is_false_when_the_fleet_is_unchanged(opts):
+    from unittest import mock
+
+    from mojo.apps.aws.services import capacity
+    from mojo.apps.assistant.services.tools.cloud import actions
+
+    resource = "m" * 63
+    fingerprint = "b" * 64
+    approval = mock.Mock(
+        revision=f"{fingerprint}:set_cache_replicas:{resource}"[:128])
+
+    # A stand-in for the live re-read: the handler must compare against the
+    # digest it bound, not against a truncated prefix of it.
+    with mock.patch.object(capacity, "fleet_revision",
+                           return_value=fingerprint):
+        unchanged = actions._fleet_moved(approval)
+    assert_true(unchanged is None,
+                f"an unchanged fleet was reported as moved: {unchanged}")
+
+    with mock.patch.object(capacity, "fleet_revision",
+                           return_value="c" * 64):
+        moved = actions._fleet_moved(approval)
+    assert_eq((moved or {}).get("error_code"), "fleet_changed",
+              f"a genuinely moved fleet must still refuse: {moved}")

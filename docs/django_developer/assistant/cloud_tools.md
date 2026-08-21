@@ -52,7 +52,8 @@ only a string (`isinstance(wanted, str)`) — a JSON array would silently read a
 ### The actor shim
 
 `common.actor_request(user, **data)` is an `objict` carrying `user`, `DATA`,
-`META`, `ip="assistant"`, `path`, `method`, `bearer=None`, `group=None`. It
+`QUERY_PARAMS`, `META`, `ip="assistant"`, `path`, `method`, `bearer=None`,
+`group=None`. It
 exists because the four `admin_platform` overviews are the only services in
 scope that still take a request, and they read exactly `request.user` (through
 `_permitted`) plus `request.DATA.get("sections")`.
@@ -160,6 +161,15 @@ the operator is looking at that same picture. **The capacity handlers re-derive
 the fingerprint with `refresh=True` before mutating**, because an early check
 against a cached envelope can pass on a fleet that has already moved.
 
+**The fingerprint is the FIRST field of the revision**
+(`<fingerprint>:<action>:<resource>`), and `_fingerprint_of` reads it from the
+front. The registry stores `str(revision)[:128]` into a 128-character column,
+so only what is composed *after* the 64-character digest can be clipped — and a
+clipped digest would still round-trip through `_require_bound_revision` (both
+sides truncate identically), claim the record, and then fail the live
+comparison forever with a false "the fleet changed". An RDS identifier alone
+can be 63 characters, so this ordering is load-bearing, not cosmetic.
+
 `apply_capacity_plan`'s `preview` is the one preview that writes: `plan_batch`
 stores the plan under `PLAN_TTL`. Accepted, because it is the identical bounded
 cache write the Admin performs on every debounced stepper tweak, it touches no
@@ -176,20 +186,40 @@ projection. A per-source key allowlist across fourteen dashboard collectors
 would be a second schema to maintain; one deny rule plus one budget is
 auditable in a single test.
 
-| Rule | Value |
-|---|---|
-| Global budget | 400 nodes / 24 KB |
-| Per container | 40 keys or items |
-| Strings | 200 characters, marker included, through `logit.mask_sensitive_data` |
-| Depth | per tool (3–5); the marker is a **scalar**, so depth N returns N levels |
-| Dropped by name | `stderr_tail`, `node_evidence`, `transitions`, `diagnosis`, `frozen_roster` |
-| Masked by name | anything in `logit.SENSITIVE_KEYS` or containing `password`, `secret`, `token`, `auth_key`, `onetime_code` |
+| Rule | Default | Notes |
+|---|---|---|
+| Node budget | 400 | per call |
+| Byte ceiling | 24 KB | **never raised** — the outer bound in every case |
+| Per container | 40 keys or items | per call |
+| Strings | 200 characters, marker included | through `logit.mask_sensitive_data` |
+| Depth | per tool (3–6) | the marker is a **scalar**, so depth N returns N levels |
+| Dropped by name | `stderr_tail`, `node_evidence`, `transitions`, `diagnosis`, `frozen_roster` | at any depth |
+| Masked by name | anything in `logit.SENSITIVE_KEYS` or containing `password`, `secret`, `token`, `auth_key`, `onetime_code` | key kept, value replaced |
 
-Depth is **per tool** because the envelopes are not the same shape: an
-`_aws_inventory` row sits at depth 4–5 under
-`sections → envelope → data → resources → ec2[]`, so a flat depth-2 cap would
-leave a caller holding only status strings. The node and byte budgets are what
-actually bound the result.
+Depth, width and the node budget are all **per call**, because the envelopes
+are not the same shape and because a tool that has already applied its own
+documented cap must not have it silently undercut here. An `_aws_inventory` row
+sits at depth 4–5 under `sections → envelope → data → resources → ec2[]`, so a
+flat depth-2 cap would leave a caller holding only status strings; and a tool
+that promises 100 rows must actually return 100.
+
+Where a tool raises the defaults, these are the real numbers:
+
+| Tool | Depth | Items | Nodes |
+|---|---|---|---|
+| `list_cloud_resources` | 4 | 100 (`MAX_RESOURCE_ROWS`) | 2200 |
+| `fetch_cloud_metrics` | 4 | 60 (`MAX_METRIC_BUCKETS`) | 1200 |
+| `get_platform_overview` — `deployments` section | 6 | 40 | 400 |
+| `get_platform_overview` — every other section | 4 | 40 | 400 |
+| `get_advanced_inventory` | 5 | 40 | 400 |
+| `get_setup_readiness` | 5 | 40 | 400 |
+| everything else | 3–4 | 40 | 400 |
+
+The `deployments` section gets depth 6 because its useful fields sit two levels
+deeper than the rest (`sections → envelope → data → items[] → item →
+node_summary → counts`) and it is already a named allowlist projection, so the
+extra depth adds no new surface. `max_bytes` is never raised: widening the
+result never removes the size bound.
 
 Named projections on top of that:
 

@@ -12,8 +12,11 @@ on their grants — see [Who sees what](#who-sees-what).
 ## Read tools
 
 Every read returns a plain JSON object. All of them are already **bounded and
-redacted** server-side (400 nodes / 24 KB, 40 items per container, 200-char
-strings), so a client can render them without further trimming.
+redacted** server-side (24 KB ceiling, 200-char strings, and a per-tool node
+and width budget), so a client can render them without further trimming. The
+documented per-tool limits are real: `list_cloud_resources` returns up to 100
+rows per service and `fetch_cloud_metrics` up to 60 buckets across up to 10
+slugs. A container that was cut carries `"truncated": true`.
 
 ### `get_platform_health`
 
