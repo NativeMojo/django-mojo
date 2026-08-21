@@ -8,3 +8,4 @@ exactly once, so it can never enter model context), buying a domain (a one-use
 money-moving confirmation), and uploading a build from a laptop.
 """
 from . import reads  # noqa: F401
+from . import onboarding  # noqa: F401
