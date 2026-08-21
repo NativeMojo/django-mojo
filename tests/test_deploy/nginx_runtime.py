@@ -273,6 +273,202 @@ def test_selinux_audit_reports_label_drift(opts):
                  f"every wrong SELinux leaf label must be reported: {errors}")
 
 
+def _write_file(path, text):
+    # The real installer fchowns to root; test harnesses are not root.
+    mode = "wb" if isinstance(text, bytes) else "w"
+    with open(path, mode) as handle:
+        handle.write(text)
+
+
+WEDGED_DUMP = (
+    'nginx: [emerg] unknown "connection_upgrade" variable\n'
+    "nginx: configuration file /etc/nginx/nginx.conf test failed\n")
+
+DUPLICATE_DUMP = (
+    'nginx: [emerg] the duplicate "connection_upgrade" variable in '
+    "/etc/nginx/conf.d/00_django_mojo_runtime.conf:7\n"
+    "nginx: configuration file /etc/nginx/nginx.conf test failed\n")
+
+
+def _sections_dump(nginx_etc, fragment, bootstrap_extra=""):
+    """A healthy nginx -T shape: bootstrap section plus the live fragment."""
+    return (
+        "# configuration file %s/nginx.conf:\nuser www;\n%s"
+        "# configuration file %s:\n%s"
+        % (nginx_etc, bootstrap_extra, fragment, open(fragment).read()))
+
+
+@th.django_unit_test("a failed nginx -T surfaces nginx's own diagnosis")
+def test_worker_parse_failure_carries_nginx_emerg(opts):
+    """Regression: the stage estate wedge reported `got []` while nginx's
+    stderr named the exact missing map. The [emerg] must reach the operator."""
+    from mojo.deploy import nginx_runtime as runtime
+
+    try:
+        runtime.parse_worker_user(WEDGED_DUMP)
+    except runtime.NginxRuntimeError as err:
+        th.assert_in('unknown "connection_upgrade" variable', str(err),
+                     "the real [emerg] must reach the operator, not a bare got []")
+    else:
+        assert False, "an error-only dump must not parse a worker user"
+
+
+@th.django_unit_test("the upgrade-map decision yields to any other declaration")
+def test_upgrade_map_decision(opts):
+    from mojo.deploy import nginx_runtime as runtime
+
+    fragment = "/etc/nginx/conf.d/00_django_mojo_runtime.conf"
+    declared = "map $http_upgrade $connection_upgrade {\n    default upgrade;\n}\n"
+    bootstrap = "# configuration file /etc/nginx/nginx.conf:\nuser www;\n"
+    ours = "# configuration file %s:\n" % fragment
+
+    cases = (
+        (bootstrap + declared + ours + "sendfile on;\n", None, False,
+         "a bootstrap declaration must win over the fragment"),
+        (bootstrap + ours + declared, None, True,
+         "a fragment-only declaration must be kept"),
+        (bootstrap + ours + "sendfile on;\n", None, True,
+         "an undeclared map must be carried by the fragment"),
+        (WEDGED_DUMP, None, True,
+         "an unknown-variable failure proves no declaration exists"),
+        (DUPLICATE_DUMP, declared.encode(), False,
+         "a duplicate failure means someone else declares it"),
+        ("nginx: [emerg] something unrelated\n", declared.encode(), True,
+         "an unrelated breakage must keep a map-bearing fragment"),
+        ("nginx: [emerg] something unrelated\n", b"sendfile on;\n", False,
+         "an unrelated breakage must keep a plain fragment"),
+        ("nginx: [emerg] something unrelated\n", None, False,
+         "an unrelated breakage with no fragment must not invent one"),
+    )
+    for dump, prior, expected, why in cases:
+        th.assert_eq(
+            runtime._upgrade_map_decision(dump, fragment, prior), expected, why)
+
+
+@th.django_unit_test("converge heals a graph wedged by the missing upgrade map")
+def test_converge_heals_missing_upgrade_map(opts):
+    """Regression for the api-wmwx-stage wedge: the live edge generation was
+    rewritten without the `$connection_upgrade` map while the bootstrap never
+    declared one, so every nginx -T failed and converge died at `got []` —
+    on deploy AND on rollback. Converge must repair exactly this state."""
+    from mojo.deploy import nginx_runtime as runtime
+
+    root = tempfile.mkdtemp(prefix="nginx-runtime-heal-")
+    try:
+        nginx_etc = os.path.join(root, "etc", "nginx")
+        fragment = runtime.fragment_path(nginx_etc)
+        os.makedirs(os.path.dirname(fragment))
+        _write_file(fragment, runtime.render_http_fragment(
+            "/var/lib/django-mojo/nginx"))
+
+        state = {"dumps": 0}
+
+        def dump(nginx_binary="nginx", allow_failure=False):
+            state["dumps"] += 1
+            if state["dumps"] == 1:
+                assert allow_failure, "the first dump must tolerate the wedge"
+                return WEDGED_DUMP
+            return _sections_dump(nginx_etc, fragment)
+
+        fake_user = SimpleNamespace(pw_uid=123, pw_gid=456)
+        with mock.patch.object(runtime.os, "geteuid", return_value=0), \
+                mock.patch.object(runtime, "nginx_dump", side_effect=dump), \
+                mock.patch.object(runtime, "_resolve_user", return_value=fake_user), \
+                mock.patch.object(runtime, "_mkdir_exact"), \
+                mock.patch.object(runtime, "_converge_selinux"), \
+                mock.patch.object(runtime, "_probe_as_worker"), \
+                mock.patch.object(runtime, "_install_fragment",
+                                  side_effect=_write_file):
+            runtime.converge("www", nginx_etc=nginx_etc,
+                             root="/var/lib/django-mojo/nginx")
+
+        healed = open(fragment).read()
+        th.assert_in("map $http_upgrade $connection_upgrade", healed,
+                     "the fragment must carry the map no other file declares")
+        th.assert_in("client_body_temp_path", healed,
+                     "healing must not displace the spill-path contract")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test("converge leaves the fragment plain when the bootstrap owns the map")
+def test_converge_keeps_fragment_plain_beside_bootstrap_map(opts):
+    from mojo.deploy import nginx_runtime as runtime
+
+    root = tempfile.mkdtemp(prefix="nginx-runtime-plain-")
+    try:
+        nginx_etc = os.path.join(root, "etc", "nginx")
+        fragment = runtime.fragment_path(nginx_etc)
+        os.makedirs(os.path.dirname(fragment))
+        _write_file(fragment, runtime.render_http_fragment(
+            "/var/lib/django-mojo/nginx"))
+        declared = ("map $http_upgrade $connection_upgrade {\n"
+                    "    default upgrade;\n}\n")
+
+        fake_user = SimpleNamespace(pw_uid=123, pw_gid=456)
+        with mock.patch.object(runtime.os, "geteuid", return_value=0), \
+                mock.patch.object(
+                    runtime, "nginx_dump",
+                    side_effect=lambda *a, **k: _sections_dump(
+                        nginx_etc, fragment, bootstrap_extra=declared)), \
+                mock.patch.object(runtime, "_resolve_user", return_value=fake_user), \
+                mock.patch.object(runtime, "_mkdir_exact"), \
+                mock.patch.object(runtime, "_converge_selinux"), \
+                mock.patch.object(runtime, "_probe_as_worker"), \
+                mock.patch.object(runtime, "_install_fragment",
+                                  side_effect=_write_file):
+            runtime.converge("www", nginx_etc=nginx_etc,
+                             root="/var/lib/django-mojo/nginx")
+
+        th.assert_true(
+            "connection_upgrade" not in open(fragment).read(),
+            "a bootstrap-declared map must not be duplicated in the fragment")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test("reconcile withdraws the fragment map when the bootstrap gains one")
+def test_reconcile_yields_map_to_bootstrap(opts):
+    """post_deploy installs the project nginx.conf AFTER converge ran. A
+    bootstrap upgraded to declare the map would leave two declarations —
+    reconcile re-decides against the post-install graph."""
+    from mojo.deploy import nginx_runtime as runtime
+
+    root = tempfile.mkdtemp(prefix="nginx-runtime-reconcile-")
+    try:
+        nginx_etc = os.path.join(root, "etc", "nginx")
+        fragment = runtime.fragment_path(nginx_etc)
+        os.makedirs(os.path.dirname(fragment))
+        _write_file(fragment, runtime.render_http_fragment(
+            "/var/lib/django-mojo/nginx", include_map=True))
+
+        state = {"dumps": 0}
+
+        def dump(nginx_binary="nginx", allow_failure=False):
+            state["dumps"] += 1
+            if state["dumps"] == 1:
+                return DUPLICATE_DUMP
+            return _sections_dump(
+                nginx_etc, fragment,
+                bootstrap_extra="map $http_upgrade $connection_upgrade {\n"
+                                "    default upgrade;\n}\n")
+
+        with mock.patch.object(runtime.os, "geteuid", return_value=0), \
+                mock.patch.object(runtime, "nginx_dump", side_effect=dump), \
+                mock.patch.object(runtime, "_install_fragment",
+                                  side_effect=_write_file):
+            changed = runtime.reconcile_upgrade_map(nginx_etc=nginx_etc)
+
+        th.assert_true(changed, "a duplicate map must move the fragment")
+        text = open(fragment).read()
+        th.assert_true("connection_upgrade" not in text,
+                       "the fragment must yield the map to the bootstrap")
+        th.assert_in("client_body_temp_path", text,
+                     "yielding the map must not displace the spill paths")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 @th.django_unit_test()
 def test_worker_probe_creates_and_removes_sentinel_in_every_leaf(opts):
     from mojo.deploy import nginx_runtime as runtime

@@ -429,6 +429,21 @@ if compgen -G "${PROJ_PATH}/aws/nginx/conf.d/*.conf" > /dev/null; then
 fi
 log "  converged ${VHOSTS} vhost(s) from aws/nginx/conf.d"
 
+# The nginx.conf installed above may itself declare (or drop) the
+# $connection_upgrade map the render-phase converge decided around — a
+# bootstrap upgraded to the bootstrap-owned contract would otherwise leave
+# two declarations in the graph until the next root render. Re-decide against
+# the post-install graph; exactly one declaration must survive. Root-gated
+# exactly like the render-phase converge itself (a non-root run cannot own
+# /etc and is a harness, not a deploy).
+if [ "$(id -u)" = "0" ]; then
+    trusted_change rendered-host-config "${NGINX_ETC}/conf.d/00_django_mojo_runtime.conf" -- \
+        python3 -m mojo.deploy.nginx_runtime reconcile --nginx-etc "$NGINX_ETC" \
+        || die "nginx upgrade-map reconcile failed — the host graph would not converge"
+else
+    log "  skipping upgrade-map reconcile (not root)"
+fi
+
 # MojoSec root assets come from the installed package, never from var/deploy
 # or the application-writable project tree. `observe` reports only; all ban
 # policy remains central. best_effort makes an unenrolled old node a warning,
