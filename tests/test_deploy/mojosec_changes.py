@@ -599,3 +599,70 @@ def test_converge_journal_catalog_stays_within_approved_roots(opts):
                        not path.startswith("/run/mojosec") for path in paths),
                    "converge control state is journal-refused by design and "
                    "must never enter the declared catalog")
+
+@th.django_unit_test()
+def test_derived_parents_respect_denied_scopes(opts):
+    from mojo.deploy.mojosec_changes import _with_immediate_parents
+
+    parents = _with_immediate_parents(
+        ["/etc/nginx/conf.d/app.conf"],
+        allowed_roots=["/etc", "/etc/mojosec", "/opt/api"])
+    th.assert_true("/etc/nginx/conf.d" in parents,
+                   "an approved monitored parent must be derived")
+    hostile = _with_immediate_parents(
+        ["/etc/mojosec/config.json", "/opt/api/current/app.py"],
+        allowed_roots=["/etc", "/etc/mojosec", "/opt/api"])
+    th.assert_true(
+        all(item in ("/etc/mojosec/config.json", "/opt/api/current/app.py")
+            for item in hostile),
+        f"control-state and release-tree parents must never derive: {hostile}")
+
+
+@th.django_unit_test()
+def test_journaled_converge_never_reruns_after_completion_failure(opts):
+    from unittest import mock
+
+    import mojo.deploy.mojosec as deploy_mojosec
+    from mojo.deploy.mojosec_changes import ChangeError
+
+    calls = {"mutations": 0}
+
+    class FakeJournal:
+        def __init__(self, begin_error=None, complete_error=None):
+            self.begin_error = begin_error
+            self.complete_error = complete_error
+
+        def begin(self, *args, **kwargs):
+            if self.begin_error:
+                raise self.begin_error
+
+        def complete(self, operation_id):
+            if self.complete_error:
+                raise self.complete_error
+
+        def abort(self, operation_id):
+            pass
+
+    def run(journal):
+        calls["mutations"] = 0
+        with mock.patch.object(deploy_mojosec, "converge",
+                               side_effect=lambda *a, **k: (
+                                   calls.__setitem__(
+                                       "mutations", calls["mutations"] + 1) or
+                                   {"changed": True})), \
+                mock.patch.object(deploy_mojosec.os.path, "exists",
+                                  return_value=True), \
+                mock.patch.object(deploy_mojosec.os, "geteuid",
+                                  return_value=0), \
+                mock.patch(
+                    "mojo.deploy.mojosec_changes.ChangeJournal",
+                    return_value=journal):
+            return deploy_mojosec._journaled_converge(
+                "observe", "best_effort", "/opt/api", "deploy-x")
+
+    result = run(FakeJournal(complete_error=ChangeError("consumed")))
+    th.assert_eq((calls["mutations"], result["changed"]), (1, True),
+                 "a completion failure must never re-run the converge mutation")
+    result = run(FakeJournal(begin_error=ChangeError("wedged")))
+    th.assert_eq((calls["mutations"], result["changed"]), (1, True),
+                 "a begin failure must fall back to exactly one unjournaled run")

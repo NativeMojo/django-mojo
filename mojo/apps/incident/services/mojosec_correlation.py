@@ -23,9 +23,12 @@ MAX_FUTURE_SKEW_SECONDS = 3600
 DEFAULT_DEPLOY_QUIET_SECONDS = 60
 MIN_DEPLOY_QUIET_SECONDS = 10
 MAX_DEPLOY_QUIET_SECONDS = 900
+# Mirrors mojo/deploy/mojosec_changes.MAX_TTL_SECONDS: no journal operation
+# may promise a longer annotation lifetime, so a wider claim is not trusted.
+MAX_EXPECTED_TTL_SECONDS = 900
 PROMOTED_CATEGORY = "mojosec.case.promoted"
 _URGENCY_RANK = {"": -1, "info": 0, "warning": 1, "high": 2, "critical": 3}
-_TOKEN = re.compile(r"^[A-Za-z0-9._:-]{1,96}$")
+_TOKEN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _WORDPRESS = re.compile(r"^/(?:wp-admin|wp-login\.php|wp-content|xmlrpc\.php)(?:/|$)")
 _PHP = re.compile(r"\.(?:php[3-8]?|phtml)(?:/|$)")
 _SECRET = re.compile(r"^/(?:\.env(?:\.|$)|\.git(?:/|$))")
@@ -116,7 +119,7 @@ def _fim_tier(path):
     return "other_protected"
 
 
-def _safe_expected(attributes):
+def _safe_expected(attributes, observed):
     value = attributes.get("expected_change")
     if not isinstance(value, dict):
         return None
@@ -132,6 +135,14 @@ def _safe_expected(attributes):
     expires = _observed(value.get("expires_at"))
     if expires is None:
         return None
+    ttl_bound = datetime.timedelta(seconds=MAX_EXPECTED_TTL_SECONDS)
+    # An annotation that had already expired when the change was observed is
+    # not trusted evidence. The journal prunes expired manifest entries, so a
+    # well-behaved sensor can never emit one — rejecting is fail-closed with
+    # no legitimate loss, and under authoritative routing it is the difference
+    # between a quiet deployment case and total central silence.
+    if expires < observed:
+        return None
     if set(value) == v2_fields:
         if (not isinstance(value.get("operation_id"), str) or
                 not _TOKEN.fullmatch(value["operation_id"])):
@@ -139,6 +150,10 @@ def _safe_expected(attributes):
         completed = _observed(value.get("completed_at"))
         if completed is None or completed > expires:
             return None
+        if expires > completed + ttl_bound:
+            return None
+    elif expires > observed + ttl_bound:
+        return None
     return {"deployment_id": deployment, "operation_kind": operation}
 
 
@@ -193,7 +208,9 @@ def _case_input(receipt, sensor_event, web_binding=None):
 
     if kind in ("fim.change", "fim.overflow", "fim.expected_change_error"):
         tier = _fim_tier(attributes.get("path"))
-        expected = _safe_expected(attributes) if kind == "fim.change" else None
+        expected = (
+            _safe_expected(attributes, observed)
+            if kind == "fim.change" else None)
         if expected:
             # Trusted, provenance-backed deployment evidence: one case per
             # sensor + deployment identity per UTC day. The quiet window
@@ -670,19 +687,28 @@ def settle_sweep(job=None, now=None, limit=500):
                 evaluator_version=case.evaluator_version)
         settled += 1
         _record_metric("deploy_cases_settled")
+    # Catch-up work only exists for authoritative installations; scoping the
+    # query keeps every shadow-mode elevated case out of the batch instead of
+    # re-resolving the enrollment per case, forever.
+    authoritative_keys = [
+        target["installation_key_id"] for target in _shadow_targets()
+        if target["mode"] == "authoritative"]
     projected = 0
     catchup = list(MojoSecCase.objects.filter(
+        installation_key_id__in=authoritative_keys,
         state=MojoSecCase.STATE_ELEVATED,
         urgency__in=("high", "critical")).exclude(
-        projected_urgency=F("urgency")).values_list("pk", flat=True)[:limit])
+        projected_urgency=F("urgency")).values_list(
+        "pk", flat=True)[:limit]) if authoritative_keys else []
     for case_id in catchup:
         if _project_case(case_id) is not None:
             projected += 1
     redispatched = 0
     stale_dispatch = MojoSecCase.objects.filter(
+        installation_key_id__in=authoritative_keys,
         state=MojoSecCase.STATE_ELEVATED,
         urgency=F("projected_urgency"),
-        projection_dispatched_at__isnull=True)[:limit]
+        projection_dispatched_at__isnull=True)[:limit] if authoritative_keys else []
     for case in stale_dispatch:
         transition = MojoSecCaseTransition.objects.filter(
             case=case, transition="projection").order_by(

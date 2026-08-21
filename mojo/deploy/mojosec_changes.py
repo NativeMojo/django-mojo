@@ -201,6 +201,7 @@ def _with_immediate_parents(paths, allowed_roots=None, max_paths=MAX_PATHS):
     for path in paths:
         parent = os.path.dirname(path)
         if (not parent or parent == "/" or parent in seen or parent in roots or
+                _denied_scope(parent) or
                 not any(_contained(parent, root) for root in roots)):
             continue
         if len(result) >= max_paths:
@@ -208,6 +209,19 @@ def _with_immediate_parents(paths, allowed_roots=None, max_paths=MAX_PATHS):
         seen.add(parent)
         result.append(parent)
     return result
+
+
+def _denied_scope(path):
+    """The validate_paths denials, re-applied to every derived parent.
+
+    Unreachable today — a child of a denied prefix is itself rejected before
+    parents are derived — but the invariant belongs to the derivation, not to
+    a coincidence between two functions.
+    """
+    if path.startswith(("/opt/api", "/opt/www")):
+        return True
+    return any(path == root or path.startswith(root + "/")
+               for root in _CONTROL_STATE_ROOTS)
 
 
 def _wheel_identity(path):

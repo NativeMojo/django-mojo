@@ -24,8 +24,9 @@ def _fim_event(event_id, path, expected=True, observed="2026-08-18T02:12:00Z",
 
     attributes = {"path": path, "change": "modified"}
     if expected:
+        # Within the journal's 900s MAX_TTL trust bound the correlator enforces.
         observed_at = _dt.datetime.fromisoformat(observed.replace("Z", "+00:00"))
-        expires = (observed_at + _dt.timedelta(hours=1)).isoformat().replace(
+        expires = (observed_at + _dt.timedelta(minutes=10)).isoformat().replace(
             "+00:00", "Z")
         attributes["expected_change"] = {
             "deployment_id": deployment_id,
@@ -666,3 +667,46 @@ def test_shadow_compare_reports_cutover_evidence(opts):
                    "the preflight must list RuleSets that stop firing on cutover")
     th.assert_true(report["bounds"]["receipt_fidelity"],
                    f"receipt fidelity must hold for the canary window: {report}")
+
+@th.django_unit_test()
+def test_expired_or_overlong_annotations_are_never_trusted(opts):
+    """A stale or over-promising annotation must not buy silence or downgrade."""
+    import datetime as _dt
+
+    from mojo.apps.incident.models import MojoSecCase, MojoSecReceipt
+    from mojo.apps.incident.services import mojosec, mojosec_correlation
+
+    observed = "2026-08-18T11:12:00Z"
+    expired = _fim_event("a1" + "0" * 62, "/etc/expired.conf",
+                         observed=observed)
+    expired["attributes"]["expected_change"]["expires_at"] = \
+        "2026-08-18T11:11:00Z"  # already expired when observed
+    overlong = _fim_event("a2" + "0" * 62, "/etc/overlong.conf",
+                          observed=observed)
+    overlong["attributes"]["expected_change"]["expires_at"] = (
+        _dt.datetime.fromisoformat(observed.replace("Z", "+00:00")) +
+        _dt.timedelta(seconds=901)).isoformat().replace("+00:00", "Z")
+    with mock.patch.object(
+            mojosec_correlation.settings, "get_static",
+            side_effect=_settings(opts)), \
+            mock.patch.object(mojosec_correlation, "_record_metric"):
+        acks = mojosec.ingest_batch(
+            opts.cutover_api_key, _batch([expired, overlong]))
+    th.assert_eq({row["status"] for row in acks["results"]}, {"accepted"},
+                 f"untrusted annotations must still be accepted as evidence: {acks}")
+    events = _sensor_events(opts).filter(
+        category="mojosec.fim.change",
+        metadata__mojosec__event_id__in=(expired["id"], overlong["id"]))
+    th.assert_eq(events.count(), 2,
+                 "both untrusted annotations must project immediate Events")
+    th.assert_true(all("expected_change" not in event.metadata["mojosec"]
+                       for event in events),
+                   "a rejected annotation must not enter Event metadata")
+    th.assert_eq(MojoSecReceipt.objects.filter(
+        wire_event_id__in=(expired["id"], overlong["id"]),
+        case_routed=True).count(), 0,
+        "untrusted annotations must never route away from Events")
+    for wire_id in (expired["id"], overlong["id"]):
+        case = MojoSecCase.objects.get(receipts__wire_event_id=wire_id)
+        th.assert_eq((case.family, case.urgency), ("system_config", "high"),
+                     "an untrusted annotation lands in the untrusted case at high")

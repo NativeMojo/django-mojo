@@ -214,7 +214,7 @@ def test_concurrent_delivery_and_fim_load_are_bounded(opts):
                 "deployment_id": "deploy-2026-08-18",
                 "operation_id": "release-42", "operation_kind": "release",
                 "completed_at": "2026-08-18T02:12:00Z",
-                "expires_at": "2026-08-18T03:00:00Z",
+                "expires_at": "2026-08-18T02:27:00Z",
             },
         }, observed="2026-08-18T02:13:00Z")
         fim_receipt = _receipt(opts, fim)

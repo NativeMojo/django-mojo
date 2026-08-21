@@ -1221,24 +1221,42 @@ def _journalable_converge_paths():
 def _journaled_converge(mode, criticality, project_path, deployment_id):
     """Run converge under the trusted-change journal when a sensor is enrolled.
 
-    Annotation is an explanation, never a gate: if the journal itself cannot
-    begin, converge still runs and FIM simply reports the writes unexplained —
-    a wedged journal must never block the sensor's own convergence.
+    Annotation is an explanation, never a gate: if the journal cannot BEGIN,
+    converge runs unjournaled and FIM simply reports the writes unexplained.
+    A journal failure AFTER the mutation must never re-run it — the converge
+    already happened; its writes just stay unannotated.
     """
-    from mojo.deploy.mojosec_changes import ChangeError, run_trusted_change
+    from mojo.deploy.mojosec_changes import ChangeError, ChangeJournal
 
-    mutate = lambda: converge(mode, criticality, project_path=project_path)
+    def mutate():
+        return converge(mode, criticality, project_path=project_path)
+
     if not os.path.exists(CONFIG_PATH) or os.geteuid() != 0:
         return mutate()
+    journal = ChangeJournal()
     try:
-        return run_trusted_change(
+        journal.begin(
             "mojosec-converge", "mojosec-converge",
-            _journalable_converge_paths(), mutate,
-            deployment_id=deployment_id or None)
-    except ChangeError as err:
+            _journalable_converge_paths(), deployment_id=deployment_id or None)
+    except (ChangeError, OSError, ValueError) as err:
         print(f"mojosec deploy: trusted-change journal unavailable ({err}); "
               "converging unjournaled", file=sys.stderr)
         return mutate()
+    try:
+        result = mutate()
+    except Exception:
+        try:
+            journal.abort("mojosec-converge")
+        except (ChangeError, OSError, ValueError):
+            pass
+        raise
+    try:
+        journal.complete("mojosec-converge")
+    except (ChangeError, OSError, ValueError) as err:
+        print(f"mojosec deploy: trusted-change completion failed ({err}); "
+              "the converge already ran and its changes stay unannotated",
+              file=sys.stderr)
+    return result
 
 
 def main(argv=None):

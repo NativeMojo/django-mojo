@@ -149,8 +149,13 @@ def _payload_digest(event):
     return hashlib.sha256(protocol.canonical_json(event).encode("utf-8")).hexdigest()
 
 
-def _expected_change_projection(kind, attributes):
-    """Project only the exact safe annotation; never raw FIM attributes."""
+def _expected_change_projection(kind, attributes, last_seen=None):
+    """Project only the exact safe annotation; never raw FIM attributes.
+
+    Applies the same expiry/TTL trust bounds as the correlator's
+    `_safe_expected`, so Event metadata never carries an annotation the
+    case routing would reject.
+    """
     if kind != "fim.change" or not isinstance(attributes, dict):
         return None
     value = attributes.get("expected_change")
@@ -169,6 +174,11 @@ def _expected_change_projection(kind, attributes):
         return None
     if parsed.tzinfo is None:
         return None
+    observed = mojosec_correlation._observed(last_seen)
+    ttl_bound = datetime.timedelta(
+        seconds=mojosec_correlation.MAX_EXPECTED_TTL_SECONDS)
+    if observed is not None and parsed < observed:
+        return None
     result = {"deployment_id": deployment_id, "expires_at": expires_at}
     if set(value) == v2_fields:
         for field in ("operation_id", "operation_kind"):
@@ -185,11 +195,15 @@ def _expected_change_projection(kind, attributes):
             return None
         if completed.tzinfo is None or completed > parsed:
             return None
+        if parsed > completed + ttl_bound:
+            return None
         result.update({
             "operation_id": value["operation_id"],
             "operation_kind": value["operation_kind"],
             "completed_at": completed_at,
         })
+    elif observed is not None and parsed > observed + ttl_bound:
+        return None
     return result
 
 
@@ -203,7 +217,8 @@ def _event_projection(batch, sensor_event):
     projection = mojosec_evidence.project(
         kind, attributes, sensor_event["count"], sensor_event["last_seen"])
     source_ip = projection["source_ip"]
-    expected_change = _expected_change_projection(kind, attributes)
+    expected_change = _expected_change_projection(
+        kind, attributes, sensor_event["last_seen"])
     projected_metadata = {
         "sensor_id": batch["sensor_id"],
         "installation_key_id": batch["installation_key_id"],
@@ -384,16 +399,17 @@ def _routable_digest_tier(binding, sensor_event):
     """True when this evidence is digest tier and may skip Event projection.
 
     Bound web observations normalize to info/warning by construction. FIM
-    routes only for a valid trusted expected-change annotation; unannotated
-    changes, overflow and annotation errors stay immediate per-receipt
-    Events at their existing severity.
+    routes only for a valid, unexpired, TTL-bounded trusted expected-change
+    annotation; unannotated changes, overflow and annotation errors stay
+    immediate per-receipt Events at their existing severity.
     """
     if binding["kind"] == "web":
         return True
     attributes = sensor_event.get("attributes")
+    observed = mojosec_correlation._observed(sensor_event.get("last_seen"))
     return (sensor_event.get("kind") == "fim.change" and
-            isinstance(attributes, dict) and
-            mojosec_correlation._safe_expected(attributes) is not None)
+            isinstance(attributes, dict) and observed is not None and
+            mojosec_correlation._safe_expected(attributes, observed) is not None)
 
 
 def _case_routed_replay(batch, sensor_event):
