@@ -1195,6 +1195,29 @@ preflight before deployment readiness is green. The check never installs a
 binding or opens the API-key credential. Default `auto` keeps legacy disabled
 nodes informational.
 
+## Pre-registering deployment identities (optional trust gate)
+
+When an installation's MojoSec enrollment sets
+`require_registered_deployments`, the central correlator only treats
+annotated FIM churn as a quiet deployment if the journal's `deployment_id`
+was pre-registered **by the party driving the deploy** — the node itself has
+no channel for this on purpose, because a node-originated registration would
+still be the same root assertion the gate exists to bound. Before the deploy,
+the driver (CI or operator, with `manage_security`) calls:
+
+```bash
+curl -X POST https://<central>/api/incident/mojosec/deployment \
+  -H "Authorization: Bearer <jwt>" -H "Content-Type: application/json" \
+  -d '{"installation_key_id": 42, "deployment_id": "wmwx-release-2026-08-21.1", "ttl_seconds": 86400}'
+```
+
+then passes the same identity to the node via `--deployment-id` /
+`MOJO_DEPLOY_ID`. Re-registering the same id extends its expiry. An
+unregistered or expired id does not break the deploy — its file changes
+simply land as ordinary unannotated high-severity evidence instead of one
+quiet deployment case. Default off; nothing changes until the enrollment row
+opts in.
+
 ## Canary and cleanup
 
 Before enabling observe, create a separate protected `mojosec_ingest` API key,

@@ -41,6 +41,13 @@ class MojoSecCase(models.Model, MojoModel):
     network = models.CharField(max_length=64, blank=True, default="", db_index=True)
     deployment_id = models.CharField(
         max_length=128, blank=True, default="", db_index=True)
+    # A campaign case (sensor_kind "campaign") groups the member cases whose
+    # matching activity it summarizes; members point here. Identity for
+    # campaign rows is (correlation_key, window_key) — see the conditional
+    # constraint below — because campaigns span installations in one Group.
+    campaign = models.ForeignKey(
+        "self", null=True, blank=True, default=None,
+        related_name="members", on_delete=models.SET_NULL)
     correlation_key = models.CharField(max_length=64)
     window_key = models.CharField(max_length=64)
     policy_version = models.PositiveIntegerField(default=1)
@@ -70,6 +77,11 @@ class MojoSecCase(models.Model, MojoModel):
     sample_count = models.PositiveSmallIntegerField(default=0)
     overflow_count = models.PositiveBigIntegerField(default=0)
     samples = models.JSONField(default=list, blank=True)
+    # Exact canonical source IPs observed on web/auth cases, capped in the
+    # correlation service; the spill beyond the cap is counted, not stored.
+    # These are the only values a block recommendation may ever target.
+    observed_sources = models.JSONField(default=list, blank=True)
+    distinct_source_count = models.PositiveIntegerField(default=0)
     # Deployment cases only: bounded {"operations": {kind: count},
     # "tiers": {tier: count}} — capped in the correlation service, spill
     # lands in "_other". Empty dict for every other case kind.
@@ -81,6 +93,13 @@ class MojoSecCase(models.Model, MojoModel):
             models.UniqueConstraint(
                 fields=("installation_key", "correlation_key", "window_key"),
                 name="incident_msc_window_uniq"),
+            # Campaign identity is the correlation pair alone: campaigns span
+            # installations within one Group, so the installation-scoped
+            # constraint above cannot deduplicate them.
+            models.UniqueConstraint(
+                fields=("correlation_key", "window_key"),
+                condition=models.Q(sensor_kind="campaign"),
+                name="incident_msc_campaign_uniq"),
         ]
         indexes = [
             models.Index(
@@ -89,6 +108,9 @@ class MojoSecCase(models.Model, MojoModel):
             models.Index(
                 fields=("installation_key", "sensor_kind", "-last_seen"),
                 name="incident_msc_install_kind_idx"),
+            models.Index(
+                fields=("installation_key", "sensor_id", "-last_seen"),
+                name="incident_msc_inst_sensor_idx"),
             models.Index(
                 fields=("resource_id", "-last_seen"),
                 name="incident_msc_resource_idx"),
@@ -101,7 +123,7 @@ class MojoSecCase(models.Model, MojoModel):
         CAN_UPDATE = False
         CAN_DELETE = False
         DENY_AI = True
-        SENSITIVE_FIELDS = ["samples"]
+        SENSITIVE_FIELDS = ["samples", "observed_sources"]
         GRAPHS = {
             "list": {
                 "fields": [
@@ -110,7 +132,8 @@ class MojoSecCase(models.Model, MojoModel):
                     "state_reason", "urgency", "urgency_reason",
                     "occurrence_count", "receipt_count",
                     "projected_event_count", "distinct_count", "sample_count",
-                    "overflow_count", "policy_version", "evaluator_version",
+                    "overflow_count", "distinct_source_count",
+                    "policy_version", "evaluator_version",
                 ],
             },
             "default": {
@@ -122,6 +145,7 @@ class MojoSecCase(models.Model, MojoModel):
                     "settled_at", "projected_urgency", "occurrence_count",
                     "receipt_count", "projected_event_count", "distinct_count",
                     "sample_count", "overflow_count", "samples", "breakdown",
+                    "distinct_source_count",
                     "policy_version", "evaluator_version",
                 ],
             },

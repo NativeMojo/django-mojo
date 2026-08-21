@@ -72,6 +72,14 @@ def settle_mojosec_cases(force=False, verbose=False, now=None):
         channel="cleanup", payload={})
 
 
+# Proposes/expires/retries MojoSec recommendations and settles target TTLs.
+@schedule(minutes="*/5")
+def sweep_mojosec_actions(force=False, verbose=False, now=None):
+    jobs.publish(
+        func="mojo.apps.incident.services.mojosec_actions.action_sweep",
+        channel="cleanup", payload={})
+
+
 # Runs every 5 minutes — unblocks IPs whose blocked_until has passed
 @schedule(minutes="*/5")
 def sweep_expired_blocks(force=False, verbose=False, now=None):
