@@ -7,7 +7,7 @@ from mojo.db import pinning
 
 class ReaderRouter:
     def db_for_read(self, model, **hints):
-        if model._meta.app_label == "sessions":
+        if model._meta.app_label in ("sessions", "account"):
             return "default"
 
         forced = pinning.forced_database()

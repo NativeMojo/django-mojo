@@ -13,12 +13,20 @@ class _SessionMeta:
     app_label = "sessions"
 
 
+class _AccountMeta:
+    app_label = "account"
+
+
 class _Model:
     _meta = _Meta()
 
 
 class _SessionModel:
     _meta = _SessionMeta()
+
+
+class _AccountModel:
+    _meta = _AccountMeta()
 
 
 class _State:
@@ -172,6 +180,32 @@ def test_session_model_uses_primary(opts):
             alias = ReaderRouter().db_for_read(_SessionModel)
             assert alias == "default", \
                 f"session rows must never route to a lagging reader, got {alias!r}"
+    finally:
+        pinning.deactivate(tokens)
+
+
+@th.django_unit_test("reader router: account models always use primary")
+def test_account_models_use_primary_even_when_reader_is_forced(opts):
+    from mojo.db import pinning, use_reader
+    from mojo.db.router import ReaderRouter
+
+    router = ReaderRouter()
+    tokens = pinning.activate()
+    try:
+        account_alias = router.db_for_read(_AccountModel)
+        ordinary_alias = router.db_for_read(_Model)
+        assert account_alias == "default", \
+            f"account reads in an active scope must use primary, got {account_alias!r}"
+        assert ordinary_alias == "reader", \
+            f"ordinary reads in the same active scope must use reader, got {ordinary_alias!r}"
+
+        with use_reader():
+            account_alias = router.db_for_read(_AccountModel)
+            ordinary_alias = router.db_for_read(_Model)
+            assert account_alias == "default", \
+                f"use_reader must not move account security state off primary, got {account_alias!r}"
+            assert ordinary_alias == "reader", \
+                f"use_reader must still route ordinary models to reader, got {ordinary_alias!r}"
     finally:
         pinning.deactivate(tokens)
 
