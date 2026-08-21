@@ -269,12 +269,21 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | `query_users` | `view_admin` | No | Search/filter users by name, email, status, permission |
 | `get_user_detail` | `view_admin` | No | Full user profile, permissions, group memberships |
 | `get_user_activity` | `view_admin` | No | Recent security events for a user |
-| `query_rate_limits` | `view_admin` | No | Currently active rate limit entries from Redis |
+| `query_rate_limits` | `view_admin` | No | Fair, bounded sample of currently active fixed- and sliding-window rate limit entries from Redis |
 | `get_permission_summary` | `view_admin` | No | User permissions breakdown (user-level + group-level) |
 | `update_user_permission` | `manage_users` | Yes | Add or remove a permission from a user |
 | `disable_user` | `manage_users` | Yes | Disable account + rotate auth_key (invalidates all sessions). Cannot disable yourself. Does not write `metadata.protected.disable.*` — use the REST `disable` action for audited disables. |
 | `enable_user` | `manage_users` | Yes | Re-enable a disabled account. Does not update `metadata.protected.disable.*` history. |
 | `force_logout` | `manage_users` | Yes | Rotate auth_key to invalidate all sessions (account stays active) |
+
+`query_rate_limits` returns at most 50 entries and shares its bounded Redis
+inspection work fairly between fixed-window (`rl:*`) and sliding-window
+(`srl:*`) keys. On Redis Cluster it scans each primary explicitly and allocates
+the same global command budget across family/primary lanes; it never uses
+cluster SCAN's all-primary fanout. Its `truncated` boolean is `true` when the
+result, inspected-key, or SCAN-call limit stopped the query before Redis was
+proven exhausted; callers must not treat a truncated response as a complete
+inventory.
 
 ### Groups Domain (`view_groups`)
 
