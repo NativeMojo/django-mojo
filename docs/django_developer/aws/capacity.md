@@ -14,9 +14,10 @@ asked for it.
 - Service: `mojo/apps/aws/services/capacity.py`
 - Endpoints: `mojo/apps/aws/rest/capacity.py` (see the web-developer track)
 - Helpers: `mojo/helpers/aws/{ec2,elbv2,rds,elasticache}.py`
-- Job: `mojo.apps.aws.asyncjobs.capacity_operation`
-- Panel: `admin_portal/assets/features/platform/capacity.js`, mounted in the
-  Dashboard's EC2 drill-in
+- Jobs: `mojo.apps.aws.asyncjobs.capacity_operation` (one action) and
+  `capacity_batch` (a plan's steps in sequence)
+- Panels: `admin_portal/assets/features/platform/capacity.js` (Dashboard EC2
+  drill-in, single actions) and `fleet.js` (Fleet Scaling, batch plan/apply)
 
 ## The architecture ruling this sits under
 
@@ -183,6 +184,20 @@ them for the whole deregistration delay. `elbv2.drained()` treats only `unused`
 (or absence from the group) as drained, and `terminate_node` re-derives that
 server-side from a fresh describe — a client saying "already drained" is a
 client, not evidence.
+
+**A COMPLETED drain removes the target from its group entirely**, so the node
+terminate exists to destroy is invisible to the serving map. Terminate
+therefore has two proof paths: still registered → every group must report it
+drained (`not_drained` otherwise, unchanged); registered nowhere →
+`_prove_fleet_member` re-describes the instance fresh and requires it to
+exist, not already be `terminated`/`shutting-down` (`already_terminated`),
+and to carry a django-mojo ownership tag (`managed-by=django-mojo` /
+`mojo:project`) **or** the `mojo:created-by=admin-capacity` tag this feature
+stamps on every clone — anything else refuses `not_fleet_member`. The self
+check runs against the bare resource id too (a drained node is absent from
+the serving describe, and a drained self node must still not terminate
+itself). Without this, drain→terminate could never complete — in a batch or
+in two manual clicks.
 
 ### The two refusals
 
@@ -408,9 +423,9 @@ The writer and the readers carry independent sizes — readers deliberately
 smaller, because that is where the money is. The action targets one named
 instance (an Aurora writer or reader via `instance_role` +
 `cluster_members`'s `IsClusterWriter`, or a standalone primary or replica),
-and "resize the readers" is therefore N applies, one per reader — the portal
-fans its one reader dropdown out client-side, and the plan/apply batch item
-composes it server-side later.
+and "resize the readers" is therefore N applies, one per reader — the Fleet
+page stages one reader size and submits one batch step per differing reader,
+which the plan/apply batch runs as ordinary sequential applies.
 
 **PromotionTier rides in the SAME ModifyDBInstance call**: writer 0, Aurora
 reader 1, standalone never (the parameter is not sent off-Aurora). Aurora
@@ -492,6 +507,129 @@ fleet — it is not the grant that terminates it.
 whose action comes from a fixed map, so the trail cannot be steered by a
 request body.
 
+## Batch plan/apply
+
+The Fleet Scaling page's one-shot form of the same actions: `plan_batch`
+validates an ordered set of steps and stores a short-lived plan;
+`apply_batch` confirms it by id and hands the steps to ONE job
+(`asyncjobs.capacity_batch` → `run_batch`) that executes them sequentially
+through the **unchanged** `apply()`. Not a desired-state reconciler: guards
+stay per-action and are never re-implemented against a hypothetical future
+state.
+
+### The plan store
+
+Plans are cache records (`…:plan:<uuid>`, `PLAN_TTL = 300`), same idiom as
+operation records — a plan is a bounded observation of AWS state, worth
+exactly as much as one, and a table would outlive its own validity. A plan
+that cannot be stored answers `cache_unavailable` 503 (a plan that cannot be
+stored cannot be confirmed — the `_claim` stance). At most `MAX_BATCH_STEPS`
+(20) steps; the stable-IPs pair is refused from batches outright (fleet-wide,
+its own fixed claim, runs alone).
+
+Plans validate against the **cached** `report()` (≤`REPORT_TTL` old) because
+the page re-plans on every debounced stepper tweak — a full describe sweep
+per keystroke would rate-limit the account for an answer the cache already
+holds. Only the apply takes `report(refresh=True)`. Both refuse
+`report_degraded` 503 when the envelope's `warnings` name a section any step
+touches (`_BATCH_SECTIONS`) — a throttled describe must never surface as
+"unknown resource", and a degraded fresh envelope must never be
+fingerprinted.
+
+### The fingerprint
+
+`_fleet_fingerprint` is a sha256 over a canonical projection of the
+STRUCTURAL facts a plan's safety depends on: mode; node `(id, healthy,
+instance_type)` tuples; database `(identifier, kind, writer, readers,
+instance_class, writer_instance_class, reader_instance_classes)` —
+`instance_class` included so a standalone writer's resize changes the hash,
+not just Aurora's; cache `(identifier, replica_count, node_type,
+cluster_enabled)`. Transient `status` strings are deliberately excluded so a
+`backing-up` flap does not 409 a valid plan. Server-side only — never
+returned to the client, so there is no forgeable surface. Apply recomputes
+it from the fresh sweep and refuses `plan_stale` 409 on mismatch, never
+silently re-planning.
+
+### Ordering
+
+`_order_steps` stable-sorts by rank — `add_node` 0, `add_reader` 1,
+`set_cache_replicas` grow 2, `resize_cache` 3, `resize_database` 4,
+`set_cache_replicas` shrink 5, `remove_reader` 6, `drain_node` 7,
+`terminate_node` 8 — then pins each terminate immediately behind the drain
+naming the same resource. Capacity never drops before a disruptive change,
+and the returned plan's `order_note` says so.
+
+### Plan-time validation
+
+The offers gate (`envelope["actions"][a].offered`) plus report-level
+resource/param checks (mirroring `_apply_cache`'s static checks, the curated
+size table, ≠-current) plus cross-batch rules: the healthy-drain budget
+(only drains of currently-healthy nodes count, and at least one healthy node
+must remain — parity with the page's `removable()`), terminate-needs-a-drain
+(earlier in the batch, or a node whose drain already completed),
+`conflicting_steps` for a batch that both resizes and removes a resource.
+Every refusal names the step index in `data.step`. Full provider
+re-derivation stays at execution time.
+
+### Costs
+
+`_step_cost` prices each step from provision's `COST_TABLE`
+(adds/removes ± the type's price, replica deltas × node type, resizes
+new−old — × member count for cache, whose node type is group-wide). Any type
+missing from the table → `monthly_delta_usd: None` + a step warning +
+`estimate_complete: false` on the plan; the total sums only priced steps.
+Never a silent $0.
+
+### The runner
+
+`apply_batch` consumes the plan **atomically** — `cache.add` on
+`…:planlock:<plan_id>` either claims it for this batch or answers
+`plan_already_applied` 409 carrying the batch id already running, so a
+double-click converges on polling. It writes the batch record
+(`…:batch:<uuid>`, TTL = summed step deadlines + margins + `CLAIM_TTL`) and
+publishes `capacity_batch` on the cleanup channel with `max_retries=0` (a
+redelivered batch would re-run mutations); `max_exec_seconds` is stored
+operator metadata, not a kill switch. A publish failure marks the batch
+`batch_dispatch_failed` and answers 503 — nothing was started.
+
+`run_batch` walks the steps: each is `apply(actor, action, resource,
+**params)` — the real claims, the real fresh-read guards, a real child
+operation and its own job, identically to a manual click (the job engine is
+a thread pool, so orchestrator and child coexist). It writes the per-step
+audit row the REST layer would have (`AUDIT_ACTIONS[action]`,
+`resource:op_id`) — the batch-level `aws_capacity_batch` row is written by
+the REST handler at apply. Then it polls the child record on
+`POLL_INTERVAL`, mirroring `phase`/`message` onto the step (one batch poll
+answers everything, and `updated` stays fresh), under a **backstop ceiling**
+of `_deadline_for(action) + 900` (+ `canary_timeout()` for `add_node`,
+whose `_deadline_for` under-budgets the proving leg). The ceiling only
+catches a wedged or vanished child — the child's own settle timeouts are
+the clock, because a ceiling that undercuts a legitimately slow child
+converts a succeeding mutation into a reported failure.
+
+First failure — a guard refusal, a claim conflict (`capacity_in_progress`
+from a concurrent single apply; per-step claims arbitrate both directions),
+a failed/vanished/over-ceiling child — fails that step with the child's
+code, marks every later step `not_attempted`, fails the batch with "Step N
+of M failed: …; the remaining K step(s) were not attempted.", and stops.
+**No rollback.** No claims of its own to release — each child releases its
+own via `_finish`/`_fail`.
+
+### What survives a restart
+
+Plan, batch and operation records live in the shared cache and survive
+process restarts — but on a single-node install the batch runner and its
+in-flight child share the engine's pool, so both threads die together.
+`max_retries=0` means the reaper marks the Job rows failed with no
+redelivery: remaining steps never start (fail-safe), and the batch record
+stays `running`-stale until its TTL. `batch_status` surfaces that honestly
+with `stalled: true` (no write in ~3 minutes); nothing auto-resumes. Held
+per-step claims expire on `CLAIM_TTL`. The engine's graceful stop waits for
+running threads, so **avoid deploys mid-batch** — a multi-hour batch
+obstructs `jobman restart` the same way a long `add_node` already does. A
+cleared cache loses everything, the same honest answer as
+`operation_status`.
+
 ## Settings
 
 | Setting | Default | Meaning |
@@ -545,8 +683,8 @@ log line, or the database.
 - **Bootstrapping.** The first node of an installation is the project's
   provisioning, not this button.
 - **The zero-downtime Aurora writer resize.** The recipe — resize a reader,
-  fail over to it, resize the old writer — is deliberately not built into
-  these actions. Each step is an ordinary single-shot apply; composing them
-  belongs to the plan/apply batch API, and the resize actions never move the
-  writer role (no failover, no promote — only instance classes and their
-  promotion tiers).
+  fail over to it, resize the old writer — is still not one button. The
+  batch API composes capacity steps, but failover is not a capacity action:
+  the resize actions never move the writer role (no failover, no promote —
+  only instance classes and their promotion tiers), so the middle of that
+  recipe stays a deliberate console move.

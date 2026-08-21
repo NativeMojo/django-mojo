@@ -2,17 +2,20 @@
 
 Add or remove an app node, an RDS reader, or an ElastiCache replica — resize
 the cache group or a single database instance to a curated size — and turn
-the fleet's stable outbound IPs on or off.
+the fleet's stable outbound IPs on or off. Several changes can be reviewed
+and executed as ONE server-validated batch (see [Batch plans](#batch-plans)).
 
 ```
-GET  /api/aws/capacity          the fleet, reader and replica picture
-GET  /api/aws/capacity/status   one capacity operation's progress
-POST /api/aws/capacity/apply    request ONE capacity change
+GET  /api/aws/capacity            the fleet, reader and replica picture
+GET  /api/aws/capacity/status     ?operation= one operation's progress · ?batch= one batch's progress
+POST /api/aws/capacity/apply      request ONE capacity change
+POST /api/aws/capacity/plan       validate, word, order and price a batch of changes
+POST /api/aws/capacity/plan/apply confirm a plan by id; its steps run as one batch
 ```
 
-Every apply is asynchronous: it returns an **operation** immediately and the
-work is proven by polling `/status`. Nothing here reports success on "AWS
-accepted it".
+Every apply is asynchronous: it returns an **operation** (or a **batch**)
+immediately and the work is proven by polling `/status`. Nothing here reports
+success on "AWS accepted it".
 
 ## Permissions
 
@@ -21,6 +24,8 @@ accepted it".
 | `GET /api/aws/capacity` | `manage_aws` |
 | `GET /api/aws/capacity/status` | `manage_aws` |
 | `POST /api/aws/capacity/apply` | `manage_aws` **AND** a literal superuser, an interactive (non-key) session, and fresh auth within 600s |
+| `POST /api/aws/capacity/plan` | same as `/apply` — a plan reveals intent, topology and cost, so it fails closed even though it mutates nothing |
+| `POST /api/aws/capacity/plan/apply` | same as `/apply` |
 
 The apply gate is stricter than the Maintenance apply next door. An engine
 upgrade changes a resource the installation already owns; these actions create
@@ -317,6 +322,168 @@ minutes.
 
 Terminal operations report `phase: "complete"`.
 
+## Batch plans
+
+Two phases. `POST /capacity/plan` validates an ordered list of steps against
+the fleet report and answers with the plan **in the server's own words** —
+per-step description, warnings, cost delta, and a safe execution order.
+`POST /capacity/plan/apply` confirms that exact plan by `plan_id` and runs
+the steps sequentially as ordinary capacity operations, each re-checked
+against live AWS the moment it runs.
+
+There is **no per-step `confirm_resource`** in the batch flow, by design:
+confirming the `plan_id` is confirming exactly the step list the server
+itself rendered.
+
+### `POST /api/aws/capacity/plan`
+
+```json
+{
+  "steps": [
+    {"action": "add_node"},
+    {"action": "resize_database", "resource": "mojo-prod-aurora-2",
+     "size": "medium", "apply_immediately": true},
+    {"action": "set_cache_replicas", "resource": "mojo-prod-redis",
+     "count": 2, "apply_immediately": true},
+    {"action": "drain_node", "resource": "i-0a1b…"},
+    {"action": "terminate_node", "resource": "i-0a1b…"}
+  ]
+}
+```
+
+Accepted actions: `add_node`, `add_reader`, `set_cache_replicas`,
+`resize_cache`, `resize_database`, `remove_reader`, `drain_node`,
+`terminate_node` — at most 20 steps. The stable-IPs pair is refused with its
+own message: it is fleet-wide, holds its own claim, and runs alone through
+the single-action apply. Per-step params match the single-action apply
+(`count`/`size`/`apply_immediately`, same no-default rules).
+
+Validation refuses, naming the step index in `data.step`: unknown actions or
+resources, the self node, duplicates, counts under the failover floor, a
+resize to the current size, a `terminate_node` with no `drain_node` for the
+same node earlier in the batch (unless its drain already completed), drains
+that would leave no healthy node serving (only drains of currently-healthy
+nodes count against that budget), and a batch that both resizes and removes
+the same resource (`conflicting_steps`).
+
+```json
+{
+  "status": true,
+  "data": {
+    "schema_version": 1,
+    "id": "5b0c…",
+    "created": "2026-08-20T18:00:00+00:00",
+    "expires_in": 300,
+    "expires_at": "2026-08-20T18:05:00+00:00",
+    "actor": 1,
+    "steps": [
+      {"index": 0, "action": "add_node", "resource": "",
+       "params": {}, "kind": "add",
+       "description": "Add an app node",
+       "warnings": ["builds, deploys and proves itself before serving · 20–40 min"],
+       "monthly_delta_usd": 70.0},
+      {"index": 1, "action": "resize_database", "resource": "mojo-prod-aurora-2",
+       "params": {"size": "medium", "apply_immediately": true}, "kind": "change",
+       "description": "Resize reader mojo-prod-aurora-2 to db.r6g.large",
+       "warnings": ["reads keep flowing; this reader pauses while it changes class"],
+       "monthly_delta_usd": 125.0}
+    ],
+    "total_monthly_delta_usd": 195.0,
+    "estimate_complete": true,
+    "order_note": "Steps run in the server's order: additions first, then resizes, then removals — and a terminate runs immediately after its own drain."
+  }
+}
+```
+
+Render the steps **as returned**: the server has already reordered them
+(additions → resizes → removals, each `terminate_node` immediately after its
+own `drain_node`) regardless of submission order, and `order_note` says so.
+`kind` (`add`/`change`/`remove`) is for styling only.
+
+**The null-cost convention**: a step whose instance type has no listed price
+answers `monthly_delta_usd: null` plus a warning (`"no listed price for …"`),
+and the plan carries `estimate_complete: false`; the total sums only priced
+steps. Never render a null as $0.
+
+Plans validate against the server's cached report (≤2 minutes old) so the
+review loop can re-plan on every tweak; the apply below takes a fresh sweep.
+A degraded AWS read that touches a planned section answers **503
+`report_degraded`** — retry, it is never "unknown resource".
+
+### `POST /api/aws/capacity/plan/apply`
+
+```json
+{"plan_id": "5b0c…"}
+```
+
+The server re-reads AWS fresh and compares a structural fingerprint of the
+fleet against the one the plan was written from:
+
+- plan expired or unknown → **404 `plan_not_found`** ("plans expire after 5
+  minutes — re-plan"). Request a new plan and show it again — never silently
+  re-plan-and-apply.
+- fleet changed since the plan → **409 `plan_stale`**. Same remedy.
+- plan already applied → **409 `plan_already_applied`**, with
+  `data.batch` naming the running batch — a double-click converges on
+  polling, not on a second batch.
+
+On success the response is the **batch record** (same shape as the status
+below, all steps `pending` except the bookkeeping), and one background job
+starts walking the steps.
+
+### `GET /api/aws/capacity/status?batch=<id>`
+
+Exactly one of `operation` and `batch` per request (both or neither is a
+400). Poll roughly every 10 seconds:
+
+```json
+{
+  "status": true,
+  "data": {
+    "schema_version": 1,
+    "id": "9c2f…",
+    "plan_id": "5b0c…",
+    "actor": 1,
+    "state": "running",
+    "current_index": 1,
+    "message": "step 2 of 3: Resize reader mojo-prod-aurora-2 to db.r6g.large",
+    "error_code": null,
+    "stalled": false,
+    "steps": [
+      {"index": 0, "action": "add_node", "resource": "", "kind": "add",
+       "description": "Add an app node", "state": "done",
+       "operation": "9f1c…", "phase": "complete",
+       "message": "i-0c3d… is serving as mojo-api-a-0c3d…", "error_code": null},
+      {"index": 1, "action": "resize_database", "resource": "mojo-prod-aurora-2",
+       "kind": "change", "description": "Resize reader … to db.r6g.large",
+       "state": "running", "operation": "8e2a…", "phase": "settling",
+       "message": "mojo-prod-aurora-2 is modifying", "error_code": null},
+      {"index": 2, "action": "drain_node", "resource": "i-0a1b…",
+       "kind": "remove", "description": "Drain mojo-api-b — traffic moves off it first",
+       "state": "pending", "operation": null, "phase": null,
+       "message": null, "error_code": null}
+    ]
+  }
+}
+```
+
+Step `state`: `pending` → `running` → `done` / `failed` / `not_attempted`.
+Each step's `operation` is a full child operation id — pollable via
+`?operation=` for the complete detail. The runner mirrors the child's
+`phase`/`message` onto the step, so one batch poll answers everything.
+
+**Mid-batch failure**: the failed step carries the child's `error_code` and
+message, every later step is `not_attempted`, the batch is `failed`, and its
+`message` says exactly where things stand ("Step N of M failed: …; the
+remaining K step(s) were not attempted."). **Nothing is rolled back** — the
+completed steps happened.
+
+`stalled: true` on a running batch means it has reported no progress for a
+few minutes — the runner thread is gone (job-engine death or a deploy
+mid-batch). Nothing auto-resumes; show "check the jobs runner". An unknown
+batch id is **404 `batch_not_found`** (batch records live in the
+coordination cache).
+
 ## Error codes
 
 Refusals return HTTP `4xx`/`5xx` with
@@ -332,7 +499,9 @@ operation record instead.
 | `invalid_request` | 400 | Unknown action, missing identifier, missing/ill-typed `count` or `apply_immediately` |
 | `node_id_pinned` | 409 | The fleet pins `EDGE_NODE_ID`, so a new node could never prove its own identity |
 | `no_source_node` | 409 | No healthy, running fleet member is available to clone |
-| `not_registered` | 409 | That instance is not registered behind any load balancer |
+| `not_registered` | 409 | A **drain** named an instance not registered behind any load balancer. (Terminate no longer refuses this shape — see `not_fleet_member`) |
+| `not_fleet_member` | 409 | A terminate named an unregistered instance that fresh EC2 facts could not prove a fleet member (missing, or no django-mojo/admin-capacity tag). A COMPLETED drain removes the target from its group, so terminate proves membership by tags instead |
+| `already_terminated` | 409 | The unregistered instance is already `terminated`/`shutting-down` |
 | `last_healthy_target` | 409 | It is the only healthy target of some attached group. `data.target_group` names it |
 | `cannot_remove_self` | 409 | It is the node answering this request. `data.self_check` carries the check's status |
 | `not_drained` | 409 | Terminate was asked for before the drain finished. `data.states` lists what the group reports |
@@ -352,6 +521,18 @@ operation record instead.
 | `provider_unavailable` | 503 | A retryable AWS failure |
 | `provider_error` | 502 | Any other AWS failure |
 | `operation_not_found` | 404 | Unknown operation id (status only) |
+| `conflicting_steps` | 409 | A batch both resizes and removes the same resource. `data.step` names the step (plan only) |
+| `report_degraded` | 503 | An AWS read touching a planned section did not answer completely — retry; never rendered as "unknown resource" (plan and plan/apply) |
+| `plan_not_found` | 404 | Unknown or expired plan id — plans live 5 minutes. Re-plan (plan/apply only) |
+| `plan_stale` | 409 | The fleet changed since the plan was written. Re-plan; never silently re-applied (plan/apply only) |
+| `plan_already_applied` | 409 | This plan already started a batch; `data.batch` names it — poll that instead (plan/apply only) |
+| `batch_dispatch_failed` | 503 | No job runner accepted the batch. **Nothing was started** (plan/apply only) |
+| `batch_not_found` | 404 | Unknown batch id (status only) |
+
+Plan-time refusals reuse the single-action codes above (`resource_not_found`,
+`cannot_remove_self`, `no_change`, `not_drained`, `last_healthy_target`,
+`automatic_failover_requires_replica`, …) and carry `data.step` — the index
+of the refused step.
 
 ### On a failed operation
 
@@ -418,8 +599,9 @@ convergence sweep finishes. That is expected, not a fault.
   set no longer fits — the completed operation's `message` says so; the
   server states the risk without pretending to measure it.
 - The zero-downtime Aurora writer recipe — resize a reader, fail over to it,
-  resize the old writer — is deliberately **not** one action. Each step is an
-  ordinary apply; composing them belongs to the plan/apply batch API.
+  resize the old writer — is still **not** one action. The batch API composes
+  capacity steps, but failover is not a capacity action, so the middle of
+  that recipe remains a manual AWS-console move.
 
 **Enabling stable IPs costs ~nothing; disabling is what bills.** AWS charges
 every public IPv4 the same, attached or not, so an attached Elastic IP just

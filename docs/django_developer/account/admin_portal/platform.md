@@ -150,24 +150,30 @@ now that it is a destination rather than a page-grid card. It is computed in
 ### Fleet Scaling
 
 `fleet` puts the whole fleet on one page — app nodes, the Redis replication
-group, and the database with its readers — as steppers over a staged desired
-state. Nothing mutates while the operator edits: the bottom bar lists the
-staged steps in plain words, one confirmation applies them, and the page then
-runs the steps **one at a time through the existing capacity actions**
-(`add_node`, `drain_node` + `terminate_node`, `set_cache_replicas`,
-`add_reader`, `remove_reader`), polling each to a terminal state before
-starting the next. Adds always run before removes. Every step is re-validated
-server-side at execution time, so this page adds no new authority: the
-`/api/aws/capacity/apply` gates (superuser AND `manage_aws`, key denial,
-600-second fresh auth, `INFRASTRUCTURE_MODE` refusal) apply per step exactly
-as they do for the capacity drill-in, and a control the server's report does
-not offer is disabled with the server's `blocked_reason` in plain words.
-
-Deliberately present but disabled, so the page's final shape is visible before
-its server sides ship: instance-size dropdowns (the resize actions), and the
-plan is assembled client-side from the server's offers until the plan/apply
-batch endpoint exists to write it server-side with exact costs and timings.
-On an `external`-mode installation the page renders read-only.
+group, and the database with its readers (live size dropdowns included, fed
+by the report's curated `sizes` ladder) — as steppers over a staged desired
+state. Nothing mutates while the operator edits: the staged changes are sent
+to `POST /api/aws/capacity/plan`, and the bottom bar renders the **server's**
+plan — its plain-English step descriptions and warnings, its execution order
+(additions → resizes → removals, a terminate pinned behind its drain), and
+its per-step and total monthly cost delta from provision's price table
+(unpriced types are an honest null, never a silent $0). One confirmation
+applies that exact plan by its `plan_id`
+(`POST /api/aws/capacity/plan/apply`); the server then runs the steps as one
+batch **through the unchanged capacity actions** (`add_node`, `drain_node` +
+`terminate_node`, `set_cache_replicas`, `resize_cache`, `resize_database`,
+`add_reader`, `remove_reader`), each re-validated against the live fleet the
+moment it runs, and the page polls one batch status
+(`GET /api/aws/capacity/status?batch=…`) to a terminal state — a failed step
+stops everything after it, and the bar says exactly which steps completed,
+failed, and were not attempted. This page adds no new authority: both batch
+endpoints carry the full `/api/aws/capacity/apply` gate (superuser AND
+`manage_aws`, key denial, 600-second fresh auth, `INFRASTRUCTURE_MODE`
+refusal), an expired or fleet-drifted plan is refused (`plan_not_found` /
+`plan_stale`) and re-requested rather than silently re-applied, and a
+control the server's report does not offer is disabled with the server's
+`blocked_reason` in plain words. On an `external`-mode installation the page
+renders read-only.
 
 ### Maintenance
 
