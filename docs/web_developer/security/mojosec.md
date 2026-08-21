@@ -286,16 +286,26 @@ rejected and group/member grants never authorize this platform-wide surface.
 
 The case surfaces are platform/global security-admin reads. API keys and group
 member grants do not authorize them, and there are no case mutation, approval,
-recommendation, or execution endpoints. The authoritative Event/Incident feed
-continues unchanged while cases are in shadow mode.
+recommendation, or execution endpoints. In shadow mode the authoritative
+Event/Incident feed continues unchanged; on an installation cut to
+authoritative mode, digest-tier web/FIM evidence stops projecting per-receipt
+Events and the case list **is** the operator surface — expected deployment
+churn appears only as one `settled` deployment case per sensor/deploy (no
+Event, no notification), and case promotions to high/critical each project one
+`mojosec.case.promoted` Event for notification RuleSets.
 
 List parameters are `page` (default 1, maximum 100), `page_size` (default 50,
-maximum 100), and indexed exact filters `state`, `urgency`, `sensor_kind`, and
-`resource_id`. Values must be positive integers; values over 100 return HTTP
-400 instead of being clamped, so the maximum offset is 9,900 rows. State is
-`observing` or `elevated`; urgency is `info`, `warning`, `high`, or `critical`;
-sensor kind is `web` or `fim`. The response includes `has_more` rather than an
-unbounded total scan. A list response has this envelope:
+maximum 100), and indexed exact filters `state`, `urgency`, `sensor_kind`,
+`resource_id`, `family`, and `deployment_id`. Page values must be positive
+integers; values over 100 return HTTP 400 instead of being clamped, so the
+maximum offset is 9,900 rows. State is `observing`, `elevated`, or `settled`;
+urgency is `info`, `warning`, `high`, or `critical`; sensor kind is `web` or
+`fim`. Every list row carries `deployment_id` (empty outside deployment
+cases); detail rows add `settled_at`, `projected_urgency`, and the bounded
+`breakdown` (`{"operations": {...}, "tiers": {...}}`) alongside `samples` and
+`transitions`; timestamps are ISO-8601 strings. Case-metrics additionally
+reports `settled` and `suppressed_events`. The response includes `has_more`
+rather than an unbounded total scan. A list response has this envelope:
 
 ```json
 {

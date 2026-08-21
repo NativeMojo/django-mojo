@@ -24,14 +24,46 @@ Event (raw signal)
 
 Events are the input. Incidents are the output. Rules, RuleSets, and handlers are the processing pipeline in between.
 
-## MojoSec shadow cases
+## MojoSec cases
 
-`MojoSecReceipt` remains the immutable forensic/idempotency ledger and the
-existing receipt → `Event` → RuleSet/handler path remains authoritative.
-`MojoSecCase` is a separate, bounded shadow projection: it summarizes web and
-FIM receipts into deterministic time windows without notifying, blocking,
-recommending, acknowledging, or owning an action. `MojoSecCaseTransition` is an
-append-only snapshot for each receipt contribution.
+`MojoSecReceipt` remains the immutable forensic/idempotency ledger.
+`MojoSecCase` summarizes web and FIM receipts into deterministic bounded
+cases; `MojoSecCaseTransition` is an append-only snapshot for each receipt
+contribution plus receipt-less system rows (`settled`, `reopened`,
+`projection`, `receipt_id_snapshot=0`).
+
+An installation's enrollment row carries a `mode`:
+
+- **`shadow`** (default) — dual-write only. The receipt → `Event` →
+  RuleSet/handler path stays authoritative and cases never notify, project,
+  or own an acknowledgement.
+- **`authoritative`** — digest-tier evidence (trusted expected-change FIM and
+  policy-bound web observations, which normalize to info/warning) is
+  **case-routed**: the receipt is created eventless with a sticky
+  `case_routed` flag, the case contribution owns the ingestion ack (`retry`
+  until it lands durably), and **no per-receipt Event is projected**.
+  Unannotated protected changes, `fim.overflow` and
+  `fim.expected_change_error` keep today's immediate, individual per-receipt
+  Events at their existing severity. Routing is decided once, at first
+  delivery: a later policy bump or un-enrollment cannot dead-letter or reject
+  accepted evidence — an unresolvable binding terminal-converts the receipt
+  into its ordinary per-receipt Event instead (visible noise, never silent
+  loss), and a `*/5` sweep re-drives stranded contributions from replay
+  evidence.
+
+Cutting an installation to authoritative consciously silences exact-category
+RuleSets on `mojosec.web.probe`, `mojosec.web.denied`, `mojosec.web.error`
+and trusted `mojosec.fim.change` for that installation — the canary command's
+`silenced_rule_sets` preflight lists exactly what stops firing. The only
+deliberate case-level projection is promotion: when an authoritative-mode
+case ratchets into high/critical, exactly one `mojosec.case.promoted` Event
+per upward urgency step is projected (level 8/12, `source_ip=None`, bounded
+metadata, no raw paths), published with exact-category lookup so deployments
+attach notification RuleSets to it. Projection is crash-safe (the
+`projected_urgency` ratchet is healed by the sweep) and handler dispatch uses
+the strict idempotent form. `block://` on the promoted category is inert by
+design — a case aggregates many sources and carries no `source_ip`;
+enforcement wiring belongs to the recommendation lifecycle in a later slice.
 
 Case counters deliberately mean different things:
 
@@ -48,10 +80,19 @@ The receipt row lock plus its one case contribution timestamp makes replay and
 concurrent duplicate delivery idempotent. The case window has a database unique
 identity and is updated under a row lock. Web cases use one-hour windows and
 normalize registered probe families plus an explicit `other_probe` bucket and
-bounded IP networks. FIM uses 15-minute windows, protected tiers, a dedicated
-overflow family, and validated expected-deployment identity. Raw paths, query
-strings, bodies, cookies, authorization, arbitrary lines, and free-form sensor
-text do not enter cases or case metrics.
+bounded IP networks. Untrusted FIM uses 15-minute windows, protected tiers and
+a dedicated overflow family. **Trusted expected-change FIM coalesces into one
+deployment case per sensor + deployment identity per UTC day** (evaluator v2):
+`family="deployment"`, the `deployment_id` column carries the identity, and a
+bounded `breakdown` records per-operation and per-tier change counts (≤16
+operations / 8 tiers, spill in `"_other"`). A deployment case **settles** after
+the quiet window (`MOJOSEC_DEPLOY_QUIET_SECONDS`, default 60, bounds 10–900)
+with no last-seen movement — a system transition, never an Event or a
+notification; a genuinely new late receipt reopens it once and it re-settles.
+Real deploys therefore project nothing anywhere: the settled case row in the
+case list is the one visible deployment summary. Raw paths, query strings,
+bodies, cookies, authorization, arbitrary lines, and free-form sensor text do
+not enter cases or case metrics.
 
 Sensor time may lead receipt time by at most the file/static
 `MOJOSEC_CASE_FUTURE_SKEW_SECONDS` setting (default 300 seconds, valid range
@@ -68,31 +109,36 @@ update, delete, approve, recommend, acknowledge, or execute endpoints.
 
 | Method | Path | Input | Response |
 |---|---|---|---|
-| `GET` | `/api/incident/mojosec/case` | `page` (default 1, maximum 100), `page_size` (default 50, maximum 100), and exact `state`, `urgency`, `sensor_kind`, or `resource_id` filters | `{status, data, page, page_size, has_more}`; `data` is a bounded list of case summaries |
+| `GET` | `/api/incident/mojosec/case` | `page` (default 1, maximum 100), `page_size` (default 50, maximum 100), and exact `state` (`observing`/`elevated`/`settled`), `urgency`, `sensor_kind`, `resource_id`, `family`, or `deployment_id` filters | `{status, data, page, page_size, has_more}`; `data` is a bounded list of case summaries |
 | `GET` | `/api/incident/mojosec/case/<id>` | Case id in the path | `{status, data}`; `data` is one case with at most 8 normalized samples and the latest 50 transition snapshots |
 | `GET` | `/api/incident/mojosec/case-metrics` | `days` (default 1, range 1–90) and optional exact `resource_id` | `{status, data}` with bounded aggregate counters and no evidence arrays |
 
 A list row contains `id`, `created`, `first_seen`, `last_seen`, `window_start`,
-`window_end`, `sensor_kind`, `resource_id`, `family`, state and urgency with
-their reasons, all six counters, and the policy/evaluator versions. Detail adds
-`sensor_id`, `network`, `samples`, and `transitions`. Each transition exposes
-only its id/time, transition and reason, from/to state and urgency, and the
-resulting occurrence/receipt counts; it never exposes receipt replay JSON or
-integrity digests.
+`window_end`, `sensor_kind`, `resource_id`, `family`, `deployment_id`, state
+and urgency with their reasons, all six counters, and the policy/evaluator
+versions; datetimes are ISO-8601 strings. Detail adds `sensor_id`, `network`,
+`settled_at`, `projected_urgency`, `breakdown`, `samples`, and `transitions`.
+Each transition exposes only its id/time, transition and reason, from/to state
+and urgency, and the resulting occurrence/receipt counts; it never exposes
+receipt replay JSON or integrity digests.
 
 `page` and `page_size` must be positive integers. Values over 100 are rejected
 with HTTP 400 rather than clamped, bounding the deepest possible offset to
 9,900 rows. Clients use `has_more` and must not request an unbounded total.
 
 The case-metrics `data` keys are `days`, `cases`, `occurrences`, `receipts`,
-`projected_events`, `distinct`, `overflows`, `compression_ratio`, and
-`by_urgency`. Compression is occurrences divided by cases, not by receipts or
-projected Events. The dual-write path also records operational metrics under
+`projected_events`, `distinct`, `overflows`, `settled`, `suppressed_events`,
+`compression_ratio`, and `by_urgency`. Compression is occurrences divided by
+cases, not by receipts or projected Events; `suppressed_events` counts
+case-routed receipts that would each have been one operator Event under the
+legacy path. The contribution path also records operational metrics under
 `mojosec:shadow:`: `receipts`, `occurrences`, `compressed_occurrences`,
-`cases_opened`, `cases_updated`, `urgency:<level>`, `promotions`, `overflow`,
-and `failures`. The `overflow` metric counts updates to cases whose bounded
-sample overflow is nonzero; the case's `overflow_count` is the durable distinct
-sample count.
+`cases_opened`, `cases_updated`, `deploy_cases_opened`,
+`deploy_cases_settled`, `events_suppressed`, `ack_retries`,
+`route_conversions`, `case_events_projected`, `projection_failures`,
+`urgency:<level>`, `promotions`, `overflow`, and `failures`. The `overflow`
+metric counts updates to cases whose bounded sample overflow is nonzero; the
+case's `overflow_count` is the durable distinct sample count.
 
 ### Rollout and one-VHost canary
 
@@ -105,8 +151,12 @@ MOJOSEC_CASE_SHADOW_TARGETS = [{
     "installation_key_id": 42,
     "vhost_ids": [17],
     "include_fim": False,
+    "mode": "shadow",          # or "authoritative" after the canary is accepted
 }]
 ```
+
+`mode` is optional and defaults to `"shadow"`; any other value fails the whole
+list closed, like every other malformed row.
 
 `vhost_ids` is only the first web eligibility gate. Before contribution, the
 server resolves an enabled VHost, requires `Vhost.domain.group_id` to equal the
@@ -130,16 +180,27 @@ inspection. The exact read-only bounds command is:
 uv run python manage.py mojosec_shadow_compare --installation-key 42 --vhost 17 --hours 24 --max-cases 500 --min-compression 2
 ```
 
-It prints the redacted `mojosec.shadow-comparison` v1 JSON contract and exits
-non-zero when receipt fidelity, cardinality, or compression bounds fail. It
-does not write cases or production policy. Disable by setting
-`MOJOSEC_CASE_SHADOW_TARGETS = []` and reconverging the application. Rollback
-leaves receipts, Events, Incidents, handlers, acknowledgements, and existing
-shadow rows untouched; it only stops new shadow contributions. Notification or
-action ownership cutover belongs to a later slice. This Slice 1 correlation
-write remains fail-open after receipt acknowledgement and has no case replay
-outbox. Slice 2 must add bounded replay for missed case contributions before
-any notification or action ownership cutover.
+`--vhost` is optional; `--sensor <sensor_id>` narrows to one node, which is
+the shape a FIM deployment canary wants. The command prints the redacted
+`mojosec.shadow-comparison` v2 JSON contract — including `suppressed_events`
+(per-receipt Events the cutover did not project), `deployment_cases`
+(per-sensor/deployment cardinality, the "one quiet summary per deploy" proof)
+and `silenced_rule_sets` (active exact-category RuleSets that stop firing for
+an authoritative installation) — and exits non-zero when receipt fidelity,
+cardinality, or compression bounds fail. It does not write cases or
+production policy.
+
+The cutover procedure is: enroll in `"shadow"`, run the comparison for at
+least one normal traffic cycle **and one real deploy**, read
+`silenced_rule_sets` to confirm nothing you rely on stops firing, then flip
+that row's `mode` to `"authoritative"` and reconverge. Flip back (or set
+`MOJOSEC_CASE_SHADOW_TARGETS = []`) to roll back new routing decisions;
+already-routed pending receipts still resolve through their sticky flag —
+contribution or terminal conversion — and are never lost. In shadow mode the
+correlation write remains fail-open after receipt acknowledgement; in
+authoritative mode the contribution owns the ack, and the `*/5`
+`settle_mojosec_cases` sweep settles quiet deployment cases, heals crashed
+projections, and re-drives stranded case-routed receipts.
 
 ---
 
