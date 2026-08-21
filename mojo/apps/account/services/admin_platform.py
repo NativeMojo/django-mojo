@@ -1186,8 +1186,14 @@ def framework_overview(request, refresh=False):
     }
 
 
-def apply_framework_update(request, version):
+def apply_framework_update(actor, version, idempotency_key=None):
     """Put the fleet back on the newest published django-mojo.
+
+    Takes the ACTOR, never a request. This is the one mutating service in this
+    module, and a mutation must not run behind a fabricated request object: the
+    two things it ever read off the request were ``request.user`` and the
+    ``Idempotency-Key`` header, so both are parameters and every caller —
+    the REST endpoint, an assistant tool, a shell — passes what it actually has.
 
     Two steps, in this order, and NEITHER of them writes a version into the pin:
 
@@ -1222,8 +1228,8 @@ def apply_framework_update(request, version):
     if pin:
         # Target records the transition, matching the framework_pin writer's
         # convention: "who cleared what" must survive in the audit trail.
-        system_settings.set_value(request.user, FRAMEWORK_VERSION_KEY, "")
-        audit_after_commit(request.user, "framework_pin", f"{pin}->latest")
+        system_settings.set_value(actor, FRAMEWORK_VERSION_KEY, "")
+        audit_after_commit(actor, "framework_pin", f"{pin}->latest")
 
     row = platform_deploy.last_converged_deployment()
     if row is None:
@@ -1232,13 +1238,13 @@ def apply_framework_update(request, version):
             "proven commit to redeploy.", code=409, status=409)
     try:
         deployment = platform_deploy.same_sha_retry(
-            row, actor=f"framework-update:{request.user.pk}",
-            created_by=request.user,
-            idempotency_key=request.META.get("HTTP_IDEMPOTENCY_KEY"))
+            row, actor=f"framework-update:{actor.pk}",
+            created_by=actor,
+            idempotency_key=idempotency_key)
     except deploy.DeploymentCoordinationError:
         raise merrors.ValueException(
             "Deploy coordination unavailable", code=503, status=503) from None
-    audit_after_commit(request.user, "framework_update",
+    audit_after_commit(actor, "framework_update",
                        f"{version}:{deployment.pk}")
     return {
         "schema_version": SCHEMA_VERSION,
