@@ -22,6 +22,7 @@ import {h, icon} from '../core.js';
 import {announce, runAction} from '../components/actions.js';
 
 import {mountConversation} from './conversation.js';
+import {mountSetup} from './setup.js';
 
 const OPEN_KEY = 'mojo-admin-assistant-open';
 const DOCKED_QUERY = '(min-width: 1101px)';
@@ -128,6 +129,11 @@ export function install({ctx, app}) {
   let session = null;
 
   function showSetup() {
+    if (!capabilities.setup) return Promise.resolve();
+    if (typeof disposeBody === 'function') disposeBody();
+    session = null;
+    const view = mountSetup({ctx, panel: api, onBack: () => { disposeBody = mountBody(); }});
+    disposeBody = () => view.dispose();
     return Promise.resolve();
   }
 

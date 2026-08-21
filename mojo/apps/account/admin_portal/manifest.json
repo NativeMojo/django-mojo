@@ -24,6 +24,7 @@
     "assets/assistant/plan.js",
     "assets/assistant/transport.js",
     "assets/assistant/conversation.js",
-    "assets/assistant/approval.js"
+    "assets/assistant/approval.js",
+    "assets/assistant/setup.js"
   ]
 }
