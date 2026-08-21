@@ -965,6 +965,11 @@ def main():
     parser.add_argument("--maintenance-state", choices=("findings", "denied", "in_flight", "stalled", "unavailable", "framework_pinned", "framework_none", "clear"), default="findings")
     parser.add_argument("--deployments-state", choices=("mixed", "converged", "failed", "empty"), default="mixed")
     parser.add_argument("--capacity-state", choices=("healthy", "single_node", "adding", "denied", "no_reader", "node_id_pinned", "external_mode"), default="healthy")
+    # The messaging fixtures have always carried these scenarios; they were
+    # reachable only through the gallery defaults until the v2 Settings
+    # sub-pages needed to be QA'd against each one.
+    parser.add_argument("--sms-state", choices=("configured", "unset", "test_mode", "verify_failed", "not_installed"), default="configured")
+    parser.add_argument("--email-state", choices=("configured", "unset", "conflict"), default="configured")
     parser.add_argument("--infrastructure-mode", choices=("managed", "external"), default="managed")
     parser.add_argument("--upstream", help="Public HTTPS django-mojo origin for live QA")
     args = parser.parse_args()
@@ -992,6 +997,8 @@ def main():
        maintenance_state=args.maintenance_state,
        deployments_state=args.deployments_state,
        capacity_state=args.capacity_state,
+       sms_state=args.sms_state,
+       email_state=args.email_state,
        infrastructure_mode=args.infrastructure_mode)
     PreviewHandler.upstream = upstream
     PreviewHandler.setup_behavior = args.setup_state

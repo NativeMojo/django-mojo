@@ -139,6 +139,12 @@ function v2Action(ctx, label, route, fallback) {
     domains: ctx.features?.advanced?.enabled === true,
     access: ctx.features?.people?.enabled === true,
     settings: ctx.features?.settings?.enabled === true,
+    // The two integration sub-pages of Settings. Each is gated on its OWN
+    // bootstrap block, not on the settings block: they are the pages that own
+    // the provider config and the test tools, and a caller may hold one
+    // without the other.
+    'settings-sms': ctx.features?.sms?.enabled === true,
+    'settings-email': ctx.features?.email?.enabled === true,
   }[route] === true;
   if (enabled) return {label, href: `#/${route}`, external: false};
   return fallback ? v1Action(ctx, label, fallback) : null;
@@ -291,17 +297,17 @@ function blockersFrom(ctx, report) {
       add({tone: 'danger', name: 'More than one mailbox claims the system default',
         copy: 'Which address this installation sends from is undefined until '
           + 'exactly one mailbox holds the default.',
-        action: v1Action(ctx, 'Open Email', 'messaging-email')});
+        action: v2Action(ctx, 'Open Email', 'settings-email', 'messaging-email')});
     } else if (!mail.default_sender) {
       add({tone: 'danger', name: 'Email has no default sender',
         copy: 'Invites, alerts and password resets have no address to send '
           + 'from and will not be delivered.',
-        action: v1Action(ctx, 'Verify a domain', 'messaging-email')});
+        action: v2Action(ctx, 'Verify a domain', 'settings-email', 'messaging-email')});
     } else if (mail.domains && !mail.sendable_domains) {
       add({tone: 'danger', name: 'No sender domain is ready to send',
         copy: 'Every domain on record is still unverified, so nothing this '
           + 'installation sends will be delivered.',
-        action: v1Action(ctx, 'Verify a domain', 'messaging-email')});
+        action: v2Action(ctx, 'Verify a domain', 'settings-email', 'messaging-email')});
     }
   }
 
@@ -311,7 +317,7 @@ function blockersFrom(ctx, report) {
     add({tone: 'warn', name: 'The text-message provider failed its last connection test',
       copy: sentence(messaging.verified.message
         || 'The provider rejected the last connection test, so codes and alerts may not send.'),
-      action: v1Action(ctx, 'Open Text messages', 'messaging-sms')});
+      action: v2Action(ctx, 'Open Text messages', 'settings-sms', 'messaging-sms')});
   }
 
   const incidents = reported(sources.incidents);
