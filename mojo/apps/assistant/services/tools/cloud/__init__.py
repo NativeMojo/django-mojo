@@ -5,3 +5,4 @@ Split the way the security domain is: reads and mutations in separate modules,
 both self-registering via @tool on import.
 """
 from . import reads  # noqa: F401
+from . import actions  # noqa: F401
