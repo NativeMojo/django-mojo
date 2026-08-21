@@ -210,13 +210,19 @@ def _safe_expected(attributes, observed):
     return {"deployment_id": deployment, "operation_kind": operation}
 
 
-def _deployment_registered(installation_key_id, deployment_id, observed):
+def _deployment_registered(installation_key_id, deployment_id, at):
+    """Live registration check, evaluated against SERVER time only.
+
+    ``at`` must never be a sensor-claimed observation timestamp: the wire
+    imposes no lower bound on ``last_seen``, so a compromised sensor could
+    backdate itself into any historical registration window.
+    """
     from mojo.apps.incident.models import MojoSecDeployment
 
     return MojoSecDeployment.objects.filter(
         installation_key_id=installation_key_id,
         deployment_id=deployment_id,
-        expires_at__gte=observed).exists()
+        expires_at__gte=at).exists()
 
 
 def _case_input(receipt, sensor_event, web_binding=None, fim_binding=None):
@@ -279,7 +285,8 @@ def _case_input(receipt, sensor_event, web_binding=None, fim_binding=None):
         if (expected and fim_binding is not None and
                 fim_binding.get("require_registered_deployments") and
                 not _deployment_registered(
-                    receipt.api_key_id, expected["deployment_id"], observed)):
+                    receipt.api_key_id, expected["deployment_id"],
+                    dates.utcnow())):
             # The annotation is well-formed but its deployment identity was
             # never pre-registered centrally. Under this opt-in trust bound
             # the sensor's root assertion alone is not enough — the change is
@@ -373,9 +380,10 @@ def _case_input(receipt, sensor_event, web_binding=None, fim_binding=None):
             sample = {"kind": kind, "actor": actor, "target_user": target_user}
             # Bounded identity only — never the exact command text, which
             # stays on the receipt/Event for security-admin drill-down.
-            for field in ("command_path", "command_sha256"):
-                if evidence.get(field):
-                    sample[field] = evidence[field]
+            # (command_sha256 is deliberately receipt-only in the evidence
+            # projection, so command_path is the distinguishing field here.)
+            if evidence.get("command_path"):
+                sample["command_path"] = evidence["command_path"]
             base.update({
                 "sensor_kind": "auth", "family": "sudo",
                 "network": "", "resource_id": f"user:{actor}"[:96],
@@ -385,7 +393,7 @@ def _case_input(receipt, sensor_event, web_binding=None, fim_binding=None):
                 "sample": sample,
                 "sample_key": _digest(
                     kind, actor, target_user,
-                    evidence.get("command_sha256", "")),
+                    evidence.get("command_path", "")),
                 "correlation_key": _digest(
                     "auth.sudo", receipt.sensor_id, actor, target_user),
             })
@@ -1062,9 +1070,18 @@ def campaign_sweep(now=None, limit=32, lookback_seconds=900):
         hour=0, minute=0, second=0, microsecond=0)
     day_end = day_start + datetime.timedelta(days=1)
     horizon = now - datetime.timedelta(seconds=lookback_seconds)
+    # Campaign membership is impossible-path evidence only: the edge itself
+    # rejected these requests as families the application cannot serve.
+    # Policy-bound ordinary traffic (info "trusted_bounded_response" — real
+    # users' 401/403s among it) must never accumulate into a proposed
+    # block set.
+    campaign_reasons = (
+        "trusted_impossible_path", "sustained_trusted_impossible_paths",
+        "corroborated_compromise")
     triples = list(
         MojoSecCase.objects.filter(
             sensor_kind="web", family__in=WEB_PROBE_FAMILIES,
+            urgency_reason__in=campaign_reasons,
             modified__gte=horizon, group__isnull=False)
         .values_list("group_id", "family", "resource_id").distinct()[:limit])
     opened = updated = 0
@@ -1073,6 +1090,7 @@ def campaign_sweep(now=None, limit=32, lookback_seconds=900):
         members = MojoSecCase.objects.filter(
             sensor_kind="web", group_id=group_id, family=family,
             resource_id=resource_id,
+            urgency_reason__in=campaign_reasons,
             last_seen__gte=day_start, last_seen__lt=day_end)
         stats = members.aggregate(
             networks=Count("network", distinct=True),

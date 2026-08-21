@@ -484,7 +484,8 @@ def test_corroboration_promotes_the_high_trigger_once(opts):
 
 
 def _web_member(opts, index, family="wordpress", resource_id="vhost:424242",
-                when=None):
+                when=None, urgency="warning",
+                urgency_reason="trusted_impossible_path"):
     from mojo.apps.incident.models import MojoSecCase
     from mojo.helpers import dates
 
@@ -500,7 +501,7 @@ def _web_member(opts, index, family="wordpress", resource_id="vhost:424242",
         window_key=f"{PREFIX}-member-w-{index}",
         window_start=when, window_end=when, first_seen=when, last_seen=when,
         policy_version=1, evaluator_version=3,
-        urgency="warning", urgency_reason="trusted_impossible_path",
+        urgency=urgency, urgency_reason=urgency_reason,
         observed_sources=[ip], distinct_source_count=1,
         occurrence_count=20, receipt_count=1)
 
@@ -563,6 +564,13 @@ def test_campaign_below_threshold_stays_uncorrelated(opts):
     for index in range(5):
         _web_member(opts, index, family="secret_files",
                     resource_id="vhost:424243", when=now)
+    # Policy-bound ordinary traffic (info, trusted_bounded_response — real
+    # users' requests among it) must never accumulate into a campaign, no
+    # matter how many networks it spans.
+    for index in range(14):
+        _web_member(opts, index, family="other_probe",
+                    resource_id="vhost:424244", when=now, urgency="info",
+                    urgency_reason="trusted_bounded_response")
     with mock.patch.object(
             mojosec_correlation.settings, "get_static",
             side_effect=_settings(opts)), \
@@ -572,6 +580,10 @@ def test_campaign_below_threshold_stays_uncorrelated(opts):
         sensor_kind="campaign", group=opts.promo_group,
         family="secret_files").count(), 0,
         "below-threshold breadth must never open a campaign")
+    th.assert_eq(MojoSecCase.objects.filter(
+        sensor_kind="campaign", group=opts.promo_group,
+        family="other_probe").count(), 0,
+        "ordinary bounded traffic must never form a campaign")
 
 
 @th.django_unit_test()
@@ -611,12 +623,26 @@ def test_deployment_registration_gate_flips_trust(opts):
                        "unregistered deployment ids are untrusted evidence")
         th.assert_eq(case.urgency, "high",
                      "unregistered deployment change is immediate evidence")
-        MojoSecDeployment.objects.create(
+        # Registration liveness is judged by SERVER time — a registration
+        # relative to the (past) sensor-claimed observation would already be
+        # expired, which is also why a backdating sensor gains nothing.
+        registration = MojoSecDeployment.objects.create(
             installation_key=opts.promo_key_a, deployment_id="promo-deploy-1",
-            expires_at=observed_at + datetime.timedelta(hours=1))
+            expires_at=dates.utcnow() + datetime.timedelta(hours=1))
         receipt2 = _receipt(opts, trusted(f"ib{0:062x}"))
         case2, contributed2 = mojosec_correlation.contribute(
             receipt2, trusted(f"ib{0:062x}"))
         th.assert_true(contributed2, "registered trusted fim must contribute")
         th.assert_eq(case2.family, "deployment",
                      "a registered deployment id restores the digest path")
+        # Backdating: once the registration has expired in server time, a
+        # sensor claiming an observation inside the old window is refused.
+        registration.expires_at = dates.utcnow() - datetime.timedelta(hours=1)
+        registration.save(update_fields=["expires_at"])
+        receipt3 = _receipt(opts, trusted(f"ic{0:062x}"))
+        case3, contributed3 = mojosec_correlation.contribute(
+            receipt3, trusted(f"ic{0:062x}"))
+        th.assert_true(contributed3, "expired-registration fim still contributes")
+        th.assert_true(case3.family != "deployment",
+                       "a backdated observation cannot revive an expired "
+                       "registration")

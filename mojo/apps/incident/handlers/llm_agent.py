@@ -629,6 +629,19 @@ def _tool_block_ip(params):
     reason = f"[LLM Agent] {params['reason']}"
     ttl = params.get("ttl", 3600)
 
+    # An LLM can explain a block; it can never pick a protected target or a
+    # permanent TTL. Same validation the recommendation/ticket paths use.
+    canonical, state, why = mojosec_actions.validate_target(ip)
+    if state != "validated":
+        return {"ok": False, "ip": ip, "blocked": False,
+                "reason": f"refused: {why}"}
+    ip = canonical
+    try:
+        ttl = int(ttl)
+    except (TypeError, ValueError):
+        ttl = 3600
+    ttl = max(300, min(ttl, 604800))
+
     if params.get("incident_id"):
         # Same single-owner rule as block:// — an LLM must never race the
         # recommendation lifecycle on a MojoSec-routed installation.

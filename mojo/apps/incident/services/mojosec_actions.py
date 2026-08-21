@@ -12,6 +12,7 @@ import datetime
 import hashlib
 import ipaddress
 import json
+import re
 
 from django.db import transaction
 from django.db.models import F
@@ -85,9 +86,16 @@ def _cidr_list(name):
     """A configured CIDR list, or None when the config is malformed.
 
     None means "cannot decide" — and because blocking is the dangerous act,
-    the caller must fail every target closed, not open.
+    the caller must fail every target closed, not open. Read raw: the list
+    coercion helpers swallow a wrong-typed value into the default, which
+    would make a typo'd protected list indistinguishable from "none
+    configured".
     """
-    value = settings.get_static(name, [], kind="list")
+    value = settings.get_static(name, None)
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        return None
     networks = []
     for row in value:
         if not isinstance(row, str):
@@ -207,20 +215,25 @@ def propose(case, action, reason_code, explanation, confidence,
                     "mojosec-rec", case.pk, action, generation),
                 expires_at=now + datetime.timedelta(
                     seconds=proposal_ttl_seconds()))
-        existing = set(open_rec.targets.values_list("ip", flat=True))
-        for candidate in list(candidate_ips)[:max_targets()]:
-            canonical, state, reason = validate_target(candidate)
-            if canonical is None or canonical in existing:
-                continue
-            if len(existing) >= max_targets():
-                break
-            existing.add(canonical)
-            MojoSecRecommendationTarget.objects.create(
-                recommendation=open_rec, ip=canonical,
-                validation_state=state, validation_reason=reason)
-        open_rec.urgency = case.urgency
-        _refresh_counts(open_rec)
-        open_rec.save()
+        if created or open_rec.state == MojoSecRecommendation.STATE_PROPOSED:
+            # An approval freezes the target set: once a human (or the auto
+            # policy) has approved, later evidence must never widen what
+            # executes under that approval. New sources wait for the next
+            # proposal after this one terminates.
+            existing = set(open_rec.targets.values_list("ip", flat=True))
+            for candidate in list(candidate_ips)[:max_targets()]:
+                canonical, state, reason = validate_target(candidate)
+                if canonical is None or canonical in existing:
+                    continue
+                if len(existing) >= max_targets():
+                    break
+                existing.add(canonical)
+                MojoSecRecommendationTarget.objects.create(
+                    recommendation=open_rec, ip=canonical,
+                    validation_state=state, validation_reason=reason)
+            open_rec.urgency = case.urgency
+            _refresh_counts(open_rec)
+            open_rec.save()
         if created:
             _transition(open_rec, "proposed", reason_code, "")
     if created:
@@ -508,8 +521,17 @@ def owns_enforcement(event):
         return False
     if category == "mojosec.case.promoted":
         return True
-    if category.startswith("mojosec.web.") or category == "mojosec.fim.change":
-        return True
+    if category.startswith("mojosec.web."):
+        # Web routing is per enrolled vhost — suppressing a vhost the
+        # enrollment does not cover would silently stop blocking for
+        # evidence nothing replaces.
+        evidence = block.get("evidence") if isinstance(
+            block.get("evidence"), dict) else {}
+        match = re.fullmatch(
+            r"vhost:([1-9][0-9]{0,19})", str(evidence.get("resource_id", "")))
+        return bool(match and int(match.group(1)) in enrollment["vhost_ids"])
+    if category == "mojosec.fim.change":
+        return bool(enrollment.get("include_fim"))
     if (category.startswith("mojosec.auth.") or
             category == "mojosec.system.service_error"):
         return bool(enrollment.get("include_host"))
@@ -542,10 +564,14 @@ def _propose_from_cases(now, horizon, limit):
     from mojo.apps.incident.models import MojoSecCase, MojoSecRecommendation
 
     proposed = 0
+    # corroborated_compromise is included wherever its pre-corroboration
+    # reason would have qualified: a promotion must never make the block
+    # proposal disappear.
     single = MojoSecCase.objects.filter(
         sensor_kind="web", modified__gte=horizon, distinct_source_count=1,
         urgency_reason__in=(
-            "trusted_impossible_path", "sustained_trusted_impossible_paths"),
+            "trusted_impossible_path", "sustained_trusted_impossible_paths",
+            "corroborated_compromise"),
         occurrence_count__gte=mojosec_correlation.block_min_occurrences(),
     ).exclude(observed_sources=[])[:limit]
     for case in single:
@@ -570,7 +596,9 @@ def _propose_from_cases(now, horizon, limit):
         proposed += 1 if created else 0
     progressions = MojoSecCase.objects.filter(
         sensor_kind="auth", family="ssh", modified__gte=horizon,
-        urgency="critical", urgency_reason="ssh_failure_then_success",
+        urgency="critical",
+        urgency_reason__in=(
+            "ssh_failure_then_success", "corroborated_compromise"),
     ).exclude(observed_sources=[])[:limit]
     for case in progressions:
         _, created = propose(

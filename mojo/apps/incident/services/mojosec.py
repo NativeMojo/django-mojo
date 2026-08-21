@@ -420,7 +420,7 @@ def _routable_digest_tier(api_key, binding, sensor_event):
         return False
     if (binding.get("require_registered_deployments") and
             not mojosec_correlation._deployment_registered(
-                api_key.pk, expected["deployment_id"], observed)):
+                api_key.pk, expected["deployment_id"], dates.utcnow())):
         return False
     return True
 

@@ -72,8 +72,10 @@ many sources and carries no `source_ip`; case-driven enforcement goes through
 the recommendation lifecycle below, which is the **single action owner** for
 routed categories: `block://` handlers and the LLM agent's auto-block are
 suppressed (with an incident history note and the
-`block_handlers_suppressed` metric, never an auto-resolve) exactly for the
-categories an authoritative enrollment routes. Unrouted categories — and
+`block_handlers_suppressed` metric, never an auto-resolve) exactly for what
+the authoritative enrollment routes — web categories only for the enrolled
+`vhost_ids`, `mojosec.fim.change` only under `include_fim`, auth/host
+categories only under `include_host`. Unrouted categories and vhosts — and
 every non-enrolled or shadow installation — keep today's per-receipt blocking
 untouched, and manual operator actions always work.
 

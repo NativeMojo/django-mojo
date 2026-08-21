@@ -343,7 +343,15 @@ class BlockHandler:
     def run(self, event):
         try:
             from mojo.apps.incident.services import mojosec_actions
-            if mojosec_actions.owns_enforcement(event):
+            owned = False
+            try:
+                owned = mojosec_actions.owns_enforcement(event)
+            except Exception:
+                # The owner check must never become a new way for blocking
+                # to silently stop: on any failure, do not suppress.
+                logger.exception(
+                    "BlockHandler: owner check failed; not suppressing")
+            if owned:
                 # The MojoSec recommendation lifecycle is the single action
                 # owner for this installation's routed categories; a
                 # per-receipt block here would race it and misattribute

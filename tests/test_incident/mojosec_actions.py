@@ -23,12 +23,13 @@ TEST_IPS = ([SCANNER_IP, SECOND_IP, TICKET_IP, WHITELISTED_IP, REVERSE_IP,
              RACE_IP] + CAMPAIGN_IPS)
 
 
-def _settings(opts, mode="authoritative", auto=False, include_host=True):
+def _settings(opts, mode="authoritative", auto=False, include_host=True,
+              vhost_ids=(777,)):
     from mojo.apps.incident.services import mojosec_correlation
 
     targets = [{
         "installation_key_id": opts.action_key.pk,
-        "vhost_ids": [],
+        "vhost_ids": list(vhost_ids),
         "include_fim": True,
         "include_host": include_host,
         "require_registered_deployments": False,
@@ -351,6 +352,63 @@ def test_scope_and_injection_bounds(opts):
         "high", ["not-an-ip", "203.0.113.0/24", "203.0.113.205 OR 1=1"])
     th.assert_eq(recommendation.validated_count, 0,
                  "garbage and CIDR strings must never become targets")
+    # A wrong-typed protected-CIDR setting refuses every target — blocking
+    # is the dangerous act, so uncertainty must stop it.
+    from mojo.apps.incident.services import mojosec_correlation
+    original = mojosec_correlation.settings.get_static
+
+    def broken(name, default=None, **kwargs):
+        if name == "MOJOSEC_PROTECTED_CIDRS":
+            return {"oops": True}
+        return original(name, default, **kwargs)
+    with mock.patch.object(
+            mojosec_correlation.settings, "get_static", side_effect=broken):
+        canonical, state, why = mojosec_actions.validate_target("203.0.114.250")
+        th.assert_eq((state, why), ("invalid", "protected_config_invalid"),
+                     "a malformed protected list must refuse every target")
+
+
+@th.django_unit_test()
+def test_approval_freezes_the_target_set(opts):
+    from mojo.apps.incident.models import MojoSecRecommendation
+    from mojo.apps.incident.services import mojosec_actions
+
+    case = _case(opts, sensor_kind="campaign", family="wordpress",
+                 urgency="high", urgency_reason="distributed_campaign",
+                 sources=CAMPAIGN_IPS[:3], resource_id="vhost:5158",
+                 key_suffix="freeze")
+    recommendation, _created = mojosec_actions.propose(
+        case, MojoSecRecommendation.ACTION_BLOCK_IP_SET,
+        "distributed_campaign", "freeze fixture", "high", CAMPAIGN_IPS[:3])
+    with mock.patch.object(mojosec_actions, "_queue_execution"), \
+            mock.patch.object(mojosec_actions, "_record_metric"):
+        mojosec_actions.approve(recommendation, opts.action_approver)
+    recommendation.refresh_from_db()
+    th.assert_eq(recommendation.state, "approved", "fixture must be approved")
+    before = recommendation.targets.count()
+    frozen, created = mojosec_actions.propose(
+        case, MojoSecRecommendation.ACTION_BLOCK_IP_SET,
+        "distributed_campaign", "later evidence", "high",
+        CAMPAIGN_IPS[:3] + ["198.51.108.99"])
+    th.assert_true(not created and frozen.pk == recommendation.pk,
+                   "the open row is reused, never duplicated")
+    th.assert_eq(frozen.targets.count(), before,
+                 "an approval freezes the target set — later evidence must "
+                 "never widen what executes under it")
+    # A corroborated critical ssh case still proposes its block — the
+    # promotion must not erase enforcement eligibility.
+    ssh_case = _case(opts, sensor_kind="auth", family="ssh",
+                     urgency="critical",
+                     urgency_reason="corroborated_compromise",
+                     sources=["203.0.114.251"], resource_id="user:corro",
+                     key_suffix="corro")
+    with mock.patch.object(mojosec_actions, "_record_metric"), \
+            _inline_execution():
+        mojosec_actions.action_sweep()
+    th.assert_eq(
+        MojoSecRecommendation.objects.filter(
+            case=ssh_case, action="temporary_block_ip").count(), 1,
+        "a corroborated ssh compromise must still propose its block")
 
 
 @th.django_unit_test()
@@ -372,12 +430,17 @@ def test_block_handler_suppression_is_scoped_to_routed_categories(opts):
 
     routed = make_event("mojosec.web.probe", {
         "mojosec": {"installation_key_id": opts.action_key.pk,
-                    "sensor_id": SENSOR}})
+                    "sensor_id": SENSOR,
+                    "evidence": {"resource_id": "vhost:777"}}})
     incident = Incident.objects.create(
         title=f"{PREFIX} incident", category="mojosec.web.probe",
         status="open")
     Event.objects.filter(pk=routed.pk).update(incident=incident)
     routed.refresh_from_db()
+    unenrolled_vhost = make_event("mojosec.web.probe", {
+        "mojosec": {"installation_key_id": opts.action_key.pk,
+                    "sensor_id": SENSOR,
+                    "evidence": {"resource_id": "vhost:888"}}})
     unrouted_auth = make_event("mojosec.auth.ssh_failure", {
         "mojosec": {"installation_key_id": opts.action_key.pk,
                     "sensor_id": SENSOR}})
@@ -399,8 +462,11 @@ def test_block_handler_suppression_is_scoped_to_routed_categories(opts):
             "suppression must not block")
         th.assert_eq(handler.run(promoted), False,
                      "block:// on a promoted case Event stays inert")
-        # include_host is OFF: auth categories are not routed, so the
-        # operator's block rule still fires and actually blocks.
+        # A vhost the enrollment does not cover is NOT routed: the
+        # operator's block rule must still fire for it.
+        th.assert_eq(handler.run(unenrolled_vhost), True,
+                     "unenrolled vhosts keep their operator block rules")
+        # include_host is OFF: auth categories are not routed either.
         th.assert_eq(handler.run(unrouted_auth), True,
                      "unrouted categories keep their operator block rules")
         geo = GeoLocatedIP.objects.get(ip_address=SCANNER_IP)
