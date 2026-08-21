@@ -370,10 +370,15 @@ def test_framework_fallback_renders_without_loaders(opts):
     from mojo.helpers import error_pages
 
     # What a project that has not configured TEMPLATES (or has broken it) gets:
-    # the private filesystem engine over the shipped templates.
-    with patch("mojo.helpers.error_pages.loader.select_template",
-               side_effect=TemplateDoesNotExist("errors/404.html")):
-        body = error_pages._render_html("404.html", {"brand_name": None, "reference": None})
+    # the private filesystem engine over the shipped templates. The failing
+    # loader is injected through _render_html's select_template seam
+    # (item #2558) instead of patching the shared error_pages module.
+    def no_loader(names):
+        raise TemplateDoesNotExist("errors/404.html")
+
+    body = error_pages._render_html(
+        "404.html", {"brand_name": None, "reference": None},
+        select_template=no_loader)
 
     assert "That page doesn&rsquo;t exist" in body, \
         "the shipped page must render straight off disk when no loader can find it"

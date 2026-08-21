@@ -2,11 +2,12 @@
 Authoritative DNS probe (mojo/helpers/dns/probe.py) + the additive
 `raise_on_error` flag on the GoDaddy DNSManager.
 
-Everything here is in-process with dnspython (and requests, for GoDaddy) fully
-patched — no DNS query and no HTTP request is ever made.
+Everything here is in-process with dnspython (and requests, for GoDaddy)
+replaced through the probe's ``dns=``/``query=``/``sleep=`` and the GoDaddy
+manager's ``http=`` injection seams (item #2558) — no DNS query and no HTTP
+request is ever made, and nothing process-global is patched.
 """
 import types
-from unittest import mock
 
 from testit import helpers as th
 
@@ -154,8 +155,8 @@ def test_find_zone_nameservers_finds_closest_authoritative_zone(opts):
 
     created = []
     fake = _fake_dns(_zone_answers(), created=created)
-    with mock.patch.object(probe, "dns_resolver", fake):
-        found = probe.find_zone_nameservers("_acme-challenge.foo.example.com")
+    found = probe.find_zone_nameservers(
+        "_acme-challenge.foo.example.com", dns=fake)
 
     assert found.error is None, f"Expected no error resolving the zone, got {found.error}"
     assert found.zone == "example.com", \
@@ -175,8 +176,8 @@ def test_find_zone_nameservers_reports_error_when_no_zone_found(opts):
     from mojo.helpers.dns import probe
 
     fake = _fake_dns({})  # every candidate NXDOMAINs
-    with mock.patch.object(probe, "dns_resolver", fake):
-        found = probe.find_zone_nameservers("_acme-challenge.nowhere.example.com")
+    found = probe.find_zone_nameservers(
+        "_acme-challenge.nowhere.example.com", dns=fake)
 
     assert found.zone is None, f"Expected no zone when nothing answers NS, got {found.zone}"
     assert found.nameservers == [], f"Expected no nameservers, got {found.nameservers}"
@@ -189,10 +190,9 @@ def test_verify_one_hop_cname_accepts_exact_direct_target(opts):
 
     answers = _cname_answers()
     fake = _fake_dns(answers)
-    with mock.patch.object(probe, "dns_resolver", fake):
-        result = probe.verify_one_hop_cname(
-            "_acme-challenge.example.com.",
-            "OPAQUE.acme-hub.example.net.")
+    result = probe.verify_one_hop_cname(
+        "_acme-challenge.example.com.",
+        "OPAQUE.acme-hub.example.net.", dns=fake)
 
     assert result.ok is True, f"Expected the exact direct CNAME to pass, got {result}"
 
@@ -208,15 +208,15 @@ def test_verify_one_hop_cname_rejects_wrong_or_chained_target(opts):
         ("example.net", "NS"): [FakeNS("ns1.wrong.example")],
         ("ns1.wrong.example", "A"): [FakeAddress("192.0.2.30")],
     })
-    with mock.patch.object(probe, "dns_resolver", _fake_dns(wrong)):
-        result = probe.verify_one_hop_cname(
-            "_acme-challenge.example.com", "opaque.acme-hub.example.net")
+    result = probe.verify_one_hop_cname(
+        "_acme-challenge.example.com", "opaque.acme-hub.example.net",
+        dns=_fake_dns(wrong))
     assert result.ok is False, "Expected a CNAME to the wrong target to fail"
 
     chained = _cname_answers(chained="third.example.net")
-    with mock.patch.object(probe, "dns_resolver", _fake_dns(chained)):
-        result = probe.verify_one_hop_cname(
-            "_acme-challenge.example.com", "opaque.acme-hub.example.net")
+    result = probe.verify_one_hop_cname(
+        "_acme-challenge.example.com", "opaque.acme-hub.example.net",
+        dns=_fake_dns(chained))
     assert result.ok is False, "Expected a second CNAME hop to fail"
     assert "one hop" in result.error, f"Expected a bounded one-hop refusal, got {result.error}"
 
@@ -231,8 +231,7 @@ def test_query_txt_pins_resolver_to_authoritative_addresses(opts):
 
     created = []
     fake = _fake_dns(_zone_answers([FakeTXT(strings=[b"token-abc"])]), created=created)
-    with mock.patch.object(probe, "dns_resolver", fake):
-        result = probe.query_txt("_acme-challenge.foo.example.com")
+    result = probe.query_txt("_acme-challenge.foo.example.com", dns=fake)
 
     assert result.error is None, f"Expected no error, got {result.error}"
     assert result.txt_values == ["token-abc"], f"Expected the TXT value, got {result.txt_values}"
@@ -256,8 +255,7 @@ def test_query_txt_missing_record_is_not_an_error(opts):
     # No TXT entry at all -> the fake raises NXDOMAIN, which just means
     # "not planted yet", not a failure of the probe.
     fake = _fake_dns(_zone_answers())
-    with mock.patch.object(probe, "dns_resolver", fake):
-        result = probe.query_txt("_acme-challenge.foo.example.com")
+    result = probe.query_txt("_acme-challenge.foo.example.com", dns=fake)
 
     assert result.error is None, f"Expected a missing TXT record to not be an error, got {result.error}"
     assert result.txt_values == [], f"Expected no values for a missing record, got {result.txt_values}"
@@ -295,11 +293,10 @@ def test_wait_for_txt_matches_quoted_and_chunked_records(opts):
     # passes is the plain digest. Normalization has to bridge the two.
     records = [FakeTXT(text='"digest-part-one" "digest-part-two"')]
     fake = _fake_dns(_zone_answers(records))
-    with mock.patch.object(probe, "dns_resolver", fake):
-        ok, seen = probe.wait_for_txt(
-            "_acme-challenge.foo.example.com",
-            ['"digest-part-onedigest-part-two"'],
-            timeout=0)
+    ok, seen = probe.wait_for_txt(
+        "_acme-challenge.foo.example.com",
+        ['"digest-part-onedigest-part-two"'],
+        timeout=0, dns=fake)
 
     assert ok is True, f"Expected quoted/chunked record to match the expected value, saw {seen}"
     assert seen == ["digest-part-onedigest-part-two"], \
@@ -323,11 +320,10 @@ def test_wait_for_txt_subset_match_for_wildcard_and_base(opts):
         FakeTXT(strings=[b"some-unrelated-value"]),
     ]
     fake = _fake_dns(_zone_answers(records))
-    with mock.patch.object(probe, "dns_resolver", fake):
-        ok, seen = probe.wait_for_txt(
-            "_acme-challenge.foo.example.com",
-            ["digest-base", "digest-wildcard"],
-            timeout=0)
+    ok, seen = probe.wait_for_txt(
+        "_acme-challenge.foo.example.com",
+        ["digest-base", "digest-wildcard"],
+        timeout=0, dns=fake)
 
     assert ok is True, f"Expected both digests present to satisfy the probe, saw {seen}"
     assert len(seen) == 3, f"Expected all three seen values reported, got {seen}"
@@ -339,11 +335,10 @@ def test_wait_for_txt_partial_match_is_not_ok(opts):
 
     records = [FakeTXT(strings=[b"digest-base"])]
     fake = _fake_dns(_zone_answers(records))
-    with mock.patch.object(probe, "dns_resolver", fake):
-        ok, seen = probe.wait_for_txt(
-            "_acme-challenge.foo.example.com",
-            ["digest-base", "digest-wildcard"],
-            timeout=0)
+    ok, seen = probe.wait_for_txt(
+        "_acme-challenge.foo.example.com",
+        ["digest-base", "digest-wildcard"],
+        timeout=0, dns=fake)
 
     assert ok is False, "Expected a partial match (one of two digests) to NOT satisfy the probe"
     assert seen == ["digest-base"], f"Expected the partial value reported back, got {seen}"
@@ -355,11 +350,10 @@ def test_wait_for_txt_timeout_returns_last_seen(opts):
 
     records = [FakeTXT(strings=[b"stale-value"])]
     fake = _fake_dns(_zone_answers(records))
-    with mock.patch.object(probe, "dns_resolver", fake):
-        ok, seen = probe.wait_for_txt(
-            "_acme-challenge.foo.example.com",
-            ["digest-that-never-lands"],
-            timeout=0)
+    ok, seen = probe.wait_for_txt(
+        "_acme-challenge.foo.example.com",
+        ["digest-that-never-lands"],
+        timeout=0, dns=fake)
 
     assert ok is False, "Expected a timeout to report failure"
     assert seen == ["stale-value"], \
@@ -380,10 +374,9 @@ def test_wait_for_txt_polls_until_the_record_appears(opts):
         return objict(txt_values=["digest-base"], zone="example.com", nameservers=[], error=None)
 
     slept = []
-    with mock.patch.object(probe, "query_txt", fake_query), \
-            mock.patch.object(probe.time, "sleep", lambda s: slept.append(s)):
-        ok, seen = probe.wait_for_txt(
-            "_acme-challenge.foo.example.com", ["digest-base"], timeout=60, interval=0)
+    ok, seen = probe.wait_for_txt(
+        "_acme-challenge.foo.example.com", ["digest-base"], timeout=60,
+        interval=0, query=fake_query, sleep=lambda s: slept.append(s))
 
     assert ok is True, f"Expected the probe to succeed once the record appears, saw {seen}"
     assert len(attempts) == 3, f"Expected the probe to keep polling until visible, got {len(attempts)} attempts"
@@ -400,8 +393,8 @@ def test_wait_for_txt_empty_expectation_fails_closed(opts):
         called.append(fqdn)
         raise AssertionError("query_txt must not run when there is nothing to expect")
 
-    with mock.patch.object(probe, "query_txt", fake_query):
-        ok, seen = probe.wait_for_txt("_acme-challenge.foo.example.com", [], timeout=0)
+    ok, seen = probe.wait_for_txt(
+        "_acme-challenge.foo.example.com", [], timeout=0, query=fake_query)
 
     assert ok is False, "Expected an empty expectation to fail closed, not to be trivially satisfied"
     assert seen == [], f"Expected no seen values, got {seen}"
@@ -427,6 +420,23 @@ class FakeResponse(object):
             raise requests.exceptions.HTTPError(f"{self.status_code} error")
 
 
+class FakeHTTP(object):
+    """Injected through DNSManager's ``http=`` seam (item #2558) — every verb
+    answers with the one scripted response."""
+
+    def __init__(self, response):
+        self.response = response
+
+    def get(self, *args, **kwargs):
+        return self.response
+
+    def put(self, *args, **kwargs):
+        return self.response
+
+    def patch(self, *args, **kwargs):
+        return self.response
+
+
 @th.django_unit_test()
 def test_godaddy_default_still_swallows_http_errors(opts):
     """
@@ -435,12 +445,11 @@ def test_godaddy_default_still_swallows_http_errors(opts):
     """
     from mojo.helpers.dns.godaddy import DNSManager
 
-    mgr = DNSManager("key", "secret")
+    bad = FakeResponse({"code": "UNAUTHORIZED", "message": "bad key"}, status_code=401)
+    mgr = DNSManager("key", "secret", http=FakeHTTP(bad))
     assert mgr.raise_on_error is False, "Expected raise_on_error to default to False"
 
-    bad = FakeResponse({"code": "UNAUTHORIZED", "message": "bad key"}, status_code=401)
-    with mock.patch("mojo.helpers.dns.godaddy.requests.get", return_value=bad):
-        result = mgr.get_domain_info("example.com")
+    result = mgr.get_domain_info("example.com")
 
     assert result.code == "UNAUTHORIZED", \
         f"Expected the parsed error body returned unchanged by default, got {result}"
@@ -451,16 +460,15 @@ def test_godaddy_raise_on_error_raises(opts):
     import requests
     from mojo.helpers.dns.godaddy import DNSManager
 
-    mgr = DNSManager("key", "secret", raise_on_error=True)
+    bad = FakeResponse({"code": "UNAUTHORIZED", "message": "bad key"}, status_code=401)
+    mgr = DNSManager("key", "secret", raise_on_error=True, http=FakeHTTP(bad))
     assert mgr.raise_on_error is True, "Expected raise_on_error to be set from the constructor"
 
-    bad = FakeResponse({"code": "UNAUTHORIZED", "message": "bad key"}, status_code=401)
     raised = False
-    with mock.patch("mojo.helpers.dns.godaddy.requests.get", return_value=bad):
-        try:
-            mgr.get_domain_info("example.com")
-        except requests.exceptions.HTTPError:
-            raised = True
+    try:
+        mgr.get_domain_info("example.com")
+    except requests.exceptions.HTTPError:
+        raised = True
 
     assert raised, "Expected raise_on_error=True to surface an HTTPError instead of a parsed error body"
 
@@ -469,12 +477,11 @@ def test_godaddy_raise_on_error_raises(opts):
 def test_godaddy_raise_on_error_passes_good_responses_through(opts):
     from mojo.helpers.dns.godaddy import DNSManager
 
-    mgr = DNSManager("key", "secret", raise_on_error=True)
     good = FakeResponse({"status": "ACTIVE", "domain": "example.com"})
+    mgr = DNSManager("key", "secret", raise_on_error=True, http=FakeHTTP(good))
 
-    with mock.patch("mojo.helpers.dns.godaddy.requests.get", return_value=good):
-        info = mgr.get_domain_info("example.com")
-        active = mgr.is_domain_active("example.com")
+    info = mgr.get_domain_info("example.com")
+    active = mgr.is_domain_active("example.com")
 
     assert info.status == "ACTIVE", f"Expected the parsed body on a 200, got {info}"
     assert active is True, "Expected is_domain_active to stay True for an ACTIVE domain"
@@ -485,20 +492,18 @@ def test_godaddy_write_methods_honor_raise_on_error(opts):
     import requests
     from mojo.helpers.dns.godaddy import DNSManager
 
-    mgr = DNSManager("key", "secret", raise_on_error=True)
     bad = FakeResponse({"code": "INVALID_BODY"}, status_code=422)
+    mgr = DNSManager("key", "secret", raise_on_error=True, http=FakeHTTP(bad))
 
     raised = False
-    with mock.patch("mojo.helpers.dns.godaddy.requests.put", return_value=bad):
-        try:
-            mgr.add_record("example.com", "TXT", "_acme-challenge", "digest", 600)
-        except requests.exceptions.HTTPError:
-            raised = True
+    try:
+        mgr.add_record("example.com", "TXT", "_acme-challenge", "digest", 600)
+    except requests.exceptions.HTTPError:
+        raised = True
     assert raised, "Expected add_record/edit_record to raise when raise_on_error=True"
 
     # ...and stay silent by default.
-    default_mgr = DNSManager("key", "secret")
-    with mock.patch("mojo.helpers.dns.godaddy.requests.put", return_value=bad):
-        result = default_mgr.add_record("example.com", "TXT", "_acme-challenge", "digest", 600)
+    default_mgr = DNSManager("key", "secret", http=FakeHTTP(bad))
+    result = default_mgr.add_record("example.com", "TXT", "_acme-challenge", "digest", 600)
     assert result.code == "INVALID_BODY", \
         f"Expected the default to keep returning the parsed body on a write error, got {result}"

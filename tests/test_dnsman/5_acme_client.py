@@ -7,7 +7,6 @@ the protocol helpers in ``mojo/helpers/acme/``.
 """
 import hashlib
 import json
-from unittest.mock import patch
 
 from requests.structures import CaseInsensitiveDict
 from testit import helpers as th
@@ -139,8 +138,12 @@ class FakeAcme(object):
 
 
 def _client(transport, key=None, **kwargs):
+    """Build an AcmeClient with the scripted transport injected through the
+    ``http=`` seam (item #2558) — never a process-global patch of the shared
+    acme client module's ``requests``."""
     from mojo.helpers.acme.client import AcmeClient
-    return AcmeClient(DIRECTORY_URL, key or _fixed_key(), **kwargs)
+    return AcmeClient(DIRECTORY_URL, key or _fixed_key(), http=transport,
+                      **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -282,10 +285,9 @@ def test_acme_dns01_txt_value(opts):
     assert "=" not in expected, "the TXT value must be base64url with padding stripped"
 
     transport = FakeAcme()
-    with patch("mojo.helpers.acme.client.requests", transport):
-        client = _client(transport, key=key)
-        assert client.key_authorization_digest(CHALLENGE_TOKEN) == expected, \
-            "the client digest helper must match jws.dns_txt_value"
+    client = _client(transport, key=key)
+    assert client.key_authorization_digest(CHALLENGE_TOKEN) == expected, \
+        "the client digest helper must match jws.dns_txt_value"
     assert not transport.posts, "computing a TXT digest must not touch the network"
 
 
@@ -299,9 +301,8 @@ def test_acme_new_account_uses_jwk(opts):
     transport.queue(NEW_ACCOUNT_URL,
                     FakeResponse(201, {"status": "valid"}, {"Location": ACCOUNT_URL}))
 
-    with patch("mojo.helpers.acme.client.requests", transport):
-        client = _client(transport, contact_email="ops@example.com")
-        account_url = client.new_account()
+    client = _client(transport, contact_email="ops@example.com")
+    account_url = client.new_account()
 
     assert account_url == ACCOUNT_URL, \
         f"new_account must return the Location header, got {account_url}"
@@ -335,9 +336,8 @@ def test_acme_bad_nonce_retry(opts):
                       "Replay-Nonce": "fresh-nonce"}),
         FakeResponse(201, {"status": "valid"}, {"Location": ACCOUNT_URL}))
 
-    with patch("mojo.helpers.acme.client.requests", transport):
-        client = _client(transport)
-        account_url = client.new_account()
+    client = _client(transport)
+    account_url = client.new_account()
 
     assert account_url == ACCOUNT_URL, \
         "a badNonce retry must succeed transparently and return the account URL"
@@ -360,9 +360,8 @@ def test_acme_bad_nonce_without_replacement(opts):
     transport.queue(NEW_ACCOUNT_URL, rejection,
                     FakeResponse(201, {"status": "valid"}, {"Location": ACCOUNT_URL}))
 
-    with patch("mojo.helpers.acme.client.requests", transport):
-        client = _client(transport)
-        client.new_account()
+    client = _client(transport)
+    client.new_account()
 
     assert len(transport.head_calls) == 2, \
         f"a badNonce with no replacement nonce must refetch from newNonce, got {transport.head_calls}"
@@ -383,12 +382,11 @@ def test_acme_bad_nonce_retries_only_once(opts):
                      {"Content-Type": "application/problem+json"}))
 
     raised = None
-    with patch("mojo.helpers.acme.client.requests", transport):
-        client = _client(transport)
-        try:
-            client.new_account()
-        except me.ValueException as err:
-            raised = err
+    client = _client(transport)
+    try:
+        client.new_account()
+    except me.ValueException as err:
+        raised = err
 
     assert raised is not None, "a repeated badNonce must eventually raise, not loop"
     assert len(transport.posts) == 2, \
@@ -411,13 +409,12 @@ def test_acme_problem_document_mapping(opts):
                                  {"Content-Type": "application/problem+json"}))
 
     raised = None
-    with patch("mojo.helpers.acme.client.requests", transport):
-        client = _client(transport)
-        client.new_account()
-        try:
-            client.new_order(["example.com"])
-        except me.ValueException as err:
-            raised = err
+    client = _client(transport)
+    client.new_account()
+    try:
+        client.new_order(["example.com"])
+    except me.ValueException as err:
+        raised = err
 
     assert raised is not None, "an ACME problem document must raise a ValueException"
     assert detail in raised.reason, \
@@ -438,12 +435,11 @@ def test_acme_requires_kid(opts):
 
     transport = FakeAcme()
     raised = None
-    with patch("mojo.helpers.acme.client.requests", transport):
-        client = _client(transport)
-        try:
-            client.new_order(["example.com"])
-        except me.ValueException as err:
-            raised = err
+    client = _client(transport)
+    try:
+        client.new_order(["example.com"])
+    except me.ValueException as err:
+        raised = err
 
     assert raised is not None, "posting without a kid must raise instead of signing with jwk"
     assert "kid" in raised.reason, \
@@ -492,39 +488,38 @@ def test_acme_happy_path(opts):
     transport = FakeAcme()
     _script_happy_path(transport)
 
-    with patch("mojo.helpers.acme.client.requests", transport):
-        client = _client(transport, key=key)
-        client.new_account()
+    client = _client(transport, key=key)
+    client.new_account()
 
-        order = client.new_order(["example.com", "*.example.com"])
-        assert order.url == ORDER_URL, \
-            f"the order URL must come from the Location header, got {order.url}"
-        assert order.authorizations == [AUTHZ_URL], \
-            f"the order must expose its authorizations, got {order.get('authorizations')}"
+    order = client.new_order(["example.com", "*.example.com"])
+    assert order.url == ORDER_URL, \
+        f"the order URL must come from the Location header, got {order.url}"
+    assert order.authorizations == [AUTHZ_URL], \
+        f"the order must expose its authorizations, got {order.get('authorizations')}"
 
-        authz = client.get_authorization(AUTHZ_URL)
-        challenge_url, token = client.dns01_challenge(authz)
-        assert challenge_url == CHALLENGE_URL, \
-            f"dns01_challenge must select the dns-01 challenge URL, got {challenge_url}"
-        assert token == CHALLENGE_TOKEN, \
-            f"dns01_challenge must return the dns-01 token, got {token}"
+    authz = client.get_authorization(AUTHZ_URL)
+    challenge_url, token = client.dns01_challenge(authz)
+    assert challenge_url == CHALLENGE_URL, \
+        f"dns01_challenge must select the dns-01 challenge URL, got {challenge_url}"
+    assert token == CHALLENGE_TOKEN, \
+        f"dns01_challenge must return the dns-01 token, got {token}"
 
-        digest = client.key_authorization_digest(token)
-        assert digest == jws.dns_txt_value(token, key), \
-            "the TXT digest must be derived from the account key"
+    digest = client.key_authorization_digest(token)
+    assert digest == jws.dns_txt_value(token, key), \
+        "the TXT digest must be derived from the account key"
 
-        client.answer_challenge(challenge_url)
-        ready = client.poll_order(ORDER_URL, until=acme_client.ORDER_READY,
-                                  timeout=5, interval=0)
-        assert ready.status == "ready", \
-            f"the order must be polled until it is ready to finalize, got {ready.get('status')}"
+    client.answer_challenge(challenge_url)
+    ready = client.poll_order(ORDER_URL, until=acme_client.ORDER_READY,
+                              timeout=5, interval=0)
+    assert ready.status == "ready", \
+        f"the order must be polled until it is ready to finalize, got {ready.get('status')}"
 
-        csr_der = acme_client.make_csr(jws.generate_key(), ["example.com", "*.example.com"])
-        finalized = client.finalize(ready, csr_der)
-        assert finalized.certificate == CERT_URL, \
-            f"finalize must return the order carrying the certificate URL, got {finalized.get('certificate')}"
+    csr_der = acme_client.make_csr(jws.generate_key(), ["example.com", "*.example.com"])
+    finalized = client.finalize(ready, csr_der)
+    assert finalized.certificate == CERT_URL, \
+        f"finalize must return the order carrying the certificate URL, got {finalized.get('certificate')}"
 
-        chain = client.download_certificate(finalized.certificate)
+    chain = client.download_certificate(finalized.certificate)
 
     assert chain == PEM_CHAIN, \
         "download_certificate must return the full PEM chain body verbatim"
@@ -571,15 +566,14 @@ def test_acme_missing_dns01_challenge(opts):
 
     transport = FakeAcme()
     raised = None
-    with patch("mojo.helpers.acme.client.requests", transport):
-        client = _client(transport)
-        authz = objict.from_dict({
-            "identifier": {"type": "dns", "value": "example.com"},
-            "challenges": [{"type": "http-01", "url": "https://acme.test/h", "token": "t"}]})
-        try:
-            client.dns01_challenge(authz)
-        except me.ValueException as err:
-            raised = err
+    client = _client(transport)
+    authz = objict.from_dict({
+        "identifier": {"type": "dns", "value": "example.com"},
+        "challenges": [{"type": "http-01", "url": "https://acme.test/h", "token": "t"}]})
+    try:
+        client.dns01_challenge(authz)
+    except me.ValueException as err:
+        raised = err
 
     assert raised is not None, "an authorization without dns-01 must raise, not return None"
     assert "example.com" in raised.reason, \
@@ -596,13 +590,12 @@ def test_acme_poll_timeout(opts):
     transport.queue(ORDER_URL, FakeResponse(200, {"status": "pending"}))
 
     raised = None
-    with patch("mojo.helpers.acme.client.requests", transport):
-        client = _client(transport)
-        client.new_account()
-        try:
-            client.poll_order(ORDER_URL, timeout=0, interval=0)
-        except me.ValueException as err:
-            raised = err
+    client = _client(transport)
+    client.new_account()
+    try:
+        client.poll_order(ORDER_URL, timeout=0, interval=0)
+    except me.ValueException as err:
+        raised = err
 
     assert raised is not None, "a stuck order must time out with an error, not hang"
     assert "pending" in raised.reason, \

@@ -81,11 +81,14 @@ def _helper(balancers=None, groups=None, health=None, health_error=None,
 
 
 def _status(frontend):
-    """Run the collector's ladder over a frontend() result."""
+    """Run the collector's ladder over a frontend() result.
+
+    Injected via _load_balancer's frontend seam: patching
+    admin_platform._cached_frontend is process-global under the parallel
+    runner (#2558).
+    """
     from mojo.apps.account.services import admin_platform
-    with mock.patch.object(admin_platform, "_cached_frontend",
-                           return_value=frontend):
-        return admin_platform._load_balancer()
+    return admin_platform._load_balancer(frontend=frontend)
 
 
 @th.django_unit_test("a fully healthy serving tier reports healthy with its elastic IP")

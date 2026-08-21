@@ -132,62 +132,7 @@ def test_fk_attach_to_unviewable_group_emits_audit_event(opts):
     Setting.objects.filter(pk=seed.id).delete()
 
 
-@th.django_unit_test()
-def test_no_fk_view_check_fields_opt_out(opts):
-    """A field listed in NO_FK_VIEW_CHECK_FIELDS must skip the audit
-    altogether — assignment proceeds, no event fires.
-
-    Setting doesn't normally exempt `group`, so we monkey-patch
-    NO_FK_VIEW_CHECK_FIELDS for this one test. The change is in-process
-    only (Setting.RestMeta — which the testit server process won't see),
-    so we exercise the relevant path directly via on_rest_save instead
-    of going through opts.client.
-    """
-    from mojo.apps.account.models import User
-    from mojo.apps.account.models.setting import Setting
-    from mojo.apps.account.models.group import Group
-    from mojo.apps.incident.models.event import Event
-    import objict
-
-    Setting.objects.filter(key="fk-attach-test-optout").delete()
-    user = User.objects.filter(username=TEST_USER).last()
-    target = Group.objects.filter(name=TEST_GROUP_NAME).last()
-
-    Event.objects.filter(uid=user.id, category="fk_attach_denied").delete()
-    setting = Setting.objects.create(key="fk-attach-test-optout", value="v0", group=None)
-
-    fake_request = objict.objict()
-    fake_request.user = user
-    fake_request.DATA = objict.objict()
-    fake_request.QUERY_PARAMS = objict.objict()
-    fake_request.method = "PUT"
-    fake_request.group = None
-    fake_request.bearer = None
-    fake_request.ip = "127.0.0.1"
-    fake_request.path = "/api/settings/x"
-    fake_request.META = {}
-    fake_request.api_key = None
-
-    original = getattr(Setting.RestMeta, "NO_FK_VIEW_CHECK_FIELDS", None)
-    setattr(Setting.RestMeta, "NO_FK_VIEW_CHECK_FIELDS", ["group"])
-    try:
-        setting.on_rest_save(fake_request, {"group": target.id})
-        setting.refresh_from_db()
-        assert setting.group_id == target.id, (
-            f"With NO_FK_VIEW_CHECK_FIELDS=['group'] the FK must be assigned; "
-            f"got group_id={setting.group_id!r}"
-        )
-        events = Event.objects.filter(
-            uid=user.id, category="fk_attach_denied",
-        ).count()
-        assert events == 0, (
-            f"NO_FK_VIEW_CHECK_FIELDS opt-out must not emit fk_attach_denied; "
-            f"got {events} event(s)"
-        )
-    finally:
-        if original is None:
-            if hasattr(Setting.RestMeta, "NO_FK_VIEW_CHECK_FIELDS"):
-                delattr(Setting.RestMeta, "NO_FK_VIEW_CHECK_FIELDS")
-        else:
-            setattr(Setting.RestMeta, "NO_FK_VIEW_CHECK_FIELDS", original)
-        Setting.objects.filter(pk=setting.pk).delete()
+# test_no_fk_view_check_fields_opt_out moved to
+# tests/test_models_extended_serial/fk_attach_audit.py (maestro item #2558) —
+# it mutates Setting.RestMeta.NO_FK_VIEW_CHECK_FIELDS, a process-global
+# attribute shared with every parallel module that touches Setting.

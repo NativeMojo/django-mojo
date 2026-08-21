@@ -234,25 +234,32 @@ def resolve_owner(spec):
         return None, None
 
 
-def install(temp_path, dest_path, owner_spec):
+def install(temp_path, dest_path, owner_spec, *, os_ops=None):
     """Move the staged file into place atomically, mode and owner first.
 
     Order matters: chmod/chown BEFORE os.replace, so the file is never visible
     at the destination with the wrong permissions, even briefly. This ordering
     is the load-bearing security property of this module — do not reorder it,
     and do not replace os.replace with an open()+write().
+
+    os_ops is a test seam for observing that ordering; None means the real os.
     """
-    os.chmod(temp_path, FILE_MODE)
+    if os_ops is None:
+        os_ops = os
+    os_ops.chmod(temp_path, FILE_MODE)
     uid, gid = resolve_owner(owner_spec)
     if uid is not None:
-        os.chown(temp_path, uid, gid)
-    os.replace(temp_path, dest_path)
+        os_ops.chown(temp_path, uid, gid)
+    os_ops.replace(temp_path, dest_path)
     log.info("installed %s (mode %o, owner %s)", dest_path, FILE_MODE,
              owner_spec or "root")
 
 
-def restart_app(config, dry_run):
+def restart_app(config, dry_run, *, run_cmd=None, sleep=None):
     """Restart the app so it picks up the new config.
+
+    run_cmd and sleep are test seams (the systemctl runner and the jitter
+    delay); None means the real subprocess.run and time.sleep.
 
     JITTERED BY HOSTNAME. Every node polls the same bucket on the same timer, so
     an un-jittered restart takes the whole fleet out simultaneously the moment a
@@ -261,6 +268,10 @@ def restart_app(config, dry_run):
     hostname rather than randomly, so a given node's slot is stable across runs
     and reproducible when you are trying to work out what happened.
     """
+    if run_cmd is None:
+        run_cmd = subprocess.run
+    if sleep is None:
+        sleep = time.sleep
     service = config.get("CONFIG_SYNC_SERVICE") or DEFAULT_SERVICE
     host = socket.gethostname().encode("utf-8", "replace")
     delay = int(hashlib.sha256(host).hexdigest()[:4], 16) % 60
@@ -271,8 +282,8 @@ def restart_app(config, dry_run):
 
     log.info("config changed — restarting %s in %ds (hostname jitter)",
              service, delay)
-    time.sleep(delay)
-    done = subprocess.run(
+    sleep(delay)
+    done = run_cmd(
         ["systemctl", "--no-block", "restart", service],
         capture_output=True, check=False)
     if done.returncode != 0:
@@ -336,9 +347,14 @@ def sweep_stale_staging(directory):
         shutil.rmtree(path, ignore_errors=True)
 
 
-def sync(s3, config, target, remote_name, dry_run):
+def sync(s3, config, target, remote_name, dry_run, *, restart=None):
     from botocore.exceptions import ClientError
     from mojo.deploy import config_override
+
+    # restart is a test seam for the CONFIG_SYNC_RESTART gate; None means the
+    # real restart_app.
+    if restart is None:
+        restart = restart_app
 
     bucket = config["AWS_CONFIG_BUCKET"]
     # The published object's name is its own setting, NOT basename(target).
@@ -473,7 +489,7 @@ def sync(s3, config, target, remote_name, dry_run):
     log.info("config updated from s3://%s/%s", bucket, key)
 
     if as_bool(config.get("CONFIG_SYNC_RESTART")):
-        return 0 if restart_app(config, dry_run) else 1
+        return 0 if restart(config, dry_run) else 1
     log.info("CONFIG_SYNC_RESTART not set — the app is still running the old "
              "config until it is restarted")
     return 0

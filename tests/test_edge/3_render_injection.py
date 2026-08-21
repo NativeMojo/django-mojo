@@ -127,10 +127,11 @@ def test_exactly_two_server_blocks(opts):
 
 @th.django_unit_test("DNS-01-only rendering emits HTTPS and no HTTP-01 shell")
 def test_http_disabled_vhost_shapes(opts):
-    from unittest import mock
-
     from mojo.apps.edge.services import render
 
+    # The disabled posture is injected through http_knobs' get_static seam
+    # (item #2558) — the renders below are driven entirely by the knobs dict,
+    # so no process-global settings patch is needed.
     def static(name, default=None, kind=None):
         if name == "EDGE_HTTP_ENABLED":
             return False
@@ -147,30 +148,29 @@ def test_http_disabled_vhost_shapes(opts):
         ("off-redirect", dict(
             kind="redirect", redirect_to="www.example.com")),
     ]
-    with mock.patch.object(render.settings, "get_static", side_effect=static):
-        knobs = render.http_knobs()
-        assert knobs["http_enabled"] is False, \
-            f"disabled posture resolved incorrectly: {knobs}"
-        assert "acme_webroot" not in knobs, \
-            f"disabled posture still hashes the ACME webroot: {knobs}"
-        for label, kwargs in cases:
-            vhost = make_vhost(
-                opts.domain, opts.certificate, label=label, **kwargs)
-            text = render.render_vhost(vhost, opts.generation, knobs=knobs)
-            assert text.count("server {") == 1, \
-                f"{label} rendered a non-HTTPS server block:\n{text}"
-            assert "listen 443 ssl;" in text, \
-                f"{label} lost its HTTPS listener:\n{text}"
-            assert "listen 80" not in text and "[::]:80" not in text, \
-                f"{label} retained port 80:\n{text}"
-            assert "/.well-known/acme-challenge/" not in text, \
-                f"{label} retained the HTTP-01 challenge path:\n{text}"
+    knobs = render.http_knobs(get_static=static)
+    assert knobs["http_enabled"] is False, \
+        f"disabled posture resolved incorrectly: {knobs}"
+    assert "acme_webroot" not in knobs, \
+        f"disabled posture still hashes the ACME webroot: {knobs}"
+    for label, kwargs in cases:
+        vhost = make_vhost(
+            opts.domain, opts.certificate, label=label, **kwargs)
+        text = render.render_vhost(vhost, opts.generation, knobs=knobs)
+        assert text.count("server {") == 1, \
+            f"{label} rendered a non-HTTPS server block:\n{text}"
+        assert "listen 443 ssl;" in text, \
+            f"{label} lost its HTTPS listener:\n{text}"
+        assert "listen 80" not in text and "[::]:80" not in text, \
+            f"{label} retained port 80:\n{text}"
+        assert "/.well-known/acme-challenge/" not in text, \
+            f"{label} retained the HTTP-01 challenge path:\n{text}"
 
-        base = render.render_http_base(knobs=knobs, security=[])
-        assert "listen 443 ssl default_server;" in base, \
-            f"disabled HTTP lost the requested 443 catch-all:\n{base}"
-        assert "listen 80" not in base and "[::]:80" not in base, \
-            f"the default-server flag resurrected port 80:\n{base}"
+    base = render.render_http_base(knobs=knobs, security=[])
+    assert "listen 443 ssl default_server;" in base, \
+        f"disabled HTTP lost the requested 443 catch-all:\n{base}"
+    assert "listen 80" not in base and "[::]:80" not in base, \
+        f"the default-server flag resurrected port 80:\n{base}"
 
 
 @th.django_unit_test("a site vhost never emits proxy_pass")

@@ -106,12 +106,16 @@ def render_context_for_kind(kind):
     }
 
 
-def validate_submission(kind, data):
+def validate_submission(kind, data, check_text=None):
     """
     Validate the submitted form against the kind schema.
 
     data is a dict-like (request.DATA / objict). Returns (common, metadata) dicts.
     Raises ValueError('field:reason') on any validation problem.
+
+    check_text is a keyword test seam (item #2558) forwarded to the content
+    guard; default None uses mojo.helpers.content_guard.check_text exactly as
+    before.
     """
     schema = KIND_SCHEMAS.get(kind)
     if schema is None:
@@ -161,7 +165,7 @@ def validate_submission(kind, data):
             common[name] = value
 
     # Optional content moderation — fail-open on exceptions.
-    _run_content_guard(common)
+    _run_content_guard(common, check_text=check_text)
 
     # Merge client-supplied metadata last so kind-specific keys always win.
     extras = _clean_client_metadata(data.get('metadata'), reserved=set(metadata.keys()))
@@ -209,20 +213,26 @@ def _clean_client_metadata(raw, reserved=None):
     return cleaned
 
 
-def _run_content_guard(common):
-    """Run content_guard.check_text on free-form fields. Fail-open on errors."""
-    try:
-        from mojo.helpers import content_guard
-    except Exception as err:  # pragma: no cover — defensive
-        logger.warning(f"public_message: content_guard import failed: {err}")
-        return
+def _run_content_guard(common, check_text=None):
+    """Run content_guard.check_text on free-form fields. Fail-open on errors.
+
+    check_text is a keyword test seam (item #2558); default None resolves to
+    content_guard.check_text.
+    """
+    if check_text is None:
+        try:
+            from mojo.helpers import content_guard
+        except Exception as err:  # pragma: no cover — defensive
+            logger.warning(f"public_message: content_guard import failed: {err}")
+            return
+        check_text = content_guard.check_text
 
     for field_name in ('name', 'subject', 'message'):
         value = common.get(field_name)
         if not value:
             continue
         try:
-            result = content_guard.check_text(value, surface='contact_form')
+            result = check_text(value, surface='contact_form')
         except Exception as err:
             logger.warning(
                 f"public_message: content_guard failed on {field_name}: {err}"

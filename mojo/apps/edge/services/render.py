@@ -70,16 +70,22 @@ def tls_ciphers():
         "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305")
 
 
-def acme_webroot():
+def acme_webroot(get_static=None):
     # get_static: this is a filesystem path optional port-80 blocks serve from,
     # and a DB row must not be able to repoint it. Same rule as EDGE_ROOT.
-    return settings.get_static("EDGE_ACME_WEBROOT", "/var/www/certbot")
+    # The parameter is an injection seam for tests (None means the shared
+    # settings singleton).
+    if get_static is None:
+        get_static = settings.get_static
+    return get_static("EDGE_ACME_WEBROOT", "/var/www/certbot")
 
 
-def http_enabled():
+def http_enabled(get_static=None):
     # File-only: enabling a public listener changes the node's serving surface.
     # A DB Setting row must not be able to open or close it.
-    return settings.get_static("EDGE_HTTP_ENABLED", True, kind="bool")
+    if get_static is None:
+        get_static = settings.get_static
+    return get_static("EDGE_HTTP_ENABLED", True, kind="bool")
 
 
 def django_static_root():
@@ -120,12 +126,13 @@ def log_dir():
     return settings.get_static("EDGE_LOG_DIR", f"{edge_root()}/log")
 
 
-def default_server_enabled():
+def default_server_enabled(get_static=None):
     # get_static and default OFF: flipping this changes which server answers
     # every unmatched name on the node — a cutover step (see the migration
     # order in docs), not a tuning knob a DB row may toggle.
-    return settings.get_static(
-        "EDGE_HTTP_DEFAULT_SERVER", False, kind="bool")
+    if get_static is None:
+        get_static = settings.get_static
+    return get_static("EDGE_HTTP_DEFAULT_SERVER", False, kind="bool")
 
 
 def mojosec_log_path():
@@ -152,8 +159,10 @@ def mojosec_trusted_proxy_cidrs():
         settings.get_static("MOJOSEC_TRUSTED_PROXY_CIDRS", ""))
 
 
-def _staged_port_value(name, default):
-    raw = settings.get_static(name, default)
+def _staged_port_value(name, default, get_static=None):
+    if get_static is None:
+        get_static = settings.get_static
+    raw = get_static(name, default)
     try:
         port = int(raw)
     except (TypeError, ValueError):
@@ -167,7 +176,7 @@ def _staged_port_value(name, default):
     return port
 
 
-def _staged_ports():
+def _staged_ports(get_static=None):
     """The (http, https) ports the STAGED copies listen on.
 
     Refused, not clamped: these are file-only settings (get_static), so a bad
@@ -179,20 +188,22 @@ def _staged_ports():
     ephemeral ceiling (60999), though a collision could not fail the check
     anyway — `nginx -t` tolerates EADDRINUSE.
     """
-    http = _staged_port_value("EDGE_STAGED_HTTP_PORT", 61080)
-    https = _staged_port_value("EDGE_STAGED_HTTPS_PORT", 61443)
+    http = _staged_port_value("EDGE_STAGED_HTTP_PORT", 61080,
+                              get_static=get_static)
+    https = _staged_port_value("EDGE_STAGED_HTTPS_PORT", 61443,
+                               get_static=get_static)
     if http == https:
         raise me.ValueException(
             f"edge staged listen ports must differ, both are {http}")
     return http, https
 
 
-def staged_http_port():
-    return _staged_ports()[0]
+def staged_http_port(get_static=None):
+    return _staged_ports(get_static=get_static)[0]
 
 
-def staged_https_port():
-    return _staged_ports()[1]
+def staged_https_port(get_static=None):
+    return _staged_ports(get_static=get_static)[1]
 
 
 def nginx_temp_paths():
@@ -202,8 +213,12 @@ def nginx_temp_paths():
             for directive, leaf in TEMP_PATHS]
 
 
-def http_knobs():
+def http_knobs(get_static=None):
     """Every resolved http-level knob, as one dict.
+
+    ``get_static`` is an injection seam for tests, threaded only into the
+    file-only posture reads (HTTP enabled, default server, ACME webroot);
+    None means the shared settings singleton.
 
     This is BOTH what `render_http_base` renders from and what
     `desired_state` embeds under its `http` key — which is what makes a TLS
@@ -211,14 +226,14 @@ def http_knobs():
     EDGE_TLS_PROTOCOLS never converged: the values were substituted at render
     time but absent from the hashed payload.
     """
-    enabled = http_enabled()
+    enabled = http_enabled(get_static)
     knobs = dict(
         http_enabled=enabled,
         mime_types=mime_types_path(),
         log_dir=log_dir(),
         keepalive_timeout=keepalive_timeout(),
         proxy_read_timeout=proxy_read_timeout(),
-        default_server=default_server_enabled(),
+        default_server=default_server_enabled(get_static),
         tls_protocols=tls_protocols(),
         tls_ciphers=tls_ciphers(),
         django_static_root=django_static_root(),
@@ -227,7 +242,7 @@ def http_knobs():
         mojosec_mode=mojosec_mode(),
     )
     if enabled:
-        knobs["acme_webroot"] = acme_webroot()
+        knobs["acme_webroot"] = acme_webroot(get_static)
     return knobs
 
 
@@ -1026,7 +1041,7 @@ def render_upstreams(upstreams):
     return "\n".join(parts)
 
 
-def _staged_listen_map(include_http=True, include_https=True):
+def _staged_listen_map(include_http=True, include_https=True, get_static=None):
     """Stripped real listen body -> its staged replacement.
 
     EXHAUSTIVE over the bodies the builders emit: `_open` (443 pair),
@@ -1034,9 +1049,11 @@ def _staged_listen_map(include_http=True, include_https=True):
     `render_http_base`. A listen line not in this map refuses the render —
     see render_staged_variant.
     """
-    http = (_staged_port_value("EDGE_STAGED_HTTP_PORT", 61080)
+    http = (_staged_port_value("EDGE_STAGED_HTTP_PORT", 61080,
+                               get_static=get_static)
             if include_http else None)
-    https = (_staged_port_value("EDGE_STAGED_HTTPS_PORT", 61443)
+    https = (_staged_port_value("EDGE_STAGED_HTTPS_PORT", 61443,
+                                get_static=get_static)
              if include_https else None)
     if http is not None and https is not None and http == https:
         raise me.ValueException(
@@ -1055,7 +1072,7 @@ def _staged_listen_map(include_http=True, include_https=True):
     return entries
 
 
-def render_staged_variant(text, temp_root=None):
+def render_staged_variant(text, temp_root=None, get_static=None):
     """The same rendered file with every listen port remapped unprivileged.
 
     The staged `nginx -t` runs as the app user, and nginx DOES attempt
@@ -1083,7 +1100,8 @@ def render_staged_variant(text, temp_root=None):
         body.startswith("listen 443") or body.startswith("listen [::]:443")
         for body in bodies)
     remap = _staged_listen_map(
-        include_http=include_http, include_https=include_https)
+        include_http=include_http, include_https=include_https,
+        get_static=get_static)
     out = []
     for line in text.split("\n"):
         body = line.strip()

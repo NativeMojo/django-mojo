@@ -327,16 +327,21 @@ class S3Config:
         return S3.resource.Bucket(bucket_name)
 
     @staticmethod
-    def list_all_buckets():
+    def list_all_buckets(*, client=None):
         """
         List all S3 buckets.
+
+        ``client`` is an injection seam for tests (None means the shared
+        lazily-built S3 client).
 
         Returns:
             List of bucket names
         """
+        if client is None:
+            client = S3.client
         rows = []
         try:
-            paginator = S3.client.get_paginator("list_buckets")
+            paginator = client.get_paginator("list_buckets")
             pages = paginator.paginate(MaxBuckets=1000)
             for page_number, response in enumerate(pages, start=1):
                 if page_number > INVENTORY_PAGE_LIMIT:
@@ -629,8 +634,11 @@ def presigned_put_url(bucket: str, key: str, expires: int = 3600,
         'put_object', ExpiresIn=expires, Params=params)
 
 
-def head_object(bucket: str, key: str) -> Optional[Dict]:
+def head_object(bucket: str, key: str, *, client=None) -> Optional[Dict]:
     """HeadObject metadata, or None when the key is absent.
+
+    ``client`` is an injection seam for tests (None means the shared
+    lazily-built S3 client).
 
     Returns the raw response so a caller can read `ChecksumSHA256` and
     `ContentLength` — verifying an upload without pulling the bytes back
@@ -643,8 +651,10 @@ def head_object(bucket: str, key: str) -> Optional[Dict]:
     object. On a checksum-less object the parameter is harmless — the field is
     simply absent, which is the case callers are written to catch.
     """
+    if client is None:
+        client = S3.client
     try:
-        return S3.client.head_object(
+        return client.head_object(
             Bucket=bucket, Key=key, ChecksumMode="ENABLED")
     except botocore.exceptions.ClientError as err:
         code = err.response.get("Error", {}).get("Code")

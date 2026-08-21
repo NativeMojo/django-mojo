@@ -301,7 +301,8 @@ def get_model(use="general"):
 # LLM calls
 # ---------------------------------------------------------------------------
 
-def call(messages, system=None, tools=None, model=None, max_tokens=4096):
+def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
+         client=None):
     """
     Call the Anthropic messages API.
 
@@ -311,16 +312,22 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096):
     Prompt caching is enabled by default — adds ``cache_control`` at the
     top level so Anthropic caches the prefix automatically. Disable via
     ``LLM_ADMIN_PROMPT_CACHE_ENABLED=False``.
+
+    ``client`` is a keyword-only test seam (item #2558): an object exposing
+    ``messages.create(**kwargs)``. Default (None) builds the real Anthropic
+    client from the configured API key, byte-identical to before.
     """
     global _zero_cache_warned
-    import anthropic
 
-    key = get_api_key()
-    if not key:
-        raise ValueError("No LLM API key configured. Set LLM_ADMIN_API_KEY or LLM_HANDLER_API_KEY.")
+    if client is None:
+        import anthropic
+
+        key = get_api_key()
+        if not key:
+            raise ValueError("No LLM API key configured. Set LLM_ADMIN_API_KEY or LLM_HANDLER_API_KEY.")
+        client = anthropic.Anthropic(api_key=key)
 
     resolved_model = model or get_model("general")
-    client = anthropic.Anthropic(api_key=key)
 
     kwargs = {
         "model": resolved_model,

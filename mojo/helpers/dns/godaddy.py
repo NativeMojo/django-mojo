@@ -63,7 +63,7 @@ def parse_body(resp):
 
 
 class DNSManager:
-    def __init__(self, api_key, api_secret, raise_on_error=False):
+    def __init__(self, api_key, api_secret, raise_on_error=False, http=None):
         self.api_key = api_key
         self.api_secret = api_secret
         # Opt-in strictness. Default stays False: existing callers rely on the
@@ -71,6 +71,9 @@ class DNSManager:
         # body, not an exception). Pass raise_on_error=True to get an
         # HTTPError instead of a silently wrong answer.
         self.raise_on_error = raise_on_error
+        # Injection seam for tests: a stand-in for the ``requests`` module
+        # (None means the real one).
+        self.http = http if http is not None else requests
 
     def _check(self, resp):
         if self.raise_on_error:
@@ -93,13 +96,13 @@ class DNSManager:
         `raise_on_error` is False, comes back as a single `objict`.)
         """
         params = {"statuses": status} if status else {}
-        resp = requests.get(build_url("domains"), headers=self._headers(), params=params)
+        resp = self.http.get(build_url("domains"), headers=self._headers(), params=params)
         self._check(resp)
         return parse_body(resp)
 
     def get_domain_info(self, domain):
         """One domain. This endpoint answers with a JSON object -> one `objict`."""
-        resp = requests.get(build_url("domains", domain), headers=self._headers())
+        resp = self.http.get(build_url("domains", domain), headers=self._headers())
         self._check(resp)
         return parse_body(resp)
 
@@ -115,7 +118,7 @@ class DNSManager:
         returns a LIST of `objict` — a multi-value TXT set is several entries,
         not one.
         """
-        resp = requests.get(
+        resp = self.http.get(
             build_url("domains", domain, "records", record_type, name),
             headers=self._headers())
         self._check(resp)
@@ -128,7 +131,7 @@ class DNSManager:
         GoDaddy answers with a JSON ARRAY (again, one entry per value), so this
         returns a LIST of `objict`.
         """
-        resp = requests.get(
+        resp = self.http.get(
             build_url("domains", domain, "records"), headers=self._headers())
         self._check(resp)
         return parse_body(resp)
@@ -144,7 +147,7 @@ class DNSManager:
         The PUT replaces EVERY record of this (type, name), so `entries` must be
         the COMPLETE desired set: a partial list silently erases the rest.
         """
-        resp = requests.put(
+        resp = self.http.put(
             build_url("domains", domain, "records", record_type, name),
             headers=self._headers(), json=list(entries))
         self._check(resp)
@@ -172,7 +175,7 @@ class DNSManager:
         return self.edit_record(domain, record_type, name, data, ttl)
 
     def bulk_add_records(self, domain, records):
-        resp = requests.patch(
+        resp = self.http.patch(
             build_url("domains", domain, "records"),
             headers=self._headers(), json=records)
         self._check(resp)

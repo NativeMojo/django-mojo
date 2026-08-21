@@ -260,7 +260,9 @@ class GeoLocatedIP(models.Model, MojoModel):
         self.save()
         return True
 
-    def check_threats(self, from_sync=False, skip_external=False):
+    def check_threats(self, from_sync=False, skip_external=False, *,
+                      check_internal=None, check_external=None,
+                      sync_config=None):
         """
         Perform comprehensive threat intelligence checks on this IP.
         Updates is_known_attacker, is_known_abuser, and threat_level fields.
@@ -277,6 +279,11 @@ class GeoLocatedIP(models.Model, MojoModel):
                 outbound check per row every day. A previously recorded
                 blocklist hit is carried forward rather than erased — skipping
                 the lookup must not be read as "not listed".
+
+        `check_internal` / `check_external` are keyword-only test seams
+        forwarded to threat_intel.perform_threat_check, and `sync_config` is
+        forwarded to _maybe_push_abuse_signals (item #2558). Defaults keep
+        production behavior byte-identical.
         """
         from mojo.helpers.geoip import threat_intel
 
@@ -289,7 +296,8 @@ class GeoLocatedIP(models.Model, MojoModel):
         # analysis here. OR-merge with existing values; never downgrade.
         if self.provider == 'mojo':
             threat_results = threat_intel.perform_threat_check(
-                self.ip_address, skip_external=True
+                self.ip_address, skip_external=True,
+                check_internal=check_internal, check_external=check_external
             )
             self.is_known_attacker = bool(
                 self.is_known_attacker or threat_results['is_known_attacker']
@@ -299,7 +307,8 @@ class GeoLocatedIP(models.Model, MojoModel):
             )
         else:
             threat_results = threat_intel.perform_threat_check(
-                self.ip_address, skip_external=skip_external)
+                self.ip_address, skip_external=skip_external,
+                check_internal=check_internal, check_external=check_external)
             self.is_known_attacker = threat_results['is_known_attacker']
             self.is_known_abuser = threat_results['is_known_abuser']
 
@@ -331,7 +340,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         self.save()
 
         if not from_sync:
-            self._maybe_push_abuse_signals(prev_snapshot)
+            self._maybe_push_abuse_signals(prev_snapshot, sync_config=sync_config)
 
         return threat_results
 
@@ -345,7 +354,7 @@ class GeoLocatedIP(models.Model, MojoModel):
             'is_known_abuser': bool(self.is_known_abuser),
         }
 
-    def _maybe_push_abuse_signals(self, prev_snapshot):
+    def _maybe_push_abuse_signals(self, prev_snapshot, *, sync_config=None):
         """
         Enqueue a push-back job to the upstream mojo provider when an abuse
         signal strictly rises on a record sourced from the `mojo` provider.
@@ -363,14 +372,25 @@ class GeoLocatedIP(models.Model, MojoModel):
                                       mojo upstream)
           - GEOIP_MOJO_PROVIDER_URL configured
           - GEOIP_MOJO_SYNC_ENABLED True (master kill switch)
+
+        `sync_config` is a keyword-only test seam (item #2558): a dict with
+        `sync_enabled` and `provider_url` keys that stands in for the
+        module-level geoip config reads. Default (None) reads the config
+        exactly as before.
         """
         try:
             if self.provider != 'mojo':
                 return
-            from mojo.helpers.geoip import config as geoip_config
-            if not geoip_config.MOJO_SYNC_ENABLED:
+            if sync_config is None:
+                from mojo.helpers.geoip import config as geoip_config
+                sync_enabled = geoip_config.MOJO_SYNC_ENABLED
+                provider_url = geoip_config.MOJO_PROVIDER_URL
+            else:
+                sync_enabled = sync_config.get('sync_enabled')
+                provider_url = sync_config.get('provider_url')
+            if not sync_enabled:
                 return
-            if not geoip_config.MOJO_PROVIDER_URL:
+            if not provider_url:
                 return
 
             order = self.THREAT_LEVEL_ORDER
@@ -457,7 +477,8 @@ class GeoLocatedIP(models.Model, MojoModel):
         if not from_sync:
             self._maybe_push_abuse_signals(prev)
 
-    def block(self, reason="manual", ttl=None, broadcast=True, from_sync=False):
+    def block(self, reason="manual", ttl=None, broadcast=True, from_sync=False,
+              *, sync_config=None):
         """
         Block this IP fleet-wide. Updates the database AND broadcasts
         the block to all instances via the job system.
@@ -475,6 +496,10 @@ class GeoLocatedIP(models.Model, MojoModel):
                 mojo provider (the change arrived via the sync endpoint).
         Returns:
             bool: True if the IP was blocked
+
+        `sync_config` is a keyword-only test seam forwarded to
+        _maybe_push_abuse_signals (item #2558); default None keeps the
+        module-level config reads.
         """
         if self.whitelist_active:
             return False
@@ -518,7 +543,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         self.refresh_from_db()
 
         if not from_sync:
-            self._maybe_push_abuse_signals(prev_snapshot)
+            self._maybe_push_abuse_signals(prev_snapshot, sync_config=sync_config)
 
         # Structured logit entry
         trigger = "auto:incident_rule" if reason == "auto:ruleset" else "manual"

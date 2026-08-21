@@ -31,7 +31,13 @@ _FIREWALL_FIELDS = (
 )
 
 
-def fetch(ip_address, api_key=None):
+# Sentinel default for the keyword-only test seams below — distinguishes
+# "not provided, read the module config" from an explicit None (item #2558).
+_CONFIG_FROM_SETTINGS = object()
+
+
+def fetch(ip_address, api_key=None, *, base_url=_CONFIG_FROM_SETTINGS,
+          key_loader=None, http_get=None):
     """
     Fetch geolocation data from an upstream django-mojo instance and normalize it.
 
@@ -39,17 +45,22 @@ def fetch(ip_address, api_key=None):
         ip_address: The IP address to look up.
         api_key: Optional API key (defaults to GEOIP_API_KEY_MOJO via config).
 
+    `base_url`, `key_loader` and `http_get` are keyword-only test seams
+    (item #2558): defaults preserve the config reads and the requests.get
+    call exactly, byte-identical in production.
+
     Returns:
         dict with provider='mojo' and the full federated field set on success,
         or None on any failure (missing config, HTTP error, non-2xx).
     """
-    base_url = config.MOJO_PROVIDER_URL
+    if base_url is _CONFIG_FROM_SETTINGS:
+        base_url = config.MOJO_PROVIDER_URL
     if not base_url:
         logit.warning("[GeoIP] mojo provider requires GEOIP_MOJO_PROVIDER_URL")
         return None
 
     if api_key is None:
-        api_key = config.get_api_key("mojo")
+        api_key = (key_loader or config.get_api_key)("mojo")
     if not api_key:
         logit.warning("[GeoIP] mojo provider requires GEOIP_API_KEY_MOJO")
         return None
@@ -62,7 +73,8 @@ def fetch(ip_address, api_key=None):
     params = {"ip": ip_address, "graph": "federation"}
 
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=5)
+        response = (http_get or requests.get)(
+            url, headers=headers, params=params, timeout=5)
         response.raise_for_status()
         body = response.json()
     except Exception as e:

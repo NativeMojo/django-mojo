@@ -676,8 +676,10 @@ def _validate_enrollment(enrollment):
     return enrollment
 
 
-def _load_enrollment():
-    enrollment, _ = _read_json_file(
+def _load_enrollment(*, loader=None):
+    if loader is None:
+        loader = _read_json_file
+    enrollment, _ = loader(
         ENROLLMENT_PATH, require_root=True, required_mode=0o600)
     return _validate_enrollment(enrollment)
 
@@ -686,16 +688,23 @@ def _target_allowed(path, roots):
     return any(os.path.commonpath((path, root)) == root for root in roots)
 
 
-def _prepare_effective_config(app_account=None, project_path="/opt/api"):
-    """Validate desired policy and merge only root-protected enrollment fields."""
-    desired, source_payload = _read_json_file(DESIRED_CONFIG_PATH)
+def _prepare_effective_config(app_account=None, project_path="/opt/api", *,
+                              loader=None):
+    """Validate desired policy and merge only root-protected enrollment fields.
+
+    loader is a test seam for the JSON file reads; None means the real
+    _read_json_file.
+    """
+    if loader is None:
+        loader = _read_json_file
+    desired, source_payload = loader(DESIRED_CONFIG_PATH)
     unknown = set(desired) - DESIRED_KEYS
     if unknown:
         raise DeployError(
             "desired config may not set protected fields: " + ", ".join(sorted(unknown)))
     if desired.get("version", 1) != 1:
         raise DeployError("desired config version must be 1")
-    enrollment = _load_enrollment()
+    enrollment = _load_enrollment(loader=loader)
     supplied = json.loads(json.dumps(desired))
     supplied["version"] = 1
     collectors = supplied.setdefault("collectors", {})

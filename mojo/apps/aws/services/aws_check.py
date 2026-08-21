@@ -179,9 +179,10 @@ def _release_buckets():
         return []
 
 
-def _portal_origin():
+def _portal_origin(*, settings_get=None):
     """The one origin browser uploads come from: the platform's BASE_URL."""
-    parsed = urlparse(_setting("BASE_URL", "") or "")
+    getter = settings_get or _setting
+    parsed = urlparse(getter("BASE_URL", "") or "")
     if parsed.scheme == "https" and parsed.hostname:
         return f"https://{parsed.netloc}"
     return ""
@@ -231,7 +232,7 @@ def _arn_suffix(arn, *prefixes):
     return ""
 
 
-def deployment_slug():
+def deployment_slug(*, settings_get=None):
     """
     The deployment's stable identity, used as an owning tag, an alarm-name
     segment, and the dimension of the certificate-expiry metric.
@@ -239,9 +240,13 @@ def deployment_slug():
     Module-level and public on purpose: the metric publisher lives in another app
     and MUST derive the same value from the same code. Two copies that drift
     produce an alarm watching a metric nobody publishes — green forever.
+
+    ``settings_get`` is an injection seam for tests (None means the module's
+    own ``_setting``).
     """
-    configured = _setting("AWS_MONITORING_NAME", "") or ""
-    host = urlparse(_setting("BASE_URL", "") or "").hostname or "deployment"
+    getter = settings_get or _setting
+    configured = getter("AWS_MONITORING_NAME", "") or ""
+    host = urlparse(getter("BASE_URL", "") or "").hostname or "deployment"
     return _safe_slug(configured or host)
 
 
@@ -265,8 +270,20 @@ class AWSCheckRunner:
     def __init__(self, region=None, profile=None, timeout=3, apply=False, yes=False,
                  probe_s3=False, bucket_name=None, mailbox_email=None,
                  adopt_bucket=False, confirm=None, clients=None, session=None, now=None,
-                 dns_domain=None, dns_group=None, provider=None):
-        self.region = region or _setting("AWS_REGION", "us-east-1")
+                 dns_domain=None, dns_group=None, provider=None, *,
+                 settings_get=None, session_factory=None, release_buckets=None,
+                 certs_service=None, delegation_service=None):
+        # Injection seams (tests): every one of these defaults to None, which
+        # preserves the production collaborators exactly. `settings_get` takes
+        # the module `_setting` signature; `release_buckets` is a literal list
+        # standing in for `_release_buckets()`; the two dnsman seams stand in
+        # for the certs/delegation service modules.
+        self.settings_get = settings_get
+        self.session_factory = session_factory
+        self.release_buckets = release_buckets
+        self.certs_service = certs_service
+        self.delegation_service = delegation_service
+        self.region = region or self._setting("AWS_REGION", "us-east-1")
         self.profile = profile
         self.timeout = max(1, min(int(timeout or 3), 30))
         self.apply = bool(apply)
@@ -291,9 +308,25 @@ class AWSCheckRunner:
         # client errors through _add(), and #1423 requires that key never be
         # logged. Without it a hub failure reaches stdout and --json in the clear.
         self._secrets = [value for value in (
-            _setting("AWS_KEY"), _setting("AWS_SECRET"),
-            _setting("DNSMAN_ACME_HUB_API_KEY"),
+            self._setting("AWS_KEY"), self._setting("AWS_SECRET"),
+            self._setting("DNSMAN_ACME_HUB_API_KEY"),
         ) if value]
+
+    def _setting(self, name, default=None, kind=None):
+        getter = self.settings_get or _setting
+        return getter(name, default, kind=kind)
+
+    def _certs(self):
+        if self.certs_service is not None:
+            return self.certs_service
+        from mojo.apps.dnsman.services import certs
+        return certs
+
+    def _delegation(self):
+        if self.delegation_service is not None:
+            return self.delegation_service
+        from mojo.apps.dnsman.services import delegation
+        return delegation
 
     def _redact(self, value):
         text = str(value)
@@ -362,9 +395,10 @@ class AWSCheckRunner:
         if access_key is None and secret_key is None and self.session is not None:
             return self.session
         if access_key is None and secret_key is None and not self.profile:
-            access_key = _setting("AWS_KEY")
-            secret_key = _setting("AWS_SECRET")
-        return get_session(
+            access_key = self._setting("AWS_KEY")
+            secret_key = self._setting("AWS_SECRET")
+        factory = self.session_factory or get_session
+        return factory(
             access_key=access_key, secret_key=secret_key, region=region or self.region,
             profile=self.profile if not access_key and not secret_key else None,
         )
@@ -430,7 +464,7 @@ class AWSCheckRunner:
 
     def check_prerequisites(self):
         self._add("prerequisites", "pass", "region.configured", f"AWS region is {self.region}", {"region": self.region})
-        parsed = urlparse(_setting("BASE_URL", "") or "")
+        parsed = urlparse(self._setting("BASE_URL", "") or "")
         if parsed.scheme == "https" and parsed.hostname:
             self._add("prerequisites", "pass", "base_url.https", "Public HTTPS BASE_URL is configured", {"host": parsed.hostname})
         else:
@@ -480,7 +514,7 @@ class AWSCheckRunner:
             self._add("cron", "fail", "redis.unavailable", exc,
                       remediation="Restore Redis connectivity before checking cron/jobs.")
             return
-        max_age = int(_setting("AWS_CHECK_CRON_MAX_AGE", 180) or 180)
+        max_age = int(self._setting("AWS_CHECK_CRON_MAX_AGE", 180) or 180)
         latest = records[0] if records else None
         if not latest:
             self._add("cron", "fail", "cron.heartbeat_missing", "No django-mojo cron-dispatch heartbeat was found",
@@ -526,7 +560,7 @@ class AWSCheckRunner:
             raise
 
     def _deployment_slug(self):
-        return deployment_slug()
+        return deployment_slug(settings_get=self.settings_get)
 
     def _create_bucket(self, bucket):
         from mojo.apps.fileman.models import FileManager
@@ -610,10 +644,11 @@ class AWSCheckRunner:
         current rules, diff, gate the merge behind _approve, and never replace
         unrelated rules.
         """
-        buckets = _release_buckets()
+        buckets = self.release_buckets if self.release_buckets is not None \
+            else _release_buckets()
         if not buckets:
             return
-        origin = _portal_origin()
+        origin = _portal_origin(settings_get=self.settings_get)
         if not origin:
             self._add("s3", "warn", "release_bucket.cors_origin_unknown",
                       "Release buckets cannot be checked for browser uploads without a public HTTPS BASE_URL",
@@ -1210,7 +1245,7 @@ class AWSCheckRunner:
         if burstable:
             profiles.append(_profile(
                 "cpu-credits", "CPUCreditBalance", "Average", "LessThanOrEqualToThreshold",
-                int(_setting("AWS_CHECK_CPU_CREDIT_FLOOR", 20) or 20)))
+                int(self._setting("AWS_CHECK_CPU_CREDIT_FLOOR", 20) or 20)))
         if resource.kind == "elasticache":
             # Not a high-water mark: ANY sustained eviction means the working set
             # no longer fits and entries are being discarded. Deliberately not a
@@ -1220,7 +1255,7 @@ class AWSCheckRunner:
         if resource.kind == "rds":
             profiles.append(_profile(
                 "freeable-memory", "FreeableMemory", "Average", "LessThanOrEqualToThreshold",
-                int(_setting("AWS_CHECK_RDS_FREEABLE_MEMORY_FLOOR", 256 * 1024 ** 2)
+                int(self._setting("AWS_CHECK_RDS_FREEABLE_MEMORY_FLOOR", 256 * 1024 ** 2)
                     or 256 * 1024 ** 2)))
             # Deliberately forgiving: RDS derives max_connections from instance
             # memory (~112 on db.t3.micro, ~405 on db.t3.medium), so no single
@@ -1231,7 +1266,7 @@ class AWSCheckRunner:
             profiles.append(_profile(
                 "connections", "DatabaseConnections", "Maximum",
                 "GreaterThanOrEqualToThreshold",
-                int(_setting("AWS_CHECK_RDS_MAX_CONNECTIONS", 500) or 500)))
+                int(self._setting("AWS_CHECK_RDS_MAX_CONNECTIONS", 500) or 500)))
         return profiles
 
     def _desired_alarms(self):
@@ -1299,7 +1334,7 @@ class AWSCheckRunner:
             "Namespace": CERT_METRIC_NAMESPACE, "MetricName": CERT_METRIC_NAME,
             "Dimensions": dimensions,
             "Statistic": "Minimum", "ComparisonOperator": "LessThanOrEqualToThreshold",
-            "Threshold": int(_setting("AWS_CHECK_CERT_EXPIRY_DAYS", 14) or 14),
+            "Threshold": int(self._setting("AWS_CHECK_CERT_EXPIRY_DAYS", 14) or 14),
             "Period": 3600, "EvaluationPeriods": 3, "DatapointsToAlarm": 3,
             # The point of the alarm, and deliberately opposite to every other
             # profile. A dead publisher must alarm, otherwise the monitoring
@@ -1398,12 +1433,12 @@ class AWSCheckRunner:
                           {"topic_arn": topic_arn})
                 return
             self._add("monitoring", "pass", "sns.topic_owned", "Owned operations SNS topic exists", {"topic_arn": topic_arn})
-        allowlist = _setting("AWS_CLOUDWATCH_ALARM_TOPIC_ARNS", [], kind="list") or []
+        allowlist = self._setting("AWS_CLOUDWATCH_ALARM_TOPIC_ARNS", [], kind="list") or []
         if topic_arn not in allowlist:
             self._add("monitoring", "pending", "sns.topic_not_allowlisted", "Operations topic ARN is not in the static receiver allowlist",
                       {"topic_arn": topic_arn}, remediation="Add the exact ARN to AWS_CLOUDWATCH_ALARM_TOPIC_ARNS, restart Django, then rerun.")
             return
-        endpoint = (_setting("BASE_URL", "") or "").rstrip("/") + "/api/aws/cloudwatch/sns/alarm"
+        endpoint = (self._setting("BASE_URL", "") or "").rstrip("/") + "/api/aws/cloudwatch/sns/alarm"
         subscriptions = self._list_paginated(
             sns, "list_subscriptions_by_topic", "Subscriptions",
             operation="sns.list_subscriptions_by_topic",
@@ -1529,9 +1564,8 @@ class AWSCheckRunner:
 
     def _check_dns_acme_account(self):
         from mojo.apps.dnsman.models import AcmeAccount
-        from mojo.apps.dnsman.services import certs
 
-        url = certs.directory_url()
+        url = self._certs().directory_url()
         account = AcmeAccount.objects.filter(directory_url=url).first()
         # The default is Let's Encrypt STAGING, deliberately, so an unconfigured
         # deploy cannot burn production rate limits. Bootstrapping against
@@ -1556,9 +1590,8 @@ class AWSCheckRunner:
     def _check_dns_delegations(self):
         from mojo.apps.dnsman.models import AcmeDelegation
         from mojo.apps.dnsman.models.acme_delegation import STATE_BROKEN
-        from mojo.apps.dnsman.services import delegation
 
-        available = delegation.is_available()
+        available = self._delegation().is_available()
         # An unconfigured hub is not a fault: direct Route53/GoDaddy issuance is
         # a fully supported path and #1423 is explicit that an absent hub only
         # means delegation is unavailable.
@@ -1587,9 +1620,8 @@ class AWSCheckRunner:
 
     def _check_dns_certificates(self):
         from mojo.apps.dnsman.models import Certificate
-        from mojo.apps.dnsman.services import certs
 
-        renew_days = certs.renew_days()
+        renew_days = self._certs().renew_days()
         rows = list(Certificate.objects.filter(not_after__isnull=False)
                     .order_by("not_after")[:100])
         total = Certificate.objects.filter(not_after__isnull=False).count()
@@ -1639,7 +1671,7 @@ class AWSCheckRunner:
         the ACME hub over HTTPS, so gating it on verified AWS credentials would
         refuse the bootstrap on a correctly-configured box that has no AWS keys.
         """
-        from mojo.apps.dnsman.services import certs, delegation
+        delegation = self._delegation()
 
         from mojo.apps.dnsman.models import AcmeDelegation, Domain
         from mojo.apps.dnsman.models.acme_delegation import STATE_RETIRED, STATE_VERIFIED
@@ -1731,7 +1763,7 @@ class AWSCheckRunner:
 
     def _request_dns_certificate(self, row):
         """Queue issuance for a verified delegation."""
-        from mojo.apps.dnsman.services import certs
+        certs = self._certs()
 
         if not self._approve(f"Request a certificate for {row.domain_name}?"):
             self._add("dns", "warn", "certificate.not_requested",
@@ -1818,6 +1850,7 @@ class AWSCheckRunner:
             report = VersionDriftScanner(
                 region=self.region, profile=self.profile,
                 timeout=self.timeout, clients=self.clients,
+                settings_get=self.settings_get,
             ).scan()
         except Exception as exc:
             self._add("versions", "warn", "versions.scan_error", exc,

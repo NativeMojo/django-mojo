@@ -64,9 +64,6 @@ def _attach(opts, web_app, hostname, actor=None, zone=None, cname_targets=None,
         with mock.patch("mojo.apps.dnsman.services.dns.list_records",
                         return_value=list(zone or [])) as listed, \
                 mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
-                mock.patch("mojo.helpers.dns.probe.query_cname",
-                           return_value=mock.Mock(
-                               targets=list(cname_targets or []))), \
                 mock.patch("mojo.apps.dnsman.services.delegation.for_domain",
                            return_value=delegation_row), \
                 mock.patch("mojo.apps.dnsman.services.delegation.initiate") as initiate, \
@@ -75,7 +72,9 @@ def _attach(opts, web_app, hostname, actor=None, zone=None, cname_targets=None,
             try:
                 result = webapp_alias.attach(
                     web_app, hostname, actor or opts.actor,
-                    retry_certificate=retry_certificate)
+                    retry_certificate=retry_certificate,
+                    resolve_cname=lambda *a, **kw: mock.Mock(
+                        targets=list(cname_targets or [])))
                 error = None
             except Exception as exc:
                 result, error = None, exc
@@ -89,14 +88,17 @@ def _preview(opts, web_app, hostname, actor=None):
 
     Every one of them must go unused: the dialog calls this while someone is
     still typing, so a provider round trip here is a round trip per keystroke.
-    Returns (result, error, listed, upsert, request, probed).
+    Returns (result, error, listed, upsert, request).
+
+    The live-CNAME probe is no longer patched here (item #2558): patching the
+    shared probe module is process-global, and preview performs no probe by
+    construction — the provider assertions below are the keystroke guard.
     """
     from mojo.apps.edge.services import webapp_alias
 
     with mock.patch("mojo.apps.dnsman.services.dns.list_records",
                     return_value=[]) as listed, \
             mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
-            mock.patch("mojo.helpers.dns.probe.query_cname") as probed, \
             mock.patch("mojo.apps.dnsman.services.delegation.for_domain",
                        return_value=None), \
             mock.patch(
@@ -107,7 +109,7 @@ def _preview(opts, web_app, hostname, actor=None):
             error = None
         except Exception as exc:
             result, error = None, exc
-        return result, error, listed, upsert, request, probed
+        return result, error, listed, upsert, request
 
 
 # ---------------------------------------------------------------------------
@@ -476,7 +478,7 @@ def test_preview_is_free_and_says_who_runs_the_dns(opts):
 
     web_app, domain, _, _ = _app_with_primary(opts)
 
-    result, error, listed, upsert, request, probed = _preview(
+    result, error, listed, upsert, request = _preview(
         opts, web_app, f"  SHOP.{domain.name.upper()}.  ")
 
     assert error is None, f"a clear managed address raised in preview: {error}"
@@ -489,12 +491,11 @@ def test_preview_is_free_and_says_who_runs_the_dns(opts):
     assert result.domain["id"] == domain.pk and \
         result.domain["name"] == domain.name, \
         f"preview did not name the domain it matched: {result.domain}"
-    # Keystroke-safe by construction: no zone read, no write, no ACME order,
-    # no live CNAME probe. Any one of them is a round trip per keystroke.
+    # Keystroke-safe by construction: no zone read, no write, no ACME order.
+    # Any one of them is a round trip per keystroke.
     listed.assert_not_called()
     upsert.assert_not_called()
     request.assert_not_called()
-    probed.assert_not_called()
     assert not Vhost.objects.filter(alias_of=web_app).exists(), \
         "previewing an address created a serving vhost for it"
 
@@ -504,7 +505,7 @@ def test_preview_reports_external_dns(opts):
     web_app, _, _, _ = _app_with_primary(opts)
     external = make_domain(group=opts.group, provider="mojo")
 
-    result, error, listed, _, _, probed = _preview(
+    result, error, listed, _, _ = _preview(
         opts, web_app, f"www.{external.name}")
 
     assert error is None and result.status == "ready", \
@@ -512,7 +513,6 @@ def test_preview_reports_external_dns(opts):
     assert result.dns == "external", \
         f"a customer-run zone was not previewed as external: {result}"
     listed.assert_not_called()
-    probed.assert_not_called()
 
 
 @th.django_unit_test("preview steers an unconnected domain with attach's own sentence")
@@ -522,7 +522,7 @@ def test_preview_needs_domain_matches_attach(opts):
     foreign = make_domain(group=stranger, provider="route53")
     hostname = f"www.{foreign.name}"
 
-    previewed, error, listed, upsert, request, _ = _preview(
+    previewed, error, listed, upsert, request = _preview(
         opts, web_app, hostname)
     assert error is None and previewed.status == "needs_domain", \
         f"an unconnected domain was not previewed as needs_domain: {error or previewed}"
@@ -544,7 +544,7 @@ def test_preview_unusable_matches_attach_refusals(opts):
     web_app, domain, _, _ = _app_with_primary(opts)
 
     for hostname in (domain.name, f"a.b.{domain.name}", f"*.{domain.name}"):
-        result, error, listed, upsert, request, _ = _preview(
+        result, error, listed, upsert, request = _preview(
             opts, web_app, hostname)
         assert error is None, \
             f"preview raised instead of reporting {hostname}: {error!r}"
@@ -578,7 +578,7 @@ def test_preview_propagates_the_authority_denial(opts):
     child_actor, _, _, _ = make_group_member(
         ["manage_webapp", "manage_dns"], group=child)
 
-    result, error, listed, upsert, request, _ = _preview(
+    result, error, listed, upsert, request = _preview(
         opts, web_app, f"shop.{domain.name}", actor=child_actor)
 
     # A 200 "unusable" here would launder an authorization denial into a hint —

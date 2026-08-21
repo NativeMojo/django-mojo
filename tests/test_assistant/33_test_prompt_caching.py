@@ -12,6 +12,10 @@ The tests that mock.patch the shared settings singleton (cache_control off,
 usage persistence, per-turn usage logging) moved to
 tests/test_assistant_extended_serial/33_test_prompt_caching.py (maestro item
 #1839).
+
+The remaining llm.call() tests inject the fake Anthropic client through the
+keyword-only client= seam on llm.call (item #2558) — no mock.patch of the
+shared mojo.helpers.llm module or the anthropic package.
 """
 import logging
 from unittest import mock
@@ -99,13 +103,12 @@ def test_llm_helper_sets_cache_control_when_enabled(opts):
         }),
     )
 
-    with mock.patch("anthropic.Anthropic", return_value=fake_client):
-        with mock.patch.object(llm, "get_api_key", return_value="sk-test"):
-            llm.call(
-                messages=[{"role": "user", "content": "hi"}],
-                system="sys",
-                model="claude-sonnet-4-test",
-            )
+    llm.call(
+        messages=[{"role": "user", "content": "hi"}],
+        system="sys",
+        model="claude-sonnet-4-test",
+        client=fake_client,
+    )
 
     sent = fake_messages.last_kwargs
     assert_true(sent is not None, "messages.create should have been called")
@@ -135,12 +138,11 @@ def test_llm_helper_returns_usage(opts):
     }
     fake_client, _ = _make_fake_client(_canned_response(usage=expected_usage))
 
-    with mock.patch("anthropic.Anthropic", return_value=fake_client):
-        with mock.patch.object(llm, "get_api_key", return_value="sk-test"):
-            result = llm.call(
-                messages=[{"role": "user", "content": "hi"}],
-                model="claude-sonnet-4-test",
-            )
+    result = llm.call(
+        messages=[{"role": "user", "content": "hi"}],
+        model="claude-sonnet-4-test",
+        client=fake_client,
+    )
 
     assert_true("usage" in result, f"result should include usage, got keys {list(result.keys())}")
     assert_eq(
@@ -281,11 +283,11 @@ def test_zero_usage_warning_fires_once(opts):
     stdlib_logger.setLevel(logging.WARNING)
 
     try:
-        with mock.patch("anthropic.Anthropic", return_value=fake_client):
-            with mock.patch.object(llm, "get_api_key", return_value="sk-test"):
-                # Two calls — both return zero cache counters
-                llm.call(messages=[{"role": "user", "content": "hi"}], model="m")
-                llm.call(messages=[{"role": "user", "content": "hi2"}], model="m")
+        # Two calls — both return zero cache counters
+        llm.call(messages=[{"role": "user", "content": "hi"}], model="m",
+                 client=fake_client)
+        llm.call(messages=[{"role": "user", "content": "hi2"}], model="m",
+                 client=fake_client)
     finally:
         stdlib_logger.removeHandler(handler)
         stdlib_logger.setLevel(prev_level)

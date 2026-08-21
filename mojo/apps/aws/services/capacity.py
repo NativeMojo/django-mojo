@@ -2362,7 +2362,7 @@ def _iso_in(seconds):
     return (dates.utcnow() + datetime.timedelta(seconds=seconds)).isoformat()
 
 
-def plan_batch(actor, steps):
+def plan_batch(actor, steps, *, report_fn=None, store=None):
     """Validate, order, word and price an ordered set of capacity steps.
 
     Reads the CACHED report on purpose: the page re-plans on every debounced
@@ -2370,7 +2370,14 @@ def plan_batch(actor, steps):
     rate-limit the account for an answer at most REPORT_TTL old. Correctness
     is unaffected — execution re-derives every guard, and the apply-time
     fingerprint is fresh regardless.
+
+    ``report_fn`` and ``store`` are injection seams for tests (None keeps the
+    module's own ``report`` and the shared cache).
     """
+    if report_fn is None:
+        report_fn = report
+    if store is None:
+        store = cache
     _refuse_external("Planning capacity changes")
     if not isinstance(steps, (list, tuple)) or not steps:
         raise CapacityError("steps must be a non-empty list of capacity steps",
@@ -2379,7 +2386,7 @@ def plan_batch(actor, steps):
         raise CapacityError(
             f"A batch holds at most {MAX_BATCH_STEPS} steps; this one has "
             f"{len(steps)}.", "invalid_request")
-    envelope = report()
+    envelope = report_fn()
     _refuse_degraded(envelope, [str((raw or {}).get("action") or "")
                                 for raw in steps
                                 if isinstance(raw, dict)])
@@ -2414,7 +2421,7 @@ def plan_batch(actor, steps):
         "order_note": ORDER_NOTE,
     }
     try:
-        cache.set(_plan_key(record["id"]), record, PLAN_TTL)
+        store.set(_plan_key(record["id"]), record, PLAN_TTL)
     except Exception:
         # A plan that cannot be stored cannot be confirmed — refusal, never
         # go-ahead, same stance as _claim.
@@ -2426,8 +2433,14 @@ def plan_batch(actor, steps):
             if key != "fingerprint"}
 
 
-def apply_batch(actor, plan_id):
-    """Confirm one stored plan by id and hand its steps to the batch job."""
+def apply_batch(actor, plan_id, *, report_fn=None):
+    """Confirm one stored plan by id and hand its steps to the batch job.
+
+    ``report_fn`` is an injection seam for tests (None keeps the module's
+    own ``report``).
+    """
+    if report_fn is None:
+        report_fn = report
     _refuse_external("Applying capacity changes")
     plan_id = str(plan_id or "").strip()
     record = None
@@ -2441,7 +2454,7 @@ def apply_batch(actor, plan_id):
             "That plan is not on record — plans expire after 5 minutes. "
             "Request a new plan and review it again.",
             "plan_not_found", 404)
-    fresh = report(refresh=True)
+    fresh = report_fn(refresh=True)
     # Never fingerprint an incomplete fleet: a degraded fresh envelope would
     # hash differently for the wrong reason and 409 an honest plan.
     _refuse_degraded(fresh, [step["action"] for step in record["steps"]])

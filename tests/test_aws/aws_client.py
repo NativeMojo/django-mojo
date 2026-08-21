@@ -8,9 +8,11 @@ def test_aws_session_uses_default_chain_and_rejects_partial_settings(opts):
     from botocore.exceptions import PartialCredentialsError
     from mojo.helpers.aws import client
 
-    with mock.patch.object(client.boto3, "Session") as session_cls:
-        client.get_session(region="us-west-2")
-        session_cls.assert_called_once_with(region_name="us-west-2")
+    # Injected via get_session's session_cls seam: patching client.boto3
+    # mutates the process-wide boto3 module under the parallel runner (#2558).
+    session_cls = mock.Mock()
+    client.get_session(region="us-west-2", session_cls=session_cls)
+    session_cls.assert_called_once_with(region_name="us-west-2")
 
     try:
         client.get_session(access_key="key-only", region="us-west-2")

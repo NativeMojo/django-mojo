@@ -43,15 +43,20 @@ ERROR_CODE = "infrastructure_external"
 DEFAULT_ACTION = "This change"
 
 
-def infrastructure_mode():
+def infrastructure_mode(*, reader=None):
     """Return exactly ``MANAGED`` or ``EXTERNAL``. Never raises.
 
     Unset/empty/``"managed"`` is managed. ``"external"`` is external. Anything
     else present — a typo, a non-string, a settings backend that blew up — is
     external, and says so once in the error log.
+
+    ``reader`` is a test seam for the file-only settings read; ``None`` means
+    the real ``settings.get_static``.
     """
+    if reader is None:
+        reader = settings.get_static
     try:
-        raw = settings.get_static(SETTING, "")
+        raw = reader(SETTING, "")
     except Exception as err:
         logit.error(
             f"{SETTING} could not be read ({err.__class__.__name__}) — "

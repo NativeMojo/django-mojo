@@ -5,9 +5,9 @@ this deployment is responsible for — feeds a single alarm that catches every
 cause of a stalled renewal at once: publisher down, challenge misrouted,
 credentials wrong, delegation record deleted.
 
-Nothing here touches AWS. `cloudwatch.put_metric_data` takes an injected client,
-and these tests patch the module function outright and assert on what it was
-handed.
+Nothing here touches AWS. The handler takes an injected `put_metric=` writer
+(item #2558), and these tests pass a recorder through that seam and assert on
+what it was handed.
 """
 
 from datetime import timedelta
@@ -64,11 +64,14 @@ def _certificate(domain, common_name, days=None, status="active"):
 
 
 def _publish():
-    """Run the job with put_metric_data stubbed; return the recorded calls."""
+    """Run the job with the CloudWatch write injected; return the recorded calls.
+
+    The recorder rides the handler's ``put_metric=`` seam (item #2558) —
+    never a process-global patch of the shared cloudwatch helper.
+    """
     from objict import objict
 
     from mojo.apps.dnsman import asyncjobs
-    from mojo.helpers.aws import cloudwatch
 
     calls = []
 
@@ -76,8 +79,8 @@ def _publish():
         calls.append(dict(namespace=namespace, metric_name=metric_name,
                           value=value, dimensions=dimensions, unit=unit))
 
-    with mock.patch.object(cloudwatch, "put_metric_data", record):
-        result = asyncjobs.publish_certificate_expiry_metric(objict(payload={}))
+    result = asyncjobs.publish_certificate_expiry_metric(
+        objict(payload={}), put_metric=record)
     return calls, result
 
 

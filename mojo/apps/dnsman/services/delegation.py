@@ -76,12 +76,18 @@ def _compare_allocation(row, allocation):
             code=503, status=503)
 
 
-def initiate(group, user, domain=None, name=None):
-    """Persist ownership/client_ref, then allocate the permanent hub target."""
+def initiate(group, user, domain=None, name=None, *, available=None):
+    """Persist ownership/client_ref, then allocate the permanent hub target.
+
+    ``available`` is an injection seam for tests, overriding the hub
+    availability probe (None means ``is_available()``).
+    """
     from mojo.apps.account.models import Group
     from mojo.apps.dnsman.models import AcmeDelegation
 
-    if not is_available():
+    if available is None:
+        available = is_available()
+    if not available:
         raise me.ValueException(
             "Delegated ACME is not configured", code=503, status=503)
     if group is None:

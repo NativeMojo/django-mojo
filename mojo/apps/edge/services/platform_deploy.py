@@ -870,10 +870,17 @@ def record_rollback_outcomes():
     return recorded
 
 
-def reconcile_stale():
-    """Verify released fleets, then close abandoned coordination attempts."""
+def reconcile_stale(verify_fleet=None):
+    """Verify released fleets, then close abandoned coordination attempts.
+
+    ``verify_fleet`` is an injection seam for tests (None means the module's
+    own ``verify``).
+    """
     from datetime import timedelta
     from mojo.apps.edge.services import deploy
+
+    if verify_fleet is None:
+        verify_fleet = verify
 
     finalize_post_restart()
     record_rollback_outcomes()
@@ -902,7 +909,7 @@ def reconcile_stale():
         if (row.status == PlatformDeployment.STATUS_FLEET
                 and row.modified < proof_cutoff):
             try:
-                result = verify(row.pk)
+                result = verify_fleet(row.pk)
             except Exception:
                 # A transient jobs/Redis failure leaves the row active for the
                 # next bounded sweep; it must not become a false terminal.

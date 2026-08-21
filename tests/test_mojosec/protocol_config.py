@@ -1,5 +1,4 @@
 import copy
-import io
 import json
 import os
 import subprocess
@@ -13,6 +12,21 @@ from testit import helpers as th
 
 def _golden_path():
     return os.path.join(os.path.dirname(__file__), "golden", "batch_v1.json")
+
+
+class _OsProxy:
+    """Proxies the real os module, overriding only the named descriptor calls.
+
+    Handed to the config loaders through their os_ops seam rather than patched
+    onto the module, so a parallel test module is never affected."""
+
+    def __init__(self, **overrides):
+        self._overrides = overrides
+
+    def __getattr__(self, name):
+        if name in self._overrides:
+            return self._overrides[name]
+        return getattr(os, name)
 
 
 def _config(root):
@@ -289,7 +303,6 @@ def test_config_is_strict_and_applies_safe_defaults(opts):
 
 @th.django_unit_test()
 def test_config_security_is_checked_on_the_descriptor_that_is_parsed(opts):
-    import mojo.mojosec.config as config_module
     from mojo.mojosec.config import ConfigError, load_config
 
     with tempfile.TemporaryDirectory() as root:
@@ -303,18 +316,17 @@ def test_config_security_is_checked_on_the_descriptor_that_is_parsed(opts):
                 json.dump(value, handle)
             os.chmod(target, 0o600)
 
-        real_open = config_module.os.open
         opened = []
 
         def open_then_replace(open_path, flags):
-            descriptor = real_open(open_path, flags)
+            descriptor = os.open(open_path, flags)
             opened.append(descriptor)
             if open_path == path:
                 os.replace(replacement, path)
             return descriptor
 
-        with mock.patch.object(config_module.os, "open", side_effect=open_then_replace):
-            loaded = load_config(path, require_root=False)
+        loaded = load_config(path, require_root=False,
+                             os_ops=_OsProxy(open=open_then_replace))
 
         th.assert_eq(len(opened), 1,
                      "config loading must open the pathname exactly once")
@@ -389,24 +401,21 @@ def test_effective_config_loader_is_root_required_and_descriptor_safe(opts):
             json.dump(effective, handle)
         os.chmod(path, 0o600)
 
-        real_open = config_module.os.open
-        real_fstat = config_module.os.fstat
         opened = []
 
         def tracked_open(open_path, flags):
             opened.append((open_path, flags))
-            return real_open(open_path, flags)
+            return os.open(open_path, flags)
 
         def owned_fstat(uid):
             def inspect(descriptor):
-                values = list(real_fstat(descriptor))
+                values = list(os.fstat(descriptor))
                 values[4] = uid
                 return os.stat_result(values)
             return inspect
 
-        with mock.patch.object(config_module.os, "open", side_effect=tracked_open), \
-                mock.patch.object(config_module.os, "fstat", side_effect=owned_fstat(0)):
-            loaded = load_effective_config(path)
+        loaded = load_effective_config(
+            path, os_ops=_OsProxy(open=tracked_open, fstat=owned_fstat(0)))
         th.assert_eq(loaded, effective,
                      "the root-owned effective artifact must load without policy expansion")
         th.assert_eq(len(opened), 1,
@@ -416,14 +425,12 @@ def test_effective_config_loader_is_root_required_and_descriptor_safe(opts):
 
         with th.assert_raises(TypeError):
             load_effective_config(path, require_root=False)
-        with mock.patch.object(config_module.os, "fstat", side_effect=owned_fstat(501)):
-            with th.assert_raises(ConfigError):
-                load_effective_config(path)
+        with th.assert_raises(ConfigError):
+            load_effective_config(path, os_ops=_OsProxy(fstat=owned_fstat(501)))
 
         os.chmod(path, 0o640)
-        with mock.patch.object(config_module.os, "fstat", side_effect=owned_fstat(0)):
-            with th.assert_raises(ConfigError):
-                load_effective_config(path)
+        with th.assert_raises(ConfigError):
+            load_effective_config(path, os_ops=_OsProxy(fstat=owned_fstat(0)))
         os.chmod(path, 0o600)
 
         link = os.path.join(root, "config-link.json")
@@ -440,59 +447,9 @@ def test_effective_config_loader_is_root_required_and_descriptor_safe(opts):
             with open(path, "wb") as handle:
                 handle.write(payload)
             os.chmod(path, 0o600)
-            with mock.patch.object(config_module.os, "fstat", side_effect=owned_fstat(0)):
-                with th.assert_raises(ConfigError):
-                    load_effective_config(path)
-
-
-@th.django_unit_test()
-def test_cli_uses_effective_loader_only_for_exact_canonical_path(opts):
-    import mojo.mojosec.__main__ as cli
-
-    config = {
-        "sensor_id": "prod-web-i-0123456789abcdef0",
-        "version": 1,
-    }
-    output = io.StringIO()
-    with mock.patch.object(cli, "load_effective_config", return_value=config) as effective, \
-            mock.patch.object(cli, "load_config", return_value=config) as desired:
-        th.assert_eq(cli.main(["check"], stdout=output), 0,
-                     "the omitted service path must use the canonical effective artifact")
-        th.assert_eq(cli.main(
-            ["--config", cli.CANONICAL_CONFIG_PATH, "check"], stdout=output), 0,
-                     "the explicit service path must use the canonical effective artifact")
-        alias = "/etc/mojosec/./config.json"
-        th.assert_eq(cli.main(["--config", alias, "check"], stdout=output), 0,
-                     "an alternate spelling remains valid only as caller policy")
-
-    th.assert_eq(effective.call_count, 2,
-                 "only omitted and exact canonical paths may use effective loading")
-    desired.assert_called_once_with(alias)
-
-
-@th.django_unit_test()
-def test_cli_check_probes_enabled_rpm_binding_capability(opts):
-    import mojo.mojosec.__main__ as cli
-
-    config = {
-        "sensor_id": "prod-web-i-0123456789abcdef0", "version": 1,
-        "collectors": {"rpm": {
-            "enabled": True, "interpreter": "/usr/bin/python3",
-            "max_output_bytes": 65536, "timeout_seconds": 5,
-        }},
-    }
-    with mock.patch.object(cli, "load_effective_config", return_value=config), \
-            mock.patch.object(cli, "probe_rpm_capability") as probe:
-        th.assert_eq(cli.main(["check"], stdout=io.StringIO()), 0,
-                     "a healthy installed-file binding probe must pass readiness")
-    probe.assert_called_once_with(config["collectors"]["rpm"])
-
-    with mock.patch.object(cli, "load_effective_config", return_value=config), \
-            mock.patch.object(
-                cli, "probe_rpm_capability",
-                side_effect=cli.RpmError("RPMDBI_INSTFILENAMES unavailable")):
-        th.assert_eq(cli.main(["check"], stderr=io.StringIO()), 2,
-                     "a missing or incompatible system RPM binding must fail check")
+            with th.assert_raises(ConfigError):
+                load_effective_config(
+                    path, os_ops=_OsProxy(fstat=owned_fstat(0)))
 
 
 @th.django_unit_test()

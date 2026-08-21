@@ -112,25 +112,22 @@ def _assert_absent(secrets, value, label):
 
 @th.django_unit_test("Dashboard collectors are permission-first and never invoke Setup")
 def test_dashboard_permission_matrix(opts):
+    """Recording fakes ride in through dashboard_overview's collectors= seam
+    (item #2558) instead of mock.patch on the shared admin_platform module —
+    the permission gating in _section_map is untouched by the seam, so a
+    collector call with every permission denied is still the bug this test
+    exists to catch."""
     from mojo.apps.account.services import admin_platform
 
     user = mock.Mock(is_superuser=False)
     user.has_permission.side_effect = lambda values: False
     request = mock.Mock(user=user)
-    with mock.patch.object(admin_platform, "_api") as api, \
-            mock.patch.object(admin_platform, "_load_balancer") as balancer, \
-            mock.patch.object(admin_platform, "_compute") as compute, \
-            mock.patch.object(admin_platform, "_dashboard_database") as database, \
-            mock.patch.object(admin_platform, "_dashboard_cache") as cache, \
-            mock.patch.object(admin_platform, "_dashboard_certificates") as certs, \
-            mock.patch.object(admin_platform, "_framework") as framework, \
-            mock.patch.object(admin_platform, "_fleet") as fleet, \
-            mock.patch.object(admin_platform, "_security") as security, \
-            mock.patch.object(admin_platform, "_dashboard_deployment") as deployments, \
-            mock.patch.object(admin_platform, "_dashboard_jobs") as jobs, \
-            mock.patch.object(admin_platform, "_dashboard_sanity") as sanity, \
-            mock.patch("mojo.apps.account.services.system_readiness.run") as setup:
-        report = admin_platform.dashboard_overview(request)
+    fakes = {name: mock.Mock() for name in (
+        "load_balancer", "compute", "database", "cache", "certificates",
+        "public_api", "framework", "sms", "email", "last_deployment",
+        "jobs", "sanity")}
+    with mock.patch("mojo.apps.account.services.system_readiness.run") as setup:
+        report = admin_platform.dashboard_overview(request, collectors=fakes)
     th.assert_eq(report["availability"]["state"], "unknown",
                  "denied sources must not manufacture an availability verdict")
     th.assert_eq(report["availability"]["down"], [],
@@ -140,8 +137,7 @@ def test_dashboard_permission_matrix(opts):
     for name, source in report["sources"].items():
         th.assert_eq(source["status"], "permission_denied",
                      f"{name} must distinguish denial from source failure")
-    for collector in (api, balancer, compute, database, cache, certs, framework,
-                      fleet, security, deployments, jobs, sanity, setup):
+    for collector in (*fakes.values(), setup):
         th.assert_true(not collector.called,
                        "Dashboard issued a forbidden or Setup readiness read")
 
@@ -171,76 +167,11 @@ def test_dashboard_status_vocabulary(opts):
                  "expired evidence remained healthy")
 
 
-ATTENTION_EMAIL = "admin_portal_attention@test.com"
-ATTENTION_PASSWORD = "Admin_portal_attention_pw_99"
-
-
-def _bootstrap_capabilities(opts):
-    response = opts.client.get("/api/account/admin/bootstrap")
-    th.assert_eq(response.status_code, 200, "the Admin bootstrap read failed")
-    return (response.json.get("data") or {}).get("capabilities") or {}
-
-
-@th.django_unit_test("the System Setup badge tracks the one thing Setup is still needed for")
-def test_setup_attention_matches_dashboard_link(opts):
-    """System Setup left the page grid, so the sidebar entry has to carry the
-    reason to open it: a superuser looking at an installation with no public
-    address. Nobody else is ever badged.
-
-    The BASE_URL read is patched in-process rather than driven through the
-    shared Setting row: parallel modules (test_system_setup, aws_check) create
-    and delete that global row at will, so an HTTP-level assertion on its
-    absence fails or passes by scheduling. The capability computation is what
-    this test owns; HTTP delivery of bootstrap is covered elsewhere."""
-    import inspect
-    from mojo.apps.account.models import User
-    from mojo.apps.account.rest import admin_portal as views
-    from mojo.apps.account.services import system_settings
-
-    admin = User.objects.get(pk=opts.integration_admin)
-    User.objects.filter(email=ATTENTION_EMAIL).delete()
-    reader = User.objects.create_user(
-        username=ATTENTION_EMAIL, email=ATTENTION_EMAIL, password=ATTENTION_PASSWORD)
-    reader.is_active = True
-    reader.is_email_verified = True
-    reader.requires_mfa = False
-    reader.save()
-    reader.add_permission("view_admin")
-
-    bootstrap = inspect.unwrap(views.on_admin_bootstrap)
-    real_get_value = system_settings.get_value
-
-    def _with_base_url(value, user):
-        def fake(key, *args, **kwargs):
-            if key == system_settings.BASE_URL:
-                return value
-            return real_get_value(key, *args, **kwargs)
-        with mock.patch.object(system_settings, "get_value", side_effect=fake):
-            return bootstrap(mock.Mock(user=user))["capabilities"]
-
-    try:
-        # No public address yet: the badge is on for the superuser.
-        unset = _with_base_url(None, admin)
-        th.assert_eq(unset["setup_attention"], True,
-                     f"an installation with no BASE_URL is not badged: {unset!r}")
-        th.assert_eq(unset["setup"], True,
-                     "a superuser lost the System Setup destination itself")
-
-        # Same installation, a non-superuser: no destination, so no badge.
-        plain = _with_base_url(None, reader)
-        th.assert_eq(plain["setup_attention"], False,
-                     f"a non-superuser was badged for Setup: {plain!r}")
-        th.assert_eq(plain["setup"], False,
-                     f"a non-superuser was offered System Setup: {plain!r}")
-
-        # Configured installation: the badge goes away for everyone.
-        configured = _with_base_url("https://admin-attention.example.com", admin)
-        th.assert_eq(configured["setup_attention"], False,
-                     f"a configured installation is still badged: {configured!r}")
-        th.assert_eq(configured["setup"], True,
-                     "a superuser lost System Setup once BASE_URL was set")
-    finally:
-        User.objects.filter(email=ATTENTION_EMAIL).delete()
+# test_setup_attention_matches_dashboard_link moved to
+# tests/test_account_admin_extended_serial/test_setup_attention.py (maestro
+# item #2558): it mock.patches system_settings.get_value, a process-global
+# attribute on the shared services module, which is unsafe under the parallel
+# default tier.
 
 
 @th.django_unit_test("real Admin HTTP responses and resulting logs contain no non-reveal secrets")

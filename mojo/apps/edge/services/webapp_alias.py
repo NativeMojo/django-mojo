@@ -277,8 +277,13 @@ def _write_managed_cname(domain, hostname, target):
     return True
 
 
-def attach(web_app, hostname, actor, retry_certificate=False):
-    """Point one more address at this app. Safe to call again at any point."""
+def attach(web_app, hostname, actor, retry_certificate=False, *,
+           resolve_cname=None):
+    """Point one more address at this app. Safe to call again at any point.
+
+    ``resolve_cname`` is an injection seam for tests (None means the live
+    authoritative probe, ``probe.query_cname``).
+    """
     from mojo.apps.dnsman.models.domain import PROVIDER_MOJO
     from mojo.apps.dnsman.services import certs
     from mojo.apps.edge.models import Vhost
@@ -338,7 +343,8 @@ def attach(web_app, hostname, actor, retry_certificate=False):
     if domain.provider == PROVIDER_MOJO:
         # External DNS: the platform holds no credential for this zone, so the
         # user publishes the record and we confirm it authoritatively.
-        if not webapp_onboarding._verify_external_cname(hostname, target):
+        if not webapp_onboarding._verify_external_cname(
+                hostname, target, resolve_cname=resolve_cname):
             return objict(
                 status="records_needed", hostname=hostname, domain=domain.pk,
                 dns=_dns_mode(domain),

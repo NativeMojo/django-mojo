@@ -89,13 +89,16 @@ def _old_v2_database(root):
 def test_store_v1_to_v3_migration_is_atomic_retryable_and_future_safe(opts):
     from mojo.mojosec.store import Store, StoreError
 
+    class _FailingSchemaStore(Store):
+        # Local fault-injection subclass: no process-global class patch.
+        def _create_ssh_session_schema(self, *args, **kwargs):
+            raise RuntimeError("injected")
+
     with tempfile.TemporaryDirectory() as root:
         os.chmod(root, 0o700)
         path = _v1_database(root)
-        with mock.patch.object(
-                Store, "_create_ssh_session_schema", side_effect=RuntimeError("injected")):
-            with th.assert_raises(RuntimeError):
-                Store(root, "sensor", AGGREGATION, DELIVERY)
+        with th.assert_raises(RuntimeError):
+            _FailingSchemaStore(root, "sensor", AGGREGATION, DELIVERY)
         db = sqlite3.connect(path)
         th.assert_eq(json.loads(db.execute(
             "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]), 1,
@@ -150,14 +153,16 @@ def test_store_v1_to_v3_migration_is_atomic_retryable_and_future_safe(opts):
 def test_store_migrates_old_v2_compatibility_columns_atomically(opts):
     from mojo.mojosec.store import Store
 
+    class _FailingDeliveryClassStore(Store):
+        # Local fault-injection subclass: no process-global class patch.
+        def _add_event_delivery_class(self, *args, **kwargs):
+            raise RuntimeError("injected after ambiguous ALTER")
+
     with tempfile.TemporaryDirectory() as root:
         os.chmod(root, 0o700)
         path = _old_v2_database(root)
-        with mock.patch.object(
-                Store, "_add_event_delivery_class",
-                side_effect=RuntimeError("injected after ambiguous ALTER")):
-            with th.assert_raises(RuntimeError):
-                Store(root, "sensor", AGGREGATION, DELIVERY)
+        with th.assert_raises(RuntimeError):
+            _FailingDeliveryClassStore(root, "sensor", AGGREGATION, DELIVERY)
         db = sqlite3.connect(path)
         columns = {row[1] for row in db.execute("PRAGMA table_info(ssh_sessions)")}
         th.assert_true("ambiguous" not in columns,

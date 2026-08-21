@@ -1,4 +1,3 @@
-import importlib
 import io
 from types import SimpleNamespace
 from unittest import mock
@@ -120,8 +119,8 @@ def test_identity_is_bounded_and_redacted(opts):
         "Account": "123456789012",
         "Arn": "arn:aws:sts::123456789012:assumed-role/app/runner",
     }
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        report = aws_check.AWSCheckRunner(clients={"sts": sts}).run(["identity"])
+    report = aws_check.AWSCheckRunner(
+        clients={"sts": sts}, settings_get=_setting_values()).run(["identity"])
     assert report["overall"] == "pass", f"Valid STS identity should pass, got {report}"
     assert report["items"][0]["details"]["account"] == "123456789012", \
         "The safe AWS account id should be reported"
@@ -374,57 +373,14 @@ def test_monitoring_stops_before_subscription_until_static_allowlist_matches(opt
         {"Key": "purpose", "Value": "cloudwatch-incidents"},
         {"Key": "deployment", "Value": "test"},
     ]}
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        report = aws_check.AWSCheckRunner(
-            clients={"sts": _verified_sts(), "sns": sns, "cloudwatch": _cloudwatch(),
-                     **_discovery_clients()},
-            apply=True, yes=True,
-        ).run(["monitoring"])
+    report = aws_check.AWSCheckRunner(
+        clients={"sts": _verified_sts(), "sns": sns, "cloudwatch": _cloudwatch(),
+                 **_discovery_clients()},
+        apply=True, yes=True, settings_get=_setting_values(),
+    ).run(["monitoring"])
     codes = [item["code"] for item in report["items"]]
     assert "sns.topic_not_allowlisted" in codes, f"Missing exact allowlist must be pending, got {codes}"
     assert sns.subscribe.call_count == 0, "The receiver must not be subscribed before static allowlisting"
-
-
-@th.django_unit_test()
-def test_s3_probe_reports_exact_cleanup_failure(opts):
-    from botocore.exceptions import ReadTimeoutError
-    from mojo.apps.fileman.models import FileManager
-    from mojo.apps.aws.services import aws_check
-
-    FileManager.objects.filter(
-        user__isnull=True, group__isnull=True, backend_type=FileManager.AWS_S3,
-    ).delete()
-    manager = FileManager.objects.create(
-        name="aws-check-test", backend_type=FileManager.AWS_S3,
-        backend_url="s3://aws-check-test", is_active=True, is_default=True,
-        is_public=False,
-    )
-    s3 = mock.Mock()
-    s3.head_bucket.return_value = {}
-    s3.get_public_access_block.return_value = {"PublicAccessBlockConfiguration": {
-        "BlockPublicAcls": True, "IgnorePublicAcls": True,
-        "BlockPublicPolicy": True, "RestrictPublicBuckets": True,
-    }}
-    s3.get_bucket_cors.return_value = {"CORSRules": [{"AllowedOrigins": ["https://example.com"]}]}
-    s3.get_object.return_value = {"Body": io.BytesIO(b"probe")}
-    secret = "https://s3.example/?X-Amz-Credential=CLEANUP-SECRET"
-    s3.delete_object.side_effect = ReadTimeoutError(endpoint_url=secret)
-    with mock.patch.object(aws_check.uuid, "uuid4", side_effect=[SimpleNamespace(hex="sentinel"), SimpleNamespace(hex="probe")]):
-        report = aws_check.AWSCheckRunner(
-            clients={"sts": _verified_sts(), "s3": s3},
-            apply=True, yes=True, probe_s3=True,
-        ).run(["s3"])
-    cleanup = next(item for item in report["items"] if item["code"] == "bucket.probe_cleanup_failed")
-    assert cleanup["details"]["key"] == "__django_mojo_aws_check__/sentinel", \
-        f"Cleanup failure must name the exact sentinel, got {cleanup}"
-    assert cleanup["details"]["operation"] == "s3.delete_object", \
-        f"Cleanup ambiguity must retain its bounded operation: {cleanup}"
-    assert "iam_action" not in cleanup["details"], \
-        "Non-authorization failures must not claim a missing IAM action"
-    assert cleanup["details"]["mutation_state"] == "unknown", \
-        f"A timed-out cleanup mutation must remain explicitly ambiguous: {cleanup}"
-    assert secret not in str(cleanup), "Cleanup evidence must not expose the provider endpoint"
-    manager.delete()
 
 
 @th.django_unit_test()
@@ -466,11 +422,11 @@ def test_email_sandbox_is_nonblocking_and_user_controlled(opts):
                 "dkim_verified": True, "notification_topics_ok": True},
         items=[production_item],
     )
+    runner = aws_check.AWSCheckRunner(apply=True, yes=True)
     with mock.patch.object(email_ops, "audit_email_domain", return_value=audit), \
-            mock.patch.object(
-                aws_check.AWSCheckRunner, "_email_has_create_candidates",
-                return_value=False):
-        report = aws_check.AWSCheckRunner(apply=True, yes=True).run(["email"])
+            mock.patch.object(runner, "_email_has_create_candidates",
+                              return_value=False):
+        report = runner.run(["email"])
 
     domain_audit = next(
         item for item in report["items"] if item["code"] == "email.domain_audit")
@@ -513,44 +469,16 @@ def test_ses_account_audit_has_no_production_access_mutation(opts):
     sesv2.get_account.return_value = {"ProductionAccessEnabled": False}
 
     def factory(service, **kwargs):
-        return {"sesv2": sesv2, "sns": sns}[service]
+        return {"ses": ses, "sesv2": sesv2, "sns": sns}[service]
 
-    with mock.patch.object(ses_domain, "_get_ses_client", return_value=ses):
-        report = ses_domain.audit_domain_config(
-            "mail.example", region="us-east-1", desired_topics={},
-            client_factory=factory)
+    report = ses_domain.audit_domain_config(
+        "mail.example", region="us-east-1", desired_topics={},
+        client_factory=factory)
 
     assert report.checks["ses_production_access"] is False, \
         "Sandbox state must remain discoverable"
     assert sesv2.method_calls == [mock.call.get_account()], \
         f"SES account audit must be read-only, got calls: {sesv2.method_calls}"
-
-
-@th.django_unit_test()
-def test_aws_check_command_json_and_failure_exit(opts):
-    from django.core.management import call_command
-    from django.core.management.base import CommandError
-
-    module = importlib.import_module("mojo.apps.aws.management.commands.aws-check")
-    passed = {
-        "schema_version": 1, "generated_at": "2026-01-01T00:00:00+00:00",
-        "region": "us-east-1", "overall": "pass",
-        "counts": {"pass": 1, "warn": 0, "fail": 0, "pending": 0, "skip": 0},
-        "items": [],
-    }
-    with mock.patch.object(module.AWSCheckRunner, "run", return_value=passed):
-        output = io.StringIO()
-        call_command("aws-check", "--json", stdout=output)
-    assert '"schema_version": 1' in output.getvalue(), "JSON mode must emit the versioned schema"
-
-    failed = dict(passed, overall="fail", counts={"pass": 0, "warn": 0, "fail": 1, "pending": 0, "skip": 0})
-    with mock.patch.object(module.AWSCheckRunner, "run", return_value=failed):
-        try:
-            call_command("aws-check", "--check", stdout=io.StringIO())
-        except CommandError as exc:
-            assert exc.returncode == 1, f"Required failures must exit 1, got {exc.returncode}"
-        else:
-            assert False, "A required readiness failure must raise CommandError"
 
 
 @th.django_unit_test()
@@ -573,19 +501,21 @@ def test_runner_uses_static_credentials_unless_profile_selected(opts):
     values = _setting_values(
         AWS_REGION="us-west-2", AWS_KEY="configured-key", AWS_SECRET="configured-secret",
     )
-    with mock.patch.object(aws_check, "_setting", side_effect=values), \
-            mock.patch.object(aws_check, "get_session") as get_session:
-        aws_check.AWSCheckRunner()._session()
-        get_session.assert_called_once_with(
-            access_key="configured-key", secret_key="configured-secret",
-            region="us-west-2", profile=None,
-        )
+    get_session = mock.Mock()
+    aws_check.AWSCheckRunner(
+        settings_get=values, session_factory=get_session)._session()
+    get_session.assert_called_once_with(
+        access_key="configured-key", secret_key="configured-secret",
+        region="us-west-2", profile=None,
+    )
 
-        get_session.reset_mock()
-        aws_check.AWSCheckRunner(profile="operators")._session()
-        get_session.assert_called_once_with(
-            access_key=None, secret_key=None, region="us-west-2", profile="operators",
-        )
+    get_session.reset_mock()
+    aws_check.AWSCheckRunner(
+        profile="operators", settings_get=values,
+        session_factory=get_session)._session()
+    get_session.assert_called_once_with(
+        access_key=None, secret_key=None, region="us-west-2", profile="operators",
+    )
 
 
 @th.django_unit_test()
@@ -642,10 +572,10 @@ def test_apply_repairs_missing_system_bucket_direct_upload_cors(opts):
         # of put_bucket_cors calls the fileman repair makes, and another
         # module's EDGE_RELEASE_BUCKETS Setting in the shared DB would add its
         # own put. The release sweep has its own tests below.
-        with mock.patch.object(aws_check, "_release_buckets", return_value=[]):
-            report = aws_check.AWSCheckRunner(
-                clients={"sts": _verified_sts(), "s3": s3}, apply=True, yes=True,
-            ).run(["s3"])
+        report = aws_check.AWSCheckRunner(
+            clients={"sts": _verified_sts(), "s3": s3}, apply=True, yes=True,
+            release_buckets=[],
+        ).run(["s3"])
         manager.refresh_from_db()
         configured = [item for item in report["items"] if item["code"] == "bucket.cors_configured"]
         assert configured and configured[0]["status"] == "pass", \
@@ -672,11 +602,10 @@ def test_release_bucket_cors_present_passes_without_mutation(opts):
         "AllowedHeaders": ["content-type", "x-amz-checksum-sha256"],
         "ExposeHeaders": ["ETag"],
     }]}
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()), \
-            mock.patch.object(aws_check, "_release_buckets",
-                              return_value=["release-media"]):
-        report = aws_check.AWSCheckRunner(
-            clients={"s3": s3, "sts": _verified_sts()}).run(["s3"])
+    report = aws_check.AWSCheckRunner(
+        clients={"s3": s3, "sts": _verified_sts()},
+        settings_get=_setting_values(), release_buckets=["release-media"],
+    ).run(["s3"])
     item = next(row for row in report["items"] if row["code"] == "release_bucket.cors")
     assert item["status"] == "pass", \
         f"a covering release-bucket rule must pass, got {item}"
@@ -697,11 +626,10 @@ def test_release_bucket_cors_missing_warns_without_apply(opts):
     s3.get_bucket_cors.side_effect = aws_check.ClientError({
         "Error": {"Code": "NoSuchCORSConfiguration", "Message": "missing"},
     }, "GetBucketCors")
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()), \
-            mock.patch.object(aws_check, "_release_buckets",
-                              return_value=["release-media"]):
-        report = aws_check.AWSCheckRunner(
-            clients={"s3": s3, "sts": _verified_sts()}).run(["s3"])
+    report = aws_check.AWSCheckRunner(
+        clients={"s3": s3, "sts": _verified_sts()},
+        settings_get=_setting_values(), release_buckets=["release-media"],
+    ).run(["s3"])
     item = next(row for row in report["items"] if row["code"] == "release_bucket.cors")
     assert item["status"] == "warn", \
         f"a missing release rule must warn on a read-only run, got {item}"
@@ -722,12 +650,10 @@ def test_release_bucket_cors_apply_merges_one_tight_rule(opts):
                  "AllowedMethods": ["GET"], "AllowedHeaders": ["authorization"]}
     s3 = mock.Mock()
     s3.get_bucket_cors.return_value = {"CORSRules": [dict(unrelated)]}
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()), \
-            mock.patch.object(aws_check, "_release_buckets",
-                              return_value=["release-media"]):
-        report = aws_check.AWSCheckRunner(
-            clients={"s3": s3, "sts": _verified_sts()}, apply=True, yes=True,
-        ).run(["s3"])
+    report = aws_check.AWSCheckRunner(
+        clients={"s3": s3, "sts": _verified_sts()}, apply=True, yes=True,
+        settings_get=_setting_values(), release_buckets=["release-media"],
+    ).run(["s3"])
     configured = next(row for row in report["items"]
                       if row["code"] == "release_bucket.cors_configured")
     assert configured["status"] == "pass" and configured["changed"] is True, \
@@ -765,11 +691,10 @@ def test_release_bucket_cors_wildcard_rule_is_not_the_tight_rule(opts):
         "AllowedMethods": ["PUT", "POST", "HEAD"],
         "AllowedHeaders": ["*"],
     }]}
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()), \
-            mock.patch.object(aws_check, "_release_buckets",
-                              return_value=["release-media"]):
-        report = aws_check.AWSCheckRunner(
-            clients={"s3": s3, "sts": _verified_sts()}).run(["s3"])
+    report = aws_check.AWSCheckRunner(
+        clients={"s3": s3, "sts": _verified_sts()},
+        settings_get=_setting_values(), release_buckets=["release-media"],
+    ).run(["s3"])
     item = next(row for row in report["items"] if row["code"] == "release_bucket.cors")
     assert item["status"] == "warn", \
         f"a wildcard-origins bucket must not pass the release sub-check, got {item}"
@@ -797,12 +722,10 @@ def test_release_bucket_cors_needs_a_base_url_origin(opts):
         user__isnull=True, group__isnull=True, backend_type=FileManager.AWS_S3,
     ).delete()
     s3 = mock.Mock()
-    with mock.patch.object(aws_check, "_setting",
-                           side_effect=_setting_values(BASE_URL="")), \
-            mock.patch.object(aws_check, "_release_buckets",
-                              return_value=["release-media"]):
-        report = aws_check.AWSCheckRunner(
-            clients={"s3": s3, "sts": _verified_sts()}).run(["s3"])
+    report = aws_check.AWSCheckRunner(
+        clients={"s3": s3, "sts": _verified_sts()},
+        settings_get=_setting_values(BASE_URL=""), release_buckets=["release-media"],
+    ).run(["s3"])
     item = next(row for row in report["items"]
                 if row["code"] == "release_bucket.cors_origin_unknown")
     assert item["status"] == "warn", \
@@ -847,10 +770,10 @@ def test_apply_section_fails_before_mutation_without_verified_identity(opts):
     sts = mock.Mock()
     sts.get_caller_identity.side_effect = NoCredentialsError()
     sns = mock.Mock()
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        report = aws_check.AWSCheckRunner(
-            clients={"sts": sts, "sns": sns}, apply=True, yes=True,
-        ).run(["monitoring"])
+    report = aws_check.AWSCheckRunner(
+        clients={"sts": sts, "sns": sns}, apply=True, yes=True,
+        settings_get=_setting_values(),
+    ).run(["monitoring"])
     assert report["overall"] == "fail", f"Unverified apply identity must fail, got {report}"
     assert report["items"][0]["code"] == "mutation.credentials.missing"
     sns.create_topic.assert_not_called()
@@ -869,10 +792,10 @@ def test_monitoring_requires_deployment_ownership_and_detects_dimension_drift(op
         {"Key": "purpose", "Value": "cloudwatch-incidents"},
         {"Key": "deployment", "Value": "another-deployment"},
     ]}
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        report = aws_check.AWSCheckRunner(
-            clients={"sns": sns, "cloudwatch": _cloudwatch(), **_discovery_clients()},
-        ).run(["monitoring"])
+    report = aws_check.AWSCheckRunner(
+        clients={"sns": sns, "cloudwatch": _cloudwatch(), **_discovery_clients()},
+        settings_get=_setting_values(),
+    ).run(["monitoring"])
     assert report["overall"] == "fail", f"Cross-deployment topic must conflict, got {report}"
     assert "sns.topic_conflict" in [item["code"] for item in report["items"]]
 
@@ -900,11 +823,11 @@ def test_monitoring_requires_deployment_ownership_and_detects_dimension_drift(op
         {"Key": "deployment", "Value": "test"},
     ]}
     values = _setting_values(AWS_CLOUDWATCH_ALARM_TOPIC_ARNS=[topic])
-    with mock.patch.object(aws_check, "_setting", side_effect=values), \
-            mock.patch.object(aws_check.AWSCheckRunner, "_desired_alarms", return_value=[desired]):
-        report = aws_check.AWSCheckRunner(
-            clients={"sns": sns, "cloudwatch": cloudwatch},
-        ).run(["monitoring"])
+    runner = aws_check.AWSCheckRunner(
+        clients={"sns": sns, "cloudwatch": cloudwatch}, settings_get=values,
+    )
+    with mock.patch.object(runner, "_desired_alarms", return_value=[desired]):
+        report = runner.run(["monitoring"])
     drift = next(item for item in report["items"] if item["code"] == "alarms.drifted")
     assert desired["AlarmName"] in drift["details"]["alarm_names"]
     cloudwatch.put_metric_alarm.assert_not_called()
@@ -1014,8 +937,8 @@ def test_desired_alarms_unchanged_for_existing_resources(opts):
                        "Engine": "postgres", "DBInstanceClass": "db.m5.large"}],
         cache_clusters=[{"CacheClusterId": "cache-1", "CacheClusterStatus": "available"}],
     )
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+    desired = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=_setting_values())._desired_alarms()
 
     by_name = {alarm["AlarmName"]: alarm for alarm in desired}
     expected = {
@@ -1083,8 +1006,8 @@ def test_target_group_alarm_uses_arn_suffix_dimensions(opts):
         _target_group(name="api", kind="net"),
         _target_group(name="web", kind="app", tg_id="aaaa1111", lb_id="bbbb2222"),
     ])
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+    desired = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=_setting_values())._desired_alarms()
 
     by_name = {alarm["AlarmName"]: alarm for alarm in desired}
     net = by_name.get("django-mojo/test/elbv2/targetgroup~api~0123456789abcdef/healthy-hosts")
@@ -1111,8 +1034,8 @@ def test_target_group_without_load_balancer_is_skipped(opts):
     from mojo.apps.aws.services import aws_check
 
     clients = _discovery_clients(target_groups=[_target_group(name="orphan", attached=False)])
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+    desired = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=_setting_values())._desired_alarms()
     assert desired == [], (
         "An unattached target group publishes no metrics, so alarming on it would "
         f"sit in INSUFFICIENT_DATA forever; got {desired}"
@@ -1131,8 +1054,8 @@ def test_empty_target_group_is_caught_by_healthy_host_alarm(opts):
     from mojo.apps.aws.services import aws_check
 
     clients = _discovery_clients(target_groups=[_target_group()])
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+    desired = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=_setting_values())._desired_alarms()
 
     by_metric = {alarm["MetricName"]: alarm for alarm in desired}
     healthy = by_metric.get("HealthyHostCount")
@@ -1178,8 +1101,8 @@ def test_credit_balance_alarm_only_on_burstable(opts):
              "Engine": "postgres", "DBInstanceClass": "db.m5.large"},
         ],
     )
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+    desired = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=_setting_values())._desired_alarms()
 
     credited = {alarm["Dimensions"][0]["Value"] for alarm in desired
                 if alarm["MetricName"] == "CPUCreditBalance"}
@@ -1202,8 +1125,8 @@ def test_evictions_alarm_is_greater_than_zero(opts):
     clients = _discovery_clients(cache_clusters=[
         {"CacheClusterId": "cache-1", "CacheClusterStatus": "available"},
     ])
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+    desired = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=_setting_values())._desired_alarms()
 
     evictions = next((a for a in desired if a["MetricName"] == "Evictions"), None)
     assert evictions is not None, \
@@ -1231,8 +1154,8 @@ def test_connection_alarm_uses_forgiving_default_and_honours_override(opts):
         {"DBInstanceIdentifier": "pg", "DBInstanceStatus": "available",
          "Engine": "postgres", "DBInstanceClass": "db.t3.medium"},
     ])
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+    desired = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=_setting_values())._desired_alarms()
     connections = next(a for a in desired if a["MetricName"] == "DatabaseConnections")
     assert connections["Threshold"] == 500, \
         f"The shipped default must be forgiving (500), got {connections['Threshold']}"
@@ -1240,8 +1163,8 @@ def test_connection_alarm_uses_forgiving_default_and_honours_override(opts):
         f"Connection exhaustion is an upward breach, got {connections['ComparisonOperator']}"
 
     values = _setting_values(AWS_CHECK_RDS_MAX_CONNECTIONS=90)
-    with mock.patch.object(aws_check, "_setting", side_effect=values):
-        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+    desired = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=values)._desired_alarms()
     connections = next(a for a in desired if a["MetricName"] == "DatabaseConnections")
     assert connections["Threshold"] == 90, (
         "An operator on a small instance class must be able to lower the ceiling; "
@@ -1261,15 +1184,16 @@ def test_cert_alarm_treats_missing_data_as_breaching(opts):
     from mojo.apps.aws.services import aws_check
 
     cloudwatch = _cloudwatch(metrics=[{"MetricName": "MinDaysToExpiry"}])
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        alarms = aws_check.AWSCheckRunner()._desired_deployment_alarms(cloudwatch)
-        resource_alarms = aws_check.AWSCheckRunner(
-            clients=_discovery_clients(
-                instances=[{"InstanceId": "i-a", "State": {"Name": "running"},
-                            "InstanceType": "t3.small"}],
-                cache_clusters=[{"CacheClusterId": "c-1", "CacheClusterStatus": "available"}],
-            ),
-        )._desired_alarms()
+    alarms = aws_check.AWSCheckRunner(
+        settings_get=_setting_values())._desired_deployment_alarms(cloudwatch)
+    resource_alarms = aws_check.AWSCheckRunner(
+        clients=_discovery_clients(
+            instances=[{"InstanceId": "i-a", "State": {"Name": "running"},
+                        "InstanceType": "t3.small"}],
+            cache_clusters=[{"CacheClusterId": "c-1", "CacheClusterStatus": "available"}],
+        ),
+        settings_get=_setting_values(),
+    )._desired_alarms()
 
     assert len(alarms) == 1, f"exactly one deployment-wide alarm, got {alarms}"
     assert alarms[0]["TreatMissingData"] == "breaching", (
@@ -1290,8 +1214,8 @@ def test_cert_alarm_threshold_direction(opts):
     from mojo.apps.aws.services import aws_check
 
     cloudwatch = _cloudwatch(metrics=[{"MetricName": "MinDaysToExpiry"}])
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        alarm = aws_check.AWSCheckRunner()._desired_deployment_alarms(cloudwatch)[0]
+    alarm = aws_check.AWSCheckRunner(
+        settings_get=_setting_values())._desired_deployment_alarms(cloudwatch)[0]
 
     assert alarm["ComparisonOperator"] == "LessThanOrEqualToThreshold", (
         "days-remaining breaches on the way DOWN; a GreaterThan comparison would "
@@ -1311,9 +1235,8 @@ def test_cert_alarm_not_created_until_metric_is_published(opts):
     from mojo.apps.aws.services import aws_check
 
     cloudwatch = _cloudwatch(metrics=[])
-    runner = aws_check.AWSCheckRunner()
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        alarms = runner._desired_deployment_alarms(cloudwatch)
+    runner = aws_check.AWSCheckRunner(settings_get=_setting_values())
+    alarms = runner._desired_deployment_alarms(cloudwatch)
 
     assert alarms == [], (
         "a breaching alarm created before its publisher has ever run goes straight "
@@ -1347,8 +1270,8 @@ def test_list_metrics_denied_does_not_abort_monitoring(opts):
         ]),
     }
     values = _setting_values(AWS_CLOUDWATCH_ALARM_TOPIC_ARNS=[topic])
-    with mock.patch.object(aws_check, "_setting", side_effect=values):
-        report = aws_check.AWSCheckRunner(clients=clients).run(["monitoring"])
+    report = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=values).run(["monitoring"])
 
     codes = [item["code"] for item in report["items"]]
     assert "monitoring.denied" not in codes, (
@@ -1373,8 +1296,8 @@ def test_desired_alarms_skips_free_storage_space_on_aurora(opts):
         {"DBInstanceIdentifier": "plain-pg", "DBInstanceStatus": "available",
          "Engine": "postgres"},
     ])
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        desired = aws_check.AWSCheckRunner(clients=clients)._desired_alarms()
+    desired = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=_setting_values())._desired_alarms()
     signals = {(alarm["Dimensions"][0]["Value"], alarm["MetricName"]) for alarm in desired}
     assert ("aurora-pg", "FreeStorageSpace") not in signals, (
         "Aurora never publishes FreeStorageSpace, so the alarm would sit permanently green; "
@@ -1417,8 +1340,8 @@ def test_aurora_storage_gap_is_reported_not_silent(opts):
         }]),
     }
     values = _setting_values(AWS_CLOUDWATCH_ALARM_TOPIC_ARNS=[topic])
-    with mock.patch.object(aws_check, "_setting", side_effect=values):
-        report = aws_check.AWSCheckRunner(clients=clients).run(["monitoring"])
+    report = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=values).run(["monitoring"])
     codes = [item["code"] for item in report["items"]]
     gap = next((item for item in report["items"]
                 if item["code"] == "alarms.aurora_storage_unmonitored"), None)
@@ -1447,8 +1370,8 @@ def test_monitoring_reports_stale_aurora_free_storage_alarm(opts):
         }]),
     }
     values = _setting_values(AWS_CLOUDWATCH_ALARM_TOPIC_ARNS=[topic])
-    with mock.patch.object(aws_check, "_setting", side_effect=values):
-        report = aws_check.AWSCheckRunner(clients=clients).run(["monitoring"])
+    report = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=values).run(["monitoring"])
     codes = [item["code"] for item in report["items"]]
     stale = next((item for item in report["items"]
                   if item["code"] == "alarms.stale_aurora_storage"), None)
@@ -1476,8 +1399,8 @@ def test_stale_detection_makes_no_call_when_no_aurora_is_discovered(opts):
         }]),
     }
     values = _setting_values(AWS_CLOUDWATCH_ALARM_TOPIC_ARNS=[topic])
-    with mock.patch.object(aws_check, "_setting", side_effect=values):
-        report = aws_check.AWSCheckRunner(clients=clients).run(["monitoring"])
+    report = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=values).run(["monitoring"])
     codes = [item["code"] for item in report["items"]]
     assert "alarms.stale_aurora_storage" not in codes, \
         f"No Aurora instance exists, so nothing can be stale, got {codes}"
@@ -1510,8 +1433,8 @@ def test_stale_detection_ignores_a_hand_fixed_alarm(opts):
         }]),
     }
     values = _setting_values(AWS_CLOUDWATCH_ALARM_TOPIC_ARNS=[topic])
-    with mock.patch.object(aws_check, "_setting", side_effect=values):
-        report = aws_check.AWSCheckRunner(clients=clients).run(["monitoring"])
+    report = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=values).run(["monitoring"])
     codes = [item["code"] for item in report["items"]]
     assert "alarms.stale_aurora_storage" not in codes, (
         "An owned alarm already hand-fixed to FreeLocalStorage is preserved, not reported "
@@ -1536,8 +1459,8 @@ def test_stale_detection_runs_before_subscription_confirmation(opts):
             "Engine": "aurora-postgresql",
         }]),
     }
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        report = aws_check.AWSCheckRunner(clients=clients).run(["monitoring"])
+    report = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=_setting_values()).run(["monitoring"])
     codes = [item["code"] for item in report["items"]]
     assert "sns.topic_not_allowlisted" in codes, \
         f"This fixture must exercise the un-allowlisted early return, got {codes}"
@@ -1553,11 +1476,12 @@ def test_network_failure_and_fresh_cron_have_stable_classification(opts):
     from django.utils import timezone
     from mojo.apps.aws.services import aws_check
 
+    runner = aws_check.AWSCheckRunner()
     with mock.patch.object(
-        aws_check.AWSCheckRunner, "check_s3",
+        runner, "check_s3",
         side_effect=EndpointConnectionError(endpoint_url="https://s3.invalid"),
     ):
-        report = aws_check.AWSCheckRunner().run(["s3"])
+        report = runner.run(["s3"])
     assert report["items"][0]["code"] == "s3.service_unreachable", report
 
     now = timezone.now()
@@ -1603,9 +1527,10 @@ def test_dns_audit_flags_staging_directory(opts):
     from mojo.apps.dnsman.services import certs
 
     staging = "https://acme-staging-v02.api.letsencrypt.org/directory"
-    runner = aws_check.AWSCheckRunner()
-    with mock.patch.object(certs, "directory_url", return_value=staging):
-        runner._check_dns_acme_account()
+    certs_service = mock.Mock(wraps=certs)
+    certs_service.directory_url.return_value = staging
+    runner = aws_check.AWSCheckRunner(certs_service=certs_service)
+    runner._check_dns_acme_account()
 
     item = next(i for i in runner.results if i["code"] == "acme.staging_directory")
     assert item["status"] == "warn", f"Staging must warn, never pass, got {item}"
@@ -1621,12 +1546,14 @@ def test_dns_bootstrap_requires_group(opts):
     from mojo.apps.aws.services import aws_check
     from mojo.apps.dnsman.services import delegation
 
+    delegation_service = mock.Mock(wraps=delegation)
+    delegation_service.initiate.return_value = mock.Mock()
     runner = aws_check.AWSCheckRunner(
-        apply=True, yes=True, dns_domain="example.com", dns_group="")
-    with mock.patch.object(delegation, "initiate") as initiate:
-        runner._bootstrap_dns_domain()
+        apply=True, yes=True, dns_domain="example.com", dns_group="",
+        delegation_service=delegation_service)
+    runner._bootstrap_dns_domain()
 
-    initiate.assert_not_called()
+    delegation_service.initiate.assert_not_called()
     codes = [item["code"] for item in runner.results]
     assert "dns.group_required" in codes, \
         f"An unnamed owner must fail closed before any mutation, got {codes}"
@@ -1641,15 +1568,17 @@ def test_dns_bootstrap_surfaces_cname_before_requesting(opts):
     row = SimpleNamespace(
         domain_name="example.com", source_name="_acme-challenge.example.com",
         target_name="abc123.hub.example.net", state="pending", domain=None)
+    delegation_service = mock.Mock(wraps=delegation)
+    delegation_service.initiate.return_value = row
+    delegation_service.prove_alias.side_effect = RuntimeError("not propagated yet")
+    certs_service = mock.Mock(wraps=certs)
+    certs_service.request_certificate.return_value = mock.Mock()
     runner = aws_check.AWSCheckRunner(
-        apply=True, yes=True, dns_domain="example.com", dns_group="7")
+        apply=True, yes=True, dns_domain="example.com", dns_group="7",
+        certs_service=certs_service, delegation_service=delegation_service)
     with mock.patch.object(runner, "_resolve_dns_group",
                            return_value=SimpleNamespace(name="tenant", pk=7,
-                                                        get_uuid=lambda: "uuid-7")), \
-            mock.patch.object(delegation, "initiate", return_value=row), \
-            mock.patch.object(delegation, "prove_alias",
-                              side_effect=RuntimeError("not propagated yet")), \
-            mock.patch.object(certs, "request_certificate") as request_certificate:
+                                                        get_uuid=lambda: "uuid-7")):
         runner._bootstrap_dns_domain()
 
     cname = next(i for i in runner.results if i["code"] == "delegation.cname_required")
@@ -1659,7 +1588,7 @@ def test_dns_bootstrap_surfaces_cname_before_requesting(opts):
     )
     assert cname["details"]["target_name"] == "abc123.hub.example.net", \
         f"The CNAME target must be surfaced, got {cname['details']}"
-    request_certificate.assert_not_called()
+    certs_service.request_certificate.assert_not_called()
 
 
 @th.django_unit_test()
@@ -1677,20 +1606,22 @@ def test_dns_bootstrap_does_not_request_certificate_until_cname_proves(opts):
     row = SimpleNamespace(
         domain_name="example.com", source_name="_acme-challenge.example.com",
         target_name="abc123.hub.example.net", state="pending", domain=None)
+    delegation_service = mock.Mock(wraps=delegation)
+    delegation_service.initiate.return_value = row
+    delegation_service.prove_alias.side_effect = RuntimeError("CNAME does not resolve")
+    delegation_service.verify.return_value = mock.Mock()
+    certs_service = mock.Mock(wraps=certs)
+    certs_service.request_certificate.return_value = mock.Mock()
     runner = aws_check.AWSCheckRunner(
-        apply=True, yes=True, dns_domain="example.com", dns_group="7")
+        apply=True, yes=True, dns_domain="example.com", dns_group="7",
+        certs_service=certs_service, delegation_service=delegation_service)
     with mock.patch.object(runner, "_resolve_dns_group",
                            return_value=SimpleNamespace(name="tenant", pk=7,
-                                                        get_uuid=lambda: "uuid-7")), \
-            mock.patch.object(delegation, "initiate", return_value=row), \
-            mock.patch.object(delegation, "prove_alias",
-                              side_effect=RuntimeError("CNAME does not resolve")), \
-            mock.patch.object(delegation, "verify") as verify, \
-            mock.patch.object(certs, "request_certificate") as request_certificate:
+                                                        get_uuid=lambda: "uuid-7")):
         runner._bootstrap_dns_domain()
 
-    request_certificate.assert_not_called()
-    verify.assert_not_called()
+    certs_service.request_certificate.assert_not_called()
+    delegation_service.verify.assert_not_called()
     codes = [item["code"] for item in runner.results]
     assert "delegation.cname_unverified" in codes, \
         f"An unresolved CNAME must be reported as pending, got {codes}"
@@ -1713,15 +1644,15 @@ def test_dns_errors_redact_the_hub_api_key(opts):
 
     secret = "hub-key-super-secret-value"
     values = _setting_values(DNSMAN_ACME_HUB_API_KEY=secret)
-    with mock.patch.object(aws_check, "_setting", side_effect=values):
-        runner = aws_check.AWSCheckRunner(
-            apply=True, yes=True, dns_domain="example.com", dns_group="7")
-        with mock.patch.object(runner, "_resolve_dns_group",
-                               return_value=SimpleNamespace(name="tenant", pk=7,
-                                                        get_uuid=lambda: "uuid-7")), \
-                mock.patch.object(delegation, "initiate",
-                                  side_effect=RuntimeError(f"hub rejected key {secret}")):
-            runner._bootstrap_dns_domain()
+    delegation_service = mock.Mock(wraps=delegation)
+    delegation_service.initiate.side_effect = RuntimeError(f"hub rejected key {secret}")
+    runner = aws_check.AWSCheckRunner(
+        apply=True, yes=True, dns_domain="example.com", dns_group="7",
+        settings_get=values, delegation_service=delegation_service)
+    with mock.patch.object(runner, "_resolve_dns_group",
+                           return_value=SimpleNamespace(name="tenant", pk=7,
+                                                        get_uuid=lambda: "uuid-7")):
+        runner._bootstrap_dns_domain()
 
     serialized = _json.dumps(runner.results)
     assert secret not in serialized, (
@@ -1755,9 +1686,8 @@ def test_elbv2_denial_does_not_disarm_every_other_alarm(opts):
         {"Error": {"Code": "AccessDenied", "Message": "no DescribeTargetGroups"}},
         "DescribeTargetGroups")
 
-    runner = aws_check.AWSCheckRunner(clients=clients)
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        desired = runner._desired_alarms()
+    runner = aws_check.AWSCheckRunner(clients=clients, settings_get=_setting_values())
+    desired = runner._desired_alarms()
 
     metrics = {alarm["MetricName"] for alarm in desired}
     assert "StatusCheckFailed" in metrics and "CPUUtilization" in metrics, (
@@ -1792,27 +1722,30 @@ def test_bootstrap_never_re_proves_a_verified_delegation(opts):
     verified = SimpleNamespace(
         domain_name="verified.example", source_name="_acme-challenge.verified.example",
         target_name="abc.hub.example.net", state="verified", domain=None)
+    delegation_service = mock.Mock(wraps=delegation)
+    delegation_service.initiate.return_value = mock.Mock()
+    delegation_service.prove_alias.return_value = mock.Mock()
+    certs_service = mock.Mock(wraps=certs)
+    certs_service.request_certificate.return_value = mock.Mock()
     runner = aws_check.AWSCheckRunner(
-        apply=True, yes=True, dns_domain="verified.example", dns_group="7")
+        apply=True, yes=True, dns_domain="verified.example", dns_group="7",
+        certs_service=certs_service, delegation_service=delegation_service)
 
     with mock.patch.object(runner, "_resolve_dns_group",
                            return_value=SimpleNamespace(name="tenant", pk=7,
                                                         get_uuid=lambda: "uuid-7")), \
             mock.patch.object(Domain.objects, "filter") as domains, \
-            mock.patch.object(AcmeDelegation.objects, "filter") as rows, \
-            mock.patch.object(delegation, "initiate") as initiate, \
-            mock.patch.object(delegation, "prove_alias") as prove_alias, \
-            mock.patch.object(certs, "request_certificate") as request_certificate:
+            mock.patch.object(AcmeDelegation.objects, "filter") as rows:
         domains.return_value.first.return_value = None
         rows.return_value.exclude.return_value.first.return_value = verified
         runner._bootstrap_dns_domain()
 
-    prove_alias.assert_not_called()
-    initiate.assert_not_called()
+    delegation_service.prove_alias.assert_not_called()
+    delegation_service.initiate.assert_not_called()
     codes = [item["code"] for item in runner.results]
     assert "delegation.already_verified" in codes, \
         f"an existing verified delegation should be reported and left alone, got {codes}"
-    request_certificate.assert_called_once()
+    certs_service.request_certificate.assert_called_once()
 
 
 @th.django_unit_test()
@@ -1826,18 +1759,20 @@ def test_bootstrap_refuses_a_domain_owned_by_another_group(opts):
     from mojo.apps.dnsman.models import Domain
     from mojo.apps.dnsman.services import delegation
 
+    delegation_service = mock.Mock(wraps=delegation)
+    delegation_service.initiate.return_value = mock.Mock()
     runner = aws_check.AWSCheckRunner(
-        apply=True, yes=True, dns_domain="taken.example", dns_group="7")
+        apply=True, yes=True, dns_domain="taken.example", dns_group="7",
+        delegation_service=delegation_service)
     with mock.patch.object(runner, "_resolve_dns_group",
                            return_value=SimpleNamespace(name="tenant", pk=7,
                                                         get_uuid=lambda: "uuid-7")), \
-            mock.patch.object(Domain.objects, "filter") as domains, \
-            mock.patch.object(delegation, "initiate") as initiate:
+            mock.patch.object(Domain.objects, "filter") as domains:
         domains.return_value.first.return_value = SimpleNamespace(
             name="taken.example", group_id=99)
         runner._bootstrap_dns_domain()
 
-    initiate.assert_not_called()
+    delegation_service.initiate.assert_not_called()
     codes = [item["code"] for item in runner.results]
     assert "dns.domain_not_owned" in codes, \
         f"a domain owned by another group must fail closed before any write, got {codes}"

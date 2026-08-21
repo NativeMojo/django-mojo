@@ -3,7 +3,8 @@ The upload flow: register -> presigned PUT -> complete.
 
 Presigning is faked at the module boundary (`s3.presigned_put_url`) — it is
 pure local signing with no request contract to honour. HeadObject is faked one
-level DOWN, at the boto client (`s3.S3._client`), so the REAL `s3.head_object`
+level DOWN, at the boto client — injected through the `client=` seam on
+`s3.head_object` (item #2558) — so the REAL `s3.head_object`
 helper runs: its request parameters are the regression surface for #1770.
 Real S3 returns `ChecksumSHA256` from HeadObject only when the request passes
 `ChecksumMode="ENABLED"`; a double that returns the checksum unconditionally
@@ -90,14 +91,20 @@ def setup_release_upload(opts):
 def _fake_s3():
     from contextlib import ExitStack
 
-    from mojo.helpers.aws import s3
-
     stack = ExitStack()
     stack.enter_context(mock.patch(
         "mojo.apps.edge.services.releases.s3.presigned_put_url",
         FakeS3.presigned_put_url))
-    stack.enter_context(mock.patch.object(s3.S3, "_client", FakeS3Client()))
     return stack
+
+
+# HeadObject is injected through `complete(..., s3_client=...)` — the seam on
+# releases.complete / s3.head_object (item #2558) — instead of patching the
+# process-global `s3.S3._client` attribute.
+def _complete(release):
+    from mojo.apps.edge.services import releases
+
+    return releases.complete(release, s3_client=FakeS3Client())
 
 
 @th.django_unit_test("register mints exactly one upload URL per declared file")
@@ -164,7 +171,7 @@ def test_complete_requires_the_files(opts):
     with _fake_s3():
         release, uploads = releases.register(
             opts.webapp, "missing1", make_manifest(["index.html"]))
-        err = raises(releases.complete, release)
+        err = raises(_complete, release)
 
     assert err is not None, "complete accepted a release with no uploaded files"
     release.refresh_from_db()
@@ -184,7 +191,7 @@ def test_complete_rejects_bad_checksum(opts):
         # Right size, wrong content.
         _put(f"{prefix}/index.html", sha256_hex="b" * 64,
              size=manifest[0]["size"])
-        err = raises(releases.complete, release)
+        err = raises(_complete, release)
 
     assert err is not None, "complete accepted an object whose checksum differs"
 
@@ -201,7 +208,7 @@ def test_complete_rejects_missing_checksum(opts):
         prefix = release.storage_prefix()
         _put(f"{prefix}/index.html", sha256_hex=manifest[0]["sha256"],
              size=manifest[0]["size"], checksum=False)
-        err = raises(releases.complete, release)
+        err = raises(_complete, release)
 
     assert err is not None, \
         "complete accepted an object with no stored checksum"
@@ -223,8 +230,7 @@ def test_head_object_requests_checksum_mode(opts):
             seen.update(kwargs)
             return {"ContentLength": 1}
 
-    with mock.patch.object(s3.S3, "_client", RecordingClient()):
-        s3.head_object("bucket", "key")
+    s3.head_object("bucket", "key", client=RecordingClient())
 
     assert seen.get("ChecksumMode") == "ENABLED", (
         f"head_object sent ChecksumMode={seen.get('ChecksumMode')!r} — "
@@ -242,7 +248,7 @@ def test_complete_rejects_bad_size(opts):
         prefix = release.storage_prefix()
         _put(f"{prefix}/index.html", sha256_hex=manifest[0]["sha256"],
              size=manifest[0]["size"] + 99)
-        err = raises(releases.complete, release)
+        err = raises(_complete, release)
 
     assert err is not None, "complete accepted an object of the wrong size"
 
@@ -258,7 +264,7 @@ def test_complete_happy_path(opts):
         for entry in manifest:
             _put(f"{prefix}/{entry['path']}", sha256_hex=entry["sha256"],
                  size=entry["size"])
-        releases.complete(release)
+        _complete(release)
 
     release.refresh_from_db()
     assert release.status == "uploaded", \
@@ -278,7 +284,7 @@ def test_complete_reports_which_files(opts):
         for entry in manifest[:2]:
             _put(f"{prefix}/{entry['path']}", sha256_hex=entry["sha256"],
                  size=entry["size"])
-        err = raises(releases.complete, release)
+        err = raises(_complete, release)
 
     assert err is not None, "a partial upload verified"
     assert "missing.css" in str(err), \
@@ -295,8 +301,8 @@ def test_complete_is_not_repeatable(opts):
         prefix = release.storage_prefix()
         _put(f"{prefix}/index.html", sha256_hex=manifest[0]["sha256"],
              size=manifest[0]["size"])
-        releases.complete(release)
-        again = releases.complete(release)
+        _complete(release)
+        again = _complete(release)
 
     assert again.pk == release.pk, "idempotent completion changed the release"
     assert again.status == "uploaded", "idempotent completion reopened the release"

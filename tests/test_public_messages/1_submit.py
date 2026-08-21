@@ -234,23 +234,24 @@ def test_content_guard_blocks_spam(opts):
     from objict import objict as _obj
     from mojo.apps.account.services import public_message as svc
 
-    with mock.patch(
-        "mojo.helpers.content_guard.check_text",
-        return_value=_obj(decision="block", reasons=["deny_hit"], matches=[], score=95),
-    ):
-        try:
-            svc.validate_submission("contact_us", {
-                "name": "Jane",
-                "email": "reject-spam@example.com",
-                "message": "anything",
-            })
-            assert_true(False, "expected ValueError when content_guard blocks")
-        except ValueError as err:
-            err_str = str(err)
-            assert_true(
-                ":blocked" in err_str,
-                f"expected 'field:blocked' error, got {err_str}",
-            )
+    # Injected through validate_submission's check_text seam (item #2558) —
+    # no patch of the shared mojo.helpers.content_guard module.
+    blocking_check = lambda value, surface=None: _obj(
+        decision="block", reasons=["deny_hit"], matches=[], score=95)
+
+    try:
+        svc.validate_submission("contact_us", {
+            "name": "Jane",
+            "email": "reject-spam@example.com",
+            "message": "anything",
+        }, check_text=blocking_check)
+        assert_true(False, "expected ValueError when content_guard blocks")
+    except ValueError as err:
+        err_str = str(err)
+        assert_true(
+            ":blocked" in err_str,
+            f"expected 'field:blocked' error, got {err_str}",
+        )
 
 
 @th.django_unit_test()
@@ -258,15 +259,14 @@ def test_content_guard_failure_is_fail_open(opts):
     """content_guard raising should not block a submission (fail-open)."""
     from mojo.apps.account.services import public_message as svc
 
-    with mock.patch(
-        "mojo.helpers.content_guard.check_text",
-        side_effect=RuntimeError("moderation engine down"),
-    ):
-        common, metadata = svc.validate_submission("contact_us", {
-            "name": "Jane",
-            "email": "ok@example.com",
-            "message": "totally fine message",
-        })
+    def broken_check(value, surface=None):
+        raise RuntimeError("moderation engine down")
+
+    common, metadata = svc.validate_submission("contact_us", {
+        "name": "Jane",
+        "email": "ok@example.com",
+        "message": "totally fine message",
+    }, check_text=broken_check)
     assert_eq(common.get("name"), "Jane", "happy path should still validate on check_text error")
     assert_eq(common.get("message"), "totally fine message", "message should survive fail-open")
 

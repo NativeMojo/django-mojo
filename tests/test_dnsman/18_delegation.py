@@ -56,10 +56,11 @@ def test_client_ref_precedes_allocation(opts):
             target=assigned_target,
         )
 
-    with mock.patch.object(delegation, "is_available", return_value=True), \
-            mock.patch.object(acme_hub_client, "allocate", side_effect=allocate):
-        first = delegation.initiate(group, None, name=name)
-        retry = delegation.initiate(group, None, name=name)
+    # Hub availability rides initiate()'s `available=` seam (item #2558)
+    # instead of a process-global patch of delegation.is_available.
+    with mock.patch.object(acme_hub_client, "allocate", side_effect=allocate):
+        first = delegation.initiate(group, None, name=name, available=True)
+        retry = delegation.initiate(group, None, name=name, available=True)
 
     assert seen[0][2] is None, \
         "client_ref must be committed while target is still unallocated"
@@ -192,16 +193,23 @@ def test_remote_work_rechecks_current_owner(opts):
                 assert False, f"{label} ownership must fail before a hub mutation"
     assert not publish.called, "invalid current ownership must consume no hub mutation"
 
-    with mock.patch.object(certs, "_get_account") as get_account:
-        for label, unused_group, domain, unused_row in cases[:2]:
-            certificate = Certificate.objects.create(
-                domain=domain,
-                common_name=domain.name,
-                sans=[domain.name, f"*.{domain.name}"],
-                status="pending")
-            result = certs.issue(certificate)
-            assert not result.ok, f"{label} ownership must fail issuance closed"
-    assert not get_account.called, \
+    # The account loader is injected through issue()'s `acme=` seam
+    # (item #2558); a recorded call would mean a CA round trip was consumed.
+    account_calls = []
+
+    def guard_account():
+        account_calls.append(True)
+        return None, None
+
+    for label, unused_group, domain, unused_row in cases[:2]:
+        certificate = Certificate.objects.create(
+            domain=domain,
+            common_name=domain.name,
+            sans=[domain.name, f"*.{domain.name}"],
+            status="pending")
+        result = certs.issue(certificate, acme=guard_account)
+        assert not result.ok, f"{label} ownership must fail issuance closed"
+    assert not account_calls, \
         "suspended or transferred ownership must consume no CA account/order call"
 
     for label, unused_group, unused_domain, row in cases:

@@ -36,25 +36,32 @@ class _FakeSession:
         self._session = _FakeBotocoreSession(source=source)
 
 
-def _patched(source="source-credentials"):
-    """Patch get_session + the botocore credential classes for one call."""
+def _deps(source="source-credentials"):
+    """Inject get_session + the botocore credential classes for one call.
+
+    Uses get_assumed_session's keyword-only seams (session_factory /
+    fetcher_cls / credentials_cls) instead of patching the shared
+    mojo.helpers.aws.client module attributes, which is process-global
+    under the parallel runner (maestro #2558).
+    """
     from mojo.helpers.aws import client
 
     session = _FakeSession(source=source)
     return client, session, (
-        mock.patch.object(client, "get_session", return_value=session),
-        mock.patch.object(client, "AssumeRoleCredentialFetcher"),
-        mock.patch.object(client, "DeferredRefreshableCredentials"),
+        mock.Mock(return_value=session),
+        mock.Mock(),
+        mock.Mock(),
     )
 
 
 @th.django_unit_test("AssumeRole: the session gets a refreshable assume-role credential")
 def test_assume_role_installs_refreshable_credentials(opts):
-    client, session, patches = _patched()
-    get_session_p, fetcher_p, deferred_p = patches
+    client, session, deps = _deps()
+    get_session, fetcher_cls, deferred_cls = deps
 
-    with get_session_p as get_session, fetcher_p as fetcher_cls, deferred_p as deferred_cls:
-        result = client.get_assumed_session(ROLE_ARN, region="us-west-2")
+    result = client.get_assumed_session(
+        ROLE_ARN, region="us-west-2", session_factory=get_session,
+        fetcher_cls=fetcher_cls, credentials_cls=deferred_cls)
 
     assert_true(
         result is session,
@@ -106,11 +113,12 @@ def test_assume_role_installs_refreshable_credentials(opts):
 
 @th.django_unit_test("AssumeRole: ExternalId is passed only when one is configured")
 def test_external_id_is_passed_when_supplied(opts):
-    client, session, patches = _patched()
-    get_session_p, fetcher_p, deferred_p = patches
+    client, session, deps = _deps()
+    get_session, fetcher_cls, deferred_cls = deps
 
-    with get_session_p, fetcher_p as fetcher_cls, deferred_p:
-        client.get_assumed_session(ROLE_ARN, external_id="tenant-secret-42")
+    client.get_assumed_session(
+        ROLE_ARN, external_id="tenant-secret-42", session_factory=get_session,
+        fetcher_cls=fetcher_cls, credentials_cls=deferred_cls)
 
     extra_args = fetcher_cls.call_args.kwargs["extra_args"]
     assert_eq(
@@ -121,11 +129,12 @@ def test_external_id_is_passed_when_supplied(opts):
 
 @th.django_unit_test("AssumeRole: ExternalId is omitted entirely when unset")
 def test_external_id_is_absent_when_not_supplied(opts):
-    client, session, patches = _patched()
-    get_session_p, fetcher_p, deferred_p = patches
+    client, session, deps = _deps()
+    get_session, fetcher_cls, deferred_cls = deps
 
-    with get_session_p, fetcher_p as fetcher_cls, deferred_p:
-        client.get_assumed_session(ROLE_ARN)
+    client.get_assumed_session(
+        ROLE_ARN, session_factory=get_session,
+        fetcher_cls=fetcher_cls, credentials_cls=deferred_cls)
 
     extra_args = fetcher_cls.call_args.kwargs["extra_args"]
     assert_true(
@@ -137,11 +146,12 @@ def test_external_id_is_absent_when_not_supplied(opts):
 
 @th.django_unit_test("AssumeRole: a default role session name and duration are applied")
 def test_default_session_name_and_duration(opts):
-    client, session, patches = _patched()
-    get_session_p, fetcher_p, deferred_p = patches
+    client, session, deps = _deps()
+    get_session, fetcher_cls, deferred_cls = deps
 
-    with get_session_p, fetcher_p as fetcher_cls, deferred_p:
-        client.get_assumed_session(ROLE_ARN)
+    client.get_assumed_session(
+        ROLE_ARN, session_factory=get_session,
+        fetcher_cls=fetcher_cls, credentials_cls=deferred_cls)
 
     extra_args = fetcher_cls.call_args.kwargs["extra_args"]
     assert_eq(
@@ -156,11 +166,13 @@ def test_default_session_name_and_duration(opts):
 
 @th.django_unit_test("AssumeRole: an explicit session name and duration win")
 def test_explicit_session_name_and_duration(opts):
-    client, session, patches = _patched()
-    get_session_p, fetcher_p, deferred_p = patches
+    client, session, deps = _deps()
+    get_session, fetcher_cls, deferred_cls = deps
 
-    with get_session_p, fetcher_p as fetcher_cls, deferred_p:
-        client.get_assumed_session(ROLE_ARN, session_name="fileman-7", duration="900")
+    client.get_assumed_session(
+        ROLE_ARN, session_name="fileman-7", duration="900",
+        session_factory=get_session, fetcher_cls=fetcher_cls,
+        credentials_cls=deferred_cls)
 
     extra_args = fetcher_cls.call_args.kwargs["extra_args"]
     assert_eq(
@@ -177,28 +189,30 @@ def test_explicit_session_name_and_duration(opts):
 def test_missing_source_identity_raises(opts):
     from botocore.exceptions import NoCredentialsError
 
-    client, session, patches = _patched(source=None)
-    get_session_p, fetcher_p, deferred_p = patches
+    client, session, deps = _deps(source=None)
+    get_session, fetcher_cls, deferred_cls = deps
 
-    with get_session_p, fetcher_p, deferred_p:
-        try:
-            client.get_assumed_session(ROLE_ARN)
-        except NoCredentialsError:
-            pass
-        else:
-            assert False, (
-                "A session with no resolvable source identity must raise "
-                "NoCredentialsError, not fail later inside the fetcher"
-            )
+    try:
+        client.get_assumed_session(
+            ROLE_ARN, session_factory=get_session,
+            fetcher_cls=fetcher_cls, credentials_cls=deferred_cls)
+    except NoCredentialsError:
+        pass
+    else:
+        assert False, (
+            "A session with no resolvable source identity must raise "
+            "NoCredentialsError, not fail later inside the fetcher"
+        )
 
 
 @th.django_unit_test("AssumeRole: an ambient source identity needs no static keys")
 def test_ambient_source_identity(opts):
-    client, session, patches = _patched()
-    get_session_p, fetcher_p, deferred_p = patches
+    client, session, deps = _deps()
+    get_session, fetcher_cls, deferred_cls = deps
 
-    with get_session_p as get_session, fetcher_p, deferred_p:
-        client.get_assumed_session(ROLE_ARN)
+    client.get_assumed_session(
+        ROLE_ARN, session_factory=get_session,
+        fetcher_cls=fetcher_cls, credentials_cls=deferred_cls)
 
     kwargs = get_session.call_args.kwargs
     assert_true(

@@ -2,6 +2,10 @@
 
 Covers fetch() success / failure modes, firewall-field stripping at the
 boundary, and threat_intel.perform_threat_check(skip_external=True).
+
+Parallel-safe (item #2558): config, HTTP and sub-check injection goes through
+the keyword-only seams on fetch() and perform_threat_check() instead of
+mock.patch on the shared geoip modules.
 """
 from unittest import mock
 from testit import helpers as th
@@ -64,8 +68,7 @@ def _mock_response(status_code=200, body=None):
 def test_mojo_fetch_missing_url_returns_none(opts):
     from mojo.helpers.geoip import mojo as mojo_provider
 
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", None):
-        result = mojo_provider.fetch("1.2.3.4")
+    result = mojo_provider.fetch("1.2.3.4", base_url=None)
     assert result is None, f"expected None when URL unset, got {result!r}"
 
 
@@ -73,9 +76,9 @@ def test_mojo_fetch_missing_url_returns_none(opts):
 def test_mojo_fetch_missing_api_key_returns_none(opts):
     from mojo.helpers.geoip import mojo as mojo_provider
 
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value=None):
-        result = mojo_provider.fetch("1.2.3.4")
+    result = mojo_provider.fetch(
+        "1.2.3.4", base_url="https://hub.example.com",
+        key_loader=lambda provider: None)
     assert result is None, f"expected None when API key unset, got {result!r}"
 
 
@@ -84,11 +87,12 @@ def test_mojo_fetch_http_error_returns_none(opts):
     from mojo.helpers.geoip import mojo as mojo_provider
     import requests as _req
 
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="tok"), \
-         mock.patch("mojo.helpers.geoip.mojo.requests.get",
-                    side_effect=_req.RequestException("boom")):
-        result = mojo_provider.fetch("1.2.3.4")
+    def raising_get(url, headers=None, params=None, timeout=None):
+        raise _req.RequestException("boom")
+
+    result = mojo_provider.fetch(
+        "1.2.3.4", api_key="tok", base_url="https://hub.example.com",
+        http_get=raising_get)
     assert result is None, f"expected None on HTTP error, got {result!r}"
 
 
@@ -96,11 +100,9 @@ def test_mojo_fetch_http_error_returns_none(opts):
 def test_mojo_fetch_non_2xx_returns_none(opts):
     from mojo.helpers.geoip import mojo as mojo_provider
 
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="tok"), \
-         mock.patch("mojo.helpers.geoip.mojo.requests.get",
-                    return_value=_mock_response(status_code=500)):
-        result = mojo_provider.fetch("1.2.3.4")
+    result = mojo_provider.fetch(
+        "1.2.3.4", api_key="tok", base_url="https://hub.example.com",
+        http_get=lambda *a, **kw: _mock_response(status_code=500))
     assert result is None, f"expected None on 5xx, got {result!r}"
 
 
@@ -109,11 +111,9 @@ def test_mojo_fetch_non_success_body_returns_none(opts):
     from mojo.helpers.geoip import mojo as mojo_provider
 
     body = {"status": False, "error": "rate limited"}
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="tok"), \
-         mock.patch("mojo.helpers.geoip.mojo.requests.get",
-                    return_value=_mock_response(status_code=200, body=body)):
-        result = mojo_provider.fetch("1.2.3.4")
+    result = mojo_provider.fetch(
+        "1.2.3.4", api_key="tok", base_url="https://hub.example.com",
+        http_get=lambda *a, **kw: _mock_response(status_code=200, body=body))
     assert result is None, (
         f"expected None when upstream returns status=False, got {result!r}"
     )
@@ -132,10 +132,9 @@ def test_mojo_fetch_success_returns_enriched_dict(opts):
         captured["params"] = params
         return _mock_response(status_code=200, body=body)
 
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="secret-token"), \
-         mock.patch("mojo.helpers.geoip.mojo.requests.get", side_effect=fake_get):
-        result = mojo_provider.fetch("203.0.113.10")
+    result = mojo_provider.fetch(
+        "203.0.113.10", api_key="secret-token",
+        base_url="https://hub.example.com", http_get=fake_get)
 
     assert result is not None, "expected a dict on success, got None"
     assert result["provider"] == "mojo", (
@@ -168,11 +167,9 @@ def test_mojo_fetch_strips_firewall_fields(opts):
     from mojo.helpers.geoip import mojo as mojo_provider
 
     body = _upstream_payload(ip="203.0.113.11")
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="tok"), \
-         mock.patch("mojo.helpers.geoip.mojo.requests.get",
-                    return_value=_mock_response(status_code=200, body=body)):
-        result = mojo_provider.fetch("203.0.113.11")
+    result = mojo_provider.fetch(
+        "203.0.113.11", api_key="tok", base_url="https://hub.example.com",
+        http_get=lambda *a, **kw: _mock_response(status_code=200, body=body))
 
     forbidden = ("is_blocked", "is_whitelisted", "blocked_at", "blocked_until",
                  "blocked_reason", "block_count", "whitelisted_reason")
@@ -192,12 +189,13 @@ def test_mojo_fetch_strips_firewall_fields(opts):
 def test_threat_intel_skip_external_skips_blocklists(opts):
     from mojo.helpers.geoip import threat_intel
 
-    with mock.patch.object(threat_intel, "check_internal_threats",
-                           return_value={"is_known_attacker": True,
-                                         "is_known_abuser": False,
-                                         "internal_stats": {"total_events": 7}}) as m_int, \
-         mock.patch.object(threat_intel, "check_all_blocklists") as m_ext:
-        result = threat_intel.perform_threat_check("203.0.113.50", skip_external=True)
+    m_int = mock.Mock(return_value={"is_known_attacker": True,
+                                    "is_known_abuser": False,
+                                    "internal_stats": {"total_events": 7}})
+    m_ext = mock.Mock()
+    result = threat_intel.perform_threat_check(
+        "203.0.113.50", skip_external=True,
+        check_internal=m_int, check_external=m_ext)
 
     assert m_int.called, "internal threat check must still run with skip_external=True"
     assert not m_ext.called, (
@@ -216,13 +214,13 @@ def test_threat_intel_default_runs_both(opts):
     """Regression: default behavior unchanged for non-mojo providers."""
     from mojo.helpers.geoip import threat_intel
 
-    with mock.patch.object(threat_intel, "check_internal_threats",
-                           return_value={"is_known_attacker": False,
-                                         "is_known_abuser": False,
-                                         "internal_stats": {}}) as m_int, \
-         mock.patch.object(threat_intel, "check_all_blocklists",
-                           return_value={"blocklist_hits": [], "is_blocklisted": False}) as m_ext:
-        threat_intel.perform_threat_check("203.0.113.51")
+    m_int = mock.Mock(return_value={"is_known_attacker": False,
+                                    "is_known_abuser": False,
+                                    "internal_stats": {}})
+    m_ext = mock.Mock(
+        return_value={"blocklist_hits": [], "is_blocklisted": False})
+    threat_intel.perform_threat_check(
+        "203.0.113.51", check_internal=m_int, check_external=m_ext)
 
     assert m_int.called, "internal check must run by default"
     assert m_ext.called, "external check must run by default"
