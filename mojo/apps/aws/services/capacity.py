@@ -2001,6 +2001,23 @@ def _fleet_fingerprint(envelope):
         json.dumps(projection, sort_keys=True).encode()).hexdigest()
 
 
+def fleet_revision(refresh=False):
+    """The structural fleet fingerprint, for callers that must bind to it.
+
+    The same value ``plan_batch`` stores and ``apply_batch`` re-derives, exposed
+    for a caller whose safety depends on "the fleet has not moved since I asked"
+    — the Assistant's capacity approvals bind it as their revision and refuse
+    when it changes between proposal and approval.
+
+    ``refresh=False`` reads the 120s report cache, which is right at proposal
+    time (the operator is looking at that same picture). Pass ``refresh=True``
+    at execution: an early check against a cached envelope can pass on a fleet
+    that has already moved, and only a fresh read answers the question the
+    binding is actually asking.
+    """
+    return _fleet_fingerprint(report(refresh=refresh))
+
+
 def _refuse_degraded(envelope, actions):
     """A throttled describe must never validate — or fingerprint — a plan."""
     touched = set()

@@ -47,6 +47,7 @@ Companion track for framework developers: [docs/django_developer/README.md](../d
 | [filevault/](filevault/README.md) | Encrypted file vault |
 | [assistant/](assistant/README.md) | LLM admin assistant — natural language queries, conversations |
 | [assistant/approvals](assistant/approvals.md) | Resolving a mutating assistant action — the `approval` block, both transports, the one failure contract |
+| [assistant/cloud_tools](assistant/cloud_tools.md) | Cloud/fleet assistant tools — result shapes, which block renders each, and what to poll after an approval |
 | [assistant/webapp_tools](assistant/webapp_tools.md) | The assistant's `webapp` domain from a client's side — result shapes, what each approval card binds, the fresh-auth split, and the handoffs |
 | [github/](github/README.md) | GitHub App installations — list, create, update, delete |
 | [docit/](docit/README.md) | Documentation system |

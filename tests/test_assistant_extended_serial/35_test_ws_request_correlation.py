@@ -44,7 +44,17 @@ def test_request_id_is_echoed_on_ack_and_streamed_events(opts):
             return True
         return original_settings_get(name, *args, **kwargs)
 
-    def run_assistant(user, message, conversation_id, on_event):
+    def run_assistant(user, message, conversation_id, on_event,
+                      request_meta=None):
+        # request_meta is the socket's own context, built by the handler from
+        # the consumer's server-stamped `_bearer` (item #2570). The stub takes
+        # it so this test keeps asserting request_id correlation rather than
+        # the signature.
+        assert_eq(request_meta.bearer, None,
+                  f"the handler must pass the socket's stamped bearer through, "
+                  f"got {request_meta!r}")
+        assert_eq(request_meta.key_backed, True,
+                  "a message with no `_bearer` stamp must read as key-backed")
         on_event("text", {"text": "Checking now", "blocks": None})
         return {
             "message_id": 321,
