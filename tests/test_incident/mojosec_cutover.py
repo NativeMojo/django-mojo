@@ -14,6 +14,7 @@ PREFIX = f"mojosec_cutover_test_{uuid.uuid4().hex[:10]}"
 SENSOR_ID = f"{PREFIX}-node-a"
 DOMAIN_NAME = f"{PREFIX.replace('_', '-')}.example.test"
 DEPLOY_ID = "wmwx-release-2026-08-21.1"
+VIEWER_PASSWORD = "MojoSecCutover##1"
 
 
 def _fim_event(event_id, path, expected=True, observed="2026-08-18T02:12:00Z",
@@ -129,12 +130,13 @@ def _receipt(opts, event, sensor_id=SENSOR_ID):
 
 @th.django_unit_setup()
 def setup_mojosec_cutover(opts):
-    from mojo.apps.account.models import ApiKey, Group
+    from mojo.apps.account.models import ApiKey, Group, User
     from mojo.apps.dnsman.models import Certificate, Domain
     from mojo.apps.edge.models import Vhost
     from mojo.apps.incident.models import (
         Event, Incident, MojoSecCase, MojoSecCaseTransition, MojoSecReceipt,
         RuleSet)
+    User.objects.filter(username__startswith="mojosec_cutover_test_").delete()
 
     # The stem (not the per-run uuid prefix) so rows from EVERY earlier run
     # are swept — the databases are long-lived and canonical wire ids
@@ -158,6 +160,13 @@ def setup_mojosec_cutover(opts):
 
     declare_pools()
     group = Group.objects.create(name=PREFIX, kind="organization")
+    viewer = User.objects.create_user(
+        f"{PREFIX}@example.test", VIEWER_PASSWORD, username=f"{PREFIX}_viewer")
+    viewer.is_active = True
+    viewer.is_email_verified = True
+    viewer.requires_mfa = False
+    viewer.add_permission("view_security")
+    viewer.save()
     key, _token = ApiKey.create_for_group(
         group, f"{PREFIX}_key", permissions={"mojosec_ingest": True})
     key.metadata = {
@@ -577,3 +586,83 @@ def test_projection_crash_is_healed_by_the_sweep(opts):
     th.assert_eq(MojoSecCaseTransition.objects.filter(
         case=case, transition="projection").count(), 1,
         "the healed projection must append one system transition")
+
+@th.django_unit_test()
+def test_case_read_contract_carries_cutover_fields(opts):
+    from mojo.decorators.limits import clear_rate_limits
+
+    opts.client.logout()
+    clear_rate_limits(ip="127.0.0.1", key="login")
+    th.assert_true(
+        opts.client.login(f"{PREFIX}@example.test", VIEWER_PASSWORD),
+        "the security viewer fixture must log in")
+
+    settled = opts.client.get(
+        f"/api/incident/mojosec/case?state=settled&deployment_id={DEPLOY_ID}")
+    th.assert_eq(settled.status_code, 200,
+                 f"the settled/deployment filters must be accepted: {settled.response}")
+    listed = opts.client.get(
+        "/api/incident/mojosec/case?family=deployment&page_size=5")
+    th.assert_eq(listed.status_code, 200,
+                 f"the family filter must be accepted: {listed.response}")
+    th.assert_true(listed.response.data,
+                   "the deployment family filter must find the flood case")
+    th.assert_true(all(row["deployment_id"] == DEPLOY_ID
+                       for row in listed.response.data),
+                   "list rows must carry the deployment identity")
+    detail = opts.client.get(
+        f"/api/incident/mojosec/case/{listed.response.data[0]['id']}")
+    th.assert_eq(detail.status_code, 200,
+                 f"case detail must serialize: {detail.response}")
+    row = detail.response.data
+    th.assert_true(isinstance(row["breakdown"], dict) and
+                   "operations" in row["breakdown"],
+                   "detail must expose the bounded operation breakdown")
+    th.assert_true("projected_urgency" in row and "settled_at" in row,
+                   "detail must expose the projection ratchet and settle stamp")
+    bad = opts.client.get("/api/incident/mojosec/case?state=bogus")
+    th.assert_eq(bad.status_code, 400,
+                 "unknown state values must be rejected")
+    metrics = opts.client.get("/api/incident/mojosec/case-metrics?days=7")
+    th.assert_eq(metrics.status_code, 200,
+                 f"case metrics must serialize: {metrics.response}")
+    th.assert_true("settled" in metrics.response.data and
+                   "suppressed_events" in metrics.response.data,
+                   "metrics must report settled and suppressed counters")
+    th.assert_true(metrics.response.data["suppressed_events"] >= 1,
+                   "routed receipts must count as suppressed Events")
+    opts.client.logout()
+
+
+@th.django_unit_test()
+def test_shadow_compare_reports_cutover_evidence(opts):
+    import io
+
+    from django.core.management import call_command
+    from mojo.apps.incident.models import RuleSet
+
+    rule_set = RuleSet.objects.create(
+        name=f"{PREFIX} fim automation", category="mojosec.fim.change",
+        priority=5, handler="notify://security@example.test")
+    try:
+        out = io.StringIO()
+        call_command(
+            "mojosec_shadow_compare",
+            "--installation-key", str(opts.cutover_api_key.pk),
+            "--sensor", SENSOR_ID, "--hours", "168",
+            "--min-compression", "2", stdout=out)
+        report = json.loads(out.getvalue())
+    finally:
+        rule_set.delete()
+    th.assert_eq(report["version"], 2,
+                 "the canary schema must carry the cutover evidence version")
+    th.assert_true(report["suppressed_events"] >= 2341,
+                   f"suppressed per-receipt Events must be reported: {report}")
+    th.assert_true(any(row["deployment_id"] == DEPLOY_ID
+                       for row in report["deployment_cases"]),
+                   "per-sensor deployment cardinality must be reported")
+    th.assert_true(any(row["category"] == "mojosec.fim.change"
+                       for row in report["silenced_rule_sets"]),
+                   "the preflight must list RuleSets that stop firing on cutover")
+    th.assert_true(report["bounds"]["receipt_fidelity"],
+                   f"receipt fidelity must hold for the canary window: {report}")
