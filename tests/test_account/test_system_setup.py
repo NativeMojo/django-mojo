@@ -58,7 +58,11 @@ def test_protected_key_registry(opts):
     expected = {
         "BASE_URL", "MOJO_INSTALLATION_UUID", "MOJO_INSTALLATION_SLUG",
         "AWS_CLOUDWATCH_ALARM_TOPIC_ARNS", "EDGE_EXPECTED_TOPOLOGY",
-        "AUTH_CONFIG", "EDGE_FRAMEWORK_VERSION", "AWS_STABLE_OUTBOUND_IPS"}
+        "AUTH_CONFIG", "EDGE_FRAMEWORK_VERSION", "AWS_STABLE_OUTBOUND_IPS",
+        # Registered by the generated testproject's testit_support app so the
+        # default tier can exercise protected-write denial against a key that
+        # can never touch real configuration; present in every testproject.
+        "TESTIT_PROTECTED_SENTINEL"}
     assert set(system_settings.protected_keys()) == expected, \
         f"protected key registry drifted: {system_settings.protected_keys()!r}"
 
