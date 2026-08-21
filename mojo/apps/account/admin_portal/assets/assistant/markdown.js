@@ -8,8 +8,8 @@
 // LINKS AND IMAGES ARE NOT SUPPORTED, on purpose. `[text](url)` renders as its
 // literal characters. Model prose is influenced by data the model read, so an
 // assistant-authored clickable URL is an injection surface this panel does not
-// open. File blocks keep their link, because that URL comes from export_data
-// and the card shows its destination hostname.
+// open. A `file` block is no exception: it is model-emittable too, so its card
+// links only same-origin URLs and shows anything else as text (see blocks.js).
 //
 // Raw HTML is literal text for the same reason.
 

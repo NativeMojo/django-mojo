@@ -7,7 +7,13 @@ verification outcome.
 
 No response from either endpoint ever carries the API key. Not masked, not
 truncated, not in an error message — only presence, a four-character hint, and
-where the credential comes from.
+where the credential comes from. The request body that *sets* it is classified
+sensitive, so it never reaches the generic request logs either.
+
+The credential is stored encrypted **in the database**. It is not encrypted in
+the settings cache: the framework's `push_to_cache` writes the decrypted value
+into Redis exactly as it does for every other secret setting, so Redis holds a
+live credential.
 
 ---
 

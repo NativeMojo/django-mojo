@@ -162,6 +162,10 @@ export function renderApprovalBlock(block, ctx = {}) {
         ? h('p', {text: text(current.preview.summary)}) : null,
       current.requires_fresh_auth
         ? h('p', {text: 'You will be asked to confirm your identity before this runs.'}) : null,
+      // A failure on a card the server still reports as pending (a dropped
+      // socket, a bounded wait that ran out) has to be said out loud, or the
+      // operator re-approves an action that may already have run.
+      live && failure ? h('p', {text: failure}) : null,
       live ? h('footer', {}, cancel, approve)
         : h('div', {class: 'assistant-state',
           text: failure || STATE_COPY[current.state] || 'This request is closed.'}),

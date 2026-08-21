@@ -120,7 +120,7 @@ paragraphs and line breaks.
 **Links and images are deliberately excluded** and render as their literal
 text. Model prose is influenced by tool output the model read, so an
 assistant-authored clickable URL is an injection surface this panel does not
-open. Raw HTML is literal text. Input is truncated at 100 000 characters with a
+open. The `file` block is held to the same rule — see its row below. Raw HTML is literal text. Input is truncated at 100 000 characters with a
 visible note, and any line over 4 000 characters is emitted as plain text with
 no inline scanning.
 
@@ -141,7 +141,7 @@ block is visible rather than silently dropped.
 | `stat` | ≤ 12 `{label, value}` items |
 | `list` | ≤ 60 `{label, value}` items |
 | `alert` | `level` in `info\|success\|warning\|error`, non-empty `message`; `role="status"` for info/success, `role="alert"` for warning/error |
-| `file` | `filename` and `url` required; the anchor is drawn only for an absolute `https:` URL with no embedded credentials, and the **destination hostname is shown beside the filename**; anything else degrades to copyable text |
+| `file` | `filename` and `url` required; the anchor is drawn **only for a same-origin `https:` URL** with no embedded credentials. Every other host — a storage backend, a shortlink on another domain — renders as copyable text with its hostname named. A `file` block is model-emittable (`file` is in the server's `VALID_BLOCK_TYPES` and `_validate_block` only checks truthiness), so a URL the model read out of a tool result must never become a click target in a superuser's console |
 | `context` | ≤ 40 references rendered as inert chips — there is no route mapping in v1, because guessing an Admin route from a model string produces links that 404 |
 | `progress` | Accepted defensively; the live tracker is fed by the `assistant_plan` / `assistant_plan_update` events, and nothing emits a `progress` block |
 | `approval` | Delegated whole to `approval.js` — see [Approvals](../../assistant/approvals.md) |

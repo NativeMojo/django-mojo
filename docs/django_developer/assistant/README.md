@@ -234,11 +234,16 @@ assistant write is `row.save(_protected_writer=<key>, _skip_cache=True)` plus
 `transaction.on_commit(row.push_to_cache)`; clearing a key deletes the rows and
 `hdel`s the cache entry in the same `on_commit`.
 
-The credential is stored through `MojoSecrets`, so `value` is empty and the
-plaintext lives only in the encrypted `mojo_secrets` column. `push_to_cache`
-does put the decrypted value in the Redis settings hash — exactly as
-`GEOIP_API_KEY_MOJO` already does, and exactly what `Setting.resolve` would
-back-fill on first read anyway.
+The credential is stored through `MojoSecrets`, so it is encrypted **in the
+database**: `value` is empty and the plaintext lives only in the encrypted
+`mojo_secrets` column.
+
+**It is not encrypted in Redis.** `push_to_cache` writes the *decrypted* value
+into the `settings:global` hash, and `Setting.resolve` would back-fill that hash
+on first read anyway. This is pre-existing framework behaviour, identical to
+`GEOIP_API_KEY_MOJO`, and it is why the UI says "stored encrypted in the
+database" rather than "stored encrypted" — treat Redis as holding a live
+credential and protect it accordingly.
 
 ### Resolution precedence
 

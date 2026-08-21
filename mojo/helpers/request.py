@@ -112,6 +112,13 @@ def sensitive_body_label(request):
         return "admin_api_key"
     if path == f"{API_ROOT}/account/admin/settings":
         return "admin_settings"
+    # The Assistant setup writer carries an Anthropic API key in its body on
+    # both `save` and `verify`. Without this entry LOGIT_DB_ALL / LOGIT_FILE_ALL
+    # write it verbatim into the logit.Log table (readable at manage_logs /
+    # view_logs / security / admin — well below the superuser tier that is
+    # allowed to set the key) and into requests.log.
+    if path == f"{API_ROOT}/account/admin/assistant":
+        return "assistant_setup"
     if path == f"{API_ROOT}/edge/webapp/link_key":
         return "webapp_deployment_key"
     if method == "POST" and path in (
