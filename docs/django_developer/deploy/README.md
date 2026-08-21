@@ -1055,11 +1055,13 @@ through the stable expected-change helper, and two previously unjournaled
 writers now do too: `mojo.deploy.mojosec converge` journals its non-control-
 state host outputs (the managed Audit policy `70-mojosec.rules` and generated
 `audit.rules`, the logrotate policy, the `00_mojosec.conf` fragment, the
-receiver snippet and `django.inc`, the systemd units, the firewall broker and
-its sudoers file), and the deploy `render` command journals the nginx runtime
-fragment install. Both accept a deployment identity (`--deployment-id` or
-`$MOJO_DEPLOY_ID`) so all of one release's operations coalesce under one
-deployment case; both fall back to running **unjournaled with a stderr
+receiver snippet and `django.inc`, the systemd units, the audit-health stable
+helper script, the firewall broker and its sudoers file), and the deploy
+`render` command journals the nginx runtime fragment install. Both accept a
+deployment identity — `mojo.deploy.mojosec install`'s `--deployment-id`
+(falling back to `$MOJO_DEPLOY_ID`), and the render command's
+`$MOJO_DEPLOY_ID` only — so all of one release's operations coalesce under
+one deployment case; both fall back to running **unjournaled with a stderr
 notice** if the journal itself cannot begin — annotation explains changes, it
 never gates convergence. The helper declares exact paths before one child
 mutation, completes only on success, and aborts failure so the sensor still

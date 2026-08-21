@@ -46,10 +46,11 @@ An installation's enrollment row carries a `mode`:
   `fim.expected_change_error` keep today's immediate, individual per-receipt
   Events at their existing severity. Routing is decided once, at first
   delivery: a later policy bump or un-enrollment cannot dead-letter or reject
-  accepted evidence — an unresolvable binding terminal-converts the receipt
-  into its ordinary per-receipt Event instead (visible noise, never silent
-  loss), and a `*/5` sweep re-drives stranded contributions from replay
-  evidence.
+  accepted evidence — an unresolvable binding, or a contribution that keeps
+  failing past `MOJOSEC_CASE_ROUTE_MAX_ATTEMPTS` (default 100) attempts,
+  terminal-converts the receipt into its ordinary per-receipt Event instead
+  (visible noise, never silent loss), and a `*/5` sweep re-drives stranded
+  contributions from replay evidence.
 
 Cutting an installation to authoritative consciously silences exact-category
 RuleSets on `mojosec.web.probe`, `mojosec.web.denied`, `mojosec.web.error`
@@ -81,7 +82,12 @@ concurrent duplicate delivery idempotent. The case window has a database unique
 identity and is updated under a row lock. Web cases use one-hour windows and
 normalize registered probe families plus an explicit `other_probe` bucket and
 bounded IP networks. Untrusted FIM uses 15-minute windows, protected tiers and
-a dedicated overflow family. **Trusted expected-change FIM coalesces into one
+a dedicated overflow family. An expected-change annotation is trusted only
+while live and within the journal's TTL promise: one already expired at
+observation time, or whose `expires_at` overshoots `completed_at` (v2) or the
+observation (v1) by more than 900 seconds, is treated as unannotated — an
+immediate high-severity Event, never a quiet case. **Trusted expected-change
+FIM coalesces into one
 deployment case per sensor + deployment identity per UTC day** (evaluator v2):
 `family="deployment"`, the `deployment_id` column carries the identity, and a
 bounded `breakdown` records per-operation and per-tier change counts (≤16
