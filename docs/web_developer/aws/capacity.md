@@ -91,6 +91,12 @@ retry.
        "aws_code": "AccessDenied",
        "message": "rds:DescribeDBClusters did not answer, so this section could not be read"}
     ],
+    "reader_routing": {
+      "database": {"active": true,
+                   "host": "mojo-prod-aurora.cluster-ro-abc.us-east-1.rds.amazonaws.com",
+                   "skip_reason": null, "matches_reader_endpoint": true},
+      "redis": {"active": true}
+    },
     "actions": {
       "add_node":           {"offered": true,  "blocked_reason": null},
       "drain_node":         {"offered": false, "blocked_reason": "last_healthy_target"},
@@ -119,6 +125,19 @@ Three things a client must not re-derive:
 
 `warnings` carries a degraded section. A section that could not be read comes
 back empty **and** named here — never silently empty.
+
+**`reader_routing` is the serving process's self-report** on whether reader
+traffic is actually configured — the settings behind it are file-only and read
+at boot, so the process itself is the only honest source. `database.active`
+means the reader alias and router are live in this process;
+`database.skip_reason` surfaces a config line that was present but could not
+be applied; `database.matches_reader_endpoint` compares the configured host
+against the Aurora cluster reader endpoint AWS reports (`null` when there is
+nothing to compare — unknown, never a false alarm). `redis.active` means a
+standalone Redis reader is configured (always `false` in cluster mode, where
+the cluster client routes replica reads itself). The answer is **per node**:
+it describes the node that served this request, and a node that has not
+restarted since the config changed still runs without routing.
 
 **`egress` is the stable-outbound-IPs picture.** `addresses` is the canonical
 list an operator hands to providers that allowlist caller IPs — the Elastic IPs

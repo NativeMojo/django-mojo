@@ -1117,3 +1117,57 @@ def test_capacity_capability(opts):
         described = platform.describe(None, capabilities)
         assert described["capabilities"]["capacity"] is False, \
             f"capacity was offered to {capabilities}"
+
+
+@th.django_unit_test("the report self-reports reader routing, honestly per node")
+def test_report_reader_routing(opts):
+    from mojo.apps.aws.services import capacity
+
+    # The live shape: the test project configures no reader of either kind, so
+    # the envelope must say so rather than omit the block or guess.
+    envelope = capacity.report(
+        elbv2_client=_elbv2_client(), ec2_client=_ec2_client(),
+        rds_client=_rds_client(), cache_client=_cache_client([_cache_group()]))
+    routing = envelope["reader_routing"]
+    assert routing["database"]["active"] is False, \
+        "no reader alias is configured, yet database routing reported active"
+    assert routing["redis"]["active"] is False, \
+        "no REDIS_READER_* is configured, yet redis reported a reader"
+
+    # The configured shapes, via the injectable form — no process-global
+    # settings mutation in the default tier.
+    active = capacity._reader_routing(
+        {"databases": [{"reader_endpoint": "db.cluster-ro.example.com"}]},
+        django_databases={"default": {"HOST": "db.example.com"},
+                          "reader": {"HOST": "db.cluster-ro.example.com"}},
+        django_routers=["mojo.db.router.ReaderRouter"],
+        skip_reason="", redis_reader_on=True)
+    assert active["database"]["active"] is True, \
+        "an installed alias + router did not report active"
+    assert active["database"]["matches_reader_endpoint"] is True, \
+        "a host equal to the cluster reader endpoint did not match"
+    assert active["redis"]["active"] is True, \
+        "a resolved redis reader did not report active"
+
+    mismatch = capacity._reader_routing(
+        {"databases": [{"reader_endpoint": "db.cluster-ro.example.com"}]},
+        django_databases={"default": {"HOST": "db.example.com"},
+                          "reader": {"HOST": "db.cluster-ro.TYPO.example.com"}},
+        django_routers=["mojo.db.router.ReaderRouter"],
+        skip_reason="", redis_reader_on=False)
+    assert mismatch["database"]["matches_reader_endpoint"] is False, \
+        "a wrong reader host was not flagged against the cluster endpoint"
+
+    skipped = capacity._reader_routing(
+        {"databases": []},
+        django_databases={"default": {"HOST": "db.example.com"}},
+        django_routers=[],
+        skip_reason="MIDDLEWARE is required for request-scoped reader routing",
+        redis_reader_on=False)
+    assert skipped["database"]["active"] is False, \
+        "a skipped injection still reported active routing"
+    assert "MIDDLEWARE" in skipped["database"]["skip_reason"], \
+        "the skip reason did not surface in the report"
+    # Nothing to compare against: unknown, never a false alarm.
+    assert skipped["database"]["matches_reader_endpoint"] is None, \
+        "an inactive config produced an endpoint verdict"

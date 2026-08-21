@@ -74,6 +74,30 @@ export async function fleetPage(ctx, signal = null) {
   const managed = () => report?.mode !== 'external';
   const offer = (name) => report?.actions?.[name] || {offered: false, blocked_reason: null};
   const instances = () => report?.nodes?.instances || [];
+  const routing = () => report?.reader_routing || {};
+
+  // The self-reported reader-routing state, as a chip. Per-node on purpose:
+  // the report answers from the process that served it, and a node that has
+  // not restarted since the config line was added still runs without routing.
+  function routingChip(kind) {
+    const state = routing()[kind] || {};
+    if (kind === 'database') {
+      if (state.skip_reason) {
+        return h('span', {class: 'fleet-chip warn', title: state.skip_reason},
+          'Reader config skipped');
+      }
+      if (state.active && state.matches_reader_endpoint === false) {
+        return h('span', {class: 'fleet-chip warn',
+          title: `${state.host} is not this cluster's reader endpoint`},
+        'Reader host mismatch');
+      }
+      return h('span', {class: `fleet-chip ${state.active ? 'on' : ''}`,
+        title: state.active ? `reads route to ${state.host} (this node)` : ''},
+      state.active ? 'Reader routing: on' : 'Reader routing: off');
+    }
+    return h('span', {class: `fleet-chip ${state.active ? 'on' : ''}`},
+      state.active ? 'Reader reads: on' : 'Reader reads: off');
+  }
 
   function resetWant() {
     want = {
@@ -406,7 +430,8 @@ export async function fleetPage(ctx, signal = null) {
     h('div', {class: 'fleet-card-head'},
       h('div', {class: 'fleet-card-title'},
         h('h3', {text: 'Redis'}),
-        h('p', {text: 'Caching, sessions, live updates and the job queue.'}))),
+        h('p', {text: 'Caching, sessions, live updates and the job queue.'})),
+      routingChip('redis')),
     ...rows.map((row) => {
       const current = Number(row.replica_count || 0);
       const min = Number(row.min_replicas || 0);
@@ -434,8 +459,13 @@ export async function fleetPage(ctx, signal = null) {
           : h('p', {class: 'fleet-note warn-text', text: blocked}),
         h('div', {class: 'fleet-note'},
           icon('activity'),
-          h('span', {text: 'Replicas are failover cover first: if the primary dies, one '
-            + 'takes over in about a minute. They never make writes faster.'})),
+          h('span', {text: routing().redis?.active
+            ? 'Replicas are failover cover first: if the primary dies, one takes '
+              + 'over in about a minute. Dashboards and metrics also read from '
+              + 'them — but they never make writes faster.'
+            : 'Replicas are failover cover: if the primary dies, one takes over '
+              + 'in about a minute. Reader reads are off on this node, so they '
+              + 'do not serve any traffic until then.'})),
         h('div', {class: 'fleet-rows'},
           ...(row.members || []).map((member) => h('div', {class: 'fleet-row'},
             h('span', {class: `fleet-pill ${row.status === 'available' ? 'ok' : 'warn'}`},
@@ -472,7 +502,8 @@ export async function fleetPage(ctx, signal = null) {
       h('div', {class: 'fleet-card-head'},
         h('div', {class: 'fleet-card-title'},
           h('h3', {text: 'Database'}),
-          h('p', {text: 'Postgres. Every account, message and record lives here.'}))),
+          h('p', {text: 'Postgres. Every account, message and record lives here.'})),
+        routingChip('database')),
       ...rows.map((row) => {
         const readers = row.readers || [];
         const adding = want.dbAdd.get(row.identifier) || 0;
@@ -514,9 +545,13 @@ export async function fleetPage(ctx, signal = null) {
               'Per-instance sizes ship in a coming update.')) : null,
           h('div', {class: 'fleet-note'},
             icon('activity'),
-            h('span', {text: 'This app reads from the primary today: a reader is standby '
-              + 'capacity plus an endpoint string until reader routing is configured. '
-              + 'If saving is slow, the answer is a bigger writer, not more readers.'})),
+            h('span', {text: routing().database?.active
+              ? 'Reader routing is on: safe reads spread across the replicas, and '
+                + 'anything just written is read back from the writer. If saving is '
+                + 'slow, the answer is a bigger writer, not more readers.'
+              : 'Reader routing is off on this node: every query goes to the '
+                + 'writer, so a reader is standby capacity until it is configured. '
+                + 'If saving is slow, the answer is a bigger writer, not more readers.'})),
           h('div', {class: 'fleet-rows'},
             h('div', {class: 'fleet-row'},
               h('span', {class: `fleet-pill ${row.status === 'available' ? 'ok' : 'warn'}`},

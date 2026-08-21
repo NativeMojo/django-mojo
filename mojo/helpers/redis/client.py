@@ -116,6 +116,16 @@ def _create_client(url, max_conn, connect_timeout, socket_timeout):
     return redis.Redis(connection_pool=pool)
 
 
+def reader_configured():
+    """True when a standalone reader is configured for this process.
+
+    The honest self-report for admin surfaces: the settings are file-only and
+    boot-time, so the process itself is the only thing that can answer.
+    Cluster mode reports False — reader=True is ignored there by design.
+    """
+    return _resolve_reader_url() is not None
+
+
 def _is_cluster(redis_client: "redis.Redis") -> bool:
     """Return True if the target enables cluster mode."""
     try:

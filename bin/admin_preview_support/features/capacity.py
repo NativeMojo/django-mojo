@@ -156,6 +156,19 @@ def _report(handler):
         "caches": [dict(row) for row in CACHES],
         "warnings": [dict(DENIED_WARNING)] if state == "denied" else [],
         "actions": _actions(handler, state, nodes, databases),
+        # Reader routing is the serving process's self-report. "healthy" shows
+        # both on so the Fleet page's chips and conditional copy render their
+        # configured shape; every other state shows the off/unconfigured shape.
+        "reader_routing": {
+            "database": {
+                "active": state == "healthy",
+                "host": ("mojo-prod-aurora.cluster-ro-abc.us-east-1.rds"
+                         ".amazonaws.com") if state == "healthy" else None,
+                "skip_reason": None,
+                "matches_reader_endpoint": True if state == "healthy" else None,
+            },
+            "redis": {"active": state == "healthy"},
+        },
     }
 
 
