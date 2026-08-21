@@ -28,15 +28,24 @@ def test_reader_url_resolution(opts):
     }))
     assert parts_url == (
         "rediss://primary-user:primary-pass@reader.example:6381/2"
-    ), f"Reader parts should inherit the primary parts, got {parts_url!r}"
+    ), "Reader parts should inherit the primary connection settings"
 
     primary_url_reader = client._resolve_reader_url(_getter({
         "REDIS_URL": "redis://:pw@primary.example:6379/3",
         "REDIS_READER_SERVER": "reader.example",
     }))
     assert primary_url_reader == "redis://:pw@reader.example:6379/3", (
-        "Reader parts must inherit credentials and DB parsed from REDIS_URL, "
-        f"got {primary_url_reader!r}")
+        "Reader parts must inherit credentials and DB parsed from REDIS_URL")
+
+    encoded_slash_reader = client._resolve_reader_url(_getter({
+        "REDIS_URL": (
+            "rediss://primary%2Fuser:primary%2Fcredential@"
+            "primary.example:6379/3"),
+        "REDIS_READER_SERVER": "reader.example",
+    }))
+    assert encoded_slash_reader == (
+        "rediss://primary%2Fuser:primary%2Fcredential@reader.example:6379/3"
+    ), "Inherited URL credentials must preserve encoded path separators"
 
     overridden_url = client._resolve_reader_url(_getter({
         "REDIS_URL": "redis://:primary-pass@primary.example:6379/3",
@@ -49,7 +58,16 @@ def test_reader_url_resolution(opts):
     }))
     assert overridden_url == (
         "rediss://reader-user:reader-pass@reader.example:6382/5"
-    ), f"Explicit reader parts must override inherited values, got {overridden_url!r}"
+    ), "Explicit reader parts must override inherited connection values"
+
+    slash_parts_url = client._resolve_reader_url(_getter({
+        "REDIS_READER_SERVER": "reader.example",
+        "REDIS_READER_USERNAME": "reader/user",
+        "REDIS_READER_PASSWORD": "reader/credential",
+    }))
+    assert slash_parts_url == (
+        "rediss://reader%2Fuser:reader%2Fcredential@reader.example:6379/0"
+    ), "Explicit reader credentials must encode path separators"
 
     cluster_url = client._resolve_reader_url(_getter({
         "REDIS_CLUSTER": True,
