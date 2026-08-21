@@ -681,6 +681,30 @@ A denial surfaces as `provider_denied` carrying **only** the IAM action —
 `ProviderCallError.detail()` is the only shape that reaches an API response, a
 log line, or the database.
 
+## Assistant access
+
+The Admin Assistant's `cloud` domain wraps this service:
+`get_fleet_capacity` (`report`), `get_capacity_operation_status`
+(`operation_status` / `batch_status`), `apply_capacity_change` (`apply`) and
+`apply_capacity_plan` (`plan_batch` + `apply_batch`).
+
+The two writes **add** a gate, they never relax one. They carry the same
+`manage_aws` + literal-superuser + fresh-600 + managed-infrastructure gate the
+REST endpoints carry, and on top of that a mutation cannot run at all until the
+operator approves a server-authored card. A `manage_aws` holder who is not a
+superuser is not merely refused — the tools are absent from every listing.
+
+`fleet_revision(refresh=False)` exists for that path: it is the same
+`_fleet_fingerprint(report())` value `plan_batch` stores, exposed so an approval
+can BIND it and refuse when the fleet moves between proposal and approval. The
+approval binds it instead of the plan id because `PLAN_TTL` (300s) is shorter
+than the approval window (600s). Proposal reads the cached report; execution
+re-derives it with `refresh=True`.
+
+The Assistant is never offered `assign` (the free-form instance→allocation map
+the server derives when omitted), and Elastic IP allocation ids never reach the
+model. See [assistant/cloud_tools.md](../assistant/cloud_tools.md).
+
 ## Operator tasks this does NOT do
 
 - **AMI cleanup.** Captured `mojo:fleet-image` AMIs are reused for 14 days and

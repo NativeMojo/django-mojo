@@ -90,6 +90,7 @@ All other tools (security, jobs, users, groups, metrics, docit, full discovery) 
 | `metrics` | Fetch time-series metrics, system health, and incident trends |
 | `docit` | Search the documentation knowledge base (docit books and pages) |
 | `discovery` | Full tool listing (`list_tools`) |
+| `cloud` | Cloud and fleet operations: platform/dashboard health, capacity, managed-engine upgrades, framework version, recorded drift, CloudWatch metrics, System Setup readiness (read-only), and the Admin's deploy/framework/upgrade/capacity controls behind an approval |
 
 ### `load_tools` — the primary gateway
 
@@ -315,6 +316,24 @@ Full reference: [metrics_tools.md](metrics_tools.md).
 | `get_incident_trends` | `view_security` | No | Incident/event trends over 1h/6h/24h/7d |
 
 Every read tool calls `mojo.apps.metrics.rest.helpers.check_view_permissions(request, account)`; the write tool calls `check_write_permissions`. This matches the REST layer exactly: per-account gating for `public`, `global`, `group-<id>`, `user-<id>`, and custom accounts. Denials return `{"error": ...}` and fire a level-5 security event.
+
+### Cloud Domain (`manage_aws` / `manage_platform` / platform read grants)
+
+Full reference: [cloud_tools.md](cloud_tools.md).
+
+Twenty on-demand tools that mirror the built-in Admin's cloud and fleet
+surfaces. Thirteen reads (platform health, platform sections, advanced
+inventory, framework status, fleet capacity, capacity operation status, managed
+upgrades, upgrade status, System Setup readiness and operation progress,
+recorded version drift, CloudWatch resources and metrics) and seven mutating
+tools (deploy retry/verify/converge, framework update, managed engine upgrade,
+single capacity change, capacity plan+apply).
+
+Every tool declares the gates its Admin twin declares — `fresh_auth_seconds=600`
+on all seven mutations, `requires_managed_infrastructure` exactly where the twin
+calls `infrastructure.refuse()`, and `requires_superuser` on the two capacity
+tools. System Setup **repair** is deliberately absent: every setup mutation is
+bound to the originating browser Origin.
 
 ### Web Domain (`view_admin`)
 
@@ -962,7 +981,7 @@ The dispatcher inspects handler signatures at first call (result is cached). Han
 
 | Kwarg | Type | Description |
 |---|---|---|
-| `request_meta` | `objict` or `None` | Slim HTTP context from the originating request: `ip`, `user_agent`, `path`, `method`. `None` when there is no HTTP request (e.g. WS path or programmatic call). |
+| `request_meta` | `objict` or `None` | Slim transport context: `ip`, `user_agent`, `path`, `method`, plus `bearer` (the credential prefix — only `"bearer"` is an interactive JWT) and `key_backed` (an ApiKey or group-scoped token, whoever it acts as). `None` only for a programmatic call with no request at all. The last two **fail closed**: an unreadable request reads as key-backed. |
 | `conversation` | `Conversation` instance | The active Conversation model instance. Use to read metadata or to associate audit records with the conversation. |
 | `approval` | `PendingAction` or `None` | The consumed approval record, on the approval path only (`None` for read-only tools, which never have one). `str(approval.uuid)` is the idempotency key to hand the underlying service; `approval.revision` is the bound `preview` revision. See [Approvals](approvals.md). |
 
@@ -977,7 +996,9 @@ def _tool_my_tool(params, user, *, request_meta=None, conversation=None):
     ...
 ```
 
-`run_assistant()` now accepts an optional `request=None` parameter. When the REST endpoint passes the Django request through, `request_meta` is populated automatically for all tool handlers that opt in. WebSocket calls do not pass a request; `request_meta` is `None` in that path.
+`run_assistant()` accepts an optional `request=None` parameter. When the REST endpoint passes the Django request through, `request_meta` is populated automatically for all tool handlers that opt in.
+
+The WebSocket path carries a `request_meta` too, built by `agent.build_ws_request_meta()` from the `_bearer` prefix `mojo/apps/realtime/handler.py` stamps on every delivered message (always overwriting what the client sent, so it is a server fact). It reports `ip`/`path`/`method` as `"websocket"`, and `key_backed` is true for anything that is not the literal `"bearer"`. A handler that needs to know "is a person driving this" reads those two fields on either transport.
 
 ### Other Registry Functions
 

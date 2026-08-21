@@ -310,6 +310,31 @@ the exact selection before mutation. Copy explicitly tells the operator that
 adoption preserves objects and unrelated configuration. The BASE_URL suggestion
 is rendered only for the `base_url` step and can never label an AWS choice.
 
+## Not reachable from the Admin Assistant
+
+Setup **repair** is deliberately absent from the Assistant's `cloud` domain, and
+it is a boundary rather than an omission. Every setup mutation — `create`,
+`choose`, `advance`, `cancel` — is bound to the browser Origin that started it:
+`request_origin` demands a same-origin `Origin` header and
+`_assert_bound_origin` compares it to the operation's stored `bound_origin`,
+on top of `require_request_admin`'s interactive, non-key-backed superuser
+session. Driving any of that from chat would mean forging that binding, which
+is the one thing an assistant tool must never do. Unbinding the origin would be
+separate, security-owned work.
+
+What IS reachable is read-only and request-free: `system_readiness.run(section,
+context)` behind `get_setup_readiness`, and `system_setup.serialize(operation)`
+behind `get_setup_operation`, which reports honest progress on an operation a
+human started in the Admin. Both tools additionally re-check an active literal
+superuser (`system_settings.require_system_admin`) and refuse any session whose
+`request_meta` is not an interactive bearer — the chat-path expression of
+`@md.denies_key_backed_session()` plus `require_request_admin`. Because there is
+no originating HTTP request, the local API probe can only be the configured one
+or the port-80 default; the port-80 case is reported as `unavailable`, naming
+`SYSTEM_SETUP_LOCAL_API_URL`, never as a failure the Admin would not show.
+
+See [assistant/cloud_tools.md](../assistant/cloud_tools.md).
+
 ## REST boundary
 
 `mojo.apps.account.rest.system_setup` exposes the service without duplicating

@@ -371,7 +371,7 @@ and deletes terminal rows older than 30 days. Correctness never depends on it;
 
 ## Built-in mutating tools and their Admin twins
 
-38 built-in tools declare `mutates=True`. Every one is gated. The extra gates
+45 built-in tools declare `mutates=True`. Every one is gated. The extra gates
 mirror whatever the visual Admin endpoint that performs the same operation
 requires — so a tool is never easier to reach through chat than through the
 portal.
@@ -391,11 +391,17 @@ portal.
 | `save_skill`, `update_skill`, `delete_skill` | skills | `assistant` | `assistant/rest/assistant.py` skill CRUD | — |
 | `set_metric_gauge` | metrics | `write_metrics` | `metrics/rest/values.py` `value/set` | — |
 | `send_notification` | comms | `comms` | `account/rest/notification.py` — RestMeta CRUD | — |
+| `retry_platform_deployment`, `verify_platform_deployment`, `converge_platform_deployment` | cloud | `manage_platform`, `admin` | `account/rest/admin_platform.py` deploy retry/verify/converge (`denies_key_backed_session` + `requires_fresh_auth(600)`; **no** `infrastructure.refuse()`) | `fresh_auth_seconds=600`, `summarize`, `preview` |
+| `apply_framework_update` | cloud | `manage_platform`, `admin` | `account/rest/admin_platform.py` framework update (same, **plus** `infrastructure.refuse()`) | `fresh_auth_seconds=600`, `requires_managed_infrastructure`, `summarize`, `preview` |
+| `apply_managed_upgrade` | cloud | `manage_aws` | `aws/rest/maintenance.py` apply (same, plus `_require_manage_tier`) | `fresh_auth_seconds=600`, `requires_managed_infrastructure`, `authorize` (superuser OR `manage_platform` OR `admin`), `summarize`, `preview` |
+| `apply_capacity_change`, `apply_capacity_plan` | cloud | `manage_aws` | `aws/rest/capacity.py` apply / plan / plan-apply (same, plus `_require_superuser`) | `fresh_auth_seconds=600`, `requires_superuser`, `requires_managed_infrastructure`, `authorize` (literal superuser), `summarize`, `preview` |
 
-No built-in tool declares `requires_superuser` or
-`requires_managed_infrastructure` today: the endpoints that carry those gates
-(capacity, deploy, domain purchase) have no assistant tool yet. New tool domains
-that wrap them must declare them.
+The `cloud` domain (item #2570) is the first real user of `requires_superuser`
+and `requires_managed_infrastructure`; see
+[cloud_tools.md](cloud_tools.md). Note where the gates are **absent**: the three
+deploy endpoints do not call `infrastructure.refuse()`, so those three tools
+stay available under external infrastructure mode, exactly as the Admin
+controls do. Mirroring means copying the twin, not tightening it.
 
 **Adding a mutating tool?** Find the Admin endpoint that performs the same
 operation, read its decorators, and mirror them. An omission here is the whole

@@ -218,7 +218,10 @@ The same page also updates django-mojo itself, through
   superuser), `no_converged_deployment`, or `infrastructure_external` — which
   overrides the other three, because the endpoint would refuse whatever the
   version facts say. The version facts themselves stay truthful.
-- `apply_framework_update(request, version)` — **clears** any pin via
+- `apply_framework_update(actor, version, idempotency_key=None)` — takes the
+  ACTOR, not a request (item #2570: no mutation should run behind a fabricated
+  request object; the REST caller passes `request.user` and the
+  `Idempotency-Key` header). **Clears** any pin via
   `system_settings.set_value(user, FRAMEWORK_VERSION_KEY, "")`, then
   `platform_deploy.same_sha_retry(last_converged_deployment())`. Refuses first
   when `INFRASTRUCTURE_MODE` is `external` (the service-layer backstop; the
@@ -232,6 +235,23 @@ converged commit is what actually installs the new release.
 `platform_deploy.last_converged_deployment()` is the row-returning sibling of
 `last_converged_framework()`: converged, not merely released, because that
 status is the reconciler's proof the commit actually runs on this fleet.
+
+## Assistant access
+
+The Admin Assistant's `cloud` domain wraps this service: `get_managed_upgrades`
+(`report`), `get_upgrade_status` (`resource_status`) and `apply_managed_upgrade`
+(`apply_upgrade`).
+
+`apply_managed_upgrade` **adds** a gate rather than relaxing one. It declares
+`fresh_auth_seconds=600` and `requires_managed_infrastructure`, and expresses
+the endpoint's `_require_manage_tier` AND-check as an `authorize` hook — so a
+`manage_aws`-only holder is never even offered it. `apply_immediately` is
+required with no default, because "now" and "next maintenance window" are
+different outage decisions. The server-side half of the typed echo is kept: the
+target must be exactly what `offered_target` returns. On top of all of it, the
+operator must approve a card that names the outage in words.
+
+See [assistant/cloud_tools.md](../assistant/cloud_tools.md).
 
 ## Configuration
 
