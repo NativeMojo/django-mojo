@@ -1,5 +1,5 @@
 """
-Redis connection helper (single-node & clustered/Serverless Valkey)
+Redis connection helper (single-node, reader, and clustered/Serverless Valkey)
 
 Usage:
     from mojo.helpers.redis import get_connection
@@ -14,39 +14,74 @@ Settings used (all optional; follows your existing naming):
     REDIS_USERNAME         # ACL username (Serverless Valkey/Redis)
     REDIS_PASSWORD         # ACL password
     REDIS_SCHEME           # 'redis' or 'rediss' (default 'rediss')
+    REDIS_READER_URL       # standalone read-only/replica URL
+    REDIS_READER_SERVER    # reader endpoint; other reader parts inherit primary
     REDIS_MAX_CONN         # per-process pool size (default 500)
     REDIS_READ_FROM_REPLICAS  # '1'/'0' (cluster only; default '1')
 
 Notes:
 - Local single-node dev: URL usually looks like    redis://localhost:6379/0
-- Cluster/Serverless prod: URL should look like    rediss://user:pass@<endpoint>:6379/0
-  (TLS + ACLs; cluster will be auto-detected and RedisCluster used)
+- Cluster/Serverless prod: set REDIS_CLUSTER and use a rediss:// URL.
+- Replication-group readers are opt-in per call with get_connection(reader=True).
 """
 
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlparse
 import redis
 from redis.cluster import RedisCluster  # redis-py provides cluster client
 
 from mojo.helpers.settings import settings
 
 _CLIENT = None  # per-process singleton (thread-safe client; uses a connection pool underneath)
+_READER_CLIENT = None
+_READER_URL = -1  # resolved once; None means no configured standalone reader
 
 
-def _build_url() -> str:
+def _primary_parts(get):
+    """Return the primary's effective connection parts."""
+    url = get("REDIS_URL", None)
+    if url:
+        parsed = urlparse(url)
+        path = str(parsed.path or "").strip("/")
+        return {
+            "scheme": parsed.scheme or "rediss",
+            "port": parsed.port or 6379,
+            "db": int(path.split("/", 1)[0]) if path else 0,
+            "user": (unquote(parsed.username)
+                     if parsed.username is not None else None),
+            "password": (unquote(parsed.password)
+                         if parsed.password is not None else None),
+        }
+    return {
+        "scheme": get("REDIS_SCHEME", "rediss"),
+        "port": int(get("REDIS_PORT", 6379)),
+        "db": int(get("REDIS_DB_INDEX", 0)),
+        "user": get("REDIS_USERNAME", None),
+        "password": get("REDIS_PASSWORD", None),
+    }
+
+
+def _build_url(prefix="REDIS", get=None):
     # Use get_static (file-based only, no DB/Redis) to avoid circular dependency:
     # Redis connection config can't come from a Redis-backed settings store.
+    get = get or settings.get_static
+
     # 1) Allow an explicit URL override
-    url = settings.get_static("REDIS_URL", None)
+    url = get(f"{prefix}_URL", None)
     if url:
         return url
 
     # 2) Build from individual parts
-    host = settings.get_static("REDIS_SERVER", "localhost")
-    port = int(settings.get_static("REDIS_PORT", 6379))
-    db   = int(settings.get_static("REDIS_DB_INDEX", 0))
-    user = settings.get_static("REDIS_USERNAME", None)
-    pwd  = settings.get_static("REDIS_PASSWORD", None)
-    scheme = settings.get_static("REDIS_SCHEME", "rediss")  # default to TLS
+    is_reader = prefix == "REDIS_READER"
+    host = get(f"{prefix}_SERVER", None if is_reader else "localhost")
+    if is_reader and not host:
+        return None
+
+    primary = _primary_parts(get)
+    port = int(get(f"{prefix}_PORT", primary["port"]))
+    db = int(get(f"{prefix}_DB_INDEX", primary["db"]))
+    user = get(f"{prefix}_USERNAME", primary["user"])
+    pwd = get(f"{prefix}_PASSWORD", primary["password"])
+    scheme = get(f"{prefix}_SCHEME", primary["scheme"])
 
     if "localhost" in host:
         scheme = "redis"
@@ -61,6 +96,26 @@ def _build_url() -> str:
     return f"{scheme}://{auth}{host}:{port}/{db}"
 
 
+def _resolve_reader_url(get=None):
+    """Resolve a standalone reader URL, or None when it should use primary."""
+    get = get or settings.get_static
+    is_cluster = str(get("REDIS_CLUSTER", False)).lower() in ("1", "true")
+    if is_cluster:
+        return None
+    return _build_url("REDIS_READER", get)
+
+
+def _create_client(url, max_conn, connect_timeout, socket_timeout):
+    pool = redis.ConnectionPool.from_url(
+        url,
+        decode_responses=True,
+        socket_connect_timeout=connect_timeout,
+        socket_timeout=socket_timeout,
+        max_connections=max_conn,
+    )
+    return redis.Redis(connection_pool=pool)
+
+
 def _is_cluster(redis_client: "redis.Redis") -> bool:
     """Return True if the target enables cluster mode."""
     try:
@@ -71,20 +126,39 @@ def _is_cluster(redis_client: "redis.Redis") -> bool:
         return False
 
 
-def get_connection():
+def get_connection(reader=False):
     """
     Returns a Redis/RedisCluster client backed by an internal connection pool.
     - Standalone (dev): redis.Redis with ConnectionPool
     - Cluster/Serverless (prod): redis.cluster.RedisCluster with ClusterConnectionPool
+    - Reader (opt-in): standalone redis.Redis from REDIS_READER_* settings
 
     The returned client is thread-safe. Create a new Pipeline per thread
     (prefer transaction=False for metrics/logging to avoid cross-slot).
 
-    Set REDIS_CLUSTER=True/False to skip the auto-detection probe. Without it,
-    the first connection makes a throwaway INFO call to detect cluster mode,
-    which adds a full extra TLS handshake + round-trip in production.
+    Set REDIS_CLUSTER=True to use RedisCluster. In cluster mode, reader=True
+    returns that primary cluster client; cluster replica reads are controlled
+    by REDIS_READ_FROM_REPLICAS.
+
+    reader=True uses a separately pooled process singleton only when
+    REDIS_READER_URL or REDIS_READER_SERVER is configured. Otherwise it
+    returns the primary client. A configured reader never fails over silently.
     """
-    global _CLIENT
+    global _CLIENT, _READER_CLIENT, _READER_URL
+    if reader:
+        if _READER_CLIENT is not None:
+            return _READER_CLIENT
+        if _READER_URL == -1:
+            _READER_URL = _resolve_reader_url()
+        if _READER_URL is None:
+            return get_connection()
+        max_conn = int(settings.get_static("REDIS_MAX_CONN", 500))
+        connect_timeout = float(settings.get_static("REDIS_CONNECT_TIMEOUT", 2))
+        socket_timeout = float(settings.get_static("REDIS_SOCKET_TIMEOUT", 60))
+        _READER_CLIENT = _create_client(
+            _READER_URL, max_conn, connect_timeout, socket_timeout)
+        return _READER_CLIENT
+
     if _CLIENT is not None:
         return _CLIENT
 
@@ -110,14 +184,8 @@ def get_connection():
             reinitialize_steps=5,
         )
     else:
-        pool = redis.ConnectionPool.from_url(
-            url,
-            decode_responses=True,
-            socket_connect_timeout=connect_timeout,
-            socket_timeout=socket_timeout,
-            max_connections=max_conn,
-        )
-        _CLIENT = redis.Redis(connection_pool=pool)
+        _CLIENT = _create_client(
+            url, max_conn, connect_timeout, socket_timeout)
 
     return _CLIENT
 

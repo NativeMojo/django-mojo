@@ -1,5 +1,6 @@
 from mojo import decorators as md
 from mojo.apps import metrics
+from mojo.helpers import redis
 from mojo.helpers.response import JsonResponse
 import mojo.errors
 import datetime
@@ -211,8 +212,10 @@ def on_metrics_series(request):
 
     check_view_permissions(request, account)
 
-    # Fetch the values using our new method
-    result = metrics.fetch_values(slugs, when, granularity, account=account, with_delta=with_delta)
+    # Dashboard reads tolerate replica lag; permission reads above stay primary.
+    result = metrics.fetch_values(
+        slugs, when, granularity, account=account, with_delta=with_delta,
+        redis_con=redis.get_connection(reader=True))
     result['status'] = True
 
     return JsonResponse(result)

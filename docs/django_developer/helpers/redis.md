@@ -31,10 +31,17 @@ All settings are optional. Configure in `settings.py` or via environment variabl
 | `REDIS_USERNAME` | — | ACL username (Serverless Valkey / Redis 6+) |
 | `REDIS_PASSWORD` | — | ACL password |
 | `REDIS_SCHEME` | `"rediss"` | `"redis"` or `"rediss"` (TLS). Auto-set to `"redis"` when host contains `localhost` |
+| `REDIS_READER_URL` | — | Full URL for an opt-in standalone reader connection; activates reader routing |
+| `REDIS_READER_SERVER` | — | Reader endpoint hostname; activates reader routing when `REDIS_READER_URL` is unset |
+| `REDIS_READER_PORT` | Primary value | Reader endpoint port |
+| `REDIS_READER_DB_INDEX` | Primary value | Reader database index |
+| `REDIS_READER_USERNAME` | Primary value | Reader ACL username |
+| `REDIS_READER_PASSWORD` | Primary value | Reader ACL password |
+| `REDIS_READER_SCHEME` | Primary value | Reader `"redis"` or `"rediss"` scheme |
 | `REDIS_MAX_CONN` | `500` | Connection pool size per process |
 | `REDIS_CONNECT_TIMEOUT` | `2` | Connection timeout in seconds |
 | `REDIS_SOCKET_TIMEOUT` | `60` | Socket timeout in seconds |
-| `REDIS_CLUSTER` | `False` | Set `True` to use `RedisCluster` client (skip auto-detection) |
+| `REDIS_CLUSTER` | `False` | Set `True` to use a `RedisCluster` client |
 | `REDIS_READ_FROM_REPLICAS` | `"1"` | Read from replica nodes (cluster mode only) |
 
 ### Local Development
@@ -53,6 +60,54 @@ REDIS_PASSWORD = "your-acl-token"
 REDIS_SCHEME = "rediss"
 REDIS_CLUSTER = True
 ```
+
+### Reader connection
+
+Replication-group readers are opt-in per call site:
+
+```python
+from mojo.helpers.redis import get_connection
+
+reader = get_connection(reader=True)
+```
+
+Configure either a complete `REDIS_READER_URL` or just the reader endpoint:
+
+```python
+REDIS_READER_SERVER = "example-ro.abc123.use1.cache.amazonaws.com"
+```
+
+These are boot-time, file-only settings read with `settings.get_static`; they
+cannot come from the Redis-backed settings store. With only
+`REDIS_READER_SERVER` set, the reader inherits the primary connection's
+effective port, database index, ACL credentials, and scheme. This includes a
+primary configured solely through `REDIS_URL`: the URL is parsed so, for
+example, a primary on database 3 with a password produces a reader on database
+3 with the same password. Any explicit `REDIS_READER_*` part overrides its
+inherited value. Pool size and timeout settings are shared with the primary.
+
+If neither reader setting is configured, `get_connection(reader=True)` returns
+the primary process singleton. This lets lag-tolerant call sites opt in before
+reader infrastructure exists. Once a reader is configured it gets its own
+process-singleton client and connection pool. A connection or command failure
+is returned to the caller; django-mojo does not silently retry it against the
+primary, because doing so would hide broken reader infrastructure.
+
+`REDIS_CLUSTER=True` ignores `REDIS_READER_*` and returns the primary
+`RedisCluster` client. Cluster replica routing remains controlled by
+`REDIS_READ_FROM_REPLICAS`.
+
+Use a reader only for reads that tolerate replication lag, such as metrics
+dashboards, analytics counters, and discovery scans. Never use it for sessions
+or caches, rate limits, job queues, pub/sub, authentication, MFA, OAuth or other
+security state, metrics permission reads, or any read-your-own-write flow.
+
+AWS documents that an ElastiCache reader endpoint distributes connections
+across replicas and tracks replica changes, but does not document how it
+resolves when a replication group has zero replicas. If the last replica is
+removed, unset `REDIS_READER_SERVER` (or `REDIS_READER_URL`) until that behavior
+has been verified for the group; otherwise lag-tolerant dashboard reads may
+error. Primary traffic is unaffected.
 
 ---
 
