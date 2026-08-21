@@ -18,6 +18,9 @@
     "assets/components/views.js",
     "assets/features/registry.js",
     "assets/assistant/panel.js",
-    "assets/assistant/assistant.css"
+    "assets/assistant/assistant.css",
+    "assets/assistant/markdown.js",
+    "assets/assistant/blocks.js",
+    "assets/assistant/plan.js"
   ]
 }
