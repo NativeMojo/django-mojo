@@ -1,8 +1,56 @@
+import json
+import os
+import subprocess
+import sys
+import tempfile
 from unittest import mock
 from urllib.parse import urlsplit
 
 from botocore.config import Config
 from testit import helpers as th
+
+
+def _presign_in_isolated_environment(environment):
+    script = """
+import json
+import os
+import sys
+from pathlib import Path
+from urllib.parse import urlsplit
+
+sys.path.insert(0, str(Path.cwd() / "testproject" / "config"))
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")
+import django
+django.setup()
+
+from mojo.helpers.aws.client import get_client
+
+client = get_client(
+    "s3", access_key="AKIAPRESIGNTEST",
+    secret_key="presign-test-secret", region="us-west-2")
+url = client.generate_presigned_url(
+    "put_object", ExpiresIn=60,
+    Params={"Bucket": "bucket", "Key": "key"})
+parsed = urlsplit(url)
+print(json.dumps({
+    "netloc": parsed.netloc,
+    "path": parsed.path,
+    "sigv4": "X-Amz-Signature=" in url,
+}))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], env=environment,
+        capture_output=True, text=True, check=True)
+    return json.loads(result.stdout)
+
+
+def _aws_test_environment(**overrides):
+    environment = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith("AWS_")
+    }
+    environment.update(overrides)
+    return environment
 
 
 @th.django_unit_test()
@@ -82,6 +130,54 @@ def test_s3_explicit_endpoint_keeps_compatible_path_addressing(opts):
         f"addressing, got {parsed.path}")
     assert "X-Amz-Signature=" in url, \
         f"An explicit S3-compatible endpoint must retain SigV4 signing: {url}"
+
+
+@th.django_unit_test()
+def test_s3_environment_endpoint_keeps_compatible_path_addressing(opts):
+    environment = _aws_test_environment(
+        AWS_ENDPOINT_URL_S3="https://storage.example.test",
+        AWS_EC2_METADATA_DISABLED="true",
+    )
+    presign = _presign_in_isolated_environment(environment)
+
+    assert presign["netloc"] == "storage.example.test", (
+        "A service endpoint selected through AWS_ENDPOINT_URL_S3 must remain "
+        f"the request host, got {presign['netloc']}")
+    assert presign["path"] == "/bucket/key", (
+        "A service endpoint selected through AWS_ENDPOINT_URL_S3 must retain "
+        f"botocore's compatible path addressing, got {presign['path']}")
+    assert presign["sigv4"], \
+        "An environment endpoint must retain SigV4 signing"
+
+
+@th.django_unit_test()
+def test_s3_shared_config_endpoint_keeps_compatible_path_addressing(opts):
+    config_text = """\
+[default]
+region = us-west-2
+services = local-services
+
+[services local-services]
+s3 =
+  endpoint_url = https://storage.example.test
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".ini") as config_file:
+        config_file.write(config_text)
+        config_file.flush()
+        environment = _aws_test_environment(
+            AWS_CONFIG_FILE=config_file.name,
+            AWS_EC2_METADATA_DISABLED="true",
+        )
+        presign = _presign_in_isolated_environment(environment)
+
+    assert presign["netloc"] == "storage.example.test", (
+        "A service endpoint selected through shared AWS config must remain "
+        f"the request host, got {presign['netloc']}")
+    assert presign["path"] == "/bucket/key", (
+        "A service endpoint selected through shared AWS config must retain "
+        f"botocore's compatible path addressing, got {presign['path']}")
+    assert presign["sigv4"], \
+        "A shared-config endpoint must retain SigV4 signing"
 
 
 @th.django_unit_test()
