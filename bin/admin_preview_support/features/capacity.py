@@ -53,12 +53,40 @@ CACHES = [
     {"identifier": "mojo-prod-redis", "status": "available", "replica_count": 1,
      "cluster_enabled": False, "automatic_failover_on": True, "multi_az_on": True,
      # Node type is group-wide in ElastiCache, so it rides on the group and
-     # every member shows it.
+     # every member shows it. cache.t4g.small is deliberately NOT a curated
+     # rung — it exercises the "Current — <type>" select shape.
      "node_type": "cache.t4g.small",
+     # Failover + a replica: the server pre-states a rolling interruption.
+     "resize_impact": "rolling",
      "members": [{"id": "mojo-prod-redis-001", "role": "primary"},
                  {"id": "mojo-prod-redis-002", "role": "replica"}],
      "min_replicas": 1, "blocked_reason": None},
 ]
+
+# Mirrors the server's report["sizes"] — the curated resize allowlist from
+# mojo/deploy/provision/spec.py CACHE_SIZES/DB_SIZES with COST_TABLE prices.
+SIZES = {
+    "cache": [
+        {"size": "small", "label": "Small", "type": "cache.t4g.micro",
+         "monthly_usd": 12.0},
+        {"size": "medium", "label": "Medium", "type": "cache.t4g.medium",
+         "monthly_usd": 50.0},
+        {"size": "large", "label": "Large", "type": "cache.r7g.large",
+         "monthly_usd": 120.0},
+        {"size": "xlarge", "label": "Extra large", "type": "cache.r7g.xlarge",
+         "monthly_usd": 240.0},
+    ],
+    "database": [
+        {"size": "small", "label": "Small", "type": "db.t4g.medium",
+         "monthly_usd": 50.0},
+        {"size": "medium", "label": "Medium", "type": "db.r6g.large",
+         "monthly_usd": 175.0},
+        {"size": "large", "label": "Large", "type": "db.r6g.xlarge",
+         "monthly_usd": 350.0},
+        {"size": "xlarge", "label": "Extra large", "type": "db.r6g.2xlarge",
+         "monthly_usd": 700.0},
+    ],
+}
 
 DENIED_WARNING = {
     "code": "databases",
@@ -132,6 +160,10 @@ def _actions(handler, state, nodes, databases):
             None if any(row["readers"] for row in databases) else "no_reader")),
         "set_cache_replicas": offer(
             "infrastructure_external" if external else None),
+        "resize_cache": offer(
+            "infrastructure_external" if external else None),
+        "resize_database": offer("infrastructure_external" if external else (
+            None if databases else "no_database")),
     }
 
 
@@ -161,6 +193,8 @@ def _report(handler):
         },
         "databases": databases,
         "caches": [dict(row) for row in CACHES],
+        "sizes": {kind: [dict(row) for row in rows]
+                  for kind, rows in SIZES.items()},
         "warnings": [dict(DENIED_WARNING)] if state == "denied" else [],
         "actions": _actions(handler, state, nodes, databases),
         # Reader routing is the serving process's self-report. "healthy" shows
@@ -219,6 +253,12 @@ DONE_COPY = {
     "remove_reader": "the reader is deleted.",
     "set_cache_replicas": ("the group has been resized. A replica is failover "
                            "capacity, not read throughput."),
+    "resize_cache": ("the group now runs the new node type. Replicas were "
+                     "replaced first, then a brief failover swapped the "
+                     "primary — one short interruption, not an outage."),
+    "resize_database": ("the instance now runs the new class. The instance "
+                        "restarted to change class — that was the few minutes "
+                        "of downtime this action warned about."),
 }
 
 

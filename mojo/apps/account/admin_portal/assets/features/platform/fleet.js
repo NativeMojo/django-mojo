@@ -14,7 +14,6 @@
 //      reported as done.
 //
 // Deliberate placeholders, disabled until their server sides ship:
-//   - instance size dropdowns (resize_cache / resize_database)
 //   - the server-written plan (plan/apply batch API) — today the step list is
 //     assembled here from the same offers the server published.
 import {api, apiOnce, h, icon} from '../../core.js';
@@ -28,7 +27,10 @@ const STATUS_PATH = '/api/aws/capacity/status';
 const APPLY_PATH = '/api/aws/capacity/apply';
 
 const POLL_INTERVAL = 10000;
-const POLL_LIMIT = 360; // one hour per operation, matching capacity.js.
+// 90 minutes per operation, matching capacity.js — above the server's
+// CACHE_RESIZE_TIMEOUT (5400s), so the page never abandons an operation the
+// server still allows.
+const POLL_LIMIT = 540;
 
 const EXTERNAL_SUB = 'Infrastructure mode is external, so this portal shows the fleet but does not change it.';
 
@@ -81,10 +83,7 @@ export async function fleetPage(ctx, signal = null) {
   // not restarted since the config line was added still runs without routing.
   // The instance type on the row itself — the operator's cheapest answer to
   // "what am I actually paying for here". Mono, because it is an identifier.
-  // Rendered only where the report supplies one: app nodes carry
-  // `instance_type` and standalone databases carry `instance_class` today;
-  // cache members and Aurora per-instance classes arrive with the resize work,
-  // and light up here with no further change.
+  // Rendered only where the report supplies one.
   function typeTag(value) {
     return value ? h('span', {class: 'fleet-tag fleet-type mono', text: value}) : null;
   }
@@ -117,6 +116,12 @@ export async function fleetPage(ctx, signal = null) {
         (row) => [row.identifier, Number(row.replica_count || 0)])),
       dbAdd: new Map((report?.databases || []).map((row) => [row.identifier, 0])),
       dbRemove: new Set(),
+      // Staged sizes, keyed by row identifier -> curated size key. Absent
+      // means unchanged; the reader map stages ONE size the plan fans out
+      // into one resize step per differing reader.
+      cacheSizes: new Map(),
+      dbWriterSizes: new Map(),
+      dbReaderSizes: new Map(),
     };
   }
 
@@ -133,6 +138,16 @@ export async function fleetPage(ctx, signal = null) {
   }
 
   // ── the plan ────────────────────────────────────────────────────────────
+
+  // Step kind drives only the dot colour: up-ladder reads as 'add', down as
+  // 'remove', and an unknown direction (current type not on the ladder)
+  // defaults to 'add'.
+  function sizeDirection(ladder, currentType, rung) {
+    const from = (ladder || []).findIndex((r) => r.type === currentType);
+    const to = (ladder || []).indexOf(rung);
+    if (from < 0 || to < 0) return 'add';
+    return to < from ? 'remove' : 'add';
+  }
 
   // Adds before removes, always — the same ordering the batch API will
   // enforce server-side. Each step carries the submissions it will make.
@@ -168,6 +183,63 @@ export async function fleetPage(ctx, signal = null) {
         submits: [{action: 'set_cache_replicas', resource: row.identifier,
           confirm_resource: row.identifier, count: wanted, apply_immediately: true}],
       });
+    }
+    for (const row of report?.caches || []) {
+      const size = want.cacheSizes.get(row.identifier);
+      if (!size) continue;
+      const rung = (report?.sizes?.cache || []).find((r) => r.size === size);
+      if (!rung || rung.type === row.node_type) continue;
+      steps.push({
+        key: `resize-cache-${row.identifier}`,
+        kind: sizeDirection(report?.sizes?.cache, row.node_type, rung),
+        label: `Resize ${row.identifier} to ${rung.type}`,
+        note: row.resize_impact === 'rolling'
+          ? 'rolls replicas first, then a brief failover — one short interruption'
+          : 'no replica: the cache is down while its node is replaced',
+        submits: [{action: 'resize_cache', resource: row.identifier,
+          confirm_resource: row.identifier, size, apply_immediately: true}],
+      });
+    }
+    for (const row of report?.databases || []) {
+      const writerSize = want.dbWriterSizes.get(row.identifier);
+      const writerTarget = row.kind === 'aurora' ? row.writer : row.identifier;
+      if (writerSize && writerTarget) {
+        const rung = (report?.sizes?.database || []).find((r) => r.size === writerSize);
+        const current = row.writer_instance_class || row.instance_class;
+        if (rung && rung.type !== current) {
+          steps.push({
+            key: `resize-writer-${row.identifier}`,
+            kind: sizeDirection(report?.sizes?.database, current, rung),
+            label: `Resize writer ${writerTarget} to ${rung.type}`,
+            note: '~minutes offline while the writer changes class',
+            submits: [{action: 'resize_database', resource: writerTarget,
+              confirm_resource: writerTarget, size: writerSize,
+              apply_immediately: true}],
+          });
+        }
+      }
+      // ONE staged reader size, fanned out into one step per reader whose
+      // class differs — skipping any reader this same plan removes: resizing
+      // a doomed reader is never what the operator meant.
+      const readerSize = want.dbReaderSizes.get(row.identifier);
+      const readerRung = readerSize
+        && (report?.sizes?.database || []).find((r) => r.size === readerSize);
+      if (readerRung) {
+        for (const reader of row.readers || []) {
+          if (want.dbRemove.has(reader)) continue;
+          const current = (row.reader_instance_classes || {})[reader];
+          if (current === readerRung.type) continue;
+          steps.push({
+            key: `resize-reader-${reader}`,
+            kind: sizeDirection(report?.sizes?.database, current, readerRung),
+            label: `Resize reader ${reader} to ${readerRung.type}`,
+            note: 'reads keep flowing; this reader pauses while it changes class',
+            submits: [{action: 'resize_database', resource: reader,
+              confirm_resource: reader, size: readerSize,
+              apply_immediately: true}],
+          });
+        }
+      }
     }
     for (const reader of want.dbRemove) {
       steps.push({
@@ -211,7 +283,7 @@ export async function fleetPage(ctx, signal = null) {
       if (live.state === 'running') { onPhase(phaseLine(live)); continue; }
       return live;
     }
-    return {state: 'failed', message: 'still running after an hour — check the AWS console'};
+    return {state: 'failed', message: 'still running after 90 minutes — check the AWS console'};
   }
 
   async function runPlan(steps) {
@@ -299,13 +371,38 @@ export async function fleetPage(ctx, signal = null) {
   }
 
   // A disabled size dropdown: honest about what runs today and what is
-  // coming. One option — the current size — and a note.
+  // coming. One option — the current size — and a note. Still used by the
+  // node card (app-node resize is a rolling replace, its own future item)
+  // and as the blocked shape of the live selects below.
   function sizePlaceholder(label, current, note) {
     return h('div', {class: 'fleet-control'},
       h('span', {class: 'fleet-label', text: label}),
       h('select', {disabled: true, title: note},
         h('option', {text: current || 'current size'})),
       h('span', {class: 'fleet-floor', text: note}));
+  }
+
+  // A live size select, fed entirely by report.sizes — never hardcoded. The
+  // first option is the current type (selected = no change; picking it back
+  // unstages), then every other curated rung with its price.
+  function sizeSelect({label, ladder, currentType, currentText, staged, note, onChange}) {
+    const rungs = ladder || [];
+    const currentRung = rungs.find((rung) => rung.type === currentType);
+    const currentLabel = currentText
+      || (currentRung
+        ? `${currentRung.label} (current) — ${currentType}`
+        : `Current — ${currentType || 'unknown'}`);
+    return h('div', {class: 'fleet-control'},
+      h('span', {class: 'fleet-label', text: label}),
+      h('select', {onchange: (event) => onChange(event.target.value || null)},
+        h('option', {value: '', text: currentLabel,
+          selected: staged ? null : true}),
+        ...rungs.filter((rung) => rung.type !== currentType).map((rung) =>
+          h('option', {value: rung.size,
+            text: `${rung.label} — ${rung.type}`
+              + (rung.monthly_usd ? ` · ≈$${rung.monthly_usd}/mo per node` : ''),
+            selected: staged === rung.size ? true : null}))),
+      note ? h('span', {class: 'fleet-floor', text: note}) : null);
   }
 
   // ── cards ───────────────────────────────────────────────────────────────
@@ -437,7 +534,8 @@ export async function fleetPage(ctx, signal = null) {
             h('p', {text: blockedText(change) || 'No ElastiCache replication group was found.'}))));
     }
     return h('div', {class: `fleet-card ${rows.some((row) =>
-      want.caches.get(row.identifier) !== Number(row.replica_count || 0)) ? 'changed' : ''}`},
+      want.caches.get(row.identifier) !== Number(row.replica_count || 0)
+      || want.cacheSizes.has(row.identifier)) ? 'changed' : ''}`},
     h('div', {class: 'fleet-card-head'},
       h('div', {class: 'fleet-card-title'},
         h('h3', {text: 'Redis'}),
@@ -451,6 +549,13 @@ export async function fleetPage(ctx, signal = null) {
       const blocked = row.blocked_reason
         ? blockedText({offered: false, blocked_reason: row.blocked_reason})
         : blockedText(change);
+      const resize = offer('resize_cache');
+      const resizable = managed() && resize.offered && !row.blocked_reason;
+      // The interruption case is the SERVER's statement (resize_impact),
+      // surfaced before apply — the page never re-derives the policy.
+      const impactNote = row.resize_impact === 'rolling'
+        ? 'Resize rolls replicas first, then a brief failover — one short interruption.'
+        : 'No replica: the cache is down while its node is replaced.';
       return h('div', {class: 'fleet-group'},
         offered ? h('div', {class: 'fleet-controls'},
           h('div', {class: 'fleet-control'},
@@ -466,7 +571,19 @@ export async function fleetPage(ctx, signal = null) {
               text: row.automatic_failover_on
                 ? `Failover is on, so at least ${Math.max(min, 1)} replica must remain.`
                 : 'Failover is off — zero replicas leaves nothing to fail over to.'})),
-          sizePlaceholder('Size of each', '', 'Resizing ships in a coming update.'))
+          resizable
+            ? sizeSelect({
+              label: 'Size of each', ladder: report?.sizes?.cache,
+              currentType: row.node_type,
+              staged: want.cacheSizes.get(row.identifier) || null,
+              note: impactNote,
+              onChange: (size) => {
+                if (size) want.cacheSizes.set(row.identifier, size);
+                else want.cacheSizes.delete(row.identifier);
+                render();
+              }})
+            : sizePlaceholder('Size of each', row.node_type || '',
+              blockedText(resize) || 'Resizing is not available.'))
           : h('p', {class: 'fleet-note warn-text', text: blocked}),
         h('div', {class: 'fleet-note'},
           icon('activity'),
@@ -508,7 +625,64 @@ export async function fleetPage(ctx, signal = null) {
             h('h3', {text: 'Database'}),
             h('p', {text: blockedText(add) || 'No database was found.'}))));
     }
-    const changed = rows.some((row) => (want.dbAdd.get(row.identifier) || 0) > 0)
+    const resize = offer('resize_database');
+
+    // The writer and the readers carry independent sizes — that asymmetry
+    // (big writer, smaller readers) is where the money is. One reader size
+    // is staged per row; the plan fans it out into one resize per reader.
+    function writerSizeControl(row) {
+      const currentType = row.writer_instance_class || row.instance_class;
+      const target = row.kind === 'aurora' ? row.writer : row.identifier;
+      if (!resize.offered) {
+        return sizePlaceholder('Writer size',
+          currentType || (row.kind === 'aurora' ? 'Aurora' : ''),
+          blockedText(resize) || 'Resizing is not available.');
+      }
+      if (!target) {
+        return sizePlaceholder('Writer size', currentType || 'Aurora',
+          'This cluster reports no writer instance to resize.');
+      }
+      return sizeSelect({
+        label: 'Writer size', ladder: report?.sizes?.database,
+        currentType,
+        staged: want.dbWriterSizes.get(row.identifier) || null,
+        note: '~minutes offline while the writer changes class.',
+        onChange: (size) => {
+          if (size) want.dbWriterSizes.set(row.identifier, size);
+          else want.dbWriterSizes.delete(row.identifier);
+          render();
+        }});
+    }
+
+    function readerSizeControl(row) {
+      const readers = row.readers || [];
+      const classes = readers.map(
+        (reader) => (row.reader_instance_classes || {})[reader]).filter(Boolean);
+      const shared = classes.length && classes.every((cls) => cls === classes[0])
+        ? classes[0] : null;
+      if (!resize.offered) {
+        return sizePlaceholder('Reader size', shared || '',
+          blockedText(resize) || 'Resizing is not available.');
+      }
+      if (!readers.length) {
+        return sizePlaceholder('Reader size', '', 'No readers to size.');
+      }
+      return sizeSelect({
+        label: 'Reader size', ladder: report?.sizes?.database,
+        currentType: shared,
+        currentText: classes.length && !shared ? 'Mixed sizes' : null,
+        staged: want.dbReaderSizes.get(row.identifier) || null,
+        note: 'Applies to every reader; reads keep flowing on the others.',
+        onChange: (size) => {
+          if (size) want.dbReaderSizes.set(row.identifier, size);
+          else want.dbReaderSizes.delete(row.identifier);
+          render();
+        }});
+    }
+
+    const changed = rows.some((row) => (want.dbAdd.get(row.identifier) || 0) > 0
+      || want.dbWriterSizes.has(row.identifier)
+      || want.dbReaderSizes.has(row.identifier))
       || want.dbRemove.size > 0;
     return h('div', {class: `fleet-card ${changed ? 'changed' : ''}`},
       h('div', {class: 'fleet-card-head'},
@@ -551,10 +725,8 @@ export async function fleetPage(ctx, signal = null) {
                 text: add.offered
                   ? (count === 0 ? 'With none, every read stays on the writer.' : '')
                   : blockedText(add)})),
-            sizePlaceholder('Writer size', row.instance_class || (row.kind === 'aurora' ? 'Aurora' : ''),
-              'Resizing ships in a coming update.'),
-            sizePlaceholder('Reader size', '',
-              'Per-instance sizes ship in a coming update.')) : null,
+            writerSizeControl(row),
+            readerSizeControl(row)) : null,
           h('div', {class: 'fleet-note'},
             icon('activity'),
             h('span', {text: routing().database?.active
@@ -626,9 +798,8 @@ export async function fleetPage(ctx, signal = null) {
           + 'and every step re-checks its guards against the live fleet the moment it '
           + 'runs — a control the server would refuse is disabled with the reason.'}),
         h('p', {text: 'Coming, and deliberately absent until their server sides ship: '
-          + 'instance resizing (the greyed-out size menus), a server-written plan with '
-          + 'exact costs and timings, and automatic overnight failback of the writer '
-          + 'after a database failover.'})));
+          + 'a server-written plan with exact costs and timings, and automatic '
+          + 'overnight failback of the writer after a database failover.'})));
   }
 
   // ── the apply bar ───────────────────────────────────────────────────────
