@@ -126,32 +126,32 @@ def test_llm_agent_investigate_and_block(opts):
     RuleSet.objects.filter(category="llm_block_test").delete()
     Event.objects.filter(category="llm_block_test").delete()
     Incident.objects.filter(category="llm_block_test").delete()
-    GeoLocatedIP.objects.filter(ip_address="10.99.99.1").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.114.99").delete()
     Job.objects.filter(channel="default").delete()
 
     event = Event.objects.create(
         category="llm_block_test",
         level=10,
         title="SSH brute force",
-        source_ip="10.99.99.1",
+        source_ip="203.0.114.99",
         details="Multiple failed SSH logins",
     )
     incident = Incident.objects.create(
         priority=10, state=0, status="new",
         category="llm_block_test", scope="global",
         title="SSH brute force",
-        source_ip="10.99.99.1",
+        source_ip="203.0.114.99",
     )
     event.incident = incident
     event.save(update_fields=["incident"])
 
     mock_responses = [
         _claude_response("tool_use", [
-            _tool_use_block("tool_1", "query_events", {"source_ip": "10.99.99.1", "minutes": 60}),
+            _tool_use_block("tool_1", "query_events", {"source_ip": "203.0.114.99", "minutes": 60}),
         ]),
         _claude_response("tool_use", [
             _tool_use_block("tool_2", "block_ip", {
-                "ip": "10.99.99.1",
+                "ip": "203.0.114.99",
                 "reason": "SSH brute force — 50 failed attempts in 10 minutes",
                 "ttl": 3600,
                 "incident_id": incident.pk,
@@ -163,7 +163,7 @@ def test_llm_agent_investigate_and_block(opts):
             }),
         ]),
         _claude_response("end_turn", [
-            _text_block("Blocked 10.99.99.1 for SSH brute force, incident resolved."),
+            _text_block("Blocked 203.0.114.99 for SSH brute force, incident resolved."),
         ]),
     ]
 
@@ -179,7 +179,7 @@ def test_llm_agent_investigate_and_block(opts):
     assert executed >= 1, f"Expected at least 1 job executed, got {executed}"
 
     # Assert IP was blocked
-    geo = GeoLocatedIP.objects.filter(ip_address="10.99.99.1").first()
+    geo = GeoLocatedIP.objects.filter(ip_address="203.0.114.99").first()
     assert geo is not None, "GeoLocatedIP should exist for blocked IP"
     assert geo.is_blocked is True, f"Expected IP to be blocked, got is_blocked={geo.is_blocked}"
 
