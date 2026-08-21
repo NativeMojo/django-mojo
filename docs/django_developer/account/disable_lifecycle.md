@@ -80,8 +80,8 @@ All other (PII-bearing) metadata keys are wiped.
 ```python
 from mojo.apps.account.services import disable as disable_service
 
-disable_service.disable_entity(entity, *, reason, by_user=None, note=None, request=None)
-disable_service.reactivate_entity(entity, *, by_user=None, note=None, request=None)
+disable_service.disable_entity(entity, *, reason, by_user=None, note=None, request=None, reporter=None)
+disable_service.reactivate_entity(entity, *, by_user=None, note=None, request=None, reporter=None)
 disable_service.record_anonymize(entity, *, by_user=None, request=None)  # called by pii_anonymize
 disable_service.mark_warning(entity, *, days_until_disable)
 disable_service.clear_warning(entity)
@@ -90,6 +90,10 @@ disable_service.has_warning(entity)      # honours new + legacy
 disable_service.get_warning_sent_at(entity)
 disable_service.migrate_legacy(entity)   # idempotent, leaves legacy keys in place
 ```
+
+`reporter` swaps the incident reporter (default `incident.report_event`) for that one
+call — it exists so tests can inject a local fake instead of patching the shared
+`mojo.apps.incident` module.
 
 `disable_entity` and `reactivate_entity` are atomic: they use a conditional
 update on `is_active` to detect concurrent flippers and raise `ValueException`
