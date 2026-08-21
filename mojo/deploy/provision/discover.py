@@ -61,6 +61,11 @@ NOT_FOUND_CODES = (
     "InvalidKeyPair.NotFound", "InvalidVpcID.NotFound",
     "InvalidGroup.NotFound", "InvalidSubnetID.NotFound",
     "InvalidAllocationID.NotFound", "InvalidInstanceID.NotFound",
+    # KMS. An alias that does not exist is the state of EVERY account before
+    # its first apply, and without this the observation of an empty account
+    # reports BLIND — which is a failure, and blocks the very run that would
+    # have created the key.
+    "NotFoundException",
 )
 
 
