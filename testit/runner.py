@@ -537,16 +537,32 @@ def run_setup(opts, module, func_name, module_name, test_name):
         return False
 
 
-def import_module_for_testing(module_name, test_name):
-    """Dynamically import a test module."""
+def import_module_for_testing(module_name, test_name, expected_root=None):
+    """Dynamically import a test module.
+
+    expected_root pins the import to a resolved package directory: an import
+    that lands outside it means another same-named package on sys.path
+    shadowed the one this record resolved to. That is reported and refused —
+    running a chimera of two packages is strictly worse than failing.
+    """
+    name = f"{module_name}.{test_name}"
     try:
-        name = f"{module_name}.{test_name}"
         module = import_module(name)
-        return module
     except (ImportError, RuntimeError):
         print(f"  Failed to import test module: {name}")
         traceback.print_exc()
         return None
+    if expected_root:
+        module_file = getattr(module, "__file__", None) or ""
+        expected = str(expected_root)
+        if not module_file.startswith(expected.rstrip(os.sep) + os.sep):
+            print(
+                f"  Refusing to run {name}: import resolved to "
+                f"{module_file or '<unknown>'} instead of the collected "
+                f"package at {expected}. A same-named package elsewhere on "
+                "sys.path is shadowing it — rename one of the packages.")
+            return None
+    return module
 
 
 def _sort_key(name):
@@ -570,29 +586,49 @@ def _count_tests_in_file(file_path):
 
 
 def _discover_test_files(module_name, test_root, parent_test_root=None):
-    """Find the module directory and return sorted list of (test_name, file_path)."""
+    """Find the module directory and return sorted list of (test_name, file_path).
+
+    Root preference (consumer first, then repository) matches _module_record;
+    callers holding a record should use _discover_record_files so discovery
+    and execution agree on one resolved directory.
+    """
     module_path = os.path.join(test_root, module_name)
     if not os.path.exists(module_path):
         if parent_test_root:
             module_path = os.path.join(parent_test_root, module_name)
         if not os.path.exists(module_path):
             return [], module_path
+    return _list_module_files(module_path), module_path
 
-    test_files = [f for f in os.listdir(module_path)
+
+def _list_module_files(module_path):
+    """Sorted (test_name, file_path) pairs for one resolved module directory."""
+    try:
+        entries = os.listdir(module_path)
+    except OSError:
+        return []
+    test_files = [f for f in entries
                   if f.endswith(".py") and f not in ["__init__.py", "setup.py"]
                   and not f.startswith("_")]
-
     result = []
     for test_file in sorted(test_files, key=_sort_key):
         test_name = test_file.rsplit('.', 1)[0]
         file_path = os.path.join(module_path, test_file)
         result.append((test_name, file_path))
-    return result, module_path
+    return result
 
 
-def run_module_tests_by_name(opts, module_name, test_name):
+def _discover_record_files(record):
+    """Discovery for a resolved module record: exactly its directory, never a
+    re-derived root."""
+    if not os.path.exists(record.path):
+        return []
+    return _list_module_files(record.path)
+
+
+def run_module_tests_by_name(opts, module_name, test_name, expected_root=None):
     """Run all test functions in a specific test module in the order they appear."""
-    module = import_module_for_testing(module_name, test_name)
+    module = import_module_for_testing(module_name, test_name, expected_root)
     if not module:
         return
     skipped = run_module_setup(opts, module, test_name, module_name)
@@ -674,18 +710,19 @@ def run_module_tests(opts, module, test_name, module_name):
         print(f"{helpers.INDENT}---------\n{helpers.INDENT}run time: {duration:.2f}s")
 
 
-def run_tests_for_module(opts, module_name, test_root, parent_test_root=None):
-    """Discover and run tests for a given module."""
-    test_files, module_path = _discover_test_files(module_name, test_root, parent_test_root)
+def run_tests_for_record(opts, record):
+    """Discover and run tests for one collected module record."""
+    test_files = _discover_record_files(record)
     if not test_files:
         return
 
     for test_name, file_path in test_files:
         if _resume.active and not _resume.reached:
-            if module_name != _resume.module or test_name != _resume.test_name:
+            if record.name != _resume.module or test_name != _resume.test_name:
                 continue
             _resume.reached = True
-        run_module_tests_by_name(opts, module_name, test_name)
+        run_module_tests_by_name(opts, record.name, test_name,
+                                 expected_root=record.path)
 
 
 # ---------------------------------------------------------------------------
@@ -1311,8 +1348,8 @@ def _push_refused(opts):
 # ---------------------------------------------------------------------------
 # Parallel module runner
 # ---------------------------------------------------------------------------
-def _run_module_in_thread(opts_template, module_name, test_root, parent_test_root, tracker):
-    """Run all test files for a module. Called from a thread."""
+def _run_module_in_thread(opts_template, record, tracker):
+    """Run all test files for a module record. Called from a thread."""
     # Each thread gets its own opts copy with its own client
     opts = copy.copy(opts_template)
     opts.client = testit.client.RestClient(opts.host, logger=opts.logger)
@@ -1331,13 +1368,14 @@ def _run_module_in_thread(opts_template, module_name, test_root, parent_test_roo
     helpers._set_display_fn(_on_event)
 
     tracker.start()
-    test_files, module_path = _discover_test_files(module_name, test_root, parent_test_root)
+    test_files = _discover_record_files(record)
     try:
         for test_name, file_path in test_files:
             if _abort_event.is_set():
                 helpers.mark_aborted()
                 raise helpers.TestitAbort()
-            run_module_tests_by_name(opts, module_name, test_name)
+            run_module_tests_by_name(opts, record.name, test_name,
+                                     expected_root=record.path)
     except helpers.TestitAbort:
         pass
     finally:
@@ -1348,44 +1386,99 @@ def _run_module_in_thread(opts_template, module_name, test_root, parent_test_roo
         if display_ref:
             display_ref.refresh()
 
-    return module_name
+    return record.name
 
 
 # Module-level ref so threads can access the display
 display_ref = None
 
 
+ORIGIN_REPO = "django_mojo"
+ORIGIN_CONSUMER = "consumer"
+
+
+def _make_record(kind, name, origin, path, test_file=None):
+    """One collected unit of work, with its ownership resolved up front.
+
+    kind: "module" (a package directory) or "file" (a single -t pkg.file spec)
+    name: the package name
+    origin: ORIGIN_REPO for django-mojo's own tests/, ORIGIN_CONSUMER for the
+        application test root
+    path: the absolute package directory this record executes from
+    test_file: the file's test name for kind="file", else None
+    has_init: whether the resolved directory carries an __init__.py — the
+        fail-closed policy state needs this distinction explicitly
+    """
+    return objict(
+        kind=kind,
+        name=name,
+        origin=origin,
+        path=str(path),
+        test_file=test_file,
+        has_init=os.path.exists(os.path.join(path, "__init__.py")),
+    )
+
+
+def _module_record(name, test_root, parent_test_root, kind="module", test_file=None):
+    """Resolve one requested name to a record. Consumer root wins when both
+    carry the name (the historical explicit-spec precedence); the path is
+    recorded so every later stage uses this exact resolution instead of
+    re-deriving its own."""
+    consumer_path = os.path.join(test_root, name)
+    if os.path.exists(consumer_path):
+        return _make_record(kind, name, ORIGIN_CONSUMER, consumer_path, test_file)
+    if parent_test_root:
+        parent_path = os.path.join(parent_test_root, name)
+        if os.path.exists(parent_path):
+            return _make_record(kind, name, ORIGIN_REPO, parent_path, test_file)
+    # Nonexistent either way — keep the consumer path so discovery reports
+    # the same empty result it always has.
+    return _make_record(kind, name, ORIGIN_CONSUMER, consumer_path, test_file)
+
+
 def _collect_modules(opts, test_root, parent_test_root):
-    """Collect all module names to run, respecting filters and ignore lists."""
-    modules = []
+    """Collect the records to run, respecting filters and ignore lists.
+
+    Returns objict records (see _make_record). A consumer package sharing a
+    repository package's name is skipped with a loud warning instead of
+    silently shadowing or duplicating it — one import name cannot bind two
+    packages in one process, and the historical behavior (discovering the
+    consumer's files while importing the repository's code) ran a chimera of
+    the two.
+    """
+    records = []
     ignored = opts.ignore_modules or []
 
     if opts.test_modules:
-        # Specific modules requested
         for test_spec in opts.test_modules:
             if '.' in test_spec:
-                # Specific file — run directly (not parallelizable at module level)
-                modules.append(("file", test_spec))
+                module_name, test_name = test_spec.split('.', 1)
+                records.append(_module_record(
+                    module_name, test_root, parent_test_root,
+                    kind="file", test_file=test_name))
             else:
                 if test_spec not in ignored:
-                    modules.append(("module", test_spec))
-        return modules
+                    records.append(_module_record(
+                        test_spec, test_root, parent_test_root))
+        return records
 
-    parent_test_modules = None
+    repo_names = set()
     if parent_test_root and os.path.exists(parent_test_root):
         parent_test_modules = sorted([
             d for d in os.listdir(parent_test_root)
             if os.path.isdir(os.path.join(parent_test_root, d))
             and not d.startswith("__")
         ])
-
-    if parent_test_modules and not opts.nomojo:
-        for name in parent_test_modules:
-            if name not in ignored:
-                modules.append(("module", name))
+        if not opts.nomojo:
+            for name in parent_test_modules:
+                if name not in ignored:
+                    records.append(_make_record(
+                        "module", name, ORIGIN_REPO,
+                        os.path.join(parent_test_root, name)))
+                    repo_names.add(name)
 
     if not opts.onlymojo:
-        app_test_root = os.path.join(paths.APPS_ROOT, "tests")
+        app_test_root = test_root
         if os.path.exists(app_test_root):
             app_modules = sorted([
                 d for d in os.listdir(app_test_root)
@@ -1393,17 +1486,26 @@ def _collect_modules(opts, test_root, parent_test_root):
                 and not d.startswith("__")
             ])
             for name in app_modules:
-                if name not in ignored:
-                    modules.append(("module", name))
+                if name in ignored:
+                    continue
+                if name in repo_names:
+                    print(
+                        f"\n  !! consumer test package '{name}' shares a "
+                        "repository package's name and is SKIPPED — rename it; "
+                        "one import name cannot execute two packages in one "
+                        "process")
+                    continue
+                records.append(_make_record(
+                    "module", name, ORIGIN_CONSUMER,
+                    os.path.join(app_test_root, name)))
 
-    return modules
+    return records
 
 
-def _count_module_tests(module_name, test_root, parent_test_root):
-    """Count total tests in a module by scanning all test files."""
-    test_files, module_path = _discover_test_files(module_name, test_root, parent_test_root)
+def _count_record_tests(record):
+    """Count total tests in a module record by scanning its test files."""
     total = 0
-    for test_name, file_path in test_files:
+    for test_name, file_path in _discover_record_files(record):
         total += _count_tests_in_file(file_path)
     return total
 
@@ -1491,37 +1593,33 @@ def main(opts):
                 else:
                     add_from_directory(test_spec, test_root)
         else:
-            all_modules = _collect_modules(opts, test_root, parent_test_root)
-            for kind, name in all_modules:
-                if kind == "module":
-                    add_from_directory(name, test_root)
+            all_records = _collect_modules(opts, test_root, parent_test_root)
+            for record in all_records:
+                if record.kind == "module":
+                    add_from_directory(record.name, test_root)
 
         print_extra_flags(extras)
         return
 
-    # Collect modules
-    all_modules = _collect_modules(opts, test_root, parent_test_root)
+    # Collect module records
+    all_records = _collect_modules(opts, test_root, parent_test_root)
 
     # Determine if we use rich UI
     use_parallel = opts.jobs > 1 and not opts.verbose
     use_rich = HAS_RICH and not opts.plain and not opts.verbose and use_parallel
 
     # Load module configs and separate serial vs parallel
-    parallel_modules = []
-    serial_modules = []
-    skipped_modules = []  # (name, reason, test_count)
-    file_specs = []
+    parallel_modules = []   # records
+    serial_modules = []     # records
+    skipped_modules = []    # (name, reason, test_count)
+    file_specs = []         # records with kind="file"
 
-    for kind, name in all_modules:
-        if kind == "file":
-            file_specs.append(name)
+    for record in all_records:
+        if record.kind == "file":
+            file_specs.append(record)
             continue
 
-        # Find module path for config loading
-        module_path = os.path.join(test_root, name)
-        if not os.path.exists(module_path) and parent_test_root:
-            module_path = os.path.join(parent_test_root, name)
-        config = _load_module_config(module_path)
+        config = _load_module_config(record.path)
 
         # Check app requirements
         if config.requires_apps:
@@ -1535,8 +1633,8 @@ def main(opts):
                         missing_app = app_label
                         break
                 if skip:
-                    total = _count_module_tests(name, test_root, parent_test_root)
-                    skipped_modules.append((name, f"requires app: {missing_app}", total))
+                    total = _count_record_tests(record)
+                    skipped_modules.append((record.name, f"requires app: {missing_app}", total))
                     continue
             except Exception:
                 pass
@@ -1546,15 +1644,15 @@ def main(opts):
             required = set(_normalize_extra_value(config.requires_extra))
             provided = set(opts.extra_list or [])
             if not required.intersection(provided):
-                total = _count_module_tests(name, test_root, parent_test_root)
+                total = _count_record_tests(record)
                 flags = ", ".join(sorted(required))
-                skipped_modules.append((name, f"requires --extra {flags}", total))
+                skipped_modules.append((record.name, f"requires --extra {flags}", total))
                 continue
 
         if config.serial or opts.jobs <= 1:
-            serial_modules.append(name)
+            serial_modules.append(record)
         else:
-            parallel_modules.append(name)
+            parallel_modules.append(record)
 
     # --- Execute ---
     display = None
@@ -1564,14 +1662,12 @@ def main(opts):
         display_ref = display
 
         # Add trackers for parallel modules
-        for name in parallel_modules:
-            total = _count_module_tests(name, test_root, parent_test_root)
-            display.add_module(name, total)
+        for record in parallel_modules:
+            display.add_module(record.name, _count_record_tests(record))
 
         # Add trackers for serial modules
-        for name in serial_modules:
-            total = _count_module_tests(name, test_root, parent_test_root)
-            display.add_module(name, total)
+        for record in serial_modules:
+            display.add_module(record.name, _count_record_tests(record))
 
         # Add trackers for skipped modules — count tests and mark all as skipped
         for name, reason, total in skipped_modules:
@@ -1592,13 +1688,13 @@ def main(opts):
             if parallel_modules:
                 with ThreadPoolExecutor(max_workers=opts.jobs) as executor:
                     futures = {}
-                    for name in parallel_modules:
-                        tracker = display.trackers[name]
+                    for record in parallel_modules:
+                        tracker = display.trackers[record.name]
                         future = executor.submit(
                             _run_module_in_thread,
-                            opts, name, test_root, parent_test_root, tracker,
+                            opts, record, tracker,
                         )
-                        futures[future] = name
+                        futures[future] = record.name
 
                     for future in as_completed(futures):
                         try:
@@ -1607,10 +1703,10 @@ def main(opts):
                             pass
 
             # Run serial modules sequentially
-            for name in serial_modules:
+            for record in serial_modules:
                 if _abort_event.is_set():
                     break
-                tracker = display.trackers[name]
+                tracker = display.trackers[record.name]
 
                 def _make_event_handler(t, d):
                     def _on_event(event, **kwargs):
@@ -1625,7 +1721,7 @@ def main(opts):
                 helpers._set_display_fn(_make_event_handler(tracker, display))
                 tracker.start()
                 try:
-                    run_tests_for_module(opts, name, test_root, parent_test_root)
+                    run_tests_for_record(opts, record)
                 except helpers.TestitAbort:
                     break
                 finally:
@@ -1649,10 +1745,10 @@ def main(opts):
         display_ref = None
 
         # Run file specs first (sequential)
-        for spec in file_specs:
-            module_name, test_name = spec.split('.', 1)
+        for record in file_specs:
             try:
-                run_module_tests_by_name(opts, module_name, test_name)
+                run_module_tests_by_name(opts, record.name, record.test_file,
+                                         expected_root=record.path)
             except helpers.TestitAbort:
                 pass
 
@@ -1660,13 +1756,13 @@ def main(opts):
         if parallel_modules:
             with ThreadPoolExecutor(max_workers=opts.jobs) as executor:
                 futures = {}
-                for name in parallel_modules:
-                    tracker = _ModuleTracker(name, 0)
+                for record in parallel_modules:
+                    tracker = _ModuleTracker(record.name, 0)
                     future = executor.submit(
                         _run_module_in_thread,
-                        opts, name, test_root, parent_test_root, tracker,
+                        opts, record, tracker,
                     )
-                    futures[future] = name
+                    futures[future] = record.name
                 for future in as_completed(futures):
                     try:
                         future.result()
@@ -1674,12 +1770,12 @@ def main(opts):
                         pass
 
         # Run serial modules sequentially
-        for name in serial_modules:
+        for record in serial_modules:
             if _resume.active and not _resume.reached:
-                if name != _resume.module:
+                if record.name != _resume.module:
                     continue
             try:
-                run_tests_for_module(opts, name, test_root, parent_test_root)
+                run_tests_for_record(opts, record)
             except helpers.TestitAbort:
                 break
 
@@ -1692,20 +1788,20 @@ def main(opts):
         display_ref = None
 
         # Run file specs first
-        for spec in file_specs:
-            module_name, test_name = spec.split('.', 1)
+        for record in file_specs:
             try:
-                run_module_tests_by_name(opts, module_name, test_name)
+                run_module_tests_by_name(opts, record.name, record.test_file,
+                                         expected_root=record.path)
             except helpers.TestitAbort:
                 break
 
         # Run all modules sequentially
-        for name in parallel_modules + serial_modules:
+        for record in parallel_modules + serial_modules:
             if _resume.active and not _resume.reached:
-                if name != _resume.module:
+                if record.name != _resume.module:
                     continue
             try:
-                run_tests_for_module(opts, name, test_root, parent_test_root)
+                run_tests_for_record(opts, record)
             except helpers.TestitAbort:
                 break
 
@@ -1715,10 +1811,10 @@ def main(opts):
     # Handle file specs in rich mode too
     if use_rich and file_specs:
         helpers._set_display_fn(None)
-        for spec in file_specs:
-            module_name, test_name = spec.split('.', 1)
+        for record in file_specs:
             try:
-                run_module_tests_by_name(opts, module_name, test_name)
+                run_module_tests_by_name(opts, record.name, record.test_file,
+                                         expected_root=record.path)
             except helpers.TestitAbort:
                 break
 

@@ -572,3 +572,209 @@ def test_should_reset_test_logs_conditions(opts):
     assert _should_reset_test_logs(objict(resume=False, list_extras=True)) is False, (
         "--list-extras executes no tests and must not clear diagnostic logs"
     )
+
+
+# ---------------------------------------------------------------------------
+# Origin-aware module records (maestro item #1839)
+# ---------------------------------------------------------------------------
+
+def _roots(tmpdir, consumer=(), repo=(), repo_init=True):
+    """Build a consumer root and a parent (repository) root with the named
+    packages. Returns (test_root, parent_test_root)."""
+    import os
+    test_root = os.path.join(tmpdir, "apps_tests")
+    parent_root = os.path.join(tmpdir, "repo_tests")
+    os.makedirs(test_root, exist_ok=True)
+    os.makedirs(parent_root, exist_ok=True)
+    for name in consumer:
+        pkg = os.path.join(test_root, name)
+        os.makedirs(pkg, exist_ok=True)
+        with open(os.path.join(pkg, "__init__.py"), "w") as fh:
+            fh.write("")
+        with open(os.path.join(pkg, "test_a.py"), "w") as fh:
+            fh.write("def test_one(opts):\n    pass\n")
+    for name in repo:
+        pkg = os.path.join(parent_root, name)
+        os.makedirs(pkg, exist_ok=True)
+        if repo_init:
+            with open(os.path.join(pkg, "__init__.py"), "w") as fh:
+                fh.write("")
+        with open(os.path.join(pkg, "test_b.py"), "w") as fh:
+            fh.write("def test_one(opts):\n    pass\n")
+    return test_root, parent_root
+
+
+def _collect(test_root, parent_root, **opt_overrides):
+    from objict import objict
+    from testit.runner import _collect_modules
+    opts = objict(test_modules=[], ignore_modules=[], nomojo=False, onlymojo=False)
+    opts.update(opt_overrides)
+    return _collect_modules(opts, test_root, parent_root)
+
+
+@th.unit_test("runner records: repository and consumer packages carry origin and path")
+def test_records_carry_origin_and_path(opts):
+    import tempfile
+    from testit.runner import ORIGIN_CONSUMER, ORIGIN_REPO
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root, parent_root = _roots(
+            tmpdir, consumer=["test_appthing"], repo=["test_repothing"])
+        records = _collect(test_root, parent_root)
+
+    by_name = {r.name: r for r in records}
+    assert set(by_name) == {"test_appthing", "test_repothing"}, (
+        f"both roots' packages must be collected, got {sorted(by_name)}"
+    )
+    repo = by_name["test_repothing"]
+    consumer = by_name["test_appthing"]
+    assert repo.origin == ORIGIN_REPO and parent_root in repo.path, (
+        f"the repository package must resolve to the parent root, got {repo}"
+    )
+    assert consumer.origin == ORIGIN_CONSUMER and test_root in consumer.path, (
+        f"the consumer package must resolve to the application root, got {consumer}"
+    )
+    assert repo.has_init is True, "repo fixture wrote an __init__.py"
+
+
+@th.unit_test("runner records: a same-named consumer package no longer shadows the repository's")
+def test_records_same_name_dedupe(opts):
+    import tempfile
+    from testit.runner import ORIGIN_REPO
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root, parent_root = _roots(
+            tmpdir, consumer=["test_dup"], repo=["test_dup"])
+        records = _collect(test_root, parent_root)
+
+    dups = [r for r in records if r.name == "test_dup"]
+    assert len(dups) == 1, (
+        f"a same-named package must yield exactly one record, never the "
+        f"historical duplicate pair, got {len(dups)}"
+    )
+    assert dups[0].origin == ORIGIN_REPO and parent_root in dups[0].path, (
+        f"the repository package must win collection over a same-named "
+        f"consumer package, got {dups[0]}"
+    )
+
+
+@th.unit_test("runner records: direct -t pkg.file specs resolve kind, file, and origin")
+def test_records_direct_file_spec(opts):
+    import tempfile
+    from testit.runner import ORIGIN_REPO
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root, parent_root = _roots(tmpdir, repo=["test_only_repo"])
+        records = _collect(test_root, parent_root,
+                           test_modules=["test_only_repo.test_b"])
+
+    assert len(records) == 1, f"one spec must yield one record, got {records}"
+    record = records[0]
+    assert record.kind == "file" and record.test_file == "test_b", (
+        f"a pkg.file spec must produce a file record naming its file, got {record}"
+    )
+    assert record.origin == ORIGIN_REPO and parent_root in record.path, (
+        f"the file spec must resolve to the repository package, got {record}"
+    )
+
+
+@th.unit_test("runner records: a package without __init__.py is recorded explicitly")
+def test_records_missing_init(opts):
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root, parent_root = _roots(
+            tmpdir, repo=["test_no_init"], repo_init=False)
+        records = _collect(test_root, parent_root)
+
+    record = next(r for r in records if r.name == "test_no_init")
+    assert record.has_init is False, (
+        "the record must state the missing __init__.py explicitly — the "
+        "fail-closed policy state depends on it, not on a permissive default"
+    )
+
+
+@th.unit_test("runner records: --nomojo and --onlymojo select by origin")
+def test_records_nomojo_onlymojo(opts):
+    import tempfile
+    from testit.runner import ORIGIN_CONSUMER, ORIGIN_REPO
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root, parent_root = _roots(
+            tmpdir, consumer=["test_appthing"], repo=["test_repothing"])
+        nomojo = _collect(test_root, parent_root, nomojo=True)
+        onlymojo = _collect(test_root, parent_root, onlymojo=True)
+
+    assert [r.origin for r in nomojo] == [ORIGIN_CONSUMER], (
+        f"--nomojo must collect only consumer records, got {nomojo}"
+    )
+    assert [r.origin for r in onlymojo] == [ORIGIN_REPO], (
+        f"--onlymojo must collect only repository records, got {onlymojo}"
+    )
+
+
+@th.unit_test("runner records: targeted -t modules resolve against both roots")
+def test_records_targeted_modules(opts):
+    import tempfile
+    from testit.runner import ORIGIN_CONSUMER, ORIGIN_REPO
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root, parent_root = _roots(
+            tmpdir, consumer=["test_appthing"], repo=["test_repothing"])
+        records = _collect(test_root, parent_root,
+                           test_modules=["test_appthing", "test_repothing"])
+
+    by_name = {r.name: r for r in records}
+    assert by_name["test_appthing"].origin == ORIGIN_CONSUMER, (
+        f"a consumer-root -t module must record consumer origin, got "
+        f"{by_name['test_appthing']}"
+    )
+    assert by_name["test_repothing"].origin == ORIGIN_REPO, (
+        f"a repository-root -t module must record repository origin, got "
+        f"{by_name['test_repothing']}"
+    )
+
+
+@th.unit_test("runner records: discovery for a record uses exactly its resolved path")
+def test_record_discovery_uses_record_path(opts):
+    import tempfile
+    from testit.runner import _discover_record_files
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root, parent_root = _roots(
+            tmpdir, consumer=["test_dup"], repo=["test_dup"])
+        records = _collect(test_root, parent_root)
+        record = next(r for r in records if r.name == "test_dup")
+        files = _discover_record_files(record)
+
+    names = [name for name, _path in files]
+    assert names == ["test_b"], (
+        f"discovery must list the repository package's files (test_b), never "
+        f"the shadowing consumer package's (test_a), got {names}"
+    )
+    assert all(record.path in path for _n, path in files), (
+        f"every discovered file must live under the record's own path, got {files}"
+    )
+
+
+@th.unit_test("runner records: a shadowed import is refused, not run")
+def test_import_shadow_refused(opts):
+    import io
+    import tempfile
+    from contextlib import redirect_stdout
+    from testit.runner import import_module_for_testing
+
+    with tempfile.TemporaryDirectory() as expected_root:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            # `json` imports fine but lives nowhere near expected_root — the
+            # exact shape of a same-named package resolving elsewhere.
+            module = import_module_for_testing("os", "path", expected_root)
+
+    assert module is None, (
+        "an import that resolves outside the record's directory must be "
+        "refused rather than executed"
+    )
+    assert "shadow" in output.getvalue().lower(), (
+        f"the refusal must explain the shadowing, got {output.getvalue()!r}"
+    )
