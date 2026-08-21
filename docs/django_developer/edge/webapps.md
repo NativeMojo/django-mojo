@@ -929,6 +929,15 @@ lock. A deployment row cascade-deleted with its WebApp (safe-delete racing an
 in-flight deploy) makes `webapp_deploy.orchestrate` a superseded no-op rather
 than a crashing `DoesNotExist`.
 
+The two destructive transactions above — take-offline and safe-delete — live in
+`services/webapp_lifecycle.py` (`take_offline`, `teardown`). The REST detach
+handler and `WebApp.on_rest_delete` are thin callers, and so is the Admin
+Assistant, which reaches this same day-2 surface through its `webapp` tool
+domain (`docs/django_developer/assistant/webapp_tools.md`). Chat gets the same
+services under the same authority and the same fresh-auth windows; minting or
+rotating `MOJO_DEPLOY_KEY`, buying a domain, and uploading a build are not
+available there and stay portal-only.
+
 ### Serving: address, certificate, shape, and paths
 
 `services/webapp_serving.py` is the whole domain layer behind the five

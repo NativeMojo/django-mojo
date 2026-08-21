@@ -39,6 +39,7 @@ DOMAIN_DESCRIPTIONS = {
     "planning": "Create and track multi-step execution plans",
     "comms": "Send notifications via SMS, email, push, and in-app channels",
     "skills": "Save, find, and manage learned multi-step procedures",
+    "webapp": "Set up, inspect, troubleshoot and operate web apps: guided setup, addresses and certificates, serving and routes, deployment history and evidence, rollback, take offline and delete. Deploy-key creation, domain purchase and build upload are Admin-only handoffs.",
 }
 
 

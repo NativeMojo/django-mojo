@@ -387,7 +387,7 @@ and deletes terminal rows older than 30 days. Correctness never depends on it;
 
 ## Built-in mutating tools and their Admin twins
 
-38 built-in tools declare `mutates=True`. Every one is gated. The extra gates
+52 built-in tools declare `mutates=True`. Every one is gated. The extra gates
 mirror whatever the visual Admin endpoint that performs the same operation
 requires — so a tool is never easier to reach through chat than through the
 portal.
@@ -407,11 +407,21 @@ portal.
 | `save_skill`, `update_skill`, `delete_skill` | skills | `assistant` | `assistant/rest/assistant.py` skill CRUD | — |
 | `set_metric_gauge` | metrics | `write_metrics` | `metrics/rest/values.py` `value/set` | — |
 | `send_notification` | comms | `comms` | `account/rest/notification.py` — RestMeta CRUD | — |
+| `start_webapp_setup` | webapp | `view_admin` + `authorize` | `edge/rest/webapp_onboarding.py` `onboarding/create` (no step-up) | group WebApp authority in `preview` and the handler |
+| `answer_webapp_setup_step`, `cancel_webapp_setup` | webapp | `view_admin` + `authorize` | `edge/rest/webapp_onboarding.py` `onboarding/choose` / `onboarding/cancel` (`requires_fresh_auth(600)`) | `fresh_auth_seconds=600`; bound operation revision |
+| `attach_webapp_address`, `detach_webapp_address`, `take_webapp_offline`, `set_webapp_serving`, `switch_webapp_certificate`, `request_webapp_certificate`, `add_webapp_route`, `remove_webapp_route`, `rollback_webapp` | webapp | `view_admin` + `authorize` | `edge/rest/web_app.py` (`denies_key_backed_session` + `requires_fresh_auth(600)` + `requires_perms('manage_webapp')`) | `fresh_auth_seconds=600`; `manage_webapp` re-checked per group |
+| `revoke_webapp_deploy_key` | webapp | `view_admin` + `authorize` | `edge/rest/web_app.py` `webapp/revoke_key` (`requires_fresh_auth(300)`) | `fresh_auth_seconds=300`; `str(approval.uuid)` is the service's idempotency key |
+| `delete_webapp` | webapp | `view_admin` + `authorize` | `DELETE edge/webapp/<pk>` (no step-up) | `fresh_auth_seconds=600` — a deliberate **escalation** over the twin |
 
 No built-in tool declares `requires_superuser` or
 `requires_managed_infrastructure` today: the endpoints that carry those gates
 (capacity, deploy, domain purchase) have no assistant tool yet. New tool domains
 that wrap them must declare them.
+
+The `webapp` domain is the first to use `authorize=` in earnest, because WebApp
+authority is group-scoped and the registry's `permission` check is global-only.
+It is also the first to bind a live service revision into `preview.revision` —
+see [webapp_tools.md](webapp_tools.md).
 
 **Adding a mutating tool?** Find the Admin endpoint that performs the same
 operation, read its decorators, and mirror them. An omission here is the whole
