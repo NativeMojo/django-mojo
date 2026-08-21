@@ -128,9 +128,17 @@ function v1Action(ctx, label, route) {
   return {label, href: v1Href(ctx, route), external: true};
 }
 
+// Whether v2's Apps destination is open to this caller. Same predicate as
+// features/apps/feature.js: the webapps block, OR a platform viewer, who
+// reaches the API service and framework rows through the same page.
+function appsEnabled(ctx) {
+  return ctx.features?.webapps?.enabled === true
+    || ctx.features?.platform?.capabilities?.view === true;
+}
+
 function v2Action(ctx, label, route, fallback) {
   const enabled = {
-    apps: ctx.features?.webapps?.enabled === true,
+    apps: appsEnabled(ctx),
     // Infrastructure is three capability-gated tabs, so the block alone is not
     // enough: a caller with the platform block and none of the three grants
     // gets no Infrastructure entry, and must be sent to v1 like anyone else.
@@ -150,6 +158,18 @@ function v2Action(ctx, label, route, fallback) {
   }[route] === true;
   if (enabled) return {label, href: `#/${route}`, external: false};
   return fallback ? v1Action(ctx, label, fallback) : null;
+}
+
+// Infrastructure is three capability-gated tabs behind one route, so a link to
+// one of them carries the tab as route state — and is offered only when THAT
+// tab is readable. A caller without it goes to the current Admin's own page for
+// the same subject, and the link says so, exactly like any other v1 fallback.
+function infrastructureAction(ctx, label, tab, fallback) {
+  if (ctx.features?.platform?.enabled === true
+    && ctx.features.platform.capabilities?.[tab] === true) {
+    return {label, href: routeHref('infrastructure', {tab}), external: false};
+  }
+  return v1Action(ctx, label, fallback);
 }
 
 // Activity is Home's own sub-page, so it takes a tab rather than a route: the
@@ -215,7 +235,7 @@ function blockersFrom(ctx, report) {
       add({tone: 'warn', name: `A major database upgrade is available (${data.drift.available_major})`,
         copy: `This installation runs ${[data.engine, data.version].filter(Boolean).join(' ') || 'an older major version'}`
           + `${deadline}. Upgrades of this size are planned, not rushed.`,
-        action: v1Action(ctx, 'Open Maintenance', 'maintenance')});
+        action: infrastructureAction(ctx, 'Open Maintenance', 'maintenance', 'maintenance')});
     }
   }
 
@@ -300,7 +320,7 @@ function blockersFrom(ctx, report) {
     add({tone: 'warn', name: `django-mojo ${build.latest} is available`,
       copy: `This fleet runs ${build.installed || 'an older build'}; framework `
         + 'releases carry security fixes.',
-      action: v1Action(ctx, 'Open Maintenance', 'maintenance')});
+      action: infrastructureAction(ctx, 'Open Maintenance', 'maintenance', 'maintenance')});
   }
 
   const email = reported(sources.email);
@@ -555,7 +575,9 @@ function syncDeploymentOperation(ctx, report) {
     title: sha ? `Deploying ${sha}` : 'Deploying the platform',
     phase: `the platform reports: ${item.status}`,
     startedAt: Date.parse(item.created) || Date.now(),
-    href: v1Href(ctx, 'deployments'),
+    // The API service's deploy history is v2's Apps page now — the same rows,
+    // the same drill-in. Only a caller who cannot open it is sent to v1.
+    href: appsEnabled(ctx) ? routeHref('apps') : v1Href(ctx, 'deployments'),
   });
   return true;
 }

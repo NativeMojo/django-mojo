@@ -162,6 +162,46 @@ def _releases():
     ]
 
 
+def _aliases():
+    """Every address this app answers on — mojo/apps/edge/services/webapp_alias.status_rows."""
+    return {"webapp": 42, "addresses": [
+        {"role": "primary", "vhost": 31, "hostname": "portal.nativemojo.com",
+         "domain": {"id": 11, "name": KNOWN_DOMAIN, "provider": "route53"},
+         "dns": "managed", "enabled": True, "certificate": dict(ACTIVE_CERT)},
+        {"role": "alias", "vhost": 32, "hostname": "www.portal.example",
+         "domain": {"id": 12, "name": "portal.example", "provider": "external"},
+         "dns": "external", "enabled": True,
+         "certificate": {"status": "pending", "not_after": None}},
+    ]}
+
+
+def _serving():
+    """How the app is reached — mojo/apps/edge/services/webapp_serving.serving_for."""
+    return {
+        "schema_version": 1,
+        "webapp": {"id": 42, "slug": "customer-portal", "display_name": "Customer Portal"},
+        "address": {"vhost": 31, "hostname": "portal.nativemojo.com",
+                    "https_origin": "https://portal.nativemojo.com",
+                    "domain": {"id": 11, "name": KNOWN_DOMAIN, "provider": "route53"},
+                    "dns": "managed",
+                    "wildcard": {"covered": True, "name": f"*.{KNOWN_DOMAIN}"}},
+        "certificate": {"id": 21, "common_name": f"*.{KNOWN_DOMAIN}",
+                        "sans": [f"*.{KNOWN_DOMAIN}", KNOWN_DOMAIN],
+                        "status": "active", "not_after": "2030-01-16T08:00:00Z",
+                        "renew_after": "2029-12-16T08:00:00Z", "days_remaining": 1243,
+                        "wildcard": True, "dedicated": None,
+                        "dedicated_supported": True, "dedicated_reason": None},
+        "serving": {"kind": "site_api", "pool": "edge-us-east", "pools": ["edge-us-east", "edge-eu-west"],
+                    "spa": True, "routes_supported": True},
+        "routes": [
+            {"id": 4, "path_prefix": "/api", "upstream": {"id": 2, "name": "portal-api"}, "managed": False},
+            {"id": 5, "path_prefix": "/auth", "upstream": {"id": 3, "name": "mojo-auth"}, "managed": True},
+        ],
+        "upstreams": [{"id": 2, "name": "portal-api"}, {"id": 3, "name": "mojo-auth"}],
+        "aliases": [{"vhost": 32, "hostname": "www.portal.example"}],
+    }
+
+
 def get(handler, parsed):
     path = parsed.path
     query = parse_qs(parsed.query)
@@ -177,10 +217,18 @@ def get(handler, parsed):
         return 200, _summaries(getattr(handler, "deployments_state", "mixed"))
     if path == "/api/edge/webapp/summary":
         return 200, _summary()
-    if path == "/api/edge/webapp/deployment":
+    # Both spellings: the fixture has always answered the /webapp/-prefixed
+    # paths, but the Admin's own app page reads the model endpoints
+    # (/api/edge/deployment, /api/edge/release), so those 404'd in the preview
+    # and the Deploys tab could never be exercised.
+    if path in ("/api/edge/webapp/deployment", "/api/edge/deployment"):
         return 200, _deployments()
-    if path == "/api/edge/webapp/release":
+    if path in ("/api/edge/webapp/release", "/api/edge/release"):
         return 200, _releases()
+    if path == "/api/edge/webapp/aliases":
+        return 200, _aliases()
+    if path == "/api/edge/webapp/serving":
+        return 200, _serving()
     if path == "/api/edge/webapp/health":
         return 200, {"webapp": 42, "status": "healthy",
                      "checked": "2026-08-10T18:05:00Z", "detail": "HTTP 200"}

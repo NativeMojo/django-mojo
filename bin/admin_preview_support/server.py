@@ -711,9 +711,17 @@ class PreviewHandler(BaseHTTPRequestHandler):
             return self._send({"webapp": 42, "secret_name": "MOJO_DEPLOY_KEY", "status": self._key_status()})
         if path == "/api/edge/webapp/onboarding/options":
             new_intent = parse_qs(parsed.query).get("group_intent") == ["new"]
+            # A brand-new workspace owns no domain yet, so name-first creation
+            # cannot apply to it — the wizard's own not-ready panel is the right
+            # answer there. An existing workspace resolves the apps domain, which
+            # is what the one-input name step needs to preview a hostname.
             return self._send({"schema_version": 1, "buckets": ["mojo-releases"],
                                "environments": ["production", "staging", "preview", "development"],
                                "cname_target": "edge.nativemojo.com",
+                               "apps_domain": None if new_intent else {
+                                   "id": 11, "name": "nativemojo.com", "provider": "route53"},
+                               "apps_domain_error": ("This workspace has no domain managed here yet."
+                                                     if new_intent else None),
                                "group_intent": "new" if new_intent else "existing",
                                "github_connected": False if new_intent else True,
                                "limits": {"attempts": 8, "lease_seconds": 90}})

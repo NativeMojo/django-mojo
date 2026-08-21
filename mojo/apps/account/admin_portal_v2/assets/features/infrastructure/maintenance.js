@@ -46,10 +46,12 @@ const KIND_LABELS = {
   'rds-instance': 'database', 'rds-cluster': 'cluster', elasticache: 'cache',
 };
 
-// Deployments has no v2 screen yet, so the one link out of this tab goes to
-// the current Admin and says so rather than dropping the operator into
-// different chrome unannounced.
+// Deploy history is v2's Apps page — the API service row and its drill-in.
+// A caller who cannot open that destination (neither the webapps block nor
+// platform view) still gets the current Admin's own page for it.
 function deploymentsHref(ctx) {
+  if (ctx.features?.webapps?.enabled === true
+    || ctx.features?.platform?.capabilities?.view === true) return '#/apps';
   return `${ctx.admin_path || '/admin/'}#/deployments`;
 }
 
@@ -366,7 +368,9 @@ export async function maintenanceTab(ctx, signal = null) {
         mono: true, detail: running.text,
         detailTone: running.tone === 'danger' ? 'danger' : 'warning',
         action: running.tone === 'warn'
-          ? {label: 'Deployments', href: deploymentsHref(ctx)} : null});
+          // 'Deploy history' names what is on the other end whichever portal
+          // owns it — v2's Apps page, or the current Admin's Deployments.
+          ? {label: 'Deploy history', href: deploymentsHref(ctx)} : null});
     }
     if (!framework) {
       return statusRow({tone: 'muted', name: 'django-mojo', value: installed,

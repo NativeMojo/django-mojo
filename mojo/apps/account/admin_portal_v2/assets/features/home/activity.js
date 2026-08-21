@@ -21,7 +21,7 @@ import {api, apiEnvelope, badge, formatDate, h, icon, statusTone, TableView} fro
 import {backPill} from '../../app.js';
 import {copyButton, runAction} from '../../components/actions.js';
 import {openInspector} from '../../components/overlays.js';
-import {decodeRouteState, restoreReturnLocation, routeHref} from '../../components/routes.js';
+import {decodeRouteState, restoreReturnLocation, returnLocation, routeHref} from '../../components/routes.js';
 import {emptyState, errorState, loadingState, sectionTabs} from '../../components/views.js';
 
 const PAGE_SIZES = [10, 25, 50];
@@ -254,13 +254,31 @@ function copyRecordButton(row) {
  * A record this row names, if the portal has somewhere to open it.
  *
  * Incidents, events, tickets and logs are other tabs of this very page, so
- * those links stay in v2. Users, groups, apps and domains are screens v2 has
- * not built yet — those open in the current Admin, and the button says so
- * rather than dropping the operator into different chrome unannounced.
+ * those links stay in v2. So does a WebApp: Apps is built, and the app's own
+ * page takes `?webapp=<id>` — the link carries this view's location in
+ * `?return=` so the app page can offer the way back. Users, groups and domains
+ * are screens v2 has not built yet; those open in the current Admin, and the
+ * button says so rather than dropping the operator into different chrome
+ * unannounced.
  */
+// Whether v2's Apps destination is open to this caller. Same predicate as
+// features/apps/feature.js — stated here rather than imported, because Home's
+// page.js already imports this file and a second import back would make the two
+// modules circular for one boolean.
+function appsEnabled(ctx) {
+  return ctx.features?.webapps?.enabled === true
+    || ctx.features?.platform?.capabilities?.view === true;
+}
+
 function knownReference(ctx, row) {
   const name = String(row.model_name || '').toLowerCase();
   const rawId = String(row.model_id || '');
+  if (name === 'webapp' && /^\d+$/.test(rawId) && appsEnabled(ctx)) {
+    return h('div', {class: 'activity-reference'},
+      h('a', {class: 'button ghost compact', href: routeHref('apps', {
+        webapp: rawId, return: returnLocation(),
+      })}, `Open WebApp ${rawId}`));
+  }
   const destinations = {
     user: ['users', 'User'], group: ['groups', 'Group'], webapp: ['deployments', 'WebApp'],
     domain: ['domains', 'Domain'], platformdeployment: ['deployments', 'Deployment'],
