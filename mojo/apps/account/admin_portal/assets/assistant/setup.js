@@ -105,7 +105,7 @@ export function mountSetup({ctx, panel, onBack}) {
         h('div', {}, h('strong', {text: 'Provider key'}), h('span', {text: keyLine})),
         verify),
       h('label', {class: 'field'}, h('span', {text: 'Replace the API key'}), apiKey,
-        h('small', {text: 'Stored encrypted. It is never shown again, here or anywhere else.'})),
+        h('small', {text: 'Stored encrypted in the database. It is never shown again, here or anywhere else.'})),
       h('label', {class: 'check-field'}, clearKey,
         h('span', {text: 'Clear the stored key on save'})),
       h('label', {class: 'field'}, h('span', {text: 'Model'}), model, choices,

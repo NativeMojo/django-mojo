@@ -238,20 +238,35 @@ function renderAlert(block) {
 }
 
 function safeDownload(value) {
-  // Absolute https only, and no embedded credentials. export_data legitimately
-  // returns either an installation shortlink or a storage-backend URL, so a
-  // same-origin rule would break real installations -- the destination host is
-  // shown beside the filename instead.
+  // SAME-ORIGIN ONLY.
+  //
+  // A `file` block is model-emittable: `file` is in the server's
+  // VALID_BLOCK_TYPES and _validate_block only checks that `filename` and `url`
+  // are truthy, so the model can emit any URL it likes -- including one it read
+  // out of a tool result. "The URL comes from export_data" was the premise this
+  // used to be built on, and it is false.
+  //
+  // So the anchor is drawn only for this installation's own origin. A storage
+  // backend or shortlink on another host still renders, as copyable text with
+  // its hostname shown -- the operator decides, in a superuser console, whether
+  // to follow it.
   try {
-    const url = new URL(String(value));
+    const url = new URL(String(value), location.href);
     if (url.protocol !== 'https:' || url.username || url.password) return null;
+    if (url.origin !== location.origin) return null;
     return url;
   } catch (_) { return null; }
+}
+
+function foreignHost(value) {
+  // The destination, for the inert branch. Never a link, only a label.
+  try { return new URL(String(value), location.href).hostname; } catch (_) { return ''; }
 }
 
 function renderFile(block) {
   if (!block.filename || !block.url) return null;
   const url = safeDownload(block.url);
+  const host = url ? '' : foreignHost(block.url);
   const facts = ['size', 'format', 'row_count', 'expires_in']
     .filter((key) => block[key] !== undefined && block[key] !== null)
     .map((key) => `${key.replace('_', ' ')}: ${text(block[key])}`);
@@ -261,7 +276,9 @@ function renderFile(block) {
       referrerpolicy: 'no-referrer', text: `Download from ${url.hostname}`})
       : h('span', {text: `Download link (copy it by hand): ${text(block.url)}`}),
     facts.length ? h('span', {text: facts.join(' · ')}) : null,
-    url ? null : h('span', {text: 'The link was not an absolute https address, so it is not clickable here.'})));
+    url ? null : h('span', {text: host
+      ? `This link points at ${host}, outside this Admin, so it is shown as text rather than a link.`
+      : 'The link was not an absolute https address, so it is not clickable here.'})));
 }
 
 function renderContext(block) {

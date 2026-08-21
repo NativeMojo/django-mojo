@@ -146,6 +146,24 @@ def test_assistant_keys_are_catalog_protected(opts):
         "the protected-writer escape no longer requires the writer to name this row's key"
 
 
+@th.django_unit_test("the Assistant setup body never reaches the generic request logs")
+def test_assistant_request_redaction(opts):
+    from unittest import mock
+
+    from mojo.helpers import request as request_helpers
+
+    # The save and verify bodies carry an Anthropic API key. Without a label
+    # here, LOGIT_DB_ALL / LOGIT_FILE_ALL write the raw body into the logit.Log
+    # table -- readable at manage_logs / view_logs / security / admin, well below
+    # the superuser tier that is allowed to set the key -- and into requests.log.
+    request = mock.Mock(path="/api/account/admin/assistant", method="POST")
+    assert request_helpers.sensitive_body_label(request) == "assistant_setup", \
+        "the Assistant setup body can enter generic request logs in plaintext"
+    trailing = mock.Mock(path="/api/account/admin/assistant/", method="POST")
+    assert request_helpers.sensitive_body_label(trailing) == "assistant_setup", \
+        "a trailing slash escapes the sensitive-body classification"
+
+
 @th.django_unit_test("the picker never goes empty when the model catalogue is unavailable")
 def test_model_choices_fallback(opts):
     from mojo.helpers import llm
@@ -260,6 +278,11 @@ def test_assistant_transport_contract(opts):
     assert not re.search(r"cancel", code, re.IGNORECASE), \
         "the transport gained a cancel path — the server exposes no way to abort " \
         "a turn, so no control here may claim to"
+    assert "APPROVAL_TIMEOUT_MS = 60000" in code and "approval_timeout" in code, \
+        "an approval decision waits forever: a socket that drops between send " \
+        "and result would leave both card controls disabled for good"
+    assert "clearTimeout(entry.timer)" in code, \
+        "the bounded approval wait is never cleared, so a settled decision leaks its timer"
     assert "isOwned(requestId)" in code, \
         "inbound events are not filtered by a request_id this transport minted; " \
         "send_event_to_user fans out to every socket the user holds"
@@ -276,6 +299,31 @@ def test_assistant_markdown_contract(opts):
         "the markdown input bounds are gone"
     assert "textContent" in markdown and "createElement" in markdown, \
         "markdown.js no longer builds nodes explicitly"
+
+
+@th.django_unit_test("a model-emitted file URL never becomes a link to another host")
+def test_assistant_file_block_is_same_origin_only(opts):
+    blocks = _code((PANEL / "blocks.js").read_text())
+
+    # `file` is in the server's VALID_BLOCK_TYPES and _validate_block only
+    # checks that filename and url are truthy, so the model can emit any URL it
+    # read out of a tool result. In a superuser console that must not be a
+    # click target.
+    assert "url.origin !== location.origin" in blocks, \
+        "renderFile no longer restricts the anchor to this installation's own origin"
+    assert "url.protocol !== 'https:'" in blocks and "url.username || url.password" in blocks, \
+        "the file URL check dropped its scheme or embedded-credential guard"
+    anchor = blocks.split("function renderFile", 1)[1].split("function renderContext", 1)[0]
+    assert anchor.count("h('a'") == 1, \
+        f"renderFile builds more than one anchor: {anchor.count(chr(104) + chr(40) + chr(39) + 'a' + chr(39))}"
+    assert "rel: 'noopener noreferrer'" in anchor and "referrerpolicy: 'no-referrer'" in anchor, \
+        "the same-origin anchor lost its rel/referrerpolicy hardening"
+    # The foreign branch is text: the hostname is named, and no anchor is built
+    # anywhere the safeDownload check returned null.
+    assert "url ? h('a'" in anchor and "h('span', {text: `Download link (copy it by hand)" in anchor, \
+        "a foreign-host file URL no longer degrades to copyable text"
+    assert "foreignHost" in blocks, \
+        "the inert branch no longer names the destination host"
 
 
 @th.django_unit_test("the panel is a docked region, a narrow dialog, and never on top")

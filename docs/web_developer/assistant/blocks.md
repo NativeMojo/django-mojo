@@ -599,13 +599,22 @@ problem:
 | `chart` | ≤ 60 labels, ≤ 8 series, every series length must equal the label count; non-finite values are **gaps, never zeros**; a `color`/`colors` entry is honoured only when it matches `/^#[0-9a-f]{3,8}$/i`, because it lands in an attribute |
 | `stat` | ≤ 12 items |
 | `list` | ≤ 60 items |
-| `file` | The link is drawn only for an absolute `https:` URL with no embedded credentials, and the destination hostname is shown beside the filename |
+| `file` | The link is drawn only for a **same-origin** `https:` URL with no embedded credentials. Any other host renders as copyable text with its hostname named, never as an anchor |
 | `context` | ≤ 40 references, rendered inert — no route is guessed from a model name |
 | `progress` | ≤ 40 steps |
 
 A block that fails validation renders as one muted line naming its type, rather
 than being silently dropped: an operator who is told nothing cannot tell "the
 assistant said nothing" from "the client ate it".
+
+> **`file` URLs are not trustworthy.** `file` is a model-emittable block type
+> and the server validates only that `filename` and `url` are present, so a URL
+> the model read out of a tool result can arrive here looking like an export.
+> The built-in Admin therefore links only its own origin and shows every other
+> host as text. In v1 that means a storage-backend export URL is **copyable
+> text, not a link**. Any client rendering into a privileged console should do
+> the same rather than trusting the block's provenance.
+
 
 ### Real-Time Updates via WebSocket
 

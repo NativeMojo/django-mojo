@@ -26,6 +26,10 @@ const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 const RATE_LIMITED_CODE = 4429;
 const MAX_FAILURES = 8;
 const OWNED_IDS = 24;
+// A decision waits this long for its ack/result before the card is handed back
+// to the operator. Without it, a socket that drops between send and result
+// leaves the entry pending forever and both buttons aria-disabled for good.
+const APPROVAL_TIMEOUT_MS = 60000;
 
 function socketUrl() {
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -123,13 +127,21 @@ export function createTransport({onEvent, onStatus = () => {}} = {}) {
     reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, BACKOFF_MS[index]);
   }
 
+  function settleApproval(requestId, payload) {
+    const entry = approvals.get(requestId);
+    if (!entry) return;
+    approvals.delete(requestId);
+    clearTimeout(entry.timer);
+    entry.settle(payload);
+  }
+
   function handleAssistantEvent(payload) {
     const requestId = payload.request_id;
-    const approval = approvals.get(requestId);
-    if (approval) {
+    if (approvals.has(requestId)) {
+      // The ack only says the decision was accepted for processing; the result
+      // is still coming, so it must not settle the wait.
       if (payload.type === 'assistant_approval_ack') return;
-      approvals.delete(requestId);
-      approval(payload);
+      settleApproval(requestId, payload);
       return;
     }
     if (!isOwned(requestId)) return;
@@ -268,7 +280,16 @@ export function createTransport({onEvent, onStatus = () => {}} = {}) {
       if (!this.isReady()) throw new Error('The Assistant connection is not ready.');
       const requestId = mint();
       return new Promise((resolve) => {
-        approvals.set(requestId, resolve);
+        const timer = setTimeout(() => {
+          approvals.delete(requestId);
+          // Not an outcome — the server may well have run it. approval.js
+          // re-reads authoritative state and re-enables the card from that.
+          resolve({type: 'assistant_error', code: 'approval_timeout',
+            action_id: actionId,
+            error: 'No answer yet — this decision may still be in flight. '
+              + 'Reload the conversation to see where it got to.'});
+        }, APPROVAL_TIMEOUT_MS);
+        approvals.set(requestId, {settle: resolve, timer});
         socket.send(JSON.stringify({
           type: 'assistant_approval', conversation_id: conversationId ?? null,
           action_id: actionId, decision, request_id: requestId,
@@ -280,6 +301,7 @@ export function createTransport({onEvent, onStatus = () => {}} = {}) {
       // in flight has nowhere to be delivered.
       pendingTurn = null;
       terminate(terminal || 'The Assistant panel was closed.');
+      approvals.forEach((entry) => clearTimeout(entry.timer));
       approvals.clear();
     },
   };
