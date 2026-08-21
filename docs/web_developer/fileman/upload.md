@@ -86,8 +86,9 @@ curl -X PUT \
   "https://bucket.s3.us-west-2.amazonaws.com/file_xyz?X-Amz-Signature=..."
 ```
 
-The AWS hostname reflects the bucket's configured region. Treat the entire URL
-as opaque; custom S3-compatible storage may return a different host and path.
+The AWS hostname reflects the S3 region configured for the selected
+FileManager. Treat the entire URL as opaque; custom S3-compatible storage may
+return a different host and path.
 
 ### Step 2b: Upload to Direct Token URL (local/other backends)
 
