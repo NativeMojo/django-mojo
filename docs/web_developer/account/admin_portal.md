@@ -146,11 +146,14 @@ key** (rotate `MOJO_DEPLOY_KEY`), and a **Danger** area (take
 offline via `POST /api/edge/webapp/detach_address`, and safe-delete the app —
 **change address moved to Serving**, beside the address it changes; Danger is
 destructive actions only).
-Take-offline and delete both remove every alias address in the same
-transaction — an app that is offline must not still answer on a customer's own
-domain — and `manage_webapp` on the app is not enough to attach an address
-under a **parent** workspace's domain: writing that record or requesting its
-certificate needs manage authority in the workspace that owns the domain.
+Take-offline handles either supported serving shape (`site` or `site_api`) and,
+like delete, removes every alias address in the same transaction — an app that
+is offline must not still answer on a customer's own domain. A malformed link
+to a non-site vhost or an invalid alias kind is refused without unlinking or
+deleting anything. `manage_webapp` on the app is not enough to attach an
+address under a **parent** workspace's domain: writing that record or
+requesting its certificate needs manage authority in the workspace that owns
+the domain.
 
 The **Serving** tab is one read, `GET /api/edge/webapp/serving`, painted as
 four cards — Address, Certificate, How it's served, Routes:
