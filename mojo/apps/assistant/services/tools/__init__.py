@@ -18,3 +18,4 @@ from . import memory  # noqa: F401
 from . import planning  # noqa: F401
 from . import notifications  # noqa: F401
 from . import skills  # noqa: F401
+from . import cloud  # noqa: F401

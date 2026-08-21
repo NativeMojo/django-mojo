@@ -30,17 +30,46 @@ logger = logit.get_logger(__name__, "assistant.log")
 
 
 def _build_request_meta(request):
-    """Slim objict with the HTTP context tools may need (ip, user_agent, path, method).
+    """Slim objict with the HTTP context tools may need.
 
-    Returns None when there is no originating HTTP request (e.g. WS path).
+    ``ip``, ``user_agent``, ``path``, ``method`` — plus the two facts a tool
+    needs to tell an interactive operator session from a machine credential:
+    ``bearer`` (the credential prefix; only ``"bearer"`` is an interactive JWT)
+    and ``key_backed`` (an ApiKey or a group-scoped token, whoever it acts as).
+    Both fail CLOSED: an unreadable request is treated as key-backed, because
+    the tools that read these refuse anything that is not provably interactive.
+
+    Returns None when there is no originating request at all.
     """
     if request is None:
         return None
+    from mojo.helpers import request as request_helpers
+
+    try:
+        key_backed = bool(request_helpers.is_key_backed_session(request))
+    except Exception:
+        key_backed = True
     return objict.objict(
         ip=getattr(request, "ip", None),
         user_agent=getattr(request, "META", {}).get("HTTP_USER_AGENT", ""),
         path=getattr(request, "path", ""),
         method=getattr(request, "method", ""),
+        bearer=getattr(request, "bearer", None),
+        key_backed=key_backed,
+    )
+
+
+def build_ws_request_meta(bearer):
+    """The WebSocket's minimal request_meta, from the server-stamped `_bearer`.
+
+    The realtime consumer stamps ``_bearer`` on every delivered message, always
+    overwriting what the client sent, so it is a server fact rather than a
+    claim. Anything that is not the literal ``"bearer"`` — an api key, a group
+    token, or nothing at all — is key-backed here.
+    """
+    return objict.objict(
+        ip="websocket", user_agent="", path="websocket", method="websocket",
+        bearer=bearer, key_backed=bearer != "bearer",
     )
 
 
@@ -1473,11 +1502,16 @@ def run_assistant(
         }
 
 
-def run_assistant_ws(user, message, conversation_id, on_event=None):
+def run_assistant_ws(user, message, conversation_id, on_event=None,
+                     request_meta=None):
     """
     WebSocket variant — conversation already exists and user message
     is already stored by the WS handler.  Skips conversation creation
     and message storage, delegates to the core loop.
+
+    ``request_meta`` is the socket's minimal context (see
+    ``build_ws_request_meta``), so a tool can tell an interactive JWT session
+    from a machine credential on this transport too.
     """
     from mojo.apps.assistant.models import Conversation, Message
     from mojo.apps.assistant import get_registry
@@ -1585,7 +1619,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
             pending_before = len(pending_actions)
             tool_results = _execute_tools(
                 tool_blocks, registry, user, conversation, tools, on_event, tool_calls_made,
-                pending_actions=pending_actions,
+                request_meta=request_meta, pending_actions=pending_actions,
             )
 
             # Accumulate context references from add_context calls
@@ -1612,6 +1646,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
             if plan and any(b["name"] == "create_plan" for b in tool_blocks):
                 plan_results, plan_blocks = _execute_parallel_plan_steps(
                     plan, registry, user, conversation, tools, on_event, tool_calls_made,
+                    request_meta=request_meta,
                 )
                 if plan_results:
                     Message.objects.create(

@@ -710,13 +710,17 @@ def _dashboard_email():
 
 
 def _newest_drift_event():
-    """The newest managed-engine drift event still inside the freshness window."""
+    """The newest managed-engine drift event still inside the freshness window.
+
+    ``created`` rides along so a caller can say how old the recorded evidence
+    is; ``_version_drift_finding`` reads only ``metadata``.
+    """
     from mojo.apps.aws.services import version_drift
     from mojo.apps.incident.models import Event
     return Event.objects.filter(
         category=version_drift.CATEGORY,
         created__gte=timezone.now() - VERSION_DRIFT_MAX_AGE).order_by(
-            "-created").values("metadata").first()
+            "-created").values("metadata", "created").first()
 
 
 def _version_drift_finding(kinds, current_version=None):

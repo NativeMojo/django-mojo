@@ -39,6 +39,7 @@ DOMAIN_DESCRIPTIONS = {
     "planning": "Create and track multi-step execution plans",
     "comms": "Send notifications via SMS, email, push, and in-app channels",
     "skills": "Save, find, and manage learned multi-step procedures",
+    "cloud": "Cloud and fleet operations: platform/dashboard health, fleet and capacity state, managed-engine upgrades, framework version, recorded drift, CloudWatch metrics, and System Setup readiness (read-only). Mutating tools mirror the built-in Admin's deploy recovery, framework update, engine upgrade and capacity controls behind the same gates plus an operator approval.",
 }
 
 

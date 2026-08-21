@@ -173,6 +173,7 @@ def _handle_message(user, data, request_id=None, _reporter=None):
     """Handle a new assistant message — validate, enqueue, ack."""
     from mojo.helpers.settings import settings
     from mojo.apps.assistant.models import Conversation, Message
+    from mojo.apps.assistant.services.agent import build_ws_request_meta
 
     # Check feature flag
     if not settings.get("LLM_ADMIN_ENABLED", False, kind="bool"):
@@ -263,10 +264,16 @@ def _handle_message(user, data, request_id=None, _reporter=None):
     # Run the agent in a background thread — no job engine dependency.
     # The handler returns assistant_thinking immediately, and the thread
     # publishes assistant_response or assistant_error when done.
+    # The socket's own request_meta, built from the `_bearer` the realtime
+    # consumer stamps on every delivered message. It is what lets a tool tell
+    # an interactive operator session from an api key on this transport; the
+    # REST path gets the same two fields off the Django request.
+    request_meta = build_ws_request_meta(data.get("_bearer"))
+
     import threading
     thread = threading.Thread(
         target=_run_agent_thread,
-        args=(user.pk, conversation.pk, message, request_id),
+        args=(user.pk, conversation.pk, message, request_id, request_meta),
         daemon=True,
     )
     thread.start()
@@ -414,7 +421,8 @@ def _run_approval_thread(user_id, conversation_id, action_id, decision, request_
 # Background thread — runs the LLM agent and publishes WS events
 # ---------------------------------------------------------------------------
 
-def _run_agent_thread(user_id, conversation_id, message, request_id=None):
+def _run_agent_thread(user_id, conversation_id, message, request_id=None,
+                      request_meta=None):
     """
     Run the assistant agent in a background thread.
 
@@ -454,7 +462,8 @@ def _run_agent_thread(user_id, conversation_id, message, request_id=None):
 
     # --- Run agent ---
     try:
-        result = run_assistant_ws(user, message, conversation_id, on_event=on_event)
+        result = run_assistant_ws(user, message, conversation_id,
+                                  on_event=on_event, request_meta=request_meta)
     except Exception:
         logger.exception("assistant thread: agent crashed for user %s conv %s",
                          user_id, conversation_id)
