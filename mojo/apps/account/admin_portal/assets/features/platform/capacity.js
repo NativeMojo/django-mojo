@@ -26,7 +26,10 @@ const STATUS_PATH = '/api/aws/capacity/status';
 const APPLY_PATH = '/api/aws/capacity/apply';
 
 const POLL_INTERVAL = 10000;
-const POLL_LIMIT = 360; // one hour at one poll every ten seconds.
+// 90 minutes at one poll every ten seconds — above the server's
+// CACHE_RESIZE_TIMEOUT (5400s), so a slow-but-succeeding rolling resize is
+// never abandoned by the page while the server still allows it.
+const POLL_LIMIT = 540;
 
 const ADD_NODE = 'add_node';
 const DRAIN_NODE = 'drain_node';
@@ -71,6 +74,7 @@ export const PHASE_COPY = {
   creating: 'creating',
   deleting: 'deleting',
   scaling: 'changing the replica count',
+  resizing: 'changing the instance size',
   addressing: 'attaching the fleet\'s stable outbound address',
   planning: 'planning which node gets which address',
   associating: 'attaching stable addresses',
@@ -184,7 +188,7 @@ export async function capacityPanel(ctx, signal = null) {
 
   // The drill-in this panel lives in has no abort signal of its own, so a
   // closed inspector is detected by the panel leaving the document. Without
-  // it, closing the overlay mid-operation would leave an hour of polling
+  // it, closing the overlay mid-operation would leave 90 minutes of polling
   // rendering into a detached tree.
   function stopped() {
     return signal?.aborted || !root.isConnected;
@@ -226,7 +230,7 @@ export async function capacityPanel(ctx, signal = null) {
       return;
     }
     if (!stopped()) {
-      note(key, 'warn', 'still running after an hour — check the AWS console');
+      note(key, 'warn', 'still running after 90 minutes — check the AWS console');
     }
   }
 

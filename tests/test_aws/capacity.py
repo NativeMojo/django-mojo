@@ -526,6 +526,152 @@ def test_terminate_requires_a_proven_drain(opts):
     _clear_claims()
 
 
+def _routed_ec2_client(rows_by_id):
+    """describe_instances answered per instance-id filter, like AWS does."""
+    client = mock.Mock()
+
+    def answer(Filters=None, **_kwargs):
+        wanted = []
+        for spec in Filters or []:
+            if spec.get("Name") == "instance-id":
+                wanted = spec.get("Values") or []
+        rows = [rows_by_id[value] for value in wanted if value in rows_by_id]
+        return {"Reservations": [{"Instances": rows}]}
+
+    client.describe_instances.side_effect = answer
+    return client
+
+
+@th.django_unit_test("a drained-out node terminates on a fresh EC2 identity proof, never on absence")
+def test_terminate_guard_deregistered_member(opts):
+    # A COMPLETED drain removes the target from its group entirely, so the
+    # drain→terminate composition used to 409 not_registered forever. The
+    # unregistered case now proves membership from fresh EC2 facts — and a
+    # generic django-mojo tag is NOT enough: staging and prod in one account
+    # are both django-mojo-tagged, so identity (mojo:project/mojo:env) must
+    # match a CURRENTLY REGISTERED member, or the created-by clone stamp.
+    from mojo.apps.aws.services import capacity
+
+    IDENTITY = {"mojo:project": "mojo-test", "mojo:env": "prod"}
+    # NODE_B is gone from every group — only NODE_A is registered.
+    elbv2_client = _elbv2_client(health={GROUP_ARN: [_target(NODE_A, "healthy")]})
+
+    def tagged(instance_id, name, pairs, state="running"):
+        row = _instance(instance_id, name, state=state)
+        for key, value in pairs.items():
+            row["Tags"].append({"Key": key, "Value": value})
+        return row
+
+    def anchor():
+        return tagged(NODE_A, "mojo-api-a",
+                      {"managed-by": "django-mojo", **IDENTITY})
+
+    def run(rows, elbv2=elbv2_client):
+        with mock.patch.object(capacity, "_local_hostname",
+                               return_value="laptop"), \
+                mock.patch.object(capacity, "_dispatch") as dispatched:
+            try:
+                record = capacity.apply(
+                    _actor(), capacity.ACTION_TERMINATE_NODE, NODE_B,
+                    elbv2_client=elbv2, ec2_client=_routed_ec2_client(rows))
+                return record, None, dispatched
+            except capacity.CapacityError as err:
+                return None, err, dispatched
+
+    # Provisioned tags whose project AND env match the registered anchor:
+    # proven, claimed, dispatched.
+    matching = tagged(NODE_B, "mojo-api-b",
+                      {"managed-by": "django-mojo", **IDENTITY})
+    record, err, dispatched = run({NODE_A: anchor(), NODE_B: matching})
+    assert err is None and dispatched.call_count == 1 \
+        and record["action"] == "terminate_node", \
+        f"a drained-out node matching the fleet's identity was refused: {err}"
+    _clear_claims()
+
+    # The admin-capacity created-by stamp is proof on its own — this
+    # feature's own clones, no identity anchor needed.
+    cloned = tagged(NODE_B, "mojo-api-b-clone",
+                    {"mojo:created-by": "admin-capacity"})
+    record, err, dispatched = run(
+        {NODE_A: _instance(NODE_A, "mojo-api-a"), NODE_B: cloned})
+    assert err is None and dispatched.call_count == 1, \
+        f"a drained-out capacity-added clone could not be terminated: {err}"
+    _clear_claims()
+
+    # django-mojo-tagged but ANOTHER environment or project — the same
+    # account's staging fleet, say — is never terminable from this portal.
+    for pairs in ({"managed-by": "django-mojo", "mojo:project": "mojo-test",
+                   "mojo:env": "staging"},
+                  {"managed-by": "django-mojo", "mojo:project": "other-app",
+                   "mojo:env": "prod"}):
+        record, err, dispatched = run(
+            {NODE_A: anchor(), NODE_B: tagged(NODE_B, "mojo-api-b", pairs)})
+        assert err is not None and err.error_code == "not_fleet_member" \
+            and err.status == 409, \
+            (f"a cross-environment instance {pairs} was terminable: "
+             f"{err and err.error_code}")
+        assert dispatched.call_count == 0, \
+            "a cross-environment terminate still dispatched"
+
+    # An anchor MISSING its identity tags proves nothing: mismatch, never a
+    # wildcard.
+    record, err, dispatched = run(
+        {NODE_A: tagged(NODE_A, "mojo-api-a", {"managed-by": "django-mojo"}),
+         NODE_B: matching})
+    assert err is not None and err.error_code == "not_fleet_member", \
+        (f"an identity-less anchor vouched for a candidate: "
+         f"{err and err.error_code}")
+    assert dispatched.call_count == 0, \
+        "an unverifiable identity still dispatched"
+
+    # No ownership tag at all: refused. Absence of registration is not consent.
+    record, err, dispatched = run(
+        {NODE_A: anchor(), NODE_B: _instance(NODE_B, "mojo-api-b")})
+    assert err is not None and err.error_code == "not_fleet_member" \
+        and err.status == 409, \
+        f"an untagged instance was terminable: {err and err.error_code}"
+    assert dispatched.call_count == 0, "an untagged terminate still dispatched"
+
+    # Already terminated: refused as such, never re-terminated.
+    gone = tagged(NODE_B, "mojo-api-b",
+                  {"managed-by": "django-mojo", **IDENTITY},
+                  state="terminated")
+    record, err, dispatched = run({NODE_A: anchor(), NODE_B: gone})
+    assert err is not None and err.error_code == "already_terminated", \
+        f"a terminated instance was terminable again: {err and err.error_code}"
+    assert dispatched.call_count == 0, \
+        "an already-terminated node still dispatched"
+
+    # A vanished instance is equally refused — nothing to prove membership on.
+    record, err, dispatched = run({NODE_A: anchor()})
+    assert err is not None and err.error_code == "not_fleet_member", \
+        f"a vanished instance was terminable: {err and err.error_code}"
+    assert dispatched.call_count == 0, "a vanished node still dispatched"
+
+    # EMPTY serving map: no registered member to anchor identity against, so
+    # even a perfectly-tagged candidate is refused — fail closed.
+    empty = _elbv2_client(health={GROUP_ARN: []})
+    perfect = tagged(NODE_B, "mojo-api-b",
+                     {"managed-by": "django-mojo", **IDENTITY})
+    record, err, dispatched = run({NODE_B: perfect}, elbv2=empty)
+    assert err is not None and err.error_code == "not_fleet_member", \
+        (f"an anchorless fleet still terminated by tag alone: "
+         f"{err and err.error_code}")
+    assert "no registered member" in err.message, \
+        f"the anchorless refusal does not explain itself: {err.message}"
+    assert dispatched.call_count == 0, "an anchorless terminate still dispatched"
+
+    # Still registered and not drained: the refusal is unchanged.
+    registered = _elbv2_client(health={GROUP_ARN: [
+        _target(NODE_A, "healthy"), _target(NODE_B, "draining")]})
+    record, err, dispatched = run(
+        {NODE_A: anchor(), NODE_B: matching}, elbv2=registered)
+    assert err is not None and err.error_code == "not_drained", \
+        f"a still-draining node's refusal changed: {err and err.error_code}"
+    assert dispatched.call_count == 0, "a still-draining node still dispatched"
+    _clear_claims()
+
+
 @th.django_unit_test("a pinned EDGE_NODE_ID blocks adding a node, in the report and the apply")
 def test_node_id_pinned_blocks_add(opts):
     from mojo.apps.aws.services import capacity
@@ -852,7 +998,10 @@ def test_proof_registers_and_extends_topology(opts):
     source = {"instance_id": NODE_A, "name": "mojo-api-a", "state": "running",
               "instance_type": "m6i.large", "subnet_id": "subnet-0aaa",
               "security_group_ids": ["sg-0aaa"],
-              "iam_instance_profile_arn": PROFILE_ARN}
+              "iam_instance_profile_arn": PROFILE_ARN,
+              "tags": {"Name": "mojo-api-a", "managed-by": "django-mojo",
+                       "mojo:project": "mojo-test", "mojo:env": "prod",
+                       "mojo:role": "app"}}
     running = dict(source, instance_id=NEW_NODE)
     with mock.patch.object(capacity, "_sleep"), \
             mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
@@ -867,7 +1016,8 @@ def test_proof_registers_and_extends_topology(opts):
                               source if value == NODE_A else running), \
             mock.patch.object(ec2_helper, "find_reusable_image",
                               return_value={"image_id": "ami-0new", "age_days": 2}), \
-            mock.patch.object(ec2_helper, "launch_clone", return_value=NEW_NODE), \
+            mock.patch.object(ec2_helper, "launch_clone",
+                              return_value=NEW_NODE) as launched, \
             mock.patch.object(elbv2_helper, "register_target") as registered, \
             mock.patch.object(platform_deploy, "last_converged_deployment",
                               return_value=row), \
@@ -879,6 +1029,13 @@ def test_proof_registers_and_extends_topology(opts):
         capacity._run_add_node(record)
 
     assert record["state"] == "done", f"a proven node did not finish: {record}"
+    # The clone is born carrying the fleet's identity — the terminate guard's
+    # identity anchor and spec.owns() discovery both key on these.
+    assert launched.call_args.kwargs["tags"] == {
+        "managed-by": "django-mojo", "mojo:project": "mojo-test",
+        "mojo:env": "prod"}, \
+        (f"the clone launch does not carry the source's identity tags: "
+         f"{launched.call_args.kwargs.get('tags')}")
     assert registered.call_count == 1, \
         f"a proven node was registered {registered.call_count} times, not one"
     assert registered.call_args[0][0] == GROUP_ARN, \
@@ -1171,3 +1328,63 @@ def test_report_reader_routing(opts):
     # Nothing to compare against: unknown, never a false alarm.
     assert skipped["database"]["matches_reader_endpoint"] is None, \
         "an inactive config produced an endpoint verdict"
+
+
+@th.django_unit_test("the report carries a per-instance class for every database row")
+def test_report_carries_instance_classes(opts):
+    from mojo.apps.aws.services import capacity
+
+    # Filter-aware on purpose: instance_role describes ONE instance by
+    # identifier, and a mock answering every filter with the same first row
+    # would fold every replica onto the wrong source.
+    instances = {
+        f"{CLUSTER}-1": {
+            "DBInstanceIdentifier": f"{CLUSTER}-1", "DBInstanceStatus": "available",
+            "Engine": "aurora-postgresql", "EngineVersion": "16.4",
+            "DBInstanceClass": "db.r6g.xlarge", "DBClusterIdentifier": CLUSTER},
+        f"{CLUSTER}-2": {
+            "DBInstanceIdentifier": f"{CLUSTER}-2", "DBInstanceStatus": "available",
+            "Engine": "aurora-postgresql", "EngineVersion": "16.4",
+            "DBInstanceClass": "db.t4g.medium", "DBClusterIdentifier": CLUSTER},
+        STANDALONE: {
+            "DBInstanceIdentifier": STANDALONE, "DBInstanceStatus": "available",
+            "Engine": "postgres", "EngineVersion": "16.4",
+            "DBInstanceClass": "db.m6g.large"},
+        f"{STANDALONE}-replica": {
+            "DBInstanceIdentifier": f"{STANDALONE}-replica",
+            "DBInstanceStatus": "available", "Engine": "postgres",
+            "EngineVersion": "16.4", "DBInstanceClass": "db.t4g.medium",
+            "ReadReplicaSourceDBInstanceIdentifier": STANDALONE},
+    }
+    rds_client = mock.Mock()
+    rds_client.describe_db_instances.side_effect = lambda **kwargs: {
+        "DBInstances": ([instances[kwargs["DBInstanceIdentifier"]]]
+                        if kwargs.get("DBInstanceIdentifier") in instances
+                        else list(instances.values())
+                        if not kwargs.get("DBInstanceIdentifier") else [])}
+    rds_client.describe_db_clusters.return_value = {"DBClusters": [{
+        "DBClusterIdentifier": CLUSTER, "Engine": "aurora-postgresql",
+        "Status": "available", "DBClusterMembers": [
+            {"DBInstanceIdentifier": f"{CLUSTER}-1", "IsClusterWriter": True},
+            {"DBInstanceIdentifier": f"{CLUSTER}-2", "IsClusterWriter": False}]}]}
+
+    envelope = capacity.report(
+        elbv2_client=_elbv2_client(), ec2_client=_ec2_client(),
+        rds_client=rds_client, cache_client=_cache_client())
+    rows = {row["identifier"]: row for row in envelope["databases"]}
+
+    aurora = rows[CLUSTER]
+    assert aurora["writer_instance_class"] == "db.r6g.xlarge", \
+        f"the aurora writer's class is missing from its row: {aurora}"
+    assert aurora["reader_instance_classes"] == {
+        f"{CLUSTER}-2": "db.t4g.medium"}, \
+        f"the aurora readers' classes are missing from their row: {aurora}"
+
+    standalone = rows[STANDALONE]
+    assert standalone["instance_class"] == "db.m6g.large", \
+        f"the standalone primary's class is missing: {standalone}"
+    assert standalone["readers"] == [f"{STANDALONE}-replica"], \
+        f"the folded replica is missing from its source: {standalone}"
+    assert standalone["reader_instance_classes"] == {
+        f"{STANDALONE}-replica": "db.t4g.medium"}, \
+        f"the folded replica's class is missing from its source: {standalone}"

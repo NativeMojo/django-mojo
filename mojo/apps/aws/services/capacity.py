@@ -1,4 +1,5 @@
-"""Admin capacity actions: add/remove an app node, an RDS reader, a cache replica.
+"""Admin capacity actions: add/remove an app node, an RDS reader, a cache
+replica — and resize the cache group or a database instance to a curated size.
 
 The alternative to this module is an operator in the AWS console at 2am, adding
 a node by hand and hoping they picked the same instance type, the same subnet,
@@ -41,12 +42,14 @@ observation of AWS state, and losing the observation loses nothing that
 would matter, and every mutation is AWS-side before the record is written.
 """
 
+import hashlib
 import json
 import time
 import uuid
 
 from django.core.cache import cache
 
+from mojo.deploy.provision import spec as provision_spec
 from mojo.helpers import infrastructure
 from mojo.helpers import logit
 from mojo.helpers.aws import ec2 as ec2_helper
@@ -75,9 +78,12 @@ ACTION_REMOVE_READER = "remove_reader"
 ACTION_SET_CACHE_REPLICAS = "set_cache_replicas"
 ACTION_ENABLE_STABLE_IPS = "enable_stable_ips"
 ACTION_DISABLE_STABLE_IPS = "disable_stable_ips"
+ACTION_RESIZE_CACHE = "resize_cache"
+ACTION_RESIZE_DATABASE = "resize_database"
 ACTIONS = (ACTION_ADD_NODE, ACTION_DRAIN_NODE, ACTION_TERMINATE_NODE,
            ACTION_ADD_READER, ACTION_REMOVE_READER, ACTION_SET_CACHE_REPLICAS,
-           ACTION_ENABLE_STABLE_IPS, ACTION_DISABLE_STABLE_IPS)
+           ACTION_ENABLE_STABLE_IPS, ACTION_DISABLE_STABLE_IPS,
+           ACTION_RESIZE_CACHE, ACTION_RESIZE_DATABASE)
 
 # Adds serialize on ONE fixed key, never on the resource: two concurrent adds
 # name different resources (or none at all), so a per-resource key would let
@@ -117,6 +123,8 @@ PHASES = {
     ACTION_SET_CACHE_REPLICAS: ("scaling", "settling"),
     ACTION_ENABLE_STABLE_IPS: ("planning", "associating", "verifying"),
     ACTION_DISABLE_STABLE_IPS: ("detaching", "verifying"),
+    ACTION_RESIZE_CACHE: ("resizing", "settling"),
+    ACTION_RESIZE_DATABASE: ("resizing", "settling"),
 }
 
 STATE_RUNNING = "running"
@@ -134,6 +142,10 @@ HEALTH_TIMEOUT = 900        # registered but never healthy -> offer Drain
 DRAIN_MARGIN = 300          # on top of the group's deregistration_delay
 RDS_TIMEOUT = 3600          # a reader can genuinely take this long
 CACHE_TIMEOUT = 1800
+# A node-type change replaces EVERY node in the group sequentially (rolling),
+# so a 1+2 group is three replacements. 3600 would sit exactly at the portal's
+# old one-hour follow cap and double-fail slow-but-succeeding resizes.
+CACHE_RESIZE_TIMEOUT = 5400
 
 DEFAULT_IMAGE_MAX_AGE_DAYS = 14
 DEFAULT_NODE_ROOT = "/opt/api"
@@ -203,6 +215,12 @@ def _claim_key(action, resource):
         return f"{CACHE_PREFIX}:claim:{ADD_NODE_CLAIM}"
     if action in (ACTION_ENABLE_STABLE_IPS, ACTION_DISABLE_STABLE_IPS):
         return f"{CACHE_PREFIX}:claim:{STABLE_IPS_CLAIM}"
+    if action == ACTION_RESIZE_CACHE:
+        # ONE claim per replication group, shared with set_cache_replicas: a
+        # resize and a replica-count change mutate the same AWS object and must
+        # serialize. The deployed key literal is reused (rather than renaming
+        # both) so a claim held across a deploy stays honored.
+        return f"{CACHE_PREFIX}:claim:{ACTION_SET_CACHE_REPLICAS}:{resource}"
     return f"{CACHE_PREFIX}:claim:{action}:{resource}"
 
 
@@ -628,6 +646,14 @@ def _database_rows(rds_client=None, region=None):
             "status": clusters[identifier].get("status"),
             "writer": detail.get("writer"),
             "readers": list(detail.get("readers") or []),
+            # Per-instance classes out of the ONE describe `instances` already
+            # holds — the writer and each reader carry independent sizes, and
+            # that asymmetry (big writer, smaller readers) is the point.
+            "writer_instance_class": (
+                instances.get(detail.get("writer")) or {}).get("instance_class"),
+            "reader_instance_classes": {
+                reader: (instances.get(reader) or {}).get("instance_class")
+                for reader in detail.get("readers") or []},
             "reader_endpoint": detail.get("reader_endpoint"),
             "endpoint": detail.get("endpoint"),
         })
@@ -649,6 +675,7 @@ def _database_rows(rds_client=None, region=None):
             "is_replica": bool(detail.get("is_replica")),
             "instance_class": detail.get("instance_class"),
             "readers": [],
+            "reader_instance_classes": {},
             "endpoint": detail.get("endpoint"),
         })
     # A standalone replica belongs to its source's row, not its own.
@@ -657,6 +684,8 @@ def _database_rows(rds_client=None, region=None):
         source = sources.get(row.get("replica_of"))
         if source is not None:
             source["readers"].append(row["identifier"])
+            source["reader_instance_classes"][row["identifier"]] = \
+                row.get("instance_class")
     return [row for row in rows if not row.get("is_replica")]
 
 
@@ -675,6 +704,15 @@ def _cache_rows(cache_client=None, region=None):
             "cluster_enabled": facts.get("cluster_enabled"),
             "automatic_failover_on": facts.get("automatic_failover_on"),
             "multi_az_on": facts.get("multi_az_on"),
+            "node_type": facts.get("node_type"),
+            # Which interruption a node-type change means for THIS group,
+            # stated before apply: failover with a replica rolls (replicas
+            # first, then a brief failover); without one the primary is down
+            # for the duration.
+            "resize_impact": ("rolling"
+                              if (facts.get("automatic_failover_on")
+                                  and int(facts.get("replica_count") or 0) >= 1)
+                              else "downtime"),
             "members": facts.get("members"),
             # The lowest count this group may be moved to. One, not zero, when
             # anything would fail over onto a replica that would no longer be
@@ -708,6 +746,51 @@ def _collect(envelope, code, iam_action, loader):
                        f"not be read"})
         logger.exception("capacity report read failed %s", code)
         return None
+
+
+# ── curated sizes ───────────────────────────────────────────────────────────
+
+def _size_catalog():
+    """The resize allowlist, with the price beside each rung.
+
+    The ladders live in provision's ``spec.py`` beside COST_TABLE so ONE file
+    answers "what sizes exist and what do they cost". The panel renders
+    exactly this and hardcodes nothing.
+    """
+    def rows(ladder):
+        return [{"size": key, "label": label, "type": itype,
+                 "monthly_usd": provision_spec.COST_TABLE.get(itype)}
+                for key, label, itype in ladder]
+    return {"cache": rows(provision_spec.CACHE_SIZES),
+            "database": rows(provision_spec.DB_SIZES)}
+
+
+def _resolve_size(ladder, size):
+    """A curated size KEY to its instance type — anything else is refused.
+
+    Refused before any provider call, and a raw type string is therefore
+    never accepted: the ladder can be re-pointed at new instance families
+    without breaking callers, and a client cannot smuggle a type the
+    allowlist does not carry.
+    """
+    wanted = str(size or "").strip().lower()
+    for key, _label, itype in ladder:
+        if key == wanted:
+            return itype
+    raise CapacityError(
+        "size must be one of: small, medium, large, xlarge", "invalid_request")
+
+
+def _ladder_index(ladder, itype):
+    """Position of ``itype`` on the ladder, or None when it is not curated.
+
+    None means the direction of a resize is unknown — the completion note
+    softens its memory caution instead of pretending to know.
+    """
+    for index, (_key, _label, rung_type) in enumerate(ladder):
+        if rung_type == itype:
+            return index
+    return None
 
 
 def _offers(envelope):
@@ -749,6 +832,12 @@ def _offers(envelope):
     cache_block = infrastructure.ERROR_CODE if external else (
         None if envelope.get("caches") else "no_cache_group")
     offer(ACTION_SET_CACHE_REPLICAS, cache_block)
+
+    # The resizes share their family's availability: a region with a cache
+    # group can resize it, a region with a database can resize an instance.
+    # Per-group cluster-mode blocking rides on each cache row's blocked_reason.
+    offer(ACTION_RESIZE_CACHE, cache_block)
+    offer(ACTION_RESIZE_DATABASE, database_block)
 
     egress = envelope.get("egress") or {}
 
@@ -843,6 +932,8 @@ def _build(elbv2_client=None, ec2_client=None, rds_client=None, cache_client=Non
                       lambda: _cache_rows(cache_client=cache_client))
     envelope["caches"] = caches or []
     envelope["reader_routing"] = _reader_routing(envelope)
+    # Static data, no provider read — no _collect wrapper needed.
+    envelope["sizes"] = _size_catalog()
     envelope["actions"] = _offers(envelope)
     return envelope
 
@@ -1081,15 +1172,88 @@ def _refuse_external(action_label):
         infrastructure.ERROR_CODE, 403)
 
 
-def _require_instance(resource, serving):
-    if not str(resource or "").startswith("i-"):
-        raise CapacityError("A node identifier is required", "invalid_request")
-    holding = _groups_holding(serving, resource)
-    if not holding:
+# The tags that name WHICH fleet a resource belongs to. Provision stamps both
+# (spec.TAGS), and spec.owns() refuses anything whose values differ — the
+# generic django-mojo tags alone cannot tell staging from prod in one account.
+FLEET_IDENTITY_TAGS = ("mojo:project", "mojo:env")
+
+
+def _identity_matches(candidate_tags, reference_tags):
+    """Exact fleet identity: project AND env equal, both present on both sides.
+
+    A missing value on EITHER side is a mismatch, never a wildcard — an
+    anchor that cannot state its own identity proves nothing about anyone.
+    """
+    for key in FLEET_IDENTITY_TAGS:
+        wanted = (reference_tags or {}).get(key)
+        held = (candidate_tags or {}).get(key)
+        if not wanted or not held or wanted != held:
+            return False
+    return True
+
+
+def _prove_fleet_member(resource, serving, ec2_client=None):
+    """Fresh EC2 facts must prove an UNREGISTERED node is ours to terminate.
+
+    A COMPLETED drain removes the target from its group entirely, so the
+    drained node terminate exists to destroy is invisible to the serving map.
+    Membership is then proven from the provider — never assumed from the
+    request — and a generic django-mojo tag is NOT enough: a staging and a
+    prod fleet in one account+region are both django-mojo-tagged, and this
+    predicate gates TerminateInstances (the exact reason ``spec.owns()``
+    matches identity, never ownership alone). Two proofs are accepted:
+
+    - the ``mojo:created-by=admin-capacity`` stamp this feature puts on every
+      clone it launches, or
+    - a django-mojo ownership tag PLUS an exact identity match — the
+      candidate's ``mojo:project`` and ``mojo:env`` equal to those of a
+      CURRENTLY REGISTERED fleet member (the anchor), with a missing value on
+      either side counting as a mismatch.
+
+    No registered member to anchor against means identity cannot be verified,
+    and the terminate is refused outright. Fail closed.
+    """
+    try:
+        facts = ec2_helper.instance_facts(resource, client=ec2_client)
+    except ProviderCallError as err:
+        raise _provider_error(
+            err, "AWS did not report this instance, so no terminate is safe "
+                 "to make.") from None
+    state = str((facts or {}).get("state") or "")
+    if facts is not None and state in ("terminated", "shutting-down"):
         raise CapacityError(
-            f"{resource} is not registered behind any load balancer.",
-            "not_registered", 409)
-    return holding
+            f"{resource} is already {state}.", "already_terminated", 409)
+    tags = (facts or {}).get("tags") or {}
+    if (facts is not None
+            and tags.get(ec2_helper.CREATED_BY_TAG) == "admin-capacity"):
+        return
+    if facts is None or not _django_mojo_tagged(tags):
+        raise CapacityError(
+            f"{resource} is not registered behind any load balancer, and "
+            f"fresh EC2 facts do not prove it a django-mojo fleet member — "
+            f"this control will not terminate it.",
+            "not_fleet_member", 409)
+    anchor_id = next(iter(_fleet_ids(serving)), None)
+    if anchor_id is None:
+        raise CapacityError(
+            f"The fleet has no registered member to prove identity against, "
+            f"so this control cannot verify that {resource} belongs to THIS "
+            f"installation. Terminate it from the AWS console if you are "
+            f"certain.",
+            "not_fleet_member", 409)
+    try:
+        anchor = ec2_helper.instance_facts(anchor_id, client=ec2_client)
+    except ProviderCallError as err:
+        raise _provider_error(
+            err, "AWS did not report the fleet's registered member, so this "
+                 "instance's identity cannot be verified.") from None
+    if not _identity_matches(tags, (anchor or {}).get("tags")):
+        raise CapacityError(
+            f"{resource} carries django-mojo tags, but its mojo:project/"
+            f"mojo:env do not match this fleet's registered members — it may "
+            f"belong to another environment in this account. This control "
+            f"will not terminate it.",
+            "not_fleet_member", 409)
 
 
 def _prepare_add_node(serving, ec2_client=None):
@@ -1138,6 +1302,10 @@ def apply(actor, action, resource="", **params):
         return _apply_reader(actor, action, resource, **params)
     if action in (ACTION_ENABLE_STABLE_IPS, ACTION_DISABLE_STABLE_IPS):
         return _apply_stable_ips(actor, action, **params)
+    if action == ACTION_RESIZE_CACHE:
+        return _apply_resize_cache(actor, resource, **params)
+    if action == ACTION_RESIZE_DATABASE:
+        return _apply_resize_database(actor, resource, **params)
     return _apply_cache(actor, resource, **params)
 
 
@@ -1162,10 +1330,21 @@ def _apply_node(actor, action, resource, elbv2_client=None, ec2_client=None, **_
         _dispatch(record)
         return record
 
-    holding = _require_instance(resource, serving)
+    if not str(resource or "").startswith("i-"):
+        raise CapacityError("A node identifier is required", "invalid_request")
+    holding = _groups_holding(serving, resource)
+    if not holding and action == ACTION_DRAIN_NODE:
+        raise CapacityError(
+            f"{resource} is not registered behind any load balancer.",
+            "not_registered", 409)
+    serving_ids = [row.get("id") for group in serving.get("groups") or []
+                   for row in group.get("targets") or []]
+    # The bare resource id rides along: a fully-drained node is absent from
+    # every group, and the self check must still be able to match it — a
+    # drained self node must not terminate itself.
     self_id, self_status = _self_check(
-        [row.get("id") for group in serving.get("groups") or []
-         for row in group.get("targets") or []], client=ec2_client)
+        serving_ids + ([resource] if resource not in serving_ids else []),
+        client=ec2_client)
     if self_id and self_id == resource:
         raise CapacityError(
             f"{resource} is the node answering this request. Removing it "
@@ -1206,6 +1385,8 @@ def _apply_node(actor, action, resource, elbv2_client=None, ec2_client=None, **_
                 "not_drained", 409,
                 {"target_group": group.get("name") or group.get("arn"),
                  "states": sorted({row.get("state") for row in rows})})
+    if not holding:
+        _prove_fleet_member(resource, serving, ec2_client=ec2_client)
     claim = _claim(action, resource, getattr(actor, "pk", None))
     record = _new_operation(action, resource, actor, claim,
                             {"self_check": self_status})
@@ -1343,6 +1524,143 @@ def _apply_cache(actor, resource, count=None, apply_immediately=None,
         "automatic_failover_on": facts.get("automatic_failover_on"),
         "multi_az_on": facts.get("multi_az_on"),
         "apply_immediately": True,
+    })
+    _dispatch(record)
+    return record
+
+
+def _require_immediate(apply_immediately, deferral):
+    """Both resizes demand a literal True — no default, no silent rewrite.
+
+    These are observed operations with a settle check; a change deferred to
+    the maintenance window has nothing to observe and would report a timeout
+    for a change that is merely queued.
+    """
+    if apply_immediately is not True:
+        raise CapacityError(
+            f"apply_immediately must be true: this control makes observed, "
+            f"immediate changes with a settle check. {deferral} Schedule a "
+            f"deferred change in the AWS console instead.",
+            "invalid_request")
+
+
+def _apply_resize_cache(actor, resource, size=None, apply_immediately=None,
+                        cache_client=None, **_ignored):
+    if not resource:
+        raise CapacityError("A cache group identifier is required", "invalid_request")
+    size_key = str(size or "").strip().lower()
+    to_type = _resolve_size(provision_spec.CACHE_SIZES, size_key)
+    _require_immediate(apply_immediately,
+                       "A deferred node-type change has nothing to observe.")
+    try:
+        facts = elasticache_helper.replication_group_facts(resource, client=cache_client)
+    except ProviderCallError as err:
+        raise _provider_error(
+            err, "AWS did not report this cache group, so no change was made."
+        ) from None
+    if facts is None:
+        raise CapacityError(
+            f"AWS reports no replication group called {resource}.",
+            "resource_not_found", 404)
+    if facts.get("cluster_enabled"):
+        raise CapacityError(
+            f"{resource} is cluster-mode enabled. Sizing a sharded group is a "
+            f"resharding decision, not a capacity change, and this control "
+            f"does not make it.",
+            elasticache_helper.CLUSTER_MODE_UNSUPPORTED, 409)
+    status = str(facts.get("status") or "").lower()
+    # "snapshotting" is the nightly backup — routine background work, never a
+    # conflict. Anything else short of available may equally be AWS's own
+    # background activity, so the refusal quotes the state verbatim and never
+    # claims another change is in flight.
+    if status not in (elasticache_helper.SETTLED, "snapshotting"):
+        raise CapacityError(
+            f"{resource} is {status}; a resize needs it settled — try again "
+            f"when it reports available.",
+            "not_settled", 409)
+    from_type = facts.get("node_type")
+    if from_type == to_type:
+        raise CapacityError(f"{resource} already runs {to_type}.", "no_change", 409)
+    replica_count = int(facts.get("replica_count") or 0)
+    failover_on = bool(facts.get("automatic_failover_on"))
+    from_index = _ladder_index(provision_spec.CACHE_SIZES, from_type)
+    to_index = _ladder_index(provision_spec.CACHE_SIZES, to_type)
+    claim = _claim(ACTION_RESIZE_CACHE, resource, getattr(actor, "pk", None))
+    record = _new_operation(ACTION_RESIZE_CACHE, resource, actor, claim, {
+        "from_type": from_type, "to_type": to_type, "size": size_key,
+        # The same rule the report's resize_impact states, re-derived from the
+        # fresh facts this apply is acting on.
+        "impact": ("rolling" if (failover_on and replica_count >= 1)
+                   else "downtime"),
+        "replica_count": replica_count,
+        "automatic_failover_on": failover_on,
+        "apply_immediately": True,
+        "monthly_usd": provision_spec.COST_TABLE.get(to_type),
+        # True/False by ladder position; None when the current type is not
+        # curated and the direction is unknown.
+        "downsize": None if from_index is None else to_index < from_index,
+    })
+    _dispatch(record)
+    return record
+
+
+def _apply_resize_database(actor, resource, size=None, apply_immediately=None,
+                           rds_client=None, **_ignored):
+    if not resource:
+        raise CapacityError("A database instance identifier is required",
+                            "invalid_request")
+    size_key = str(size or "").strip().lower()
+    to_class = _resolve_size(provision_spec.DB_SIZES, size_key)
+    _require_immediate(apply_immediately,
+                       "A deferred class change parks silently until the "
+                       "maintenance window.")
+    try:
+        role = rds_helper.instance_role(resource, client=rds_client)
+        if role is None:
+            raise CapacityError(
+                f"AWS reports no database instance called {resource}.",
+                "resource_not_found", 404)
+        status = str(role.get("status") or "").lower()
+        # backing-up / storage-optimization / maintenance are routine RDS
+        # background windows in which a class change is permitted. Anything
+        # else — modifying, rebooting, creating, and above all deleting (the
+        # remove_reader race) — is refused with the provider state quoted
+        # verbatim, attributing nothing.
+        if status not in (RDS_SETTLED, "backing-up", "storage-optimization",
+                          "maintenance"):
+            raise CapacityError(
+                f"{resource} is {status}; a resize needs it settled — try "
+                f"again when it reports available.",
+                "not_settled", 409)
+        from_class = role.get("instance_class")
+        if from_class == to_class:
+            raise CapacityError(
+                f"{resource} already runs {to_class}.", "no_change", 409)
+        cluster_id = role.get("cluster")
+        if cluster_id:
+            # Aurora member: the writer is known ONLY through IsClusterWriter.
+            # The tier rides in the same ModifyDBInstance call — writer at 0,
+            # readers at 1, so a failover prefers the big box — and this item
+            # never moves the writer role itself.
+            cluster = rds_helper.cluster_members(cluster_id, client=rds_client) or {}
+            role_name = "writer" if resource == cluster.get("writer") else "reader"
+            promotion_tier = 0 if role_name == "writer" else 1
+        else:
+            role_name = "reader" if role.get("is_replica") else "writer"
+            # PromotionTier is an Aurora concept; never sent off-Aurora.
+            promotion_tier = None
+    except ProviderCallError as err:
+        raise _provider_error(
+            err, "AWS did not report this database, so no change was made."
+        ) from None
+    claim = _claim(ACTION_RESIZE_DATABASE, resource, getattr(actor, "pk", None))
+    record = _new_operation(ACTION_RESIZE_DATABASE, resource, actor, claim, {
+        "kind": "aurora" if cluster_id else "standalone",
+        "cluster": cluster_id, "role": role_name,
+        "from_class": from_class, "to_class": to_class, "size": size_key,
+        "promotion_tier": promotion_tier,
+        "apply_immediately": True,
+        "monthly_usd": provision_spec.COST_TABLE.get(to_class),
     })
     _dispatch(record)
     return record
@@ -1500,10 +1818,13 @@ def _deadline_for(action):
                 + PROOF_MARGIN + HEALTH_TIMEOUT)
     if action == ACTION_DRAIN_NODE:
         return 3600
-    if action in (ACTION_ADD_READER, ACTION_REMOVE_READER):
+    if action in (ACTION_ADD_READER, ACTION_REMOVE_READER,
+                  ACTION_RESIZE_DATABASE):
         return RDS_TIMEOUT
     if action == ACTION_SET_CACHE_REPLICAS:
         return CACHE_TIMEOUT
+    if action == ACTION_RESIZE_CACHE:
+        return CACHE_RESIZE_TIMEOUT
     return 900
 
 
@@ -1525,6 +1846,870 @@ def operation_status(operation_id):
     return record
 
 
+# ── batch plans ─────────────────────────────────────────────────────────────
+#
+# Two-phase: plan_batch validates an ordered set of EXISTING actions against a
+# fresh report and stores a short-lived, server-worded plan; apply_batch
+# confirms by plan id and hands the steps to ONE job that calls the unchanged
+# apply() per step. Guards are never re-implemented against a hypothetical
+# future state — each step re-derives them from AWS the moment it runs,
+# exactly as a manual click would, and holds exactly the claims a manual
+# sequence would.
+
+PLAN_TTL = 300
+MAX_BATCH_STEPS = 20
+# How long a running batch may go silent before status flags it: the runner
+# ticks every POLL_INTERVAL, so minutes of silence mean the runner thread is
+# gone (engine death, deploy) — nothing auto-resumes, and the flag is the
+# honest surface for that.
+BATCH_STALL_AFTER = 180
+
+# The stable-ips pair is deliberately absent: fleet-wide, its own fixed claim,
+# and interleaving it in a batch buys nothing. It runs alone.
+BATCH_ACTIONS = (ACTION_ADD_NODE, ACTION_ADD_READER, ACTION_SET_CACHE_REPLICAS,
+                 ACTION_RESIZE_CACHE, ACTION_RESIZE_DATABASE,
+                 ACTION_REMOVE_READER, ACTION_DRAIN_NODE, ACTION_TERMINATE_NODE)
+
+# Which report sections each action validates against. A degraded read of a
+# touched section must surface as "AWS did not answer — retry", never as
+# "unknown resource".
+_BATCH_SECTIONS = {
+    ACTION_ADD_NODE: ("serving", "instances"),
+    ACTION_DRAIN_NODE: ("serving", "instances"),
+    ACTION_TERMINATE_NODE: ("serving", "instances"),
+    ACTION_ADD_READER: ("databases",),
+    ACTION_REMOVE_READER: ("databases",),
+    ACTION_RESIZE_DATABASE: ("databases",),
+    ACTION_SET_CACHE_REPLICAS: ("caches",),
+    ACTION_RESIZE_CACHE: ("caches",),
+}
+
+# Execution order: capacity never drops before a disruptive change. Ranks 2/5
+# split set_cache_replicas by direction (grow with the adds, shrink with the
+# removes); a terminate is pinned immediately behind its own drain afterwards.
+_BATCH_RANK = {
+    ACTION_ADD_NODE: 0,
+    ACTION_ADD_READER: 1,
+    ACTION_RESIZE_CACHE: 3,
+    ACTION_RESIZE_DATABASE: 4,
+    ACTION_REMOVE_READER: 6,
+    ACTION_DRAIN_NODE: 7,
+    ACTION_TERMINATE_NODE: 8,
+}
+
+ORDER_NOTE = ("Steps run in the server's order: additions first, then "
+              "resizes, then removals — and a terminate runs immediately "
+              "after its own drain.")
+
+
+def _plan_key(plan_id):
+    return f"{CACHE_PREFIX}:plan:{plan_id}"
+
+
+def _plan_lock_key(plan_id):
+    return f"{CACHE_PREFIX}:planlock:{plan_id}"
+
+
+def _batch_key(batch_id):
+    return f"{CACHE_PREFIX}:batch:{batch_id}"
+
+
+def _write_batch(record):
+    record["updated"] = _now()
+    try:
+        cache.set(_batch_key(record["id"]), record,
+                  int(record.get("ttl") or CLAIM_TTL))
+    except Exception:
+        logger.warning("capacity: batch %s could not be recorded",
+                       record.get("id"))
+    return record
+
+
+def _read_batch(batch_id):
+    try:
+        record = cache.get(_batch_key(batch_id))
+    except Exception:
+        record = None
+    return record if isinstance(record, dict) else None
+
+
+def _instances(envelope):
+    return (envelope.get("nodes") or {}).get("instances") or []
+
+
+def _node_row(envelope, resource):
+    for row in _instances(envelope):
+        if row.get("id") == resource:
+            return row
+    return None
+
+
+def _cache_row(envelope, resource):
+    for row in envelope.get("caches") or []:
+        if row.get("identifier") == resource:
+            return row
+    return None
+
+
+def _db_role(envelope, resource):
+    """``(role, instance_class)`` for one database instance, or (None, None).
+
+    A standalone primary is its row's writer (challenge #6: the fallback to
+    ``instance_class`` matters — standalone rows carry no
+    writer_instance_class).
+    """
+    for row in envelope.get("databases") or []:
+        if resource == row.get("writer") or (
+                row.get("kind") == "standalone"
+                and resource == row.get("identifier")):
+            return "writer", (row.get("writer_instance_class")
+                              or row.get("instance_class"))
+        if resource in (row.get("readers") or []):
+            return "reader", (row.get("reader_instance_classes") or {}).get(
+                resource)
+    return None, None
+
+
+def _fleet_fingerprint(envelope):
+    """sha256 of the STRUCTURAL facts a plan's safety depends on.
+
+    Transient status strings are deliberately excluded so a `backing-up` flap
+    does not 409 a valid plan; instance classes are included so a resize —
+    Aurora or standalone — changes the hash. Server-side only: never returned
+    to a client, so there is no forgeable surface.
+    """
+    nodes = sorted(
+        [str(row.get("id") or ""), bool(row.get("healthy")),
+         str(row.get("instance_type") or "")]
+        for row in _instances(envelope))
+    databases = sorted(
+        [str(row.get("identifier") or ""), str(row.get("kind") or ""),
+         str(row.get("writer") or ""),
+         sorted(str(reader) for reader in row.get("readers") or []),
+         str(row.get("instance_class") or ""),
+         str(row.get("writer_instance_class") or ""),
+         sorted([str(key), str(value)] for key, value in
+                (row.get("reader_instance_classes") or {}).items())]
+        for row in envelope.get("databases") or [])
+    caches = sorted(
+        [str(row.get("identifier") or ""), int(row.get("replica_count") or 0),
+         str(row.get("node_type") or ""), bool(row.get("cluster_enabled"))]
+        for row in envelope.get("caches") or [])
+    projection = {"mode": envelope.get("mode"), "nodes": nodes,
+                  "databases": databases, "caches": caches}
+    return hashlib.sha256(
+        json.dumps(projection, sort_keys=True).encode()).hexdigest()
+
+
+def _refuse_degraded(envelope, actions):
+    """A throttled describe must never validate — or fingerprint — a plan."""
+    touched = set()
+    for action in actions:
+        touched.update(_BATCH_SECTIONS.get(action) or ())
+    for warning in envelope.get("warnings") or []:
+        if warning.get("code") in touched:
+            raise CapacityError(
+                f"AWS did not answer completely "
+                f"({warning.get('iam_action') or warning.get('code')}), so "
+                f"this plan cannot be checked against the fleet. Retry "
+                f"shortly.",
+                "report_degraded", 503)
+
+
+def _refuse_step(index, message, error_code="invalid_request", status=400):
+    raise CapacityError(f"Step {index + 1}: {message}", error_code, status,
+                        {"step": index})
+
+
+def _step_kind(step, envelope):
+    action = step["action"]
+    if action in (ACTION_ADD_NODE, ACTION_ADD_READER):
+        return "add"
+    if action in (ACTION_RESIZE_CACHE, ACTION_RESIZE_DATABASE):
+        return "change"
+    if action == ACTION_SET_CACHE_REPLICAS:
+        row = _cache_row(envelope, step["resource"]) or {}
+        current = int(row.get("replica_count") or 0)
+        return "add" if step["params"]["count"] > current else "remove"
+    return "remove"
+
+
+def _step_rank(step):
+    if step["action"] == ACTION_SET_CACHE_REPLICAS:
+        return 2 if step["kind"] == "add" else 5
+    return _BATCH_RANK[step["action"]]
+
+
+def _order_steps(steps):
+    """Stable-sort by rank, then pin each terminate behind its own drain."""
+    ranked = sorted(steps, key=_step_rank)
+    drains = {step["resource"] for step in ranked
+              if step["action"] == ACTION_DRAIN_NODE}
+    paired = {step["resource"]: step for step in ranked
+              if step["action"] == ACTION_TERMINATE_NODE
+              and step["resource"] in drains}
+    ordered = []
+    for step in ranked:
+        if (step["action"] == ACTION_TERMINATE_NODE
+                and paired.get(step["resource"]) is step):
+            continue
+        ordered.append(step)
+        if step["action"] == ACTION_DRAIN_NODE and step["resource"] in paired:
+            ordered.append(paired[step["resource"]])
+    return ordered
+
+
+def _validate_step(index, raw, envelope, planned):
+    """One submitted step against the report, refusing what apply would.
+
+    Plan-time validation is the offers gate plus report-level resource, param
+    and cross-batch checks — full provider re-derivation stays at execution
+    (the settled "not a reconciler" stance). ``planned`` is the normalized
+    steps accepted so far, in submission order.
+    """
+    if not isinstance(raw, dict):
+        _refuse_step(index, "each step must be an object naming an action")
+    action = str(raw.get("action") or "").strip()
+    if action in (ACTION_ENABLE_STABLE_IPS, ACTION_DISABLE_STABLE_IPS):
+        _refuse_step(index,
+                     "the stable-outbound-IPs switch is fleet-wide and holds "
+                     "its own claim — run it alone through the single-action "
+                     "apply, never inside a batch.")
+    if action not in BATCH_ACTIONS:
+        _refuse_step(index, f"unknown batch action '{action}'.")
+    offer = (envelope.get("actions") or {}).get(action) or {}
+    if not offer.get("offered"):
+        _refuse_step(index,
+                     f"{action} is not currently offered "
+                     f"({offer.get('blocked_reason') or 'unavailable'}).",
+                     offer.get("blocked_reason") or "not_offered", 409)
+    resource = str(raw.get("resource") or "").strip()
+    step = {"action": action, "resource": resource, "params": {}}
+
+    if action == ACTION_ADD_NODE:
+        step["resource"] = resource = ""
+    elif action == ACTION_ADD_READER:
+        if not any(row.get("identifier") == resource
+                   for row in envelope.get("databases") or []):
+            _refuse_step(index,
+                         f"the report lists no database called "
+                         f"{resource or '(missing)'}.",
+                         "resource_not_found", 404)
+    elif action == ACTION_REMOVE_READER:
+        role, _class = _db_role(envelope, resource)
+        if role != "reader":
+            _refuse_step(index,
+                         f"{resource or '(missing)'} is not a read replica in "
+                         f"the report.", "not_a_reader", 409)
+    elif action in (ACTION_SET_CACHE_REPLICAS, ACTION_RESIZE_CACHE):
+        row = _cache_row(envelope, resource)
+        if row is None:
+            _refuse_step(index,
+                         f"the report lists no cache group called "
+                         f"{resource or '(missing)'}.",
+                         "resource_not_found", 404)
+        if row.get("blocked_reason"):
+            _refuse_step(index, f"{resource} is blocked: "
+                                f"{row['blocked_reason']}.",
+                         row["blocked_reason"], 409)
+    elif action == ACTION_RESIZE_DATABASE:
+        role, _class = _db_role(envelope, resource)
+        if role is None:
+            _refuse_step(index,
+                         f"the report lists no database instance called "
+                         f"{resource or '(missing)'}.",
+                         "resource_not_found", 404)
+    else:
+        row = _node_row(envelope, resource)
+        if row is None:
+            _refuse_step(index,
+                         f"the report lists no registered node called "
+                         f"{resource or '(missing)'}.",
+                         "resource_not_found", 404)
+        if resource == (envelope.get("nodes") or {}).get("self"):
+            _refuse_step(index,
+                         f"{resource} is the node answering this request; a "
+                         f"batch cannot remove it.",
+                         "cannot_remove_self", 409)
+
+    if action not in (ACTION_ADD_NODE, ACTION_ADD_READER):
+        if any(prior["action"] == action and prior["resource"] == resource
+               for prior in planned):
+            _refuse_step(index,
+                         f"duplicate step — {action} on "
+                         f"{resource or 'the fleet'} appears twice.")
+
+    if action == ACTION_SET_CACHE_REPLICAS:
+        row = _cache_row(envelope, resource)
+        count = raw.get("count")
+        if type(count) is not int:
+            _refuse_step(index, "count must be a whole number.")
+        if raw.get("apply_immediately") is not True:
+            _refuse_step(index,
+                         "apply_immediately must be true: ElastiCache applies "
+                         "a replica-count change immediately and offers no "
+                         "maintenance-window option.")
+        if count < 0:
+            _refuse_step(index, "count cannot be negative.")
+        current = int(row.get("replica_count") or 0)
+        if count == current:
+            _refuse_step(index,
+                         f"{resource} already has {current} replica(s).",
+                         "no_change", 409)
+        floor = int(row.get("min_replicas") or 0)
+        if count < floor:
+            _refuse_step(index,
+                         f"{resource} has automatic failover enabled, which "
+                         f"requires at least {floor} replica(s).",
+                         elasticache_helper.FAILOVER_REQUIRES_REPLICA, 409)
+        step["params"] = {"count": count, "apply_immediately": True}
+    elif action in (ACTION_RESIZE_CACHE, ACTION_RESIZE_DATABASE):
+        if raw.get("apply_immediately") is not True:
+            _refuse_step(index,
+                         "apply_immediately must be true: a resize is an "
+                         "observed, immediate change with a settle check.")
+        ladder = (provision_spec.CACHE_SIZES if action == ACTION_RESIZE_CACHE
+                  else provision_spec.DB_SIZES)
+        try:
+            to_type = _resolve_size(ladder, raw.get("size"))
+        except CapacityError as err:
+            _refuse_step(index, err.message, err.error_code)
+        if action == ACTION_RESIZE_CACHE:
+            current_type = (_cache_row(envelope, resource) or {}).get(
+                "node_type")
+        else:
+            _role, current_type = _db_role(envelope, resource)
+        if current_type == to_type:
+            _refuse_step(index, f"{resource} already runs {to_type}.",
+                         "no_change", 409)
+        step["params"] = {"size": str(raw.get("size")).strip().lower(),
+                          "apply_immediately": True}
+
+    _check_cross_batch(index, step, envelope, planned)
+    step["kind"] = _step_kind(step, envelope)
+    return step
+
+
+def _check_cross_batch(index, step, envelope, planned):
+    action, resource = step["action"], step["resource"]
+    removes = (ACTION_REMOVE_READER, ACTION_DRAIN_NODE, ACTION_TERMINATE_NODE)
+    resizes = (ACTION_RESIZE_CACHE, ACTION_RESIZE_DATABASE)
+
+    if action == ACTION_DRAIN_NODE:
+        # Only drains of currently-HEALTHY nodes consume the healthy budget —
+        # exact parity with the page's removable() rule: an unhealthy node
+        # drains freely, and at least one healthy node must remain.
+        healthy = [row for row in _instances(envelope) if row.get("healthy")]
+        if (_node_row(envelope, resource) or {}).get("healthy"):
+            already = sum(
+                1 for prior in planned
+                if prior["action"] == ACTION_DRAIN_NODE
+                and (_node_row(envelope, prior["resource"]) or {}).get(
+                    "healthy"))
+            if already + 1 >= len(healthy):
+                _refuse_step(index,
+                             "draining these nodes would leave no healthy "
+                             "node serving — keep at least one.",
+                             "last_healthy_target", 409)
+
+    if action == ACTION_TERMINATE_NODE:
+        drained_in_batch = any(
+            prior["action"] == ACTION_DRAIN_NODE
+            and prior["resource"] == resource for prior in planned)
+        if not drained_in_batch:
+            row = _node_row(envelope, resource) or {}
+            state = str(row.get("state") or "")
+            if row.get("healthy") or state == "initial" or "draining" in state:
+                _refuse_step(index,
+                             f"terminate_node needs a drain_node for "
+                             f"{resource} earlier in this batch, or a node "
+                             f"whose drain has already completed.",
+                             "not_drained", 409)
+
+    # Resizing a resource another step in this batch removes is never what
+    # the operator meant — refused whichever order the two were submitted in.
+    if action in resizes and any(
+            prior["action"] in removes and prior["resource"] == resource
+            for prior in planned):
+        _refuse_step(index,
+                     f"this batch both resizes and removes {resource}.",
+                     "conflicting_steps", 409)
+    if action in removes and any(
+            prior["action"] in resizes and prior["resource"] == resource
+            for prior in planned):
+        _refuse_step(index,
+                     f"this batch both resizes and removes {resource}.",
+                     "conflicting_steps", 409)
+
+
+def _describe_step(step, envelope):
+    """Plain-English ``(description, warnings)`` — the server's own words."""
+    action, resource = step["action"], step["resource"]
+    if action == ACTION_ADD_NODE:
+        return ("Add an app node",
+                ["builds, deploys and proves itself before serving · "
+                 "20–40 min"])
+    if action == ACTION_ADD_READER:
+        return (f"Add a read replica to {resource}",
+                ["can take up to an hour to come online"])
+    if action == ACTION_SET_CACHE_REPLICAS:
+        row = _cache_row(envelope, resource) or {}
+        current = int(row.get("replica_count") or 0)
+        return (f"Change {resource} replicas {current} → "
+                f"{step['params']['count']}",
+                ["applies immediately — ElastiCache has no maintenance-window "
+                 "option"])
+    if action == ACTION_RESIZE_CACHE:
+        row = _cache_row(envelope, resource) or {}
+        to_type = _resolve_size(provision_spec.CACHE_SIZES,
+                                step["params"]["size"])
+        note = ("rolls replicas first, then a brief failover — one short "
+                "interruption"
+                if row.get("resize_impact") == "rolling" else
+                "no replica: the cache is down while its node is replaced")
+        return f"Resize {resource} to {to_type}", [note]
+    if action == ACTION_RESIZE_DATABASE:
+        role, _class = _db_role(envelope, resource)
+        to_class = _resolve_size(provision_spec.DB_SIZES,
+                                 step["params"]["size"])
+        if role == "writer":
+            return (f"Resize writer {resource} to {to_class}",
+                    ["~minutes offline while the writer changes class"])
+        return (f"Resize reader {resource} to {to_class}",
+                ["reads keep flowing; this reader pauses while it changes "
+                 "class"])
+    if action == ACTION_REMOVE_READER:
+        return (f"Remove read replica {resource}",
+                ["deleted with no final snapshot"])
+    row = _node_row(envelope, resource) or {}
+    name = row.get("name") or resource
+    if action == ACTION_DRAIN_NODE:
+        return f"Drain {name} — traffic moves off it first", []
+    return f"Terminate {name}", []
+
+
+def _price(instance_type):
+    return provision_spec.COST_TABLE.get(instance_type) if instance_type \
+        else None
+
+
+def _step_cost(step, envelope):
+    """``(monthly_delta_usd, warnings)``. An unpriced type is an honest None
+    plus a warning — never a silent $0 folded into the total."""
+    action, resource = step["action"], step["resource"]
+    if action == ACTION_DRAIN_NODE:
+        return 0.0, []
+    if action == ACTION_ADD_NODE:
+        healthy = [row for row in _instances(envelope) if row.get("healthy")]
+        itype = healthy[0].get("instance_type") if healthy else None
+        price = _price(itype)
+        if price is None:
+            return None, [f"no listed price for {itype or 'this node type'}"]
+        return price, []
+    if action == ACTION_TERMINATE_NODE:
+        itype = (_node_row(envelope, resource) or {}).get("instance_type")
+        price = _price(itype)
+        if price is None:
+            return None, [f"no listed price for {itype or 'this node type'}"]
+        return -price, []
+    if action == ACTION_ADD_READER:
+        row = next((r for r in envelope.get("databases") or []
+                    if r.get("identifier") == resource), {})
+        cls = row.get("writer_instance_class") or row.get("instance_class")
+        price = _price(cls)
+        if price is None:
+            return None, [f"no listed price for {cls or 'this class'}"]
+        return price, []
+    if action == ACTION_REMOVE_READER:
+        _role, cls = _db_role(envelope, resource)
+        price = _price(cls)
+        if price is None:
+            return None, [f"no listed price for {cls or 'this class'}"]
+        return -price, []
+    if action == ACTION_SET_CACHE_REPLICAS:
+        row = _cache_row(envelope, resource) or {}
+        node_type = row.get("node_type")
+        price = _price(node_type)
+        if price is None:
+            return None, [f"no listed price for {node_type or 'this node type'}"]
+        delta = step["params"]["count"] - int(row.get("replica_count") or 0)
+        return delta * price, []
+    if action == ACTION_RESIZE_CACHE:
+        row = _cache_row(envelope, resource) or {}
+        from_type = row.get("node_type")
+        to_type = _resolve_size(provision_spec.CACHE_SIZES,
+                                step["params"]["size"])
+        # Node type is group-wide, so the delta applies to every member.
+        members = len(row.get("members") or []) or (
+            int(row.get("replica_count") or 0) + 1)
+        from_price, to_price = _price(from_type), _price(to_type)
+        if from_price is None or to_price is None:
+            missing = from_type if from_price is None else to_type
+            return None, [f"no listed price for {missing or 'this node type'}"]
+        return (to_price - from_price) * members, []
+    _role, from_class = _db_role(envelope, resource)
+    to_class = _resolve_size(provision_spec.DB_SIZES, step["params"]["size"])
+    from_price, to_price = _price(from_class), _price(to_class)
+    if from_price is None or to_price is None:
+        missing = from_class if from_price is None else to_class
+        return None, [f"no listed price for {missing or 'this class'}"]
+    return to_price - from_price, []
+
+
+def _iso_in(seconds):
+    import datetime
+    from mojo.helpers import dates
+    return (dates.utcnow() + datetime.timedelta(seconds=seconds)).isoformat()
+
+
+def plan_batch(actor, steps):
+    """Validate, order, word and price an ordered set of capacity steps.
+
+    Reads the CACHED report on purpose: the page re-plans on every debounced
+    stepper tweak, and a full AWS describe sweep per keystroke would
+    rate-limit the account for an answer at most REPORT_TTL old. Correctness
+    is unaffected — execution re-derives every guard, and the apply-time
+    fingerprint is fresh regardless.
+    """
+    _refuse_external("Planning capacity changes")
+    if not isinstance(steps, (list, tuple)) or not steps:
+        raise CapacityError("steps must be a non-empty list of capacity steps",
+                            "invalid_request")
+    if len(steps) > MAX_BATCH_STEPS:
+        raise CapacityError(
+            f"A batch holds at most {MAX_BATCH_STEPS} steps; this one has "
+            f"{len(steps)}.", "invalid_request")
+    envelope = report()
+    _refuse_degraded(envelope, [str((raw or {}).get("action") or "")
+                                for raw in steps
+                                if isinstance(raw, dict)])
+    normalized = []
+    for index, raw in enumerate(steps):
+        normalized.append(_validate_step(index, raw, envelope, normalized))
+    ordered = _order_steps(normalized)
+    total = 0.0
+    complete = True
+    for index, step in enumerate(ordered):
+        step["index"] = index
+        description, notes = _describe_step(step, envelope)
+        delta, cost_notes = _step_cost(step, envelope)
+        step["description"] = description
+        step["warnings"] = notes + cost_notes
+        step["monthly_delta_usd"] = None if delta is None else round(delta, 2)
+        if delta is None:
+            complete = False
+        else:
+            total += delta
+    record = {
+        "schema_version": SCHEMA_VERSION,
+        "id": str(uuid.uuid4()),
+        "created": _now(),
+        "expires_in": PLAN_TTL,
+        "expires_at": _iso_in(PLAN_TTL),
+        "actor": getattr(actor, "pk", None),
+        "fingerprint": _fleet_fingerprint(envelope),
+        "steps": ordered,
+        "total_monthly_delta_usd": round(total, 2),
+        "estimate_complete": complete,
+        "order_note": ORDER_NOTE,
+    }
+    try:
+        cache.set(_plan_key(record["id"]), record, PLAN_TTL)
+    except Exception:
+        # A plan that cannot be stored cannot be confirmed — refusal, never
+        # go-ahead, same stance as _claim.
+        raise CapacityError(
+            "The coordination cache is unavailable, so this plan could not "
+            "be stored for confirmation. Try again shortly.",
+            "cache_unavailable", 503) from None
+    return {key: value for key, value in record.items()
+            if key != "fingerprint"}
+
+
+def apply_batch(actor, plan_id):
+    """Confirm one stored plan by id and hand its steps to the batch job."""
+    _refuse_external("Applying capacity changes")
+    plan_id = str(plan_id or "").strip()
+    record = None
+    if plan_id:
+        try:
+            record = cache.get(_plan_key(plan_id))
+        except Exception:
+            record = None
+    if not isinstance(record, dict):
+        raise CapacityError(
+            "That plan is not on record — plans expire after 5 minutes. "
+            "Request a new plan and review it again.",
+            "plan_not_found", 404)
+    fresh = report(refresh=True)
+    # Never fingerprint an incomplete fleet: a degraded fresh envelope would
+    # hash differently for the wrong reason and 409 an honest plan.
+    _refuse_degraded(fresh, [step["action"] for step in record["steps"]])
+    if _fleet_fingerprint(fresh) != record.get("fingerprint"):
+        raise CapacityError(
+            "The fleet changed since this plan was written. Request a new "
+            "plan and review it again.",
+            "plan_stale", 409)
+    batch_id = str(uuid.uuid4())
+    # Atomic single-use: `add` either claims the plan for THIS batch or names
+    # the batch that already claimed it, so a double-click converges on
+    # polling, never on a second batch.
+    try:
+        acquired = cache.add(_plan_lock_key(plan_id), batch_id, CLAIM_TTL)
+    except Exception:
+        raise CapacityError(
+            "The coordination cache is unavailable, so a second apply of "
+            "this plan cannot be ruled out. Try again shortly.",
+            "cache_unavailable", 503) from None
+    if not acquired:
+        try:
+            existing = cache.get(_plan_lock_key(plan_id))
+        except Exception:
+            existing = None
+        if existing:
+            raise CapacityError(
+                "This plan was already applied. Poll the running batch "
+                "instead of starting a second one.",
+                "plan_already_applied", 409, {"batch": existing})
+        raise CapacityError(
+            "The coordination cache is unavailable, so a second apply of "
+            "this plan cannot be ruled out. Try again shortly.",
+            "cache_unavailable", 503)
+    steps = [{
+        "index": step["index"], "action": step["action"],
+        "resource": step["resource"],
+        "params": dict(step.get("params") or {}),
+        "description": step.get("description"), "kind": step.get("kind"),
+        "state": "pending", "operation": None, "phase": None,
+        "message": None, "error_code": None,
+    } for step in record["steps"]]
+    budget = sum(_deadline_for(step["action"]) for step in steps) \
+        + 120 * len(steps)
+    batch = {
+        "schema_version": SCHEMA_VERSION,
+        "id": batch_id,
+        "plan_id": plan_id,
+        "actor": getattr(actor, "pk", None),
+        "state": STATE_RUNNING,
+        "started": _now(),
+        "current_index": 0,
+        "message": "requested",
+        "error_code": None,
+        "steps": steps,
+        "ttl": budget + CLAIM_TTL,
+    }
+    _write_batch(batch)
+    from mojo.apps import jobs
+    try:
+        jobs.publish(
+            func="mojo.apps.aws.asyncjobs.capacity_batch",
+            payload={"batch": batch_id},
+            channel="cleanup", max_retries=0,
+            # Stored but unenforced by the job engine — operator metadata,
+            # not a kill switch. The runner's per-step ceilings are the clock.
+            max_exec_seconds=budget)
+    except Exception:
+        logger.exception("capacity: batch %s could not be dispatched",
+                         batch_id)
+        batch["state"] = STATE_FAILED
+        batch["error_code"] = "batch_dispatch_failed"
+        batch["message"] = ("The batch could not be handed to a job runner, "
+                            "so nothing was started.")
+        for step in batch["steps"]:
+            step["state"] = "not_attempted"
+        _write_batch(batch)
+        raise CapacityError(
+            "This installation's job runners did not accept the batch, so "
+            "nothing was changed.", "batch_dispatch_failed", 503) from None
+    logger.info("capacity batch %s dispatched plan=%s steps=%d actor=%s",
+                batch_id, plan_id, len(steps), batch["actor"])
+    # The stored record keeps its TTL; the wire answer, like batch_status,
+    # does not carry bookkeeping.
+    return {key: value for key, value in batch.items() if key != "ttl"}
+
+
+def batch_status(batch_id):
+    """One batch's recorded progress, or a 404. A pure READ, like
+    operation_status — polling must never advance the work."""
+    record = _read_batch(str(batch_id or "").strip())
+    if record is None:
+        raise CapacityError(
+            "That capacity batch is not on record. It finished long ago, or "
+            "the coordination cache was cleared.",
+            "batch_not_found", 404)
+    result = {key: value for key, value in record.items() if key != "ttl"}
+    result["stalled"] = _batch_stalled(record)
+    return result
+
+
+def _batch_stalled(record):
+    if record.get("state") != STATE_RUNNING:
+        return False
+    from mojo.helpers import dates
+    try:
+        updated = dates.parse_datetime(record.get("updated"))
+        age = (dates.utcnow() - updated).total_seconds()
+    except Exception:
+        return False
+    return age > BATCH_STALL_AFTER
+
+
+def _step_ceiling(action):
+    """A generous BACKSTOP above the child's own deadline — never the clock.
+
+    A ceiling that undercuts a legitimately slow child converts a succeeding
+    mutation into a reported failure, the worst lie this API could tell. The
+    add_node extra: _deadline_for budgets only PROOF_MARGIN for the proving
+    leg, but the child actually waits canary_timeout() + PROOF_MARGIN.
+    """
+    ceiling = _deadline_for(action) + 900
+    if action == ACTION_ADD_NODE:
+        try:
+            from mojo.apps.edge.services import deploy
+            ceiling += int(deploy.canary_timeout())
+        except Exception:
+            ceiling += 900
+    return ceiling
+
+
+def _audit_batch_step(actor, step, operation_id):
+    """The per-step audit row the REST layer would have written.
+
+    Single-action applies audit in the REST handler; the batch runner calls
+    the service directly, so it writes the same row itself, with the same
+    untainted action names. Function-level imports on purpose: rest.capacity
+    imports this module at module level.
+    """
+    try:
+        from mojo.apps.account.services import admin_platform
+        from mojo.apps.aws.rest.capacity import AUDIT_ACTIONS
+        admin_platform.audit_after_commit(
+            actor, AUDIT_ACTIONS.get(step["action"], "aws_capacity"),
+            f"{step.get('resource') or 'fleet'}:{operation_id}")
+    except Exception:
+        logger.exception("capacity: batch step audit could not be written")
+
+
+def _follow_operation(record, step, operation_id):
+    """Poll one child operation to a terminal state, copying its progress.
+
+    Copies phase/message onto the step each tick so ONE batch poll answers
+    everything and `updated` stays fresh. Returns the terminal record, the
+    still-running record at the backstop ceiling, or None when the child's
+    record vanished from the cache.
+    """
+    deadline = time.time() + _step_ceiling(step["action"])
+    misses = 0
+    live = None
+    while time.time() < deadline:
+        _sleep(POLL_INTERVAL)
+        live = _read_operation(operation_id)
+        if live is None:
+            # Tolerate a transient cache blip; sustained absence means the
+            # record is genuinely gone.
+            misses += 1
+            if misses >= 3:
+                return None
+            continue
+        misses = 0
+        step["phase"] = live.get("phase")
+        step["message"] = live.get("message")
+        _write_batch(record)
+        if live.get("state") != STATE_RUNNING:
+            return live
+    return live
+
+
+def _fail_batch(record, position, error_code, message):
+    steps = record.get("steps") or []
+    step = steps[position]
+    step["state"] = STATE_FAILED
+    step["error_code"] = str(error_code)
+    step["message"] = str(message)
+    remaining = len(steps) - position - 1
+    for later in steps[position + 1:]:
+        later["state"] = "not_attempted"
+        later["message"] = "not attempted — an earlier step failed"
+    record["state"] = STATE_FAILED
+    record["error_code"] = str(error_code)
+    tail = (f"; the remaining {remaining} step(s) were not attempted."
+            if remaining else "")
+    record["message"] = (f"Step {position + 1} of {len(steps)} failed: "
+                         f"{message}{tail}")
+    logger.warning("capacity batch %s failed at step %s code=%s",
+                   record.get("id"), position, error_code)
+    _write_batch(record)
+    return STATE_FAILED
+
+
+def run_batch(batch_id):
+    """The batch job body: each step is an UNCHANGED single-action apply.
+
+    apply() claims, re-derives its guards from fresh AWS reads, records a
+    child operation and dispatches its own job — identically to a manual
+    click. This runner only sequences, mirrors progress, audits, and stops at
+    the first failure (no rollback; later steps are not attempted). No claims
+    of its own: each child releases its own via _finish/_fail.
+    """
+    from objict import objict
+
+    record = _read_batch(batch_id)
+    if record is None:
+        logger.warning("capacity: batch %s vanished before it ran", batch_id)
+        return "missing"
+    if record.get("state") != STATE_RUNNING:
+        return str(record.get("state"))
+    actor = objict(pk=record.get("actor"))
+    steps = record.get("steps") or []
+    for position, step in enumerate(steps):
+        record["current_index"] = position
+        step["state"] = STATE_RUNNING
+        step["message"] = "requested"
+        record["message"] = (f"step {position + 1} of {len(steps)}: "
+                             f"{step.get('description') or step['action']}")
+        _write_batch(record)
+        try:
+            child = apply(actor, step["action"], step.get("resource") or "",
+                          **(step.get("params") or {}))
+        except CapacityError as err:
+            return _fail_batch(record, position, err.error_code, err.message)
+        except Exception:
+            logger.exception("capacity: batch %s step %s raised",
+                             batch_id, position)
+            return _fail_batch(record, position, "operation_failed",
+                               "This step stopped with an unexpected error.")
+        operation_id = child.get("id")
+        step["operation"] = operation_id
+        _write_batch(record)
+        _audit_batch_step(actor, step, operation_id)
+        final = _follow_operation(record, step, operation_id)
+        if final is None:
+            return _fail_batch(
+                record, position, "operation_vanished",
+                f"The step's operation record vanished from the coordination "
+                f"cache before it finished. Check the AWS console; the "
+                f"operation id was {operation_id}.")
+        if final.get("state") == STATE_RUNNING:
+            return _fail_batch(
+                record, position, "operation_timeout",
+                f"The step gave no terminal answer within the batch's "
+                f"backstop ceiling. It may still be working — poll "
+                f"?operation={operation_id} and check the AWS console.")
+        if final.get("state") != STATE_DONE:
+            return _fail_batch(
+                record, position,
+                final.get("error_code") or "operation_failed",
+                final.get("message") or "the operation failed")
+        step["state"] = STATE_DONE
+        step["phase"] = "complete"
+        step["message"] = final.get("message")
+        _write_batch(record)
+    record["state"] = STATE_DONE
+    record["message"] = f"All {len(steps)} step(s) completed."
+    _write_batch(record)
+    return STATE_DONE
+
+
 # ── the operation job ───────────────────────────────────────────────────────
 
 def run_operation(operation_id):
@@ -1544,6 +2729,8 @@ def run_operation(operation_id):
         ACTION_SET_CACHE_REPLICAS: _run_set_cache_replicas,
         ACTION_ENABLE_STABLE_IPS: _run_enable_stable_ips,
         ACTION_DISABLE_STABLE_IPS: _run_disable_stable_ips,
+        ACTION_RESIZE_CACHE: _run_resize_cache,
+        ACTION_RESIZE_DATABASE: _run_resize_database,
     }
     runner = runners.get(record.get("action"))
     if runner is None:
@@ -1614,10 +2801,19 @@ def _run_add_node(record):
     # ── launching ──────────────────────────────────────────────────────────
     base = detail.get("source_name") or source.get("name") or "mojo-node"
     _advance(record, "launching", "launching the new node")
+    # Clones carry the fleet's identity from birth: the source's
+    # mojo:project/mojo:env (and managed-by, when present) ride onto the
+    # launch tags beside the created-by stamp, so discovery (spec.owns) and
+    # the terminate guard's identity anchor both recognize the clone even if
+    # the stamp is ever lost.
+    identity = {key: value
+                for key, value in (source.get("tags") or {}).items()
+                if key in FLEET_IDENTITY_TAGS + ("managed-by",) and value}
     instance_id = ec2_helper.launch_clone(
         source, image_id, source.get("subnet_id"),
         name=f"{base}-clone",
-        user_data=node_user_data(base))
+        user_data=node_user_data(base),
+        tags=identity)
     if not instance_id:
         return _fail(record, "launch_failed",
                      "AWS accepted the launch but named no instance.")
@@ -2214,3 +3410,93 @@ def _run_set_cache_replicas(record):
     return _fail(record, "cache_timeout",
                  f"{resource} did not settle at {wanted} replica(s). Check the "
                  f"ElastiCache console.")
+
+
+# Provider failures in both resize runners deliberately ride the generic
+# handler in run_operation: the claim is held while the mutation state is
+# unknown, which is right here — a retried modify is a second mutation.
+
+def _memory_caution(downsize):
+    """The honest downsize note. Stated, never measured: the report carries no
+    bytes-used figure, so the note names the risk without pretending to."""
+    if downsize is True:
+        return (" The node is smaller — if the working set no longer fits, "
+                "Redis evicts under its maxmemory policy; check cache memory "
+                "metrics.")
+    if downsize is None:
+        return (" If the new node is smaller than the old one and the working "
+                "set no longer fits, Redis evicts under its maxmemory policy; "
+                "check cache memory metrics.")
+    return ""
+
+
+def _run_resize_cache(record):
+    resource = record["resource"]
+    detail = record["detail"]
+    to_type = detail["to_type"]
+    _advance(record, "resizing",
+             f"moving {resource} from {detail['from_type']} to {to_type}")
+    elasticache_helper.modify_replication_group_node_type(resource, to_type, True)
+    invalidate()
+    _advance(record, "settling", "waiting for every node to run the new type")
+    deadline = time.time() + CACHE_RESIZE_TIMEOUT
+    while time.time() < deadline:
+        _sleep(30)
+        facts = elasticache_helper.replication_group_facts(resource)
+        if facts is None:
+            continue
+        _advance(record, "settling",
+                 f"{resource} is {facts.get('status')} on "
+                 f"{facts.get('node_type')}")
+        if (facts.get("status") == elasticache_helper.SETTLED
+                and facts.get("node_type") == to_type):
+            invalidate()
+            note = ("Replicas were replaced first, then a brief failover "
+                    "swapped the primary — one short interruption, not an "
+                    "outage." if detail.get("impact") == "rolling" else
+                    "With no replica, the cache was down while its node was "
+                    "replaced.")
+            note += _memory_caution(detail.get("downsize"))
+            return _finish(record, f"{resource} now runs {to_type}. {note}")
+    return _fail(record, "resize_timeout",
+                 f"{resource} did not settle on {to_type}. Check the "
+                 f"ElastiCache console.")
+
+
+def _run_resize_database(record):
+    resource = record["resource"]
+    detail = record["detail"]
+    to_class = detail["to_class"]
+    _advance(record, "resizing",
+             f"moving {resource} from {detail['from_class']} to {to_class}")
+    rds_helper.modify_instance_class(
+        resource, to_class, True, promotion_tier=detail.get("promotion_tier"))
+    invalidate()
+    _advance(record, "settling", "waiting for the instance to settle")
+    deadline = time.time() + RDS_TIMEOUT
+    while time.time() < deadline:
+        _sleep(30)
+        row = rds_helper.instance_role(resource)
+        if row is None:
+            continue
+        _advance(record, "settling", f"{resource} is {row.get('status')}")
+        if (row.get("status") == RDS_SETTLED
+                and row.get("instance_class") == to_class):
+            invalidate()
+            note = ("The instance restarted to change class — that was the "
+                    "few minutes of downtime this action warned about."
+                    if detail.get("role") == "writer" else
+                    "The writer kept serving; this reader paused while it "
+                    "changed class.")
+            # Keyed on the tier VALUE, never on role wording: a standalone
+            # primary or replica (tier None) has no tier to claim.
+            tier = detail.get("promotion_tier")
+            if tier == 0:
+                note += " Failover preference: tier 0."
+            elif tier is not None:
+                note += (f" It sits at failover tier {tier}, so the "
+                         f"writer-class box stays preferred.")
+            return _finish(record, f"{resource} now runs {to_class}. {note}")
+    return _fail(record, "resize_timeout",
+                 f"{resource} did not settle on {to_class}. Check the RDS "
+                 f"console.")

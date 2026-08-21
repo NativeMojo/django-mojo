@@ -75,8 +75,14 @@ def _facts(status, engine_version, pending):
 
 
 def _instance_facts(row):
-    return _facts(row.get("DBInstanceStatus"), row.get("EngineVersion"),
-                  row.get("PendingModifiedValues"))
+    facts = _facts(row.get("DBInstanceStatus"), row.get("EngineVersion"),
+                   row.get("PendingModifiedValues"))
+    # Instances only — clusters have no class of their own. Riding on the one
+    # describe `instance_statuses` already performs, this is what gives the
+    # capacity report a per-instance class for every Aurora member at zero
+    # extra API calls.
+    facts["instance_class"] = row.get("DBInstanceClass")
+    return facts
 
 
 def _cluster_facts(row):
@@ -147,6 +153,30 @@ def modify_instance_engine_version(identifier, target_version, apply_immediately
     }
     if parameter_group:
         params["DBParameterGroupName"] = parameter_group
+    return _caller.call(
+        "rds.modify_db_instance", lambda: rds.modify_db_instance(**params),
+        iam_action="rds:ModifyDBInstance", mutation=True)
+
+
+def modify_instance_class(identifier, instance_class, apply_immediately,
+                          promotion_tier=None, client=None, region=None):
+    """Move one DB instance to ``instance_class``.
+
+    ``PromotionTier`` rides in the SAME call when given — Aurora members only,
+    never sent for a standalone instance — so a successful resize can never
+    leave the tier half-set. No ``AllowMajorVersionUpgrade``: a class change
+    is not an engine change. ``ApplyImmediately`` is the caller's explicit
+    choice and is never defaulted — "now" restarts the instance, "next
+    maintenance window" parks the change, and the operator decides which.
+    """
+    rds = _rds(client, region)
+    params = {
+        "DBInstanceIdentifier": identifier,
+        "DBInstanceClass": instance_class,
+        "ApplyImmediately": bool(apply_immediately),
+    }
+    if promotion_tier is not None:
+        params["PromotionTier"] = int(promotion_tier)
     return _caller.call(
         "rds.modify_db_instance", lambda: rds.modify_db_instance(**params),
         iam_action="rds:ModifyDBInstance", mutation=True)

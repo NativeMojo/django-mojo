@@ -109,9 +109,11 @@ COST_TABLE = {
     "db.t4g.medium": 50.0,
     "db.r6g.large": 175.0,
     "db.r6g.xlarge": 350.0,
+    "db.r6g.2xlarge": 700.0,
     "cache.t4g.micro": 12.0,
     "cache.t4g.medium": 50.0,
     "cache.r7g.large": 120.0,
+    "cache.r7g.xlarge": 240.0,
     "nlb": 20.0,
     "eip": 3.6,
     "ebs_gb_month": 0.08,
@@ -120,6 +122,25 @@ COST_TABLE = {
     "guardduty": 5.0,
     "cloudwatch_logs_gb_month": 0.50,
 }
+
+# The Admin capacity resize allowlist: the ONLY sizes the resize_cache /
+# resize_database actions accept, exposed by the capacity report with the
+# price beside each rung. `(key, label, instance_type)`, ordered small to
+# extra large. Every type named here must stay priced in COST_TABLE, or the
+# panel would offer a size with no number on it — tests/test_deploy/
+# provision_spec.py enforces both the pricing and the ordering.
+CACHE_SIZES = (
+    ("small", "Small", "cache.t4g.micro"),
+    ("medium", "Medium", "cache.t4g.medium"),
+    ("large", "Large", "cache.r7g.large"),
+    ("xlarge", "Extra large", "cache.r7g.xlarge"),
+)
+DB_SIZES = (
+    ("small", "Small", "db.t4g.medium"),
+    ("medium", "Medium", "db.r6g.large"),
+    ("large", "Large", "db.r6g.xlarge"),
+    ("xlarge", "Extra large", "db.r6g.2xlarge"),
+)
 
 # Rough starting points for the storage lines, so the estimate is not silently
 # missing the two things that grow.

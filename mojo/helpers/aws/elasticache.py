@@ -178,6 +178,24 @@ def modify_replication_group_engine_version(identifier, target_version, apply_im
         iam_action="elasticache:ModifyReplicationGroup", mutation=True)
 
 
+def modify_replication_group_node_type(identifier, node_type, apply_immediately,
+                                       client=None, region=None):
+    """Move one replication group to ``node_type`` — every member, rolling.
+
+    ``CacheNodeType`` is group-wide: replicas always match their primary, so
+    there is no per-instance form of this call. No other member rides along,
+    and ``ApplyImmediately`` is the caller's explicit choice — replacing every
+    node in the group is an interruption decision the operator makes.
+    """
+    cache = _cache(client, region)
+    return _caller.call(
+        "elasticache.modify_replication_group",
+        lambda: cache.modify_replication_group(
+            ReplicationGroupId=identifier, CacheNodeType=node_type,
+            ApplyImmediately=bool(apply_immediately)),
+        iam_action="elasticache:ModifyReplicationGroup", mutation=True)
+
+
 def modify_cache_cluster_engine_version(identifier, target_version, apply_immediately,
                                         parameter_group=None, client=None, region=None):
     """Move one standalone cache cluster to ``target_version``. See the group twin."""
@@ -242,6 +260,9 @@ def _group_facts(row):
         "identifier": row.get("ReplicationGroupId"),
         "status": str(row.get("Status") or "").lower(),
         "description": row.get("Description"),
+        # Group-wide in ElastiCache: every member runs the same node type, so
+        # there is no per-instance cache sizing to report.
+        "node_type": row.get("CacheNodeType"),
         "cluster_enabled": bool(row.get("ClusterEnabled")),
         "automatic_failover": failover,
         "automatic_failover_on": failover in FAILOVER_ON,

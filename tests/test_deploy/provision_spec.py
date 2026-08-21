@@ -51,6 +51,34 @@ def test_presets_are_coherent(opts):
                    "second node is unreachable")
 
 
+@th.django_unit_test("the capacity resize ladders are priced, unique, and ordered by cost")
+def test_resize_ladders_are_priced_and_ordered(opts):
+    from mojo.deploy.provision import spec as spec_module
+
+    for name, ladder in (("CACHE_SIZES", spec_module.CACHE_SIZES),
+                         ("DB_SIZES", spec_module.DB_SIZES)):
+        keys = [key for key, _label, _type in ladder]
+        th.assert_eq(keys, ["small", "medium", "large", "xlarge"],
+                     f"{name} must carry exactly the four curated rungs in "
+                     f"order — the panel and the resize API contract name "
+                     f"these keys")
+        types = [itype for _key, _label, itype in ladder]
+        th.assert_eq(len(set(types)), len(types),
+                     f"{name} maps two rungs onto one instance type: {types}")
+        prices = []
+        for _key, label, itype in ladder:
+            th.assert_true(itype in spec_module.COST_TABLE,
+                           f"{name} rung {label!r} uses {itype} which has no "
+                           f"price in COST_TABLE — the resize offer would "
+                           f"render with no number on it")
+            prices.append(spec_module.COST_TABLE[itype])
+        th.assert_true(
+            all(prices[i] < prices[i + 1] for i in range(len(prices) - 1)),
+            f"{name} is not ordered small→xlarge by price — a 'bigger' rung "
+            f"that costs less means the ladder points at the wrong types: "
+            f"{list(zip(types, prices))}")
+
+
 @th.django_unit_test("two availability zones, because Aurora requires two")
 def test_az_count_is_two(opts):
     from mojo.deploy.provision import spec as spec_module

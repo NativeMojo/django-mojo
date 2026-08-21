@@ -1,10 +1,12 @@
 // Fleet Scaling — the whole fleet on one page: app nodes, Redis, database.
 //
 // The interaction model is stage-then-apply: every stepper edits a local
-// desired state, the bottom bar lists what would change in plain words, and
-// Apply runs the steps one at a time through the EXISTING capacity actions —
-// each one still validated server-side at execution time, exactly as if the
-// operator had clicked them individually in the capacity panel.
+// desired state, the staged steps are sent to POST /capacity/plan, and the
+// bottom bar renders the SERVER's plan — its wording, its ordering, its cost
+// delta. Nothing here invents a description or a price. Confirming applies
+// the plan by its id (POST /capacity/plan/apply); the server then runs the
+// steps as one batch, each step re-validated against the live fleet the
+// moment it runs, and this page polls one batch status to a terminal state.
 //
 // Rules carried over from capacity.js:
 //   1. Every control the server would refuse is absent or disabled with the
@@ -12,11 +14,6 @@
 //      re-derives an offer.
 //   2. Progress is polled to a terminal state; "AWS accepted it" is never
 //      reported as done.
-//
-// Deliberate placeholders, disabled until their server sides ship:
-//   - instance size dropdowns (resize_cache / resize_database)
-//   - the server-written plan (plan/apply batch API) — today the step list is
-//     assembled here from the same offers the server published.
 import {api, apiOnce, h, icon} from '../../core.js';
 import {toast} from '../../components/actions.js';
 import {openModal} from '../../components/overlays.js';
@@ -25,23 +22,21 @@ import {BLOCKED_COPY, PHASE_COPY} from './capacity.js';
 
 const CAPACITY_PATH = '/api/aws/capacity';
 const STATUS_PATH = '/api/aws/capacity/status';
-const APPLY_PATH = '/api/aws/capacity/apply';
+const PLAN_PATH = '/api/aws/capacity/plan';
+const PLAN_APPLY_PATH = '/api/aws/capacity/plan/apply';
 
 const POLL_INTERVAL = 10000;
-const POLL_LIMIT = 360; // one hour per operation, matching capacity.js.
+// Per STEP, matching capacity.js's 90 minutes per operation — above the
+// server's CACHE_RESIZE_TIMEOUT (5400s), so the page never abandons a batch
+// the server still allows.
+const POLL_LIMIT = 540;
 
 const EXTERNAL_SUB = 'Infrastructure mode is external, so this portal shows the fleet but does not change it.';
 
-// Rough monthly on-demand estimates, keyed by instance type. Display-only
-// ("≈"), and only where the report names a type; the authoritative number
-// arrives with the server-written plan when the batch API ships.
-const EST_MONTHLY = {
-  't3.small': 15, 't3.medium': 30, 't3.large': 60, 't3.xlarge': 121,
-  'm6i.large': 70,
-};
-
-function estimate(type) {
-  return EST_MONTHLY[type] || null;
+function deltaText(value) {
+  if (value === null || value === undefined) return '';
+  const rounded = Math.round(Math.abs(value) * 100) / 100;
+  return `${value < 0 ? '−' : '+'}$${rounded}/mo`;
 }
 
 function blockedText(action) {
@@ -68,8 +63,16 @@ export async function fleetPage(ctx, signal = null) {
   let report = null;
   // Desired state, staged locally until Apply.
   let want = null;
-  // While a plan is running: {steps, index, phase} — replaces the bar body.
+  // While a batch is running: the server's batch record — replaces the bar body.
   let running = null;
+  // The server-written plan for the current staged steps, and its request
+  // lifecycle. planKey is the JSON of the staged steps the plan answers for —
+  // a cheap way to re-request only when the staging actually changed.
+  let serverPlan = null;
+  let planPending = false;
+  let planError = null;
+  let planTimer = null;
+  let planKey = '';
 
   const managed = () => report?.mode !== 'external';
   const offer = (name) => report?.actions?.[name] || {offered: false, blocked_reason: null};
@@ -81,10 +84,7 @@ export async function fleetPage(ctx, signal = null) {
   // not restarted since the config line was added still runs without routing.
   // The instance type on the row itself — the operator's cheapest answer to
   // "what am I actually paying for here". Mono, because it is an identifier.
-  // Rendered only where the report supplies one: app nodes carry
-  // `instance_type` and standalone databases carry `instance_class` today;
-  // cache members and Aurora per-instance classes arrive with the resize work,
-  // and light up here with no further change.
+  // Rendered only where the report supplies one.
   function typeTag(value) {
     return value ? h('span', {class: 'fleet-tag fleet-type mono', text: value}) : null;
   }
@@ -117,6 +117,12 @@ export async function fleetPage(ctx, signal = null) {
         (row) => [row.identifier, Number(row.replica_count || 0)])),
       dbAdd: new Map((report?.databases || []).map((row) => [row.identifier, 0])),
       dbRemove: new Set(),
+      // Staged sizes, keyed by row identifier -> curated size key. Absent
+      // means unchanged; the reader map stages ONE size the plan fans out
+      // into one resize step per differing reader.
+      cacheSizes: new Map(),
+      dbWriterSizes: new Map(),
+      dbReaderSizes: new Map(),
     };
   }
 
@@ -132,123 +138,132 @@ export async function fleetPage(ctx, signal = null) {
     return signal?.aborted || !root.isConnected;
   }
 
-  // ── the plan ────────────────────────────────────────────────────────────
+  // ── the staged steps ────────────────────────────────────────────────────
 
-  // Adds before removes, always — the same ordering the batch API will
-  // enforce server-side. Each step carries the submissions it will make.
-  function plan() {
+  // Raw submissions only — no wording, no ordering, no prices: those are the
+  // server's. A staged node removal is TWO steps (drain, then terminate); one
+  // staged reader size fans out into one resize per differing reader, skipping
+  // any reader this same batch removes.
+  function stagedSteps() {
     const steps = [];
     for (let index = 0; index < want.addNodes; index += 1) {
-      steps.push({
-        key: `add-node-${index}`, kind: 'add',
-        label: 'Add an app node',
-        note: 'builds, deploys and proves itself before serving · 20–40 min',
-        submits: [{action: 'add_node', confirm_resource: 'add_node'}],
-      });
+      steps.push({action: 'add_node'});
     }
     for (const [identifier, addCount] of want.dbAdd) {
       for (let index = 0; index < addCount; index += 1) {
-        steps.push({
-          key: `add-reader-${identifier}-${index}`, kind: 'add',
-          label: `Add a read replica to ${identifier}`,
-          note: '~10 min to come online',
-          submits: [{action: 'add_reader', resource: identifier,
-            confirm_resource: identifier}],
-        });
+        steps.push({action: 'add_reader', resource: identifier});
       }
     }
     for (const row of report?.caches || []) {
       const current = Number(row.replica_count || 0);
       const wanted = want.caches.get(row.identifier);
-      if (wanted === undefined || wanted === current) continue;
-      steps.push({
-        key: `cache-${row.identifier}`, kind: wanted > current ? 'add' : 'remove',
-        label: `Change ${row.identifier} replicas ${current} → ${wanted}`,
-        note: 'applies immediately — ElastiCache has no maintenance-window option here',
-        submits: [{action: 'set_cache_replicas', resource: row.identifier,
-          confirm_resource: row.identifier, count: wanted, apply_immediately: true}],
-      });
+      if (wanted !== undefined && wanted !== current) {
+        steps.push({action: 'set_cache_replicas', resource: row.identifier,
+          count: wanted, apply_immediately: true});
+      }
+      const size = want.cacheSizes.get(row.identifier);
+      const rung = size
+        && (report?.sizes?.cache || []).find((r) => r.size === size);
+      if (rung && rung.type !== row.node_type) {
+        steps.push({action: 'resize_cache', resource: row.identifier,
+          size, apply_immediately: true});
+      }
+    }
+    for (const row of report?.databases || []) {
+      const writerSize = want.dbWriterSizes.get(row.identifier);
+      const writerTarget = row.kind === 'aurora' ? row.writer : row.identifier;
+      if (writerSize && writerTarget) {
+        const rung = (report?.sizes?.database || []).find(
+          (r) => r.size === writerSize);
+        const current = row.writer_instance_class || row.instance_class;
+        if (rung && rung.type !== current) {
+          steps.push({action: 'resize_database', resource: writerTarget,
+            size: writerSize, apply_immediately: true});
+        }
+      }
+      const readerSize = want.dbReaderSizes.get(row.identifier);
+      const readerRung = readerSize
+        && (report?.sizes?.database || []).find((r) => r.size === readerSize);
+      if (readerRung) {
+        for (const reader of row.readers || []) {
+          if (want.dbRemove.has(reader)) continue;
+          const current = (row.reader_instance_classes || {})[reader];
+          if (current === readerRung.type) continue;
+          steps.push({action: 'resize_database', resource: reader,
+            size: readerSize, apply_immediately: true});
+        }
+      }
     }
     for (const reader of want.dbRemove) {
-      steps.push({
-        key: `remove-reader-${reader}`, kind: 'remove',
-        label: `Remove read replica ${reader}`,
-        note: 'deleted with no final snapshot — it is a copy of the primary',
-        submits: [{action: 'remove_reader', resource: reader,
-          confirm_resource: reader}],
-      });
+      steps.push({action: 'remove_reader', resource: reader});
     }
     for (const id of want.removeNodes) {
-      const row = instances().find((node) => node.id === id);
-      steps.push({
-        key: `remove-node-${id}`, kind: 'remove',
-        label: `Drain and shut down ${row?.name || id}`,
-        note: 'traffic moves off it first; the instance is then terminated',
-        submits: [
-          {action: 'drain_node', resource: id, confirm_resource: id},
-          {action: 'terminate_node', resource: id, confirm_resource: id},
-        ],
-      });
+      steps.push({action: 'drain_node', resource: id});
+      steps.push({action: 'terminate_node', resource: id});
     }
     return steps;
   }
 
-  // ── the runner ──────────────────────────────────────────────────────────
+  // ── the server plan ─────────────────────────────────────────────────────
 
-  async function follow(operation, onPhase) {
-    const params = new URLSearchParams({operation});
-    for (let count = 0; count < POLL_LIMIT && !stopped(); count += 1) {
+  // Debounced: called from render(), it re-requests only when the staged
+  // steps actually changed, ~400ms after the last tweak.
+  function syncPlan() {
+    if (running) return;
+    const steps = stagedSteps();
+    const key = JSON.stringify(steps);
+    if (key === planKey) return;
+    planKey = key;
+    clearTimeout(planTimer);
+    serverPlan = null;
+    planError = null;
+    if (!steps.length) { planPending = false; return; }
+    planPending = true;
+    planTimer = setTimeout(() => requestPlan(steps, key), 400);
+  }
+
+  async function requestPlan(steps, key) {
+    let plan;
+    try {
+      plan = await apiOnce(PLAN_PATH, {method: 'POST', signal,
+        body: JSON.stringify({steps})});
+    } catch (error) {
+      if (error?.name === 'AbortError' || key !== planKey || stopped()) return;
+      planPending = false;
+      planError = error.message || 'the server refused this plan';
+      render();
+      return;
+    }
+    if (key !== planKey || stopped()) return;
+    serverPlan = plan;
+    planPending = false;
+    render();
+  }
+
+  // ── the batch ───────────────────────────────────────────────────────────
+
+  async function runBatch(batch) {
+    running = batch;
+    render();
+    const params = new URLSearchParams({batch: batch.id});
+    const limit = POLL_LIMIT * Math.max(1, (batch.steps || []).length);
+    for (let count = 0; count < limit && !stopped(); count += 1) {
       await wait(POLL_INTERVAL);
-      if (stopped()) return {state: 'aborted'};
+      if (stopped()) return;
       let live;
       try {
         live = await api(`${STATUS_PATH}?${params.toString()}`, {signal});
       } catch (error) {
-        if (error?.name === 'AbortError') return {state: 'aborted'};
-        onPhase(`progress unavailable: ${error.message}`);
+        if (error?.name === 'AbortError') return;
+        running.pollNote = `progress unavailable: ${error.message}`;
+        render();
         continue;
       }
-      if (live.state === 'running') { onPhase(phaseLine(live)); continue; }
-      return live;
-    }
-    return {state: 'failed', message: 'still running after an hour — check the AWS console'};
-  }
-
-  async function runPlan(steps) {
-    running = {steps, index: 0, phase: '', failed: null, done: []};
-    render();
-    for (let index = 0; index < steps.length; index += 1) {
-      if (stopped()) return;
-      running.index = index;
-      const step = steps[index];
-      for (const payload of step.submits) {
-        running.phase = 'requesting…';
-        render();
-        let started;
-        try {
-          started = await apiOnce(APPLY_PATH, {method: 'POST', signal,
-            body: JSON.stringify(payload)});
-        } catch (error) {
-          if (error?.code === 'fresh_auth_required') { running = null; render(); return; }
-          running.failed = {index, message: error.message};
-          render();
-          return finishPlan(false);
-        }
-        const final = await follow(started.id, (text) => {
-          running.phase = text;
-          render();
-        });
-        if (final.state === 'aborted') return;
-        if (final.state !== 'done') {
-          running.failed = {index, message: phaseLine(final)};
-          render();
-          return finishPlan(false);
-        }
-      }
-      running.done.push(index);
+      running = live;
       render();
+      if (live.state !== 'running') return finishPlan(live.state === 'done');
     }
-    return finishPlan(true);
+    if (!stopped()) return finishPlan(false);
   }
 
   async function finishPlan(ok) {
@@ -259,10 +274,11 @@ export async function fleetPage(ctx, signal = null) {
     render();
   }
 
-  function confirmApply(steps) {
+  function confirmApply(plan) {
     return new Promise((resolve) => {
       let settled = false;
       const settle = (value) => { if (settled) return; settled = true; close(); resolve(value); };
+      const steps = plan.steps || [];
       const content = h('div', {},
         h('p', {class: 'modal-copy',
           text: 'These run one at a time, in this order. Each step is re-checked '
@@ -271,7 +287,8 @@ export async function fleetPage(ctx, signal = null) {
         h('ul', {class: 'fleet-confirm-list'},
           ...steps.map((step) => h('li', {},
             h('span', {class: `fleet-dot ${step.kind}`}),
-            h('span', {text: step.label})))),
+            h('span', {text: step.description})))),
+        h('p', {class: 'modal-copy', text: totalLine(plan)}),
         h('div', {class: 'form-actions'},
           h('button', {class: 'button ghost', type: 'button',
             onclick: () => settle(false)}, 'Cancel'),
@@ -283,6 +300,34 @@ export async function fleetPage(ctx, signal = null) {
         onClose: () => { if (!settled) { settled = true; resolve(false); } },
       });
     });
+  }
+
+  function totalLine(plan) {
+    const total = plan.total_monthly_delta_usd;
+    let text = total ? `Monthly cost change: ≈ ${deltaText(total)}`
+      : 'No monthly cost change';
+    if (plan.estimate_complete === false) {
+      text += ' (some steps have no listed price)';
+    }
+    return text;
+  }
+
+  async function applyPlan(plan) {
+    if (!(await confirmApply(plan))) return;
+    let batch;
+    try {
+      batch = await apiOnce(PLAN_APPLY_PATH, {method: 'POST', signal,
+        body: JSON.stringify({plan_id: plan.id})});
+    } catch (error) {
+      if (error?.name === 'AbortError' || error?.code === 'fresh_auth_required') return;
+      // plan_not_found / plan_stale and friends: show the server's sentence,
+      // re-request a fresh plan, re-render — NEVER silently re-plan-and-apply.
+      toast(error.message || 'The plan could not be applied.');
+      planKey = '';
+      render();
+      return;
+    }
+    runBatch(batch);
   }
 
   // ── controls ────────────────────────────────────────────────────────────
@@ -299,13 +344,38 @@ export async function fleetPage(ctx, signal = null) {
   }
 
   // A disabled size dropdown: honest about what runs today and what is
-  // coming. One option — the current size — and a note.
+  // coming. One option — the current size — and a note. Still used by the
+  // node card (app-node resize is a rolling replace, its own future item)
+  // and as the blocked shape of the live selects below.
   function sizePlaceholder(label, current, note) {
     return h('div', {class: 'fleet-control'},
       h('span', {class: 'fleet-label', text: label}),
       h('select', {disabled: true, title: note},
         h('option', {text: current || 'current size'})),
       h('span', {class: 'fleet-floor', text: note}));
+  }
+
+  // A live size select, fed entirely by report.sizes — never hardcoded. The
+  // first option is the current type (selected = no change; picking it back
+  // unstages), then every other curated rung with its price.
+  function sizeSelect({label, ladder, currentType, currentText, staged, note, onChange}) {
+    const rungs = ladder || [];
+    const currentRung = rungs.find((rung) => rung.type === currentType);
+    const currentLabel = currentText
+      || (currentRung
+        ? `${currentRung.label} (current) — ${currentType}`
+        : `Current — ${currentType || 'unknown'}`);
+    return h('div', {class: 'fleet-control'},
+      h('span', {class: 'fleet-label', text: label}),
+      h('select', {onchange: (event) => onChange(event.target.value || null)},
+        h('option', {value: '', text: currentLabel,
+          selected: staged ? null : true}),
+        ...rungs.filter((rung) => rung.type !== currentType).map((rung) =>
+          h('option', {value: rung.size,
+            text: `${rung.label} — ${rung.type}`
+              + (rung.monthly_usd ? ` · ≈$${rung.monthly_usd}/mo per node` : ''),
+            selected: staged === rung.size ? true : null}))),
+      note ? h('span', {class: 'fleet-floor', text: note}) : null);
   }
 
   // ── cards ───────────────────────────────────────────────────────────────
@@ -344,8 +414,6 @@ export async function fleetPage(ctx, signal = null) {
       (row) => row.healthy && !want.removeNodes.has(row.id)).length;
     const total = rows.length - want.removeNodes.size + want.addNodes;
     const type = rows[0]?.instance_type || '';
-    const each = estimate(type);
-    const cost = each ? `≈ $${each * total}` : '';
 
     const removable = (row) => managed() && drain.offered && !row.self
       && !want.removeNodes.has(row.id) && (!row.healthy || healthyLeft > 1);
@@ -402,8 +470,7 @@ export async function fleetPage(ctx, signal = null) {
       h('div', {class: 'fleet-card-head'},
         h('div', {class: 'fleet-card-title'},
           h('h3', {text: 'App nodes'}),
-          h('p', {text: 'The machines that serve web requests and run background jobs.'})),
-        cost ? h('span', {class: 'fleet-cost', text: `${cost} / mo`}) : null),
+          h('p', {text: 'The machines that serve web requests and run background jobs.'}))),
       managed() ? h('div', {class: 'fleet-controls'},
         h('div', {class: 'fleet-control'},
           h('span', {class: 'fleet-label', text: 'How many'}),
@@ -437,7 +504,8 @@ export async function fleetPage(ctx, signal = null) {
             h('p', {text: blockedText(change) || 'No ElastiCache replication group was found.'}))));
     }
     return h('div', {class: `fleet-card ${rows.some((row) =>
-      want.caches.get(row.identifier) !== Number(row.replica_count || 0)) ? 'changed' : ''}`},
+      want.caches.get(row.identifier) !== Number(row.replica_count || 0)
+      || want.cacheSizes.has(row.identifier)) ? 'changed' : ''}`},
     h('div', {class: 'fleet-card-head'},
       h('div', {class: 'fleet-card-title'},
         h('h3', {text: 'Redis'}),
@@ -451,6 +519,13 @@ export async function fleetPage(ctx, signal = null) {
       const blocked = row.blocked_reason
         ? blockedText({offered: false, blocked_reason: row.blocked_reason})
         : blockedText(change);
+      const resize = offer('resize_cache');
+      const resizable = managed() && resize.offered && !row.blocked_reason;
+      // The interruption case is the SERVER's statement (resize_impact),
+      // surfaced before apply — the page never re-derives the policy.
+      const impactNote = row.resize_impact === 'rolling'
+        ? 'Resize rolls replicas first, then a brief failover — one short interruption.'
+        : 'No replica: the cache is down while its node is replaced.';
       return h('div', {class: 'fleet-group'},
         offered ? h('div', {class: 'fleet-controls'},
           h('div', {class: 'fleet-control'},
@@ -466,7 +541,19 @@ export async function fleetPage(ctx, signal = null) {
               text: row.automatic_failover_on
                 ? `Failover is on, so at least ${Math.max(min, 1)} replica must remain.`
                 : 'Failover is off — zero replicas leaves nothing to fail over to.'})),
-          sizePlaceholder('Size of each', '', 'Resizing ships in a coming update.'))
+          resizable
+            ? sizeSelect({
+              label: 'Size of each', ladder: report?.sizes?.cache,
+              currentType: row.node_type,
+              staged: want.cacheSizes.get(row.identifier) || null,
+              note: impactNote,
+              onChange: (size) => {
+                if (size) want.cacheSizes.set(row.identifier, size);
+                else want.cacheSizes.delete(row.identifier);
+                render();
+              }})
+            : sizePlaceholder('Size of each', row.node_type || '',
+              blockedText(resize) || 'Resizing is not available.'))
           : h('p', {class: 'fleet-note warn-text', text: blocked}),
         h('div', {class: 'fleet-note'},
           icon('activity'),
@@ -508,7 +595,64 @@ export async function fleetPage(ctx, signal = null) {
             h('h3', {text: 'Database'}),
             h('p', {text: blockedText(add) || 'No database was found.'}))));
     }
-    const changed = rows.some((row) => (want.dbAdd.get(row.identifier) || 0) > 0)
+    const resize = offer('resize_database');
+
+    // The writer and the readers carry independent sizes — that asymmetry
+    // (big writer, smaller readers) is where the money is. One reader size
+    // is staged per row; the plan fans it out into one resize per reader.
+    function writerSizeControl(row) {
+      const currentType = row.writer_instance_class || row.instance_class;
+      const target = row.kind === 'aurora' ? row.writer : row.identifier;
+      if (!resize.offered) {
+        return sizePlaceholder('Writer size',
+          currentType || (row.kind === 'aurora' ? 'Aurora' : ''),
+          blockedText(resize) || 'Resizing is not available.');
+      }
+      if (!target) {
+        return sizePlaceholder('Writer size', currentType || 'Aurora',
+          'This cluster reports no writer instance to resize.');
+      }
+      return sizeSelect({
+        label: 'Writer size', ladder: report?.sizes?.database,
+        currentType,
+        staged: want.dbWriterSizes.get(row.identifier) || null,
+        note: '~minutes offline while the writer changes class.',
+        onChange: (size) => {
+          if (size) want.dbWriterSizes.set(row.identifier, size);
+          else want.dbWriterSizes.delete(row.identifier);
+          render();
+        }});
+    }
+
+    function readerSizeControl(row) {
+      const readers = row.readers || [];
+      const classes = readers.map(
+        (reader) => (row.reader_instance_classes || {})[reader]).filter(Boolean);
+      const shared = classes.length && classes.every((cls) => cls === classes[0])
+        ? classes[0] : null;
+      if (!resize.offered) {
+        return sizePlaceholder('Reader size', shared || '',
+          blockedText(resize) || 'Resizing is not available.');
+      }
+      if (!readers.length) {
+        return sizePlaceholder('Reader size', '', 'No readers to size.');
+      }
+      return sizeSelect({
+        label: 'Reader size', ladder: report?.sizes?.database,
+        currentType: shared,
+        currentText: classes.length && !shared ? 'Mixed sizes' : null,
+        staged: want.dbReaderSizes.get(row.identifier) || null,
+        note: 'Applies to every reader; reads keep flowing on the others.',
+        onChange: (size) => {
+          if (size) want.dbReaderSizes.set(row.identifier, size);
+          else want.dbReaderSizes.delete(row.identifier);
+          render();
+        }});
+    }
+
+    const changed = rows.some((row) => (want.dbAdd.get(row.identifier) || 0) > 0
+      || want.dbWriterSizes.has(row.identifier)
+      || want.dbReaderSizes.has(row.identifier))
       || want.dbRemove.size > 0;
     return h('div', {class: `fleet-card ${changed ? 'changed' : ''}`},
       h('div', {class: 'fleet-card-head'},
@@ -551,10 +695,8 @@ export async function fleetPage(ctx, signal = null) {
                 text: add.offered
                   ? (count === 0 ? 'With none, every read stays on the writer.' : '')
                   : blockedText(add)})),
-            sizePlaceholder('Writer size', row.instance_class || (row.kind === 'aurora' ? 'Aurora' : ''),
-              'Resizing ships in a coming update.'),
-            sizePlaceholder('Reader size', '',
-              'Per-instance sizes ship in a coming update.')) : null,
+            writerSizeControl(row),
+            readerSizeControl(row)) : null,
           h('div', {class: 'fleet-note'},
             icon('activity'),
             h('span', {text: routing().database?.active
@@ -622,66 +764,88 @@ export async function fleetPage(ctx, signal = null) {
       h('summary', {text: 'What this page is actually doing'}),
       h('div', {class: 'fleet-tech-body'},
         h('p', {text: 'Every control maps to one server-side capacity action; nothing here '
-          + 'talks to AWS directly. Apply runs the steps in order (adds before removes), '
-          + 'and every step re-checks its guards against the live fleet the moment it '
-          + 'runs — a control the server would refuse is disabled with the reason.'}),
-        h('p', {text: 'Coming, and deliberately absent until their server sides ship: '
-          + 'instance resizing (the greyed-out size menus), a server-written plan with '
-          + 'exact costs and timings, and automatic overnight failback of the writer '
-          + 'after a database failover.'})));
+          + 'talks to AWS directly. The staged changes are sent to the server, which '
+          + 'writes the plan you see — its wording, its order (adds before removes, a '
+          + 'terminate right behind its drain), and its cost delta. Confirming applies '
+          + 'that exact plan by id; the server runs the steps as one batch, each '
+          + 're-checked against the live fleet the moment it runs, and a failed step '
+          + 'stops everything after it. A control the server would refuse is disabled '
+          + 'with the reason.'}),
+        h('p', {text: 'Coming, and deliberately absent until its server side ships: '
+          + 'automatic overnight failback of the writer after a database failover.'})));
   }
 
   // ── the apply bar ───────────────────────────────────────────────────────
 
-  function applyBar(steps) {
-    if (running) {
-      return h('div', {class: 'fleet-bar show'},
-        h('div', {class: 'fleet-progress'},
-          ...running.steps.map((step, index) => {
-            const state = running.done.includes(index) ? 'done'
-              : running.failed && index === running.failed.index ? 'failed'
-                : running.failed || index > running.index ? 'pending'
-                  : index === running.index ? 'active' : 'pending';
-            return h('div', {class: `fleet-pstep ${state}`},
-              state === 'active' ? h('span', {class: 'pending-spinner'})
-                : state === 'done' ? h('span', {class: 'fleet-tick', text: '✓'})
-                  : state === 'failed' ? h('span', {class: 'fleet-tick', text: '✕'})
-                    : h('span', {class: 'fleet-tick', text: ''}),
-              h('span', {text: step.label}),
-              state === 'active' ? h('span', {class: 'fleet-phase', text: running.phase}) : null,
-              state === 'failed' ? h('span', {class: 'fleet-phase danger-text',
-                text: running.failed.message}) : null);
-          }),
-          running.failed ? h('div', {class: 'form-actions'},
-            h('button', {class: 'button', type: 'button',
-              onclick: () => finishPlan(false)}, 'Close')) : null));
-    }
-    if (!steps.length) return h('div', {class: 'fleet-bar'});
+  function runningBar() {
+    const steps = running.steps || [];
+    return h('div', {class: 'fleet-bar show'},
+      h('div', {class: 'fleet-progress'},
+        ...steps.map((step) => {
+          const state = step.state === 'done' ? 'done'
+            : step.state === 'failed' ? 'failed'
+              : step.state === 'running' ? 'active' : 'pending';
+          return h('div', {class: `fleet-pstep ${state}`},
+            state === 'active' ? h('span', {class: 'pending-spinner'})
+              : state === 'done' ? h('span', {class: 'fleet-tick', text: '✓'})
+                : state === 'failed' ? h('span', {class: 'fleet-tick', text: '✕'})
+                  : h('span', {class: 'fleet-tick', text: ''}),
+            h('span', {text: step.description || step.action}),
+            state === 'active'
+              ? h('span', {class: 'fleet-phase',
+                text: running.pollNote || phaseLine(step)}) : null,
+            state === 'failed' ? h('span', {class: 'fleet-phase danger-text',
+              text: step.message || 'failed'}) : null,
+            step.state === 'not_attempted'
+              ? h('span', {class: 'fleet-phase',
+                text: 'not attempted — an earlier step failed'}) : null);
+        }),
+        running.stalled ? h('div', {class: 'fleet-phase danger-text',
+          text: 'no progress reported — check the jobs runner'}) : null,
+        running.state === 'failed' ? h('div', {class: 'form-actions'},
+          h('button', {class: 'button', type: 'button',
+            onclick: () => finishPlan(false)}, 'Close')) : null));
+  }
+
+  function applyBar() {
+    if (running) return runningBar();
+    const staged = stagedSteps();
+    if (!staged.length) return h('div', {class: 'fleet-bar'});
+    const plan = serverPlan;
+    const body = plan
+      ? h('ul', {},
+        ...(plan.steps || []).map((step) => h('li', {},
+          h('span', {class: `fleet-dot ${step.kind}`}),
+          h('span', {}, step.description,
+            step.monthly_delta_usd !== null && step.monthly_delta_usd !== undefined
+              ? h('span', {class: 'fleet-bar-note',
+                text: ` · ${deltaText(step.monthly_delta_usd)}`}) : null,
+            ...(step.warnings || []).map((warning) =>
+              h('span', {class: 'fleet-bar-note', text: ` — ${warning}`}))))))
+      : h('p', {class: 'fleet-bar-note',
+        text: planError ? `The server refused this plan: ${planError}` : 'pricing…'});
     return h('div', {class: 'fleet-bar show'},
       h('div', {class: 'fleet-bar-in'},
         h('div', {class: 'fleet-bar-list'},
           h('h4', {text: 'You\'re about to'}),
-          h('ul', {},
-            ...steps.map((step) => h('li', {},
-              h('span', {class: `fleet-dot ${step.kind}`}),
-              h('span', {}, step.label,
-                step.note ? h('span', {class: 'fleet-bar-note', text: ` — ${step.note}`}) : null))))),
+          body,
+          plan ? h('p', {class: 'fleet-bar-note',
+            text: `${totalLine(plan)} · ${plan.order_note || ''}`}) : null),
         h('div', {class: 'fleet-bar-actions'},
           h('button', {class: 'button ghost', type: 'button',
             onclick: () => { resetWant(); render(); }}, 'Discard'),
           // responsiveness-exempt: confirmApply awaits a human confirming the
-          // staged steps; runPlan renders after every step once it starts.
+          // server's plan; runBatch renders after every poll once it starts.
           h('button', {class: 'button primary', type: 'button',
-            onclick: async () => {
-              if (await confirmApply(steps)) runPlan(steps);
-            }},
-          `Apply ${steps.length} change${steps.length === 1 ? '' : 's'}`))));
+            disabled: plan ? null : true,
+            onclick: () => { if (serverPlan) applyPlan(serverPlan); }},
+          `Apply ${(plan?.steps || staged).length} change${(plan?.steps || staged).length === 1 ? '' : 's'}`))));
   }
 
   // ── page ────────────────────────────────────────────────────────────────
 
   function render() {
-    const steps = running ? running.steps : plan();
+    syncPlan();
     root.replaceChildren(...[
       managed() ? null : h('div', {class: 'callout warning'},
         icon('alert'), h('p', {text: EXTERNAL_SUB})),
@@ -691,7 +855,7 @@ export async function fleetPage(ctx, signal = null) {
       databaseCard(),
       warningsCard(),
       techDetails(),
-      applyBar(steps),
+      applyBar(),
     ].filter(Boolean));
   }
 
