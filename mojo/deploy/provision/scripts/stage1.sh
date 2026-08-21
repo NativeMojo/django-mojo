@@ -128,11 +128,26 @@ bash "${PROJ_PATH}/aws/ec2_bootstrap.sh"
 # this is what makes the node run the same release as the CLI that built it.
 
 log "pinning django-mojo==${DJANGO_MOJO_VERSION}"
-DJANGO_MOJO_PIP_ARGS=()
-if pip install --help 2>/dev/null | grep -q -- '--refresh-package'; then
-    DJANGO_MOJO_PIP_ARGS+=(--refresh-package=django-mojo)
-fi
-pip install "${DJANGO_MOJO_PIP_ARGS[@]}" --upgrade "django-mojo==${DJANGO_MOJO_VERSION}"
+# A freshly published release can lag pip's Simple-index caches by minutes
+# (post_deploy.sh's framework resolution block tells the whole story), so the
+# pin converges with bounded retries whose retries bypass every pip cache —
+# no feature-detected flags, any pip version. A fresh node has no installed
+# framework to fall back on, so exhaustion stays fatal here; re-running
+# provisioning is the recovery.
+DJANGO_MOJO_RETRIES="${DJANGO_MOJO_RETRIES:-6}"
+DJANGO_MOJO_RETRY_DELAY="${DJANGO_MOJO_RETRY_DELAY:-30}"
+pin_attempt=1
+pin_args=()
+until pip install "${pin_args[@]}" --upgrade "django-mojo==${DJANGO_MOJO_VERSION}"; do
+    if [ "$pin_attempt" -ge "$DJANGO_MOJO_RETRIES" ]; then
+        log "django-mojo==${DJANGO_MOJO_VERSION} did not resolve after ${DJANGO_MOJO_RETRIES} attempts"
+        exit 1
+    fi
+    pin_attempt=$((pin_attempt+1))
+    pin_args=(--no-cache-dir)
+    log "django-mojo==${DJANGO_MOJO_VERSION} not resolvable yet; retry ${pin_attempt}/${DJANGO_MOJO_RETRIES} in ${DJANGO_MOJO_RETRY_DELAY}s"
+    sleep "$DJANGO_MOJO_RETRY_DELAY"
+done
 
 # ── 4. the project ───────────────────────────────────────────────────────────
 

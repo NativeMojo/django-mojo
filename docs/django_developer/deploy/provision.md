@@ -407,7 +407,7 @@ published to the config bucket with the version pin substituted, and logged to
 |---|---|---|
 | 1 | untar the app tarball into `/opt/api` | `ec2_bootstrap.sh` and `ec2_deploy.sh` are files **inside** it |
 | 2 | `aws/ec2_bootstrap.sh` | the OS: users, packages, nginx, certbot, and an **unpinned** `pip install django-mojo` |
-| 3 | `pip install --refresh-package=django-mojo --upgrade "django-mojo==<version>"` | **after** step 2, precisely so it overwrites that unpinned install; the refresh option is feature-detected and omitted on pre-26.2 pip |
+| 3 | `pip install --upgrade "django-mojo==<version>"`, converged with bounded retries (`--no-cache-dir` after the first attempt) | **after** step 2, precisely so it overwrites that unpinned install; a freshly published version can lag pip's Simple-index caches, and a fresh node has nothing to fall back on, so exhaustion stays fatal here |
 | 4 | `aws/ec2_deploy.sh` | the project: nginx vhosts, systemd units, `var/` ownership |
 | 5 | `echo prod > var/profile`, chown `ec2-user:www`, chmod 640 | after step 4's ownership sweep, before step 7's restart |
 | 6 | CloudWatch agent | installed if absent, configured, enabled — before the restart, so the app's first minutes are logged |

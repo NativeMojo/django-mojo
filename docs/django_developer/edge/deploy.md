@@ -687,6 +687,11 @@ because a **fork** owns all of it, and because the deploy plane depends on it:
   `var/allow_migrate` flag file, which is not a lock) and installs
   `pip install django-mojo==<the --framework value>` — pinned, never
   `--upgrade`, because the version was resolved once for the whole fleet.
+  The pin is confirmed against PyPI's JSON API and converged with
+  cache-bypassing retries; a pin that still will not install **fails open**
+  to the node's installed framework with a `framework` deploy warning
+  (see the deploy README's framework-install section) — it never fails the
+  deploy of a tested API.
 - A fork must additionally declare the contract marker, or at minimum accept
   every required flag; otherwise the deploy plane refuses it (above). The
   supported answer to "our node script needs a local delta" is a shim with the
