@@ -1040,6 +1040,133 @@ def _project_case(case_id):
     return event
 
 
+WEB_PROBE_FAMILIES = (
+    "wordpress", "php_runtime", "secret_files", "admin_tools", "other_probe")
+
+
+def campaign_sweep(now=None, limit=32, lookback_seconds=900):
+    """Coalesce distributed matching web activity into campaign cases.
+
+    One campaign per (group, family, resource, UTC day) — identity is the
+    correlation pair, DB-enforced by the conditional campaign constraint;
+    the installation stamp is the deterministic min member id and is never
+    re-derived. Re-runs recompute counters idempotently, and projection is
+    re-attempted every sweep, so a member flipping to authoritative later
+    still surfaces the campaign.
+    """
+    from django.db.models import Count, Max, Min, Sum
+    from mojo.apps.incident.models import MojoSecCase, MojoSecCaseTransition
+
+    now = now or dates.utcnow()
+    day_start = now.astimezone(datetime.timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + datetime.timedelta(days=1)
+    horizon = now - datetime.timedelta(seconds=lookback_seconds)
+    triples = list(
+        MojoSecCase.objects.filter(
+            sensor_kind="web", family__in=WEB_PROBE_FAMILIES,
+            modified__gte=horizon, group__isnull=False)
+        .values_list("group_id", "family", "resource_id").distinct()[:limit])
+    opened = updated = 0
+    campaign_ids = []
+    for group_id, family, resource_id in triples:
+        members = MojoSecCase.objects.filter(
+            sensor_kind="web", group_id=group_id, family=family,
+            resource_id=resource_id,
+            last_seen__gte=day_start, last_seen__lt=day_end)
+        stats = members.aggregate(
+            networks=Count("network", distinct=True),
+            occurrences=Sum("occurrence_count"),
+            receipts=Sum("receipt_count"),
+            sources=Sum("distinct_source_count"),
+            first=Min("first_seen"), last=Max("last_seen"))
+        if (stats["networks"] or 0) < campaign_min_sources():
+            continue
+        correlation_key = _digest("campaign", group_id, family, resource_id)
+        window_key = _digest("campaign", day_start.date().isoformat())
+        with transaction.atomic():
+            campaign = MojoSecCase.objects.select_for_update().filter(
+                sensor_kind="campaign", correlation_key=correlation_key,
+                window_key=window_key).first()
+            created = campaign is None
+            if created:
+                stamp = members.order_by("installation_key_id").values_list(
+                    "installation_key_id", flat=True).first()
+                if stamp is None:
+                    continue
+                campaign = MojoSecCase.objects.create(
+                    group_id=group_id, installation_key_id=stamp,
+                    sensor_id=f"campaign:{group_id}"[:128],
+                    sensor_kind="campaign", resource_id=resource_id,
+                    family=family, network="",
+                    correlation_key=correlation_key, window_key=window_key,
+                    window_start=day_start, window_end=day_end,
+                    first_seen=stats["first"], last_seen=stats["last"],
+                    policy_version=1, evaluator_version=EVALUATOR_VERSION,
+                    state=MojoSecCase.STATE_ELEVATED,
+                    state_reason="distributed_campaign",
+                    urgency="high", urgency_reason="distributed_campaign")
+                campaign = MojoSecCase.objects.select_for_update().get(
+                    pk=campaign.pk)
+            before = (campaign.occurrence_count, campaign.distinct_count)
+            sources = []
+            for member_sources in members.exclude(
+                    observed_sources=[]).values_list(
+                    "observed_sources", flat=True)[:256]:
+                if not isinstance(member_sources, list):
+                    continue
+                for item in member_sources:
+                    if item not in sources:
+                        sources.append(item)
+                if len(sources) >= 256:
+                    break
+            campaign.occurrence_count = stats["occurrences"] or 0
+            campaign.receipt_count = stats["receipts"] or 0
+            campaign.distinct_count = stats["networks"] or 0
+            campaign.distinct_source_count = stats["sources"] or 0
+            campaign.observed_sources = sources[:256]
+            campaign.first_seen = min(campaign.first_seen, stats["first"])
+            campaign.last_seen = max(campaign.last_seen, stats["last"])
+            campaign.samples = [
+                {"network": network} for network in members.values_list(
+                    "network", flat=True).distinct()[:MAX_SAMPLES]]
+            campaign.sample_count = len(campaign.samples)
+            campaign.save()
+            members.exclude(campaign=campaign).update(
+                campaign=campaign, modified=dates.utcnow())
+            changed = (campaign.occurrence_count,
+                       campaign.distinct_count) != before
+            if created or changed:
+                MojoSecCaseTransition.objects.create(
+                    case=campaign, receipt=None, receipt_id_snapshot=0,
+                    transition="opened" if created else "updated",
+                    reason="distributed_campaign",
+                    from_state="" if created else campaign.state,
+                    to_state=campaign.state,
+                    from_urgency="" if created else campaign.urgency,
+                    to_urgency=campaign.urgency,
+                    occurrence_count=campaign.occurrence_count,
+                    receipt_count=campaign.receipt_count,
+                    projected_event_count=campaign.projected_event_count,
+                    distinct_count=campaign.distinct_count,
+                    sample_count=campaign.sample_count,
+                    overflow_count=campaign.overflow_count,
+                    policy_version=campaign.policy_version,
+                    evaluator_version=campaign.evaluator_version)
+        campaign_ids.append(campaign.pk)
+        if created:
+            opened += 1
+            _record_metric("campaigns_opened")
+        elif changed:
+            updated += 1
+    # Projection is ratcheted and mode-aware; calling it every sweep is the
+    # campaign's catch-up path (the settle catch-up query is keyed by the
+    # stamped installation, which for a campaign is only a placeholder).
+    for campaign_id in campaign_ids:
+        _project_case(campaign_id)
+    return {"opened": opened, "updated": updated, "checked": len(triples)}
+
+
 def settle_sweep(job=None, now=None, limit=500):
     """Settle quiet deployment cases and heal projection after a crash.
 
@@ -1120,14 +1247,17 @@ def settle_sweep(job=None, now=None, limit=500):
             continue
         if _dispatch_projection(case, event):
             redispatched += 1
+    campaigns = campaign_sweep(now=now)
     from . import mojosec as mojosec_service
     retried = mojosec_service.retry_case_routed(now=now, limit=limit)
     if job is not None and hasattr(job, "add_log"):
         job.add_log(
             f"Settled {settled} deployment case(s); projected {projected}; "
             f"re-dispatched {redispatched}; retried {retried} case-routed "
-            "receipt(s)")
+            f"receipt(s); campaigns opened {campaigns['opened']} / updated "
+            f"{campaigns['updated']}")
     return {
         "settled": settled, "projected": projected,
         "redispatched": redispatched, "retried": retried,
+        "campaigns": campaigns,
     }

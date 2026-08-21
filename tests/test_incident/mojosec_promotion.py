@@ -66,7 +66,7 @@ def _batch(events, sensor_id=SENSOR_A):
 
 
 def _settings(opts, mode="authoritative", include_host=True,
-              require_registered=False):
+              require_registered=False, mode_b=None):
     from mojo.apps.incident.services import mojosec_correlation
 
     targets = [
@@ -84,7 +84,7 @@ def _settings(opts, mode="authoritative", include_host=True,
             "include_fim": True,
             "include_host": include_host,
             "require_registered_deployments": require_registered,
-            "mode": mode,
+            "mode": mode_b or mode,
         },
     ]
     original = mojosec_correlation.settings.get_static
@@ -141,10 +141,14 @@ def setup_mojosec_promotion(opts):
     stem = "mojosec_promo_test_"
     MojoSecCaseTransition.maintenance_objects.filter(
         case__sensor_id__startswith=stem).delete()
+    MojoSecCaseTransition.maintenance_objects.filter(
+        case__installation_key__name__startswith=stem).delete()
     MojoSecReceipt.objects.filter(sensor_id__startswith=stem).delete()
-    for case in MojoSecCase.objects.filter(sensor_id__startswith=stem):
-        case.members.update(campaign=None)
+    # Campaign rows carry a synthetic sensor id, so sweep by owning key too;
+    # members drop their campaign FK via SET_NULL on delete.
     MojoSecCase.objects.filter(sensor_id__startswith=stem).delete()
+    MojoSecCase.objects.filter(
+        installation_key__name__startswith=stem).delete()
     MojoSecDeployment.objects.filter(
         deployment_id__startswith="promo-deploy-").delete()
     for sensor in (SENSOR_A, SENSOR_B):
@@ -477,6 +481,97 @@ def test_corroboration_promotes_the_high_trigger_once(opts):
     other_node = _cases(sensor_id=SENSOR_B, family="service").get()
     th.assert_true(other_node.pk not in corroborated,
                    "evidence on another sensor must not corroborate")
+
+
+def _web_member(opts, index, family="wordpress", resource_id="vhost:424242",
+                when=None):
+    from mojo.apps.incident.models import MojoSecCase
+    from mojo.helpers import dates
+
+    when = when or dates.utcnow()
+    ip = f"198.51.{100 + index}.7"
+    key = opts.promo_key_a if index % 2 == 0 else opts.promo_key_b
+    sensor = SENSOR_A if index % 2 == 0 else SENSOR_B
+    return MojoSecCase.objects.create(
+        group=opts.promo_group, installation_key=key, sensor_id=sensor,
+        sensor_kind="web", family=family, resource_id=resource_id,
+        network=f"198.51.{100 + index}.0/24",
+        correlation_key=f"{PREFIX}-member-{family}-{index}",
+        window_key=f"{PREFIX}-member-w-{index}",
+        window_start=when, window_end=when, first_seen=when, last_seen=when,
+        policy_version=1, evaluator_version=3,
+        urgency="warning", urgency_reason="trusted_impossible_path",
+        observed_sources=[ip], distinct_source_count=1,
+        occurrence_count=20, receipt_count=1)
+
+
+@th.django_unit_test()
+def test_campaign_coalesces_distributed_probes_once(opts):
+    from mojo.apps.incident.models import MojoSecCase
+    from mojo.apps.incident.services import mojosec_correlation
+    from mojo.helpers import dates
+
+    now = dates.utcnow()
+    for index in range(53):
+        _web_member(opts, index, when=now)
+    # The stamped installation (min member id) is SHADOW; node B is
+    # authoritative — projection must follow any-member-authoritative, not
+    # the placeholder stamp.
+    with mock.patch.object(
+            mojosec_correlation.settings, "get_static",
+            side_effect=_settings(opts, mode="shadow", mode_b="authoritative")), \
+            mock.patch.object(mojosec_correlation, "_record_metric"):
+        result = mojosec_correlation.campaign_sweep(now=now)
+        th.assert_eq(result["opened"], 1,
+                     f"53 networks must open exactly one campaign: {result}")
+        campaign = MojoSecCase.objects.get(
+            sensor_kind="campaign", group=opts.promo_group,
+            family="wordpress")
+        th.assert_eq(campaign.distinct_count, 53,
+                     "the campaign must count every distinct network")
+        th.assert_eq(campaign.occurrence_count, 53 * 20,
+                     "campaign volume must aggregate member occurrences")
+        th.assert_eq(campaign.members.count(), 53,
+                     "every member case must link to the campaign")
+        th.assert_eq(len(campaign.observed_sources), 53,
+                     "bounded exact sources must union across members")
+        th.assert_eq((campaign.urgency, campaign.state),
+                     ("high", "elevated"),
+                     "a campaign is high/elevated by construction")
+        promoted = _promoted_events().filter(
+            metadata__mojosec_case__case_id=campaign.pk)
+        th.assert_eq(promoted.count(), 1,
+                     "an authoritative member must surface the campaign once")
+        # Idempotent re-run: same campaign, same Event, stable counters.
+        again = mojosec_correlation.campaign_sweep(now=now)
+        th.assert_eq(again["opened"], 0,
+                     f"a re-run must never mint a second campaign: {again}")
+        campaign.refresh_from_db()
+        th.assert_eq(campaign.occurrence_count, 53 * 20,
+                     "re-running the sweep must not inflate counters")
+        th.assert_eq(promoted.count(), 1,
+                     "re-running the sweep must not re-project")
+
+
+@th.django_unit_test()
+def test_campaign_below_threshold_stays_uncorrelated(opts):
+    from mojo.apps.incident.models import MojoSecCase
+    from mojo.apps.incident.services import mojosec_correlation
+    from mojo.helpers import dates
+
+    now = dates.utcnow()
+    for index in range(5):
+        _web_member(opts, index, family="secret_files",
+                    resource_id="vhost:424243", when=now)
+    with mock.patch.object(
+            mojosec_correlation.settings, "get_static",
+            side_effect=_settings(opts)), \
+            mock.patch.object(mojosec_correlation, "_record_metric"):
+        mojosec_correlation.campaign_sweep(now=now)
+    th.assert_eq(MojoSecCase.objects.filter(
+        sensor_kind="campaign", group=opts.promo_group,
+        family="secret_files").count(), 0,
+        "below-threshold breadth must never open a campaign")
 
 
 @th.django_unit_test()
