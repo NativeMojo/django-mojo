@@ -54,7 +54,7 @@ def _get_redirect_uri(request, provider_name):
 _DEPLOYMENT_FROM_SETTINGS = object()
 
 
-def _validate_redirect_uri(request, redirect_uri,
+def _validate_redirect_uri(request, redirect_uri, *,
                            deployment_entries=_DEPLOYMENT_FROM_SETTINGS):
     """
     Validate redirect_uri against the allowlist, matched as a URL.

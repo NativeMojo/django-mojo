@@ -644,10 +644,39 @@ def _discover_record_files(record):
     return _list_module_files(record.path)
 
 
+def _record_unrunnable_file(module_name, test_name, expected_root, reason):
+    """A test file that could not run at all is a FAILURE, never a silent skip.
+
+    The refusal used to be a print() on a channel agents are told not to read,
+    so a whole package could vanish from a run whose report still said passed
+    (security-review finding, item #1839). Count the file's tests and land one
+    error in the report so status goes red and failures[] names the file.
+    """
+    file_path = None
+    if expected_root:
+        candidate = os.path.join(expected_root, f"{test_name}.py")
+        if os.path.exists(candidate):
+            file_path = candidate
+    total = _count_tests_in_file(file_path) if file_path else 0
+    helpers._set_active_test(f"{module_name}:{test_name}:<import>")
+    helpers._increment("total", max(total, 1))
+    helpers._increment("failed")
+    helpers._record_result(
+        f"{test_name} (unrunnable)", status="error",
+        detail=f"{module_name}.{test_name} did not run: {reason}")
+    dfn = helpers._get_display_fn()
+    if dfn:
+        dfn("test_result", name=f"{test_name} (unrunnable)", status="error",
+            detail=reason)
+
+
 def run_module_tests_by_name(opts, module_name, test_name, expected_root=None):
     """Run all test functions in a specific test module in the order they appear."""
     module = import_module_for_testing(module_name, test_name, expected_root)
     if not module:
+        _record_unrunnable_file(
+            module_name, test_name, expected_root,
+            "import failed or resolved to a shadowing package (see output above)")
         return
     skipped = run_module_setup(opts, module, test_name, module_name)
     if skipped:
