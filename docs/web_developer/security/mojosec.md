@@ -280,22 +280,32 @@ rejected and group/member grants never authorize this platform-wide surface.
 | `POST` | `/api/incident/mojosec/replay` | global `manage_security` or `security` | Explicit offline evaluation of a draft/shadow proposal |
 | `POST` | `/api/incident/mojosec/shadow` | global `manage_security` or `security` | Explicit offline evaluation of a shadow-labelled proposal |
 | `GET` | `/api/incident/mojosec/metrics` | global `view_security` or `security` | Bounded detector receipt/disposition counts |
-| `GET` | `/api/incident/mojosec/case` | global `view_security` or `security` | Paginated read-only shadow case list |
+| `GET` | `/api/incident/mojosec/case` | global `view_security` or `security` | Paginated read-only case list (shadow and authoritative installations both) |
 | `GET` | `/api/incident/mojosec/case/<id>` | global `view_security` or `security` | One case with at most 8 samples and 50 transitions |
-| `GET` | `/api/incident/mojosec/case-metrics` | global `view_security` or `security` | Bounded aggregate shadow comparison metrics |
+| `GET` | `/api/incident/mojosec/case-metrics` | global `view_security` or `security` | Bounded aggregate case metrics |
 
 The case surfaces are platform/global security-admin reads. API keys and group
 member grants do not authorize them, and there are no case mutation, approval,
-recommendation, or execution endpoints. The authoritative Event/Incident feed
-continues unchanged while cases are in shadow mode.
+recommendation, or execution endpoints. In shadow mode the authoritative
+Event/Incident feed continues unchanged; on an installation cut to
+authoritative mode, digest-tier web/FIM evidence stops projecting per-receipt
+Events and the case list **is** the operator surface — expected deployment
+churn appears only as one `settled` deployment case per sensor/deploy (no
+Event, no notification), and case promotions to high/critical each project one
+`mojosec.case.promoted` Event for notification RuleSets.
 
 List parameters are `page` (default 1, maximum 100), `page_size` (default 50,
-maximum 100), and indexed exact filters `state`, `urgency`, `sensor_kind`, and
-`resource_id`. Values must be positive integers; values over 100 return HTTP
-400 instead of being clamped, so the maximum offset is 9,900 rows. State is
-`observing` or `elevated`; urgency is `info`, `warning`, `high`, or `critical`;
-sensor kind is `web` or `fim`. The response includes `has_more` rather than an
-unbounded total scan. A list response has this envelope:
+maximum 100), and indexed exact filters `state`, `urgency`, `sensor_kind`,
+`resource_id`, `family`, and `deployment_id`. Page values must be positive
+integers; values over 100 return HTTP 400 instead of being clamped, so the
+maximum offset is 9,900 rows. State is `observing`, `elevated`, or `settled`;
+urgency is `info`, `warning`, `high`, or `critical`; sensor kind is `web` or
+`fim`. Every list row carries `deployment_id` (empty outside deployment
+cases); detail rows add `settled_at`, `projected_urgency`, and the bounded
+`breakdown` (`{"operations": {...}, "tiers": {...}}`) alongside `samples` and
+`transitions`; timestamps are ISO-8601 strings. Case-metrics additionally
+reports `settled` and `suppressed_events`. The response includes `has_more`
+rather than an unbounded total scan. A list response has this envelope:
 
 ```json
 {
@@ -321,7 +331,8 @@ unbounded total scan. A list response has this envelope:
     "sample_count": 1,
     "overflow_count": 0,
     "policy_version": 1,
-    "evaluator_version": 1
+    "evaluator_version": 1,
+    "deployment_id": ""
   }],
   "page": 1,
   "page_size": 50,
@@ -337,8 +348,8 @@ contains receipt replay JSON or integrity digests.
 
 `GET /api/incident/mojosec/case-metrics?days=1&resource_id=vhost:17`
 accepts 1–90 days and an optional exact resource. It returns case,
-occurrence, receipt, projected-Event, distinct, overflow, urgency, and
-compression totals in this exact shape:
+occurrence, receipt, projected-Event, distinct, overflow, settled,
+suppressed-event, urgency, and compression totals in this exact shape:
 
 ```json
 {
@@ -351,6 +362,8 @@ compression totals in this exact shape:
     "projected_events": 6,
     "distinct": 5,
     "overflows": 0,
+    "settled": 1,
+    "suppressed_events": 9992,
     "compression_ratio": 2503.0,
     "by_urgency": {"info": 3, "warning": 1}
   }
@@ -364,9 +377,10 @@ one as an alias for another. HTTP-scheme 301 contributions do not increment
 twins. Metrics exclude rows later than server time plus the configured future
 skew.
 
-Shadow rollout is selected only by the server's file/static
+Case correlation is enrolled only by the server's file/static
 `MOJOSEC_CASE_SHADOW_TARGETS` setting, initially for one installation key and
-one VHost. It cannot be enabled by this API or by a DB-backed setting. Operators
+one VHost; each enrolled row carries a `mode` of `shadow` (default) or
+`authoritative`. It cannot be enabled by this API or by a DB-backed setting. Operators
 should expect a web contribution only when the enabled VHost exists, its
 owning Domain group matches the installation API key's group, and its saved
 policy version and response class match the bounded edge evidence.
@@ -377,13 +391,18 @@ per row are accepted; exceeding either bound disables the target list. Operators
 observe at least one normal traffic cycle, inspect case urgency and the metrics
 above, and run the bounded `mojosec_shadow_compare` command for receipt
 fidelity, case cardinality, and compression gates. Rollback sets the target
-list to empty and reconverges the application. Existing cases remain readable,
-and receipts, Events, Incidents, acknowledgements, handlers, and notifications
-are unchanged; only new shadow contributions stop. Shadow cases do not become
-an action or notification authority in this rollout. The shadow correlation
-dual-write is acknowledged fail-open and has no case replay outbox in Slice 1;
-Slice 2 must add bounded replay of missed contributions before notification or
-action ownership can move to cases.
+list to empty, or flips a row's `mode` back to `shadow`, and reconverges the
+application. Existing cases remain readable, and receipts, Events, Incidents,
+acknowledgements, handlers, and notifications are unchanged; already-routed
+pending receipts still resolve through their sticky flag — contribution or
+terminal conversion — and are never lost. Plain `shadow` mode never becomes an
+action or notification authority; only `authoritative` mode's case promotion
+projects the one deliberate `mojosec.case.promoted` Event that notification
+RuleSets consume (see above). The shadow correlation dual-write is
+acknowledged fail-open; in `authoritative` mode the contribution owns the ack
+instead, and the `*/5` `settle_mojosec_cases` sweep settles quiet deployment
+cases, heals crashed projections, and re-drives stranded case-routed
+receipts.
 
 `MOJOSEC_CASE_FUTURE_SKEW_SECONDS` is file/static-only, defaults to 300 seconds,
 and accepts 0–3600. Invalid values fail closed to zero. A sensor timestamp over

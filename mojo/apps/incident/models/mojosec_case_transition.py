@@ -18,7 +18,16 @@ class MojoSecCaseTransition(models.Model, MojoModel):
     receipt = models.ForeignKey(
         "incident.MojoSecReceipt", null=True, blank=True, default=None,
         related_name="case_transitions", on_delete=models.SET_NULL)
-    receipt_id_snapshot = models.PositiveBigIntegerField()
+    # 0 marks a system transition (settle, reopen, projection) that no receipt
+    # produced; the unique constraint below only binds real receipt snapshots.
+    receipt_id_snapshot = models.PositiveBigIntegerField(default=0)
+    # Set only on `projection` system transitions, after the case-level Event
+    # exists. SET_NULL keeps the audit row when Events are pruned; the
+    # snapshot integer survives in the integrity payload.
+    projected_event = models.ForeignKey(
+        "incident.Event", null=True, blank=True, default=None,
+        related_name="+", on_delete=models.SET_NULL)
+    projected_event_id_snapshot = models.PositiveBigIntegerField(default=0)
     transition = models.CharField(max_length=32, db_index=True)
     reason = models.CharField(max_length=96)
     from_state = models.CharField(max_length=16, blank=True, default="")
@@ -39,7 +48,8 @@ class MojoSecCaseTransition(models.Model, MojoModel):
         ordering = ["created", "id"]
         constraints = [
             models.UniqueConstraint(
-                fields=("receipt_id_snapshot",), name="incident_msct_receipt_uniq"),
+                fields=("receipt_id_snapshot",), name="incident_msct_receipt_uniq",
+                condition=models.Q(receipt_id_snapshot__gt=0)),
         ]
         indexes = [
             models.Index(fields=("case", "created"), name="incident_msct_case_idx"),
@@ -52,7 +62,9 @@ class MojoSecCaseTransition(models.Model, MojoModel):
         CAN_UPDATE = False
         CAN_DELETE = False
         DENY_AI = True
-        SENSITIVE_FIELDS = ["row_digest", "receipt_id_snapshot"]
+        SENSITIVE_FIELDS = [
+            "row_digest", "receipt_id_snapshot", "projected_event_id_snapshot",
+        ]
         GRAPHS = {
             "default": {
                 "fields": [
@@ -76,6 +88,14 @@ class MojoSecCaseTransition(models.Model, MojoModel):
         raise ValueError("MojoSec case transitions are append-only")
 
     def integrity_payload(self):
+        payload = self._base_integrity_payload()
+        # Conditional so rows digested before the projection linkage existed
+        # keep verifying against their stored digest unchanged.
+        if self.projected_event_id_snapshot:
+            payload["projected_event_id_snapshot"] = self.projected_event_id_snapshot
+        return payload
+
+    def _base_integrity_payload(self):
         return {
             "case_id": self.case_id,
             "receipt_id_snapshot": self.receipt_id_snapshot,

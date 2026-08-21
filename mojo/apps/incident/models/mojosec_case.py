@@ -8,9 +8,11 @@ class MojoSecCase(models.Model, MojoModel):
 
     STATE_OBSERVING = "observing"
     STATE_ELEVATED = "elevated"
+    STATE_SETTLED = "settled"
     STATES = (
         (STATE_OBSERVING, "Observing"),
         (STATE_ELEVATED, "Elevated"),
+        (STATE_SETTLED, "Settled"),
     )
     URGENCIES = (
         ("info", "Info"),
@@ -37,6 +39,8 @@ class MojoSecCase(models.Model, MojoModel):
     resource_id = models.CharField(max_length=96, blank=True, default="", db_index=True)
     family = models.CharField(max_length=64, db_index=True)
     network = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    deployment_id = models.CharField(
+        max_length=128, blank=True, default="", db_index=True)
     correlation_key = models.CharField(max_length=64)
     window_key = models.CharField(max_length=64)
     policy_version = models.PositiveIntegerField(default=1)
@@ -48,6 +52,16 @@ class MojoSecCase(models.Model, MojoModel):
     urgency = models.CharField(
         max_length=16, choices=URGENCIES, default="info", db_index=True)
     urgency_reason = models.CharField(max_length=96, default="unknown_evidence")
+    # Deployment cases settle after the bounded quiet window; a later NEW
+    # receipt reopens them. Both are system transitions, never Events.
+    settled_at = models.DateTimeField(null=True, blank=True, default=None)
+    # Highest urgency already projected as a case-level Event — the projection
+    # ratchet. Blank until the first promotion projects.
+    projected_urgency = models.CharField(max_length=16, blank=True, default="")
+    # Set when the projected Event's RuleSet handler dispatch was durably
+    # queued; the sweep re-dispatches idempotently while this is null.
+    projection_dispatched_at = models.DateTimeField(
+        null=True, blank=True, default=None)
 
     occurrence_count = models.PositiveBigIntegerField(default=0)
     receipt_count = models.PositiveBigIntegerField(default=0)
@@ -56,6 +70,10 @@ class MojoSecCase(models.Model, MojoModel):
     sample_count = models.PositiveSmallIntegerField(default=0)
     overflow_count = models.PositiveBigIntegerField(default=0)
     samples = models.JSONField(default=list, blank=True)
+    # Deployment cases only: bounded {"operations": {kind: count},
+    # "tiers": {tier: count}} — capped in the correlation service, spill
+    # lands in "_other". Empty dict for every other case kind.
+    breakdown = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["-last_seen", "-id"]
@@ -88,8 +106,9 @@ class MojoSecCase(models.Model, MojoModel):
             "list": {
                 "fields": [
                     "id", "created", "first_seen", "last_seen", "sensor_kind",
-                    "resource_id", "family", "state", "state_reason", "urgency",
-                    "urgency_reason", "occurrence_count", "receipt_count",
+                    "resource_id", "family", "deployment_id", "state",
+                    "state_reason", "urgency", "urgency_reason",
+                    "occurrence_count", "receipt_count",
                     "projected_event_count", "distinct_count", "sample_count",
                     "overflow_count", "policy_version", "evaluator_version",
                 ],
@@ -98,10 +117,12 @@ class MojoSecCase(models.Model, MojoModel):
                 "fields": [
                     "id", "created", "modified", "first_seen", "last_seen",
                     "window_start", "window_end", "sensor_id", "sensor_kind",
-                    "resource_id", "family", "network", "state", "state_reason",
-                    "urgency", "urgency_reason", "occurrence_count", "receipt_count",
-                    "projected_event_count", "distinct_count", "sample_count",
-                    "overflow_count", "samples", "policy_version", "evaluator_version",
+                    "resource_id", "family", "network", "deployment_id",
+                    "state", "state_reason", "urgency", "urgency_reason",
+                    "settled_at", "projected_urgency", "occurrence_count",
+                    "receipt_count", "projected_event_count", "distinct_count",
+                    "sample_count", "overflow_count", "samples", "breakdown",
+                    "policy_version", "evaluator_version",
                 ],
             },
         }

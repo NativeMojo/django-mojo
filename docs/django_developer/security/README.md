@@ -842,6 +842,7 @@ Default health rules are auto-created on first health check run. They send notif
 | `prune_mojosec_receipts` | Daily 8:15 AM | Deletes published and dead MojoSec receipts older than `MOJOSEC_RECEIPT_RETENTION_DAYS`; never deletes live pending publication rows |
 | `prune_mojosec_learning` | Daily 8:25 AM | Deletes bounded offline evaluation summaries older than `MOJOSEC_LEARNING_EVALUATION_RETENTION_DAYS`; feedback/proposal audit rows remain |
 | `replay_mojosec_handler_outbox` | Every 5 minutes | Replays published MojoSec receipts whose handler dispatch is pending, failed, or stale-queued past `MOJOSEC_HANDLER_QUEUED_STALE_SECONDS`; dead-letters receipts at `MOJOSEC_HANDLER_MAX_ATTEMPTS` and pending receipts whose Event was pruned |
+| `settle_mojosec_cases` | Every 5 minutes | Settles quiet MojoSec deployment cases past `MOJOSEC_DEPLOY_QUIET_SECONDS`, heals crashed case promotions, and re-drives stranded case-routed receipts; system transitions only, never Events |
 | `prune_events` | Daily 9:45 AM | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` days with level < 6 |
 | `sweep_expired_blocks` | Every 5 minutes | Unblocks IPs where `blocked_until` has passed |
 | `sync_firewall` | Hourly | Restores all ipsets from DB truth; skips unchanged sets; startup recovery after reboot |

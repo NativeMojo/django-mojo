@@ -1197,6 +1197,68 @@ def resolve_lifecycle(mode, criticality):
     )
 
 
+def _journalable_converge_paths():
+    """Every non-control-state host file converge may write, plus retirees.
+
+    /etc/mojosec, /var/lib/mojosec and /run/mojosec are converge-owned control
+    state the journal refuses by design; everything here sits under approved
+    monitored roots so an enrolled sensor can explain the converge's own
+    writes instead of flagging them as unexplained protected changes.
+    """
+    from mojo.deploy import audit as audit_deploy
+    from mojo.deploy.firewall_broker import BROKER_PATH, SUDOERS_PATH
+
+    return [
+        SERVICE_PATH, NGINX_FRAGMENT_PATH, RECEIVER_SNIPPET_PATH,
+        DJANGO_INCLUDE_PATH, LOGROTATE_PATH, AUDIT_HEALTH_SERVICE_PATH,
+        AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH,
+        audit_deploy.MANAGED_PATH, audit_deploy.GENERATED_PATH,
+        BROKER_PATH, SUDOERS_PATH,
+        "/etc/systemd/system/mojosec-agent.service",
+    ]
+
+
+def _journaled_converge(mode, criticality, project_path, deployment_id):
+    """Run converge under the trusted-change journal when a sensor is enrolled.
+
+    Annotation is an explanation, never a gate: if the journal cannot BEGIN,
+    converge runs unjournaled and FIM simply reports the writes unexplained.
+    A journal failure AFTER the mutation must never re-run it — the converge
+    already happened; its writes just stay unannotated.
+    """
+    from mojo.deploy.mojosec_changes import ChangeError, ChangeJournal
+
+    def mutate():
+        return converge(mode, criticality, project_path=project_path)
+
+    if not os.path.exists(CONFIG_PATH) or os.geteuid() != 0:
+        return mutate()
+    journal = ChangeJournal()
+    try:
+        journal.begin(
+            "mojosec-converge", "mojosec-converge",
+            _journalable_converge_paths(), deployment_id=deployment_id or None)
+    except (ChangeError, OSError, ValueError) as err:
+        print(f"mojosec deploy: trusted-change journal unavailable ({err}); "
+              "converging unjournaled", file=sys.stderr)
+        return mutate()
+    try:
+        result = mutate()
+    except Exception:
+        try:
+            journal.abort("mojosec-converge")
+        except (ChangeError, OSError, ValueError):
+            pass
+        raise
+    try:
+        journal.complete("mojosec-converge")
+    except (ChangeError, OSError, ValueError) as err:
+        print(f"mojosec deploy: trusted-change completion failed ({err}); "
+              "the converge already ran and its changes stay unannotated",
+              file=sys.stderr)
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="/usr/bin/python3 -E -P -m mojo.deploy.mojosec")
@@ -1206,6 +1268,10 @@ def main(argv=None):
     install.add_argument("--criticality", choices=("enrolled",) + CRITICALITIES,
                          default="enrolled")
     install.add_argument("--project-path", default="/opt/api")
+    install.add_argument(
+        "--deployment-id", default="",
+        help="deployment identity for expected-change annotations "
+             "(default: $MOJO_DEPLOY_ID, else the operation id)")
     rotate = sub.add_parser("rotate-credential")
     rotate.add_argument("--no-restart", action="store_true")
     sub.add_parser("install-enrollment")
@@ -1220,7 +1286,10 @@ def main(argv=None):
                       "sensor_id": enrollment["sensor_id"]}
         else:
             mode, criticality = resolve_lifecycle(args.mode, args.criticality)
-            result = converge(mode, criticality, project_path=args.project_path)
+            deployment_id = (
+                args.deployment_id or os.environ.get("MOJO_DEPLOY_ID", ""))
+            result = _journaled_converge(
+                mode, criticality, args.project_path, deployment_id)
             result.setdefault("ok", True)
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return 0

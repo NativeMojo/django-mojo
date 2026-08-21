@@ -513,3 +513,156 @@ def test_node_setup_declares_exact_unit_and_cron_destinations(opts):
     th.assert_eq(declared, [
         "/etc/systemd/system/mojo.service", "/etc/cron.d/3_mojo_jobs"],
         "node_setup must predeclare only its rendered unit and cron destinations")
+
+@th.django_unit_test()
+def test_immediate_parent_directories_are_journaled_and_matchable(opts):
+    """Writing a file explains its directory's metadata change too."""
+    from mojo.deploy.mojosec_changes import ChangeJournal, _snapshot
+    from mojo.mojosec.expected_changes import annotation, load_manifest
+
+    with tempfile.TemporaryDirectory() as root:
+        conf_dir = os.path.join(root, "conf.d")
+        os.mkdir(conf_dir)
+        target = os.path.join(conf_dir, "app.conf")
+        journal = ChangeJournal(
+            journal_path=os.path.join(root, "journal.json"),
+            lock_path=os.path.join(root, "journal.lock"),
+            manifest_path=os.path.join(root, "expected.json"),
+            allowed_roots=[root],
+        )
+        operation = journal.begin(
+            "parent-coverage", "rendered-host-config", [target],
+            ttl_seconds=900)
+        th.assert_true(conf_dir in operation["paths"],
+                       "begin must auto-journal the declared path's parent")
+        th.assert_true(root not in operation["paths"],
+                       "an approved root itself must never be auto-journaled")
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write("rendered host config\n")
+        info = os.stat(conf_dir, follow_symlinks=False)
+        os.utime(conf_dir, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000))
+        completed = journal.complete("parent-coverage")
+        th.assert_eq({entry["path"] for entry in completed},
+                     {target, conf_dir},
+                     "both the file and its perturbed parent directory must annotate")
+        entries = load_manifest(
+            os.path.join(root, "expected.json"), require_root=False)
+        matched = annotation(
+            entries, conf_dir, "modified", None, _snapshot(conf_dir))
+        th.assert_true(matched is not None and
+                       matched["operation_kind"] == "rendered-host-config",
+                       "the sensor-side exact match must explain the directory change")
+
+
+@th.django_unit_test()
+def test_retry_after_hot_parent_drift_stays_idempotent(opts):
+    """A concurrent write to an auto-journaled parent must not fail a retry."""
+    from mojo.deploy.mojosec_changes import ChangeError, ChangeJournal
+
+    with tempfile.TemporaryDirectory() as root:
+        conf_dir = os.path.join(root, "conf.d")
+        os.mkdir(conf_dir)
+        target = os.path.join(conf_dir, "app.conf")
+        journal = ChangeJournal(
+            journal_path=os.path.join(root, "journal.json"),
+            lock_path=os.path.join(root, "journal.lock"),
+            manifest_path=os.path.join(root, "expected.json"),
+            allowed_roots=[root],
+        )
+        journal.begin("retry-drift", "rendered-host-config", [target],
+                      ttl_seconds=900)
+        info = os.stat(conf_dir, follow_symlinks=False)
+        os.utime(conf_dir, ns=(
+            info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+        retried = journal.begin(
+            "retry-drift", "rendered-host-config", [target], ttl_seconds=900)
+        th.assert_true(conf_dir in retried["paths"],
+                       "the idempotent retry must return the active operation")
+        with th.assert_raises(ChangeError):
+            journal.begin("retry-drift", "rendered-host-config",
+                          [os.path.join(conf_dir, "other.conf")],
+                          ttl_seconds=900)
+        journal.abort("retry-drift")
+
+
+@th.django_unit_test()
+def test_converge_journal_catalog_stays_within_approved_roots(opts):
+    from mojo.deploy.mojosec import _journalable_converge_paths
+    from mojo.deploy.mojosec_changes import validate_paths
+
+    paths = _journalable_converge_paths()
+    th.assert_eq(len(validate_paths(paths)), len(paths),
+                 "every converge journal path must sit under an approved root, "
+                 "or begin() would refuse and converge would run unjournaled")
+    th.assert_true(all(not path.startswith("/etc/mojosec") and
+                       not path.startswith("/var/lib/mojosec") and
+                       not path.startswith("/run/mojosec") for path in paths),
+                   "converge control state is journal-refused by design and "
+                   "must never enter the declared catalog")
+
+@th.django_unit_test()
+def test_derived_parents_respect_denied_scopes(opts):
+    from mojo.deploy.mojosec_changes import _with_immediate_parents
+
+    parents = _with_immediate_parents(
+        ["/etc/nginx/conf.d/app.conf"],
+        allowed_roots=["/etc", "/etc/mojosec", "/opt/api"])
+    th.assert_true("/etc/nginx/conf.d" in parents,
+                   "an approved monitored parent must be derived")
+    hostile = _with_immediate_parents(
+        ["/etc/mojosec/config.json", "/opt/api/current/app.py"],
+        allowed_roots=["/etc", "/etc/mojosec", "/opt/api"])
+    th.assert_true(
+        all(item in ("/etc/mojosec/config.json", "/opt/api/current/app.py")
+            for item in hostile),
+        f"control-state and release-tree parents must never derive: {hostile}")
+
+
+@th.django_unit_test()
+def test_journaled_converge_never_reruns_after_completion_failure(opts):
+    from unittest import mock
+
+    import mojo.deploy.mojosec as deploy_mojosec
+    from mojo.deploy.mojosec_changes import ChangeError
+
+    calls = {"mutations": 0}
+
+    class FakeJournal:
+        def __init__(self, begin_error=None, complete_error=None):
+            self.begin_error = begin_error
+            self.complete_error = complete_error
+
+        def begin(self, *args, **kwargs):
+            if self.begin_error:
+                raise self.begin_error
+
+        def complete(self, operation_id):
+            if self.complete_error:
+                raise self.complete_error
+
+        def abort(self, operation_id):
+            pass
+
+    def run(journal):
+        calls["mutations"] = 0
+        with mock.patch.object(deploy_mojosec, "converge",
+                               side_effect=lambda *a, **k: (
+                                   calls.__setitem__(
+                                       "mutations", calls["mutations"] + 1) or
+                                   {"changed": True})), \
+                mock.patch.object(deploy_mojosec.os.path, "exists",
+                                  return_value=True), \
+                mock.patch.object(deploy_mojosec.os, "geteuid",
+                                  return_value=0), \
+                mock.patch(
+                    "mojo.deploy.mojosec_changes.ChangeJournal",
+                    return_value=journal):
+            return deploy_mojosec._journaled_converge(
+                "observe", "best_effort", "/opt/api", "deploy-x")
+
+    result = run(FakeJournal(complete_error=ChangeError("consumed")))
+    th.assert_eq((calls["mutations"], result["changed"]), (1, True),
+                 "a completion failure must never re-run the converge mutation")
+    result = run(FakeJournal(begin_error=ChangeError("wedged")))
+    th.assert_eq((calls["mutations"], result["changed"]), (1, True),
+                 "a begin failure must fall back to exactly one unjournaled run")

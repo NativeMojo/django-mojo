@@ -71,10 +71,14 @@ def setup_mojosec_cases(opts):
     from mojo.apps.incident.models import (
         MojoSecCase, MojoSecCaseTransition, MojoSecReceipt)
 
+    # Sweep by the constant stem: per-run uuid prefixes leak rows into the
+    # long-lived database forever, and their canonical wire ids collide with
+    # other files' globally-scoped lookups.
+    stem = "mojosec_case_test_"
     MojoSecCaseTransition.maintenance_objects.filter(
-        case__sensor_id=PREFIX).delete()
-    MojoSecReceipt.objects.filter(sensor_id=PREFIX).delete()
-    MojoSecCase.objects.filter(sensor_id=PREFIX).delete()
+        case__sensor_id__startswith=stem).delete()
+    MojoSecReceipt.objects.filter(sensor_id__startswith=stem).delete()
+    MojoSecCase.objects.filter(sensor_id__startswith=stem).delete()
     ApiKey.objects.filter(name__startswith=PREFIX).delete()
     Vhost.objects.filter(domain__name__in=(DOMAIN_NAME, OTHER_DOMAIN_NAME)).delete()
     Certificate.objects.filter(
@@ -210,7 +214,7 @@ def test_concurrent_delivery_and_fim_load_are_bounded(opts):
                 "deployment_id": "deploy-2026-08-18",
                 "operation_id": "release-42", "operation_kind": "release",
                 "completed_at": "2026-08-18T02:12:00Z",
-                "expires_at": "2026-08-18T03:00:00Z",
+                "expires_at": "2026-08-18T02:27:00Z",
             },
         }, observed="2026-08-18T02:13:00Z")
         fim_receipt = _receipt(opts, fim)
@@ -262,7 +266,7 @@ def test_samples_overflow_and_late_windows_are_explicit(opts):
             mock.patch.object(mojosec_correlation, "_record_metric"):
         for index in range(9):
             event = _event("web.probe", f"{index + 10:064x}", attributes={
-                "source_ip": "198.51.100.88", "method": "GET", "status": 404,
+                "source_ip": "198.51.101.88", "method": "GET", "status": 404,
                 "request_uri": f"/wp-content/plugin-{index}/readme.txt?secret=drop-me",
                 "response_class": "impossible_path",
                 "resource_id": f"vhost:{opts.case_vhost_id}",
@@ -271,7 +275,7 @@ def test_samples_overflow_and_late_windows_are_explicit(opts):
             receipt = _receipt(opts, event)
             cases.append(mojosec_correlation.contribute(receipt, event)[0])
         late = _event("web.probe", "f" * 64, attributes={
-            "source_ip": "198.51.100.88", "method": "GET", "status": 404,
+            "source_ip": "198.51.101.88", "method": "GET", "status": 404,
             "request_uri": "/wp-content/late/readme.txt",
             "response_class": "impossible_path",
             "resource_id": f"vhost:{opts.case_vhost_id}",
@@ -318,7 +322,7 @@ def test_web_shadow_requires_authoritative_vhost_tenant_and_policy_binding(opts)
 
     def evidence(event_id, vhost_id, version=5, response_class="impossible_path"):
         return _event("web.probe", event_id, attributes={
-            "source_ip": "198.51.100.144", "method": "GET", "status": 404,
+            "source_ip": "198.51.102.144", "method": "GET", "status": 404,
             "request_uri": "/wp-login.php", "response_class": response_class,
             "resource_id": f"vhost:{vhost_id}", "edge_policy_version": version,
             "scheme": "https",

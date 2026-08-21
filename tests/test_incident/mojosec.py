@@ -185,14 +185,14 @@ def test_mojosec_endpoint_accepts_gzip_and_acks_each_event(opts):
 
     probe = Event.objects.get(metadata__mojosec__event_id="e" * 64)
     login = Event.objects.get(metadata__mojosec__event_id="d" * 64)
-    receipt = MojoSecReceipt.objects.get(wire_event_id="e" * 64)
-    sudo_receipt = MojoSecReceipt.objects.get(wire_event_id="0" * 64)
+    receipt = MojoSecReceipt.objects.get(sensor_id=SENSOR_ID, wire_event_id="e" * 64)
+    sudo_receipt = MojoSecReceipt.objects.get(sensor_id=SENSOR_ID, wire_event_id="0" * 64)
     sudo_projected = Event.objects.get(metadata__mojosec__event_id="0" * 64)
-    local_sudo_receipt = MojoSecReceipt.objects.get(wire_event_id="ab" * 32)
+    local_sudo_receipt = MojoSecReceipt.objects.get(sensor_id=SENSOR_ID, wire_event_id="ab" * 32)
     local_sudo_projected = Event.objects.get(metadata__mojosec__event_id="ab" * 32)
-    truncated_sudo_receipt = MojoSecReceipt.objects.get(wire_event_id="ac" * 32)
+    truncated_sudo_receipt = MojoSecReceipt.objects.get(sensor_id=SENSOR_ID, wire_event_id="ac" * 32)
     truncated_sudo_projected = Event.objects.get(metadata__mojosec__event_id="ac" * 32)
-    poisoned_receipt = MojoSecReceipt.objects.get(wire_event_id="6" * 64)
+    poisoned_receipt = MojoSecReceipt.objects.get(sensor_id=SENSOR_ID, wire_event_id="6" * 64)
     poisoned_projected = Event.objects.get(metadata__mojosec__event_id="6" * 64)
     th.assert_eq(probe.source_ip, "198.51.100.7",
                  "an eligible detector kind should promote its validated source IP")
@@ -482,7 +482,8 @@ def test_local_only_create_and_publication_terminalization_races_are_safe(opts):
         statuses = list(pool.map(lambda unused: create_once(), range(2)))
     th.assert_eq(sorted(statuses), ["accepted", "duplicate"],
                  f"concurrent local-only creates must admit one identity once: {statuses}")
-    created = MojoSecReceipt.objects.get(wire_event_id="14" * 32)
+    created = MojoSecReceipt.objects.get(
+        sensor_id=SENSOR_ID, wire_event_id="14" * 32)
     th.assert_true(created.event_id is None,
                    "the concurrent winner must still create only an eventless receipt")
 
@@ -769,7 +770,8 @@ def test_mojosec_idempotency_is_scoped_to_installation_key(opts):
                  "the first installation should claim its own wire id")
     th.assert_eq(other["results"][0]["status"], "accepted",
                  "another authenticated installation may use the same wire id")
-    th.assert_eq(MojoSecReceipt.objects.filter(wire_event_id="3" * 64).count(), 2,
+    th.assert_eq(MojoSecReceipt.objects.filter(
+        wire_event_id="3" * 64, sensor_id=SENSOR_ID).count(), 2,
                  "deduplication identity must include the authenticated API key")
 
 

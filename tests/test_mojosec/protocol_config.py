@@ -237,7 +237,9 @@ def test_receiver_projects_only_safe_expected_change_annotation(opts):
                  "extra sensor-controlled annotation fields must be dropped centrally")
     v2 = {
         "deployment_id": "deploy-20260808.1",
-        "expires_at": "2026-08-08T12:30:00Z",
+        # Exactly completed_at + the journal's 900s MAX_TTL trust bound the
+        # central projection now enforces.
+        "expires_at": "2026-08-08T12:15:00Z",
         "operation_id": "deploy-20260808.1-nginx",
         "operation_kind": "rendered-config",
         "completed_at": "2026-08-08T12:00:00Z",

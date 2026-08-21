@@ -153,14 +153,20 @@ def _bounded_positive(value, default, maximum, name="value"):
     return value
 
 
+def _iso(value):
+    # The plain-dict response path (objict.to_json) cannot serialize
+    # datetimes nested inside lists — bounded ISO strings, explicitly.
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
 def _case_row(case, detail=False):
     row = {
         "id": case.pk,
-        "created": case.created,
-        "first_seen": case.first_seen,
-        "last_seen": case.last_seen,
-        "window_start": case.window_start,
-        "window_end": case.window_end,
+        "created": _iso(case.created),
+        "first_seen": _iso(case.first_seen),
+        "last_seen": _iso(case.last_seen),
+        "window_start": _iso(case.window_start),
+        "window_end": _iso(case.window_end),
         "sensor_kind": case.sensor_kind,
         "resource_id": case.resource_id,
         "family": case.family,
@@ -176,15 +182,20 @@ def _case_row(case, detail=False):
         "overflow_count": case.overflow_count,
         "policy_version": case.policy_version,
         "evaluator_version": case.evaluator_version,
+        "deployment_id": case.deployment_id,
     }
     if detail:
         row["sensor_id"] = case.sensor_id
         row["network"] = case.network
+        row["settled_at"] = _iso(case.settled_at) if case.settled_at else None
+        row["projected_urgency"] = case.projected_urgency
+        row["breakdown"] = (
+            case.breakdown if isinstance(case.breakdown, dict) else {})
         row["samples"] = list(case.samples)[:8] if isinstance(case.samples, list) else []
         row["transitions"] = [
             {
                 "id": item.pk,
-                "created": item.created,
+                "created": _iso(item.created),
                 "transition": item.transition,
                 "reason": item.reason,
                 "from_state": item.from_state,
@@ -213,7 +224,7 @@ def on_mojosec_case(request, pk=None):
                 "MojoSec case does not exist", code=404, status=404)
         return {"status": True, "data": _case_row(case, detail=True)}
     filters = {
-        "state": ("observing", "elevated"),
+        "state": ("observing", "elevated", "settled"),
         "urgency": ("info", "warning", "high", "critical"),
         "sensor_kind": ("web", "fim"),
     }
@@ -229,6 +240,12 @@ def on_mojosec_case(request, pk=None):
                 not resource_id.startswith(("vhost:", "installation:"))):
             raise merrors.ValueException("invalid MojoSec case resource_id")
         queryset = queryset.filter(resource_id=resource_id)
+    for field, limit in (("family", 64), ("deployment_id", 128)):
+        value = request.DATA.get(field)
+        if value not in (None, ""):
+            if not isinstance(value, str) or len(value) > limit:
+                raise merrors.ValueException(f"invalid MojoSec case {field}")
+            queryset = queryset.filter(**{field: value})
     page = _bounded_positive(request.DATA.get("page"), 1, 100, name="page")
     page_size = _bounded_positive(
         request.DATA.get("page_size"), 50, 100, name="page_size")
@@ -271,6 +288,16 @@ def on_mojosec_case_metrics(request):
     }
     occurrences = totals["occurrences"] or 0
     cases = totals["cases"] or 0
+    settled = queryset.filter(state="settled").count()
+    from mojo.apps.incident.models import MojoSecReceipt
+
+    suppressed_query = MojoSecReceipt.objects.filter(
+        case_routed=True,
+        publish_state=MojoSecReceipt.PUBLISH_PUBLISHED,
+        case_contributed_at__gte=now - dates.timedelta(days=days))
+    if resource_id not in (None, ""):
+        suppressed_query = suppressed_query.filter(
+            mojosec_case__resource_id=resource_id)
     return {
         "status": True,
         "data": {
@@ -281,6 +308,8 @@ def on_mojosec_case_metrics(request):
             "projected_events": totals["projected_events"] or 0,
             "distinct": totals["distinct"] or 0,
             "overflows": totals["overflows"] or 0,
+            "settled": settled,
+            "suppressed_events": suppressed_query.count(),
             "compression_ratio": round(occurrences / cases, 2) if cases else 0,
             "by_urgency": by_urgency,
         },

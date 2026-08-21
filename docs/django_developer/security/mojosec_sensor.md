@@ -225,6 +225,21 @@ Events are then delivered whether or not an annotation arrives. Malformed
 manifests emit a visible `fim.expected_change_error`; they never block expiry
 delivery.
 
+Producer coverage explains a whole deploy, not just its package paths: the
+journal auto-annotates each declared path's immediate parent directory (so
+deploy-owned directory metadata under `/etc/cron.d`, `/etc/logrotate.d`, and
+`/etc/nginx/conf.d` matches instead of surfacing unexplained), and
+`mojo.deploy.mojosec converge` plus the render command's nginx runtime
+fragment install run under the journal on enrolled hosts with the release's
+deployment identity (`--deployment-id` / `$MOJO_DEPLOY_ID`). Centrally,
+trusted expected-change FIM coalesces into one `MojoSecCase` per sensor +
+deployment identity per UTC day; on an installation enrolled in
+`authoritative` mode those receipts are case-routed — accepted, retained, and
+replayable, but projecting **no** per-receipt operator Event — while
+unannotated protected changes stay immediate individual Events (see
+`docs/django_developer/logging/incidents.md` for the cutover contract, ack
+ownership, and rollback).
+
 Deploy the producer-capable package before activating `al2023-web-v2`. During
 that first stage the profile stays inactive while normal deploy, node setup,
 and certificate operations prove the stable helper path. Then preview every

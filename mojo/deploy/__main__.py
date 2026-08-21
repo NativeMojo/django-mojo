@@ -177,7 +177,8 @@ def cmd_render(args):
                    or test_seams)
     if (os.geteuid() == 0 and host_deploy and
             os.path.normpath(args.dest) == canonical_dest):
-        from mojo.deploy.nginx_runtime import NginxRuntimeError, converge
+        from mojo.deploy.nginx_runtime import (
+            NginxRuntimeError, converge, fragment_path)
         nginx_etc = os.environ.get("NGINX_ETC", "/etc/nginx")
         runtime_root = os.environ.get(
             "MOJO_NGINX_RUNTIME_ROOT", "/var/lib/django-mojo/nginx")
@@ -189,12 +190,49 @@ def cmd_render(args):
             print("mojo.deploy render: refusing redirected nginx runtime "
                   "paths for a production project", file=sys.stderr)
             return 1
-        try:
+
+        def converge_runtime():
             converge(args.web_user, nginx_etc=nginx_etc, root=runtime_root)
+
+        # Journal the runtime fragment write when a sensor is enrolled so the
+        # rendered host config is provenance-explained instead of an
+        # unexplained protected change. Annotation is best-effort: a journal
+        # that cannot BEGIN never blocks the serving-plane converge, and a
+        # journal failure AFTER the mutation never re-runs it.
+        journal = None
+        if not test_seams and os.path.exists("/etc/mojosec/config.json"):
+            from mojo.deploy.mojosec_changes import ChangeError, ChangeJournal
+            journal = ChangeJournal()
+            try:
+                journal.begin(
+                    "nginx-runtime-fragment", "rendered-host-config",
+                    [fragment_path(nginx_etc)],
+                    deployment_id=os.environ.get("MOJO_DEPLOY_ID") or None)
+            except (ChangeError, OSError, ValueError) as err:
+                print("mojo.deploy render: trusted-change journal "
+                      "unavailable (%s); converging unjournaled" % err,
+                      file=sys.stderr)
+                journal = None
+        try:
+            converge_runtime()
         except NginxRuntimeError as err:
+            if journal is not None:
+                from mojo.deploy.mojosec_changes import ChangeError
+                try:
+                    journal.abort("nginx-runtime-fragment")
+                except (ChangeError, OSError, ValueError):
+                    pass
             print("mojo.deploy render: nginx runtime convergence failed: %s"
                   % err, file=sys.stderr)
             return 1
+        if journal is not None:
+            from mojo.deploy.mojosec_changes import ChangeError
+            try:
+                journal.complete("nginx-runtime-fragment")
+            except (ChangeError, OSError, ValueError) as err:
+                print("mojo.deploy render: trusted-change completion failed "
+                      "(%s); the fragment install stays unannotated" % err,
+                      file=sys.stderr)
 
     context = build_context(args.project_path, args.app_user,
                             args.web_user, args.workers)

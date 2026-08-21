@@ -1051,9 +1051,27 @@ an operator selects v2, records a complete preview, and explicitly initializes
 the exact v2 digest; profile mismatch fails closed and never rebaselines.
 
 Post-deploy, `node_setup`, and `certbot_sync` route monitored host changes
-through the stable expected-change helper. The helper declares exact paths
-before one child mutation, completes only on success, and aborts failure so the
-sensor still reports those bytes as unexplained. Pip resolution is bounded and
+through the stable expected-change helper, and two previously unjournaled
+writers now do too: `mojo.deploy.mojosec converge` journals its non-control-
+state host outputs (the managed Audit policy `70-mojosec.rules` and generated
+`audit.rules`, the logrotate policy, the `00_mojosec.conf` fragment, the
+receiver snippet and `django.inc`, the systemd units, the audit-health stable
+helper script, the firewall broker and its sudoers file), and the deploy
+`render` command journals the nginx runtime fragment install. Both accept a
+deployment identity — `mojo.deploy.mojosec install`'s `--deployment-id`
+(falling back to `$MOJO_DEPLOY_ID`), and the render command's
+`$MOJO_DEPLOY_ID` only — so all of one release's operations coalesce under
+one deployment case; both fall back to running **unjournaled with a stderr
+notice** if the journal itself cannot begin — annotation explains changes, it
+never gates convergence. The helper declares exact paths before one child
+mutation, completes only on success, and aborts failure so the sensor still
+reports those bytes as unexplained. `begin()` additionally journals each
+declared path's **immediate parent directory** (never an approved root like
+`/etc` itself) so the directory-metadata changes a write causes — the mtime of
+`/etc/cron.d`, `/etc/logrotate.d`, `/etc/nginx/conf.d` — are provenance-
+explained instead of surfacing as unexplained protected changes; retries stay
+idempotent because the active-operation comparison covers only the declared
+identity, not the volatile parent snapshots. Pip resolution is bounded and
 uses incoming plus installed wheel `RECORD` paths, including exact installer
 metadata and generated scripts/bytecode; it never diffs an arbitrary
 site-packages scope. Repeated parent destinations are deduplicated before
