@@ -10,6 +10,7 @@ import {announce, loadInto, runAction, toast} from '../components/actions.js';
 import {confirmAction} from '../components/overlays.js';
 import {degradedState, emptyState, loadingState} from '../components/views.js';
 import {renderBlocks} from './blocks.js';
+import {renderApprovalBlock} from './approval.js';
 import {renderMarkdown} from './markdown.js';
 import {applyPlanUpdate, planTracker} from './plan.js';
 import {createTransport} from './transport.js';
@@ -60,11 +61,19 @@ export function mountConversation({ctx, panel}) {
     thread.scrollTop = thread.scrollHeight;
   }
 
+  function blockContext() {
+    return {
+      transport,
+      conversationId,
+      onQuickReply: (value) => { appendUser(value); setBusy(true); },
+    };
+  }
+
   function appendAssistant(text, blocks) {
     const children = [];
     if (text) children.push(renderMarkdown(text));
     const node = bubble('assistant', ...children);
-    (blocks && blocks.length ? renderBlocks(blocks, {conversationId}) : [])
+    (blocks && blocks.length ? renderBlocks(blocks, blockContext()) : [])
       .forEach((block) => node.append(block));
     thread.append(node);
     scroll();
@@ -122,6 +131,15 @@ export function mountConversation({ctx, panel}) {
     }
     if (event.type === 'assistant_text') {
       appendAssistant(event.text, event.blocks);
+      return;
+    }
+    if (event.type === 'assistant_approval_required') {
+      // Server-authored and never model-forgeable. The card is appended in the
+      // thread where the turn is, and the composer stays usable: a procedure
+      // pauses at the card and no continuation is coming until the operator
+      // answers.
+      const card = renderApprovalBlock(event.block, blockContext());
+      if (card) { thread.append(card); scroll(); announce('The assistant needs your approval.'); }
       return;
     }
     if (event.type === 'assistant_plan') {
@@ -206,7 +224,7 @@ export function mountConversation({ctx, panel}) {
       const blocks = (message.blocks || []).map((block) => (
         block && block.action_id && states.has(block.action_id)
           ? states.get(block.action_id) : block));
-      renderBlocks(blocks, {conversationId: id}).forEach((block) => node.append(block));
+      renderBlocks(blocks, blockContext()).forEach((block) => node.append(block));
       nodes.push(node);
     });
     thread.replaceChildren(...(nodes.length ? nodes

@@ -11,6 +11,7 @@
 // No innerHTML anywhere in this module.
 
 import {h} from '../core.js';
+import {renderApprovalBlock, renderActionBlock} from './approval.js';
 import {renderMarkdown} from './markdown.js';
 import {planTracker} from './plan.js';
 
@@ -287,6 +288,10 @@ const RENDERERS = {
   // Accepted defensively with the plan tracker's own schema. Nothing produces
   // it today; the live tracker is fed by the WS plan events.
   progress: (block) => planTracker(block),
+  // Both delegated whole. This module knows nothing else about approvals: the
+  // server-issued card and the legacy quick-reply are one file's business.
+  approval: (block, ctx) => renderApprovalBlock(block, ctx),
+  action: (block, ctx) => renderActionBlock(block, ctx),
 };
 
 export function renderBlock(block, ctx = {}) {
