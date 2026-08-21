@@ -135,6 +135,78 @@ def project_capacity(envelope):
     }
 
 
+def local_probe_note(source):
+    """How to report the System Setup local API probe from a chat turn.
+
+    There is no originating HTTP request here, so ``trusted_local_api_target``
+    can only answer ``configured_static`` or ``default_80``. The Admin always
+    has a request to take a port from, so a port-80 miss is a red row the Admin
+    would never show — it is reported as UNAVAILABLE, naming the setting that
+    would make it real evidence, rather than as a failure.
+    """
+    if source != "default_80":
+        return {"source": source, "status": "attempted"}
+    return {
+        "source": source, "status": "unavailable",
+        "setting": "SYSTEM_SETUP_LOCAL_API_URL",
+        "message": (
+            "No SYSTEM_SETUP_LOCAL_API_URL is configured, so the local API "
+            "probe fell back to port 80 with no request to take a port from. "
+            "Treat any local-API check row in this report as unproven rather "
+            "than failing."),
+    }
+
+
+def project_drift(row):
+    """The recorded managed-engine drift, from the newest in-window Event.
+
+    ``row`` is what ``admin_platform._newest_drift_event()`` returns — a dict
+    with ``metadata`` and ``created``, or None. Never runs a live scan: a
+    chat-triggered scan would be a capability the Admin does not have and a
+    provider fan-out per turn.
+    """
+    from mojo.helpers import infrastructure
+    from mojo.apps.account.services import admin_platform
+
+    if row is None:
+        return {
+            "status": "no_recent_scan",
+            "mode": infrastructure.infrastructure_mode(),
+            "recorded_at": None, "findings": [],
+            "message": (
+                "No managed-engine drift scan has been recorded inside the "
+                "Dashboard's freshness window "
+                f"({admin_platform.VERSION_DRIFT_MAX_AGE.days} days)."),
+        }
+    metadata = row.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    findings = metadata.get("findings")
+    findings = findings if isinstance(findings, list) else []
+    rows = []
+    for finding in findings[:MAX_DRIFT_FINDINGS]:
+        if not isinstance(finding, dict):
+            continue
+        rows.append({
+            "kind": finding.get("kind"),
+            "resource": finding.get("resource_id"),
+            "engine": finding.get("engine"),
+            "current_version": finding.get("current_version"),
+            "available_major": finding.get("available_major"),
+            "deadline": finding.get("deadline"),
+            "days_remaining": finding.get("days_remaining"),
+            "note": finding.get("note"),
+        })
+    created = row.get("created")
+    return bounded({
+        "status": "recorded",
+        "mode": infrastructure.infrastructure_mode(),
+        "recorded_at": created.isoformat() if created is not None else None,
+        "region": metadata.get("region"),
+        "findings": rows,
+        "truncated": len(findings) > len(rows),
+    }, depth=4)
+
+
 def project_series(data, labels):
     """Per-slug series capped at the most recent buckets, plus min/max/avg."""
     labels = list(labels or [])
@@ -502,27 +574,13 @@ def _tool_get_setup_readiness(params, user, *, request_meta=None):
         "local_url": target["url"], "local_source": target["source"],
         "timeout": 2.0, "retries": 1,
     })
-    local_probe = {"source": target["source"], "status": "attempted"}
-    if target["source"] == "default_80":
-        # The Admin never probes this way — it always has a request to take a
-        # port from. Reporting a port-80 miss as a failure would be a red row
-        # the Admin would not show, so it is reported as unavailable instead.
-        local_probe = {
-            "source": target["source"], "status": "unavailable",
-            "setting": "SYSTEM_SETUP_LOCAL_API_URL",
-            "message": (
-                "No SYSTEM_SETUP_LOCAL_API_URL is configured, so the local API "
-                "probe fell back to port 80 with no request to take a port "
-                "from. Treat any local-API check row in this report as "
-                "unproven rather than failing."),
-        }
     return bounded({
         "section": section,
         "overall": report.get("overall"),
         "summary": report.get("summary"),
         "generated_at": report.get("generated_at"),
         "truncated": report.get("truncated"),
-        "local_probe": local_probe,
+        "local_probe": local_probe_note(target["source"]),
         "sections": report.get("sections"),
     }, depth=5)
 
@@ -559,10 +617,16 @@ def _tool_get_setup_operation(params, user, *, request_meta=None):
     operation_id = str(params.get("operation") or "").strip()
     row = None
     if operation_id:
+        # The pk is a UUID column: a model-invented id must be a refusal, not a
+        # ValidationError from the query layer.
+        import uuid as uuid_module
+
         try:
-            row = SystemSetupOperation.objects.filter(pk=operation_id).first()
-        except (ValueError, TypeError):
-            row = None
+            parsed = uuid_module.UUID(operation_id)
+        except (ValueError, TypeError, AttributeError):
+            parsed = None
+        if parsed is not None:
+            row = SystemSetupOperation.objects.filter(pk=parsed).first()
         if row is None:
             return refuse("That setup operation is not on record.",
                           "unknown_resource")
@@ -603,47 +667,11 @@ def _tool_get_setup_operation(params, user, *, request_meta=None):
     input_schema={"type": "object", "properties": {}},
 )
 def _tool_get_version_drift(params, user):
-    from mojo.helpers import infrastructure
     from mojo.apps.account.services import admin_platform
 
     # The same query the Dashboard's own drift row runs, reused rather than
     # rewritten so the category filter and the freshness window cannot drift.
-    row = admin_platform._newest_drift_event()
-    metadata = (row or {}).get("metadata")
-    metadata = metadata if isinstance(metadata, dict) else {}
-    findings = metadata.get("findings")
-    findings = findings if isinstance(findings, list) else []
-    if row is None:
-        return {"status": "no_recent_scan",
-                "mode": infrastructure.infrastructure_mode(),
-                "recorded_at": None, "findings": [],
-                "message": (
-                    "No managed-engine drift scan has been recorded inside the "
-                    "Dashboard's freshness window "
-                    f"({admin_platform.VERSION_DRIFT_MAX_AGE.days} days).")}
-    rows = []
-    for finding in findings[:MAX_DRIFT_FINDINGS]:
-        if not isinstance(finding, dict):
-            continue
-        rows.append({
-            "kind": finding.get("kind"),
-            "resource": finding.get("resource_id"),
-            "engine": finding.get("engine"),
-            "current_version": finding.get("current_version"),
-            "available_major": finding.get("available_major"),
-            "deadline": finding.get("deadline"),
-            "days_remaining": finding.get("days_remaining"),
-            "note": finding.get("note"),
-        })
-    return bounded({
-        "status": "recorded",
-        "mode": infrastructure.infrastructure_mode(),
-        "recorded_at": (row.get("created").isoformat()
-                        if row.get("created") is not None else None),
-        "region": metadata.get("region"),
-        "findings": rows,
-        "truncated": len(findings) > len(rows),
-    }, depth=4)
+    return project_drift(admin_platform._newest_drift_event())
 
 
 # --- CloudWatch -----------------------------------------------------------

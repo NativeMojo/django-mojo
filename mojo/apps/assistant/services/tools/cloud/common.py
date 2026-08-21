@@ -59,6 +59,9 @@ SENSITIVE_SUBSTRINGS = ("password", "secret", "token", "auth_key", "onetime_code
 REDACTED = "*****"
 
 TRUNCATED = "…"
+# The depth marker is a SCALAR on purpose: a dict marker would itself add a
+# level, so "bounded to depth N" would return N+1 levels.
+TRUNCATED_DEPTH = "[truncated: depth]"
 
 
 def _sensitive(key):
@@ -72,7 +75,9 @@ def _scalar(value, budget):
     if isinstance(value, str):
         text = logit.mask_sensitive_data(value)
         if len(text) > MAX_STRING:
-            text = text[:MAX_STRING] + TRUNCATED
+            # MAX_STRING is the CAP, marker included — a "bounded to 200" that
+            # returns 201 characters is not bounded.
+            text = text[:MAX_STRING - len(TRUNCATED)] + TRUNCATED
         budget["bytes"] += len(text)
         return text
     if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
@@ -89,7 +94,7 @@ def _walk(value, depth, budget):
     budget["nodes"] += 1
     if isinstance(value, dict):
         if depth <= 0:
-            return {"truncated": "depth"}
+            return TRUNCATED_DEPTH
         out = {}
         for index, (key, item) in enumerate(value.items()):
             if index >= MAX_ITEMS or _spent(budget):
@@ -105,7 +110,7 @@ def _walk(value, depth, budget):
         return out
     if isinstance(value, (list, tuple, set)):
         if depth <= 0:
-            return {"truncated": "depth"}
+            return TRUNCATED_DEPTH
         out = []
         for index, item in enumerate(value):
             if index >= MAX_ITEMS or _spent(budget):
