@@ -258,6 +258,13 @@ GET /api/assistant/conversation
 
 List the requesting user's past conversations. Admins see all conversations; non-admins see only their own.
 
+> **Filter by `user` unless you mean it.** `Conversation.VIEW_PERMS` accepts
+> `view_admin` outright and `owner` is only the *fallback*, so an unfiltered list
+> returns **every** operator's conversation titles to a `view_admin` holder. A
+> per-operator history list must pass `?user=<your id>`. (Continuation stays
+> owner-only regardless: both the REST and WebSocket paths look a conversation
+> up with `user=<caller>`.)
+
 **Permission**: `view_admin`
 
 **Query parameters**: Standard RestMeta pagination (`limit`, `page`, `order_by`).
@@ -842,6 +849,18 @@ Full contract, including the block schema, both transports, the single failure b
 ## WebSocket Interface
 
 For real-time chat UIs, the assistant supports a WebSocket interface alongside REST. Conversation CRUD stays as REST; the actual chat flows over the existing realtime WebSocket connection.
+
+Two properties of this transport decide how a client has to be written:
+
+* **Events fan out to every socket the user holds.** The server publishes to the
+  user, not to the socket that asked, so a second tab receives the first tab's
+  events too. `request_id` is the **only** safe correlation key: mint one per
+  turn and drop every `assistant_*` event whose `request_id` you did not mint.
+* **The server closes an idle authenticated socket after 30 seconds of _client_
+  silence.** Server→client events do not reset that timer — only inbound
+  messages do. Send `{"action": "ping"}` on an interval well under 30s (the
+  built-in Admin uses 12s) for as long as the socket is open, including while a
+  long turn is running and while your UI is closed with a turn pending.
 
 ### Client-to-Server Messages
 

@@ -193,6 +193,79 @@ LLM_ADMIN_API_KEY = "sk-ant-..."  # or falls back to LLM_HANDLER_API_KEY
 
 Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 
+## Admin setup surface
+
+An owner can enable the assistant, store and check a provider key, and pin a
+model from the built-in Admin, without editing a settings file.
+`mojo/apps/account/services/assistant_setup.py` is the only writer;
+`GET`/`POST /api/account/admin/assistant` is its only boundary (owner-only for
+read *and* write — see
+[the API reference](../../web_developer/account/admin_portal/assistant.md)).
+
+### The five protected keys
+
+| Key | Owned by | Stored as |
+|---|---|---|
+| `LLM_ADMIN_ENABLED` | `assistant_setup` | Plain global `Setting` row |
+| `LLM_ADMIN_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row |
+| `LLM_ADMIN_MODEL` | `assistant_setup` | Plain row, absent means automatic |
+| `LLM_ADMIN_VERIFY_STATE` | `assistant_setup` | How the STORED key last checked |
+| `LLM_HANDLER_API_KEY` | The deployment file | Never written from Admin |
+
+All five are **catalog-protected**: `admin_settings.is_catalog_protected()`
+returns true, so `Setting.set()`, the generic `/api/settings` REST surface, a
+shell save and every other writer refuse them. The four writable keys have one
+dedicated escape — `row.save(_protected_writer=<key>)` — and the writer must
+name the exact key the row carries, so no writer can smuggle a different
+protected key past the guard.
+
+`LLM_HANDLER_API_KEY` is protected **read-only**. A global database row would
+outrank the deployment file (`SettingsHelper.get` reads database rows before
+`django.conf`), which would make a value labelled "Deployment settings" a lie.
+Nothing writes it; it stays visible as provenance.
+
+### Writes go through the guarded save path, never `.update()`
+
+`Setting.resolve` reads Redis *first*. A queryset `.update()` or `bulk_create`
+skips `push_to_cache`, so the ORM read looks right while the resolver keeps
+serving the old value — a disable that silently does not take effect. Every
+assistant write is `row.save(_protected_writer=<key>, _skip_cache=True)` plus
+`transaction.on_commit(row.push_to_cache)`; clearing a key deletes the rows and
+`hdel`s the cache entry in the same `on_commit`.
+
+The credential is stored through `MojoSecrets`, so `value` is empty and the
+plaintext lives only in the encrypted `mojo_secrets` column. `push_to_cache`
+does put the decrypted value in the Redis settings hash — exactly as
+`GEOIP_API_KEY_MOJO` already does, and exactly what `Setting.resolve` would
+back-fill on first read anyway.
+
+### Resolution precedence
+
+```
+LLM_ADMIN_API_KEY (Admin row)  ->  LLM_ADMIN_API_KEY (deployment file)
+                               ->  LLM_HANDLER_API_KEY (deployment fallback)
+```
+
+This is existing behaviour, not new code: `llm.get_api_key()` already prefers
+`LLM_ADMIN_API_KEY`, and a database row already outranks the file. `state()`
+reports which one is live as `key.source` (`admin` / `deployment` / `fallback` /
+`none`) with a four-character hint, and never the value.
+
+### Verification
+
+`verify(actor, api_key=None)` checks a candidate, or the stored credential when
+none is given, through `llm.verify_api_key()`. The outcome is reduced to a fixed
+vocabulary — `verified`, `invalid_key`, `unreachable`, `not_configured` — so no
+provider response body, exception repr or key fragment can reach an
+operator-visible string.
+
+Only a check of the **stored** credential is recorded in
+`LLM_ADMIN_VERIFY_STATE`. A rejected candidate was never stored, so recording it
+would make the settings page describe a configuration the installation is not
+running. A `save` that supplies a new key verifies it **before** the transaction
+opens and refuses the whole save when it fails, so the installation never runs a
+credential nobody proved.
+
 ## Settings
 
 | Setting | Default | Description |
