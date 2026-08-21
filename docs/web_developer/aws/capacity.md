@@ -514,7 +514,7 @@ operation record instead.
 | `node_id_pinned` | 409 | The fleet pins `EDGE_NODE_ID`, so a new node could never prove its own identity |
 | `no_source_node` | 409 | No healthy, running fleet member is available to clone |
 | `not_registered` | 409 | A **drain** named an instance not registered behind any load balancer. (Terminate no longer refuses this shape — see `not_fleet_member`) |
-| `not_fleet_member` | 409 | A terminate named an unregistered instance that fresh EC2 facts could not prove a fleet member (missing, or no django-mojo/admin-capacity tag). A COMPLETED drain removes the target from its group, so terminate proves membership by tags instead |
+| `not_fleet_member` | 409 | A terminate named an unregistered instance that fresh EC2 facts could not prove a member of THIS fleet: missing, no admin-capacity clone stamp and no django-mojo tags, `mojo:project`/`mojo:env` not exactly matching a currently registered member's, or no registered member left to verify identity against (fail closed — use the console). A COMPLETED drain removes the target from its group, so terminate proves membership by identity, never by a generic tag |
 | `already_terminated` | 409 | The unregistered instance is already `terminated`/`shutting-down` |
 | `last_healthy_target` | 409 | It is the only healthy target of some attached group. `data.target_group` names it |
 | `cannot_remove_self` | 409 | It is the node answering this request. `data.self_check` carries the check's status |

@@ -112,7 +112,7 @@ ladder and writes each phase onto the record:
 | Phase | What happens | Failure |
 |---|---|---|
 | `capturing` | Reuse a `mojo:fleet-image` AMI younger than `ADMIN_CAPACITY_IMAGE_MAX_AGE_DAYS` (14), else `create_image(NoReboot=True)` on a healthy **non-primary** member and poll until `available` | `image_timeout` after 30 min — **nothing was launched** |
-| `launching` | `run_instances` cloning instance type, subnet, security groups and instance profile, with `HttpTokens=required` and `mojo:created-by=admin-capacity` | `launch_timeout` — the instance exists and is NOT registered |
+| `launching` | `run_instances` cloning instance type, subnet, security groups and instance profile, with `HttpTokens=required`, `mojo:created-by=admin-capacity`, and the source's identity tags (`mojo:project`/`mojo:env`/`managed-by`) so the clone is born a provable fleet member | `launch_timeout` — the instance exists and is NOT registered |
 | `booting` | Wait for `<node_id>-engine` on the `edge` channel | `runner_missing` after 20 min — running, unregistered, serving nothing |
 | `converging` | ONE targeted `_publish_deploy_node(runner_id, row.sha, row.framework_version, migrate=False, deployment_id=row.pk)` for `platform_deploy.last_converged_deployment()` | `no_converged_deployment` |
 | `proving` | Poll `readiness.local_node_proof` over `execute_on_runner` until `platform_deploy.proof_matches` accepts it | `proof_timeout` — **NOT registered** |
@@ -189,15 +189,24 @@ client, not evidence.
 terminate exists to destroy is invisible to the serving map. Terminate
 therefore has two proof paths: still registered → every group must report it
 drained (`not_drained` otherwise, unchanged); registered nowhere →
-`_prove_fleet_member` re-describes the instance fresh and requires it to
-exist, not already be `terminated`/`shutting-down` (`already_terminated`),
-and to carry a django-mojo ownership tag (`managed-by=django-mojo` /
-`mojo:project`) **or** the `mojo:created-by=admin-capacity` tag this feature
-stamps on every clone — anything else refuses `not_fleet_member`. The self
-check runs against the bare resource id too (a drained node is absent from
-the serving describe, and a drained self node must still not terminate
-itself). Without this, drain→terminate could never complete — in a batch or
-in two manual clicks.
+`_prove_fleet_member` re-describes the instance fresh, requires it to exist
+and not already be `terminated`/`shutting-down` (`already_terminated`), then
+proves identity one of two ways: the `mojo:created-by=admin-capacity` stamp
+this feature puts on every clone it launches, **or** a django-mojo ownership
+tag PLUS an exact identity match — the candidate's `mojo:project` and
+`mojo:env` equal to those of a **currently registered** fleet member (the
+identity anchor), a missing value on either side counting as a mismatch,
+never a wildcard. A generic django-mojo tag alone is deliberately not
+enough: a staging and a prod fleet in one account+region are both
+django-mojo-tagged, and this predicate gates `TerminateInstances` — the
+same reason provision's `spec.owns()` matches identity, never ownership
+alone. No registered member to anchor against → refused outright (use the
+AWS console). Anything else refuses `not_fleet_member`. The self check runs
+against the bare resource id too (a drained node is absent from the serving
+describe, and a drained self node must still not terminate itself). Without
+this, drain→terminate could never complete — in a batch or in two manual
+clicks. Clones launched here carry the source's identity tags from birth, so
+they satisfy either proof.
 
 ### The two refusals
 

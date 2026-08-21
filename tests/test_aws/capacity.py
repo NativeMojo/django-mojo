@@ -542,100 +542,132 @@ def _routed_ec2_client(rows_by_id):
     return client
 
 
-@th.django_unit_test("a drained-out node terminates on a fresh EC2 tag proof, never on absence")
+@th.django_unit_test("a drained-out node terminates on a fresh EC2 identity proof, never on absence")
 def test_terminate_guard_deregistered_member(opts):
     # A COMPLETED drain removes the target from its group entirely, so the
     # drain→terminate composition used to 409 not_registered forever. The
-    # unregistered case now proves fleet membership from fresh EC2 facts.
+    # unregistered case now proves membership from fresh EC2 facts — and a
+    # generic django-mojo tag is NOT enough: staging and prod in one account
+    # are both django-mojo-tagged, so identity (mojo:project/mojo:env) must
+    # match a CURRENTLY REGISTERED member, or the created-by clone stamp.
     from mojo.apps.aws.services import capacity
 
+    IDENTITY = {"mojo:project": "mojo-test", "mojo:env": "prod"}
     # NODE_B is gone from every group — only NODE_A is registered.
     elbv2_client = _elbv2_client(health={GROUP_ARN: [_target(NODE_A, "healthy")]})
 
-    def attempt(row_b):
-        rows = {NODE_A: _instance(NODE_A, "mojo-api-a"), NODE_B: row_b}
-        with mock.patch.object(capacity, "_local_hostname", return_value="laptop"), \
+    def tagged(instance_id, name, pairs, state="running"):
+        row = _instance(instance_id, name, state=state)
+        for key, value in pairs.items():
+            row["Tags"].append({"Key": key, "Value": value})
+        return row
+
+    def anchor():
+        return tagged(NODE_A, "mojo-api-a",
+                      {"managed-by": "django-mojo", **IDENTITY})
+
+    def run(rows, elbv2=elbv2_client):
+        with mock.patch.object(capacity, "_local_hostname",
+                               return_value="laptop"), \
                 mock.patch.object(capacity, "_dispatch") as dispatched:
-            record = capacity.apply(
-                _actor(), capacity.ACTION_TERMINATE_NODE, NODE_B,
-                elbv2_client=elbv2_client,
-                ec2_client=_routed_ec2_client(rows))
-        return record, dispatched
+            try:
+                record = capacity.apply(
+                    _actor(), capacity.ACTION_TERMINATE_NODE, NODE_B,
+                    elbv2_client=elbv2, ec2_client=_routed_ec2_client(rows))
+                return record, None, dispatched
+            except capacity.CapacityError as err:
+                return None, err, dispatched
 
-    # django-mojo ownership tag: proven, claimed, dispatched.
-    tagged = _instance(NODE_B, "mojo-api-b")
-    tagged["Tags"].append({"Key": "managed-by", "Value": "django-mojo"})
-    record, dispatched = attempt(tagged)
-    assert dispatched.call_count == 1 and record["action"] == "terminate_node", \
-        "a drained-out, django-mojo-tagged node could not be terminated"
+    # Provisioned tags whose project AND env match the registered anchor:
+    # proven, claimed, dispatched.
+    matching = tagged(NODE_B, "mojo-api-b",
+                      {"managed-by": "django-mojo", **IDENTITY})
+    record, err, dispatched = run({NODE_A: anchor(), NODE_B: matching})
+    assert err is None and dispatched.call_count == 1 \
+        and record["action"] == "terminate_node", \
+        f"a drained-out node matching the fleet's identity was refused: {err}"
     _clear_claims()
 
-    # The admin-capacity created-by tag is equally a fleet proof — it is what
-    # this feature stamps on every clone it launches.
-    cloned = _instance(NODE_B, "mojo-api-b-clone")
-    cloned["Tags"].append({"Key": "mojo:created-by", "Value": "admin-capacity"})
-    record, dispatched = attempt(cloned)
-    assert dispatched.call_count == 1, \
-        "a drained-out capacity-added clone could not be terminated"
+    # The admin-capacity created-by stamp is proof on its own — this
+    # feature's own clones, no identity anchor needed.
+    cloned = tagged(NODE_B, "mojo-api-b-clone",
+                    {"mojo:created-by": "admin-capacity"})
+    record, err, dispatched = run(
+        {NODE_A: _instance(NODE_A, "mojo-api-a"), NODE_B: cloned})
+    assert err is None and dispatched.call_count == 1, \
+        f"a drained-out capacity-added clone could not be terminated: {err}"
     _clear_claims()
 
-    # No ownership tag: refused. Absence of registration is not consent.
-    with mock.patch.object(capacity, "_local_hostname", return_value="laptop"), \
-            mock.patch.object(capacity, "_dispatch") as dispatched:
-        with th.assert_raises(capacity.CapacityError) as caught:
-            capacity.apply(
-                _actor(), capacity.ACTION_TERMINATE_NODE, NODE_B,
-                elbv2_client=elbv2_client,
-                ec2_client=_routed_ec2_client(
-                    {NODE_A: _instance(NODE_A, "mojo-api-a"),
-                     NODE_B: _instance(NODE_B, "mojo-api-b")}))
-    assert caught.exception.error_code == "not_fleet_member" \
-        and caught.exception.status == 409, \
-        f"an untagged instance was terminable: {caught.exception.error_code}"
+    # django-mojo-tagged but ANOTHER environment or project — the same
+    # account's staging fleet, say — is never terminable from this portal.
+    for pairs in ({"managed-by": "django-mojo", "mojo:project": "mojo-test",
+                   "mojo:env": "staging"},
+                  {"managed-by": "django-mojo", "mojo:project": "other-app",
+                   "mojo:env": "prod"}):
+        record, err, dispatched = run(
+            {NODE_A: anchor(), NODE_B: tagged(NODE_B, "mojo-api-b", pairs)})
+        assert err is not None and err.error_code == "not_fleet_member" \
+            and err.status == 409, \
+            (f"a cross-environment instance {pairs} was terminable: "
+             f"{err and err.error_code}")
+        assert dispatched.call_count == 0, \
+            "a cross-environment terminate still dispatched"
+
+    # An anchor MISSING its identity tags proves nothing: mismatch, never a
+    # wildcard.
+    record, err, dispatched = run(
+        {NODE_A: tagged(NODE_A, "mojo-api-a", {"managed-by": "django-mojo"}),
+         NODE_B: matching})
+    assert err is not None and err.error_code == "not_fleet_member", \
+        (f"an identity-less anchor vouched for a candidate: "
+         f"{err and err.error_code}")
+    assert dispatched.call_count == 0, \
+        "an unverifiable identity still dispatched"
+
+    # No ownership tag at all: refused. Absence of registration is not consent.
+    record, err, dispatched = run(
+        {NODE_A: anchor(), NODE_B: _instance(NODE_B, "mojo-api-b")})
+    assert err is not None and err.error_code == "not_fleet_member" \
+        and err.status == 409, \
+        f"an untagged instance was terminable: {err and err.error_code}"
     assert dispatched.call_count == 0, "an untagged terminate still dispatched"
 
     # Already terminated: refused as such, never re-terminated.
-    gone = _instance(NODE_B, "mojo-api-b", state="terminated")
-    gone["Tags"].append({"Key": "managed-by", "Value": "django-mojo"})
-    with mock.patch.object(capacity, "_local_hostname", return_value="laptop"), \
-            mock.patch.object(capacity, "_dispatch") as dispatched:
-        with th.assert_raises(capacity.CapacityError) as caught:
-            capacity.apply(
-                _actor(), capacity.ACTION_TERMINATE_NODE, NODE_B,
-                elbv2_client=elbv2_client,
-                ec2_client=_routed_ec2_client(
-                    {NODE_A: _instance(NODE_A, "mojo-api-a"), NODE_B: gone}))
-    assert caught.exception.error_code == "already_terminated", \
-        f"a terminated instance was terminable again: {caught.exception.error_code}"
-    assert dispatched.call_count == 0, "an already-terminated node still dispatched"
+    gone = tagged(NODE_B, "mojo-api-b",
+                  {"managed-by": "django-mojo", **IDENTITY},
+                  state="terminated")
+    record, err, dispatched = run({NODE_A: anchor(), NODE_B: gone})
+    assert err is not None and err.error_code == "already_terminated", \
+        f"a terminated instance was terminable again: {err and err.error_code}"
+    assert dispatched.call_count == 0, \
+        "an already-terminated node still dispatched"
 
     # A vanished instance is equally refused — nothing to prove membership on.
-    with mock.patch.object(capacity, "_local_hostname", return_value="laptop"), \
-            mock.patch.object(capacity, "_dispatch") as dispatched:
-        with th.assert_raises(capacity.CapacityError) as caught:
-            capacity.apply(
-                _actor(), capacity.ACTION_TERMINATE_NODE, NODE_B,
-                elbv2_client=elbv2_client,
-                ec2_client=_routed_ec2_client(
-                    {NODE_A: _instance(NODE_A, "mojo-api-a")}))
-    assert caught.exception.error_code == "not_fleet_member", \
-        f"a vanished instance was terminable: {caught.exception.error_code}"
+    record, err, dispatched = run({NODE_A: anchor()})
+    assert err is not None and err.error_code == "not_fleet_member", \
+        f"a vanished instance was terminable: {err and err.error_code}"
     assert dispatched.call_count == 0, "a vanished node still dispatched"
+
+    # EMPTY serving map: no registered member to anchor identity against, so
+    # even a perfectly-tagged candidate is refused — fail closed.
+    empty = _elbv2_client(health={GROUP_ARN: []})
+    perfect = tagged(NODE_B, "mojo-api-b",
+                     {"managed-by": "django-mojo", **IDENTITY})
+    record, err, dispatched = run({NODE_B: perfect}, elbv2=empty)
+    assert err is not None and err.error_code == "not_fleet_member", \
+        (f"an anchorless fleet still terminated by tag alone: "
+         f"{err and err.error_code}")
+    assert "no registered member" in err.message, \
+        f"the anchorless refusal does not explain itself: {err.message}"
+    assert dispatched.call_count == 0, "an anchorless terminate still dispatched"
 
     # Still registered and not drained: the refusal is unchanged.
     registered = _elbv2_client(health={GROUP_ARN: [
         _target(NODE_A, "healthy"), _target(NODE_B, "draining")]})
-    with mock.patch.object(capacity, "_local_hostname", return_value="laptop"), \
-            mock.patch.object(capacity, "_dispatch") as dispatched:
-        with th.assert_raises(capacity.CapacityError) as caught:
-            capacity.apply(
-                _actor(), capacity.ACTION_TERMINATE_NODE, NODE_B,
-                elbv2_client=registered,
-                ec2_client=_routed_ec2_client(
-                    {NODE_A: _instance(NODE_A, "mojo-api-a"),
-                     NODE_B: _instance(NODE_B, "mojo-api-b")}))
-    assert caught.exception.error_code == "not_drained", \
-        f"a still-draining node's refusal changed: {caught.exception.error_code}"
+    record, err, dispatched = run(
+        {NODE_A: anchor(), NODE_B: matching}, elbv2=registered)
+    assert err is not None and err.error_code == "not_drained", \
+        f"a still-draining node's refusal changed: {err and err.error_code}"
     assert dispatched.call_count == 0, "a still-draining node still dispatched"
     _clear_claims()
 
@@ -966,7 +998,10 @@ def test_proof_registers_and_extends_topology(opts):
     source = {"instance_id": NODE_A, "name": "mojo-api-a", "state": "running",
               "instance_type": "m6i.large", "subnet_id": "subnet-0aaa",
               "security_group_ids": ["sg-0aaa"],
-              "iam_instance_profile_arn": PROFILE_ARN}
+              "iam_instance_profile_arn": PROFILE_ARN,
+              "tags": {"Name": "mojo-api-a", "managed-by": "django-mojo",
+                       "mojo:project": "mojo-test", "mojo:env": "prod",
+                       "mojo:role": "app"}}
     running = dict(source, instance_id=NEW_NODE)
     with mock.patch.object(capacity, "_sleep"), \
             mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
@@ -981,7 +1016,8 @@ def test_proof_registers_and_extends_topology(opts):
                               source if value == NODE_A else running), \
             mock.patch.object(ec2_helper, "find_reusable_image",
                               return_value={"image_id": "ami-0new", "age_days": 2}), \
-            mock.patch.object(ec2_helper, "launch_clone", return_value=NEW_NODE), \
+            mock.patch.object(ec2_helper, "launch_clone",
+                              return_value=NEW_NODE) as launched, \
             mock.patch.object(elbv2_helper, "register_target") as registered, \
             mock.patch.object(platform_deploy, "last_converged_deployment",
                               return_value=row), \
@@ -993,6 +1029,13 @@ def test_proof_registers_and_extends_topology(opts):
         capacity._run_add_node(record)
 
     assert record["state"] == "done", f"a proven node did not finish: {record}"
+    # The clone is born carrying the fleet's identity — the terminate guard's
+    # identity anchor and spec.owns() discovery both key on these.
+    assert launched.call_args.kwargs["tags"] == {
+        "managed-by": "django-mojo", "mojo:project": "mojo-test",
+        "mojo:env": "prod"}, \
+        (f"the clone launch does not carry the source's identity tags: "
+         f"{launched.call_args.kwargs.get('tags')}")
     assert registered.call_count == 1, \
         f"a proven node was registered {registered.call_count} times, not one"
     assert registered.call_args[0][0] == GROUP_ARN, \

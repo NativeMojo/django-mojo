@@ -1172,15 +1172,46 @@ def _refuse_external(action_label):
         infrastructure.ERROR_CODE, 403)
 
 
-def _prove_fleet_member(resource, ec2_client=None):
+# The tags that name WHICH fleet a resource belongs to. Provision stamps both
+# (spec.TAGS), and spec.owns() refuses anything whose values differ — the
+# generic django-mojo tags alone cannot tell staging from prod in one account.
+FLEET_IDENTITY_TAGS = ("mojo:project", "mojo:env")
+
+
+def _identity_matches(candidate_tags, reference_tags):
+    """Exact fleet identity: project AND env equal, both present on both sides.
+
+    A missing value on EITHER side is a mismatch, never a wildcard — an
+    anchor that cannot state its own identity proves nothing about anyone.
+    """
+    for key in FLEET_IDENTITY_TAGS:
+        wanted = (reference_tags or {}).get(key)
+        held = (candidate_tags or {}).get(key)
+        if not wanted or not held or wanted != held:
+            return False
+    return True
+
+
+def _prove_fleet_member(resource, serving, ec2_client=None):
     """Fresh EC2 facts must prove an UNREGISTERED node is ours to terminate.
 
     A COMPLETED drain removes the target from its group entirely, so the
     drained node terminate exists to destroy is invisible to the serving map.
-    Membership is then proven from the provider and the fleet's own tags —
-    never assumed from the request: the instance must exist, must not already
-    be terminated, and must carry a django-mojo ownership tag or the
-    admin-capacity created-by tag this feature stamps on every clone.
+    Membership is then proven from the provider — never assumed from the
+    request — and a generic django-mojo tag is NOT enough: a staging and a
+    prod fleet in one account+region are both django-mojo-tagged, and this
+    predicate gates TerminateInstances (the exact reason ``spec.owns()``
+    matches identity, never ownership alone). Two proofs are accepted:
+
+    - the ``mojo:created-by=admin-capacity`` stamp this feature puts on every
+      clone it launches, or
+    - a django-mojo ownership tag PLUS an exact identity match — the
+      candidate's ``mojo:project`` and ``mojo:env`` equal to those of a
+      CURRENTLY REGISTERED fleet member (the anchor), with a missing value on
+      either side counting as a mismatch.
+
+    No registered member to anchor against means identity cannot be verified,
+    and the terminate is refused outright. Fail closed.
     """
     try:
         facts = ec2_helper.instance_facts(resource, client=ec2_client)
@@ -1193,13 +1224,35 @@ def _prove_fleet_member(resource, ec2_client=None):
         raise CapacityError(
             f"{resource} is already {state}.", "already_terminated", 409)
     tags = (facts or {}).get("tags") or {}
-    if facts is None or not (
-            _django_mojo_tagged(tags)
-            or tags.get(ec2_helper.CREATED_BY_TAG) == "admin-capacity"):
+    if (facts is not None
+            and tags.get(ec2_helper.CREATED_BY_TAG) == "admin-capacity"):
+        return
+    if facts is None or not _django_mojo_tagged(tags):
         raise CapacityError(
             f"{resource} is not registered behind any load balancer, and "
             f"fresh EC2 facts do not prove it a django-mojo fleet member — "
             f"this control will not terminate it.",
+            "not_fleet_member", 409)
+    anchor_id = next(iter(_fleet_ids(serving)), None)
+    if anchor_id is None:
+        raise CapacityError(
+            f"The fleet has no registered member to prove identity against, "
+            f"so this control cannot verify that {resource} belongs to THIS "
+            f"installation. Terminate it from the AWS console if you are "
+            f"certain.",
+            "not_fleet_member", 409)
+    try:
+        anchor = ec2_helper.instance_facts(anchor_id, client=ec2_client)
+    except ProviderCallError as err:
+        raise _provider_error(
+            err, "AWS did not report the fleet's registered member, so this "
+                 "instance's identity cannot be verified.") from None
+    if not _identity_matches(tags, (anchor or {}).get("tags")):
+        raise CapacityError(
+            f"{resource} carries django-mojo tags, but its mojo:project/"
+            f"mojo:env do not match this fleet's registered members — it may "
+            f"belong to another environment in this account. This control "
+            f"will not terminate it.",
             "not_fleet_member", 409)
 
 
@@ -1333,7 +1386,7 @@ def _apply_node(actor, action, resource, elbv2_client=None, ec2_client=None, **_
                 {"target_group": group.get("name") or group.get("arn"),
                  "states": sorted({row.get("state") for row in rows})})
     if not holding:
-        _prove_fleet_member(resource, ec2_client=ec2_client)
+        _prove_fleet_member(resource, serving, ec2_client=ec2_client)
     claim = _claim(action, resource, getattr(actor, "pk", None))
     record = _new_operation(action, resource, actor, claim,
                             {"self_check": self_status})
@@ -2748,10 +2801,19 @@ def _run_add_node(record):
     # ── launching ──────────────────────────────────────────────────────────
     base = detail.get("source_name") or source.get("name") or "mojo-node"
     _advance(record, "launching", "launching the new node")
+    # Clones carry the fleet's identity from birth: the source's
+    # mojo:project/mojo:env (and managed-by, when present) ride onto the
+    # launch tags beside the created-by stamp, so discovery (spec.owns) and
+    # the terminate guard's identity anchor both recognize the clone even if
+    # the stamp is ever lost.
+    identity = {key: value
+                for key, value in (source.get("tags") or {}).items()
+                if key in FLEET_IDENTITY_TAGS + ("managed-by",) and value}
     instance_id = ec2_helper.launch_clone(
         source, image_id, source.get("subnet_id"),
         name=f"{base}-clone",
-        user_data=node_user_data(base))
+        user_data=node_user_data(base),
+        tags=identity)
     if not instance_id:
         return _fail(record, "launch_failed",
                      "AWS accepted the launch but named no instance.")
