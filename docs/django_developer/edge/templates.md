@@ -80,8 +80,10 @@ DNS-01-only mode and two when public HTTP is enabled, asserted in
 - **Routes** (`site_api`) — one `location ^~ <prefix>` per `VhostRoute`, so
   longest-prefix wins while the site's asset-suffix regex cannot capture an
   asset-shaped request below a declared API prefix. Every proxied location
-  carries the canonical proxy body: upgrade headers (`$connection_upgrade`
-  map lives in the base), X-Forwarded set, no-cache posture, buffering off,
+  carries the canonical proxy body: upgrade headers (the `$connection_upgrade`
+  map lives in the bootstrap — or in the generation base on a node whose
+  bootstrap predates it, see below), X-Forwarded set, no-cache posture,
+  buffering off,
   `proxy_read_timeout` from `EDGE_PROXY_READ_TIMEOUT`. `proxy_pass` targets
   are **named upstream blocks** (`edge_up_<pk>`), never inline addresses.
 
@@ -94,7 +96,8 @@ generations/<gen>/
   http.d/00_base.conf       mime include, log_format + $loggable + access_log,
                             sendfile/keepalive/server_tokens/gzip,
                             blocklist maps + watch log, flag-gated catch-alls
-                            (NOT $connection_upgrade — bootstrap owns it)
+                            (NOT $connection_upgrade — bootstrap owns it,
+                            EXCEPT under carry_upgrade_map, below)
   http.d/10_upstreams.conf  upstream edge_up_<pk> { server <target>; } blocks —
                             the ONLY place a literal host:port / socket appears
   conf.d/<vhost-pk>.conf    HTTPS server, plus HTTP when enabled
@@ -167,6 +170,29 @@ Notes that bite:
   reads the generation), the node reloads and reports the generation
   installed — and serves none of it. Nothing errors. If a vhost "installed
   everywhere" but does not serve, check the node's bootstrap first.
+- **A bootstrap that predates the map is healed, not required.** Exactly one
+  `$connection_upgrade` declaration may exist per graph, and two mechanisms
+  keep that true on nodes provisioned before this contract (their bootstrap
+  declares no map, so a map-less generation can never activate — the
+  `api-wmwx-stage` wedge). First, the deploy-owned runtime fragment
+  (`00_django_mojo_runtime.conf`) carries the map whenever nothing else in
+  the graph declares it, decided at every root deploy and re-decided after
+  the project nginx.conf installs (`mojo/deploy/nginx_runtime.py`). Second,
+  the installer probes with the REAL `nginx -t`: an
+  `unknown "connection_upgrade" variable` verdict re-stages the generation
+  with `carry_upgrade_map` — the base declares the map, the harness yields
+  it, and the variant lands in its **own** generation directory
+  (`render.local_generation_id`) recorded in `installed.json`; a later
+  duplicate verdict flips it back. Do not "fix" a carrying node by adding
+  the map to its bootstrap without expecting one failed converge first —
+  the duplicate verdict is how the generation learns to stop carrying it.
+- **A generation id moves whenever the renderer moves.** The framework
+  version participates in `generation_id`, so a django-mojo upgrade
+  re-stages into a fresh directory and takes the full pre-filter → swap →
+  real-test gate. The installer additionally refuses to rewrite a LIVE
+  generation's rendered files with changed bytes — an in-place rewrite of
+  the active include graph has no swap to revert, which is exactly how the
+  wedge happened.
 
 The staging harness (`nginx.conf` inside the generation) mirrors the
 bootstrap: main context + the same two directives — but its two includes read

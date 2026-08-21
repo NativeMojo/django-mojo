@@ -142,7 +142,7 @@ def local_node_id():
 def local_node_proof(data=None):
     """Safe runner-control response: identity/version/generation metadata only."""
     import mojo
-    from mojo.apps.edge.services import installer
+    from mojo.apps.edge.services import installer, render
     from mojo.apps.edge.settings_validators import expected_topology
 
     raw = data or {}
@@ -155,12 +155,19 @@ def local_node_proof(data=None):
     current_generation = current.rsplit("/", 1)[-1] if current else None
     for pool in topology["pools"]:
         installed = installer.read_installed(pool)
+        serving = installed.get("serving_generation")
         evidence[pool] = {
             "generation": installed.get("generation"),
             "excluded": len(installed.get("excluded") or []),
             "www_pending": len(installed.get("www_pending") or {}),
             "cert_pending": len(installed.get("cert_pending") or []),
-            "serving_generation": installed.get("serving_generation"),
+            "serving_generation": serving,
+            # The directory a carrying node serves from is the LOCAL variant
+            # of the fleet id (see render.local_generation_id) — this is the
+            # value `current_generation` can actually be compared against.
+            "serving_local_generation": render.local_generation_id(
+                serving, bool(installed.get("carry_upgrade_map")))
+                if serving else None,
             "current_generation": current_generation,
         }
     deployed_sha, deployed_uuid = _read_deploy_identity()
@@ -307,7 +314,12 @@ def check_fleet(context):
             healthy = bool(
                 evidence and evidence.get("generation") == desired[pool]
                 and evidence.get("serving_generation")
-                and evidence.get("serving_generation") == evidence.get("current_generation")
+                # A carrying node serves from the LOCAL variant's directory;
+                # older nodes' proofs predate the field, so fall back to the
+                # fleet id they still compare equal under.
+                and (evidence.get("serving_local_generation")
+                     or evidence.get("serving_generation"))
+                    == evidence.get("current_generation")
                 and not evidence.get("excluded") and not evidence.get("www_pending")
                 and not evidence.get("cert_pending"))
             counts["pass" if healthy else "pending"] += 1

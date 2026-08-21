@@ -271,10 +271,42 @@ def test_local_node_proof_no_secret_shape(opts):
         f"proof grew an unreviewed top-level surface: {proof}"
     assert set(proof["pools"]["default"]) == {
         "generation", "excluded", "www_pending", "cert_pending",
-        "serving_generation", "current_generation"}, \
+        "serving_generation", "serving_local_generation",
+        "current_generation"}, \
         f"proof exposed more than convergence metadata: {proof}"
     assert "token" not in str(proof).lower() and "secret" not in str(proof).lower(), \
         f"proof exposed credential material: {proof}"
+
+
+@th.django_unit_test("a carrying node's proof compares equal to its own directory")
+def test_local_node_proof_carried_generation_compares_equal(opts):
+    """Regression: the fleet gate requires serving == current. A node whose
+    generation carries the `$connection_upgrade` map serves from the LOCAL
+    variant's directory, so comparing the fleet id against the directory name
+    would report the node unconverged forever. The proof must carry the value
+    the comparison is actually about."""
+    from mojo.apps.edge.services import installer, readiness, render
+
+    with tempfile.TemporaryDirectory() as root, \
+            mock.patch.object(render, "edge_root", return_value=root):
+        fleet = "c" * 64
+        local = render.local_generation_id(fleet, True)
+        generation = os.path.join(root, "generations", local)
+        os.makedirs(generation)
+        os.symlink(generation, os.path.join(root, "current"))
+        installer.write_installed(
+            "desired-default", pool="default", serving_generation=fleet,
+            carry_upgrade_map=True)
+        proof = with_setting(
+            "EDGE_NODE_ID", "edge-proof-carry",
+            lambda: readiness.local_node_proof({"pools": ["default"]}))
+    evidence = proof["pools"]["default"]
+    th.assert_eq(evidence["serving_generation"], fleet,
+                 "the fleet id must stay the reported serving generation")
+    th.assert_eq(evidence["serving_local_generation"],
+                 evidence["current_generation"],
+                 "a carried install must prove convergence against the "
+                 "directory it actually serves from")
 
 
 @th.django_unit_test("atomic deployment identity is authoritative with one legacy fallback")

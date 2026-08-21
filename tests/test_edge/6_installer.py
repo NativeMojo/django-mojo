@@ -878,3 +878,155 @@ def test_installer_matches_endpoint(opts):
 
     assert from_endpoint == from_installer, \
         "the endpoint and the installer computed different generation ids"
+
+
+@th.django_unit_test("a bootstrap with no upgrade map makes the generation carry it")
+def test_ambient_map_missing_flips_generation_to_carry(opts):
+    """Regression for the api-wmwx-stage wedge population that cannot be
+    healed from /etc: the ambient graph (bootstrap + runtime fragment) and an
+    activating generation must between them declare `$connection_upgrade`
+    exactly once, and only the REAL `nginx -t` knows which side a given node
+    needs. An unknown-variable verdict flips the generation to carry the map
+    itself, in a NEW directory, remembered in installed.json; a later
+    duplicate verdict (the bootstrap caught up) flips it back."""
+    from mojo.apps.edge.services import installer, render
+    from mojo.apps.dnsman.models import Certificate
+
+    root = _root(opts)
+    patches = _with_root(root)
+    _enter(patches)
+    try:
+        Certificate.objects.filter(pk=opts.certificate.pk).update(
+            cert_pem="-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
+        vhost = make_vhost(opts.domain, opts.certificate, label="carry",
+                           pool=_pool("carrymap"))
+
+        declaration = "map $http_upgrade $connection_upgrade"
+        state = {"real": 0}
+
+        def ambient_lacks_map(argv):
+            if "-t" in argv and "-c" not in argv:
+                state["real"] += 1
+                if state["real"] == 1:
+                    return FakeProc(1, stderr=(
+                        'nginx: [emerg] unknown "connection_upgrade" variable\n'
+                        "nginx: configuration file /etc/nginx/nginx.conf "
+                        "test failed\n"))
+            return _ok(argv)
+
+        recorder = Recorder(ambient_lacks_map)
+        with mock.patch.object(installer, "_run", recorder):
+            result = installer.install(pool=_pool("carrymap"))
+
+        assert result.changed, "the carried retry never installed"
+        assert recorder.reloaded, "the carried generation was never reloaded"
+        th.assert_eq(len(recorder.tested), 4,
+                     "expected staged+real for the plain attempt, then "
+                     "staged+real for the carried retry")
+
+        current = os.path.realpath(render.current_link())
+        local = render.local_generation_id(result.generation, True)
+        assert _same_path(current, render.generation_dir(local)), (
+            "current must point at the carried variant's own directory")
+        base = open(os.path.join(current, "http.d", "00_base.conf")).read()
+        th.assert_in(declaration, base,
+                     "the carried generation must declare the map its "
+                     "bootstrap never did")
+        harness = open(os.path.join(current, "nginx.conf")).read()
+        assert declaration not in harness, (
+            "the harness must not double-declare a carried map")
+        installed = json.load(open(installer.installed_path(_pool("carrymap"))))
+        assert installed.get("carry_upgrade_map") is True, (
+            "the probed answer must be remembered, or every converge re-fails "
+            "its way to it")
+
+        # Remembered means an unchanged desired state short-circuits — no
+        # re-probe through a failing -t every ten minutes.
+        recorder2 = Recorder()
+        with mock.patch.object(installer, "_run", recorder2):
+            second = installer.install(pool=_pool("carrymap"))
+        assert not second.changed, "an unchanged carried state must short-circuit"
+        th.assert_eq(len(recorder2.tested), 0,
+                     "a short-circuited converge must run no nginx -t at all")
+
+        # The bootstrap catches up (now declares the map): the next activation
+        # sees a duplicate and the generation stops carrying it.
+        vhost.spa = True
+        vhost.save()
+        state2 = {"real": 0}
+
+        def ambient_gained_map(argv):
+            if "-t" in argv and "-c" not in argv:
+                state2["real"] += 1
+                if state2["real"] == 1:
+                    return FakeProc(1, stderr=(
+                        'nginx: [emerg] the duplicate "connection_upgrade" '
+                        "variable in /etc/nginx/nginx.conf:9\n"))
+            return _ok(argv)
+
+        recorder3 = Recorder(ambient_gained_map)
+        with mock.patch.object(installer, "_run", recorder3):
+            third = installer.install(pool=_pool("carrymap"))
+        assert third.changed, "the plain retry never installed"
+        current = os.path.realpath(render.current_link())
+        assert _same_path(
+            current, render.generation_dir(
+                render.local_generation_id(third.generation, False))), (
+            "a duplicate verdict must move current back to the plain variant")
+        base = open(os.path.join(current, "http.d", "00_base.conf")).read()
+        assert declaration not in base, (
+            "the generation must yield the map to a bootstrap that declares it")
+        installed = json.load(open(installer.installed_path(_pool("carrymap"))))
+        assert not installed.get("carry_upgrade_map"), (
+            "the cleared bit must be remembered too")
+    finally:
+        _exit(patches, root)
+
+
+@th.django_unit_test("a live generation directory is never rewritten with changed bytes")
+def test_live_generation_rewrite_is_refused(opts):
+    """THE wedge mechanism, as a guard: a pending retry defeats the
+    short-circuit and re-stages the id the node is serving. When the renderer
+    has moved in between (a framework upgrade), those writes land DIFFERENT
+    bytes in the live include graph with no swap and nothing to revert — the
+    node breaks on disk while nginx serves from memory. The version-in-the-id
+    makes that collision impossible; this guard is what keeps it loud if it
+    ever happens again."""
+    from mojo.apps.edge.services import installer, render
+    from mojo.apps.dnsman.models import Certificate
+
+    root = _root(opts)
+    patches = _with_root(root)
+    _enter(patches)
+    try:
+        Certificate.objects.filter(pk=opts.certificate.pk).update(
+            cert_pem="-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
+        make_vhost(opts.domain, opts.certificate, label="liveguard",
+                   pool=_pool("liveguard"))
+
+        with mock.patch.object(installer, "_run", Recorder()):
+            installer.install(pool=_pool("liveguard"))
+        live = os.path.realpath(render.current_link())
+        base_path = os.path.join(live, "http.d", "00_base.conf")
+        before = open(base_path).read()
+
+        # A renderer that moved without moving the id — the upgrade shape.
+        with mock.patch.object(render, "render_http_base",
+                               return_value="# drifted renderer output\n"), \
+                mock.patch.object(installer, "_run", Recorder()) :
+            err = raises(installer.install, pool=_pool("liveguard"), force=True)
+
+        assert err is not None, (
+            "changed bytes were written into the live generation silently")
+        th.assert_eq(open(base_path).read(), before,
+                     "the live generation's rendered bytes must be untouched")
+        assert _same_path(render.current_link(), live), (
+            "current must still point at the generation nginx loaded")
+
+        # The retry path stays alive: identical bytes are a no-op re-stage,
+        # not a refusal — that is how pending fetches and key material heal.
+        with mock.patch.object(installer, "_run", Recorder()):
+            again = installer.install(pool=_pool("liveguard"), force=True)
+        assert again.changed, "an identical forced re-stage must still install"
+    finally:
+        _exit(patches, root)

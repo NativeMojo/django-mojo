@@ -710,6 +710,22 @@ temp directive exactly once before continuing. The tree and global fragment
 survive framework rollback, so an older renderer cannot recreate the outage.
 Do not replace this with `/tmp` or a package-owned `/var/lib/nginx` directory.
 
+The fragment also settles ownership of the WebSocket upgrade map
+(`map $http_upgrade $connection_upgrade`). Exactly one declaration may exist
+per graph: any declaration outside the fragment (the node bootstrap, a legacy
+edge generation base) wins and the fragment stays plain; when nothing declares
+it — a bootstrap written before the bootstrap-owned contract in
+`docs/django_developer/edge/templates.md` — the fragment carries it. A graph
+already wedged by the missing map (`nginx -T` failing with
+`unknown "connection_upgrade" variable`, which converge previously reported as
+the unhelpful `worker user; got []`) is repaired the same way before the
+worker identity is read, and converge's failures now quote nginx's own
+`[emerg]` line. Because the project's `aws/nginx/nginx.conf` is installed
+*after* render, `post_deploy` re-runs the decision
+(`python3 -m mojo.deploy.nginx_runtime reconcile`) once host configs are in
+place, so a bootstrap that newly declares the map makes the fragment yield in
+the same deploy instead of failing the final `nginx -t`.
+
 `var/deploy/` is the single source of truth for what the last deploy shipped:
 post_deploy installs `/etc` copies FROM it, and check_node byte-compares
 `/etc` AGAINST it. The template names deliberately match the historical

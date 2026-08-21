@@ -18,6 +18,18 @@ import tempfile
 
 RUNTIME_ROOT = "/var/lib/django-mojo/nginx"
 FRAGMENT_NAME = "00_django_mojo_runtime.conf"
+# The WebSocket upgrade map. Bootstrap-owned by contract since the edge
+# renderer stopped emitting it (docs/django_developer/edge/templates.md) —
+# but a node provisioned before that contract has no declaration, and any
+# include referencing $connection_upgrade then fails every nginx -t. The
+# fragment carries the map on exactly those nodes; the decision lives in
+# _upgrade_map_decision and always yields to a declaration anywhere else.
+UPGRADE_MAP_LINES = (
+    "map $http_upgrade $connection_upgrade {",
+    "    default upgrade;",
+    "    '' close;",
+    "}",
+)
 TEMP_PATHS = (
     ("client_body_temp_path", "client_body"),
     ("proxy_temp_path", "proxy"),
@@ -38,10 +50,13 @@ def runtime_paths(root=RUNTIME_ROOT):
                  for directive, leaf in TEMP_PATHS)
 
 
-def render_http_fragment(root=RUNTIME_ROOT, indent=""):
-    return "".join(
+def render_http_fragment(root=RUNTIME_ROOT, indent="", include_map=False):
+    text = "".join(
         "%s%s %s;\n" % (indent, directive, path)
         for directive, path in runtime_paths(root))
+    if include_map:
+        text += "".join("%s%s\n" % (indent, line) for line in UPGRADE_MAP_LINES)
+    return text
 
 
 def fragment_path(nginx_etc="/etc/nginx"):
@@ -51,10 +66,71 @@ def fragment_path(nginx_etc="/etc/nginx"):
 def parse_worker_user(config):
     users = re.findall(r"(?m)^\s*user\s+([^;\s]+)(?:\s+[^;\s]+)?\s*;", config)
     if len(users) != 1:
+        # When nginx -T failed before dumping, `config` is only its error
+        # output — quote it, or the operator debugs "got []" while nginx
+        # already named the actual breakage.
+        errors = [line.strip() for line in config.splitlines()
+                  if "[emerg]" in line or "[alert]" in line
+                  or "test failed" in line]
+        detail = " — nginx reported: %s" % "; ".join(errors[-3:]) if errors else ""
         raise NginxRuntimeError(
-            "nginx -T must expose exactly one effective worker user; got %r"
-            % users)
+            "nginx -T must expose exactly one effective worker user; got %r%s"
+            % (users, detail))
     return users[0]
+
+
+_UPGRADE_MAP_DECL_RE = re.compile(r"map\s+\$http_upgrade\s+\$connection_upgrade\s*{")
+_UNKNOWN_UPGRADE_VAR_RE = re.compile(r'unknown "connection_upgrade" variable')
+_DUPLICATE_UPGRADE_VAR_RE = re.compile(
+    r'(?:duplicate|conflicting)[^\n]{0,60}"connection_upgrade"')
+
+
+def _dump_sections(dump):
+    """{path: text} per `# configuration file <path>:` section of an nginx -T
+    dump. {} when the test failed before the dump began (error output only)."""
+    sections = {}
+    name = None
+    lines = []
+    for line in dump.splitlines():
+        match = re.match(r"^# configuration file (.+):$", line)
+        if match:
+            if name is not None:
+                sections[name] = "\n".join(lines)
+            name = match.group(1)
+            lines = []
+        elif name is not None:
+            lines.append(line)
+    if name is not None:
+        sections[name] = "\n".join(lines)
+    return sections
+
+
+def _upgrade_map_decision(dump, path, prior):
+    """Must the runtime fragment carry the $connection_upgrade map?
+
+    Exactly one declaration may exist per graph. Any declaration OUTSIDE the
+    fragment (the node bootstrap, a legacy edge generation base) wins and the
+    fragment yields; with none anywhere, the fragment carries it so a node
+    whose bootstrap predates the bootstrap-owned contract keeps a resolvable
+    graph. When nginx -T failed before dumping, nginx's own error decides: an
+    unknown-variable failure proves no declaration exists, a duplicate means
+    one exists beside ours. Any other breakage keeps the fragment's current
+    answer (`prior` bytes, None when absent) — repair must not thrash on an
+    unrelated failure.
+    """
+    sections = _dump_sections(dump)
+    if sections:
+        for name, text in sections.items():
+            if name != path and _UPGRADE_MAP_DECL_RE.search(text):
+                return False
+        return True
+    if _UNKNOWN_UPGRADE_VAR_RE.search(dump):
+        return True
+    if _DUPLICATE_UPGRADE_VAR_RE.search(dump):
+        return False
+    if prior is None:
+        return False
+    return bool(_UPGRADE_MAP_DECL_RE.search(prior.decode("utf-8", "replace")))
 
 
 def _run(argv, timeout=30):
@@ -292,15 +368,54 @@ def _install_fragment(path, text):
             pass
 
 
+def _read_fragment(path):
+    try:
+        with open(path, "rb") as handle:
+            return handle.read()
+    except FileNotFoundError:
+        return None
+
+
+def _restore_fragment(path, prior):
+    if prior is None:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+    else:
+        _install_fragment(path, prior)
+
+
 def converge(web_user, nginx_etc="/etc/nginx", root=RUNTIME_ROOT,
              nginx_binary="nginx"):
     if os.geteuid() != 0:
         raise NginxRuntimeError("nginx runtime convergence requires root")
+    path = fragment_path(nginx_etc)
+    prior = _read_fragment(path)
     # A previously installed fragment with drifted/missing directories can
     # make nginx -T exit non-zero. Its emitted config is still authoritative
     # for resolving the worker, and repair must be able to heal that state.
     before = nginx_dump(nginx_binary, allow_failure=True)
-    actual_user = parse_worker_user(before)
+    desired = render_http_fragment(
+        root, include_map=_upgrade_map_decision(before, path, prior))
+    try:
+        actual_user = parse_worker_user(before)
+    except NginxRuntimeError:
+        # A graph that cannot even resolve its worker. The one breakage this
+        # module can repair is a missing/duplicated upgrade map (a node whose
+        # bootstrap predates the bootstrap-owned contract): install the
+        # corrected fragment first and let the re-dump speak. Anything else —
+        # including a fragment already carrying the right answer — keeps the
+        # original diagnosis, which now quotes nginx's own [emerg].
+        if desired.encode() == (prior if prior is not None else b""):
+            raise
+        _install_fragment(path, desired)
+        try:
+            before = nginx_dump(nginx_binary, allow_failure=True)
+            actual_user = parse_worker_user(before)
+        except NginxRuntimeError:
+            _restore_fragment(path, prior)
+            raise
     if actual_user != web_user:
         raise NginxRuntimeError(
             "WEB_USER %s does not match nginx worker user %s"
@@ -308,19 +423,12 @@ def converge(web_user, nginx_etc="/etc/nginx", root=RUNTIME_ROOT,
     user = _resolve_user(web_user)
     _mkdir_exact(os.path.dirname(root), 0, 0, 0o755)
     _mkdir_exact(root, 0, 0, 0o755)
-    for _directive, path in runtime_paths(root):
-        _mkdir_exact(path, user.pw_uid, 0, 0o700)
+    for _directive, path_ in runtime_paths(root):
+        _mkdir_exact(path_, user.pw_uid, 0, 0o700)
     _converge_selinux(root)
     _probe_as_worker(user, root)
 
-    path = fragment_path(nginx_etc)
-    prior = None
-    try:
-        with open(path, "rb") as handle:
-            prior = handle.read()
-    except FileNotFoundError:
-        pass
-    _install_fragment(path, render_http_fragment(root))
+    _install_fragment(path, desired)
     try:
         active = nginx_dump(nginx_binary)
         if parse_worker_user(active) != web_user:
@@ -328,10 +436,7 @@ def converge(web_user, nginx_etc="/etc/nginx", root=RUNTIME_ROOT,
         _verify_active(active, root)
     except Exception as activation_error:
         hint = _activation_hint(activation_error, path)
-        if prior is None:
-            os.unlink(path)
-        else:
-            _install_fragment(path, prior)
+        _restore_fragment(path, prior)
         try:
             nginx_dump(nginx_binary)
         except NginxRuntimeError as rollback_error:
@@ -341,6 +446,40 @@ def converge(web_user, nginx_etc="/etc/nginx", root=RUNTIME_ROOT,
         if hint:
             raise NginxRuntimeError("%s%s" % (activation_error, hint))
         raise activation_error
+
+
+def reconcile_upgrade_map(nginx_etc="/etc/nginx", root=RUNTIME_ROOT,
+                          nginx_binary="nginx"):
+    """Re-decide who declares the upgrade map after host configs changed.
+
+    post_deploy installs the project's nginx.conf and vhosts AFTER `converge`
+    ran, so a bootstrap that newly declares the map (or drops it) would leave
+    the graph with two declarations, or none, until the next root render.
+    Runs the same decision against the post-install graph and rewrites the
+    fragment when the answer moved; restores it when the rewrite does not
+    converge. Returns whether the fragment changed. Never performs the first
+    install — that is converge's transactional job.
+    """
+    if os.geteuid() != 0:
+        raise NginxRuntimeError("nginx runtime reconcile requires root")
+    path = fragment_path(nginx_etc)
+    prior = _read_fragment(path)
+    if prior is None:
+        return False
+    dump = nginx_dump(nginx_binary, allow_failure=True)
+    desired = render_http_fragment(
+        root, include_map=_upgrade_map_decision(dump, path, prior))
+    if desired.encode() == prior:
+        return False
+    _install_fragment(path, desired)
+    try:
+        nginx_dump(nginx_binary)
+    except NginxRuntimeError as err:
+        _restore_fragment(path, prior)
+        raise NginxRuntimeError(
+            "upgrade-map reconcile did not converge (%s); prior fragment "
+            "restored" % err)
+    return True
 
 
 def audit(web_user, nginx_etc="/etc/nginx", root=RUNTIME_ROOT,
@@ -391,7 +530,12 @@ def audit(web_user, nginx_etc="/etc/nginx", root=RUNTIME_ROOT,
     try:
         with open(path) as handle:
             fragment_text = handle.read()
-        if fragment_text != render_http_fragment(root):
+        # The fragment legitimately exists in two shapes — with the upgrade
+        # map (no other declaration in the graph) and without (the bootstrap
+        # or a legacy generation owns it). Audit against the shape the active
+        # graph calls for; a failed dump keeps the installed answer.
+        include_map = _upgrade_map_decision(active, path, fragment_text.encode())
+        if fragment_text != render_http_fragment(root, include_map=include_map):
             errors.append("nginx runtime fragment bytes differ from the packaged contract")
     except OSError as err:
         errors.append("cannot read %s: %s" % (path, err))
@@ -405,11 +549,23 @@ def audit(web_user, nginx_etc="/etc/nginx", root=RUNTIME_ROOT,
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="python3 -m mojo.deploy.nginx_runtime")
-    parser.add_argument("command", choices=("audit",))
-    parser.add_argument("--web-user", required=True)
+    parser.add_argument("command", choices=("audit", "reconcile"))
+    parser.add_argument("--web-user")
     parser.add_argument("--nginx-etc", default="/etc/nginx")
     parser.add_argument("--runtime-root", default=RUNTIME_ROOT)
     args = parser.parse_args(argv)
+    if args.command == "reconcile":
+        try:
+            changed = reconcile_upgrade_map(nginx_etc=args.nginx_etc,
+                                            root=args.runtime_root)
+        except NginxRuntimeError as err:
+            print(str(err), file=sys.stderr)
+            return 1
+        if changed:
+            print("nginx upgrade-map ownership moved; runtime fragment rewritten")
+        return 0
+    if not args.web_user:
+        parser.error("--web-user is required for audit")
     errors = audit(args.web_user, nginx_etc=args.nginx_etc,
                    root=args.runtime_root)
     for error in errors:

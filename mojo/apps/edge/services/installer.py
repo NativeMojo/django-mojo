@@ -20,6 +20,10 @@ nginx -t -c generations/<new>/nginx.conf                cheap pre-filter
 os.replace(current -> generations/<new>)                nothing has reloaded yet
 nginx -t                                                against the REAL config
     fail, or "conflicting server name" on stderr -> revert current, incident, raise
+      EXCEPT a verdict naming $connection_upgrade: revert, flip the
+      carry_upgrade_map answer, and retry ONCE into the flipped variant's own
+      directory (see _ambient_map_moved — only the real check can see whether
+      this node's bootstrap declares the map)
     ok -> systemctl reload nginx, write installed.json, prune
 ```
 
@@ -72,6 +76,7 @@ app is down but whose timer still runs).
 
 import json
 import os
+import re
 import shutil
 import subprocess
 
@@ -244,7 +249,8 @@ def pending_certs(installed=None):
 
 
 def write_installed(generation, excluded=None, www_pending=None,
-                    cert_pending=None, pool="default", serving_generation=None):
+                    cert_pending=None, pool="default", serving_generation=None,
+                    carry_upgrade_map=False):
     """Record what this node installed.
 
     `www_pending` is {vhost id: desired version} for vhosts whose release
@@ -252,11 +258,15 @@ def write_installed(generation, excluded=None, www_pending=None,
     material would not read. Both are written only when non-empty, so a
     healthy node's installed.json keeps exactly the shape it always had — and
     either one's presence is what makes the next converge retry instead of
-    short-circuiting.
+    short-circuiting. `carry_upgrade_map` (written only when set) remembers
+    the probed answer to "must the generation declare $connection_upgrade
+    itself" — see `install()`.
     """
     payload = dict(generation=generation, excluded=sorted(excluded or []))
     if serving_generation:
         payload["serving_generation"] = serving_generation
+    if carry_upgrade_map:
+        payload["carry_upgrade_map"] = True
     if www_pending:
         # JSON object keys are strings either way; normalise here so a reader
         # never has to guess which side of a round-trip it is holding.
@@ -341,6 +351,31 @@ def _disabled_upstreams(vhost):
         if not route.upstream.is_enabled:
             rows.append(route.upstream)
     return rows
+
+
+_UPGRADE_MAP_MISSING = 'unknown "connection_upgrade" variable'
+_UPGRADE_MAP_DUPLICATE_RE = re.compile(
+    r'(?:duplicate|conflicting)[^\n]{0,60}"connection_upgrade"')
+
+
+def _ambient_map_moved(output, carry):
+    """The real-config verdict on who declares `$connection_upgrade`, or None.
+
+    Only the REAL `nginx -t` sees the ambient graph — the bootstrap plus the
+    deploy-owned runtime fragment — so only it can say which side of the
+    exactly-once contract this node needs. An unknown-variable failure proves
+    the ambient graph declares no map (a bootstrap written before the
+    bootstrap-owned contract): the generation must carry it. A duplicate
+    proves the ambient graph now declares one beside the generation's copy:
+    the generation must stop. Returns the corrected carry bit, or None when
+    the failure is not the map's (a conflicting server NAME does not match —
+    the pattern requires the quoted variable).
+    """
+    if not carry and _UPGRADE_MAP_MISSING in output:
+        return True
+    if carry and _UPGRADE_MAP_DUPLICATE_RE.search(output):
+        return False
+    return None
 
 
 def _report_incident(message, title, key=None):
@@ -439,8 +474,39 @@ def _previous_web_root(previous, vhost_id):
     return resolved
 
 
+def _write_rendered(path, body, gen_is_live):
+    """Write one rendered config file into a generation tree.
+
+    A generation directory is immutable-by-id EXCEPT that a converge retry
+    legitimately re-stages the id it is already serving — pending release
+    bytes and key material heal that way. Identical bytes are skipped (an
+    in-place truncate+write of a file nginx may be reading mid `-t` is a
+    race), and DIFFERENT bytes for the LIVE generation are refused outright:
+    that means the renderer moved without moving the generation id, and
+    rewriting the active include graph in place wedges the node with no swap
+    to revert. The framework version participates in the id precisely so this
+    cannot happen; this guard keeps it loud if it ever does.
+    """
+    existing = None
+    try:
+        with open(path) as handle:
+            existing = handle.read()
+    except OSError:
+        pass
+    if existing == body:
+        return
+    if existing is not None and gen_is_live:
+        raise InstallError(
+            f"refusing to rewrite {path} in place: the generation is live "
+            "and its rendered content changed without moving the generation "
+            "id")
+    with open(path, "w") as handle:
+        handle.write(body)
+
+
 def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
-                     previous=None, pool="default", http=None):
+                     previous=None, pool="default", http=None,
+                     carry_upgrade_map=False):
     """Build `generations/<generation>/` completely.
 
     Returns `objict(excluded, cert_excluded)`: every vhost left out of the
@@ -545,7 +611,10 @@ def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
             report=vhost.pk not in reported_certs,
             key=f"cert-material:{vhost.pk}:{vhost.certificate_id}")
 
-    files = render.render_generation(installable, generation, knobs=http)
+    files = render.render_generation(installable, generation, knobs=http,
+                                     carry_upgrade_map=carry_upgrade_map)
+    live = current_target()
+    gen_is_live = live is not None and os.path.realpath(gen_dir) == live
     for name, text in files.items():
         # Two copies of every rendered file: the real tree (what `current`
         # serves after the swap) and the staging/ listen-remapped copy the
@@ -559,11 +628,13 @@ def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
                                   if name == "http.d/00_base.conf" else None))):
             path = os.path.join(gen_dir, target)
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as handle:
-                handle.write(body)
+            _write_rendered(path, body, gen_is_live)
 
-    with open(os.path.join(gen_dir, "nginx.conf"), "w") as handle:
-        handle.write(render.render_nginx_harness(generation))
+    _write_rendered(
+        os.path.join(gen_dir, "nginx.conf"),
+        render.render_nginx_harness(generation,
+                                    carry_upgrade_map=carry_upgrade_map),
+        gen_is_live)
 
     stage_web_roots(generation, installable, webapps or [], fallbacks)
     return objict(excluded=excluded, cert_excluded=cert_excluded)
@@ -747,6 +818,7 @@ def install(pool="default", force=False, pools=None):
             item_vhosts, webapps=item_webapps)["generation"]
         installed_by_pool[item] = read_installed(item)
     installed = installed_by_pool[selected_pools[0]]
+    carry = bool(installed.get("carry_upgrade_map"))
     pending = any(pending_releases(row) for row in installed_by_pool.values())
     cert_pending = any(pending_certs(row) for row in installed_by_pool.values())
     live = current_target()
@@ -762,7 +834,8 @@ def install(pool="default", force=False, pools=None):
         installed_by_pool[item].get("generation") == pool_generations[item]
         and installed_by_pool[item].get("serving_generation") == generation
         for item in selected_pools)
-    if (not force and evidence_current and live_generation == generation
+    if (not force and evidence_current
+            and live_generation == render.local_generation_id(generation, carry)
             and not pending and not cert_pending):
         return objict(changed=False, generation=generation, reason="unchanged",
                       pools=selected_pools, pool_generations=pool_generations)
@@ -775,24 +848,38 @@ def install(pool="default", force=False, pools=None):
     # release degrades its own vhost and nothing else.
     fetch_failures = www_sync.fetch_webapps(webapps)
 
-    staged = stage_generation(vhosts, generation, webapps,
-                              fetch_failures=fetch_failures,
-                              previous=previous, pool=selected_pools[0],
-                              http=payload["http"])
-    excluded = staged.excluded
+    # At most two attempts: the recorded carry answer, and — only when the
+    # REAL nginx -t names the upgrade map — the flipped one. The generation
+    # and the ambient graph (bootstrap + runtime fragment) must between them
+    # declare `$connection_upgrade` exactly once, only the real check can see
+    # the ambient side, and each answer stages into its OWN directory so the
+    # flip never touches a tree the other answer is serving.
+    for attempt in (1, 2):
+        local_generation = render.local_generation_id(generation, carry)
+        staged = stage_generation(vhosts, local_generation, webapps,
+                                  fetch_failures=fetch_failures,
+                                  previous=previous, pool=selected_pools[0],
+                                  http=payload["http"],
+                                  carry_upgrade_map=carry)
+        excluded = staged.excluded
 
-    gen_dir = render.generation_dir(generation)
-    ok, output = _nginx_check(os.path.join(gen_dir, "nginx.conf"))
-    if not ok:
-        _fail(generation, f"staged configuration failed nginx -t: {output}",
-              reverted_to=previous)
+        gen_dir = render.generation_dir(local_generation)
+        ok, output = _nginx_check(os.path.join(gen_dir, "nginx.conf"))
+        if not ok:
+            _fail(local_generation,
+                  f"staged configuration failed nginx -t: {output}",
+                  reverted_to=previous)
 
-    _symlink_swap(render.current_link(), gen_dir)
+        _symlink_swap(render.current_link(), gen_dir)
 
-    # Nothing has reloaded yet, so the running configuration is still the old
-    # one. This is the authoritative check — against the REAL nginx.conf.
-    ok, output = _nginx_check()
-    if not ok:
+        # Nothing has reloaded yet, so the running configuration is still the
+        # old one. This is the authoritative check — against the REAL
+        # nginx.conf.
+        ok, output = _nginx_check()
+        if ok:
+            break
+
+        # A bad `current` must never survive, whatever happens next.
         if previous:
             _symlink_swap(render.current_link(), previous)
         else:
@@ -800,7 +887,16 @@ def install(pool="default", force=False, pools=None):
                 os.unlink(render.current_link())
             except OSError:
                 pass
-        _fail(generation,
+        flipped = _ambient_map_moved(output, carry)
+        if attempt == 1 and flipped is not None:
+            logit.info(
+                f"edge: real nginx -t says this node's ambient graph "
+                f"{'lacks' if flipped else 'now declares'} the "
+                f"$connection_upgrade map; restaging with "
+                f"carry_upgrade_map={flipped}")
+            carry = flipped
+            continue
+        _fail(local_generation,
               f"generation failed nginx -t against the real config: {output}",
               reverted_to=previous)
 
@@ -816,7 +912,7 @@ def install(pool="default", force=False, pools=None):
         # still serving the previous config and the next converge (or a manual
         # reload) picks this up. Reverting here would discard a good generation
         # over a transient systemd failure.
-        _fail(generation, f"nginx reload failed: {reload_output}",
+        _fail(local_generation, f"nginx reload failed: {reload_output}",
               reverted_to=None, revert_note="current left at the new generation")
 
     # Every fetch-failed vhost, whether it is serving stale bytes or is dark.
@@ -837,7 +933,8 @@ def install(pool="default", force=False, pools=None):
         write_installed(
             pool_generations[item], item_excluded,
             www_pending=item_www_pending, cert_pending=item_cert_pending,
-            pool=item, serving_generation=generation)
+            pool=item, serving_generation=generation,
+            carry_upgrade_map=carry)
     prune_generations()
     www_sync.prune_releases(webapps)
     logit.info(
