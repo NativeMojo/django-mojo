@@ -27,10 +27,11 @@ Events are the input. Incidents are the output. Rules, RuleSets, and handlers ar
 ## MojoSec cases
 
 `MojoSecReceipt` remains the immutable forensic/idempotency ledger.
-`MojoSecCase` summarizes web and FIM receipts into deterministic bounded
-cases; `MojoSecCaseTransition` is an append-only snapshot for each receipt
-contribution plus receipt-less system rows (`settled`, `reopened`,
-`projection`, `receipt_id_snapshot=0`).
+`MojoSecCase` summarizes web, FIM, auth/privilege and service/host receipts
+into deterministic bounded cases (evaluator v3); `MojoSecCaseTransition` is an
+append-only snapshot for each receipt contribution plus receipt-less system
+rows (`settled`, `reopened`, `projection`, `promoted` corroborations,
+`receipt_id_snapshot=0`).
 
 An installation's enrollment row carries a `mode`:
 
@@ -54,17 +55,27 @@ An installation's enrollment row carries a `mode`:
 
 Cutting an installation to authoritative consciously silences exact-category
 RuleSets on `mojosec.web.probe`, `mojosec.web.denied`, `mojosec.web.error`
-and trusted `mojosec.fim.change` for that installation — the canary command's
-`silenced_rule_sets` preflight lists exactly what stops firing. The only
-deliberate case-level projection is promotion: when an authoritative-mode
-case ratchets into high/critical, exactly one `mojosec.case.promoted` Event
-per upward urgency step is projected (level 8/12, `source_ip=None`, bounded
-metadata, no raw paths), published with exact-category lookup so deployments
-attach notification RuleSets to it. Projection is crash-safe (the
-`projected_urgency` ratchet is healed by the sweep) and handler dispatch uses
-the strict idempotent form. `block://` on the promoted category is inert by
-design — a case aggregates many sources and carries no `source_ip`;
-enforcement wiring belongs to the recommendation lifecycle in a later slice.
+and trusted `mojosec.fim.change` for that installation — and, when the
+enrollment also sets `include_host`, on `mojosec.auth.ssh_failure`,
+`mojosec.auth.ssh_login`, `mojosec.auth.sudo_command` and
+`mojosec.system.service_error`. The canary command's `silenced_rule_sets`
+preflight lists exactly what stops firing. The only deliberate case-level
+projection is promotion: when an authoritative-mode case ratchets into
+high/critical, exactly one `mojosec.case.promoted` Event per upward urgency
+step is projected (level 8/12, `source_ip=None`, bounded metadata including
+`installation_key_id` and any `corroborating_case_ids`, no raw paths),
+published with exact-category lookup so deployments attach notification
+RuleSets to it. Projection is crash-safe (the `projected_urgency` ratchet is
+healed by the sweep) and handler dispatch uses the strict idempotent form.
+`block://` on the promoted category is inert by design — a case aggregates
+many sources and carries no `source_ip`; case-driven enforcement goes through
+the recommendation lifecycle below, which is the **single action owner** for
+routed categories: `block://` handlers and the LLM agent's auto-block are
+suppressed (with an incident history note and the
+`block_handlers_suppressed` metric, never an auto-resolve) exactly for the
+categories an authoritative enrollment routes. Unrouted categories — and
+every non-enrolled or shadow installation — keep today's per-receipt blocking
+untouched, and manual operator actions always work.
 
 Case counters deliberately mean different things:
 
@@ -100,6 +111,53 @@ case list is the one visible deployment summary. Raw paths, query strings,
 bodies, cookies, authorization, arbitrary lines, and free-form sensor text do
 not enter cases or case metrics.
 
+**Auth/privilege and service/host correlation** (enrollment `include_host`)
+uses hourly per-node windows — every key embeds the sensor id, so cases never
+merge across nodes; campaigns below are the one deliberate cross-node join.
+SSH cases key on the **exact source IP** plus account (`family="ssh"`,
+`resource_id="user:<account>"`; the `/24` network column is display only, so
+a same-subnet admin never shares an attacker's case). Failure aggregates
+accumulate as `info`, elevating to `warning` (`ssh_failure_burst`) at
+`MOJOSEC_AUTH_ELEVATE_OCCURRENCES` (default 50). A successful login whose own
+case (or its previous hourly window twin — one closed-window rollover is
+honored) already holds `MOJOSEC_SSH_PROMOTE_MIN_FAILURES` (default 5) failure
+occurrences promotes to **critical `ssh_failure_then_success`** — the one
+block-recommendation-eligible SSH signal. A success from a *different* IP
+while the same account is under a failure burst promotes only to **high
+`ssh_login_during_failure_burst`**: it pages, and deliberately proposes no
+enforcement. Sudo commands correlate per actor/target (`family="sudo"`;
+samples carry `command_path`/`command_sha256`, never command text — that
+stays on receipts/Events); `auth.sudo_failure` correlates per sensor only
+(the sensor ships no actor/source for it) and keeps its immediate Event.
+Service failures correlate per unit + failure kind (`family="service"`),
+elevating to high (`service_failure_burst`) at
+`MOJOSEC_HOST_ELEVATE_OCCURRENCES` occurrences in a window; `system.oom`
+keeps its immediate critical Event and contributes a `family="oom"` case.
+Under authoritative routing the digest kinds (`ssh_failure`, `ssh_login`,
+`sudo_command`, `service_error`) are case-routed with the same sticky
+contract as web/FIM; `oom` and `sudo_failure` never route.
+
+**Cross-kind corroboration**: when a contribution leaves a case high/critical
+with a qualifying reason (`unexplained_protected_change`,
+`ssh_failure_then_success`, `service_failure_burst`,
+`fim_collector_overflow`, `sustained_trusted_impossible_paths`), one bounded
+indexed query looks for **high/critical** cases of other sensor kinds on the
+same node inside a two-sided `MOJOSEC_CORROBORATION_WINDOW_SECONDS` window
+(default 3600). Two or more distinct kinds with an fim-untrusted or auth
+participant promote the trigger to **critical `corroborated_compromise`**
+(once — the promotion records `corroborated_with` case ids in the breakdown
+and rides the normal projection ratchet). Warning-level scanner background
+never corroborates, by design.
+
+**Campaigns**: the `*/5` sweep coalesces same-family/resource web cases
+across a tenant Group's sensors into one campaign case per UTC day when they
+span at least `MOJOSEC_CAMPAIGN_MIN_SOURCES` (default 10) distinct source
+networks — `sensor_kind="campaign"`, members linked via their `campaign` FK,
+counters and the bounded exact-source union (≤256) recomputed idempotently.
+Campaign identity is DB-unique on the correlation pair; the stamped
+installation is only a deterministic placeholder (min member id), and
+projection fires when **any member** installation is authoritative.
+
 Sensor time may lead receipt time by at most the file/static
 `MOJOSEC_CASE_FUTURE_SKEW_SECONDS` setting (default 300 seconds, valid range
 0–3600). A value outside that range fails closed to zero. Evidence beyond the
@@ -120,10 +178,15 @@ update, delete, approve, recommend, acknowledge, or execute endpoints.
 | `GET` | `/api/incident/mojosec/case-metrics` | `days` (default 1, range 1–90) and optional exact `resource_id` | `{status, data}` with bounded aggregate counters and no evidence arrays |
 
 A list row contains `id`, `created`, `first_seen`, `last_seen`, `window_start`,
-`window_end`, `sensor_kind`, `resource_id`, `family`, `deployment_id`, state
-and urgency with their reasons, all six counters, and the policy/evaluator
-versions; datetimes are ISO-8601 strings. Detail adds `sensor_id`, `network`,
-`settled_at`, `projected_urgency`, `breakdown`, `samples`, and `transitions`.
+`window_end`, `sensor_kind` (`web`/`fim`/`auth`/`host`/`campaign`),
+`resource_id` (`vhost:`/`installation:`/`user:` prefixes), `family`,
+`deployment_id`, `campaign_id`, `distinct_source_count`, state and urgency
+with their reasons, all six counters, and the policy/evaluator versions;
+datetimes are ISO-8601 strings. A `campaign_id` filter lists one campaign's
+members. Detail adds `sensor_id`, `network`, `settled_at`,
+`projected_urgency`, `breakdown`, `samples`, and `transitions` — never the
+raw `observed_sources` list, whose exact IPs surface only as recommendation
+targets.
 Each transition exposes only its id/time, transition and reason, from/to state
 and urgency, and the resulting occurrence/receipt counts; it never exposes
 receipt replay JSON or integrity digests.
@@ -134,7 +197,8 @@ with HTTP 400 rather than clamped, bounding the deepest possible offset to
 
 The case-metrics `data` keys are `days`, `cases`, `occurrences`, `receipts`,
 `projected_events`, `distinct`, `overflows`, `settled`, `suppressed_events`,
-`compression_ratio`, and `by_urgency`. Compression is occurrences divided by
+`compression_ratio`, `by_urgency`, `recommendations`, `targets_applied`,
+`targets_pre_existing`, and `targets_protected`. Compression is occurrences divided by
 cases, not by receipts or projected Events; `suppressed_events` counts
 case-routed receipts that would each have been one operator Event under the
 legacy path. The contribution path also records operational metrics under
@@ -157,12 +221,23 @@ MOJOSEC_CASE_SHADOW_TARGETS = [{
     "installation_key_id": 42,
     "vhost_ids": [17],
     "include_fim": False,
+    "include_host": False,     # auth/privilege + service/host correlation
+    "require_registered_deployments": False,  # driver-side identity gate
     "mode": "shadow",          # or "authoritative" after the canary is accepted
 }]
 ```
 
-`mode` is optional and defaults to `"shadow"`; any other value fails the whole
-list closed, like every other malformed row.
+`mode` is optional and defaults to `"shadow"`; any other value — or any
+unknown key — fails the whole list closed, like every other malformed row
+(deploy the code before adding the new keys to config).
+`require_registered_deployments` additionally requires each trusted
+expected-change annotation's `deployment_id` to have a live driver-side
+registration (`POST /api/incident/mojosec/deployment`) before FIM routes as a
+quiet deployment; an unregistered id is treated as an unannotated change —
+an immediate high Event, never silence. The node journal has no network
+channel on purpose: a node-originated registration would still be
+root-asserted, and the point of the gate is an identity the sensor cannot
+mint for itself.
 
 `vhost_ids` is only the first web eligibility gate. Before contribution, the
 server resolves an enabled VHost, requires `Vhost.domain.group_id` to equal the
@@ -190,10 +265,13 @@ uv run python manage.py mojosec_shadow_compare --installation-key 42 --vhost 17 
 the shape a FIM deployment canary wants. The command prints the redacted
 `mojosec.shadow-comparison` v2 JSON contract — including `suppressed_events`
 (per-receipt Events the cutover did not project), `deployment_cases`
-(per-sensor/deployment cardinality, the "one quiet summary per deploy" proof)
-and `silenced_rule_sets` (active exact-category RuleSets that stop firing for
-an authoritative installation) — and exits non-zero when receipt fidelity,
-cardinality, or compression bounds fail. It does not write cases or
+(per-sensor/deployment cardinality, the "one quiet summary per deploy" proof),
+`host_cases` (auth/host case cardinality per kind/family) and
+`silenced_rule_sets` (active exact-category RuleSets that stop firing for an
+authoritative installation — including the auth/host categories when the
+enrollment sets `include_host`, reported by the `include_host` flag) — and
+exits non-zero when receipt fidelity, cardinality, or compression bounds
+fail. It does not write cases or
 production policy.
 
 The cutover procedure is: enroll in `"shadow"`, run the comparison for at
@@ -207,6 +285,66 @@ correlation write remains fail-open after receipt acknowledgement; in
 authoritative mode the contribution owns the ack, and the `*/5`
 `settle_mojosec_cases` sweep settles quiet deployment cases, heals crashed
 projections, and re-drives stranded case-routed receipts.
+
+### MojoSec recommendations — the single action owner
+
+`MojoSecRecommendation` is the only automatic enforcement path for MojoSec
+evidence. Proposals derive from correlated cases only, in the `*/5`
+`sweep_mojosec_actions` cron: a single-source impossible-path web case at
+`MOJOSEC_BLOCK_MIN_OCCURRENCES` (default 12) proposes `temporary_block_ip`; a
+campaign proposes `temporary_block_ip_set` over its bounded source union
+(cap `MOJOSEC_ACTION_MAX_TARGETS`, default 256); a critical
+`ssh_failure_then_success` case proposes a block of exactly its own IP.
+Targets only ever come from a case's server-derived `observed_sources` —
+never receipt metadata strings, samples, notes, or an LLM — and each is
+validated fail-closed: canonicalized, refused when non-global
+(private/loopback/link-local/multicast/reserved), whitelisted, or inside
+`MOJOSEC_PROTECTED_CIDRS` / `MOJOSEC_TRUSTED_PROXY_CIDRS` (a malformed CIDR
+list refuses **every** target — uncertainty stops enforcement). Protected
+targets are recorded as skipped rows, never silently dropped.
+
+The lifecycle is `proposed → approved|auto_approved → executing →
+executed|failed → expired|reversed` (+ `rejected`), with one open
+recommendation per (case, action) enforced by the database, append-only
+`MojoSecRecommendationTransition` audit rows (approver identity included),
+and one append-only `MojoSecExecutionAttempt` per target per try.
+**Auto-execution is off by default** (`MOJOSEC_ACTION_AUTO_EXECUTE`) and even
+when enabled applies only to `temporary_block_ip` with exactly one validated
+target, high confidence, and a TTL at most
+`MOJOSEC_ACTION_AUTO_MAX_TTL_SECONDS` (default 86400). Multi-IP sets and
+SSH-compromise blocks always take a human. `requested_scope` accepts
+`installation`/`group` only — `region`/`fleet` are refused until Maestro item
+1636 lands the authoritative identity contract.
+
+Execution locks the `GeoLocatedIP` row and decides honestly under the lock:
+**`applied`** (block placed with the requested TTL — automation never places
+a permanent block; central `sweep_expired_blocks` still owns the actual
+unblock at expiry), **`pre_existing`** (an active block already covered the
+IP; its prior reason/expiry are snapshotted and the requested TTL/reason were
+NOT applied — this never counts as execution success), or **`whitelisted`**
+(whitelist always wins). Failed targets retry bounded
+(`MOJOSEC_ACTION_MAX_ATTEMPTS`, default 5); partial failure is visible in the
+counters and a `partial` transition. Unapproved proposals expire after
+`MOJOSEC_ACTION_PROPOSAL_TTL_SECONDS` (default 3 days); applied targets
+settle to `expired` when their TTL passes, and an all-expired recommendation
+follows.
+
+**Operator runbook** — all through
+`POST /api/incident/mojosec/recommendation-action` with
+`{recommendation_id, action, note}` (`manage_security`/`security`):
+`approve` executes exactly what was proposed (no parameter can add targets or
+widen scope), `reject`/`cancel` decline it, `reverse` unblocks every applied
+target and audits each reversal. Read the queue with
+`GET /api/incident/mojosec/recommendation?state=proposed`; detail exposes
+per-target validation/outcome rows, the last 50 transitions and attempts.
+The ticket approve-block flow rides the same validation
+(`execute_manual_block`): it requires the approver to hold security
+permissions, reports `pre_existing` honestly, and never resolves a ticket on
+a block that did not hold. Action metrics land under `mojosec:action:*`
+(`recommendations_proposed|auto_approved|approved|rejected|executed|expired|
+reversed`, `targets_applied|pre_existing|whitelisted|failed`,
+`block_handlers_suppressed`, `manual_*`), and correlation adds
+`mojosec:shadow:corroborations` and `campaigns_opened`.
 
 ---
 

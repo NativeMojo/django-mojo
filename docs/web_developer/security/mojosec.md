@@ -283,10 +283,20 @@ rejected and group/member grants never authorize this platform-wide surface.
 | `GET` | `/api/incident/mojosec/case` | global `view_security` or `security` | Paginated read-only case list (shadow and authoritative installations both) |
 | `GET` | `/api/incident/mojosec/case/<id>` | global `view_security` or `security` | One case with at most 8 samples and 50 transitions |
 | `GET` | `/api/incident/mojosec/case-metrics` | global `view_security` or `security` | Bounded aggregate case metrics |
+| `GET` | `/api/incident/mojosec/recommendation` | global `view_security`, `manage_security` or `security` | Paginated recommendation list (`state`, `action`, `urgency`, `confidence`, `case_id` filters) |
+| `GET` | `/api/incident/mojosec/recommendation/<id>` | global `view_security`, `manage_security` or `security` | One recommendation with per-target validation/outcome rows, last 50 transitions and attempts |
+| `POST` | `/api/incident/mojosec/recommendation-action` | global `manage_security` or `security` | `{recommendation_id, action: approve\|reject\|cancel\|reverse, note}` — approves exactly what was proposed; no parameter can add targets or widen scope |
+| `GET` | `/api/incident/mojosec/deployment` | global `view_security`, `manage_security` or `security` | Driver-side deployment registrations (optional `installation_key_id` filter) |
+| `POST` | `/api/incident/mojosec/deployment` | global `manage_security` or `security` | Pre-register `{installation_key_id, deployment_id, ttl_seconds, note}` before a deploy |
 
 The case surfaces are platform/global security-admin reads. API keys and group
-member grants do not authorize them, and there are no case mutation, approval,
-recommendation, or execution endpoints. In shadow mode the authoritative
+member grants do not authorize them, and there are no case mutation endpoints —
+enforcement flows exclusively through the recommendation lifecycle above,
+whose targets are always server-derived case sources with per-target
+`validated`/`protected`/`invalid` validation and honest
+`applied`/`pre_existing`/`whitelisted`/`failed`/`expired`/`reversed` outcomes
+(`pre_existing` means an active block already covered the IP and the requested
+TTL/reason were **not** applied). In shadow mode the authoritative
 Event/Incident feed continues unchanged; on an installation cut to
 authoritative mode, digest-tier web/FIM evidence stops projecting per-receipt
 Events and the case list **is** the operator surface — expected deployment
@@ -296,15 +306,22 @@ Event, no notification), and case promotions to high/critical each project one
 
 List parameters are `page` (default 1, maximum 100), `page_size` (default 50,
 maximum 100), and indexed exact filters `state`, `urgency`, `sensor_kind`,
-`resource_id`, `family`, and `deployment_id`. Page values must be positive
+`resource_id`, `family`, `deployment_id`, and `campaign_id` (a campaign's
+member cases). Page values must be positive
 integers; values over 100 return HTTP 400 instead of being clamped, so the
 maximum offset is 9,900 rows. State is `observing`, `elevated`, or `settled`;
-urgency is `info`, `warning`, `high`, or `critical`; sensor kind is `web` or
-`fim`. Every list row carries `deployment_id` (empty outside deployment
-cases); detail rows add `settled_at`, `projected_urgency`, and the bounded
+urgency is `info`, `warning`, `high`, or `critical`; sensor kind is `web`,
+`fim`, `auth`, `host`, or `campaign`; `resource_id` accepts the `vhost:`,
+`installation:`, and `user:` prefixes. Every list row carries `deployment_id`
+(empty outside deployment cases), `campaign_id` (null outside campaign
+members), and `distinct_source_count`; detail rows add `settled_at`,
+`projected_urgency`, and the bounded
 `breakdown` (`{"operations": {...}, "tiers": {...}}`) alongside `samples` and
-`transitions`; timestamps are ISO-8601 strings. Case-metrics additionally
-reports `settled` and `suppressed_events`. The response includes `has_more`
+`transitions`; timestamps are ISO-8601 strings. Exact observed source IPs are
+never on case rows — they surface only as recommendation targets.
+Case-metrics additionally
+reports `settled`, `suppressed_events`, `recommendations`, `targets_applied`,
+`targets_pre_existing`, and `targets_protected`. The response includes `has_more`
 rather than an unbounded total scan. A list response has this envelope:
 
 ```json

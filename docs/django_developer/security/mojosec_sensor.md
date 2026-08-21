@@ -644,6 +644,28 @@ HTTPS with `Authorization: apikey <per-installation-token>`. The checked-in
 golden fixture under `tests/test_mojosec/golden/` is the request compatibility
 contract for sensor and receiver implementations.
 
+### Central correlation of auth and host evidence
+
+No sensor change was needed for central auth/host correlation — every field
+it keys on already crosses the wire. When an installation's enrollment row
+sets `include_host` (see the incidents documentation for the full contract),
+the receiver correlates `auth.ssh_failure`/`auth.ssh_login` per exact source
+IP + account, `auth.sudo_command` per actor/target, and
+`system.service_error` per unit + failure kind — hourly windows, strictly
+per node. Under `mode: "authoritative"` those four kinds stop projecting
+per-receipt Events (the case owns the acknowledgement, exactly like the
+web/FIM cutover); `system.oom` and `auth.sudo_failure` always keep their
+immediate Events and merely contribute. An SSH failure burst followed by a
+success from the same IP promotes the case to critical and pages through
+`mojosec.case.promoted`; the sensor's `recommendation` field remains
+advisory-only either way. Two sensor limitations are documented rather than
+worked around: `auth.sudo_failure` carries no actor/source attribution (its
+detector fingerprints bounded message text), and OOM evidence names no
+victim process. Optionally, `require_registered_deployments` on the same
+enrollment row makes trusted-deployment FIM routing additionally demand a
+driver-side pre-registered deployment id — an identity the node's root
+cannot mint — via `POST /api/incident/mojosec/deployment`.
+
 ### Receiver enrollment and publication
 
 Provision a separate API key for each installation. The key must carry the
