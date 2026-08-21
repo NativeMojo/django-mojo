@@ -13,7 +13,7 @@ inputs:
     required: false
     default: dist
   version:
-    description: Immutable release version; use the Git commit SHA
+    description: Immutable release version; GitHub workflows should include commit, run, and attempt
     required: true
   timeout-seconds:
     description: Maximum time to wait for fleet convergence

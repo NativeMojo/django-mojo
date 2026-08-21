@@ -1434,7 +1434,7 @@ jobs:
           api-url: \"__API_URL__\"
           webapp-id: \"__WEBAPP_ID__\"
           artifact-dir: \"__OUTPUT__\"
-          version: ${{ github.sha }}
+          version: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
         env:
           MOJO_DEPLOY_KEY: ${{ secrets.MOJO_DEPLOY_KEY }}
 """

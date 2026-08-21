@@ -1,5 +1,6 @@
 import boto3
 from botocore.config import Config
+from botocore.configprovider import ConfiguredEndpointProvider
 from botocore.credentials import AssumeRoleCredentialFetcher, DeferredRefreshableCredentials
 from botocore.exceptions import NoCredentialsError, PartialCredentialsError
 
@@ -20,6 +21,31 @@ DEFAULT_ROLE_DURATION = 43200
 # derive the session name per-owner (the fileman backend uses the FileManager
 # pk), which puts the owner into the cache key.
 _ASSUME_ROLE_CACHE = {}
+
+
+def _has_configured_endpoint(session, service):
+    """Return whether botocore will select a non-argument endpoint URL.
+
+    Configured endpoints may come from service/global environment variables or
+    from the active profile's shared-config services section. Resolve them
+    through botocore's own provider so django-mojo applies the same precedence
+    as ``Session.client`` without duplicating that configuration contract.
+    """
+    botocore_session = getattr(session, "_session", None)
+    if botocore_session is None:
+        # An injected session is allowed to implement its own endpoint policy.
+        # Treat an opaque policy as configured rather than forcing AWS-specific
+        # virtual-host addressing onto a potentially compatible endpoint.
+        return True
+    if botocore_session.get_config_variable(
+            "ignore_configured_endpoint_urls"):
+        return False
+    provider = ConfiguredEndpointProvider(
+        full_config=botocore_session.full_config,
+        scoped_config=botocore_session.get_scoped_config(),
+        client_name=service,
+    )
+    return bool(provider.provide())
 
 
 def get_session(access_key=None, secret_key=None, region=None, profile=None):
@@ -106,6 +132,14 @@ def get_client(service, access_key=None, secret_key=None, region=None,
             # platform presigns without one, so any uploader whose HTTP
             # client adds a Content-Type gets 403 SignatureDoesNotMatch.
             config_kwargs["signature_version"] = "s3v4"
+            if not endpoint_url and not _has_configured_endpoint(
+                    session, service):
+                # Botocore may presign non-us-east-1 buckets through the
+                # legacy global S3 endpoint unless virtual-host addressing is
+                # explicit. Do not impose this on S3-compatible endpoints,
+                # including endpoints selected through environment/shared
+                # config, whose path/host contract is provider-specific.
+                config_kwargs["s3"] = {"addressing_style": "virtual"}
         config = Config(**config_kwargs)
     kwargs = {"config": config}
     if region:
