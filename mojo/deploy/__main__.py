@@ -177,7 +177,8 @@ def cmd_render(args):
                    or test_seams)
     if (os.geteuid() == 0 and host_deploy and
             os.path.normpath(args.dest) == canonical_dest):
-        from mojo.deploy.nginx_runtime import NginxRuntimeError, converge
+        from mojo.deploy.nginx_runtime import (
+            NginxRuntimeError, converge, fragment_path)
         nginx_etc = os.environ.get("NGINX_ETC", "/etc/nginx")
         runtime_root = os.environ.get(
             "MOJO_NGINX_RUNTIME_ROOT", "/var/lib/django-mojo/nginx")
@@ -189,8 +190,29 @@ def cmd_render(args):
             print("mojo.deploy render: refusing redirected nginx runtime "
                   "paths for a production project", file=sys.stderr)
             return 1
-        try:
+
+        def converge_runtime():
             converge(args.web_user, nginx_etc=nginx_etc, root=runtime_root)
+        try:
+            # Journal the runtime fragment write when a sensor is enrolled so
+            # the rendered host config is provenance-explained instead of an
+            # unexplained protected change. Annotation is best-effort: a
+            # broken journal must never block the serving-plane converge.
+            if not test_seams and os.path.exists("/etc/mojosec/config.json"):
+                from mojo.deploy.mojosec_changes import (
+                    ChangeError, run_trusted_change)
+                try:
+                    run_trusted_change(
+                        "nginx-runtime-fragment", "rendered-host-config",
+                        [fragment_path(nginx_etc)], converge_runtime,
+                        deployment_id=os.environ.get("MOJO_DEPLOY_ID") or None)
+                except ChangeError as err:
+                    print("mojo.deploy render: trusted-change journal "
+                          "unavailable (%s); converging unjournaled" % err,
+                          file=sys.stderr)
+                    converge_runtime()
+            else:
+                converge_runtime()
         except NginxRuntimeError as err:
             print("mojo.deploy render: nginx runtime convergence failed: %s"
                   % err, file=sys.stderr)

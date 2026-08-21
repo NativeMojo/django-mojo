@@ -185,6 +185,31 @@ def _with_monitored_parents(paths):
     return result
 
 
+def _with_immediate_parents(paths, allowed_roots=None, max_paths=MAX_PATHS):
+    """Add each declared path's immediate parent directory when monitored.
+
+    Writing a file perturbs its directory's metadata, and FIM reports that
+    change separately — without this the exact-match manifest leaves routine
+    deploy-owned directory metadata unexplained (/etc/cron.d, /etc/logrotate.d,
+    /etc/nginx/conf.d). Only the immediate parent, and never an approved root
+    itself: auto-journaling /etc outright would attribute concurrent
+    non-deploy writes to the deploy.
+    """
+    roots = tuple(allowed_roots or (_GENERAL_ROOTS + _HOME_ROOTS))
+    result = list(paths)
+    seen = set(paths)
+    for path in paths:
+        parent = os.path.dirname(path)
+        if (not parent or parent == "/" or parent in seen or parent in roots or
+                not any(_contained(parent, root) for root in roots)):
+            continue
+        if len(result) >= max_paths:
+            break
+        seen.add(parent)
+        result.append(parent)
+    return result
+
+
 def _wheel_identity(path):
     with zipfile.ZipFile(path) as archive:
         metadata = [name for name in archive.namelist()
@@ -540,6 +565,8 @@ class ChangeJournal:
                 not 1 <= ttl_seconds <= MAX_TTL_SECONDS):
             raise ChangeError("trusted-change TTL is out of bounds")
         exact = validate_paths(paths, self.allowed_roots, max_paths=max_paths)
+        exact = _with_immediate_parents(
+            exact, allowed_roots=self.allowed_roots, max_paths=max_paths)
         before = {path: _snapshot(path) for path in exact}
         descriptor = self._locked()
         try:
@@ -552,11 +579,16 @@ class ChangeJournal:
                 "started_at": _timestamp(_now()), "ttl_seconds": ttl_seconds,
             }
             if existing is not None:
-                stable = dict(existing)
-                stable.pop("started_at", None)
-                compare = dict(requested)
-                compare.pop("started_at", None)
-                if stable != compare:
+                # Compare the DECLARED identity only. `before` snapshots of
+                # auto-added parent directories are volatile (any concurrent
+                # write moves their mtime), and a legitimate retry must not
+                # read as a different operation because a hot directory moved.
+                identity = (
+                    "operation_id", "operation_kind", "deployment_id",
+                    "paths", "ttl_seconds",
+                )
+                if any(existing.get(field) != requested[field]
+                       for field in identity):
                     raise ChangeError("operation id is already active with different scope")
                 if reaped:
                     _atomic_write(self.journal_path, journal)
