@@ -342,6 +342,26 @@ class BlockHandler:
 
     def run(self, event):
         try:
+            from mojo.apps.incident.services import mojosec_actions
+            if mojosec_actions.owns_enforcement(event):
+                # The MojoSec recommendation lifecycle is the single action
+                # owner for this installation's routed categories; a
+                # per-receipt block here would race it and misattribute
+                # enforcement. Visible skip, and never an auto-resolve.
+                mojosec_actions._record_metric("block_handlers_suppressed")
+                if event.incident_id:
+                    try:
+                        from mojo.apps.incident.models import Incident
+                        Incident.objects.get(pk=event.incident_id).add_history(
+                            "handler:block",
+                            note=("handler:block suppressed — MojoSec "
+                                  "recommendation lifecycle owns enforcement"))
+                    except Exception:
+                        logger.exception(
+                            "BlockHandler: suppression note failed for %s",
+                            event.incident_id)
+                return False
+
             ip = getattr(event, "source_ip", None)
             if not ip:
                 ip = (event.metadata or {}).get("source_ip")

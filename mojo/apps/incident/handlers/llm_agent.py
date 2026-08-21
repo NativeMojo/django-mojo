@@ -623,10 +623,32 @@ def _tool_update_incident(params):
 
 def _tool_block_ip(params):
     from mojo.apps.account.models import GeoLocatedIP
+    from mojo.apps.incident.services import mojosec_actions
 
     ip = params["ip"]
     reason = f"[LLM Agent] {params['reason']}"
     ttl = params.get("ttl", 3600)
+
+    if params.get("incident_id"):
+        # Same single-owner rule as block:// — an LLM must never race the
+        # recommendation lifecycle on a MojoSec-routed installation.
+        try:
+            from mojo.apps.incident.models import Incident
+            incident = Incident.objects.get(pk=params["incident_id"])
+            triggering = incident.events.order_by("-id").first()
+            if triggering is not None and mojosec_actions.owns_enforcement(
+                    triggering):
+                mojosec_actions._record_metric("block_handlers_suppressed")
+                incident.add_history("handler:llm", note=(
+                    f"[LLM Agent] block of {ip} suppressed — MojoSec "
+                    "recommendation lifecycle owns enforcement"))
+                return {"ok": False, "ip": ip, "blocked": False,
+                        "reason": "suppressed: MojoSec recommendation "
+                                  "lifecycle owns enforcement"}
+        except Exception:
+            logger.exception(
+                "LLM block owner check failed for incident %s",
+                params.get("incident_id"))
 
     geo, _ = GeoLocatedIP.objects.get_or_create(ip_address=ip)
     geo.block(reason=reason, ttl=ttl)

@@ -219,28 +219,52 @@ def _handler_rule_update(ticket, note, action, context):
 def _handler_block_confirm(ticket, note, action, context):
     """Handle IP block confirmation.
 
-    Approve: execute the block via IPSet.
+    Approve: validated block through the MojoSec action service, with the
+    approver's identity and permission checked. The ticket resolves only
+    when enforcement actually holds (applied, or verifiably pre-existing) —
+    never on a swallowed failure.
     Deny: close ticket.
     """
     if action == "approve":
-        import ipaddress
+        from mojo.apps.incident.services import mojosec_actions
+
+        actor = getattr(note, "user", None)
+        if actor is None or not actor.has_permission(
+                ["manage_security", "security"]):
+            _add_system_note(
+                ticket, "Block approval refused: approver lacks security "
+                        "permissions.")
+            return
         ip = context.get("ip")
         reason = context.get("reason", "Approved via ticket action")
-        if ip:
-            try:
-                ipaddress.ip_address(ip)
-            except ValueError:
-                _add_system_note(ticket, f"Invalid IP address format: {ip}")
-                return
-            try:
-                from mojo.apps.incident.models import IPSet
-                IPSet.block_ip(ip, reason=reason)
-                _add_system_note(ticket, f"IP {ip} blocked successfully.")
-            except Exception:
-                logger.exception("Failed to block IP %s via ticket action", ip)
-                _add_system_note(ticket, f"Failed to block IP {ip} — see logs for details.")
-        else:
+        if not ip:
             _add_system_note(ticket, "No IP specified in block context.")
+            ticket.status = "resolved"
+            ticket.save(update_fields=["status"])
+            return
+        try:
+            result = mojosec_actions.execute_manual_block(ip, reason, actor)
+        except Exception:
+            logger.exception("Failed to block IP %s via ticket action", ip)
+            _add_system_note(
+                ticket, f"Failed to block IP {ip} — see logs for details. "
+                        "Ticket left open.")
+            return
+        outcome = result.get("outcome")
+        if outcome == "applied":
+            _add_system_note(
+                ticket, f"IP {result['ip']} blocked for {result['ttl']}s "
+                        f"(approved by {actor.username}).")
+        elif outcome == "pre_existing":
+            _add_system_note(
+                ticket, f"IP {result['ip']} was already blocked "
+                        f"(reason: {result.get('prior_reason') or 'unknown'}); "
+                        "the requested TTL/reason were not applied.")
+        else:
+            _add_system_note(
+                ticket, f"Block of {result.get('ip', ip)} refused: "
+                        f"{result.get('reason', outcome)}. Ticket left open.")
+            return
         ticket.status = "resolved"
         ticket.save(update_fields=["status"])
 
