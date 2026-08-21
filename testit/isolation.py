@@ -16,6 +16,7 @@ Nothing in this module imports or executes the code it scans.
 """
 import ast
 import os
+import re
 
 from objict import objict
 
@@ -86,8 +87,63 @@ _ENVIRON_WRITE_METHODS = frozenset({"update", "setdefault", "pop", "clear", "pop
 _SYS_MODULES_WRITE_METHODS = frozenset({"update", "setdefault", "pop", "clear", "popitem"})
 
 
+# The enforcement ring (maestro item #1839): the mutation classes that have
+# produced recorded cross-module release failures. These BLOCK the default
+# tier. Everything else the scanner finds (app-internal provider mocks and
+# similar) is advisory until the cold-ring migration lands.
+HOT_CODES = frozenset({
+    "settings_singleton_mutation",
+    "django_settings_mutation",
+    "environ_mutation",
+    "sys_modules_mutation",
+    "protected_setting_write",
+    "protected_setting_unresolved",
+    "protected_rest_write",
+    "scan_error",
+})
+
+# A patch of — or assignment to — these surfaces has cross-app blast radius:
+# every parallel module reads settings and paths, reports incidents, publishes
+# jobs, and runs through testit itself. mojo.helpers.paths is here because a
+# redirected VAR_ROOT poisons the ready-signal/conf reads of every concurrent
+# server_settings() context.
+SHARED_PATCH_PREFIXES = (
+    "mojo.helpers.settings",
+    "mojo.helpers.paths",
+    "mojo.apps.incident",
+    "mojo.apps.jobs",
+    "testit.",
+)
+
+_TARGET_RE = re.compile(r"'([A-Za-z0-9_.]+)'")
+
+
 def violation(code, file, line, detail):
     return objict(code=code, file=file, line=line, detail=detail)
+
+
+def is_hot_violation(row):
+    """Whether one violation belongs to the blocking (hot) enforcement ring."""
+    if row.code in HOT_CODES:
+        return True
+    if row.code in ("patch_shared", "patch_unresolved", "production_attr_mutation"):
+        if "settings singleton" in row.detail:
+            return True
+        # A detail may quote both the attribute name and the dotted target —
+        # any quoted token in a shared namespace makes the site hot.
+        for token in _TARGET_RE.findall(row.detail):
+            if token.startswith(SHARED_PATCH_PREFIXES):
+                return True
+    return False
+
+
+def partition_violations(violations):
+    """Split violations into (hot, cold) per the enforcement ring."""
+    hot = []
+    cold = []
+    for row in violations:
+        (hot if is_hot_violation(row) else cold).append(row)
+    return hot, cold
 
 
 def is_protected_key(key):
@@ -555,6 +611,34 @@ class _FileScanner(ast.NodeVisitor):
                 f"{func.attr.upper()} {path} writes production settings "
                 "through the live server, visible to every parallel module")
 
+    def _check_setattr_call(self, node):
+        """setattr()/delattr() with a provable shared target is a mutation of
+        that target whatever the (possibly dynamic) attribute name is."""
+        func = node.func
+        if not isinstance(func, ast.Name) or func.id not in ("setattr", "delattr"):
+            return
+        if not node.args:
+            return
+        verb = "assignment to" if func.id == "setattr" else "deletion of"
+        target = node.args[0]
+        dotted = self._dotted_of(target)
+        if dotted == SETTINGS_SINGLETON or (
+                dotted and dotted.startswith(SETTINGS_SINGLETON + ".")):
+            self._flag(
+                "settings_singleton_mutation", node,
+                f"{func.id}() {verb} an attribute of the shared settings "
+                f"singleton ({SETTINGS_SINGLETON})")
+        elif dotted == DJANGO_SETTINGS or (
+                dotted and dotted.startswith(DJANGO_SETTINGS + ".")):
+            self._flag(
+                "django_settings_mutation", node,
+                f"{func.id}() {verb} an attribute of django.conf.settings")
+        elif dotted and _is_production_path(dotted):
+            self._flag(
+                "production_attr_mutation", node,
+                f"{func.id}() {verb} an attribute of shared production "
+                f"object '{dotted}'")
+
     def _check_environ_calls(self, node):
         func = node.func
         if not isinstance(func, ast.Attribute):
@@ -580,6 +664,7 @@ class _FileScanner(ast.NodeVisitor):
             if not self._check_setting_chain(node):
                 self._check_service_writer(node)
                 self._check_rest_write(node)
+            self._check_setattr_call(node)
             self._check_environ_calls(node)
         self.generic_visit(node)
 

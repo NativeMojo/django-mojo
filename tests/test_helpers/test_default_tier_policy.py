@@ -254,6 +254,26 @@ def test_environ_mutation(opts):
     )
 
 
+@th.unit_test("policy: setattr/delattr with dynamic names still hit provable targets")
+def test_setattr_dynamic_names_detected(opts):
+    codes = _codes("""
+        from django.conf import settings as dj_settings
+        from mojo.helpers.settings import settings
+
+        def test_thing(opts):
+            for name in opts.names:
+                setattr(dj_settings, name, "x")
+                delattr(settings, name)
+    """)
+    assert "django_settings_mutation" in codes, (
+        f"setattr(django settings, <dynamic>, ...) must be detected — the "
+        f"target is provable even when the key is not, got {codes}"
+    )
+    assert "settings_singleton_mutation" in codes, (
+        f"delattr on the settings singleton must be detected, got {codes}"
+    )
+
+
 @th.unit_test("policy: sys.modules mutation is detected")
 def test_sys_modules_mutation(opts):
     codes = _codes("""
@@ -573,4 +593,61 @@ def test_state_consumer_exempt(opts):
     assert problems == [], (
         f"consumer/application test roots are not part of the repository "
         f"migration and must not be required to declare default_core, got {problems}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Enforcement ring — hot (blocking) vs cold (advisory) partition
+# ---------------------------------------------------------------------------
+
+@th.unit_test("policy ring: recorded-failure classes are hot")
+def test_ring_mutation_classes_hot(opts):
+    from testit import isolation
+    for code in ("settings_singleton_mutation", "django_settings_mutation",
+                 "environ_mutation", "sys_modules_mutation",
+                 "protected_setting_write", "protected_setting_unresolved",
+                 "protected_rest_write", "scan_error"):
+        row = isolation.violation(code, "<f>", 1, "fixture")
+        assert isolation.is_hot_violation(row), (
+            f"{code} produced recorded release failures and must block the "
+            "default tier"
+        )
+
+
+@th.unit_test("policy ring: shared-surface patches are hot, app-internal are cold")
+def test_ring_patch_targets(opts):
+    from testit import isolation
+
+    shared = isolation.violation(
+        "patch_shared", "<f>", 1,
+        "patch('mojo.apps.incident.report_event') replaces a shared production attribute")
+    singleton = isolation.violation(
+        "patch_shared", "<f>", 1,
+        "patch.object of the shared settings singleton (mojo.helpers.settings.settings)")
+    app_internal = isolation.violation(
+        "patch_shared", "<f>", 1,
+        "patch.object of shared production object 'mojo.apps.aws.services.ec2_client'")
+    unresolved = isolation.violation(
+        "patch_unresolved", "<f>", 1,
+        "patch.object target 'target' came back from a helper call")
+
+    assert isolation.is_hot_violation(shared), (
+        "a patch of mojo.apps.incident.* must be hot — its overlap swallowed "
+        "26 Event rows in a release gate"
+    )
+    assert isolation.is_hot_violation(singleton), (
+        "a settings-singleton patch must be hot"
+    )
+    assert not isolation.is_hot_violation(app_internal), (
+        "an app-internal provider mock is cold-ring (advisory) in this build"
+    )
+    assert not isolation.is_hot_violation(unresolved), (
+        "unresolved provenance without a shared target stays advisory until "
+        "the cold-ring migration"
+    )
+
+    hot, cold = isolation.partition_violations(
+        [shared, singleton, app_internal, unresolved])
+    assert len(hot) == 2 and len(cold) == 2, (
+        f"partition must split 2 hot / 2 cold, got {len(hot)}/{len(cold)}"
     )

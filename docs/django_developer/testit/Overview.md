@@ -264,6 +264,46 @@ does not serialize it, so the module must declare `"serial": true` as well.
 To move a whole module, add `"requires_extra": ["slow"]` (or `["extended"]`) to its
 `__init__.py` TESTIT config. For a single test, use the decorator.
 
+#### The enforced isolation policy (repository packages only)
+
+Since maestro item #1839 the isolation contract is **enforced, fail-closed**, before any
+test imports or workers start. `testit/isolation.py` AST-scans every package under
+django-mojo's own `tests/` — targeted (`-t`) and direct-file runs do not bypass it.
+Consumer/application test roots are exempt and keep the historical contract; ownership is
+resolved per package by the runner's origin records, never guessed from a name.
+
+A **repository** package is valid in exactly one of two states:
+
+| State | Declaration | Constraints |
+|---|---|---|
+| default | `"default_core": True` | no `requires_extra`; no blocking violation. `"serial": True` is allowed only for a violation-free package that is serial for execution reasons (signal handlers) — never as isolation cover for mutation. |
+| opt-in | nonempty `"requires_extra"` | `"serial": True` is mandatory whenever the scan finds mutation — `requires_extra` selects coverage, it does not isolate it (`--all` still runs eligible modules in parallel). |
+
+A repository package with **no readable literal `TESTIT` dict** (missing `__init__.py`,
+no `TESTIT`, or a computed value) fails the policy outright — the permissive default is
+not inherited.
+
+**The detected grammar** (deterministic; it proves these classes and claims nothing about
+arbitrary dynamic Python): `mock.patch`/`patch.object`/`patch.dict` through any import
+alias; mutation of the shared `mojo.helpers.settings.settings` singleton (assignment,
+deletion, aliased rebinding); `django.conf.settings` attribute mutation; `os.environ` and
+`sys.modules` writes; writes to protected configuration keys through the `Setting` ORM
+(literal, module-constant and literal-collection keys are resolved; a dynamic key fails
+closed as unresolvable), through the settings service writers
+(`set_override`/`clear_override`/`set_auth_safe_fields`), and through literal REST writes
+to `/api/settings`. Reads are always allowed, as are locally constructed fakes, injected
+callables (many services expose `reporter=`/`publisher=`/`loader=`/`send_email=` seams
+for exactly this), and keys under the reserved **`TESTIT_`** namespace, which production
+code never reads.
+
+**Blocking vs advisory:** the classes above with cross-module blast radius — singleton /
+Django-settings / environ / `sys.modules` mutation, protected setting and REST writes,
+and patches of the shared `mojo.helpers.settings`, `mojo.apps.incident`,
+`mojo.apps.jobs` and `testit` surfaces — **block the run**. Patches of app-internal
+provider seams (AWS clients, DNS providers and similar) are currently advisory: the
+runner prints one summary line per run until the cold-ring migration lands
+(#1839 follow-up). There are no comment or path suppressions — fix the test or move it.
+
 ### JSON Config
 CLI flags always win, but you can seed defaults through a JSON file:
 
@@ -300,21 +340,20 @@ Supported keys:
 Each test package can declare a `TESTIT` dict in its `__init__.py` to control how the runner handles it. The runner reads the file via AST — the module is never imported during config loading, so there are no side effects.
 
 ```python
-# tests/test_auth/__init__.py  — parallel module (default)
+# tests/test_auth/__init__.py  — parallel default module (repository packages
+# must declare their state explicitly; see the enforced isolation policy)
 TESTIT = {
     "requires_apps": ["mojo.apps.account"],  # skip if app is not installed
+    "default_core": True,                    # clean, parallel-safe default tier
 }
 
-# tests/test_job_engine/__init__.py  — serial for a reason OTHER than server_settings()
+# tests/test_job_engine/__init__.py  — default, serial for a reason OTHER than
+# isolation: signal handlers only work on the main thread. Allowed because the
+# package carries no mutation violations.
 TESTIT = {
     "requires_apps": ["mojo.apps.jobs"],
-    "serial": True,                          # JobEngine/Scheduler use signal handlers (main thread only)
-}
-
-# tests/test_oauth/__init__.py  — calls th.server_settings() but stays parallel;
-# testit/server_lock.py keeps that restart away from open websockets on its own.
-TESTIT = {
-    "requires_apps": ["mojo.apps.account"],
+    "serial": True,
+    "default_core": True,
 }
 
 # tests/test_security/__init__.py  — opt-in slow module
@@ -323,22 +362,36 @@ TESTIT = {
     "serial": True,
     "requires_extra": ["slow"],              # skipped unless --all or --extra slow
 }
+
+# tests/test_geofence_extended_serial/__init__.py — opt-in home for coverage
+# that genuinely needs process-wide mutation
+TESTIT = {
+    "requires_apps": ["mojo.apps.account"],
+    "requires_extra": ["extended"],
+    "serial": True,                          # mandatory: requires_extra alone is not isolation
+}
 ```
 
 When a large app has many tests, split it into domain-focused packages (`test_auth`, `test_mfa`, `test_user_mgmt`, etc.) rather than one monolithic `test_accounts`. Each package runs in parallel by default.
 
-> **`th.server_settings()` no longer requires `"serial": True`.** It restarts the
-> server (writing `var/django.conf` for uvicorn to reload), which used to tear
-> down any websocket another module had open — the cause of intermittent
-> "Connection is already closed" failures during full-suite runs.
-> `testit/server_lock.py` now serializes just that hazard: a `WsClient`
-> connection holds a **shared** lock for its lifetime, and `server_settings()`
-> takes it **exclusively** for both of its reloads. Modules stay parallel and
-> only the actual restart windows are excluded — much cheaper than marking every
-> caller serial. Use `"serial": True` for the *other* reasons (signal handlers
-> bound to the main thread, as in `test_job_engine`; or a stress module that
-> intentionally holds many sockets longer than the writer's fail-open timeout,
-> as in `test_realtime`).
+> **`th.server_settings()` no longer requires `"serial": True`** for the
+> *websocket* hazard: it restarts the server (writing `var/django.conf` for
+> uvicorn to reload), which used to tear down any websocket another module had
+> open. `testit/server_lock.py` serializes just that: a `WsClient` connection
+> holds a **shared** lock for its lifetime, and `server_settings()` takes it
+> **exclusively** for both of its reloads.
+>
+> **What `server_settings()` does NOT do: make the override private.** While
+> the context is open, the overridden keys are live on the one shared server
+> for EVERY parallel module's requests — the restore on exit does not undo
+> what another module observed mid-window. The same is true of any
+> restoring try/finally around process-global state: restoration bounds the
+> window, it does not close it. Override only keys whose changed value is
+> harmless to concurrent modules (or default-equal), or put the coverage in
+> an opt-in serial package. Use `"serial": True` for the *other* execution
+> reasons too (signal handlers bound to the main thread, as in
+> `test_job_engine`; or a stress module that intentionally holds many sockets
+> longer than the writer's fail-open timeout, as in `test_realtime`).
 >
 > A `WsClient` opened **inside** a `server_settings()` body is fine: the thread
 > already holding the exclusive hold is granted the shared hold immediately

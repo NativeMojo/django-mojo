@@ -177,6 +177,7 @@ _DEFAULT_CONFIG = objict(
     serial=False,
     requires_apps=[],
     requires_extra=[],
+    default_core=False,
 )
 
 # Opt-in tiers that --all turns on. See setup_parser for what each one means.
@@ -236,18 +237,28 @@ def _pid_alive(pid):
         return False
 
 
-def _load_module_config(module_path):
-    """Load TESTIT config from a module's __init__.py via AST (no import side effects)."""
+def _load_module_config_ex(module_path):
+    """Load TESTIT config from a module's __init__.py via AST (no import side
+    effects). Returns (config, state) where state is one of:
+
+    "ok"            — a literal TESTIT dict was read
+    "missing_init"  — the directory has no __init__.py
+    "missing_testit"— __init__.py exists but declares no TESTIT dict
+    "invalid"       — __init__.py or its TESTIT value could not be parsed
+
+    Every non-"ok" state yields the permissive defaults for backward
+    compatibility; the repository policy treats them as fail-closed instead.
+    """
     init_path = os.path.join(module_path, "__init__.py")
     if not os.path.exists(init_path):
-        return objict(_DEFAULT_CONFIG)
+        return objict(_DEFAULT_CONFIG), "missing_init"
 
     try:
         with open(init_path, "r", encoding="utf-8") as fh:
             source = fh.read()
         tree = ast.parse(source, filename=init_path)
     except (OSError, SyntaxError):
-        return objict(_DEFAULT_CONFIG)
+        return objict(_DEFAULT_CONFIG), "invalid"
 
     for node in tree.body:
         if isinstance(node, ast.Assign):
@@ -255,13 +266,20 @@ def _load_module_config(module_path):
                 if isinstance(target, ast.Name) and target.id == "TESTIT":
                     try:
                         value = ast.literal_eval(node.value)
-                        if isinstance(value, dict):
-                            merged = dict(_DEFAULT_CONFIG)
-                            merged.update(value)
-                            return objict(merged)
                     except (ValueError, TypeError):
-                        pass
-    return objict(_DEFAULT_CONFIG)
+                        return objict(_DEFAULT_CONFIG), "invalid"
+                    if isinstance(value, dict):
+                        merged = dict(_DEFAULT_CONFIG)
+                        merged.update(value)
+                        return objict(merged), "ok"
+                    return objict(_DEFAULT_CONFIG), "invalid"
+    return objict(_DEFAULT_CONFIG), "missing_testit"
+
+
+def _load_module_config(module_path):
+    """Load TESTIT config from a module's __init__.py via AST (no import side effects)."""
+    config, _state = _load_module_config_ex(module_path)
+    return config
 
 
 # ---------------------------------------------------------------------------
@@ -1397,6 +1415,61 @@ ORIGIN_REPO = "django_mojo"
 ORIGIN_CONSUMER = "consumer"
 
 
+def _enforce_repository_policy(parent_test_root):
+    """Fail-closed default-tier policy over django-mojo's own test tree.
+
+    Runs before any import or worker, over the COMPLETE repository tree —
+    targeted and direct-file runs do not bypass it. Consumer/application
+    test roots are exempt and keep the historical selection contract.
+
+    Blocking: hot-ring violations (see testit.isolation.HOT_CODES and
+    SHARED_PATCH_PREFIXES) inside a default package, and any repository
+    package without a readable literal TESTIT config declaring its state.
+    Cold-ring violations (app-internal provider mocks) are advisory until
+    the cold-ring migration (maestro item #1839 follow-up).
+
+    Returns the advisory (cold) counts as (sites, packages).
+    """
+    from testit import isolation
+
+    if not parent_test_root or not os.path.exists(parent_test_root):
+        return 0, 0
+
+    problems = []
+    cold_sites = 0
+    cold_packages = 0
+    for name in sorted(os.listdir(parent_test_root)):
+        package_path = os.path.join(parent_test_root, name)
+        if not os.path.isdir(package_path) or name.startswith("__"):
+            continue
+        config, state = _load_module_config_ex(package_path)
+        scanned = isolation.scan_package(package_path)
+        hot, cold = isolation.partition_violations(scanned.violations)
+        if cold:
+            cold_sites += len(cold)
+            cold_packages += 1
+        package_problems = isolation.evaluate_package_state(
+            config, hot, origin=ORIGIN_REPO, has_config=(state == "ok"))
+        for problem in package_problems:
+            problems.append(f"{name}: {problem}")
+        if hot and not (config.requires_extra and config.serial):
+            problems.append(
+                f"{name}: {len(hot)} blocking isolation violation(s):\n"
+                + "\n".join(
+                    f"    {row.file}:{row.line}: [{row.code}] {row.detail}"
+                    for row in hot))
+
+    if problems:
+        sys.exit(
+            "\nDEFAULT-TIER ISOLATION POLICY FAILED — no tests were run.\n"
+            "Every repository test package must declare default_core=True "
+            "(clean) or a nonempty requires_extra (opt-in, serial when it "
+            "mutates). See .claude/rules/testing.md and "
+            "docs/django_developer/testit/Overview.md.\n\n"
+            + "\n".join(problems))
+    return cold_sites, cold_packages
+
+
 def _make_record(kind, name, origin, path, test_file=None):
     """One collected unit of work, with its ownership resolved up front.
 
@@ -1600,6 +1673,14 @@ def main(opts):
 
         print_extra_flags(extras)
         return
+
+    # Fail-closed repository isolation policy — before any import or worker.
+    cold_sites, cold_packages = _enforce_repository_policy(parent_test_root)
+    if cold_sites:
+        print(
+            f"  isolation advisory: {cold_sites} app-internal patch site(s) in "
+            f"{cold_packages} package(s) remain outside the enforced ring "
+            "(cold ring, maestro item #1839)")
 
     # Collect module records
     all_records = _collect_modules(opts, test_root, parent_test_root)

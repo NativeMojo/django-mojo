@@ -1,4 +1,5 @@
 TESTIT = {
+    "default_core": True,
     "requires_apps": ["mojo.apps.account"],
     # Parallel-safe: tests pass per-request test-mode headers
     # (X-Mojo-Test-Geo, X-Mojo-Test-Geofence-System, etc.) instead of using
