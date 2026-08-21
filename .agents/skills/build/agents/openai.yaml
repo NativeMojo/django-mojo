@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build"
+  short_description: "Implement a scoped planning item with tests"
+  default_prompt: "Use $build to claim, implement, verify, and close this scoped item."

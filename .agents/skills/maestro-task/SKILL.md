@@ -56,7 +56,7 @@ back — not one item that quietly staples them together.
      never create one unprompted. (Names are claimed globally, so a taken name
      fails — suggest a distinctive one.)
 3. If maestro is unreachable or unauthenticated: **stop with an explicit
-   notice** and offer the repo's local intake skill (e.g. `/request`) if one
+   notice** and offer the repo's local intake skill (e.g. `$request`) if one
    exists. Never fall back silently.
 4. Call `get_board(board, items=False)` once and keep the column schema — the
    columns, the roster, the board's name and `item_url_template`, without the

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Scope"
+  short_description: "Triage and plan a confirmed work item"
+  default_prompt: "Use $scope to intake this item, allocate its id, and write a buildable plan."

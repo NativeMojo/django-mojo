@@ -10,6 +10,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = ROOT / ".claude" / "skills"
 TARGET_ROOT = ROOT / ".agents" / "skills"
+AGENT_SOURCE_ROOT = ROOT / ".claude" / "agents"
+AGENT_TARGET_ROOT = ROOT / ".codex" / "agents"
 SKILL_NAMES = (
     "maestro-task",
     "maestro-scope",
@@ -19,6 +21,19 @@ SKILL_NAMES = (
     "maestro-release-note",
     "release",
     "sites-verify",
+    "request",
+    "scope",
+    "build",
+)
+
+# File-based fallback skills (used when Maestro is down) — no Maestro MCP
+# dependency is declared for these.
+LOCAL_SKILLS = frozenset(("request", "scope", "build"))
+
+AGENT_NAMES = (
+    "test-runner",
+    "docs-updater",
+    "security-review",
 )
 
 INTERFACES = {
@@ -61,6 +76,21 @@ INTERFACES = {
         "Sites Verify",
         "Visually verify a deployed Maestro site",
         "Use $sites-verify to inspect the deployed site in real desktop and narrow-view renders.",
+    ),
+    "request": (
+        "Request",
+        "File a new work request into the local planning inbox",
+        "Use $request to capture this ask as a structured item in planning/inbox/.",
+    ),
+    "scope": (
+        "Scope",
+        "Triage and plan a confirmed work item",
+        "Use $scope to intake this item, allocate its id, and write a buildable plan.",
+    ),
+    "build": (
+        "Build",
+        "Implement a scoped planning item with tests",
+        "Use $build to claim, implement, verify, and close this scoped item.",
     ),
 }
 
@@ -119,10 +149,19 @@ def yaml_block(value):
     return "\n".join(lines)
 
 
+LOCAL_COMMAND_RE = re.compile(r"(?<![\w/$.-])/(request|scope|build|memory)\b")
+
+
+def adapt_commands(text):
+    return LOCAL_COMMAND_RE.sub(r"$\1", text)
+
+
 def adapt_body(body):
     body = re.sub(r"`/maestro-(task|scope|build|auto|vibe|release-note)", r"`$maestro-\1", body)
     body = body.replace("`/sites-verify", "`$sites-verify")
+    body = adapt_commands(body)
     body = body.replace("`CLAUDE.md`", "`AGENTS.md`")
+    body = body.replace("Claude Code's built-in", "Codex's built-in")
     body = body.replace("Opus, high effort", "frontier model, high reasoning")
     body = body.replace(
         "Delegate to `$maestro-release-note`", "Use `$maestro-release-note`")
@@ -135,7 +174,7 @@ def render_skill(name):
     source_name = scalar(frontmatter, "name", source)
     if source_name != name:
         raise ValueError(f"{source}: expected name {name!r}, found {source_name!r}")
-    description = scalar(frontmatter, "description", source)
+    description = adapt_commands(scalar(frontmatter, "description", source))
     version = source_version(frontmatter)
     if version == "unknown":
         note = (
@@ -164,18 +203,45 @@ def quote_yaml(value):
 
 def render_openai_yaml(name):
     display_name, short_description, default_prompt = INTERFACES[name]
-    return (
+    rendered = (
         "interface:\n"
         f"  display_name: {quote_yaml(display_name)}\n"
         f"  short_description: {quote_yaml(short_description)}\n"
         f"  default_prompt: {quote_yaml(default_prompt)}\n"
-        "dependencies:\n"
-        "  tools:\n"
-        "    - type: \"mcp\"\n"
-        "      value: \"maestro\"\n"
-        "      description: \"Read and update the shared Maestro workspace and boards\"\n"
-        "      transport: \"streamable_http\"\n"
-        "      url: \"https://maestromojo.com/mcp\"\n"
+    )
+    if name not in LOCAL_SKILLS:
+        rendered += (
+            "dependencies:\n"
+            "  tools:\n"
+            "    - type: \"mcp\"\n"
+            "      value: \"maestro\"\n"
+            "      description: \"Read and update the shared Maestro workspace and boards\"\n"
+            "      transport: \"streamable_http\"\n"
+            "      url: \"https://maestromojo.com/mcp\"\n"
+        )
+    return rendered
+
+
+def quote_toml(value):
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def render_agent_toml(name):
+    source = AGENT_SOURCE_ROOT / f"{name}.md"
+    frontmatter, body = split_frontmatter(source.read_text(encoding="utf-8"), source)
+    source_name = scalar(frontmatter, "name", source)
+    if source_name != name:
+        raise ValueError(f"{source}: expected name {name!r}, found {source_name!r}")
+    description = scalar(frontmatter, "description", source)
+    instructions = adapt_body(body).rstrip()
+    instructions = instructions.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
+    return (
+        f"# Generated from .claude/agents/{name}.md by scripts/sync_maestro_skills.py."
+        " Do not edit directly.\n"
+        f"name = {quote_toml(name)}\n"
+        f"description = {quote_toml(description)}\n"
+        'developer_instructions = """\n'
+        f'{instructions}"""\n'
     )
 
 
@@ -184,6 +250,8 @@ def expected_files():
         target = TARGET_ROOT / name
         yield target / "SKILL.md", render_skill(name)
         yield target / "agents" / "openai.yaml", render_openai_yaml(name)
+    for name in AGENT_NAMES:
+        yield AGENT_TARGET_ROOT / f"{name}.toml", render_agent_toml(name)
 
 
 def main():
@@ -212,7 +280,10 @@ def main():
         return 1
 
     action = "checked" if args.check else "synced"
-    print(f"{action} {len(SKILL_NAMES)} Codex skills in {TARGET_ROOT.relative_to(ROOT)}")
+    print(
+        f"{action} {len(SKILL_NAMES)} Codex skills in {TARGET_ROOT.relative_to(ROOT)} "
+        f"and {len(AGENT_NAMES)} agents in {AGENT_TARGET_ROOT.relative_to(ROOT)}"
+    )
     return 0
 
 

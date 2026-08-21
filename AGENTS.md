@@ -49,16 +49,20 @@ Per-checkout test isolation permits different worktrees to test concurrently.
 
 The Claude skill sources live under `.claude/skills/`: the upstream-managed
 `maestro-*` workflows and `sites-verify`, plus the repo-local `release`
-workflow. ChatGPT and Codex discover generated counterparts in
-`.agents/skills/`.
+workflow and the file-based fallback flow (`request`, `scope`, `build`).
+ChatGPT and Codex discover generated counterparts in `.agents/skills/`, and
+the post-build agent briefs in `.claude/agents/` are likewise generated into
+`.codex/agents/*.toml`.
 Never hand-edit the generated copies. After `get_dev_skills()` refreshes the
-Claude sources, run:
+Claude sources, or after editing any source skill or agent brief, run:
 
 ```bash
 scripts/sync_maestro_skills.py
 scripts/sync_maestro_skills.py --check
 ```
 
-The sync removes Claude-only frontmatter, converts slash-style Maestro skill
-mentions to `$skill` mentions, maps provider-specific model wording to Codex
-reasoning terminology, and declares the Maestro MCP dependency for ChatGPT.
+The sync removes Claude-only frontmatter, converts slash-style skill mentions
+to `$skill` mentions, maps provider-specific model wording to Codex reasoning
+terminology, and declares the Maestro MCP dependency for ChatGPT — except for
+the fallback skills (`request`, `scope`, `build`), which are file-based and
+declare no Maestro dependency.
