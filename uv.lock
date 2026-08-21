@@ -667,7 +667,7 @@ wheels = [
 
 [[package]]
 name = "django-mojo"
-version = "1.15.14"
+version = "1.15.15"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
