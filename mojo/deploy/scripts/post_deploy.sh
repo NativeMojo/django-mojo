@@ -248,14 +248,66 @@ trusted_pip() {
     fi
 }
 
-# pip 26.2 started honoring PyPI's Simple API cache lifetime. A framework
-# published immediately before a deploy can therefore be absent from a cached
-# catalog response even though its wheel is already live. Older pip releases
-# do not know this option, but they revalidate by default, so feature-detect it.
-FRAMEWORK_PIP_ARGS=()
-if pip install --help 2>/dev/null | grep -q -- '--refresh-package'; then
-    FRAMEWORK_PIP_ARGS+=(--refresh-package=django-mojo)
-fi
+# ── framework resolution ─────────────────────────────────────────────────────
+#
+# The API being deployed already passed its own tests; the framework step must
+# never veto it over resolution trivia. PyPI's JSON API is the fresh authority
+# (purged at upload); pip resolves through the Simple index, a DIFFERENT
+# cached document that can lag it by minutes — and pip's own catalog cache
+# honors that lag since pip 26.2. So: confirm the target against the JSON API,
+# converge onto it with bounded retries whose retries bypass every pip cache
+# (`--no-cache-dir` — works on every pip ever shipped, no feature-detected
+# flags), and if it STILL will not install, deploy on the framework already
+# present and file a deploy warning naming both versions. The fleet dashboards
+# already show each node's installed framework, so divergence is a visible
+# fact, never a failed deploy. The ONLY fatal state is a node with no
+# framework at all: nothing could serve.
+
+FRAMEWORK_RETRIES="${FRAMEWORK_RETRIES:-6}"
+FRAMEWORK_RETRY_DELAY="${FRAMEWORK_RETRY_DELAY:-30}"
+
+installed_framework() {
+    python3 -c "import mojo; print(mojo.__version__)" 2>/dev/null || true
+}
+
+# exists|absent|unknown for one exact version, per the JSON API. `absent` is
+# definitive (a 404 means waiting cannot help); transport failures retry
+# briefly and then answer `unknown`, which still attempts the install — pip
+# may reach a mirror this probe cannot.
+pypi_framework_state() {
+    local code attempt
+    for attempt in 1 2 3; do
+        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+            "https://pypi.org/pypi/django-mojo/${1}/json" 2>/dev/null || echo 000)"
+        case "$code" in
+            200) echo exists; return 0 ;;
+            404) echo absent; return 0 ;;
+        esac
+        sleep 2
+    done
+    echo unknown
+}
+
+pypi_latest_framework() {
+    curl -fsS --max-time 10 "https://pypi.org/pypi/django-mojo/json" 2>/dev/null \
+        | grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+        | sed 's/.*"\([^"]*\)"$/\1/' || true
+}
+
+converge_framework() { # exact version -> 0 once installed
+    local target="$1" attempt=1
+    local args=()
+    while :; do
+        if trusted_pip pip install "${args[@]}" "django-mojo==${target}"; then
+            return 0
+        fi
+        [ "$attempt" -ge "$FRAMEWORK_RETRIES" ] && return 1
+        attempt=$((attempt+1))
+        args=(--no-cache-dir)
+        log "  django-mojo==${target} not resolvable yet; retry ${attempt}/${FRAMEWORK_RETRIES} in ${FRAMEWORK_RETRY_DELAY}s..."
+        sleep "$FRAMEWORK_RETRY_DELAY"
+    done
+}
 
 # ── dependencies ─────────────────────────────────────────────────────────────
 #
@@ -265,7 +317,8 @@ fi
 # Fleet deploys pass --framework: the orchestrator resolves the newest
 # django-mojo ONCE per deploy and every node installs exactly that — pinned
 # across nodes for the seconds a deploy takes, never across time. Bare runs
-# install latest, so releases are never missed. Either way a failure is loud.
+# converge onto the JSON API's latest. A framework that will not install is a
+# deploy WARNING, never a veto — see the framework resolution block above.
 
 # A project whose only dependency IS django-mojo legitimately has nothing to
 # pin, and dying on the missing file is a worse failure than the one that check
@@ -285,15 +338,38 @@ fi
 phase_end
 
 phase_begin framework
-if [ -n "$FRAMEWORK" ]; then
-    log "Installing django-mojo==${FRAMEWORK} (fleet-pinned)..."
-    trusted_pip pip install "${FRAMEWORK_PIP_ARGS[@]}" "django-mojo==${FRAMEWORK}" \
-        || die "django-mojo ${FRAMEWORK} install failed — refusing to deploy on an unknown framework version"
-else
-    log "Upgrading django-mojo (latest)..."
-    trusted_pip pip install "${FRAMEWORK_PIP_ARGS[@]}" --upgrade django-mojo \
-        || die "django-mojo upgrade failed — refusing to deploy on an unknown framework version"
+CURRENT_FRAMEWORK="$(installed_framework)"
+TARGET_FRAMEWORK="$FRAMEWORK"
+if [ -z "$TARGET_FRAMEWORK" ]; then
+    # Bare runs converge onto the JSON API's latest — never a blind
+    # `--upgrade` through a possibly-stale Simple index, which silently
+    # installs the PREVIOUS version and looks like success.
+    TARGET_FRAMEWORK="$(pypi_latest_framework)"
+    if [ -n "$TARGET_FRAMEWORK" ]; then
+        log "Resolved django-mojo latest=${TARGET_FRAMEWORK} from the PyPI JSON API"
+    fi
 fi
+if [ -z "$TARGET_FRAMEWORK" ]; then
+    record_warning framework "could not resolve a django-mojo target (no pin, PyPI JSON unreachable); deploying on installed ${CURRENT_FRAMEWORK:-none}"
+elif [ "$TARGET_FRAMEWORK" = "$CURRENT_FRAMEWORK" ]; then
+    log "django-mojo ${CURRENT_FRAMEWORK} already installed (matches target)"
+else
+    FRAMEWORK_STATE="$(pypi_framework_state "$TARGET_FRAMEWORK")"
+    if [ "$FRAMEWORK_STATE" = "absent" ]; then
+        record_warning framework "django-mojo==${TARGET_FRAMEWORK} is not on PyPI (JSON API 404 — waiting cannot help); deploying on installed ${CURRENT_FRAMEWORK:-none}"
+    else
+        log "Installing django-mojo==${TARGET_FRAMEWORK} (fleet target, JSON API says ${FRAMEWORK_STATE})..."
+        if converge_framework "$TARGET_FRAMEWORK"; then
+            log "  django-mojo==${TARGET_FRAMEWORK} installed"
+        else
+            record_warning framework "django-mojo==${TARGET_FRAMEWORK} would not install after ${FRAMEWORK_RETRIES} attempts; deploying on installed ${CURRENT_FRAMEWORK:-none}"
+        fi
+    fi
+fi
+FINAL_FRAMEWORK="$(installed_framework)"
+[ -n "$FINAL_FRAMEWORK" ] \
+    || die "no django-mojo is installed at all — nothing can serve without a framework"
+log "  framework for this deploy: django-mojo ${FINAL_FRAMEWORK}"
 phase_end
 
 # Refresh the stable producer only after the framework install is complete.

@@ -437,17 +437,29 @@ processing, `nginx -t` gate + reload, systemd + cron install from
 `var/deploy/`, the structural stale-cron sweep, `var/logs` ownership, restart,
 and a `PROBE_URL` health gate.
 
-Both the fleet-pinned and bare-latest framework installs feature-detect pip's
-`--refresh-package` option and apply it only to `django-mojo`. pip 26.2 began
-honoring PyPI's Simple API cache lifetime, which can otherwise hide a release
-published seconds before deployment. Older pip releases omit the unsupported
-option and retain their historical always-revalidate behavior.
+The framework install is a **convergence, never a one-shot veto**. The target
+(the `--framework` pin, or on bare runs the newest version per PyPI's JSON
+API) is first confirmed to exist against the JSON API — the endpoint that
+reflects an upload instantly, unlike the Simple index pip resolves through,
+whose CDN and client caches can lag a fresh release by minutes. A confirmed
+target is installed with bounded retries (default 6 × 30s;
+`FRAMEWORK_RETRIES` / `FRAMEWORK_RETRY_DELAY`) whose retries pass
+`--no-cache-dir`, which defeats every pip cache on every pip version with no
+feature-detected flags. A target the JSON API 404s (waiting cannot help) or
+one that exhausts its retries **fails open**: the deploy continues on the
+framework already installed and files a `framework` deploy warning naming
+both versions — the fleet dashboards and node proofs already show each node's
+installed framework, so divergence is a visible fact, never a failed deploy.
+The one fatal state is a node with **no** django-mojo at all. Bare runs no
+longer use blind `pip install --upgrade`, which through a stale index
+silently installed the previous version and reported success.
 
-The rollback boundary is deliberately narrow. Dependency/framework install,
-migrations, collectstatic, render, the app's nginx/systemd contract, nginx
+The rollback boundary is deliberately narrow. Dependency install, migrations,
+collectstatic, render, the app's nginx/systemd contract, nginx
 validation/reload, `mojo-asgi` restart, `PROBE_URL`, and `sanity_check` are
 release-critical: failure means the candidate cannot be trusted to serve and
-the canary rolls back. MojoSec, security include refresh, auxiliary services,
+the canary rolls back. The framework install is the deliberate exception
+above — converge or warn, never veto. MojoSec, security include refresh, auxiliary services,
 timers, cron, retired-name cleanup and log ownership are housekeeping: failure
 files a level-5 `edge_deploy` incident with a fixed phase and continues. Raw
 command output never enters the incident. A deployment identity/callback

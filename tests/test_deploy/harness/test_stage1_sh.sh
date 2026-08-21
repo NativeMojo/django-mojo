@@ -147,9 +147,18 @@ EOF
     cat > "$STUB/pip" <<'EOF'
 #!/bin/bash
 echo "CMD pip $*" >> "$CALLLOG"
-if [ "$*" = "install --help" ]; then
-    echo "  --refresh-package <package>"
-fi
+case "$*" in
+    *django-mojo==*)
+        # $CALLLOG.framework_fail: the next N pin resolutions fail the way a
+        # stale Simple index does; counts down per invocation.
+        remaining="$(cat "$CALLLOG.framework_fail" 2>/dev/null || echo 0)"
+        if [ "$remaining" -gt 0 ] 2>/dev/null; then
+            echo "$((remaining - 1))" > "$CALLLOG.framework_fail"
+            echo "ERROR: No matching distribution found for django-mojo" >&2
+            exit 1
+        fi
+        ;;
+esac
 EOF
 
     # A successful install is what makes amazon-cloudwatch-agent-ctl appear —
@@ -227,12 +236,29 @@ assert_eq "$rc" 0 "a clean first run exits 0"
 assert_has "$CALLLOG" "app.tar.gz" "the application tarball is fetched"
 if [ -f "$PROJ/aws/ec2_bootstrap.sh" ]; then ok "the tree is unpacked into PROJ_PATH"; else fail "the tree is unpacked into PROJ_PATH"; fi
 assert_before "app.tar.gz" "CMD ec2_bootstrap.sh" "the tarball is unpacked BEFORE ec2_bootstrap.sh runs (it lives inside it)"
-assert_before "CMD ec2_bootstrap.sh" "CMD pip install --refresh-package=django-mojo --upgrade django-mojo==${VERSION}" \
+assert_before "CMD ec2_bootstrap.sh" "CMD pip install --upgrade django-mojo==${VERSION}" \
     "the version pin runs AFTER ec2_bootstrap.sh, so it overwrites the unpinned install"
-assert_before "CMD pip install --refresh-package=django-mojo --upgrade django-mojo==${VERSION}" "CMD ec2_deploy.sh" \
+assert_before "CMD pip install --upgrade django-mojo==${VERSION}" "CMD ec2_deploy.sh" \
     "the pin is in place before the project deploy runs"
-assert_has "$CALLLOG" "CMD pip install --refresh-package=django-mojo --upgrade django-mojo==${VERSION}" \
-    "the provisioning pin refreshes django-mojo's catalog entry"
+assert_has "$CALLLOG" "CMD pip install --upgrade django-mojo==${VERSION}" \
+    "the provisioning pin targets the exact resolved version"
+
+echo "stage1.sh: a stale catalog is retried through the caches, then converges"
+setup_tree
+setup_stubs
+echo 1 > "$CALLLOG.framework_fail"
+( env -u DJANGO_SETTINGS_MODULE \
+    PATH="$STUB:$PATH" \
+    PROJ_PATH="$PROJ" \
+    BOOTSTRAP_CONF="$PROJ/var/bootstrap.conf" \
+    STAGE1_LOG="$OUT" \
+    CW_AGENT_ETC="$CWETC" \
+    CALLLOG="$CALLLOG" \
+    DJANGO_MOJO_RETRY_DELAY=0 \
+    bash "$STAGE1" ); rc=$?
+assert_eq "$rc" 0 "a stale-then-fresh catalog still provisions"
+assert_has "$CALLLOG" "CMD pip install --no-cache-dir --upgrade django-mojo==${VERSION}" \
+    "the retry bypasses every pip cache"
 
 echo "stage1.sh: var/profile"
 assert_eq "$(cat "$PROJ/var/profile" 2>/dev/null)" "prod" "var/profile contains exactly 'prod'"

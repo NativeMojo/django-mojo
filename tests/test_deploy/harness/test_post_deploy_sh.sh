@@ -203,8 +203,31 @@ setup_env() {
         cat > "$STUB/$cmd" <<EOF
 #!/bin/bash
 echo "CMD $cmd \$*" >> "\$CALLLOG"
-if [ "$cmd" = "pip" ] && [ "\$*" = "install --help" ]; then
-    [ -f "\$STUBCTL/pip.no_refresh" ] || echo "  --refresh-package <package>"
+if [ "$cmd" = "pip" ] && [[ "\$*" == *install*django-mojo==* ]]; then
+    # pip.framework_fail_times: the next N framework resolutions fail the way
+    # a stale Simple index does. Counts down per invocation (the mojosec
+    # dry-run and the real install each consume one, like production).
+    remaining="\$(cat "\$STUBCTL/pip.framework_fail_times" 2>/dev/null || echo 0)"
+    if [ "\$remaining" -gt 0 ] 2>/dev/null; then
+        echo "\$((remaining - 1))" > "\$STUBCTL/pip.framework_fail_times"
+        echo "ERROR: No matching distribution found for django-mojo" >&2
+        exit 1
+    fi
+fi
+if [ "$cmd" = "curl" ]; then
+    for arg in "\$@"; do
+        case "\$arg" in
+            https://pypi.org/pypi/django-mojo/json)
+                # Latest-resolution body; default resolves the harness pin.
+                cat "\$STUBCTL/pypi.latest.body" 2>/dev/null \
+                    || printf '{"info":{"version":"9.9.9"}}'
+                exit 0 ;;
+            https://pypi.org/pypi/django-mojo/*/json)
+                # Existence probe answers with an HTTP code (-w '%{http_code}').
+                printf '%s' "\$(cat "\$STUBCTL/pypi.version.code" 2>/dev/null || echo 200)"
+                exit 0 ;;
+        esac
+    done
 fi
 ctl="\$STUBCTL/$cmd.exit"
 [ -f "\$ctl" ] && exit "\$(cat "\$ctl")"
@@ -279,6 +302,12 @@ case "\$*" in
         if [ -f "\$STUBCTL/render.exit" ]; then exit "\$(cat "\$STUBCTL/render.exit")"; fi
         exec env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$REPO" "$REAL_PYTHON3" "\$@"
         ;;
+    *"print(mojo.__version__)"*)
+        # The installed-framework probe. mojo.version ctl: absent = a normal
+        # node (1.0.0); present-but-empty = no framework installed at all.
+        cat "\$STUBCTL/mojo.version" 2>/dev/null || echo "1.0.0"
+        exit 0
+        ;;
 esac
 ctl="\$STUBCTL/python3.exit"
 [ -f "\$ctl" ] && exit "\$(cat "\$ctl")"
@@ -315,35 +344,82 @@ run_post_deploy_env() { # VAR=val ... -- args...
 
 # ── tests ────────────────────────────────────────────────────────────────────
 
-echo "post_deploy.sh: --framework pins the install; bare upgrades; deps come FIRST"
+echo "post_deploy.sh: --framework converges the pin; bare resolves latest; deps come FIRST"
 setup_env
 run_post_deploy --framework 9.9.9 >/dev/null 2>&1
 assert_eq "$?" 0 "--framework run exits 0"
 assert_in_log "CMD pip install -r $PROJ/requirements.txt" \
     "requirements install uses an absolute path that survives the trusted helper cwd"
-assert_in_log "CMD pip install --refresh-package=django-mojo django-mojo==9.9.9" \
-    "pinned install refreshes django-mojo's catalog entry"
-assert_order "CMD pip install -r" "CMD pip install --refresh-package=django-mojo django-mojo==9.9.9" \
+assert_in_log "CMD curl .*https://pypi.org/pypi/django-mojo/9.9.9/json" \
+    "the pin is confirmed against the PyPI JSON API — the fresh pipe — first"
+assert_in_log "CMD pip install django-mojo==9.9.9" \
+    "pinned install targets the exact fleet version"
+assert_order "CMD pip install -r" "CMD pip install django-mojo==9.9.9" \
     "requirements install precedes the framework pin"
 setup_env
 run_post_deploy >/dev/null 2>&1
 assert_eq "$?" 0 "bare run exits 0"
-assert_in_log "CMD pip install --refresh-package=django-mojo --upgrade django-mojo" \
-    "bare run refreshes django-mojo before upgrading to latest"
-assert_order "CMD pip install -r" "CMD pip install --refresh-package=django-mojo --upgrade django-mojo" \
-    "requirements install precedes the latest upgrade"
-assert_order "CMD pip install --refresh-package=django-mojo --upgrade django-mojo" "CMD python3 -m mojo.deploy render" \
+assert_in_log "CMD curl .*https://pypi.org/pypi/django-mojo/json" \
+    "bare run resolves latest from the PyPI JSON API"
+assert_in_log "CMD pip install django-mojo==9.9.9" \
+    "bare run converges onto the resolved latest as an exact pin"
+assert_not_in_log "pip install .*--upgrade django-mojo" \
+    "the blind --upgrade path is gone — a stale index silently installed the previous version"
+assert_order "CMD pip install -r" "CMD pip install django-mojo==9.9.9" \
+    "requirements install precedes the framework install"
+assert_order "CMD pip install django-mojo==9.9.9" "CMD python3 -m mojo.deploy render" \
     "render runs AFTER the framework install (renders the just-installed templates)"
 
-echo "post_deploy.sh: pre-26.2 pip keeps its historical no-flag path"
+echo "post_deploy.sh: framework convergence retries through caches, then fails OPEN"
 setup_env
-touch "$CTL/pip.no_refresh"
-run_post_deploy --framework 9.9.9 >/dev/null 2>&1
-assert_eq "$?" 0 "an older pip run exits 0"
-assert_in_log "CMD pip install django-mojo==9.9.9" \
-    "older pip receives no unsupported refresh option"
-assert_not_in_log "--refresh-package=django-mojo" \
-    "older pip never receives the new option"
+echo 1 > "$CTL/pip.framework_fail_times"
+run_post_deploy_env FRAMEWORK_RETRY_DELAY=0 -- --framework 9.9.9 > "$OUT" 2>&1
+assert_eq "$?" 0 "a stale-then-fresh catalog still deploys"
+assert_in_log "CMD pip install django-mojo==9.9.9" "first attempt uses the normal cache"
+assert_in_log "CMD pip install --no-cache-dir django-mojo==9.9.9" \
+    "the retry bypasses every pip cache — no feature-detected flags, any pip version"
+assert_not_in_log "deploy_warning framework" \
+    "a converged retry is a success, not a warning"
+
+setup_env
+echo 404 > "$CTL/pypi.version.code"
+run_post_deploy --framework 8.8.8 > "$OUT" 2>&1
+assert_eq "$?" 0 "a pin that does not exist on PyPI must not veto a tested API deploy"
+assert_not_in_log "CMD pip install django-mojo==8.8.8" \
+    "a JSON-confirmed-absent version is never install-attempted (waiting cannot help)"
+assert_in_log "deploy_warning framework" \
+    "skipping the framework files a deploy warning"
+assert_in_log "CMD nginx -t" "the deploy still completes past nginx"
+assert_has "$OUT" "deploying on installed" \
+    "the fallback names the framework that stays live"
+
+setup_env
+echo 99 > "$CTL/pip.framework_fail_times"
+run_post_deploy_env FRAMEWORK_RETRY_DELAY=0 FRAMEWORK_RETRIES=2 -- --framework 9.9.9 > "$OUT" 2>&1
+assert_eq "$?" 0 "exhausted install retries fail OPEN, never the deploy"
+assert_in_log "deploy_warning framework" "the exhausted convergence files a deploy warning"
+assert_in_log "CMD systemctl restart mojo-asgi" \
+    "the app still restarts on the installed framework"
+
+setup_env
+echo 9.9.9 > "$CTL/mojo.version"
+run_post_deploy --framework 9.9.9 > "$OUT" 2>&1
+assert_eq "$?" 0 "already-at-target run exits 0"
+assert_not_in_log "CMD pip install django-mojo==" \
+    "an already-installed target skips the install entirely"
+
+setup_env
+: > "$CTL/mojo.version"
+echo 99 > "$CTL/pip.framework_fail_times"
+run_post_deploy_env FRAMEWORK_RETRY_DELAY=0 FRAMEWORK_RETRIES=1 -- --framework 9.9.9 > "$OUT" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    ok "a node with NO framework at all still refuses (nothing could serve)"
+else
+    fail "a node with NO framework at all still refuses (exit was 0)"
+fi
+assert_has "$OUT" "no django-mojo is installed at all" \
+    "the fatal names the one truly fatal state"
 
 echo "post_deploy.sh: --migrate runs migrate_locked BEFORE the restart; absent runs none"
 setup_env
@@ -627,8 +703,8 @@ assert_not_in_log "path /etc/mojosec" \
 assert_lacks "$OUT" "MojoSec control state is never trusted-change scope" \
     "no self-conflicting declaration reaches the validator"
 assert_lacks "$OUT" "FATAL: MojoSec deployment failed" "the enrolled deploy does not abort"
-assert_in_log "CMD pip install --refresh-package=django-mojo django-mojo==9.9.9" \
-    "refreshed pip still runs through the pip-run passthrough"
+assert_in_log "CMD pip install django-mojo==9.9.9" \
+    "the pinned install still runs through the pip-run passthrough"
 assert_in_log "migrate_locked" "the canary still migrates under the journal"
 assert_in_log "MOJOSEC_CWD /" "the converge child keeps its cwd invariant under the wrapper"
 
