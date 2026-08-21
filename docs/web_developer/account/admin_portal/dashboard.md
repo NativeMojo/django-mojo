@@ -147,9 +147,13 @@ no capability means no request, not a 403.
 Packaged cross-links use one canonical hash state for `subject_type`,
 `subject_id`, `subject_model`, `inspector`, Activity filters, bounded `focus`,
 and bounded `return`. Unknown keys are rejected by Activity rather than
-broadening a filtered query. Missing Public API configuration opens Setup on
-`django.base_url`, the incident row opens the Activity incidents tab, and the
-deployment row opens the Deployments lane. Upgrade links point at
+broadening a filtered query. Missing Public API configuration offers in-place
+setup: a modal that runs the durable Setup fix operation for the `django`
+section (`setup/create` → `setup/advance` → the `base_url` choice →
+verification) against the same endpoints and permissions System Setup uses —
+there is no separate write path — with an Open System Setup link as the
+fallback for anything richer. The incident row opens the Activity incidents
+tab, and the deployment row opens the Deployments lane. Upgrade links point at
 `#/maintenance` and must be rendered only when that route is registered.
 Ignored, resolved, and closed incidents never contribute to the open count.
 

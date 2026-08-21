@@ -1,20 +1,22 @@
 // Drill-ins for the Dashboard rows. A row is one sentence; everything an
 // operator would previously have opened the Platform health grid for lives
-// one deliberate click behind a `Details` link. Two of these drill-ins fetch
-// a narrowed `?sections=` slice on open — that work is paid only when someone
-// actually asks for it, never on every Dashboard load.
+// one deliberate click behind a `Details` link, in a centered modal. Two of
+// these drill-ins fetch a narrowed `?sections=` slice on open — that work is
+// paid only when someone actually asks for it, never on every Dashboard load.
 import {api, formatDate, h} from '../../core.js';
 import {loadInto, runAction} from '../../components/actions.js';
-import {openInspector} from '../../components/overlays.js';
+import {openModal} from '../../components/overlays.js';
 import {capacityPanel} from '../platform/capacity.js';
 
 const FLEET_PATH = '/api/account/admin/platform?sections=fleet';
 const SECURITY_PATH = '/api/account/admin/platform?sections=security';
 
 // statusRow renders its action as a .row-link anchor; wire the handler onto it
-// (same pattern as the Deployments lane).
+// (same pattern as the Deployments lane). The action link is appended after
+// the detail slot, so when both slots hold links the LAST one is the action —
+// querySelector would bind the handler to a detail-slot Details link instead.
 export function wireAction(row, run) {
-  const link = row.querySelector('.row-link');
+  const link = [...row.querySelectorAll('.row-link')].at(-1);
   if (link) {
     link.addEventListener('click', (event) => {
       event.preventDefault();
@@ -64,8 +66,8 @@ function plainReason(source) {
   return String(reason).replaceAll('_', ' ');
 }
 
-export function openSourceInspector({title, source, facts = [], extra = null, footer = null}) {
-  return openInspector({title, content: h('div', {class: 'dash-inspector'},
+export function openSourceInspector({title, source, facts = [], extra = null, footer = null, wide = false}) {
+  return openModal({title, wide, content: h('div', {class: 'dash-inspector'},
     observedLine(source), factList(facts), extra, footer,
     technicalDetails(source?.data))});
 }
@@ -116,7 +118,7 @@ export function openFleetInspector(ctx, computeSource) {
   const slot = h('div', {class: 'dash-slot'});
   const capacity = h('div', {class: 'dash-slot'});
   const inspector = openSourceInspector({
-    title: 'EC2 · instances and edge runners',
+    title: 'EC2 · instances and edge runners', wide: true,
     source: computeSource,
     facts: [
       ['Evidence', data.source === 'target_group'
@@ -169,7 +171,7 @@ function sanityChecks(sanitySource) {
 
 export function openApiInspector(apiSource, sanitySource) {
   const data = apiSource?.data || {};
-  return openInspector({title: 'Public API', content: h('div', {class: 'dash-inspector'},
+  return openModal({title: 'Public API', content: h('div', {class: 'dash-inspector'},
     observedLine(apiSource),
     factList([
       ['Public origin', data.public_origin],
@@ -232,7 +234,7 @@ function securityView(section) {
 // the platform-security tier would accept.
 export function openSecurityInspector(ctx) {
   const slot = h('div', {class: 'dash-block'});
-  const inspector = openInspector({title: 'Security posture',
+  const inspector = openModal({title: 'Security posture',
     content: h('div', {class: 'dash-inspector'}, slot)});
   if (ctx?.features?.platform?.capabilities?.security !== true) {
     slot.replaceChildren(h('p', {class: 'muted small',

@@ -7,6 +7,7 @@ import {
   detailLink, openApiInspector, openFleetInspector, openSecurityInspector,
   openSourceInspector, wireAction,
 } from './inspectors.js';
+import {openApiSetup} from './setup.js';
 
 const HEADLINE_TONE = {ok: 'ok', down: 'danger', unknown: 'muted'};
 
@@ -180,15 +181,19 @@ function sanityFailure(sanitySource) {
   return failing.length > 1 ? `${first} · +${failing.length - 1} more` : first;
 }
 
-function publicApiRow(source, ctx, sanitySource) {
+function publicApiRow(source, ctx, sanitySource, reload) {
   const data = source.data || {};
   const open = () => openApiInspector(source, sanitySource);
   if (source.status === 'unconfigured' || !data.configured) {
-    const href = ctx.capabilities.setup
-      ? routeHref('setup', {focus: 'django.base_url', return: routeHref('dashboard')})
-      : null;
-    return detailsRow({tone: 'muted', name: 'Public API', value: 'Not configured',
-      action: href ? {label: 'Set it up', href} : null}, open);
+    if (!ctx.capabilities.setup) {
+      return detailsRow({tone: 'muted', name: 'Public API', value: 'Not configured'}, open);
+    }
+    // Setup happens here, in a modal running the same durable fix operation
+    // System Setup runs; a completed setup re-collects the whole page.
+    const row = statusRow({tone: 'muted', name: 'Public API', value: 'Not configured',
+      detailNode: detailLink('Details', open),
+      action: {label: 'Set it up', href: '#'}});
+    return wireAction(row, () => openApiSetup(ctx, {onDone: reload}));
   }
   const probed = data.probe?.version || '';
   const node = data.node_version || '';
@@ -361,7 +366,7 @@ export async function dashboardPage(ctx) {
         ]),
         section('Software', [
           {name: 'Public API', source: sources.public_api,
-            build: (source) => publicApiRow(source, ctx, sources.sanity)},
+            build: (source) => publicApiRow(source, ctx, sources.sanity, () => load(true))},
           {name: 'django-mojo', source: sources.framework, build: frameworkRow},
           // Absent, not red, until a system SMS provider actually exists.
           {name: 'Text messages',

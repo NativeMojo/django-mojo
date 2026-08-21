@@ -834,13 +834,23 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if path == "/api/account/admin/setup/advance":
             if self.setup_behavior == "delay":
                 time.sleep(1.25)
-            type(self).setup_operation = setup_complete_operation((self.setup_operation or {}).get("mode", "fix"))
+            current = self.setup_operation or {}
+            # A fix drives to the BASE_URL choice before anything completes,
+            # exactly like the real django section; only an operation already
+            # carrying an accepted choice advances to the verified end.
+            if (current.get("mode") == "fix" and current.get("status") == "planned"
+                    and not current.get("choices")):
+                type(self).setup_operation = setup_choice_operation()
+            else:
+                type(self).setup_operation = setup_complete_operation(current.get("mode", "fix"))
             return self._send(self.setup_operation)
         if path == "/api/account/admin/setup/choose":
-            type(self).setup_operation = setup_planned_operation("fix")
-            self.setup_operation["log"] = [{"at": "2026-08-10T03:00:01Z",
-                                             "message": "Public BASE_URL choice accepted"}]
-            return self._send(self.setup_operation)
+            operation = setup_planned_operation("fix")
+            operation["choices"] = {payload.get("step_id", "base_url"): payload.get("choice", {})}
+            operation["log"] = [{"at": "2026-08-10T03:00:01Z",
+                                 "message": "Public BASE_URL choice accepted"}]
+            type(self).setup_operation = operation
+            return self._send(operation)
         if path == "/api/account/admin/setup/cancel":
             type(self).setup_operation = {"id": payload.get("operation", "preview-choice"),
                                           "mode": "fix", "status": "cancelled",
@@ -930,7 +940,7 @@ def main():
     parser.add_argument("--key-state", choices=("missing", "active", "rotated", "revoked"), default="active")
     parser.add_argument("--setup-state", choices=("idle", "choice", "delay", "error", "fresh", "ambiguous"), default="idle")
     parser.add_argument("--activity-state", choices=("full", "empty", "unavailable"), default="full")
-    parser.add_argument("--dashboard-state", choices=("healthy", "degraded", "down", "jobs_stalled", "sanity_failed", "denied", "unknown"), default="healthy")
+    parser.add_argument("--dashboard-state", choices=("healthy", "degraded", "down", "jobs_stalled", "sanity_failed", "denied", "unknown", "unconfigured"), default="healthy")
     parser.add_argument("--onboarding-state", choices=("idle", "address", "github", "verify", "complete", "lost_key", "new_group"), default="idle")
     parser.add_argument("--settings-state", choices=("normal", "duplicate", "invalid", "provider_failed", "unset", "restricted", "delay", "error", "fresh"), default="normal")
     parser.add_argument("--metrics-state", choices=("live", "empty", "unconfigured", "denied", "partial"), default="live")

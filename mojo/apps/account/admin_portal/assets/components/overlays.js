@@ -76,8 +76,16 @@ function openOverlay({kind = 'modal', title, subtitle = '', content, danger = fa
   document.body.classList.add('locked');
   if (STACK.length === 1) document.addEventListener('keydown', keydown);
   requestAnimationFrame(() => {
-    if (kind === 'inspector') heading.focus({preventScroll: true});
-    else (panel.querySelector('[autofocus],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),button:not([disabled])') || heading).focus({preventScroll: true});
+    if (kind === 'inspector') { heading.focus({preventScroll: true}); return; }
+    // Queried in preference order, not as one selector list: querySelector on
+    // a list returns document order, and the header's × button precedes every
+    // body control, so a combined query handed initial focus to Close in every
+    // dismissible modal. Body controls only — a modal with nothing to fill in
+    // reads its own title first.
+    const body = ['input', 'select', 'textarea', 'button']
+      .map((tag) => `.${kind}-body ${tag}:not([disabled])`).join(',');
+    (panel.querySelector('[autofocus]') || panel.querySelector(body) || heading)
+      .focus({preventScroll: true});
   });
   return entry;
 }

@@ -125,7 +125,9 @@ function infrastructureNote(ctx) {
     : 'Infrastructure: external — AWS resources are managed by your infrastructure team\'s IaC, and this portal does not change them.'});
 }
 
-async function suggestedBaseUrl(signal) {
+// Shared with the Dashboard's public-API setup modal, which prefills the same
+// suggestion this page's choice form shows.
+export async function suggestedBaseUrl(signal) {
   if (window.location.protocol === 'https:') return window.location.origin;
   if (!['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname)) return '';
   try {
