@@ -35,6 +35,21 @@ FLEET_PROVIDER_KEYS = frozenset({
     "GEOIP_MOJO_SYNC_ENABLED", "GEOIP_API_KEY_MOJO",
     "ADMIN_PROVIDER_SETUP_REVISION", "ADMIN_PROVIDER_VERIFY_STATE",
 })
+# The Assistant's own keys.  The writable four are owned by
+# ``services/assistant_setup`` and reached only through the owner-tier endpoint;
+# ``LLM_HANDLER_API_KEY`` joins them read-only because a global database row
+# would outrank the deployment file (``helpers/settings/helper.py``) and make a
+# descriptor labelled "Deployment settings" a lie.
+ASSISTANT_WRITABLE_KEYS = frozenset({
+    "LLM_ADMIN_ENABLED", "LLM_ADMIN_API_KEY", "LLM_ADMIN_MODEL",
+    "LLM_ADMIN_VERIFY_STATE",
+})
+ASSISTANT_KEYS = ASSISTANT_WRITABLE_KEYS | {"LLM_HANDLER_API_KEY"}
+# Keys whose one dedicated writer may pass ``_protected_writer=<key>`` through
+# ``Setting.save``.  Naming the key twice is the point: a writer proves it owns
+# exactly the row it is saving, so a shared helper cannot smuggle a different
+# protected key past the guard.
+PROTECTED_WRITER_KEYS = frozenset({"GEOIP_API_KEY_MOJO"}) | ASSISTANT_WRITABLE_KEYS
 NON_PUBLIC_HOST_SUFFIXES = frozenset({
     "alt", "arpa", "corp", "example", "home", "internal", "invalid", "lan", "local",
     "localdomain", "localhost", "onion", "test",
@@ -102,7 +117,8 @@ def _section_names(descriptor_rows):
 
 def is_catalog_protected(key):
     """Return whether alternate *global* writers must refuse this key."""
-    return key in MUTABLE_KEYS or key in FLEET_PROVIDER_KEYS
+    return (key in MUTABLE_KEYS or key in FLEET_PROVIDER_KEYS or
+            key in ASSISTANT_KEYS)
 
 
 def _bounded(value):

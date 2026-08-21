@@ -617,15 +617,15 @@ def test_provider_setup_key_hint_contract(opts):
     from mojo.apps.account.services import provider_setup
 
     for value in ("", None, 12345678, "short", "1234567"):
-        assert provider_setup._key_hint(value) == "", \
+        assert provider_setup.key_hint(value) == "", \
             f"a value too short to hint safely produced one: {value!r}"
-    assert provider_setup._key_hint("12345678") == "5678", \
+    assert provider_setup.key_hint("12345678") == "5678", \
         "an eight-character key did not produce its last four characters"
     secret = "mojo_live_key_0123456789abcdef"
-    assert provider_setup._key_hint(secret) == secret[-4:] and \
-        len(provider_setup._key_hint(secret)) == 4, \
+    assert provider_setup.key_hint(secret) == secret[-4:] and \
+        len(provider_setup.key_hint(secret)) == 4, \
         "the hint is not exactly the last four characters"
-    assert not secret.startswith(provider_setup._key_hint(secret)), \
+    assert not secret.startswith(provider_setup.key_hint(secret)), \
         "the hint is a prefix, which is the half of a key conventions publish"
 
     Setting.objects.filter(key="GEOIP_API_KEY_MOJO", group=None).delete()

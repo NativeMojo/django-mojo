@@ -334,11 +334,24 @@ class Setting(MojoSecrets, MojoModel):
     # Save / delete hooks
     # ------------------------------------------------------------------
 
+    def _dedicated_writer_owns_row(self, protected_writer):
+        """True when the caller proved it is THE writer for this exact key.
+
+        The escape is deliberately per-key and stated twice: the writer names
+        the key it believes it is saving, and the row must carry that same key.
+        A shared helper handed a different protected row therefore cannot reuse
+        somebody else's escape, and every other path — Setting.set, the generic
+        REST surface, a shell save — still fails closed.
+        """
+        if not protected_writer or protected_writer != self.key:
+            return False
+        from mojo.apps.account.services import admin_settings
+        return self.key in admin_settings.PROTECTED_WRITER_KEYS
+
     def save(self, *args, **kwargs):
         protected_writer = kwargs.pop("_protected_writer", None)
         skip_cache = kwargs.pop("_skip_cache", False)
-        if not (self.key == "GEOIP_API_KEY_MOJO" and
-                protected_writer == "GEOIP_API_KEY_MOJO"):
+        if not self._dedicated_writer_owns_row(protected_writer):
             self._reject_protected_write()
         self._validate_value()
         super().save(*args, **kwargs)
