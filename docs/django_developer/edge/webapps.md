@@ -134,6 +134,11 @@ Rows are neither editable nor deletable.
 5. CI:  GET /api/edge/release/deployment/<id> until live or terminal failure
 ```
 
+The canonical GitHub action retries the current presigned PUT when S3 returns
+a transient HTTP status or the runner encounters a timeout, connection reset,
+or remote disconnect. Backoff is bounded; permanent HTTP failures still fail
+immediately, and rerunning the same immutable release remains safe.
+
 Manifest paths are relative and slash-delimited. Each segment accepts letters,
 digits, `.`, `_`, `-`, `!`, and `~`; the last two are required by Next.js
 static exports. Empty, absolute, `.`/`..`, control-character, space, and other

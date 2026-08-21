@@ -5,6 +5,11 @@ accepts an already-built static directory, registers its immutable manifest,
 uploads each file using its presigned URL, completes server-side verification,
 and waits until the active edge fleet reports the release live.
 
+Presigned uploads retry transient HTTP failures, timeouts, connection resets,
+and remote disconnects with bounded backoff before the action fails. A brief
+runner-to-S3 network interruption therefore retries the current immutable
+object instead of abandoning the whole release.
+
 > **This is a live public contract.** The admin portal's onboarding wizard
 > generates a workflow that references this action at
 > `NativeMojo/django-mojo/examples/github/actions/deploy-webapp@main`, so a

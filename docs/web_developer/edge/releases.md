@@ -29,6 +29,11 @@ It is intentionally an example path, not django-mojo's own `.github/actions`
 directory: application repositories reference the released framework action
 and keep only their build-and-trigger workflow locally.
 
+The canonical action automatically retries transient runner-to-S3 upload
+interruptions with bounded backoff. A timeout, connection reset, remote
+disconnect, or retryable S3 status retries the current object; authentication
+and other permanent HTTP failures still stop immediately.
+
 **GitHub Actions is the primary, documented path** — one secret
 (`MOJO_DEPLOY_KEY`) and one workflow file, generated for you. Everything below
 is that same contract either way.

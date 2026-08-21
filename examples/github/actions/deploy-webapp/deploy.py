@@ -14,6 +14,7 @@ from urllib import error, request
 IGNORED_NAMES = {".DS_Store", ".gitkeep", "Thumbs.db"}
 TERMINAL_FAILURES = {"failed", "rolled_back", "superseded"}
 RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
+UPLOAD_ATTEMPTS = 7
 
 
 class DeployError(RuntimeError):
@@ -100,7 +101,7 @@ class Client:
         except error.URLError as exc:
             raise DeployError(f"platform {method} {path} failed: {exc.reason}") from exc
 
-    def upload(self, url, path, headers, attempts=2):
+    def upload(self, url, path, headers, attempts=UPLOAD_ATTEMPTS):
         body = Path(path).read_bytes()
         last_error = None
         for attempt in range(1, attempts + 1):
@@ -112,11 +113,15 @@ class Client:
                 last_error = exc
                 if exc.code not in RETRYABLE_STATUS or attempt == attempts:
                     break
-            except error.URLError as exc:
+            except (error.URLError, ConnectionError, TimeoutError) as exc:
                 last_error = exc
                 if attempt == attempts:
                     break
-            self.sleep(min(attempt * 2, 5))
+            delay = min(attempt * 2, 5)
+            print(
+                f"Upload interrupted for {Path(path).name}; "
+                f"retrying in {delay}s ({attempt + 1}/{attempts})")
+            self.sleep(delay)
         raise DeployError(f"upload failed for {Path(path).name}: {last_error}")
 
 
