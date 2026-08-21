@@ -28,6 +28,15 @@ BATCH_CLAIM = "batch-test-claim"
 
 # ── fixtures ────────────────────────────────────────────────────────────────
 
+def _capacity_publish(call):
+    """Scope for th.capture_publishes: only this module's capacity jobs.
+
+    An unscoped patch of mojo.apps.jobs.publish is process-global and swallows
+    every parallel module's publishes (maestro item #1839); the scoped capture
+    records capacity jobs and forwards everything else to the real publish.
+    """
+    return str(call.get("func", "")).startswith("mojo.apps.aws.asyncjobs.capacity")
+
 def _actor(pk=1):
     return SimpleNamespace(pk=pk, username="batch-actor", is_superuser=True)
 
@@ -507,13 +516,13 @@ def test_apply_batch_expiry_and_stale(opts):
     drifted = _full_envelope()
     drifted["nodes"]["instances"].append(_node(NODE_D, "mojo-api-d"))
     with mock.patch.object(capacity, "report", return_value=drifted), \
-            mock.patch("mojo.apps.jobs.publish") as published:
+            th.capture_publishes(_capacity_publish) as published:
         with th.assert_raises(capacity.CapacityError) as caught:
             capacity.apply_batch(_actor(), stored["id"])
     assert caught.exception.error_code == "plan_stale" \
         and caught.exception.status == 409, \
         f"a drifted fleet answered {caught.exception.error_code}"
-    assert published.call_count == 0, "a stale plan still published a job"
+    assert len(published) == 0, "a stale plan still published a job"
 
 
 @th.django_unit_test("a plan id is single-use; the second apply names the running batch")
@@ -523,9 +532,9 @@ def test_apply_batch_is_single_use(opts):
     envelope = _full_envelope()
     with mock.patch.object(capacity, "report", return_value=envelope):
         stored = capacity.plan_batch(_actor(), [{"action": "add_node"}])
-        with mock.patch("mojo.apps.jobs.publish") as published:
+        with th.capture_publishes(_capacity_publish) as published:
             first = capacity.apply_batch(_actor(), stored["id"])
-            assert published.call_count == 1, "the first apply did not publish"
+            assert len(published) == 1, "the first apply did not publish"
             with th.assert_raises(capacity.CapacityError) as caught:
                 capacity.apply_batch(_actor(), stored["id"])
     assert caught.exception.error_code == "plan_already_applied" \
@@ -545,8 +554,8 @@ def test_apply_batch_dispatch_failure(opts):
         stored = capacity.plan_batch(_actor(), [
             {"action": "add_node"},
             {"action": "add_reader", "resource": CLUSTER}])
-        with mock.patch("mojo.apps.jobs.publish",
-                        side_effect=RuntimeError("no runners")):
+        with th.capture_publishes(_capacity_publish,
+                                  side_effect=RuntimeError("no runners")):
             with th.assert_raises(capacity.CapacityError) as caught:
                 capacity.apply_batch(_actor(), stored["id"])
     assert caught.exception.error_code == "batch_dispatch_failed" \
@@ -563,9 +572,10 @@ def test_apply_batch_dispatch_failure(opts):
         stored = capacity.plan_batch(_actor(), [
             {"action": "add_node"},
             {"action": "add_reader", "resource": CLUSTER}])
-        with mock.patch("mojo.apps.jobs.publish") as published:
+        with th.capture_publishes(_capacity_publish) as published:
             batch = capacity.apply_batch(_actor(), stored["id"])
-    kwargs = published.call_args.kwargs
+    assert len(published) == 1, f"expected one capacity publish, got {len(published)}"
+    kwargs = published[-1]
     assert kwargs["func"] == "mojo.apps.aws.asyncjobs.capacity_batch", \
         f"the wrong job was published: {kwargs['func']}"
     assert kwargs["max_retries"] == 0, \
