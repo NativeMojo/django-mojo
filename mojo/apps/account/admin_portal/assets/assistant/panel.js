@@ -19,8 +19,9 @@
 // announce() helper instead.
 
 import {h, icon} from '../core.js';
-import {announce} from '../components/actions.js';
-import {loadingState} from '../components/views.js';
+import {announce, runAction} from '../components/actions.js';
+
+import {mountConversation} from './conversation.js';
 
 const OPEN_KEY = 'mojo-admin-assistant-open';
 const DOCKED_QUERY = '(min-width: 1101px)';
@@ -43,18 +44,35 @@ export function install({ctx, app}) {
   let disposeBody = null;
   let open = false;
 
-  const thread = h('div', {class: 'assistant-body', 'aria-live': 'off'});
+  const body = h('div', {class: 'assistant-body', 'aria-live': 'off'});
   const status = h('span', {class: 'assistant-status', role: 'status', 'aria-live': 'polite'});
+  let controls = {};
+  const newButton = h('button', {
+    class: 'icon-button', type: 'button', 'aria-label': 'New conversation',
+    onclick: (event) => runAction(event.currentTarget, () => controls.onNew?.(),
+      {announceLabel: 'Starting a new conversation'}),
+  }, icon('plus'));
+  const historyButton = h('button', {
+    class: 'icon-button', type: 'button', 'aria-label': 'Conversation history',
+    onclick: (event) => runAction(event.currentTarget, () => controls.onHistory?.(),
+      {announceLabel: 'Loading conversations'}),
+  }, icon('activity'));
+  const setupButton = h('button', {
+    class: 'icon-button', type: 'button', 'aria-label': 'Assistant setup',
+    onclick: (event) => runAction(event.currentTarget, () => showSetup(),
+      {announceLabel: 'Opening Assistant setup'}),
+  }, icon('settings'));
   const closeButton = h('button', {
     class: 'icon-button', type: 'button', 'aria-label': 'Close Assistant',
     onclick: () => setOpen(false),
   }, icon('close'));
   const head = h('div', {class: 'assistant-head'},
     icon('assistant'), h('strong', {text: 'Assistant'}), status,
-    h('div', {class: 'assistant-head-actions'}, closeButton));
+    h('div', {class: 'assistant-head-actions'}, newButton, historyButton,
+      capabilities.setup ? setupButton : null, closeButton));
   const aside = h('aside', {
     id: 'assistant-panel', class: 'assistant-panel', 'aria-live': 'off', hidden: true,
-  }, head, thread);
+  }, head, body);
 
   const launcher = h('button', {
     class: 'icon-button', type: 'button', 'aria-label': 'Assistant',
@@ -93,7 +111,11 @@ export function install({ctx, app}) {
     app.classList.toggle('assistant-open', open && media.matches);
     launcher.setAttribute('aria-expanded', String(open));
     applyMode();
-    if (!open) { launcher.focus?.({preventScroll: true}); return; }
+    if (!open) {
+      session?.close?.();
+      launcher.focus?.({preventScroll: true});
+      return;
+    }
     if (!disposeBody) disposeBody = mountBody();
     if (focus && !media.matches) {
       const target = aside.querySelector(FOCUSABLE);
@@ -102,11 +124,17 @@ export function install({ctx, app}) {
     announce('Assistant panel opened');
   }
 
+  // Assigned by mountBody(); the setup view replaces it in place.
+  let session = null;
+
+  function showSetup() {
+    return Promise.resolve();
+  }
+
   function mountBody() {
-    // Replaced by the conversation module; until it is mounted the panel says
-    // what it is doing rather than showing an empty column.
-    thread.replaceChildren(loadingState('Loading Assistant'));
-    return null;
+    const mounted = mountConversation({ctx, panel: api});
+    session = mounted;
+    return () => mounted.dispose();
   }
 
   const onModeChange = () => {
@@ -116,29 +144,40 @@ export function install({ctx, app}) {
   media.addEventListener('change', onModeChange);
   aside.addEventListener('keydown', trapFocus);
 
+  function teardown() {
+    media.removeEventListener('change', onModeChange);
+    aside.removeEventListener('keydown', trapFocus);
+    if (typeof disposeBody === 'function') disposeBody();
+    disposeBody = null;
+    session = null;
+    app.classList.remove('assistant-open');
+    aside.remove();
+    launcher.remove();
+  }
+
+  const api = {
+    aside,
+    body,
+    status,
+    capabilities,
+    ctx,
+    setControls(next) { controls = next || {}; },
+    showSetup: () => showSetup(),
+    open: () => setOpen(true),
+    close: () => setOpen(false),
+    // Authority loss removes the panel outright rather than leaving a composer
+    // whose every message the server will refuse.
+    revoke: () => teardown(),
+    dispose: teardown,
+  };
   const topbarActions = app.querySelector('.topbar-actions');
   // Ahead of the theme toggle: the Assistant is the leftmost action so the
   // sign-out control stays the last thing in the row.
   topbarActions?.prepend(launcher);
   app.append(aside);
   applyMode();
+  // Mounted only after `api` exists: the body is handed this object.
   if (storedOpen()) setOpen(true, {focus: false});
 
-  return {
-    aside,
-    thread,
-    status,
-    capabilities,
-    open: () => setOpen(true),
-    close: () => setOpen(false),
-    dispose() {
-      media.removeEventListener('change', onModeChange);
-      aside.removeEventListener('keydown', trapFocus);
-      if (typeof disposeBody === 'function') disposeBody();
-      disposeBody = null;
-      app.classList.remove('assistant-open');
-      aside.remove();
-      launcher.remove();
-    },
-  };
+  return api;
 }
