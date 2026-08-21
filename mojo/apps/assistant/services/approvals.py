@@ -386,6 +386,17 @@ def states_for_conversation(conversation, limit=50):
     return [render_block(row, now=now) for row in reversed(rows)]
 
 
+def states_for_user(user, limit=50):
+    """The caller's own approval cards, newest first. Owner-scoped by the query."""
+    from mojo.apps.assistant.models import PendingAction
+
+    if user is None:
+        return []
+    rows = list(PendingAction.objects.filter(user=user).order_by("-created")[:limit])
+    now = dates.utcnow()
+    return [render_block(row, now=now) for row in rows]
+
+
 def proposal_result(block):
     """What the MODEL sees when it calls a mutating tool. Nothing has happened."""
     return {

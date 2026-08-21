@@ -31,8 +31,20 @@ class Conversation(models.Model, MojoModel):
             "detail": {
                 "fields": ["id", "title", "created", "modified", "messages"],
                 "graphs": {"messages": "default", "user": "basic"},
+                "extra": [("get_pending_actions", "pending_actions")],
             },
         }
+
+    def get_pending_actions(self):
+        """Current state of this conversation's approval cards, in one query.
+
+        Message blocks carry the card AS PROPOSED. Re-loading a history without
+        this would offer Approve on an action that expired an hour ago; with it,
+        resolved and expired cards render inert.
+        """
+        from mojo.apps.assistant.services import approvals
+
+        return approvals.states_for_conversation(self)
 
     def __str__(self):
         return f"Conversation {self.pk} ({self.user})"
