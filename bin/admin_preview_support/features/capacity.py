@@ -1,11 +1,13 @@
 """Deterministic Capacity fixtures for the Admin visual preview.
 
-Answers the capacity report, one operation's progress, and the apply. States
-are chosen so every branch the panel can render is reachable without an AWS
-account: a healthy multi-node fleet with controls, a single-node fleet where
-removal is refused, an add already in flight through its phase ladder, a denied
-IAM read, a database with no reader, a fleet that pins EDGE_NODE_ID, and an
-installation whose infrastructure is external.
+Answers the capacity report, one operation's progress, the single apply, and
+the batch plan/apply pair (a deterministic plan-1/batch-1 whose status
+advances one step per poll). States are chosen so every branch the panel can
+render is reachable without an AWS account: a healthy multi-node fleet with
+controls, a single-node fleet where removal is refused, an add already in
+flight through its phase ladder, a denied IAM read, a database with no reader,
+a fleet that pins EDGE_NODE_ID, and an installation whose infrastructure is
+external.
 """
 
 from urllib.parse import parse_qs
@@ -112,6 +114,8 @@ ADDING_NODE = {
 def reset(handler, fixtures, *, capacity_state="healthy", **options):
     handler.capacity_state = capacity_state
     handler.capacity_operations = {}
+    handler.capacity_plans = {}
+    handler.capacity_batches = {}
     if capacity_state == "external_mode":
         # The installation-wide mode, not a provider scenario — set here so the
         # bootstrap payload and the panel agree from the first render.
@@ -233,9 +237,44 @@ def _operation(handler, parsed):
         "phases", "message", "error_code", "warnings", "detail")}
 
 
+def _batch_status(handler, batch_id):
+    """One batch poll advances one step to done — the _operation idiom."""
+    record = getattr(handler, "capacity_batches", {}).get(batch_id)
+    if record is None:
+        return 404, {"status": False, "error": "That capacity batch is not "
+                     "on record.", "error_code": "batch_not_found", "data": {}}
+    steps = record["steps"]
+    active = next((step for step in steps if step["state"] == "running"), None)
+    if active is not None:
+        active["state"] = "done"
+        active["phase"] = "complete"
+        active["message"] = "done."
+        following = next((step for step in steps
+                          if step["state"] == "pending"), None)
+        if following is not None:
+            following["state"] = "running"
+            following["phase"] = "working"
+            following["message"] = "working"
+            record["current_index"] = following["index"]
+        else:
+            record["state"] = "done"
+            record["message"] = f"All {len(steps)} step(s) completed."
+    return 200, {key: record[key] for key in (
+        "schema_version", "id", "plan_id", "state", "current_index",
+        "message", "error_code", "steps", "stalled")}
+
+
+def _status(handler, parsed):
+    query = parse_qs(parsed.query)
+    batch_id = (query.get("batch") or [""])[0]
+    if batch_id:
+        return _batch_status(handler, batch_id)
+    return _operation(handler, parsed)
+
+
 ROUTES = {
     "/api/aws/capacity": lambda handler, parsed: _report(handler),
-    "/api/aws/capacity/status": _operation,
+    "/api/aws/capacity/status": _status,
 }
 
 
@@ -262,7 +301,180 @@ DONE_COPY = {
 }
 
 
+# Fixture prices consistent with the report's instance types. The cache
+# group's current cache.t4g.small is deliberately unpriced, so a plan touching
+# it exercises the honest-null path (monthly_delta_usd null + a warning +
+# estimate_complete false) instead of a silent $0.
+PLAN_PRICES = {
+    "m6i.large": 70.0,
+    "db.t4g.medium": 50.0, "db.r6g.large": 175.0,
+    "db.r6g.xlarge": 350.0, "db.r6g.2xlarge": 700.0,
+    "cache.t4g.micro": 12.0, "cache.t4g.medium": 50.0,
+    "cache.r7g.large": 120.0, "cache.r7g.xlarge": 240.0,
+}
+
+PLAN_ORDER_NOTE = ("Steps run in the server's order: additions first, then "
+                   "resizes, then removals — and a terminate runs "
+                   "immediately after its own drain.")
+
+_PLAN_RANK = {"add_node": 0, "add_reader": 1, "resize_cache": 3,
+              "resize_database": 4, "remove_reader": 6, "drain_node": 7,
+              "terminate_node": 8}
+
+
+def _node_name(resource):
+    for row in NODES + [ADDING_NODE]:
+        if row["id"] == resource:
+            return row["name"]
+    return resource
+
+
+def _rung_type(family, size):
+    for row in SIZES[family]:
+        if row["size"] == size:
+            return row["type"]
+    return str(size or "")
+
+
+def _plan_step(step):
+    action = step.get("action") or ""
+    resource = step.get("resource") or ""
+    kind = ("add" if action in ("add_node", "add_reader")
+            else "change" if action.startswith("resize_") else "remove")
+    delta, warnings = None, []
+    if action == "add_node":
+        description = "Add an app node"
+        warnings = ["builds, deploys and proves itself before serving · "
+                    "20–40 min"]
+        delta = PLAN_PRICES["m6i.large"]
+    elif action == "add_reader":
+        description = f"Add a read replica to {resource}"
+        warnings = ["can take up to an hour to come online"]
+        delta = PLAN_PRICES["db.r6g.large"]
+    elif action == "set_cache_replicas":
+        count = step.get("count")
+        current = CACHES[0]["replica_count"]
+        description = f"Change {resource} replicas {current} → {count}"
+        kind = "add" if (count or 0) > current else "remove"
+        warnings = ["applies immediately — ElastiCache has no "
+                    "maintenance-window option",
+                    "no listed price for cache.t4g.small"]
+    elif action == "resize_cache":
+        description = f"Resize {resource} to {_rung_type('cache', step.get('size'))}"
+        warnings = ["rolls replicas first, then a brief failover — one short "
+                    "interruption",
+                    "no listed price for cache.t4g.small"]
+    elif action == "resize_database":
+        to_type = _rung_type("database", step.get("size"))
+        writer = DATABASES[0]["writer"]
+        role = "writer" if resource == writer else "reader"
+        from_type = (DATABASES[0]["writer_instance_class"] if role == "writer"
+                     else DATABASES[0]["reader_instance_classes"].get(
+                         resource, "db.t4g.medium"))
+        description = f"Resize {role} {resource} to {to_type}"
+        warnings = (["~minutes offline while the writer changes class"]
+                    if role == "writer" else
+                    ["reads keep flowing; this reader pauses while it "
+                     "changes class"])
+        if from_type in PLAN_PRICES and to_type in PLAN_PRICES:
+            delta = PLAN_PRICES[to_type] - PLAN_PRICES[from_type]
+        else:
+            warnings = warnings + [f"no listed price for {from_type}"]
+    elif action == "remove_reader":
+        description = f"Remove read replica {resource}"
+        warnings = ["deleted with no final snapshot"]
+        delta = -PLAN_PRICES["db.t4g.medium"]
+    elif action == "drain_node":
+        description = f"Drain {_node_name(resource)} — traffic moves off it first"
+        delta = 0.0
+    elif action == "terminate_node":
+        description = f"Terminate {_node_name(resource)}"
+        delta = -PLAN_PRICES["m6i.large"]
+    else:
+        description = action or "unknown step"
+    return {"action": action, "resource": resource,
+            "params": {key: value for key, value in step.items()
+                       if key not in ("action", "resource")},
+            "kind": kind, "description": description, "warnings": warnings,
+            "monthly_delta_usd": delta}
+
+
+def _order_plan_steps(steps):
+    def rank(step):
+        if step["action"] == "set_cache_replicas":
+            return 2 if step["kind"] == "add" else 5
+        return _PLAN_RANK.get(step["action"], 9)
+
+    ranked = sorted(steps, key=rank)
+    drains = {step["resource"] for step in ranked
+              if step["action"] == "drain_node"}
+    paired = {step["resource"]: step for step in ranked
+              if step["action"] == "terminate_node"
+              and step["resource"] in drains}
+    ordered = []
+    for step in ranked:
+        if (step["action"] == "terminate_node"
+                and paired.get(step["resource"]) is step):
+            continue
+        ordered.append(step)
+        if step["action"] == "drain_node" and step["resource"] in paired:
+            ordered.append(paired[step["resource"]])
+    return ordered
+
+
+def _plan(handler, payload):
+    steps = [_plan_step(step) for step in (payload.get("steps") or [])]
+    ordered = _order_plan_steps(steps)
+    for index, step in enumerate(ordered):
+        step["index"] = index
+    priced = [step["monthly_delta_usd"] for step in ordered
+              if step["monthly_delta_usd"] is not None]
+    plan_id = "plan-1"
+    record = {
+        "schema_version": 1, "id": plan_id,
+        "created": "2026-08-18T18:00:00Z", "expires_in": 300,
+        "expires_at": "2026-08-18T18:05:00Z", "actor": 1,
+        "steps": ordered,
+        "total_monthly_delta_usd": round(sum(priced), 2),
+        "estimate_complete": len(priced) == len(ordered),
+        "order_note": PLAN_ORDER_NOTE,
+    }
+    handler.capacity_plans[plan_id] = record
+    return 200, record
+
+
+def _plan_apply(handler, payload):
+    plan = getattr(handler, "capacity_plans", {}).get(payload.get("plan_id"))
+    if plan is None:
+        return 404, {"status": False,
+                     "error": "That plan is not on record — plans expire "
+                              "after 5 minutes. Request a new plan and review "
+                              "it again.",
+                     "error_code": "plan_not_found", "data": {}}
+    steps = [{"index": step["index"], "action": step["action"],
+              "resource": step["resource"], "params": step["params"],
+              "description": step["description"], "kind": step["kind"],
+              "state": "pending", "operation": None, "phase": None,
+              "message": None, "error_code": None}
+             for step in plan["steps"]]
+    if steps:
+        steps[0]["state"] = "running"
+        steps[0]["phase"] = "working"
+        steps[0]["message"] = "requested"
+    record = {
+        "schema_version": 1, "id": "batch-1", "plan_id": plan["id"],
+        "state": "running", "current_index": 0, "message": "requested",
+        "error_code": None, "steps": steps, "stalled": False,
+    }
+    handler.capacity_batches[record["id"]] = record
+    return 200, record
+
+
 def post(handler, path, payload):
+    if path == "/api/aws/capacity/plan":
+        return _plan(handler, payload)
+    if path == "/api/aws/capacity/plan/apply":
+        return _plan_apply(handler, payload)
     if path != "/api/aws/capacity/apply":
         return None
     action = payload.get("action") or "add_node"
