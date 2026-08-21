@@ -606,10 +606,39 @@ class _FileScanner(ast.NodeVisitor):
         if path is None:
             return
         if path == _REST_PROTECTED_PATH or path.startswith(_REST_PROTECTED_PATH + "/"):
+            if self._rest_payload_key_is_reserved(node):
+                return
             self._flag(
                 "protected_rest_write", node,
                 f"{func.attr.upper()} {path} writes production settings "
                 "through the live server, visible to every parallel module")
+
+    def _rest_payload_key_is_reserved(self, node):
+        """True only when the write's payload names a literal reserved
+        (TESTIT_-prefixed) settings key.
+
+        A denial test may exercise the generic /api/settings surface against a
+        sentinel key the test project registers as protected — that write can
+        never touch real production configuration. Anything less provable — no
+        payload, a non-dict payload, a dynamic or non-literal ``key``, or a key
+        outside the reserved namespace — keeps the fail-closed flag exactly as
+        before.
+        """
+        if len(node.args) < 2:
+            return False
+        payload = node.args[1]
+        if not isinstance(payload, ast.Dict):
+            return False
+        if any(key_node is None for key_node in payload.keys):
+            # A **splat anywhere can smuggle any key — not provable.
+            return False
+        for key_node, value_node in zip(payload.keys, payload.values):
+            key_name = self._resolve_string(key_node)
+            if key_name == "key":
+                setting_key = self._resolve_string(value_node)
+                return (isinstance(setting_key, str)
+                        and setting_key.startswith(ALLOWED_KEY_PREFIX))
+        return False
 
     def _check_setattr_call(self, node):
         """setattr()/delattr() with a provable shared target is a mutation of

@@ -419,6 +419,43 @@ def test_protected_rest_write(opts):
     )
 
 
+@th.unit_test("policy: a reserved-key REST settings write is allowed; anything less provable is not")
+def test_rest_write_reserved_key(opts):
+    codes = _codes("""
+        def test_thing(opts):
+            opts.client.post("/api/settings", {"key": "TESTIT_PROTECTED_SENTINEL", "value": "x"})
+    """)
+    assert codes == [], (
+        f"a literal TESTIT_-prefixed key can never touch real configuration — "
+        f"the denial-contract tests need this write allowed, got {codes}"
+    )
+
+    codes = _codes("""
+        def test_thing(opts):
+            opts.client.post("/api/settings", {"key": "AUTH_CONFIG", "value": "x"})
+    """)
+    assert "protected_rest_write" in codes, (
+        f"a real key stays a violation, got {codes}"
+    )
+
+    codes = _codes("""
+        def test_thing(opts):
+            opts.client.post("/api/settings", {"key": opts.key, "value": "x"})
+    """)
+    assert "protected_rest_write" in codes, (
+        f"a dynamic key cannot be proven reserved and must stay flagged, got {codes}"
+    )
+
+    codes = _codes("""
+        def test_thing(opts):
+            opts.client.post("/api/settings", {"key": "TESTIT_OK", **opts.extra})
+    """)
+    assert "protected_rest_write" in codes, (
+        f"a **splat can smuggle any key past a literal 'key' entry and must "
+        f"stay flagged, got {codes}"
+    )
+
+
 @th.unit_test("policy: REST settings reads are allowed")
 def test_rest_settings_read_allowed(opts):
     codes = _codes("""

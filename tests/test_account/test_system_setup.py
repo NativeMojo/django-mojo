@@ -59,7 +59,12 @@ def test_protected_key_registry(opts):
         "BASE_URL", "MOJO_INSTALLATION_UUID", "MOJO_INSTALLATION_SLUG",
         "AWS_CLOUDWATCH_ALARM_TOPIC_ARNS", "EDGE_EXPECTED_TOPOLOGY",
         "AUTH_CONFIG", "EDGE_FRAMEWORK_VERSION", "AWS_STABLE_OUTBOUND_IPS"}
-    assert set(system_settings.protected_keys()) == expected, \
+    # The test project's testit_support app registers TESTIT_-prefixed
+    # sentinels for the denial-contract tests (item #2558); they are reserved
+    # test keys, not production roster drift.
+    registered = {k for k in system_settings.protected_keys()
+                  if not k.startswith("TESTIT_")}
+    assert registered == expected, \
         f"protected key registry drifted: {system_settings.protected_keys()!r}"
 
 

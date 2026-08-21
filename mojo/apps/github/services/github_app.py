@@ -140,10 +140,15 @@ def get_install_token(install):
     return data["token"]
 
 
-def verify_webhook_signature(payload_body, signature_header):
+_SECRET_FROM_SETTINGS = object()
+
+
+def verify_webhook_signature(payload_body, signature_header, *,
+                             secret=_SECRET_FROM_SETTINGS):
     """Verify that a webhook payload was sent by GitHub.
 
-    Uses HMAC-SHA256 with the GITHUB_WEBHOOK_SECRET setting.
+    Uses HMAC-SHA256 with the GITHUB_WEBHOOK_SECRET setting. `secret` is a
+    keyword-only test seam; the sentinel default preserves the settings read.
 
     Args:
         payload_body: Raw request body bytes.
@@ -152,7 +157,8 @@ def verify_webhook_signature(payload_body, signature_header):
     Returns:
         bool: True if signature is valid, False otherwise.
     """
-    secret = settings.get("GITHUB_WEBHOOK_SECRET", None)
+    if secret is _SECRET_FROM_SETTINGS:
+        secret = settings.get("GITHUB_WEBHOOK_SECRET", None)
     if not secret:
         logger.warning("GITHUB_WEBHOOK_SECRET not configured, rejecting webhook")
         return False

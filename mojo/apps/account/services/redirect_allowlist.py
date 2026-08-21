@@ -233,7 +233,14 @@ _REFUSAL_BUDGET = 50
 _CACHE = {}
 
 
-def is_enforced():
+# Sentinel: "read the deployment configuration from settings". None is a real
+# injected value (nothing configured), so absence needs its own marker — the
+# same pattern as oauth._validate_redirect_uri's deployment seam.
+_CONFIG_FROM_SETTINGS = object()
+
+
+def is_enforced(*, static_entries=_CONFIG_FROM_SETTINGS,
+                resolver_path=_CONFIG_FROM_SETTINGS):
     """
     Return True when this deployment has opted in to handoff destination checks.
 
@@ -241,13 +248,22 @@ def is_enforced():
     AUTH_HANDOFF_ALLOWED_URLS is *set at all* — including an empty list, which
     is a deliberate "enforce, and allow nothing". Unset means monitor mode; see
     the module docstring.
+
+    `static_entries` / `resolver_path` are keyword-only test seams injecting
+    the raw configured values; defaults preserve the settings reads exactly.
     """
-    if settings.get("AUTH_HANDOFF_RESOLVER", ""):
+    if resolver_path is _CONFIG_FROM_SETTINGS:
+        resolver_path = settings.get("AUTH_HANDOFF_RESOLVER", "")
+    if resolver_path:
         return True
-    return settings.get("AUTH_HANDOFF_ALLOWED_URLS", None) is not None
+    if static_entries is _CONFIG_FROM_SETTINGS:
+        static_entries = settings.get("AUTH_HANDOFF_ALLOWED_URLS", None)
+    return static_entries is not None
 
 
-def is_allowed_destination(url, request=None):
+def is_allowed_destination(url, request=None, *,
+                           static_entries=_CONFIG_FROM_SETTINGS,
+                           resolver_path=_CONFIG_FROM_SETTINGS):
     """
     Return True when a handoff code may be minted for `url`.
 
@@ -261,7 +277,7 @@ def is_allowed_destination(url, request=None):
     if not url or not isinstance(url, str):
         return False
 
-    configured, resolver = _get_resolver()
+    configured, resolver = _get_resolver(resolver_path=resolver_path)
     if configured:
         if resolver is None:
             # Dotted path did not import. Refuse everything rather than
@@ -275,16 +291,19 @@ def is_allowed_destination(url, request=None):
                 f"AUTH_HANDOFF_RESOLVER raised for {url!r}: {exc} — refusing")
             return False
 
-    return _matches_static_list(url)
+    return _matches_static_list(url, static_entries=static_entries)
 
 
-def _get_resolver():
+def _get_resolver(resolver_path=_CONFIG_FROM_SETTINGS):
     """Return (is_configured, callable_or_None).
 
     is_configured distinguishes "no resolver set, use the static list" from
     "a resolver is set but broken, refuse everything".
     """
-    path = settings.get("AUTH_HANDOFF_RESOLVER", "")
+    if resolver_path is _CONFIG_FROM_SETTINGS:
+        path = settings.get("AUTH_HANDOFF_RESOLVER", "")
+    else:
+        path = resolver_path or ""
     if not path:
         return False, None
     cached = _CACHE.get(path, Ellipsis)
@@ -574,13 +593,18 @@ def matchable_scheme(url):
     return parts[0] if parts is not None else ""
 
 
-def _matches_static_list(url):
+def _matches_static_list(url, static_entries=_CONFIG_FROM_SETTINGS):
     # The candidate early-out stays AHEAD of the settings read: an unparsable
     # destination short-circuits before any Redis/DB settings lookup, and this
     # path is attacker-reachable on the public monitor leg.
     if _split(url) is None:
         return False
-    allowed = settings.get("AUTH_HANDOFF_ALLOWED_URLS", [], kind="list") or []
+    if static_entries is _CONFIG_FROM_SETTINGS:
+        allowed = settings.get("AUTH_HANDOFF_ALLOWED_URLS", [], kind="list") or []
+    else:
+        # Injected raw value: the same coercion the settings read performs.
+        allowed = coerce_entries(
+            static_entries, source="AUTH_HANDOFF_ALLOWED_URLS") or []
     return matches_allowlist(
         url, allowed, source="AUTH_HANDOFF_ALLOWED_URLS", allow_wildcard=True)
 
