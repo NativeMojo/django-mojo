@@ -87,9 +87,9 @@ def _build_url(prefix="REDIS", get=None):
         scheme = "redis"
 
     if user and pwd:
-        auth = f"{quote(user)}:{quote(pwd)}@"
+        auth = f"{quote(user, safe='')}:{quote(pwd, safe='')}@"
     elif pwd:
-        auth = f":{quote(pwd)}@"
+        auth = f":{quote(pwd, safe='')}@"
     else:
         auth = ""
 
