@@ -261,8 +261,8 @@ def test_platform_feature_package(opts):
     advanced = (ROOT / "mojo/apps/account/admin_portal/assets/features/advanced/feature.js").read_text()
     advanced_page = (ROOT / "mojo/apps/account/admin_portal/assets/features/advanced/page.js").read_text()
     preview = (ROOT / "bin/admin_preview_support/server.py").read_text()
-    assert "routes: ['setup', 'metrics', 'maintenance']" in platform, \
-        "Platform is no longer exactly Setup, Metrics and Maintenance"
+    assert "routes: ['setup', 'metrics', 'maintenance', 'fleet']" in platform, \
+        "Platform is no longer exactly Setup, Metrics, Maintenance and Fleet"
     assert "platformPage" not in platform and "platformPage" not in platform_page, \
         "the dissolved Platform health page came back"
     assert "platformDestinations" not in platform_page, \

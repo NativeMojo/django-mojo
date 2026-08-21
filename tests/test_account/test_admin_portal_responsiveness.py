@@ -91,11 +91,10 @@ BANNED = (
 
 EXEMPT_MARKER = "responsiveness-exempt:"
 # A deliberate exemption is rare and reasoned. If this needs raising, the
-# reason belongs in the review, not in a quietly larger number. The three that
+# reason belongs in the review, not in a quietly larger number. The four that
 # exist are named in
-# docs/django_developer/account/admin_portal/responsiveness.md, and the sweep
-# that closed the door tree-wide added none.
-EXEMPT_CAP = 3
+# docs/django_developer/account/admin_portal/responsiveness.md.
+EXEMPT_CAP = 4
 
 
 def _code(text):

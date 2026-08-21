@@ -669,6 +669,8 @@ export async function fleetPage(ctx, signal = null) {
         h('div', {class: 'fleet-bar-actions'},
           h('button', {class: 'button ghost', type: 'button',
             onclick: () => { resetWant(); render(); }}, 'Discard'),
+          // responsiveness-exempt: confirmApply awaits a human confirming the
+          // staged steps; runPlan renders after every step once it starts.
           h('button', {class: 'button primary', type: 'button',
             onclick: async () => {
               if (await confirmApply(steps)) runPlan(steps);

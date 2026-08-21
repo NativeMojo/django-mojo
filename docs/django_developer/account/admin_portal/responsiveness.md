@@ -216,7 +216,7 @@ button.addEventListener('click', async () => {
 
 `test_no_raw_async_handlers_contract` honours an exemption comment within three
 lines above the handler, and caps the total number of exemptions. There are
-three, and the cap is three:
+four, and the cap is four:
 
 - `components/model.js` `lifecycleControl` — the await is a confirm dialog.
 - `core.js` `FormView` — it already guards correctly. Its disable is
@@ -227,6 +227,9 @@ three, and the cap is three:
 - `features/advanced/page.js` `recordEditor` — its first await is the
   replace-the-record-set confirm. The provider write that follows runs behind
   the busy scrim.
+- `features/platform/fleet.js` — its Apply button's first await is
+  `confirmApply`, the staged-steps confirm dialog. `runPlan`, which follows,
+  paints its own step-by-step progress once it starts.
 
 ### The swept set is the tree
 

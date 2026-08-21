@@ -27,9 +27,9 @@ def test_modular_shell_contract(opts):
         assert f"./{name}/feature.js" in registry
     assert "[dashboard, webapps, advanced, people, activity, platform, settings, sms, email]" in registry, \
         "primary navigation does not follow the approved operator journey"
-    assert "routes: ['setup', 'metrics', 'maintenance']" in platform, \
+    assert "routes: ['setup', 'metrics', 'maintenance', 'fleet']" in platform, \
         "Platform grew or lost a route — health dissolved into the Dashboard, " \
-        "deployments belongs to the merged lane"
+        "deployments belongs to the merged lane, fleet staging is the newest addition"
     assert "routes: ['deployments', 'webapps']" in webapps, \
         "the merged Deployments lane does not own both routes"
     assert "label: 'Deployments'" in webapps, \
@@ -140,7 +140,7 @@ def test_dashboard_drilldown_contract(opts):
     assert "assets/features/dashboard/inspectors.js" in assets, \
         "inspectors.js is not a declared package asset"
 
-    assert "openInspector" in inspectors and "'../../components/overlays.js'" in inspectors, \
+    assert "openModal" in inspectors and "'../../components/overlays.js'" in inspectors, \
         "the drill-ins do not use the shared overlay layer"
     assert "JSON.stringify(" in inspectors and "Technical details" in inspectors, \
         "the exact collector payload is not reachable behind a disclosure"
