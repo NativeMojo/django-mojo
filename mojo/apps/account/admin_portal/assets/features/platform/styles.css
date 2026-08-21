@@ -136,3 +136,10 @@ html[data-theme="dark"] {
 .fleet-chip{align-self:flex-start;white-space:nowrap;padding:3px 9px;border-radius:999px;font-size:9.5px;font-weight:750;background:var(--surface-3);color:var(--muted)}
 .fleet-chip.on{color:var(--success);background:color-mix(in srgb,var(--success) 10%,var(--surface))}
 .fleet-chip.warn{color:var(--warning);background:color-mix(in srgb,var(--warning) 12%,var(--surface))}
+/* A column flex parent stretches children cross-axis by default, which turned
+   the stepper and the placeholder select into full-label-width boxes with dead
+   space after the + button. They size to their content, not their caption. */
+.fleet-stepper,.fleet-control select{align-self:flex-start}
+/* The instance type is an identifier, not a label: mono, and tinted so it
+   reads as a distinct fact from the role/status tags beside it. */
+.fleet-tag.fleet-type{color:var(--text);background:var(--surface);border:1px solid var(--line);font-size:9.5px;letter-spacing:.01em}

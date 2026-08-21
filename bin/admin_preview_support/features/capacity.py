@@ -41,6 +41,10 @@ DATABASES = [
     {"identifier": "mojo-prod-aurora", "kind": "aurora",
      "engine": "aurora-postgresql", "status": "available",
      "writer": "mojo-prod-aurora-1", "readers": ["mojo-prod-aurora-2"],
+     # Per-instance classes: a beefy writer with a deliberately smaller reader,
+     # the shape the resize work targets.
+     "writer_instance_class": "db.r6g.large",
+     "reader_instance_classes": {"mojo-prod-aurora-2": "db.t4g.medium"},
      "reader_endpoint": "mojo-prod-aurora.cluster-ro-abc.us-east-1.rds.amazonaws.com",
      "endpoint": "mojo-prod-aurora.cluster-abc.us-east-1.rds.amazonaws.com"},
 ]
@@ -48,6 +52,9 @@ DATABASES = [
 CACHES = [
     {"identifier": "mojo-prod-redis", "status": "available", "replica_count": 1,
      "cluster_enabled": False, "automatic_failover_on": True, "multi_az_on": True,
+     # Node type is group-wide in ElastiCache, so it rides on the group and
+     # every member shows it.
+     "node_type": "cache.t4g.small",
      "members": [{"id": "mojo-prod-redis-001", "role": "primary"},
                  {"id": "mojo-prod-redis-002", "role": "replica"}],
      "min_replicas": 1, "blocked_reason": None},

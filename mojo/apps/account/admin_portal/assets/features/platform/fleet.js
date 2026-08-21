@@ -79,6 +79,16 @@ export async function fleetPage(ctx, signal = null) {
   // The self-reported reader-routing state, as a chip. Per-node on purpose:
   // the report answers from the process that served it, and a node that has
   // not restarted since the config line was added still runs without routing.
+  // The instance type on the row itself — the operator's cheapest answer to
+  // "what am I actually paying for here". Mono, because it is an identifier.
+  // Rendered only where the report supplies one: app nodes carry
+  // `instance_type` and standalone databases carry `instance_class` today;
+  // cache members and Aurora per-instance classes arrive with the resize work,
+  // and light up here with no further change.
+  function typeTag(value) {
+    return value ? h('span', {class: 'fleet-tag fleet-type mono', text: value}) : null;
+  }
+
   function routingChip(kind) {
     const state = routing()[kind] || {};
     if (kind === 'database') {
@@ -294,7 +304,7 @@ export async function fleetPage(ctx, signal = null) {
     return h('div', {class: 'fleet-control'},
       h('span', {class: 'fleet-label', text: label}),
       h('select', {disabled: true, title: note},
-        h('option', {text: current || 'unknown'})),
+        h('option', {text: current || 'current size'})),
       h('span', {class: 'fleet-floor', text: note}));
   }
 
@@ -367,6 +377,7 @@ export async function fleetPage(ctx, signal = null) {
           h('span', {class: 'fleet-pill-dot'}),
           leaving ? 'Will drain' : row.healthy ? 'Healthy' : (row.state || 'unknown')),
         h('span', {class: 'fleet-name mono', text: row.name || row.id}),
+        typeTag(row.instance_type),
         labels ? h('span', {class: 'fleet-tag', text: labels}) : null,
         h('span', {class: 'fleet-row-side'},
           leaving
@@ -472,6 +483,7 @@ export async function fleetPage(ctx, signal = null) {
               h('span', {class: 'fleet-pill-dot'}),
               row.status === 'available' ? 'Healthy' : row.status),
             h('span', {class: 'fleet-name mono', text: member.id || member}),
+            typeTag(member.node_type || row.node_type),
             h('span', {class: 'fleet-tag', text: member.role || ''}))),
           ...Array.from({length: Math.max(0, wanted - current)}, () =>
             h('div', {class: 'fleet-row ghost'},
@@ -558,6 +570,7 @@ export async function fleetPage(ctx, signal = null) {
                 h('span', {class: 'fleet-pill-dot'}),
                 row.status === 'available' ? 'Healthy' : row.status),
               h('span', {class: 'fleet-name mono', text: row.writer || row.identifier}),
+              typeTag(row.writer_instance_class || row.instance_class),
               h('span', {class: 'fleet-tag', text: 'writer'})),
             ...readers.map((reader) => {
               const leaving = want.dbRemove.has(reader);
@@ -566,6 +579,7 @@ export async function fleetPage(ctx, signal = null) {
                   h('span', {class: 'fleet-pill-dot'}),
                   leaving ? 'Will remove' : 'Healthy'),
                 h('span', {class: 'fleet-name mono', text: reader}),
+                typeTag((row.reader_instance_classes || {})[reader]),
                 h('span', {class: 'fleet-tag', text: 'reader'}),
                 h('span', {class: 'fleet-row-side'},
                   leaving
