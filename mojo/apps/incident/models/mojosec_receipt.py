@@ -50,6 +50,10 @@ class MojoSecReceipt(models.Model, MojoModel):
     case_contributed_at = models.DateTimeField(
         null=True, blank=True, default=None, db_index=True)
     case_sample_key = models.CharField(max_length=64, blank=True, default="")
+    # Sticky routing decided at first delivery: a case-routed receipt is owned
+    # by case contribution and must never enter the per-receipt Event
+    # publication or its dead-letter paths.
+    case_routed = models.BooleanField(default=False, db_index=True)
 
     sensor_id = models.CharField(max_length=128, db_index=True)
     wire_event_id = models.CharField(max_length=64)
