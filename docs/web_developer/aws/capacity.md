@@ -1,7 +1,8 @@
 # Capacity actions
 
-Add or remove an app node, an RDS reader, or an ElastiCache replica — and
-turn the fleet's stable outbound IPs on or off.
+Add or remove an app node, an RDS reader, or an ElastiCache replica — resize
+the cache group or a single database instance to a curated size — and turn
+the fleet's stable outbound IPs on or off.
 
 ```
 GET  /api/aws/capacity          the fleet, reader and replica picture
@@ -60,6 +61,8 @@ retry.
       {"identifier": "mojo-prod-aurora", "kind": "aurora", "engine": "aurora-postgresql",
        "status": "available", "writer": "mojo-prod-aurora-1",
        "readers": ["mojo-prod-aurora-2"],
+       "writer_instance_class": "db.r6g.xlarge",
+       "reader_instance_classes": {"mojo-prod-aurora-2": "db.t4g.medium"},
        "reader_endpoint": "…cluster-ro-….rds.amazonaws.com",
        "endpoint": "…cluster-….rds.amazonaws.com"}
     ],
@@ -83,9 +86,24 @@ retry.
     "caches": [
       {"identifier": "mojo-prod-redis", "status": "available", "replica_count": 1,
        "cluster_enabled": false, "automatic_failover_on": true, "multi_az_on": true,
+       "node_type": "cache.t4g.micro", "resize_impact": "rolling",
        "members": [{"id": "…-001", "role": "primary"}, {"id": "…-002", "role": "replica"}],
        "min_replicas": 1, "blocked_reason": null}
     ],
+    "sizes": {
+      "cache": [
+        {"size": "small",  "label": "Small",       "type": "cache.t4g.micro",  "monthly_usd": 12.0},
+        {"size": "medium", "label": "Medium",      "type": "cache.t4g.medium", "monthly_usd": 50.0},
+        {"size": "large",  "label": "Large",       "type": "cache.r7g.large",  "monthly_usd": 120.0},
+        {"size": "xlarge", "label": "Extra large", "type": "cache.r7g.xlarge", "monthly_usd": 240.0}
+      ],
+      "database": [
+        {"size": "small",  "label": "Small",       "type": "db.t4g.medium",  "monthly_usd": 50.0},
+        {"size": "medium", "label": "Medium",      "type": "db.r6g.large",   "monthly_usd": 175.0},
+        {"size": "large",  "label": "Large",       "type": "db.r6g.xlarge",  "monthly_usd": 350.0},
+        {"size": "xlarge", "label": "Extra large", "type": "db.r6g.2xlarge", "monthly_usd": 700.0}
+      ]
+    },
     "warnings": [
       {"code": "databases", "iam_action": "rds:DescribeDBClusters",
        "aws_code": "AccessDenied",
@@ -104,6 +122,8 @@ retry.
       "add_reader":         {"offered": true,  "blocked_reason": null},
       "remove_reader":      {"offered": false, "blocked_reason": "no_reader"},
       "set_cache_replicas": {"offered": true,  "blocked_reason": null},
+      "resize_cache":       {"offered": true,  "blocked_reason": null},
+      "resize_database":    {"offered": true,  "blocked_reason": null},
       "enable_stable_ips":  {"offered": false, "blocked_reason": "already_enabled"},
       "disable_stable_ips": {"offered": true,  "blocked_reason": null}
     }
@@ -125,6 +145,20 @@ Three things a client must not re-derive:
 
 `warnings` carries a degraded section. A section that could not be read comes
 back empty **and** named here — never silently empty.
+
+**`sizes` is the curated resize allowlist**, with the approximate monthly
+on-demand cost per node beside each rung. Render the resize dropdowns from
+exactly this — never a hardcoded list: the ladder can be re-pointed at new
+instance families server-side without any client change. The current type per
+row comes with it: cache rows carry a group-wide `node_type` (ElastiCache has
+no per-member sizing — replicas always match their primary) plus
+`resize_impact` (`"rolling"` — failover with at least one replica, replicas
+replaced first then a brief failover — or `"downtime"` — no replica, the
+cache is down while its node is replaced), stated **before** apply so the UI
+can warn honestly. Aurora rows carry `writer_instance_class` and
+`reader_instance_classes` (per reader); standalone rows already carried
+`instance_class` and now fold each replica's class into
+`reader_instance_classes` too.
 
 **`reader_routing` is the serving process's self-report** on whether reader
 traffic is actually configured — the settings behind it are file-only and read
@@ -171,7 +205,7 @@ Common fields:
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `action` | string | yes | One of `add_node`, `drain_node`, `terminate_node`, `add_reader`, `remove_reader`, `set_cache_replicas`, `enable_stable_ips`, `disable_stable_ips` |
+| `action` | string | yes | One of `add_node`, `drain_node`, `terminate_node`, `add_reader`, `remove_reader`, `set_cache_replicas`, `resize_cache`, `resize_database`, `enable_stable_ips`, `disable_stable_ips` |
 | `resource` | string | yes, except fleet-wide actions | Instance id, database identifier, or replication-group id |
 | `confirm_resource` | string | yes | Must equal `resource` EXACTLY. The fleet-wide actions (`add_node`, `enable_stable_ips`, `disable_stable_ips`) have no resource — for them it is the literal action word |
 
@@ -180,11 +214,18 @@ Per-action fields:
 | Action | Extra fields |
 |---|---|
 | `set_cache_replicas` | `count` (integer, **no default**), `apply_immediately` (boolean, **no default**, must be `true`) |
+| `resize_cache` | `size` (one of `small`/`medium`/`large`/`xlarge`, **no default**), `apply_immediately` (boolean, **no default**, must be `true`). `resource` is the replication-group id; the whole group is resized — node type is group-wide |
+| `resize_database` | `size` (same four keys, **no default**), `apply_immediately` (boolean, **no default**, must be `true`). `resource` is ONE instance identifier — an Aurora writer, an Aurora reader, a standalone primary, or a standalone replica. The writer and the readers carry independent sizes |
 | `enable_stable_ips` | `assign` (optional object `{instance_id: allocation_id}`) — give a NAMED eligible reservation to a named node instead of letting the server pick. An allocation is eligible only if it is unassociated **and** carries a django-mojo ownership tag; anything else is refused (`address_not_eligible`) before any mutation |
 
-`confirm_resource` is checked **before any provider call**. `count` and
-`apply_immediately` have no defaults: a missing field is a question that was
-never asked, not a "no".
+`confirm_resource` is checked **before any provider call**. `count`, `size`
+and `apply_immediately` have no defaults: a missing field is a question that
+was never asked, not a "no". `size` is a curated KEY from the report's
+`sizes` block, never a raw instance type — a type string is refused
+(`invalid_request`) before any provider call. Resizing an Aurora member also
+sets its failover `PromotionTier` in the same call (writer 0, readers 1), so
+a failover prefers the writer-class box; it never moves the writer role
+itself.
 
 ### Bodies
 
@@ -203,6 +244,12 @@ never asked, not a "no".
 
 {"action": "set_cache_replicas", "resource": "mojo-prod-redis",
  "confirm_resource": "mojo-prod-redis", "count": 2, "apply_immediately": true}
+
+{"action": "resize_cache", "resource": "mojo-prod-redis",
+ "confirm_resource": "mojo-prod-redis", "size": "large", "apply_immediately": true}
+
+{"action": "resize_database", "resource": "mojo-prod-aurora-2",
+ "confirm_resource": "mojo-prod-aurora-2", "size": "medium", "apply_immediately": true}
 
 {"action": "enable_stable_ips", "confirm_resource": "enable_stable_ips"}
 
@@ -263,6 +310,8 @@ minutes.
 | `add_reader` | `creating` → `settling` |
 | `remove_reader` | `deleting` |
 | `set_cache_replicas` | `scaling` → `settling` |
+| `resize_cache` | `resizing` → `settling` |
+| `resize_database` | `resizing` → `settling` |
 | `enable_stable_ips` | `planning` → `associating` → `verifying` |
 | `disable_stable_ips` | `detaching` → `verifying` |
 
@@ -290,12 +339,13 @@ operation record instead.
 | `resource_not_found` | 404 | AWS reports no such database or cache group |
 | `not_a_reader` | 409 | The target is a primary database or an Aurora writer, not a reader |
 | `not_a_source` | 409 | `add_reader` was pointed at a replica; point it at the source |
-| `cluster_mode_unsupported` | 409 | Cluster-mode-enabled group; its replica count is a resharding decision |
+| `cluster_mode_unsupported` | 409 | Cluster-mode-enabled group; its replica count (and its sizing) is a resharding decision. Refuses `set_cache_replicas` and `resize_cache` alike |
 | `automatic_failover_requires_replica` | 409 | Failover or Multi-AZ is on, so the group must keep at least one replica |
-| `no_change` | 409 | The group already has that many replicas — or a disable found nothing to detach |
+| `no_change` | 409 | The group already has that many replicas, a resize named the size the resource already runs, or a disable found nothing to detach |
+| `not_settled` | 409 | A resize was asked of a resource that is not settled. The message quotes the provider's state verbatim (`modifying`, `deleting`, …) and attributes nothing — the state may be AWS background work. Routine background states are allowed through: cache `snapshotting`; RDS `backing-up`, `storage-optimization`, `maintenance` |
 | `no_fleet_nodes` | 409 | No node is registered behind a load balancer, so there is nothing to give a stable address to |
 | `address_not_eligible` | 409 | An explicitly assigned allocation is associated, unknown, or carries no django-mojo ownership tag. The remedy (tag it in the console) is in the message |
-| `capacity_in_progress` | 409 | Another capacity change holds the single-flight claim. **All adds share one claim; enable and disable of stable IPs share another** |
+| `capacity_in_progress` | 409 | Another capacity change holds the single-flight claim. **All adds share one claim; enable and disable of stable IPs share another; a cache resize and a replica-count change on the same group share that group's claim** |
 | `cache_unavailable` | 503 | The coordination cache cannot rule out a concurrent change. Retry shortly |
 | `dispatch_failed` | 503 | No job runner accepted the operation. **Nothing was changed** — except for the stable-IPs actions, where the durable policy WAS recorded before dispatch; their message says so, and re-running the action converges |
 | `provider_denied` | 403 | AWS refused. `data.failure.iam_action` names the missing grant — and nothing else |
@@ -317,6 +367,7 @@ operation record instead.
 | `terminate_timeout` | AWS accepted the termination but the instance has not reached `terminated` |
 | `reader_timeout` / `delete_timeout` | AWS accepted the change but the instance has not settled. It is billable — check the RDS console |
 | `cache_timeout` | The group did not settle at the requested replica count |
+| `resize_timeout` | The resource did not settle on the new size in time. The mutation is AWS-side — check the console the message names; the report re-derives the truth on its next read |
 | `address_quota` | AWS's public-IPv4 quota is exhausted (default 5 per region). The message says how many nodes were addressed and how many remain; raise the quota and run the enable again |
 | `address_failed` | An address could not be attached. On `add_node` the clone is running and **deliberately not registered** — a node whose egress nobody allowlisted must not serve |
 | `address_unverified` | The verify re-read did not show the expected associations. Run the action again — both stable-ips operations converge only what is missing |
@@ -347,6 +398,28 @@ failover-off group leaves nothing to fail over to — say so before doing it.
 
 One more, right after an add: fleet readiness reads `pending` until the
 convergence sweep finishes. That is expected, not a fault.
+
+**Resizing interrupts something, and which thing must be said up front.**
+
+- `resize_cache` on a group with automatic failover and at least one replica
+  (`resize_impact: "rolling"`): replicas are replaced first, then a brief
+  failover swaps the primary — one short interruption, not an outage. With no
+  replica (`"downtime"`): the cache is down while its node is replaced. The
+  report states which case applies **before** apply — render it on the
+  control, not just in the confirmation.
+- `resize_database` on a **writer** (Aurora writer or standalone primary):
+  the instance restarts to change class — a few minutes offline. Say
+  "~minutes offline", not "brief".
+- `resize_database` on a **reader**: the writer keeps serving and reads keep
+  flowing on the other readers; only this reader pauses while it changes
+  class.
+- Downsizing is allowed (the guard is identity, not direction). A smaller
+  cache node risks eviction under the group's maxmemory policy if the working
+  set no longer fits — the completed operation's `message` says so; the
+  server states the risk without pretending to measure it.
+- The zero-downtime Aurora writer recipe — resize a reader, fail over to it,
+  resize the old writer — is deliberately **not** one action. Each step is an
+  ordinary apply; composing them belongs to the plan/apply batch API.
 
 **Enabling stable IPs costs ~nothing; disabling is what bills.** AWS charges
 every public IPv4 the same, attached or not, so an attached Elastic IP just

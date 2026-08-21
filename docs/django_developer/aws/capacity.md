@@ -1,9 +1,10 @@
 # Capacity actions
 
-Adding and removing an app node, an RDS reader, or a cache replica — and
-turning the fleet's stable outbound IPs on and off — from the Admin portal,
-with server-derived guards, an audit trail, and proof that an added node runs
-the code the rest of the fleet runs.
+Adding and removing an app node, an RDS reader, or a cache replica — resizing
+the cache group or a single database instance to a curated size — and turning
+the fleet's stable outbound IPs on and off — from the Admin portal, with
+server-derived guards, an audit trail, and proof that an added node runs the
+code the rest of the fleet runs.
 
 The alternative this replaces is an operator in the AWS console at 2am, adding
 a node by hand and hoping they picked the same instance type, the same subnet,
@@ -379,6 +380,89 @@ Two refusals, both before the API call:
 **A replica in a replication group is failover capacity, not read throughput.**
 django-mojo talks to the primary endpoint only.
 
+## Resizing (curated sizes)
+
+`resize_cache` (ModifyReplicationGroup `CacheNodeType`) and `resize_database`
+(ModifyDBInstance `DBInstanceClass`), on the same operation contract as every
+other capacity action: fresh guards at apply time, single-flight claim,
+phased job with a bounded settle loop, audit event, plain-English completion
+note.
+
+### The ladder lives in provision's `spec.py`
+
+`CACHE_SIZES` and `DB_SIZES` sit in `mojo/deploy/provision/spec.py` beside
+`COST_TABLE` — one file answers "what sizes exist and what do they cost", the
+existing priced-preset test pattern extends to guard them
+(`tests/test_deploy/provision_spec.py`), and the import is free (spec imports
+only `re`). The report's `sizes` block is exactly this data with the price
+per rung, so the panel renders the allowlist rather than hardcoding it.
+
+**The API takes a size KEY (`small`/`medium`/`large`/`xlarge`), never an
+instance type.** `_resolve_size` refuses anything off the ladder before any
+provider call, so a client cannot smuggle an arbitrary type and the ladder
+can be re-pointed at new families without breaking callers.
+
+### The database resize is PER INSTANCE
+
+The writer and the readers carry independent sizes — readers deliberately
+smaller, because that is where the money is. The action targets one named
+instance (an Aurora writer or reader via `instance_role` +
+`cluster_members`'s `IsClusterWriter`, or a standalone primary or replica),
+and "resize the readers" is therefore N applies, one per reader — the portal
+fans its one reader dropdown out client-side, and the plan/apply batch item
+composes it server-side later.
+
+**PromotionTier rides in the SAME ModifyDBInstance call**: writer 0, Aurora
+reader 1, standalone never (the parameter is not sent off-Aurora). Aurora
+therefore prefers the writer-class box in any failover where it is available,
+and the "tier call fails after a successful resize" failure mode is designed
+out rather than handled. Nothing here ever moves the writer role — no
+failover, no promote; the overnight failback after a failover is its own
+item.
+
+### Interruption semantics, stated before apply
+
+- **Cache**: node type is group-wide (replicas always match their primary).
+  With automatic failover and ≥1 replica the change is a rolling replace —
+  replicas first, then a brief failover — one short interruption. With no
+  replica the primary is down for the duration. Each cache row carries
+  `resize_impact` (`"rolling"`/`"downtime"`) so the case is on screen before
+  the button.
+- **Database**: `apply_immediately` must be literally `true` for both actions
+  (present, boolean, true — mirroring `set_cache_replicas`): a
+  maintenance-window deferral has no bounded settle and would make an
+  observed operation report a timeout for a change that is merely queued. A
+  writer resize restarts the instance — minutes offline, and the completion
+  note owns it; a reader resize pauses only that reader.
+- **Downsizing is allowed** — the guard is identity (`no_change`), not
+  direction — and a cache downsize's completion note states the eviction risk
+  under maxmemory honestly, without pretending to measure a working set the
+  report does not carry.
+- **`not_settled`**: a resize against a resource that is not settled is
+  refused with the provider state quoted verbatim, never blamed on an
+  in-flight change. Benign background states pass: cache `snapshotting`; RDS
+  `backing-up`, `storage-optimization`, `maintenance`. `deleting` stays
+  refused — that closes the race with `remove_reader`.
+
+### Claims
+
+`resize_cache` **shares set_cache_replicas' per-group claim key** (the
+deployed literal, not a rename): a resize and a replica-count change mutate
+the same AWS object and must serialize, and reusing the literal keeps a claim
+held across a deploy honored. `resize_database` takes its own per-instance
+key, so two readers resize concurrently while one instance never carries two
+changes.
+
+### Report enrichment
+
+`_cache_rows` gains `node_type` (group-wide) and `resize_impact`;
+`_database_rows` gains `writer_instance_class` and `reader_instance_classes`
+for Aurora (from the one `instance_statuses` describe — `rds._instance_facts`
+now carries `instance_class`, so no extra API call) and folds each standalone
+replica's class into its source's `reader_instance_classes`. These are the
+exact field names the Fleet page already consumes, so its type tags and size
+selects light up with no negotiation.
+
 ## Cross-cutting mechanics
 
 **Single flight.** `add_node` claims one FIXED literal key
@@ -437,10 +521,11 @@ elasticloadbalancing:RegisterTargets
 elasticloadbalancing:DeregisterTargets
 rds:DescribeDBInstances     rds:DescribeDBClusters
 rds:CreateDBInstance        rds:CreateDBInstanceReadReplica
-rds:DeleteDBInstance
+rds:DeleteDBInstance        rds:ModifyDBInstance        (resize_database)
 elasticache:DescribeReplicationGroups
 elasticache:IncreaseReplicaCount
 elasticache:DecreaseReplicaCount
+elasticache:ModifyReplicationGroup                      (resize_cache)
 ```
 
 A denial surfaces as `provider_denied` carrying **only** the IAM action —
@@ -459,3 +544,9 @@ log line, or the database.
   audited change. Nothing autoscales.
 - **Bootstrapping.** The first node of an installation is the project's
   provisioning, not this button.
+- **The zero-downtime Aurora writer resize.** The recipe — resize a reader,
+  fail over to it, resize the old writer — is deliberately not built into
+  these actions. Each step is an ordinary single-shot apply; composing them
+  belongs to the plan/apply batch API, and the resize actions never move the
+  writer role (no failover, no promote — only instance classes and their
+  promotion tiers).
