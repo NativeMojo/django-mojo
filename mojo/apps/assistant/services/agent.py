@@ -24,6 +24,7 @@ import ujson
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from mojo.helpers.settings import settings
 from mojo.helpers import logit, llm
+from mojo.apps.assistant.services import approvals
 
 logger = logit.get_logger(__name__, "assistant.log")
 
@@ -46,11 +47,17 @@ def _build_request_meta(request):
 _HANDLER_SIG_CACHE = {}
 
 
-def _call_handler(handler, tool_input, user, request_meta, conversation):
+def _call_handler(handler, tool_input, user, request_meta, conversation, approval=None):
     """Invoke a tool handler, passing optional kwargs only when the handler declares them.
 
     Existing handlers stay on ``(params, user)`` with no changes; new tools opt in
-    by adding ``request_meta`` and/or ``conversation`` as keyword-only parameters.
+    by adding ``request_meta``, ``conversation`` and/or ``approval`` as
+    keyword-only parameters.
+
+    ``approval`` is the consumed ``PendingAction`` on the approval path (``None``
+    for read-only tools, which never have one). A handler reads
+    ``str(approval.uuid)`` for the underlying service's idempotency key and
+    ``approval.revision`` for a bound plan revision.
     """
     sig = _HANDLER_SIG_CACHE.get(handler)
     if sig is None:
@@ -62,6 +69,8 @@ def _call_handler(handler, tool_input, user, request_meta, conversation):
         kwargs["request_meta"] = request_meta
     if "conversation" in params:
         kwargs["conversation"] = conversation
+    if "approval" in params:
+        kwargs["approval"] = approval
     return handler(tool_input, user, **kwargs)
 
 
@@ -408,7 +417,7 @@ You have access to tools for querying and managing the system. Each tool call is
 ## Guidelines
 - Answer questions clearly and concisely using the data from your tools.
 - When presenting data, summarize key findings and highlight anything unusual.
-- For mutating operations (blocking IPs, canceling jobs, updating incidents), always confirm with the user before executing.
+- Mutating operations (blocking IPs, canceling jobs, disabling users, updating incidents) are NOT executed when you call the tool. The server returns an approval request and shows the operator an approval card; only the operator can approve it, and only they can make it happen. When you get an `approval_required` result: say what is waiting for approval, then STOP. Do not call the tool again for the same request, do not ask the user to type "yes" in chat, and never report the work as done — you will see the server's own outcome message in the conversation on your next turn.
 - If a tool call fails with a permission error, explain what permission the user needs.
 - Bound your queries: use reasonable time ranges and limits. Don't query everything at once.
 - Never expose passwords, auth keys, or other secrets — the tools already filter these out.
@@ -473,7 +482,9 @@ To manage skills:
 - `list_skills` — list all available skills (summaries).
 - `delete_skill` — remove a skill.
 
-When the user's request matches a skill from the catalog, call `find_skill` with its ID to load the steps, then execute them in order. If a step has a condition, evaluate it against the previous step's result. If the skill is marked AUTO-EXECUTE, run it without asking for confirmation. Otherwise, confirm with the user before running the steps.
+When the user's request matches a skill from the catalog, call `find_skill` with its ID to load the steps, then execute them in order. If a step has a condition, evaluate it against the previous step's result. If the skill is marked AUTO-EXECUTE, run its read-only steps without asking for confirmation. Otherwise, confirm with the user before running the steps.
+
+AUTO-EXECUTE never covers a mutating step. Any step that calls a mutating tool produces an approval request the operator must resolve, exactly as it would outside a skill — there is no pre-authorization. A multi-step skill or plan therefore PAUSES at the approval card: report which step is waiting, stop, and resume from the operator's next message once they tell you the outcome. Do not loop, do not retry, and do not skip the step.
 
 ## Structured Data Blocks
 
@@ -514,11 +525,11 @@ Optional chart fields:
 {"type": "stat", "items": [{"label": "Open Incidents", "value": 42}, {"label": "Failed Jobs (24h)", "value": 7}, {"label": "Active Users", "value": 156}]}
 ```
 
-**action** — for mutating operations that need user confirmation:
+**action** — a quick-reply prompt, for asking the user a question with preset answers:
 ```assistant_block
-{"type": "action", "title": "Block IP", "description": "Block 1.2.3.4 on all firewall sets for 24 hours", "actions": [{"label": "Confirm", "value": "confirm"}, {"label": "Cancel", "value": "cancel"}]}
+{"type": "action", "title": "Which window?", "description": "Pick a time range to investigate", "actions": [{"label": "Last hour", "value": "last hour"}, {"label": "Last 7 days", "value": "last 7 days"}]}
 ```
-Use when you need user confirmation before executing a mutating operation (blocking IPs, disabling users, canceling jobs, etc.). Always include a Cancel option. The user clicks a button and their choice is sent back as a message. Do not execute the operation until you receive confirmation.
+The user clicks a button and its `value` is sent back to you as an ordinary chat message — nothing more. NEVER use this block to confirm a mutating operation: it carries no authority whatsoever, and mutations are gated by the server's own approval card, which you cannot emit.
 
 **list** — for single-record details, key/value summaries:
 ```assistant_block
@@ -548,7 +559,7 @@ Use when a tool generates a downloadable file. The frontend renders this as a do
 - Use `cutout: 0.5` on `pie` charts when the slice count is small (≤4) and the title benefits from a center-callout look.
 - Use `colors` (chart-level) when the data has natural categorical meaning where specific colors matter (status: success=green / warning=yellow / error=red; severity: low/medium/high). For arbitrary categories, omit `colors` and let the framework's palette pick.
 - Pass `stacked: false` (or `grouped: true`) on bar charts only when the user is comparing magnitudes between categories at the same time-bucket. Otherwise, the default stacked view shows totals more clearly.
-- Use action blocks for confirmations — never ask "type yes to confirm" when an action block is appropriate.
+- Use action blocks only for quick replies to a question you asked. Never use one to confirm a mutation — the server issues its own approval card for those, and you cannot emit one.
 - Use alert blocks sparingly — only for genuinely important warnings, errors, or status changes.
 - Keep table rows bounded — show the most relevant 20 rows max, mention the total if there are more.
 - Column names should be human-readable (Title Case).
@@ -797,13 +808,22 @@ def _extract_context_refs(tool_blocks, tool_results):
 
 def _execute_tool(
         block, registry, user, conversation, tools, on_event, tool_calls_made,
-        request_meta=None, _reporter=None):
+        request_meta=None, _reporter=None, pending_actions=None):
     """
-    Execute a single tool call with permission gate, meta-tool handling,
-    and event reporting.
+    Execute a single tool call with permission gate, approval gate, meta-tool
+    handling, and event reporting.
+
+    This is the ONLY place a tool handler is dispatched from an agent turn, and
+    both ``run_assistant`` and ``run_assistant_ws`` funnel through it — which is
+    why the approval gate lives here and nowhere else. A ``mutates=True`` tool
+    never reaches ``_call_handler``: it produces a ``PendingAction`` the operator
+    must resolve (see ``services/approvals.py``). No prompt wording can route
+    around this.
 
     Returns a dict with 'tool_use_id' and 'result' for building tool_results.
     """
+    from mojo.apps.assistant import user_can_use_tool
+
     tool_name = block["name"]
     tool_input = block["input"]
     tool_id = block["id"]
@@ -819,7 +839,9 @@ def _execute_tool(
             f"User: {user.email} (id={user.pk}), conv={conversation.pk}",
             user=user, _reporter=_reporter,
         )
-    elif not user.has_permission(tool_entry["permission"]):
+    elif not user_can_use_tool(user, tool_entry):
+        # `authorize` failing is deliberately indistinguishable from a missing
+        # permission — same tool error, same event.
         perm = tool_entry["permission"]
         tool_result = {
             "error": f"Permission denied. You need '{perm}' to use {tool_name}."
@@ -833,6 +855,34 @@ def _execute_tool(
             f"(requires '{perm}'). conv={conversation.pk}",
             user=user, _reporter=_reporter,
         )
+    elif tool_entry.get("mutates"):
+        # THE GATE. A mutating tool call is a PROPOSAL, never an execution.
+        try:
+            tool_result, approval_block = approvals.propose(
+                user, conversation, tool_name, tool_entry, tool_input,
+                request_meta=request_meta, on_event=on_event, _reporter=_reporter,
+            )
+            if approval_block is not None and pending_actions is not None:
+                pending_actions.append(approval_block)
+            tool_calls_made.append({
+                "tool": tool_name,
+                "input": tool_input,
+            })
+        except Exception as exc:
+            logger.exception("Approval proposal failed for %s", tool_name)
+            tool_result = {
+                "error": f"Tool '{tool_name}' could not be prepared for approval."
+            }
+            _report_event(
+                "assistant:error", 6,
+                f"Approval proposal failed: {tool_name}",
+                (
+                    f"Proposing '{tool_name}' failed for user {user.email} "
+                    f"(id={user.pk}). conv={conversation.pk}. Error: {exc!r}\n"
+                    f"{traceback.format_exc()[:2000]}"
+                ),
+                user=user, _reporter=_reporter,
+            )
     else:
         try:
             if on_event:
@@ -858,17 +908,8 @@ def _execute_tool(
             _handle_plan_tool(
                 conversation, tool_name, tool_input, tool_result, on_event,
             )
-            # Report events for successful mutating tool calls
-            if tool_entry.get("mutates") and (
-                not isinstance(tool_result, dict) or "error" not in tool_result
-            ):
-                _report_event(
-                    f"assistant:tool:{tool_name}", 5,
-                    f"Assistant tool: {tool_name}",
-                    f"User {user.email} (id={user.pk}) executed mutating tool "
-                    f"'{tool_name}'. conv={conversation.pk}",
-                    user=user, _reporter=_reporter,
-                )
+            # The `assistant:tool:<name>` success event now fires from
+            # approvals.resolve(), the only place a mutating tool can run.
         except Exception as exc:
             logger.exception("Tool %s failed", tool_name)
             tool_result = {"error": f"Tool '{tool_name}' encountered an internal error."}
@@ -898,7 +939,8 @@ def _execute_tool(
     }
 
 
-def _execute_tools(tool_blocks, registry, user, conversation, tools, on_event, tool_calls_made, request_meta=None):
+def _execute_tools(tool_blocks, registry, user, conversation, tools, on_event,
+                   tool_calls_made, request_meta=None, pending_actions=None):
     """
     Execute tool calls, using parallel execution when multiple non-meta tools
     are present in a single turn.
@@ -919,13 +961,17 @@ def _execute_tools(tool_blocks, registry, user, conversation, tools, on_event, t
 
     # Meta-tools run first, serially (they modify conversation state)
     for block in meta_blocks:
-        result = _execute_tool(block, registry, user, conversation, tools, on_event, tool_calls_made, request_meta)
+        result = _execute_tool(block, registry, user, conversation, tools, on_event,
+                               tool_calls_made, request_meta,
+                               pending_actions=pending_actions)
         results.append(result)
 
     # Regular tools run in parallel if there are multiple
     if len(regular_blocks) <= 1:
         for block in regular_blocks:
-            result = _execute_tool(block, registry, user, conversation, tools, on_event, tool_calls_made, request_meta)
+            result = _execute_tool(block, registry, user, conversation, tools, on_event,
+                                   tool_calls_made, request_meta,
+                                   pending_actions=pending_actions)
             results.append(result)
     else:
         with ThreadPoolExecutor(max_workers=min(max_workers, len(regular_blocks))) as pool:
@@ -934,6 +980,7 @@ def _execute_tools(tool_blocks, registry, user, conversation, tools, on_event, t
                 future = pool.submit(
                     _execute_tool, block, registry, user, conversation,
                     tools, on_event, tool_calls_made, request_meta,
+                    pending_actions=pending_actions,
                 )
                 futures[future] = block["id"]
 
@@ -1232,6 +1279,7 @@ def run_assistant(
     registry = get_registry()
     tool_calls_made = []
     context_refs = []
+    pending_actions = []
     usage_totals = {}
     request_meta = _build_request_meta(request)
     t_start = time.time()
@@ -1286,6 +1334,7 @@ def run_assistant(
                     "blocks": blocks,
                     "conversation_id": conversation.pk,
                     "tool_calls_made": tool_calls_made,
+                    "pending_actions": pending_actions,
                     "duration_ms": duration_ms,
                     "usage": usage_totals or None,
                 }
@@ -1307,20 +1356,27 @@ def run_assistant(
                 })
 
             # Process tool calls — parallel when multiple non-meta tools
+            pending_before = len(pending_actions)
             tool_results = _execute_tools(
                 tool_blocks, registry, user, conversation, tools, on_event, tool_calls_made,
-                request_meta=request_meta,
+                request_meta=request_meta, pending_actions=pending_actions,
             )
 
             # Accumulate context references from add_context calls
             context_refs.extend(_extract_context_refs(tool_blocks, tool_results))
+
+            # Persist any approval cards proposed this turn on the turn's own
+            # message, so a later crash in the loop cannot lose them — the panel
+            # recovers them from history or GET /api/assistant/action.
+            turn_blocks = list(interim_blocks or [])
+            turn_blocks.extend(pending_actions[pending_before:])
 
             # Store tool interaction messages
             Message.objects.create(
                 conversation=conversation,
                 role="assistant",
                 content=interim_text,
-                blocks=interim_blocks or None,
+                blocks=turn_blocks or None,
                 tool_calls=tool_blocks or None,
             )
             Message.objects.create(
@@ -1380,6 +1436,7 @@ def run_assistant(
             "response": response_text,
             "conversation_id": conversation.pk,
             "tool_calls_made": tool_calls_made,
+            "pending_actions": pending_actions,
             "duration_ms": duration_ms,
             "usage": usage_totals or None,
         }
@@ -1411,6 +1468,7 @@ def run_assistant(
         return {
             "error": error,
             "conversation_id": conversation.pk,
+            "pending_actions": pending_actions,
             "status_code": 500,
         }
 
@@ -1460,6 +1518,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
     registry = get_registry()
     tool_calls_made = []
     context_refs = []
+    pending_actions = []
     usage_totals = {}
     t_start = time.time()
 
@@ -1503,6 +1562,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
                     "created": msg.created.isoformat(),
                     "conversation_id": conversation.pk,
                     "tool_calls_made": tool_calls_made,
+                    "pending_actions": pending_actions,
                     "duration_ms": duration_ms,
                     "usage": usage_totals or None,
                 }
@@ -1522,16 +1582,23 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
                 })
 
             # Process tool calls — parallel when multiple non-meta tools
+            pending_before = len(pending_actions)
             tool_results = _execute_tools(
                 tool_blocks, registry, user, conversation, tools, on_event, tool_calls_made,
+                pending_actions=pending_actions,
             )
 
             # Accumulate context references from add_context calls
             context_refs.extend(_extract_context_refs(tool_blocks, tool_results))
 
+            # Approval cards proposed this turn ride the turn's own message, so
+            # a later crash cannot lose them.
+            turn_blocks = list(interim_blocks or [])
+            turn_blocks.extend(pending_actions[pending_before:])
+
             Message.objects.create(
                 conversation=conversation, role="assistant",
-                content=interim_text, blocks=interim_blocks or None,
+                content=interim_text, blocks=turn_blocks or None,
                 tool_calls=tool_blocks or None,
             )
             Message.objects.create(
@@ -1573,6 +1640,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
         return {
             "response": response_text, "conversation_id": conversation.pk,
             "tool_calls_made": tool_calls_made, "duration_ms": duration_ms,
+            "pending_actions": pending_actions,
             "usage": usage_totals or None,
         }
 
@@ -1581,13 +1649,16 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
         err_str = str(e)
         if "not_found_error" in err_str or "404" in err_str:
             _report_event("assistant:error:api", 7, "LLM model not found", err_str[:500], user=user)
-            return {"error": f"LLM model not found. Check LLM_ADMIN_MODEL setting. ({err_str[:200]})"}
+            return {"error": f"LLM model not found. Check LLM_ADMIN_MODEL setting. ({err_str[:200]})",
+                    "pending_actions": pending_actions}
         if "authentication_error" in err_str or "401" in err_str:
             _report_event("assistant:error:api", 7, "LLM API auth failure", err_str[:500], user=user)
-            return {"error": "LLM API key is invalid. Check LLM_ADMIN_API_KEY setting."}
+            return {"error": "LLM API key is invalid. Check LLM_ADMIN_API_KEY setting.",
+                    "pending_actions": pending_actions}
         if "rate_limit" in err_str.lower() or "429" in err_str:
             _report_event("assistant:error:api", 5, "LLM API rate limit", err_str[:500], user=user)
-            return {"error": "LLM API rate limit reached. Please wait a moment and try again."}
+            return {"error": "LLM API rate limit reached. Please wait a moment and try again.",
+                    "pending_actions": pending_actions}
         _report_event(
             "assistant:error:unhandled", 8,
             "WS agent loop unhandled exception",
@@ -1598,4 +1669,5 @@ def run_assistant_ws(user, message, conversation_id, on_event=None):
             ),
             user=user,
         )
-        return {"error": f"Assistant error: {err_str[:200]}"}
+        return {"error": f"Assistant error: {err_str[:200]}",
+                "pending_actions": pending_actions}
