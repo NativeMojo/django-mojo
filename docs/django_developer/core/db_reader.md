@@ -61,7 +61,7 @@ The router chooses in this order:
 
 | Situation | Database |
 |---|---|
-| Django session model read | `default` |
+| Django session or django-mojo account model read | `default` |
 | Inside `use_primary()` | `default` |
 | A write has pinned the current context | `default` |
 | Inside `use_reader()`, outside an atomic block | `reader` |
@@ -76,9 +76,12 @@ requests begin pinned because they commonly fetch a row before updating it; a
 replica-lagged fetch could otherwise overwrite newer primary data. Any ORM
 write during a safe request also pins every later read in that request.
 
-Credential resolution and Django session reads always use primary. This avoids
-an intermittent authentication failure immediately after login, registration,
-token creation, or session creation.
+Every model in the central `account` app and every Django session model always
+reads from primary, even inside `use_reader()`. This keeps authentication,
+authorization, tenant membership, API keys, security posture, and other
+account state out of the replica-lag window. It also avoids an intermittent
+authentication failure immediately after login, registration, token creation,
+or session creation.
 
 `ATOMIC_REQUESTS=True` effectively keeps request reads on primary because the
 request executes in an atomic block. Raw SQL is outside Django's router
@@ -104,8 +107,8 @@ with use_reader():
 ```
 
 `use_reader()` starts a fresh unpinned sub-scope and restores the caller's
-state on exit. A write inside it re-pins subsequent reads, and an atomic block
-still wins and uses primary.
+state on exit. Account and session models remain on primary. A write inside it
+re-pins subsequent reads, and an atomic block still wins and uses primary.
 
 Force a freshness-critical block to primary with the companion helper:
 
