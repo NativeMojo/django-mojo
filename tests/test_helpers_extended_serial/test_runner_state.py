@@ -198,3 +198,40 @@ def test_read_dev_server_conf_uses_var_override(opts):
                      "host should come from the var/dev_server.conf override")
         th.assert_eq(port, 9999,
                      "port should come from the var/dev_server.conf override, parsed as int")
+
+
+@th.unit_test("an unrunnable test file is a recorded failure, never a silent skip")
+def test_unrunnable_file_is_recorded(opts):
+    """Regression for the #1839 security review: a refused shadow import (or
+    any import failure) used to return silently — the module vanished from the
+    report, which still said passed."""
+    import io
+    from contextlib import redirect_stdout
+    from objict import objict
+    from testit import helpers, runner
+
+    saved = (helpers.TEST_RUN.total, helpers.TEST_RUN.failed,
+             list(helpers.TEST_RUN.records))
+    saved_display = helpers._get_display_fn()
+    try:
+        # The simulated failure must not reach the live progress tracker —
+        # this thread's display callback would count it against THIS module.
+        helpers._set_display_fn(None)
+        before_failed = helpers.TEST_RUN.failed
+        fake_opts = objict(verbose=False, errors=False, stop=False)
+        with redirect_stdout(io.StringIO()):
+            runner.run_module_tests_by_name(
+                fake_opts, "no_such_pkg_1839", "no_such_file",
+                expected_root="/nonexistent/root")
+        assert helpers.TEST_RUN.failed == before_failed + 1, (
+            "an unimportable test file must land exactly one recorded failure, "
+            f"got failed={helpers.TEST_RUN.failed} (was {before_failed})"
+        )
+        last = helpers.TEST_RUN.records[-1]
+        assert last["status"] == "error" and "did not run" in last.get("detail", ""), (
+            f"the failure record must say the file did not run, got {last}"
+        )
+    finally:
+        helpers._set_display_fn(saved_display)
+        helpers.TEST_RUN.total, helpers.TEST_RUN.failed = saved[0], saved[1]
+        helpers.TEST_RUN.records = saved[2]
