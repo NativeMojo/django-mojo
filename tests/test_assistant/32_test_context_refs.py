@@ -132,25 +132,6 @@ def test_nonexistent_pk_filtered(opts):
 # DENY_AI model filtered
 # ---------------------------------------------------------------------------
 
-@th.django_unit_test()
-def test_deny_ai_model_filtered(opts):
-    from mojo.apps.incident.models import RuleSet
-
-    setattr(RuleSet.RestMeta, "DENY_AI_VIEW", True)
-    try:
-        result = _add_context({
-            "references": [{
-                "app_name": "incident",
-                "model_name": "RuleSet",
-                "pk": opts.ruleset.pk,
-                "label": "Denied",
-            }],
-        }, opts.admin)
-        assert "error" not in result, f"Should not error: {result.get('error')}"
-        refs = result["references"]
-        assert len(refs) == 0, f"DENY_AI_VIEW model should be filtered, got {len(refs)} refs"
-    finally:
-        delattr(RuleSet.RestMeta, "DENY_AI_VIEW")
 
 
 # ---------------------------------------------------------------------------

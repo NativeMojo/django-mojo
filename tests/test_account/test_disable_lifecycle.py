@@ -1,6 +1,20 @@
-"""Tests for the disable-lifecycle service, REST actions, and throttle-read endpoint."""
-from unittest import mock
+"""Tests for the disable-lifecycle service, REST actions, and throttle-read endpoint.
+
+Parallel-safety (maestro item #1839): service-level calls inject a local
+incident reporter through the service seams instead of patching the shared
+incident module. The REST tests used to wrap opts.client calls in
+mock.patch("mojo.apps.incident.report_event") — those patches were no-ops
+(the server is a separate process) and are simply gone.
+"""
 from testit import helpers as th
+
+
+def _null_reporter(*args, **kwargs):
+    return None
+
+
+def _null_send_email(user, template, context):
+    return None
 
 
 ADMIN_USERNAME = "disable_admin@test.com"
@@ -85,8 +99,8 @@ def test_service_disable_writes_namespace(opts):
     target.refresh_from_db()
     admin = User.objects.get(pk=opts.admin_id)
 
-    with mock.patch("mojo.apps.incident.report_event"):
-        disable_service.disable_entity(target, reason="admin", by_user=admin, note="testing")
+    disable_service.disable_entity(
+        target, reason="admin", by_user=admin, note="testing", reporter=_null_reporter)
 
     target.refresh_from_db()
     block = (target.metadata or {}).get("protected", {}).get("disable", {})
@@ -110,8 +124,8 @@ def test_service_disable_already_disabled_rejected(opts):
 
     raised = False
     try:
-        with mock.patch("mojo.apps.incident.report_event"):
-            disable_service.disable_entity(target, reason="admin", by_user=None)
+        disable_service.disable_entity(
+            target, reason="admin", by_user=None, reporter=_null_reporter)
     except merrors.ValueException:
         raised = True
 
@@ -128,10 +142,11 @@ def test_service_reactivate_appends_history(opts):
     target.refresh_from_db()
     admin = User.objects.get(pk=opts.admin_id)
 
-    with mock.patch("mojo.apps.incident.report_event"):
-        disable_service.disable_entity(target, reason="admin", by_user=admin, note="bad apple")
-        target.refresh_from_db()
-        disable_service.reactivate_entity(target, by_user=admin, note="appeal granted")
+    disable_service.disable_entity(
+        target, reason="admin", by_user=admin, note="bad apple", reporter=_null_reporter)
+    target.refresh_from_db()
+    disable_service.reactivate_entity(
+        target, by_user=admin, note="appeal granted", reporter=_null_reporter)
 
     target.refresh_from_db()
     block = (target.metadata or {}).get("protected", {}).get("disable", {})
@@ -159,8 +174,8 @@ def test_service_reactivate_never_disabled_rejected(opts):
 
     raised = False
     try:
-        with mock.patch("mojo.apps.incident.report_event"):
-            disable_service.reactivate_entity(target, by_user=None)
+        disable_service.reactivate_entity(
+            target, by_user=None, reporter=_null_reporter)
     except merrors.ValueException:
         raised = True
 
@@ -177,12 +192,14 @@ def test_service_history_cap_at_20(opts):
     target.refresh_from_db()
     admin = User.objects.get(pk=opts.admin_id)
 
-    with mock.patch("mojo.apps.incident.report_event"):
-        for cycle in range(disable_service.HISTORY_CAP + 1):
-            disable_service.disable_entity(target, reason="admin", by_user=admin, note=f"cycle-{cycle}")
-            target.refresh_from_db()
-            disable_service.reactivate_entity(target, by_user=admin)
-            target.refresh_from_db()
+    for cycle in range(disable_service.HISTORY_CAP + 1):
+        disable_service.disable_entity(
+            target, reason="admin", by_user=admin, note=f"cycle-{cycle}",
+            reporter=_null_reporter)
+        target.refresh_from_db()
+        disable_service.reactivate_entity(
+            target, by_user=admin, reporter=_null_reporter)
+        target.refresh_from_db()
 
     history = (target.metadata or {}).get("protected", {}).get("disable", {}).get("history") or []
     assert len(history) == disable_service.HISTORY_CAP, \
@@ -230,8 +247,9 @@ def test_pii_anonymize_disabled_user_pushes_to_history(opts):
     user.save()
     admin = User.objects.get(pk=opts.admin_id)
 
-    with mock.patch("mojo.apps.incident.report_event"):
-        disable_service.disable_entity(user, reason="abuse", by_user=admin, note="pre-anonymize")
+    disable_service.disable_entity(
+        user, reason="abuse", by_user=admin, note="pre-anonymize",
+        reporter=_null_reporter)
 
     user.refresh_from_db()
     user.pii_anonymize()
@@ -269,9 +287,7 @@ def test_sweep_writes_new_warning_shape(opts):
     user.last_activity = dates.subtract(days=85)
     user.save()
 
-    with mock.patch("mojo.apps.incident.report_event"), \
-         mock.patch.object(User, "send_template_email"):
-        warn_inactive_users()
+    warn_inactive_users(reporter=_null_reporter, send_email=_null_send_email)
 
     user.refresh_from_db()
     warning = (user.metadata or {}).get("protected", {}).get("disable", {}).get("warning") or {}
@@ -295,8 +311,7 @@ def test_sweep_writes_new_disable_shape(opts):
     user.last_activity = dates.subtract(days=100)
     user.save()
 
-    with mock.patch("mojo.apps.incident.report_event"):
-        disable_inactive_users()
+    disable_inactive_users(reporter=_null_reporter)
 
     user.refresh_from_db()
     block = (user.metadata or {}).get("protected", {}).get("disable", {})
@@ -322,16 +337,16 @@ def test_sweep_reads_legacy_warning(opts):
     user.metadata = {"protected": {"disable_warned": True, "disable_warn_date": str(dates.subtract(days=2))}}
     user.save()
 
-    with mock.patch("mojo.apps.incident.report_event"), \
-         mock.patch.object(User, "send_template_email") as send_email:
-        warn_inactive_users()
+    sent_to = []
 
-    # Send count for THIS specific user — already warned via legacy flag, should not re-warn
+    def record_send(user_obj, template, context):
+        sent_to.append(getattr(user_obj, "username", None))
+
+    warn_inactive_users(reporter=_null_reporter, send_email=record_send)
+
     user.refresh_from_db()
-    sent_to_this_user = any(
-        getattr(call.args[0], "username", None) == user.username
-        for call in send_email.call_args_list
-    ) if send_email.call_args_list else False
+    assert user.username not in sent_to, \
+        f"already-warned (legacy flag) user must not be re-emailed, got sends to {sent_to}"
     # Most reliable check: the legacy flag is still present, no new namespace warning was added
     protected = (user.metadata or {}).get("protected") or {}
     assert protected.get("disable_warned") is True, "legacy disable_warned should be untouched"
@@ -356,8 +371,7 @@ def test_sweep_honors_new_exempt_flag(opts):
     user.metadata = {"protected": {"disable": {"exempt_from_auto_disable": True}}}
     user.save()
 
-    with mock.patch("mojo.apps.incident.report_event"):
-        disable_inactive_users()
+    disable_inactive_users(reporter=_null_reporter)
 
     user.refresh_from_db()
     assert user.is_active is True, \
@@ -380,8 +394,7 @@ def test_sweep_honors_legacy_exempt_flag(opts):
     user.metadata = {"protected": {"no_disable": True}}
     user.save()
 
-    with mock.patch("mojo.apps.incident.report_event"):
-        disable_inactive_users()
+    disable_inactive_users(reporter=_null_reporter)
 
     user.refresh_from_db()
     assert user.is_active is True, \
@@ -462,11 +475,10 @@ def test_rest_disable_user(opts):
     User.objects.filter(pk=target.pk).update(is_active=True, metadata={})
 
     assert opts.client.login(ADMIN_USERNAME, ADMIN_PASSWORD), "admin login failed"
-    with mock.patch("mojo.apps.incident.report_event"):
-        resp = opts.client.post(
-            f"/api/user/{target.pk}",
-            {"disable": {"reason": "admin", "note": "rest-test"}},
-        )
+    resp = opts.client.post(
+        f"/api/user/{target.pk}",
+        {"disable": {"reason": "admin", "note": "rest-test"}},
+    )
     opts.client.logout()
 
     assert resp.status_code == 200, \
@@ -492,11 +504,10 @@ def test_rest_reactivate_user(opts):
     )
 
     assert opts.client.login(ADMIN_USERNAME, ADMIN_PASSWORD), "admin login failed"
-    with mock.patch("mojo.apps.incident.report_event"):
-        resp = opts.client.post(
-            f"/api/user/{target.pk}",
-            {"reactivate": {"note": "second chance"}},
-        )
+    resp = opts.client.post(
+        f"/api/user/{target.pk}",
+        {"reactivate": {"note": "second chance"}},
+    )
     opts.client.logout()
 
     assert resp.status_code == 200, \
@@ -517,12 +528,11 @@ def test_rest_disable_invalid_reason_rejected(opts):
     User.objects.filter(pk=target.pk).update(is_active=True, metadata={})
 
     assert opts.client.login(ADMIN_USERNAME, ADMIN_PASSWORD), "admin login failed"
-    with mock.patch("mojo.apps.incident.report_event"):
-        # 'inactive' is server-only — REST callers cannot use it
-        resp = opts.client.post(
-            f"/api/user/{target.pk}",
-            {"disable": {"reason": "inactive"}},
-        )
+    # 'inactive' is server-only — REST callers cannot use it
+    resp = opts.client.post(
+        f"/api/user/{target.pk}",
+        {"disable": {"reason": "inactive"}},
+    )
     opts.client.logout()
 
     assert resp.status_code != 200, \
@@ -539,11 +549,10 @@ def test_rest_disable_requires_manage_users(opts):
     User.objects.filter(pk=target.pk).update(is_active=True, metadata={})
 
     assert opts.client.login(NONADMIN_USERNAME, NONADMIN_PASSWORD), "nonadmin login failed"
-    with mock.patch("mojo.apps.incident.report_event"):
-        resp = opts.client.post(
-            f"/api/user/{target.pk}",
-            {"disable": {"reason": "admin"}},
-        )
+    resp = opts.client.post(
+        f"/api/user/{target.pk}",
+        {"disable": {"reason": "admin"}},
+    )
     opts.client.logout()
 
     assert resp.status_code != 200, \
@@ -560,16 +569,15 @@ def test_rest_group_disable_reactivate(opts):
     Group.objects.filter(pk=group.pk).update(is_active=True, metadata={})
 
     assert opts.client.login(ADMIN_USERNAME, ADMIN_PASSWORD), "admin login failed"
-    with mock.patch("mojo.apps.incident.report_event"):
-        resp1 = opts.client.post(
-            f"/api/group/{group.pk}",
-            {"disable": {"reason": "archived", "note": "old project"}},
-        )
-        group.refresh_from_db()
-        resp2 = opts.client.post(
-            f"/api/group/{group.pk}",
-            {"reactivate": {"note": "back in action"}},
-        )
+    resp1 = opts.client.post(
+        f"/api/group/{group.pk}",
+        {"disable": {"reason": "archived", "note": "old project"}},
+    )
+    group.refresh_from_db()
+    resp2 = opts.client.post(
+        f"/api/group/{group.pk}",
+        {"reactivate": {"note": "back in action"}},
+    )
     opts.client.logout()
 
     assert resp1.status_code == 200, \
@@ -596,16 +604,15 @@ def test_rest_group_disable_reactivate_bare_groups(opts):
     Group.objects.filter(pk=group.pk).update(is_active=True, metadata={})
 
     assert opts.client.login(GROUPSONLY_USERNAME, GROUPSONLY_PASSWORD), "groups-only login failed"
-    with mock.patch("mojo.apps.incident.report_event"):
-        resp1 = opts.client.post(
-            f"/api/group/{group.pk}",
-            {"disable": {"reason": "archived", "note": "bare groups"}},
-        )
-        group.refresh_from_db()
-        resp2 = opts.client.post(
-            f"/api/group/{group.pk}",
-            {"reactivate": {"note": "bare groups"}},
-        )
+    resp1 = opts.client.post(
+        f"/api/group/{group.pk}",
+        {"disable": {"reason": "archived", "note": "bare groups"}},
+    )
+    group.refresh_from_db()
+    resp2 = opts.client.post(
+        f"/api/group/{group.pk}",
+        {"reactivate": {"note": "bare groups"}},
+    )
     opts.client.logout()
 
     assert resp1.status_code == 200, \

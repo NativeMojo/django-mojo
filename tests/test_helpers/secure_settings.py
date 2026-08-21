@@ -268,31 +268,10 @@ def test_setting_global_fallback(opts):
 # SettingsHelper integration
 # ===========================================================================
 
-@th.django_unit_test()
-def test_settings_helper_db_override(opts):
-    """DB setting overrides django.conf.settings value."""
-    from mojo.helpers.settings import settings
-    from mojo.apps.account.models.setting import Setting
-    from django.conf import settings as django_settings
-
-    django_settings.MY_FAKE_VAR = True
-    # DEBUG is True in django.conf.settings for testproject
-    original = settings.get("MY_FAKE_VAR")
-    assert original is True, f"Precondition: DEBUG should be True, got {original}"
-
-    # Override via DB
-    Setting.set("MY_FAKE_VAR", False)
-    val = settings.get("MY_FAKE_VAR", kind="bool")
-    assert val == False, f"DB setting should override, got {val}"
-
-    Setting.set("MY_FAKE_VAR", True)
-    val = settings.get("MY_FAKE_VAR", kind="bool")
-    assert val == True, f"DB setting should override, got {val}"
-
-    # Clean up — django.conf.settings should come back
-    Setting.remove("MY_FAKE_VAR")
-    val = settings.get("MY_FAKE_VAR")
-    assert val is True, f"After removal, should fall back to django.conf, got {val}"
+# test_settings_helper_db_override moved to
+# tests/test_helpers_extended_serial/secure_settings.py: it assigns an
+# attribute on django.conf.settings, a process-global mutation unsafe under
+# the parallel default tier (maestro item #1839).
 
 
 @th.django_unit_test()
@@ -332,29 +311,10 @@ def test_settings_helper_secret_transparent(opts):
 # REST API tests
 # ===========================================================================
 
-@th.django_unit_test()
-def test_rest_create_setting(opts):
-    """POST /api/settings creates a setting."""
-    from mojo.decorators.limits import clear_rate_limits
-    clear_rate_limits(ip="127.0.0.1")
-
-    opts.client.login(TEST_USER, TEST_PWORD)
-    resp = opts.client.post("/api/settings", {
-        "key": "REST_TEST",
-        "value": "rest_value",
-        "is_secret": False,
-    })
-    opts.client.logout()
-    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-    data = resp.json
-    assert data.get("status") is True, f"Expected status=true, got {data}"
-
-    from mojo.apps.account.models.setting import Setting
-    s = Setting.objects.filter(key="REST_TEST", group=None).first()
-    assert s is not None, "Setting should exist in DB"
-    assert s.get_value() == "rest_value", f"Expected 'rest_value', got {s.get_value()}"
-
-    Setting.remove("REST_TEST")
+# test_rest_create_setting moved to
+# tests/test_helpers_extended_serial/secure_settings.py: it writes a global
+# Setting through the live server (POST /api/settings), visible to every
+# parallel module (maestro item #1839).
 
 
 @th.django_unit_test()

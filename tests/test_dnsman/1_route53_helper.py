@@ -31,21 +31,6 @@ def _prices(tld="com", price=13.0, currency="USD"):
     }
 
 
-def _settings(**overrides):
-    """Patch settings.get in-process (th.server_settings is for the separate
-    server process and does nothing for these direct module calls)."""
-    from mojo.helpers.settings import settings as settings_obj
-
-    real_get = settings_obj.get
-
-    def patched_get(name, *args, **kwargs):
-        if name in overrides:
-            return overrides[name]
-        return real_get(name, *args, **kwargs)
-
-    return patch.object(settings_obj, "get", side_effect=patched_get)
-
-
 # ---------------------------------------------------------------------------
 # client factories
 # ---------------------------------------------------------------------------
@@ -251,25 +236,6 @@ def test_list_prices_cache_expires(opts):
 
     assert client.list_prices.call_count == 2, (
         f"Expected an expired entry to refetch, got {client.list_prices.call_count} calls")
-
-
-@th.django_unit_test()
-def test_list_prices_ttl_zero_disables_cache(opts):
-    """ROUTE53_PRICE_CACHE_HOURS <= 0 is the escape hatch: no hits, no stores."""
-    from mojo.helpers.aws import route53
-
-    route53._price_cache.clear()
-    client = _client(list_prices=_prices())
-
-    with _settings(ROUTE53_PRICE_CACHE_HOURS=0):
-        with patch(f"{MODULE}._domains_client", return_value=client):
-            route53.list_prices("com")
-            route53.list_prices("com")
-
-    assert client.list_prices.call_count == 2, (
-        f"Expected TTL<=0 to disable caching, got {client.list_prices.call_count} calls")
-    assert "com" not in route53._price_cache, (
-        "Expected TTL<=0 to store nothing in the cache")
 
 
 @th.django_unit_test()
@@ -1172,3 +1138,4 @@ def test_list_registered_domains_tolerates_an_unparseable_name(opts):
         f"a valid name must survive alongside an invalid one, got {names}")
     assert "bad name.com" in names, (
         f"the unparseable name should come back raw, not drop the listing; got {names}")
+

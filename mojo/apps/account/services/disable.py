@@ -136,11 +136,14 @@ def disconnect_realtime(entity, request=None):
             model_id=entity.pk)
 
 
-def disable_entity(entity, *, reason, by_user=None, note=None, request=None):
+def disable_entity(entity, *, reason, by_user=None, note=None, request=None,
+                   reporter=None):
     """Disable a User or Group.
 
     Atomic. Raises ValueException if the entity is already disabled.
-    Clears any pending warning. Emits logit + incident event.
+    Clears any pending warning. Emits logit + incident event. `reporter`
+    swaps the incident reporter for this call only (tests inject a local
+    fake instead of patching the shared incident module).
     """
     Model = type(entity)
     by_user_id, by_username = _by_fields(by_user)
@@ -199,11 +202,13 @@ def disable_entity(entity, *, reason, by_user=None, note=None, request=None):
         category=f"{prefix}:{kind}",
         level=4,
         request=request,
+        reporter=reporter,
     )
     return entity
 
 
-def reactivate_entity(entity, *, by_user=None, note=None, request=None):
+def reactivate_entity(entity, *, by_user=None, note=None, request=None,
+                      reporter=None):
     """Reactivate a disabled entity.
 
     Pushes the live disable block to `history` with `reactivated_*` fields.
@@ -265,6 +270,7 @@ def reactivate_entity(entity, *, by_user=None, note=None, request=None):
         category=f"{prefix}:reactivated",
         level=2,
         request=request,
+        reporter=reporter,
     )
     return entity
 
@@ -438,10 +444,13 @@ def _entity_label(entity):
     return f"id={entity.pk}"
 
 
-def _emit_incident(entity, *, details, title, category, level, request=None):
+def _emit_incident(entity, *, details, title, category, level, request=None,
+                   reporter=None):
     """Best-effort incident event emission. Failures are logged but never raised."""
     try:
-        from mojo.apps.incident import report_event
+        if reporter is None:
+            from mojo.apps.incident import report_event
+            reporter = report_event
         Model = type(entity)
         kwargs = dict(
             details=details,
@@ -455,7 +464,7 @@ def _emit_incident(entity, *, details, title, category, level, request=None):
             kwargs["uid"] = entity.pk
         if request is not None:
             kwargs["request"] = request
-        report_event(**kwargs)
+        reporter(**kwargs)
     except Exception:
         logit.exception(
             f"disable_service: failed to emit incident event for "

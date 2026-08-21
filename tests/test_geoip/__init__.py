@@ -1,4 +1,5 @@
 TESTIT = {
+    "default_core": True,
     # incident is required for check_internal_threats(); account for
     # GeoLocatedIP. Both live in the generated test project.
     "requires_apps": ["mojo.apps.account", "mojo.apps.incident"],

@@ -1,3 +1,5 @@
+"""Moved from the default-tier sibling (maestro item #1839): these tests mutate shared testit/production module state process-wide (seam rebinding, module-attribute save/restore), which races every parallel module.
+"""
 """`broadcast=True` reaches EVERY live runner, not whichever one pops first.
 
 The bug this module pins down (django-mojo <= 1.7.1): under Plan B every runner

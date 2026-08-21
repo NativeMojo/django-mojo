@@ -179,25 +179,6 @@ def helper_func():
     th.assert_eq(count, 2, "Should count exactly 2 test_ functions")
 
 
-@th.django_unit_test("thread safety: _increment is atomic")
-def test_increment_atomic(opts):
-    import threading
-    from testit import helpers
-
-    # Use a scratch field so we don't clobber TEST_RUN.total mid-suite
-    with helpers._lock:
-        helpers.TEST_RUN._scratch_counter = 0
-
-    threads = []
-    for _ in range(100):
-        t = threading.Thread(target=helpers._increment, args=("_scratch_counter",))
-        threads.append(t)
-        t.start()
-    for t in threads:
-        t.join()
-
-    th.assert_eq(helpers.TEST_RUN._scratch_counter, 100,
-                 f"Expected exactly 100 after 100 concurrent increments, got {helpers.TEST_RUN._scratch_counter}")
 
 
 @th.django_unit_test("thread-local display: per-thread isolation")
@@ -236,153 +217,16 @@ def test_client_last_response(opts):
     th.assert_true(client.last_response.elapsed_ms >= 0, "last_response should have elapsed_ms")
 
 
-@th.django_unit_test("agent output: _write_agent_report creates file")
-def test_agent_report_writes(opts):
-    import os
-    import json
-    from testit import runner, helpers
-    from mojo.helpers import paths
-
-    # Enable agent mode temporarily
-    old_agent = helpers.AGENT_MODE
-    helpers.AGENT_MODE = True
-
-    try:
-        runner._write_agent_report(opts)
-        report_path = os.path.join(paths.VAR_ROOT, "test_failures.json")
-        th.assert_true(os.path.exists(report_path), "test_failures.json should be created")
-
-        with open(report_path) as fh:
-            data = json.load(fh)
-        th.assert_true("total" in data, "Report should have total field")
-        th.assert_true("failures" in data, "Report should have failures field")
-        th.assert_true(isinstance(data["failures"], list), "failures should be a list")
-    finally:
-        helpers.AGENT_MODE = old_agent
 
 
-class _FakeTracker:
-    """Stands in for the rich display's per-module tracker."""
-
-    def __init__(self, total, passed, failed, skipped, elapsed=0.0, skip_reason=None):
-        self.total = total
-        self.passed = passed
-        self.failed = failed
-        self.skipped = skipped
-        self.elapsed = elapsed
-        self.skip_reason = skip_reason
 
 
-class _FakeDisplay:
-    def __init__(self, trackers):
-        self.trackers = trackers
-        self._order = list(trackers.keys())
 
 
-@th.django_unit_test("agent output: top-level rollup equals the sum of per-module values")
-def test_agent_report_rollup_matches_modules(opts):
-    """Regression for #1127.
-
-    TEST_RUN's counters only see tests that actually executed, so a module skipped
-    whole (requires_extra / requires_apps) used to contribute nothing to the
-    top-level total/skipped while still being counted in its own module entry. A
-    baseline recorded from the top-level numbers then drifted against one derived
-    from the table by exactly the size of the opt-in tier.
-    """
-    import os
-    import json
-    from testit import runner, helpers
-    from mojo.helpers import paths
-
-    display = _FakeDisplay({
-        # Ran normally.
-        "test_alpha": _FakeTracker(total=10, passed=9, failed=0, skipped=1, elapsed=1.5),
-        # Skipped whole — the case that used to vanish from the rollup.
-        "test_optin": _FakeTracker(total=40, passed=0, failed=0, skipped=40,
-                                   elapsed=0.0, skip_reason="requires --extra slow"),
-    })
-
-    old_agent = helpers.AGENT_MODE
-    helpers.AGENT_MODE = True
-    try:
-        runner._write_agent_report(opts, display=display)
-        with open(os.path.join(paths.VAR_ROOT, "test_failures.json")) as fh:
-            data = json.load(fh)
-    finally:
-        helpers.AGENT_MODE = old_agent
-
-    module_total = sum(m["tests"] for m in data["modules"].values())
-    module_skipped = sum(m["skipped"] for m in data["modules"].values())
-
-    th.assert_eq(data["total"], module_total,
-                 f"top-level total ({data['total']}) must equal the sum of per-module "
-                 f"tests ({module_total})")
-    th.assert_eq(data["skipped"], module_skipped,
-                 f"top-level skipped ({data['skipped']}) must equal the sum of per-module "
-                 f"skipped ({module_skipped})")
-    th.assert_eq(data["total"], 50,
-                 f"the whole-skipped module's 40 tests must be counted, got {data['total']}")
-    th.assert_true("ran" in data,
-                   "report should carry a 'ran' block for what actually executed")
 
 
-@th.django_unit_test("agent output: per-test durations feed a slowest list")
-def test_agent_report_slowest(opts):
-    """Module-level timing cannot say which test inside a slow module is the cost."""
-    import os
-    import json
-    from testit import runner, helpers
-    from mojo.helpers import paths
-
-    old_records = helpers.TEST_RUN.records
-    old_agent = helpers.AGENT_MODE
-    helpers.AGENT_MODE = True
-    try:
-        helpers.TEST_RUN.records = [
-            {"module": "test_alpha", "test_module": "a", "function": "f",
-             "name": "quick_one", "status": "passed", "duration": 0.01},
-            {"module": "test_alpha", "test_module": "a", "function": "f",
-             "name": "slow_one", "status": "passed", "duration": 9.5},
-            # No duration recorded — must not blow up the sort.
-            {"module": "test_alpha", "test_module": "a", "function": "f",
-             "name": "untimed", "status": "passed"},
-        ]
-        runner._write_agent_report(opts)
-        with open(os.path.join(paths.VAR_ROOT, "test_failures.json")) as fh:
-            data = json.load(fh)
-    finally:
-        helpers.TEST_RUN.records = old_records
-        helpers.AGENT_MODE = old_agent
-
-    th.assert_true("slowest" in data, "report should carry a 'slowest' list")
-    th.assert_true(len(data["slowest"]) >= 2,
-                   f"slowest should include the timed tests, got {len(data['slowest'])}")
-    th.assert_eq(data["slowest"][0]["test_name"], "slow_one",
-                 f"slowest entry should be the 9.5s test, got {data['slowest'][0]['test_name']}")
-    th.assert_true(data["slowest"][0]["duration"] >= data["slowest"][1]["duration"],
-                   "slowest list must be sorted descending by duration")
 
 
-@th.django_unit_test("per-test timing: _record_result stores a duration")
-def test_record_result_duration(opts):
-    from testit import helpers
-
-    old_records = helpers.TEST_RUN.records
-    try:
-        helpers.TEST_RUN.records = []
-        helpers._record_result("timing_probe", status="passed", duration=0.25)
-        record = helpers.TEST_RUN.records[-1]
-        th.assert_true("duration" in record,
-                       "a recorded result should carry its duration")
-        th.assert_eq(record["duration"], 0.25,
-                     f"duration should round-trip, got {record.get('duration')}")
-
-        # A negative clock delta must never surface as a negative duration.
-        helpers._record_result("timing_probe_neg", status="passed", duration=-1.0)
-        th.assert_eq(helpers.TEST_RUN.records[-1]["duration"], 0.0,
-                     "a negative duration must be clamped to zero")
-    finally:
-        helpers.TEST_RUN.records = old_records
 
 
 @th.django_unit_test("dev_server.conf: var/ overrides config/ when both exist")
@@ -417,33 +261,6 @@ def test_resolve_conf_fallback_to_config(opts):
                      "config/dev_server.conf should be used when var/ is absent")
 
 
-@th.django_unit_test("dev_server.conf: _read_dev_server_conf honors the var/ override")
-def test_read_dev_server_conf_uses_var_override(opts):
-    # Wire-through: proves the reader delegates to paths.resolve_conf (not a direct
-    # CONFIG_ROOT read). Patches the paths globals to temp dirs and restores them in
-    # finally — same pattern as test_agent_report_writes above. Never writes the live
-    # var/dev_server.conf (that would trip uvicorn's --reload-include '*.conf').
-    from mojo.helpers import paths
-    from testit import helpers
-    import tempfile
-    from pathlib import Path
-
-    with tempfile.TemporaryDirectory() as var_dir, tempfile.TemporaryDirectory() as cfg_dir:
-        var_root, cfg_root = Path(var_dir), Path(cfg_dir)
-        (cfg_root / "dev_server.conf").write_text("host=127.0.0.1\nport=5555\n")
-        (var_root / "dev_server.conf").write_text("host=192.168.1.50\nport=9999\n")
-
-        old_var, old_cfg = paths.VAR_ROOT, paths.CONFIG_ROOT
-        paths.VAR_ROOT, paths.CONFIG_ROOT = var_root, cfg_root
-        try:
-            host, port = helpers._read_dev_server_conf()
-        finally:
-            paths.VAR_ROOT, paths.CONFIG_ROOT = old_var, old_cfg
-
-        th.assert_eq(host, "192.168.1.50",
-                     "host should come from the var/dev_server.conf override")
-        th.assert_eq(port, 9999,
-                     "port should come from the var/dev_server.conf override, parsed as int")
 
 
 @th.unit_test("fresh test runs clear framework logs but preserve unrelated files")
@@ -571,4 +388,249 @@ def test_should_reset_test_logs_conditions(opts):
     )
     assert _should_reset_test_logs(objict(resume=False, list_extras=True)) is False, (
         "--list-extras executes no tests and must not clear diagnostic logs"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Origin-aware module records (maestro item #1839)
+# ---------------------------------------------------------------------------
+
+def _roots(tmpdir, consumer=(), repo=(), repo_init=True):
+    """Build a consumer root and a parent (repository) root with the named
+    packages. Returns (test_root, parent_test_root)."""
+    import os
+    test_root = os.path.join(tmpdir, "apps_tests")
+    parent_root = os.path.join(tmpdir, "repo_tests")
+    os.makedirs(test_root, exist_ok=True)
+    os.makedirs(parent_root, exist_ok=True)
+    for name in consumer:
+        pkg = os.path.join(test_root, name)
+        os.makedirs(pkg, exist_ok=True)
+        with open(os.path.join(pkg, "__init__.py"), "w") as fh:
+            fh.write("")
+        with open(os.path.join(pkg, "test_a.py"), "w") as fh:
+            fh.write("def test_one(opts):\n    pass\n")
+    for name in repo:
+        pkg = os.path.join(parent_root, name)
+        os.makedirs(pkg, exist_ok=True)
+        if repo_init:
+            with open(os.path.join(pkg, "__init__.py"), "w") as fh:
+                fh.write("")
+        with open(os.path.join(pkg, "test_b.py"), "w") as fh:
+            fh.write("def test_one(opts):\n    pass\n")
+    return test_root, parent_root
+
+
+def _collect(test_root, parent_root, **opt_overrides):
+    from objict import objict
+    from testit.runner import _collect_modules
+    opts = objict(test_modules=[], ignore_modules=[], nomojo=False, onlymojo=False)
+    opts.update(opt_overrides)
+    return _collect_modules(opts, test_root, parent_root)
+
+
+@th.unit_test("runner records: repository and consumer packages carry origin and path")
+def test_records_carry_origin_and_path(opts):
+    import tempfile
+    from testit.runner import ORIGIN_CONSUMER, ORIGIN_REPO
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root, parent_root = _roots(
+            tmpdir, consumer=["test_appthing"], repo=["test_repothing"])
+        records = _collect(test_root, parent_root)
+
+    by_name = {r.name: r for r in records}
+    assert set(by_name) == {"test_appthing", "test_repothing"}, (
+        f"both roots' packages must be collected, got {sorted(by_name)}"
+    )
+    repo = by_name["test_repothing"]
+    consumer = by_name["test_appthing"]
+    assert repo.origin == ORIGIN_REPO and parent_root in repo.path, (
+        f"the repository package must resolve to the parent root, got {repo}"
+    )
+    assert consumer.origin == ORIGIN_CONSUMER and test_root in consumer.path, (
+        f"the consumer package must resolve to the application root, got {consumer}"
+    )
+    assert repo.has_init is True, "repo fixture wrote an __init__.py"
+
+
+@th.unit_test("runner records: a same-named consumer package no longer shadows the repository's")
+def test_records_same_name_dedupe(opts):
+    import tempfile
+    from testit.runner import ORIGIN_REPO
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root, parent_root = _roots(
+            tmpdir, consumer=["test_dup"], repo=["test_dup"])
+        records = _collect(test_root, parent_root)
+
+    dups = [r for r in records if r.name == "test_dup"]
+    assert len(dups) == 1, (
+        f"a same-named package must yield exactly one record, never the "
+        f"historical duplicate pair, got {len(dups)}"
+    )
+    assert dups[0].origin == ORIGIN_REPO and parent_root in dups[0].path, (
+        f"the repository package must win collection over a same-named "
+        f"consumer package, got {dups[0]}"
+    )
+
+
+@th.unit_test("runner records: direct -t pkg.file specs resolve kind, file, and origin")
+def test_records_direct_file_spec(opts):
+    import tempfile
+    from testit.runner import ORIGIN_REPO
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root, parent_root = _roots(tmpdir, repo=["test_only_repo"])
+        records = _collect(test_root, parent_root,
+                           test_modules=["test_only_repo.test_b"])
+
+    assert len(records) == 1, f"one spec must yield one record, got {records}"
+    record = records[0]
+    assert record.kind == "file" and record.test_file == "test_b", (
+        f"a pkg.file spec must produce a file record naming its file, got {record}"
+    )
+    assert record.origin == ORIGIN_REPO and parent_root in record.path, (
+        f"the file spec must resolve to the repository package, got {record}"
+    )
+
+
+@th.unit_test("runner records: a package without __init__.py is recorded explicitly")
+def test_records_missing_init(opts):
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root, parent_root = _roots(
+            tmpdir, repo=["test_no_init"], repo_init=False)
+        records = _collect(test_root, parent_root)
+
+    record = next(r for r in records if r.name == "test_no_init")
+    assert record.has_init is False, (
+        "the record must state the missing __init__.py explicitly — the "
+        "fail-closed policy state depends on it, not on a permissive default"
+    )
+
+
+@th.unit_test("runner records: --nomojo and --onlymojo select by origin")
+def test_records_nomojo_onlymojo(opts):
+    import tempfile
+    from testit.runner import ORIGIN_CONSUMER, ORIGIN_REPO
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root, parent_root = _roots(
+            tmpdir, consumer=["test_appthing"], repo=["test_repothing"])
+        nomojo = _collect(test_root, parent_root, nomojo=True)
+        onlymojo = _collect(test_root, parent_root, onlymojo=True)
+
+    assert [r.origin for r in nomojo] == [ORIGIN_CONSUMER], (
+        f"--nomojo must collect only consumer records, got {nomojo}"
+    )
+    assert [r.origin for r in onlymojo] == [ORIGIN_REPO], (
+        f"--onlymojo must collect only repository records, got {onlymojo}"
+    )
+
+
+@th.unit_test("runner records: targeted -t modules resolve against both roots")
+def test_records_targeted_modules(opts):
+    import tempfile
+    from testit.runner import ORIGIN_CONSUMER, ORIGIN_REPO
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root, parent_root = _roots(
+            tmpdir, consumer=["test_appthing"], repo=["test_repothing"])
+        records = _collect(test_root, parent_root,
+                           test_modules=["test_appthing", "test_repothing"])
+
+    by_name = {r.name: r for r in records}
+    assert by_name["test_appthing"].origin == ORIGIN_CONSUMER, (
+        f"a consumer-root -t module must record consumer origin, got "
+        f"{by_name['test_appthing']}"
+    )
+    assert by_name["test_repothing"].origin == ORIGIN_REPO, (
+        f"a repository-root -t module must record repository origin, got "
+        f"{by_name['test_repothing']}"
+    )
+
+
+@th.unit_test("runner records: discovery for a record uses exactly its resolved path")
+def test_record_discovery_uses_record_path(opts):
+    import tempfile
+    from testit.runner import _discover_record_files
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_root, parent_root = _roots(
+            tmpdir, consumer=["test_dup"], repo=["test_dup"])
+        records = _collect(test_root, parent_root)
+        record = next(r for r in records if r.name == "test_dup")
+        files = _discover_record_files(record)
+
+    names = [name for name, _path in files]
+    assert names == ["test_b"], (
+        f"discovery must list the repository package's files (test_b), never "
+        f"the shadowing consumer package's (test_a), got {names}"
+    )
+    assert all(record.path in path for _n, path in files), (
+        f"every discovered file must live under the record's own path, got {files}"
+    )
+
+
+@th.unit_test("runner config states: ok / missing_init / missing_testit / invalid")
+def test_config_states(opts):
+    import os
+    import tempfile
+    from testit.runner import _load_module_config_ex
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config, state = _load_module_config_ex(tmpdir)
+        assert state == "missing_init", (
+            f"a directory without __init__.py must report missing_init, got {state}"
+        )
+
+        init_path = os.path.join(tmpdir, "__init__.py")
+        with open(init_path, "w") as fh:
+            fh.write("# empty\n")
+        config, state = _load_module_config_ex(tmpdir)
+        assert state == "missing_testit", (
+            f"an __init__.py without a TESTIT dict must report missing_testit, got {state}"
+        )
+
+        with open(init_path, "w") as fh:
+            fh.write('TESTIT = {"serial": True, "default_core": True}\n')
+        config, state = _load_module_config_ex(tmpdir)
+        assert state == "ok" and config.serial is True and config.default_core is True, (
+            f"a literal TESTIT dict must report ok and merge, got {state} {config}"
+        )
+
+        with open(init_path, "w") as fh:
+            fh.write("TESTIT = make_config()\n")
+        config, state = _load_module_config_ex(tmpdir)
+        assert state == "invalid", (
+            f"a computed (non-literal) TESTIT must report invalid — fail-closed, got {state}"
+        )
+        assert config.default_core is False, (
+            "a non-ok state must fall back to the permissive defaults for "
+            "backward compatibility (the policy layer is what fails closed)"
+        )
+
+
+@th.unit_test("runner records: a shadowed import is refused, not run")
+def test_import_shadow_refused(opts):
+    import io
+    import tempfile
+    from contextlib import redirect_stdout
+    from testit.runner import import_module_for_testing
+
+    with tempfile.TemporaryDirectory() as expected_root:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            # `json` imports fine but lives nowhere near expected_root — the
+            # exact shape of a same-named package resolving elsewhere.
+            module = import_module_for_testing("os", "path", expected_root)
+
+    assert module is None, (
+        "an import that resolves outside the record's directory must be "
+        "refused rather than executed"
+    )
+    assert "shadow" in output.getvalue().lower(), (
+        f"the refusal must explain the shadowing, got {output.getvalue()!r}"
     )

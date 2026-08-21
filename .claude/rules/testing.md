@@ -41,6 +41,22 @@ Before writing any test, read `docs/django_developer/testit/Overview.md`. This i
 - If process-wide mutation is genuinely unavoidable, put that coverage in an opt-in
   module and mark the module `serial`. An extra tag alone does not provide isolation:
   `--all` still runs eligible modules in parallel.
+- **This is enforced, fail-closed** (item #1839): `testit/isolation.py` AST-scans every
+  repository test package before workers start; `-t` and direct-file runs do not bypass
+  it. Every repo package must declare its state in `TESTIT`: `"default_core": True`
+  (clean; no `requires_extra`; `serial` only for execution reasons and only when
+  violation-free) or a nonempty `"requires_extra"` (opt-in; `serial: True` mandatory
+  when it mutates). A package without a readable literal `TESTIT` dict fails the run.
+  Consumer/application test roots are exempt.
+- The blocking grammar: settings-singleton / `django.conf.settings` / `os.environ` /
+  `sys.modules` mutation, protected-setting ORM/service/REST writes (dynamic keys fail
+  closed), and patches of the shared `mojo.helpers.settings`, `mojo.apps.incident`,
+  `mojo.apps.jobs` and `testit` surfaces. App-internal provider mocks are advisory for
+  now (cold ring — see the #1839 follow-up). Keys under `TESTIT_` are always writable.
+  Prefer the service seams (`reporter=`, `publisher=`, `send_email=`, `loader=`) over
+  any patch. No comment/path suppressions exist.
+- A restoring `try/finally` or `th.server_settings()` does NOT make shared mutation
+  parallel-safe — restoration bounds the visibility window, it does not close it.
 
 ## Rules
 - Every `assert` must include a descriptive failure message — no bare asserts

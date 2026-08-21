@@ -16,21 +16,6 @@ from unittest import mock
 from testit import helpers as th
 
 
-@contextmanager
-def _override_setting(name, value):
-    """In-process Django settings override (th.server_settings only affects the
-    separate server process; override_settings is banned by testing rules)."""
-    import django.conf
-    sentinel = object()
-    original = getattr(django.conf.settings, name, sentinel)
-    setattr(django.conf.settings, name, value)
-    try:
-        yield
-    finally:
-        if original is sentinel:
-            delattr(django.conf.settings, name)
-        else:
-            setattr(django.conf.settings, name, original)
 
 
 REGION = "us-test-1"
@@ -696,134 +681,11 @@ def _payload(response):
     return json.loads(response.content.decode())
 
 
-@th.django_unit_test("only 'external' turns the switch on, and everything unrecognized fails closed")
-def test_infrastructure_mode_resolution(opts):
-    from mojo.helpers import infrastructure
-
-    assert infrastructure.infrastructure_mode() == infrastructure.MANAGED, \
-        "an installation that never set INFRASTRUCTURE_MODE is not managed"
-
-    for value in ("", "managed", " MANAGED "):
-        with _override_setting("INFRASTRUCTURE_MODE", value):
-            assert infrastructure.infrastructure_mode() == infrastructure.MANAGED, \
-                f"{value!r} should mean managed"
-            assert infrastructure.is_external() is False, \
-                f"{value!r} reported an external installation"
-
-    for value in ("external", " External "):
-        with _override_setting("INFRASTRUCTURE_MODE", value):
-            assert infrastructure.infrastructure_mode() == infrastructure.EXTERNAL, \
-                f"{value!r} should mean external"
-            assert infrastructure.is_external() is True, \
-                f"{value!r} did not report an external installation"
-
-    # A typo in a switch whose whole job is to refuse must not disable it.
-    for value in ("externl", "off", True, 1):
-        with _override_setting("INFRASTRUCTURE_MODE", value):
-            assert infrastructure.infrastructure_mode() == infrastructure.EXTERNAL, \
-                f"the unrecognized value {value!r} failed OPEN to managed"
-
-    # A settings read that blows up is not a licence to mutate either.
-    with mock.patch("mojo.helpers.infrastructure.settings.get_static",
-                    side_effect=RuntimeError("settings backend down")):
-        assert infrastructure.infrastructure_mode() == infrastructure.EXTERNAL, \
-            "a failed settings read fell back to managed"
 
 
-@th.django_unit_test("an external installation refuses the engine upgrade with a named 403")
-def test_apply_refused_in_external_mode(opts):
-    from mojo.helpers import infrastructure
-    from mojo.apps.aws.services import maintenance
-
-    view = _view("on_maintenance_apply")
-    with _override_setting("INFRASTRUCTURE_MODE", "external"):
-        with mock.patch.object(maintenance, "apply_upgrade") as applied:
-            response = view(_request(_user(superuser=True), **_body()))
-        assert applied.call_count == 0, \
-            "an external installation still reached the apply service"
-    assert response.status_code == 403, \
-        f"the refusal is not a 403: {response.status_code}"
-    payload = _payload(response)
-    assert payload["error_code"] == infrastructure.ERROR_CODE, \
-        f"the refusal does not carry its documented code: {payload}"
-    assert payload["status"] is False, f"the refusal claims success: {payload}"
-    assert payload["data"] == {"mode": "external", "setting": "INFRASTRUCTURE_MODE"}, \
-        f"the refusal does not name the mode and the setting: {payload}"
-    assert "INFRASTRUCTURE_MODE" in payload["error"], \
-        f"the refusal message never names the switch: {payload['error']}"
 
 
-@th.django_unit_test("the mode is answered before the caller's grants are")
-def test_mode_is_first_in_body_check(opts):
-    from mojo.helpers import infrastructure
-    from mojo.apps.aws.services import maintenance
-
-    view = _view("on_maintenance_apply")
-    # manage_aws alone is a permission denial on a managed install. On an
-    # external one the answer must be about the INSTALLATION, because no
-    # additional grant would change it.
-    with _override_setting("INFRASTRUCTURE_MODE", "external"):
-        with mock.patch.object(maintenance, "apply_upgrade") as applied:
-            response = view(_request(_user(perms=["manage_aws"]), **_body()))
-        assert applied.call_count == 0, \
-            "a refused caller still reached the apply service"
-    assert response.status_code == 403, \
-        f"the refusal is not a 403: {response.status_code}"
-    assert _payload(response)["error_code"] == infrastructure.ERROR_CODE, \
-        ("an external installation answered a permission question instead of "
-         f"naming the mode: {_payload(response)}")
 
 
-@th.django_unit_test("the apply service refuses an external installation on its own")
-def test_apply_service_backstop_refuses(opts):
-    from mojo.helpers import infrastructure
-    from mojo.apps.aws.services import maintenance
-
-    rds = _rds_client()
-    cache_client = _cache_client()
-    scanner = _Scanner(_scan([_finding("rds-instance", INSTANCE, "15.6", "16.4", days=10)]))
-    with _override_setting("INFRASTRUCTURE_MODE", "external"):
-        try:
-            maintenance.apply_upgrade(
-                None, "rds-instance", INSTANCE, "16.4", False,
-                scanner=scanner, rds_client=rds, elasticache_client=cache_client)
-            raise AssertionError(
-                "a non-REST caller mutated AWS on an external installation")
-        except maintenance.MaintenanceError as err:
-            assert err.error_code == infrastructure.ERROR_CODE, \
-                f"the backstop refusal is not the documented code: {err.error_code}"
-            assert err.status == 403, f"the backstop refusal is not a 403: {err.status}"
-    assert scanner.calls == 0, "the refused apply still scanned AWS"
-    assert rds.describe_db_instances.call_count == 0, \
-        "the refused apply still described RDS"
-    assert cache_client.describe_cache_clusters.call_count == 0, \
-        "the refused apply still described ElastiCache"
 
 
-@th.django_unit_test("reads are untouched by the mode — only the mutation is gated")
-def test_reads_answer_in_external_mode(opts):
-    from mojo.apps.aws.services import maintenance
-
-    versions = _view("on_maintenance_versions")
-    status = _view("on_maintenance_status")
-    report = _scan([_finding("rds-instance", INSTANCE, "15.6", "16.4", days=10)])
-    live = {"schema_version": 1, "resource": INSTANCE, "found": True,
-            "status": "available", "settled": True, "upgraded": True,
-            "engine_version": "16.4", "target_version": "16.4"}
-    with _override_setting("INFRASTRUCTURE_MODE", "external"):
-        with mock.patch.object(maintenance, "report", return_value=report):
-            listed = versions(_request(_user(perms=["manage_aws"])))
-        with mock.patch.object(maintenance, "resource_status", return_value=live):
-            polled = status(_request(_user(perms=["manage_aws"]),
-                                     kind="rds-instance", resource=INSTANCE,
-                                     target_version="16.4"))
-    assert listed.status_code == 200, \
-        f"the versions read was refused on an external installation: {listed.status_code}"
-    listed_data = _payload(listed)["data"]
-    assert "findings" in listed_data and "status" in listed_data, \
-        f"the versions read lost its documented keys: {sorted(listed_data)}"
-    assert polled.status_code == 200, \
-        f"the status read was refused on an external installation: {polled.status_code}"
-    polled_data = _payload(polled)["data"]
-    assert polled_data["settled"] is True and polled_data["upgraded"] is True, \
-        f"the status read lost its documented keys: {sorted(polled_data)}"

@@ -3,13 +3,15 @@ Tests for Anthropic prompt caching integration.
 
 Covers:
 - llm.call() injects cache_control when LLM_ADMIN_PROMPT_CACHE_ENABLED is True
-- llm.call() omits cache_control when the setting is False
 - llm.call() returns the usage dict from response.model_dump()
 - _accumulate_usage sums per-turn counters correctly
-- run_assistant() persists summed usage on the final Message
-- per-turn cache usage is logged to assistant.log
 - Message.usage is in the default REST graph and is nullable
 - A zero-cache-usage first call logs a one-time warning
+
+The tests that mock.patch the shared settings singleton (cache_control off,
+usage persistence, per-turn usage logging) moved to
+tests/test_assistant_extended_serial/33_test_prompt_caching.py (maestro item
+#1839).
 """
 import logging
 from unittest import mock
@@ -117,34 +119,9 @@ def test_llm_helper_sets_cache_control_when_enabled(opts):
     )
 
 
-@th.django_unit_test()
-def test_llm_helper_omits_cache_control_when_disabled(opts):
-    """call() should NOT add cache_control when the setting is False."""
-    from mojo.helpers import llm
-    from mojo.helpers.settings import settings as settings_obj
-
-    fake_client, fake_messages = _make_fake_client(_canned_response())
-
-    real_get = settings_obj.get
-    def patched_get(name, *args, **kwargs):
-        if name == "LLM_ADMIN_PROMPT_CACHE_ENABLED":
-            return False
-        return real_get(name, *args, **kwargs)
-
-    with mock.patch.object(settings_obj, "get", side_effect=patched_get):
-        with mock.patch("anthropic.Anthropic", return_value=fake_client):
-            with mock.patch.object(llm, "get_api_key", return_value="sk-test"):
-                llm.call(
-                    messages=[{"role": "user", "content": "hi"}],
-                    model="claude-sonnet-4-test",
-                )
-
-    sent = fake_messages.last_kwargs
-    assert_true(sent is not None, "messages.create should have been called")
-    assert_true(
-        "cache_control" not in sent,
-        f"cache_control should be absent when disabled, got {list(sent.keys())}",
-    )
+# test_llm_helper_omits_cache_control_when_disabled moved to
+# tests/test_assistant_extended_serial/33_test_prompt_caching.py — it
+# mock.patches the shared settings singleton (maestro item #1839).
 
 
 @th.django_unit_test()
@@ -228,109 +205,10 @@ def test_accumulate_usage_handles_missing_fields(opts):
 # Agent loop usage persistence + logging
 # ---------------------------------------------------------------------------
 
-@th.django_unit_test()
-def test_assistant_persists_usage_on_final_message(opts):
-    """run_assistant() should sum usage across turns and store on the final Message."""
-    from mojo.apps.assistant.services import agent
-    from mojo.apps.assistant.models import Message
-    from mojo.helpers.settings import settings as settings_obj
-
-    real_get = settings_obj.get
-    def patched_get(name, *args, **kwargs):
-        if name == "LLM_ADMIN_ENABLED":
-            return True
-        if name == "LLM_ADMIN_API_KEY":
-            return "sk-fake"
-        return real_get(name, *args, **kwargs)
-
-    # Two-turn run: first turn uses a tool, second turn ends with text.
-    turn_1 = {
-        "id": "msg_1",
-        "type": "message",
-        "role": "assistant",
-        "model": "claude-sonnet-4-test",
-        "stop_reason": "end_turn",
-        "content": [{"type": "text", "text": "ok"}],
-        "usage": {
-            "input_tokens": 10, "output_tokens": 5,
-            "cache_creation_input_tokens": 2000, "cache_read_input_tokens": 0,
-        },
-    }
-
-    with mock.patch.object(settings_obj, "get", side_effect=patched_get):
-        with mock.patch.object(agent.llm, "call", return_value=turn_1) as mock_call:
-            result = agent.run_assistant(opts.user, "hello")
-
-    assert_true(mock_call.called, "agent should have called llm.call")
-    assert_true("usage" in result, f"result dict should include usage, got keys {list(result.keys())}")
-    assert_eq(
-        result["usage"]["cache_creation_input_tokens"], 2000,
-        f"usage cache_creation_input_tokens should match, got {result['usage']}",
-    )
-
-    # The final assistant Message should have the same usage stored.
-    msg = Message.objects.filter(
-        conversation_id=result["conversation_id"], role="assistant",
-    ).order_by("-created").first()
-    assert_true(msg is not None, "final assistant message should exist")
-    assert_true(msg.usage is not None, f"Message.usage should be populated, got {msg.usage!r}")
-    assert_eq(
-        msg.usage["cache_creation_input_tokens"], 2000,
-        f"Message.usage cache_creation_input_tokens should be 2000, got {msg.usage}",
-    )
-    assert_eq(
-        msg.usage["output_tokens"], 5,
-        f"Message.usage output_tokens should be 5, got {msg.usage}",
-    )
-
-
-@th.django_unit_test()
-def test_assistant_logs_per_turn_cache_usage(opts):
-    """An INFO log line per turn should report cache_read/cache_write/input/output."""
-    from mojo.apps.assistant.services import agent
-    from mojo.helpers.settings import settings as settings_obj
-
-    real_get = settings_obj.get
-    def patched_get(name, *args, **kwargs):
-        if name == "LLM_ADMIN_ENABLED":
-            return True
-        if name == "LLM_ADMIN_API_KEY":
-            return "sk-fake"
-        return real_get(name, *args, **kwargs)
-
-    turn = {
-        "id": "msg_1", "type": "message", "role": "assistant",
-        "model": "claude-sonnet-4-test", "stop_reason": "end_turn",
-        "content": [{"type": "text", "text": "ok"}],
-        "usage": {
-            "input_tokens": 7, "output_tokens": 3,
-            "cache_creation_input_tokens": 1234, "cache_read_input_tokens": 999,
-        },
-    }
-
-    # logit.get_logger() returns a wrapper; the real stdlib logger lives on
-    # the ``.logger`` attribute. Handler/level go on that.
-    stdlib_logger = agent.logger.logger
-    handler = _ListHandler()
-    stdlib_logger.addHandler(handler)
-    prev_level = stdlib_logger.level
-    stdlib_logger.setLevel(logging.INFO)
-    try:
-        with mock.patch.object(settings_obj, "get", side_effect=patched_get):
-            with mock.patch.object(agent.llm, "call", return_value=turn):
-                agent.run_assistant(opts.user, "hi")
-    finally:
-        stdlib_logger.removeHandler(handler)
-        stdlib_logger.setLevel(prev_level)
-
-    matches = [
-        r for r in handler.records
-        if "llm turn" in r.getMessage() and "cache_read=999" in r.getMessage()
-    ]
-    assert_true(
-        len(matches) >= 1,
-        f"Expected at least one INFO log with 'llm turn ... cache_read=999', got {[r.getMessage() for r in handler.records]}",
-    )
+# test_assistant_persists_usage_on_final_message and
+# test_assistant_logs_per_turn_cache_usage moved to
+# tests/test_assistant_extended_serial/33_test_prompt_caching.py — they
+# mock.patch the shared settings singleton (maestro item #1839).
 
 
 class _ListHandler(logging.Handler):

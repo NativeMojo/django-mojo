@@ -49,7 +49,13 @@ def _get_redirect_uri(request, provider_name):
     return f"{origin}/auth/oauth/{provider_name}/complete"
 
 
-def _validate_redirect_uri(request, redirect_uri):
+# Sentinel: "read the deployment allowlist from settings" — None is a real
+# injected value (no allowlist configured), so absence needs its own marker.
+_DEPLOYMENT_FROM_SETTINGS = object()
+
+
+def _validate_redirect_uri(request, redirect_uri,
+                           deployment_entries=_DEPLOYMENT_FROM_SETTINGS):
     """
     Validate redirect_uri against the allowlist, matched as a URL.
 
@@ -122,7 +128,15 @@ def _validate_redirect_uri(request, redirect_uri):
     Raises ValueException (400) if the URI is not on the allowlist or if no
     allowlist is configured at all.
     """
-    deployment = list(settings.get("ALLOWED_REDIRECT_URLS", [], kind="list") or [])
+    if deployment_entries is _DEPLOYMENT_FROM_SETTINGS:
+        deployment = list(settings.get("ALLOWED_REDIRECT_URLS", [], kind="list") or [])
+    else:
+        # Injected raw value (tests): apply the SAME kind="list" coercion the
+        # settings read performs, so a bare string or JSON-array string behaves
+        # identically to a deployment configuring the key that way.
+        deployment = list(redirect_allowlist.coerce_entries(
+            deployment_entries, source="ALLOWED_REDIRECT_URLS") or []) \
+            if deployment_entries is not None else []
     # getattr + truthiness, never hasattr: request.group may be an objict-shaped
     # stand-in, and objict answers hasattr True for every name.
     group = getattr(request, "group", None)

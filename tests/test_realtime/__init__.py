@@ -1,4 +1,5 @@
 TESTIT = {
+    "default_core": True,
     "requires_apps": ["mojo.apps.realtime"],
     # Connection-limit coverage deliberately keeps ten sockets open together.
     # A concurrent server_settings writer degrades after 60s and restarts the

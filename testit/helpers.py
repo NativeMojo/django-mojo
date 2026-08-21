@@ -569,7 +569,8 @@ def expect(value, got, name="field"):
     assert value == got, f"{name} expected {value} got {got}"
 
 
-def run_pending_jobs(channel=None, status="pending", func=None, payload=None):
+def run_pending_jobs(channel=None, status="pending", func=None, payload=None,
+                     loader=None):
     """
     Execute pending jobs from the DB the same way the job engine does.
     No Redis or running engine needed.
@@ -580,11 +581,18 @@ def run_pending_jobs(channel=None, status="pending", func=None, payload=None):
     calls func(job) — exactly like job_engine.py:642.
     Marks job completed on success, failed on exception.
 
+    `loader` swaps the function loader for this call only — parallel test
+    modules must inject a local loader instead of patching the shared
+    load_job_function module attribute, which every other thread sees.
+
     Returns count of jobs executed.
     """
     from mojo.apps.jobs.models import Job
-    from mojo.apps.jobs.job_engine import load_job_function
     from django.utils import timezone
+
+    if loader is None:
+        from mojo.apps.jobs.job_engine import load_job_function
+        loader = load_job_function
 
     qs = Job.objects.filter(status=status)
     if channel:
@@ -597,7 +605,7 @@ def run_pending_jobs(channel=None, status="pending", func=None, payload=None):
 
     count = 0
     for job in qs:
-        handler = load_job_function(job.func)
+        handler = loader(job.func)
         try:
             handler(job)
             next_status = "completed"

@@ -1,4 +1,5 @@
 TESTIT = {
+    "default_core": True,
     "requires_apps": ["mojo.apps.incident"],
     # Deliberately NOT requires_extra: ["slow"] — unlike tests/test_incident/,
     # these are fast incident-rule correctness and prompt/doc accuracy

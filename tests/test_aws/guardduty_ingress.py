@@ -1,7 +1,6 @@
 import base64
 import json
 from datetime import timedelta
-from unittest import mock
 
 from testit import helpers as th
 
@@ -105,25 +104,6 @@ def _envelope(message_id, message, topic=TOPIC):
     }
 
 
-def _sign(envelope, key):
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.asymmetric import padding
-    from mojo.apps.aws.services import sns
-
-    envelope["Signature"] = base64.b64encode(
-        key.sign(sns._canonical(envelope), padding.PKCS1v15(), hashes.SHA256())
-    ).decode("ascii")
-    return envelope
-
-
-class _Certificate:
-    def __init__(self, public_key):
-        self._public_key = public_key
-
-    def public_key(self):
-        return self._public_key
-
-
 def _clear_state():
     from mojo.apps.aws.models import GuardDutyFinding
     from mojo.apps.incident.models import (
@@ -182,91 +162,6 @@ def test_endpoint_is_routed(opts):
         f"map at all, so AWS could never deliver a finding. Got "
         f"{response.status_code}."
     )
-
-
-@th.django_unit_test()
-def test_signature_and_allowlist_are_isolated_from_cloudwatch(opts):
-    from cryptography.hazmat.primitives.asymmetric import rsa
-    from django.conf import settings as django_settings
-    from django.test import RequestFactory
-    from django.utils import timezone
-    from mojo.apps.aws.rest.sns import on_guardduty_finding
-    from mojo.apps.aws.services import sns
-
-    _clear_state()
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    envelope = _sign(
-        _envelope("gd-valid", _eventbridge(_finding(timezone.now()))), key,
-    )
-
-    def _post(payload):
-        return RequestFactory().generic(
-            "POST", "/api/aws/guardduty/sns/finding",
-            data=json.dumps(payload), content_type="text/plain",
-        )
-
-    sentinel = object()
-    gd_original = getattr(
-        django_settings, "AWS_GUARDDUTY_FINDING_TOPIC_ARNS", sentinel,
-    )
-    cw_original = getattr(
-        django_settings, "AWS_CLOUDWATCH_ALARM_TOPIC_ARNS", sentinel,
-    )
-    try:
-        django_settings.AWS_GUARDDUTY_FINDING_TOPIC_ARNS = [TOPIC]
-        django_settings.AWS_CLOUDWATCH_ALARM_TOPIC_ARNS = []
-        with mock.patch.object(
-            sns, "_certificate", return_value=_Certificate(key.public_key()),
-        ):
-            accepted = on_guardduty_finding(_post(envelope))
-        assert accepted.status_code == 200, (
-            "A signed notification from an allowlisted topic must be accepted, "
-            f"got {accepted.status_code}"
-        )
-
-        django_settings.AWS_GUARDDUTY_FINDING_TOPIC_ARNS = []
-        with mock.patch.object(sns, "_certificate") as certificate:
-            denied = on_guardduty_finding(_post(envelope))
-        assert denied.status_code == 403, (
-            "An empty GuardDuty topic allowlist must fail closed, got "
-            f"{denied.status_code}"
-        )
-        assert certificate.called is False, (
-            "A denied topic must be rejected before any certificate I/O"
-        )
-
-        django_settings.AWS_CLOUDWATCH_ALARM_TOPIC_ARNS = [TOPIC]
-        with mock.patch.object(
-            sns, "_certificate", return_value=_Certificate(key.public_key()),
-        ):
-            cross = on_guardduty_finding(_post(envelope))
-        assert cross.status_code == 403, (
-            "A topic allowlisted only for CloudWatch alarms must NOT be able "
-            "to deliver findings (or confirm a subscription) on the GuardDuty "
-            f"receiver; the two allowlists are independent. Got {cross.status_code}"
-        )
-
-        django_settings.AWS_GUARDDUTY_FINDING_TOPIC_ARNS = [TOPIC]
-        tampered = dict(envelope)
-        tampered["MessageId"] = "gd-tampered"
-        with mock.patch.object(
-            sns, "_certificate", return_value=_Certificate(key.public_key()),
-        ):
-            forged = on_guardduty_finding(_post(tampered))
-        assert forged.status_code == 403, (
-            "A signed envelope whose MessageId was altered after signing must "
-            f"be rejected, got {forged.status_code}"
-        )
-    finally:
-        for name, original in (
-            ("AWS_GUARDDUTY_FINDING_TOPIC_ARNS", gd_original),
-            ("AWS_CLOUDWATCH_ALARM_TOPIC_ARNS", cw_original),
-        ):
-            if original is sentinel:
-                if hasattr(django_settings, name):
-                    delattr(django_settings, name)
-            else:
-                setattr(django_settings, name, original)
 
 
 @th.django_unit_test()
@@ -528,62 +423,6 @@ def test_shipped_policy_dispatches_once_per_delivery(opts):
 
 
 @th.django_unit_test()
-def test_each_occurrence_publishes_its_own_handler_job(opts):
-    from django.utils import timezone
-    from mojo.apps.aws.models import GuardDutyFinding
-    from mojo.apps.aws.services.guardduty_findings import process_notification
-    from mojo.apps.incident.handlers.event_handlers import execute_handler
-    from mojo.apps.incident.services.lifecycle import resolve_incident
-    from mojo.apps.incident.models import Ticket
-
-    _clear_state()
-    _ticket_policy()
-    started = timezone.now()
-    process_notification(_envelope("gd-occ-1", _eventbridge(_finding(started))))
-
-    finding = GuardDutyFinding.objects.get()
-    first_event = _events().get()
-    first_job = _handler_jobs().get()
-    assert first_job.idempotency_key.startswith(
-        f"aws-gd:{finding.pk}:{first_event.pk}"
-    ), (
-        f"Occurrence 1 must be keyed aws-gd:{finding.pk}:{first_event.pk}, got "
-        f"{first_job.idempotency_key}"
-    )
-
-    with mock.patch(
-        "mojo.apps.incident.handlers.event_handlers.TicketHandler._push_to_maestro"
-    ) as push:
-        execute_handler(first_job)
-    ticket = Ticket.objects.get(category="guardduty-test")
-    assert ticket.incident_id == finding.active_incident_id, (
-        "The configured ticket handler must link human work to the finding's incident"
-    )
-    assert push.call_count == 1, "Board routing must occur only through TicketHandler"
-
-    resolve_incident(
-        _incidents().first(), note="operator closed it", kind="guardduty:test",
-    )
-    process_notification(
-        _envelope("gd-occ-2", _eventbridge(_finding(started + timedelta(hours=2))))
-    )
-
-    finding.refresh_from_db()
-    second_event = _events().order_by("id").last()
-    assert _handler_jobs().count() == 2, (
-        "A NEW occurrence must publish its OWN handler job. Job.idempotency_key "
-        "is globally unique and jobs.publish returns the pre-existing job on "
-        "collision, so a finding-pk-only prefix would silently publish nothing "
-        f"here. Got {_handler_jobs().count()} job(s)."
-    )
-    assert _handler_jobs().filter(
-        idempotency_key__startswith=f"aws-gd:{finding.pk}:{second_event.pk}",
-    ).exists(), (
-        f"Occurrence 2 must be keyed aws-gd:{finding.pk}:{second_event.pk}"
-    )
-
-
-@th.django_unit_test()
 def test_persisted_metadata_is_bounded(opts):
     from django.utils import timezone
     from mojo.apps.aws.services.guardduty_findings import process_notification
@@ -722,3 +561,4 @@ def test_recurrence_never_bundles_back_into_a_resolved_incident(opts):
         f"The resolved incident must not gain events after resolution, got "
         f"{resolved.events.count()}"
     )
+

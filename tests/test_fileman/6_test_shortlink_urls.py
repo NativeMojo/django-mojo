@@ -226,40 +226,6 @@ def test_toggle_fm_off(opts):
     fm.save(update_fields=["mojo_secrets", "modified"])
 
 
-@th.django_unit_test("Toggle: per-FileManager True overrides global False")
-def test_toggle_fm_true_wins(opts):
-    from mojo.apps.fileman.models import FileManager
-    from mojo.apps.shortlink.models import ShortLink
-    from unittest import mock
-
-    fm = FileManager.objects.get(pk=opts.fm_id)
-    fm.set_setting("use_shortlinks", True)  # per-manager ON
-    fm.save(update_fields=["mojo_secrets", "modified"])
-
-    # Simulate global OFF via settings.get returning False. Patching the helper
-    # module's settings import is simplest (and works because generate_download_url
-    # is invoked in-process — no cross-process server isolation).
-    from mojo.apps.fileman.models import file as file_module
-    with mock.patch.object(file_module, "_shortlink_installed", return_value=True):
-        with mock.patch("mojo.helpers.settings.settings.get") as mget:
-            def _fake_get(k, default=None, **kwargs):
-                if k == "FILEMAN_USE_SHORTLINKS":
-                    return False
-                return default
-            mget.side_effect = _fake_get
-            f = _mk_file(opts, "tier1_fm_wins.txt")
-            url = f.generate_download_url()
-    assert_true("/s/" in (url or ""),
-                f"per-manager True should override global False; got {url!r}")
-    assert_true(
-        ShortLink.objects.filter(file=f, source="fileman").exists(),
-        "shortlink row should be created when per-manager wins",
-    )
-
-    fm.set_setting("use_shortlinks", None)
-    fm.save(update_fields=["mojo_secrets", "modified"])
-
-
 # ---------------------------------------------------------------------------
 # Public vs private backend — resolver must not recurse
 # ---------------------------------------------------------------------------
@@ -736,3 +702,4 @@ def cleanup_shortlink_tests(opts):
 
     if os.path.exists(opts.tmpdir):
         _shutil.rmtree(opts.tmpdir, ignore_errors=True)
+

@@ -65,14 +65,24 @@ def dispatch(group, event_type, data, *, idempotency_key=None, channel="webhooks
     )
 
 
-def handle_fanout(job):
+def handle_fanout(job, *, publisher=None, reporter=None):
     """Worker handler: load the Group, query matching active subscriptions,
     publish one signed webhook job per row. Per-row failures are reported to
     the incident app and skipped. Returns 'success' or 'failed' (no retry on
     'failed' — group_missing is not recoverable).
+
+    `publisher` and `reporter` default to the production callables
+    (jobs.publish_webhook and incident.report_event). They exist so a test
+    can inject local fakes instead of patching the shared module attributes,
+    which every parallel test thread observes.
     """
     from mojo.apps.account.models import Group, WebhookSubscription
     from mojo.apps import incident
+
+    if publisher is None:
+        publisher = jobs.publish_webhook
+    if reporter is None:
+        reporter = incident.report_event
 
     payload = job.payload
     group_id = payload.get("group_id")
@@ -83,7 +93,7 @@ def handle_fanout(job):
 
     group = Group.objects.filter(pk=group_id).first()
     if group is None:
-        incident.report_event(
+        reporter(
             details=f"webhook fan-out skipped: group_id={group_id} not found (event_type={event_type})",
             category="webhook:fanout:group_missing",
             scope="account",
@@ -114,14 +124,14 @@ def handle_fanout(job):
             )
             if idempotency_key:
                 kwargs["idempotency_key"] = f"{idempotency_key}_{sub.id}"
-            jid = jobs.publish_webhook(**kwargs)
+            jid = publisher(**kwargs)
             if len(published_job_ids) < PUBLISHED_JOB_ID_CAP:
                 published_job_ids.append(jid)
         except Exception as e:
             failed_count += 1
             safe_repr = _safe_error_repr(e)
             try:
-                incident.report_event(
+                reporter(
                     details=(
                         f"webhook fan-out failed to publish for subscription "
                         f"{sub.id} (group={group.id}, event_type={event_type}): {safe_repr}"

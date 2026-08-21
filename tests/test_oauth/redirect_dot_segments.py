@@ -54,25 +54,6 @@ ENTRIES = [ENTRY]
 REFUSAL = "redirect_uri is not on the allowlist"
 
 
-@contextlib.contextmanager
-def _entries(value):
-    """Point the IN-PROCESS allowlist at `value`.
-
-    In-process only: `opts.client` talks to a separate server process that keeps
-    the pinned test-project settings, so this never leaks into the endpoint test.
-    """
-    from django.conf import settings as django_settings
-
-    missing = object()
-    prev = getattr(django_settings, SETTING_KEY, missing)
-    setattr(django_settings, SETTING_KEY, value)
-    try:
-        yield
-    finally:
-        if prev is missing:
-            delattr(django_settings, SETTING_KEY)
-        else:
-            setattr(django_settings, SETTING_KEY, prev)
 
 
 def _refusal(redirect_uri, entries=ENTRIES):
@@ -81,13 +62,16 @@ def _refusal(redirect_uri, entries=ENTRIES):
     from mojo.apps.account.rest import oauth
 
     installed = list(entries) if isinstance(entries, (list, tuple)) else entries
-    with _entries(installed):
-        try:
-            # `request=None` = no group context, so `entries` IS the whole
-            # allowlist (the per-group source contributes nothing).
-            oauth._validate_redirect_uri(None, redirect_uri)
-        except merrors.ValueException as exc:
-            return str(exc.reason)
+    try:
+        # `request=None` = no group context, so `entries` IS the whole
+        # allowlist (the per-group source contributes nothing). The raw value
+        # is injected through the deployment_entries seam, which applies the
+        # same kind="list" coercion settings.get would — no process-global
+        # django.conf mutation (maestro item #1839).
+        oauth._validate_redirect_uri(None, redirect_uri,
+                                     deployment_entries=installed)
+    except merrors.ValueException as exc:
+        return str(exc.reason)
     return None
 
 

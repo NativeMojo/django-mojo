@@ -4,7 +4,6 @@ Tests for assistant incident event reporting.
 Verifies that security-relevant actions in the assistant generate
 incident events via report_event().
 """
-from unittest import mock
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
@@ -58,13 +57,15 @@ def test_report_event_helper_calls_incident_report(opts):
     from mojo.apps.assistant.services.agent import _report_event
 
     _clear_events(opts.admin, "assistant:test")
-    # Simulate a different package patching the public alias in parallel. The
-    # call-local dependency must still reach the real reporter.
-    with mock.patch("mojo.apps.incident.report_event"):
-        _report_event(
-            "assistant:test", 5, "Test title", "Test details",
-            user=opts.admin, _reporter=_real_reporter(),
-        )
+    # Converted for maestro item #1839: this used to wrap the call in
+    # mock.patch("mojo.apps.incident.report_event") to simulate a parallel
+    # package patching the public alias — a process-wide mutation that is
+    # itself unsafe in the parallel default tier. The call-local _reporter=
+    # seam is what the test asserts, and it needs no shared patch.
+    _report_event(
+        "assistant:test", 5, "Test title", "Test details",
+        user=opts.admin, _reporter=_real_reporter(),
+    )
     event = _event(opts.admin, "assistant:test")
     assert_eq(event.details, "Test details", "incident details should match")
     assert_eq(event.category, "assistant:test", "Category should match")
@@ -157,40 +158,10 @@ def test_event_categories_follow_convention(opts):
 # Handler events
 # ---------------------------------------------------------------------------
 
-@th.django_unit_test()
-def test_handler_permission_denied_fires_event(opts):
-    """WS handler permission denied should fire an event."""
-    from mojo.apps.assistant.handler import _handle_message
-    from mojo.apps.account.models import User
-
-    # Create user without view_admin
-    email = "evt-noperm@example.com"
-    User.objects.filter(email=email).delete()
-    noperm = User.objects.create_user(username=email, email=email, password=TEST_PASSWORD)
-    noperm.is_email_verified = True
-    noperm.save()
-
-    # Mock settings.get to return True for LLM_ADMIN_ENABLED so we reach permission check
-    from mojo.helpers.settings import settings
-    orig_get = settings.get
-
-    def patched_get(name, *args, **kwargs):
-        if name == "LLM_ADMIN_ENABLED":
-            return True
-        return orig_get(name, *args, **kwargs)
-
-    _clear_events(noperm, "assistant:permission_denied")
-    with mock.patch.object(settings, "get", side_effect=patched_get):
-        result = _handle_message(
-            noperm, {"type": "assistant_message", "message": "hello"},
-            _reporter=_real_reporter())
-    assert_eq(result["type"], "assistant_error", "Should return error")
-    event = _event(noperm, "assistant:permission_denied")
-    assert_eq(
-        event.category,
-        "assistant:permission_denied",
-        "Category should be assistant:permission_denied",
-    )
+# test_handler_permission_denied_fires_event moved to
+# tests/test_assistant_extended_serial/12_test_incident_reporting.py — it
+# mock.patches the shared settings singleton (mojo.helpers.settings.settings)
+# around an in-process handler call (maestro item #1839).
 
 
 # ---------------------------------------------------------------------------

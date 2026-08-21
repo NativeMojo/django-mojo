@@ -1,3 +1,9 @@
+# The tests that mutate django.conf.settings in-process (EMBEDDINGS_PROVIDER,
+# EMBEDDINGS_DIM, DOCIT_KB_RECONCILE_ENABLED, DOCIT_KB_MAX_DISTANCE) moved to
+# tests/test_docit_extended_serial/knowledge.py (maestro item #1839):
+# test_embed_provider_unavailable, test_embed_dimension_guard,
+# test_search_mode_degrades_without_provider, test_reconcile_null_embeddings_arm,
+# test_reconcile_cron_dispatcher, test_search_relevance_floor.
 from testit import helpers as th
 
 KB_USER = "kbtest_user"
@@ -172,54 +178,6 @@ def test_embed_pipeline_and_hash_skip(opts):
     page.content = PAGE_ALPHA_CONTENT
     page.save()
     knowledge.embed_page_now(page)
-
-
-@th.django_unit_test()
-def test_embed_provider_unavailable(opts):
-    """Without a provider, chunks are still written — embeddings stay null."""
-    from django.conf import settings as dj_settings
-    from mojo.apps.docit.models import Page
-    from mojo.apps.docit_kb.models import PageChunk
-    from mojo.apps.docit_kb.services import knowledge
-
-    page = Page.objects.get(pk=opts.kb_page_beta_id)
-    PageChunk.objects.filter(page=page).delete()
-    original = getattr(dj_settings, "EMBEDDINGS_PROVIDER", "mock")
-    dj_settings.EMBEDDINGS_PROVIDER = "bedrock"  # no AWS creds in the test env
-    try:
-        stats = knowledge.embed_page_now(page)
-        assert stats.created >= 1, f"Chunks must be created without a provider, got {stats}"
-        assert stats.embedded == 0, f"No provider must mean no embeddings, got {stats}"
-        assert PageChunk.objects.filter(page=page, embedding__isnull=False).count() == 0, \
-            "No embeddings may be written while the provider is unavailable"
-    finally:
-        dj_settings.EMBEDDINGS_PROVIDER = original
-
-    # Provider back: the same rows get their embeddings filled in.
-    stats = knowledge.embed_page_now(page)
-    assert stats.created == 0 and stats.embedded >= 1, \
-        f"Re-run with provider must embed the null rows only, got {stats}"
-
-
-@th.django_unit_test()
-def test_embed_dimension_guard(opts):
-    """A dimension mismatch must skip vectors instead of writing corrupt data."""
-    from django.conf import settings as dj_settings
-    from mojo.apps.docit.models import Page
-    from mojo.apps.docit_kb.models import PageChunk
-    from mojo.apps.docit_kb.services import knowledge
-
-    page = Page.objects.get(pk=opts.kb_page_beta_id)
-    PageChunk.objects.filter(page=page).delete()
-    dj_settings.EMBEDDINGS_DIM = 256
-    try:
-        stats = knowledge.embed_page_now(page)
-        assert stats.embedded == 0, \
-            f"EMBEDDINGS_DIM=256 vs 1024 column must skip embedding, got {stats}"
-    finally:
-        del dj_settings.EMBEDDINGS_DIM
-    stats = knowledge.embed_page_now(page)
-    assert stats.embedded >= 1, f"Restored dimension must embed again, got {stats}"
 
 
 @th.django_unit_test()
@@ -430,30 +388,6 @@ def test_rest_search_endpoint(opts):
 
 
 @th.django_unit_test()
-def test_search_mode_degrades_without_provider(opts):
-    """Without a usable provider, search degrades to FTS mode instead of erroring.
-
-    Tested in-process (not via th.server_settings) — a server_settings
-    override of EMBEDDINGS_PROVIDER can leak into var/django.conf under
-    parallel full-suite runs and poison the next run's baseline (item 543).
-    The REST dispatch layer is covered by test_rest_search_endpoint.
-    """
-    from django.conf import settings as dj_settings
-    from mojo.apps.docit_kb.services import knowledge
-
-    original = getattr(dj_settings, "EMBEDDINGS_PROVIDER", "mock")
-    dj_settings.EMBEDDINGS_PROVIDER = "bedrock"  # no AWS creds in the test env
-    try:
-        found = knowledge.search("ZXQTOKEN99")
-        assert found.mode == "fts", f"Bedrock without creds must degrade to fts, got {found.mode}"
-        assert len(found.results) >= 1, "FTS-only search must still find the exact identifier"
-        assert found.results[0].page_id == opts.kb_page_beta_id, \
-            f"Degraded search must still rank the beta page first, got {found.results[0].page_id}"
-    finally:
-        dj_settings.EMBEDDINGS_PROVIDER = original
-
-
-@th.django_unit_test()
 def test_fallback_page_search(opts):
     """The docit-only fallback (no docit_kb) searches pages directly."""
     from mojo.apps.docit.services.search import search_any, search_pages
@@ -638,41 +572,6 @@ def test_reconcile_never_chunked_heals_beyond_lookback(opts):
 
 
 @th.django_unit_test()
-def test_reconcile_null_embeddings_arm(opts):
-    """Null vectors are healed when a provider exists, and ignored when none does."""
-    from django.conf import settings as dj_settings
-    from mojo.apps.docit_kb.models import PageChunk
-    from mojo.apps.docit_kb.services import knowledge
-
-    _clean_recon_pages()
-    page = _recon_page(opts, "nullvec", "# Nullvec\n\nRECONNULL66 body.\n")
-    original = getattr(dj_settings, "EMBEDDINGS_PROVIDER", "mock")
-    dj_settings.EMBEDDINGS_PROVIDER = "bedrock"  # no AWS creds in the test env
-    try:
-        knowledge.embed_page_now(page)
-    finally:
-        dj_settings.EMBEDDINGS_PROVIDER = original
-    _drop_embed_jobs(page.pk)
-    assert PageChunk.objects.filter(page=page, embedding__isnull=True).exists(), \
-        "Fixture must have chunks with null embeddings"
-
-    result = knowledge.reconcile_stale_pages(now=_after_grace())
-    assert _recon_job_count(page.pk) == 1, \
-        f"A chunked page with null vectors must be re-queued when a provider exists, sweep={result}"
-
-    # No provider: null vectors are the normal steady state of an FTS-only
-    # install and must never be queued, or the sweep loops forever.
-    _drop_embed_jobs(page.pk)
-    dj_settings.EMBEDDINGS_PROVIDER = "bedrock"
-    try:
-        result = knowledge.reconcile_stale_pages(now=_after_grace(120))
-        assert _recon_job_count(page.pk) == 0, \
-            f"Without a provider the null-embedding arm must be skipped entirely, sweep={result}"
-    finally:
-        dj_settings.EMBEDDINGS_PROVIDER = original
-
-
-@th.django_unit_test()
 def test_reconcile_blank_guard_asymmetry(opts):
     """Blank + never chunked is skipped; blank + still chunked must heal."""
     from mojo.apps.docit_kb.models import PageChunk
@@ -781,48 +680,6 @@ def test_reconcile_limit(opts):
         f"The older stale page must wait for the next sweep, sweep={result}"
 
     _clean_recon_pages()
-
-
-@th.django_unit_test()
-def test_reconcile_cron_dispatcher(opts):
-    """The cron dispatcher queues the sweep job, and the kill switch stops it."""
-    from datetime import timedelta
-    from django.conf import settings as dj_settings
-    from django.utils import timezone
-    from mojo.apps.docit.models import Page
-    from mojo.apps.docit_kb import cronjobs
-    from mojo.apps.docit_kb.models import PageChunk
-    from mojo.apps.jobs.models import Job
-
-    _clean_recon_pages()
-    Job.objects.filter(func=RECON_JOB).delete()
-    page = _recon_page(opts, "cron", "# Cron\n\nRECONCRON10 body.\n")
-    # The sweep runs on the real clock inside the job, so age the page out of
-    # the grace window rather than passing a simulated instant.
-    Page.objects.filter(pk=page.pk).update(modified=timezone.now() - timedelta(hours=2))
-
-    job_id = cronjobs.reconcile_embeddings()
-    assert job_id, f"The dispatcher must return a job id, got {job_id!r}"
-    assert Job.objects.filter(func=RECON_JOB, status="pending").count() == 1, \
-        "The dispatcher must queue exactly one sweep job"
-
-    th.run_pending_jobs(func=RECON_JOB)   # sweep publishes per-page embed jobs
-    assert _recon_job_count(page.pk) == 1, \
-        "The sweep job must queue a recon embed job for the stale page"
-    th.run_pending_jobs(
-        func=EMBED_JOB, payload={"page_id": page.pk})   # embed jobs run
-    assert PageChunk.objects.filter(page=page).count() >= 1, \
-        "The full cron -> sweep -> embed chain must chunk the page"
-
-    Job.objects.filter(func=RECON_JOB).delete()
-    dj_settings.DOCIT_KB_RECONCILE_ENABLED = False
-    try:
-        result = cronjobs.reconcile_embeddings()
-        assert result is None, f"The disabled dispatcher must return None, got {result!r}"
-        assert Job.objects.filter(func=RECON_JOB).count() == 0, \
-            "DOCIT_KB_RECONCILE_ENABLED=False must queue nothing"
-    finally:
-        del dj_settings.DOCIT_KB_RECONCILE_ENABLED
 
 
 # ---------------------------------------------------------------------------
@@ -959,72 +816,6 @@ def test_fts_leg_relevance_bound(opts):
     found = search_pages("ZXQTOKEN99", book=opts.kb_book_slug)
     assert [r.page_id for r in found] == [opts.kb_page_beta_id], \
         f"The page-level fallback must still find real matches, got {[r.page_id for r in found]}"
-
-
-@th.django_unit_test()
-def test_search_relevance_floor(opts):
-    """knowledge.search: floor off by default, honored via kwarg or setting."""
-    from django.conf import settings as dj_settings
-    from mojo.apps.docit_kb.services import knowledge
-
-    floor_page = _floor_page(opts)
-    book = opts.kb_book_slug
-
-    # Default-off: omitting max_distance must match an explicit no-op floor
-    # (2.0 is the cosine-distance maximum). This fails the day anyone ships a
-    # default value for DOCIT_KB_MAX_DISTANCE without a decision.
-    default = knowledge.search(FLOOR_QUERY, book=book)
-    wide = knowledge.search(FLOOR_QUERY, book=book, max_distance=2.0)
-    assert [r.page_id for r in default.results] == [r.page_id for r in wide.results], \
-        (f"Omitting max_distance must equal an explicit no-op floor, got "
-         f"{[r.page_id for r in default.results]} vs {[r.page_id for r in wide.results]}")
-    assert any(r.page_id == floor_page.pk for r in default.results), \
-        f"Sanity: the floor page must be findable, got {[r.page_id for r in default.results]}"
-
-    # An unmatched query under a floor: honestly empty, and still hybrid.
-    found = knowledge.search(NONSENSE_QUERY, book=book, max_distance=FLOOR)
-    assert found.mode == "hybrid", \
-        f"A live provider still reports hybrid when the floor empties the leg, got {found.mode}"
-    assert found.results == [], \
-        f"An unmatched query must return zero rows under a floor, got {found.results}"
-
-    # The same floor must not break a genuine match end to end.
-    found = knowledge.search(FLOOR_QUERY, book=book, max_distance=FLOOR)
-    assert any(r.page_id == floor_page.pk for r in found.results), \
-        f"The floor must not drop a genuine match, got {[r.page_id for r in found.results]}"
-
-    # DOCIT_KB_MAX_DISTANCE applies when the caller passes nothing; the kwarg
-    # overrides it. Mutated in-process rather than via th.server_settings — a
-    # server_settings override can leak into var/django.conf under parallel
-    # full-suite runs (item 543), and these calls need no server.
-    dj_settings.DOCIT_KB_MAX_DISTANCE = FLOOR
-    try:
-        found = knowledge.search(NONSENSE_QUERY, book=book)
-        assert found.results == [], \
-            f"DOCIT_KB_MAX_DISTANCE must apply when no kwarg is given, got {found.results}"
-        found = knowledge.search(NONSENSE_QUERY, book=book, max_distance=2.0)
-        assert len(found.results) >= 1, \
-            "An explicit max_distance must override the setting, got no results"
-    finally:
-        del dj_settings.DOCIT_KB_MAX_DISTANCE
-
-    # A setting that is uncoercible or out of range degrades to "no floor" and
-    # logs — it must never raise, and must never silently empty the leg.
-    # "nan" is the dangerous one: float("nan") does NOT raise, and
-    # `distance <= nan` is False for every row, so an unguarded NaN would empty
-    # the vector leg for every query on every tenant while still reporting
-    # mode="hybrid" — indistinguishable from an empty corpus.
-    for bad in ("not-a-number", "nan", "inf", -1.0, 5.0):
-        dj_settings.DOCIT_KB_MAX_DISTANCE = bad
-        try:
-            found = knowledge.search(NONSENSE_QUERY, book=book)
-            assert found.mode == "hybrid", \
-                f"DOCIT_KB_MAX_DISTANCE={bad!r} must be ignored, not fatal — got mode {found.mode}"
-            assert len(found.results) >= 1, \
-                (f"DOCIT_KB_MAX_DISTANCE={bad!r} must fall back to NO floor, "
-                 f"not silently empty the vector leg")
-        finally:
-            del dj_settings.DOCIT_KB_MAX_DISTANCE
 
 
 @th.django_unit_test()

@@ -135,38 +135,10 @@ def test_fanout_empty_children_returns_zero_filled(opts):
         f"Expected labels and series same length, labels={result['labels']}, series={series}"
 
 
-@th.django_unit_test()
-def test_fanout_cap_exceeded_in_process(opts):
-    """Direct in-process call must enforce the cap when settings are patched
-    via the django settings system. Uses ``settings.get_static`` lookup, which
-    reads live."""
-    from mojo.apps.metrics.rest.helpers import fetch_group_fanout
-    import mojo.errors
-
-    parent, matches, _, _ = _build_tree()
-    for g in matches:
-        _seed("fan_cap", g, 1)
-
-    from django.conf import settings as dj_settings
-    original = getattr(dj_settings, "METRICS_FANOUT_MAX_CHILDREN", None)
-    dj_settings.METRICS_FANOUT_MAX_CHILDREN = 2
-    try:
-        raised = False
-        try:
-            fetch_group_fanout(
-                parent.pk, "location", ["fan_cap"],
-                granularity="hours", with_labels=True,
-            )
-        except mojo.errors.ValueException as e:
-            raised = True
-            assert "METRICS_FANOUT_MAX_CHILDREN" in str(e.reason), \
-                f"Cap error must reference setting name, got: {e.reason}"
-        assert raised, "fetch_group_fanout should have raised ValueException for cap exceeded"
-    finally:
-        if original is None:
-            del dj_settings.METRICS_FANOUT_MAX_CHILDREN
-        else:
-            dj_settings.METRICS_FANOUT_MAX_CHILDREN = original
+# test_fanout_cap_exceeded_in_process moved to
+# tests/test_metrics_extended_serial/fanout.py — it mutates
+# django.conf.settings (METRICS_FANOUT_MAX_CHILDREN) in-process (maestro
+# item #1839).
 
 
 @th.unit_test()
