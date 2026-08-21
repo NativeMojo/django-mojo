@@ -302,6 +302,34 @@ def test_action_list_is_owner_scoped(opts):
               f"{scoped.status_code}: {scoped.json}")
 
 
+@th.django_unit_test("the context endpoint cannot be used to read another operator's action")
+def test_context_endpoint_refuses_pending_action(opts):
+    conv = _conversation(opts, "approval-rest-context", user=opts.other)
+    foreign = _propose(opts.other, conv, "block_ip",
+                       {"ip": "198.51.100.79", "reason": "context probe", "ttl": 60})
+
+    from mojo.apps.assistant.models import PendingAction
+    import uuid as uuid_module
+
+    row = PendingAction.objects.filter(
+        uuid=uuid_module.UUID(foreign["action_id"])).first()
+
+    _login(opts)
+    resp = opts.client.post("/api/assistant/context",
+                            {"model": "assistant.PendingAction", "pk": row.pk})
+    opts.client.logout()
+
+    # PendingAction is NO_REST and build_context reads by pk with no owner scope,
+    # so without the guard this returned another operator's action verbatim.
+    assert_true(resp.status_code >= 400,
+                f"a NO_REST model must be refused, got {resp.status_code}: {resp.json}")
+    body = str(resp.json)
+    assert_true(foreign["action_id"] not in body,
+                "no part of another operator's action may appear in the response")
+    assert_true("context probe" not in body,
+                "the refused response must not leak the action's summary or args")
+
+
 @th.django_unit_test("a key-backed session cannot resolve an approval")
 def test_key_backed_session_refused(opts):
     import uuid as uuid_module

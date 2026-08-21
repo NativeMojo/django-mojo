@@ -11,6 +11,7 @@ handler except through `approvals.resolve()`, resolved by the bound operator,
 once, within the window, with every gate re-checked against a freshly reloaded
 User.
 """
+import hashlib
 import time
 import uuid as uuid_module
 
@@ -74,6 +75,11 @@ def _tool_preview(params, user, approval=None):
     return {"ok": True}
 
 
+def _tool_superuser(params, user, approval=None):
+    _record(params, user, approval)
+    return {"ok": True}
+
+
 def _authorize(user):
     return bool(FLAGS.authorize)
 
@@ -130,6 +136,12 @@ def _register_test_tools():
         input_schema=_RUN_SCHEMA, handler=_tool_preview,
         permission=TEST_PERM, mutates=True, domain=TEST_DOMAIN, core=False,
         preview=_preview,
+    )
+    register_tool(
+        name="testit_approval_superuser", description="Fixture superuser-only tool",
+        input_schema=_RUN_SCHEMA, handler=_tool_superuser,
+        permission=TEST_PERM, mutates=True, domain=TEST_DOMAIN, core=False,
+        requires_superuser=True,
     )
 
 
@@ -380,6 +392,145 @@ def test_authorize_rechecked_at_execution(opts):
 
 
 # ---------------------------------------------------------------------------
+# requires_superuser
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("a non-superuser never sees, dispatches or proposes a superuser tool")
+def test_requires_superuser_gates_before_approval(opts):
+    from mojo.apps.assistant import (
+        get_available_domains, get_domain_tools_for_user, get_tools_for_user,
+    )
+    from mojo.apps.assistant.models import PendingAction
+
+    _reset(opts)
+    conv = _conversation(opts, "approval-superuser")
+    assert_true(not opts.admin.is_superuser,
+                "this fixture user must not be a superuser")
+
+    names = {t["name"] for t in get_tools_for_user(opts.admin)}
+    assert_true("testit_approval_superuser" not in names,
+                f"a superuser-only tool must not be listed to a non-superuser, got {names}")
+    domain_names = {t["name"] for t in
+                    get_domain_tools_for_user(opts.admin, [TEST_DOMAIN])}
+    assert_true("testit_approval_superuser" not in domain_names,
+                "a superuser-only tool must not appear in its domain tool list")
+    listed = get_available_domains(opts.admin).get(TEST_DOMAIN, {}).get("tools", [])
+    assert_true("testit_approval_superuser" not in listed,
+                f"a superuser-only tool must not be listed in its domain, got {listed}")
+
+    payload = _dispatch(opts, conv, "testit_approval_superuser", {"target": "alpha"})
+    assert_true("error" in payload and "Permission denied" in payload["error"],
+                f"a superuser-only tool must refuse at dispatch, got {payload}")
+    assert_eq(PendingAction.objects.filter(conversation=conv).count(), 0,
+              "a superuser-only tool must not mint a card a non-superuser can never approve")
+    assert_eq(len(CALLS), 0, "a superuser-only tool must never reach its handler")
+
+
+@th.django_unit_test("a superuser lists, proposes and approves a superuser tool")
+def test_requires_superuser_allows_a_superuser(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.assistant import get_tools_for_user
+    from mojo.apps.assistant.services import approvals
+
+    _reset(opts)
+    conv = _conversation(opts, "approval-superuser-ok")
+    User.objects.filter(pk=opts.admin.pk).update(is_superuser=True)
+    opts.admin.refresh_from_db()
+    try:
+        names = {t["name"] for t in get_tools_for_user(opts.admin)}
+        assert_true("testit_approval_superuser" in names,
+                    "a superuser must see the tool listed")
+        _payload, block = _propose(opts, conv, tool_name="testit_approval_superuser")
+        assert_eq(block["requires_superuser"], True,
+                  "the card must advertise the superuser requirement")
+        result = approvals.resolve(opts.admin, block["action_id"], "approve")
+    finally:
+        User.objects.filter(pk=opts.admin.pk).update(is_superuser=False)
+        opts.admin.refresh_from_db()
+
+    assert_eq(result["block"]["state"], "completed",
+              f"a superuser must be able to approve, got {result['block']}")
+    assert_eq(len(CALLS), 1, f"the handler must run exactly once, ran {len(CALLS)}")
+
+
+@th.django_unit_test("a gate dropped from the registry cannot un-gate a pending card")
+def test_snapshot_gates_survive_deregistration(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.assistant import get_registry
+    from mojo.apps.assistant.services import approvals
+
+    _reset(opts)
+    conv = _conversation(opts, "approval-snapshot-gates")
+
+    # A step-up card proposed while the tool declared fresh_auth_seconds must
+    # still demand step-up after the declaration is removed.
+    fresh_entry = get_registry()["testit_approval_fresh"]
+    _payload, fresh_block = _propose(opts, conv, tool_name="testit_approval_fresh")
+    assert_eq(fresh_block["requires_fresh_auth"], True,
+              "the card must advertise the step-up requirement")
+    fresh_entry["fresh_auth_seconds"] = None
+    try:
+        refusal = _refusal(approvals.resolve, opts.admin, fresh_block["action_id"],
+                           "approve")
+    finally:
+        fresh_entry["fresh_auth_seconds"] = 600
+    assert_true(refusal is not None,
+                "a card that advertised step-up must still demand it after the "
+                "registry dropped the gate")
+    assert_eq(refusal.code, approvals.CODE_REAUTH,
+              f"expected reauth_required, got {refusal.code}")
+    assert_eq(len(CALLS), 0, "no un-gated card may reach the handler")
+
+    # Same rule for requires_superuser.
+    User.objects.filter(pk=opts.admin.pk).update(is_superuser=True)
+    opts.admin.refresh_from_db()
+    su_entry = get_registry()["testit_approval_superuser"]
+    try:
+        _payload, su_block = _propose(opts, conv, tool_name="testit_approval_superuser")
+    finally:
+        User.objects.filter(pk=opts.admin.pk).update(is_superuser=False)
+        opts.admin.refresh_from_db()
+
+    su_entry["requires_superuser"] = False
+    try:
+        refusal = _refusal(approvals.resolve, opts.admin, su_block["action_id"],
+                           "approve")
+    finally:
+        su_entry["requires_superuser"] = True
+    assert_true(refusal is not None,
+                "a card that advertised requires_superuser must still demand it "
+                "after the registry dropped the gate")
+    assert_eq(refusal.code, approvals.CODE_PERMISSION,
+              f"expected permission_denied, got {refusal.code}")
+    assert_eq(_row(su_block["action_id"]).failure_code, "superuser_required",
+              "the record must say which gate refused")
+    assert_eq(len(CALLS), 0, "no un-gated card may reach the handler")
+
+
+# ---------------------------------------------------------------------------
+# NO_REST models are not readable through the context endpoint
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("context.resolve_model refuses a NO_REST model")
+def test_context_refuses_no_rest_models(opts):
+    from mojo.apps.assistant.services import context
+
+    model, err = context.resolve_model("assistant.PendingAction")
+    assert_true(model is None,
+                "a NO_REST model must never resolve through the context builder")
+    assert_true(err is not None and "not available" in err["error"],
+                f"the refusal must match the model-tool guard's shape, got {err}")
+
+    model, err = context.resolve_model("assistant.Message")
+    assert_true(model is None,
+                "assistant.Message is NO_REST too and must be refused")
+
+    model, err = context.resolve_model("assistant.Conversation")
+    assert_true(model is not None and err is None,
+                f"an ordinary REST model must still resolve, got {err}")
+
+
+# ---------------------------------------------------------------------------
 # preview()
 # ---------------------------------------------------------------------------
 
@@ -483,6 +634,23 @@ def test_fingerprint(opts):
     assert_true("hunter2-secret" not in first,
                 "the fingerprint must not contain an argument value")
     assert_eq(len(first), 64, f"the fingerprint must be a sha256 hex digest, got {first!r}")
+
+    # The digest is taken over the REDACTED arguments. It lands in an incident
+    # event and a logit.Log payload alongside the argument NAMES, and an unsalted
+    # SHA-256 over a raw six-digit code is a trivially short offline search.
+    masked_a = approvals.fingerprint("t", {"target": "a", "onetime_code": "111111"})
+    masked_b = approvals.fingerprint("t", {"target": "a", "onetime_code": "999999"})
+    assert_eq(masked_a, masked_b,
+              "two values under a masked key must hash identically — the digest "
+              "must be over the mask, never the secret")
+    raw_digest = hashlib.sha256(
+        approvals.canonical_json(
+            {"tool": "t", "args": {"target": "a", "onetime_code": "111111"}}
+        ).encode("utf-8")).hexdigest()
+    assert_true(masked_a != raw_digest,
+                "the fingerprint must NOT be the digest of the raw arguments")
+    assert_true(approvals.fingerprint("t", {"target": "a"}) != masked_a,
+                "a masked argument must still change the fingerprint vs. its absence")
 
     different = approvals.fingerprint("testit_approval_run", {"target": "beta"})
     assert_true(different != first, "different arguments must fingerprint differently")

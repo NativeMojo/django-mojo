@@ -211,8 +211,17 @@ def user_can_use_tool(user, entry):
     rules ``has_permission`` cannot express (compound grants, group-scoped
     authority). An ``authorize`` that raises is treated as a refusal — a broken
     predicate must not open a tool.
+
+    ``requires_superuser`` is checked here too, not only at approval time. A gate
+    enforced solely at resolution still lets a non-superuser holding the tool's
+    permission see it listed, have the model call it, and receive a real approval
+    card that can never be approved — an authorization decision leaked as a dead
+    card. Checking it in the one shared predicate refuses it identically at
+    listing, dispatch, proposal and execution.
     """
     if not user.has_permission(entry["permission"]):
+        return False
+    if entry.get("requires_superuser") and not getattr(user, "is_superuser", False):
         return False
     authorize = entry.get("authorize")
     if authorize is None:

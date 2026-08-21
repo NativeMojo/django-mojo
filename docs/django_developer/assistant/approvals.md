@@ -83,15 +83,20 @@ automatically.
 | `user`, `conversation`, `group` | The binding, snapshotted at proposal. |
 | `tool_name`, `permission` | What was proposed, and under which grant. |
 | `args` | The **normalized** argument set — the only thing execution reads. |
-| `args_fingerprint` | `sha256` over the canonical JSON of `{tool, args}`. |
+| `args_fingerprint` | `sha256` over the canonical JSON of `{tool, redact(args)}` — the **masked** form, never the raw values. |
 | `summary`, `preview` | Redacted, operator-facing card content. |
 | `fresh_auth_seconds`, `requires_superuser`, `requires_managed_infrastructure` | Gate snapshot, for audit and rendering. |
 | `revision` | A `preview`'s bound revision, re-checked before execution. |
 | `state`, `expires_at`, `resolved_at` | Lifecycle. |
 | `result`, `failure_code` | Bounded, redacted outcome. |
 
-**The snapshot never outranks the registry.** Execution re-reads
-`get_registry()[tool_name]` and re-checks every gate against it. A tool that was
+**The snapshot never outranks the registry — but it can only make a gate
+stricter, never looser.** Execution re-reads `get_registry()[tool_name]` and
+re-checks every gate against it; for `requires_superuser`,
+`requires_managed_infrastructure` and `fresh_auth_seconds` the live entry is
+combined with the snapshot (OR, and the shorter window), so removing a gate from
+the registry cannot silently un-gate a pending card that already told the
+operator it would ask. A tool that was
 unregistered, or whose `mutates` flag was removed, resolves to the generic
 failure; a tool whose permission changed is checked against the *live* value.
 Trusting the snapshot would let a downgrade at deploy time execute under
@@ -109,7 +114,7 @@ All six arguments are accepted by both `register_tool()` and `@tool(...)`.
 | Argument | Meaning |
 |---|---|
 | `fresh_auth_seconds=None` | Recency window in seconds; mirrors `@md.requires_fresh_auth(seconds=N)` on the matching Admin endpoint. When set, the action can be resolved **over REST only**. |
-| `requires_superuser=False` | AND-check for a live literal `User.is_superuser`, mirroring the hand-written superuser checks in the Admin REST layer (`aws/rest/capacity.py:79`). |
+| `requires_superuser=False` | AND-check for a live literal `User.is_superuser`, mirroring the hand-written superuser checks in the Admin REST layer (`aws/rest/capacity.py:79`). Enforced inside `user_can_use_tool`, so a non-superuser never sees the tool listed, never has the model call it, and never receives a card they could not approve. |
 | `requires_managed_infrastructure=False` | Tool is hidden from the model and refused at proposal and execution when `infrastructure.is_external()`. |
 | `summarize=None` | `(params, user) -> str`. One operator-facing sentence for the card. Must contain no secret. Default: `"<tool_name> will run with the arguments below."` |
 | `preview=None` | `(params, user) -> {"summary": str, "details": <json>, "revision": str}`. Read-only. See below. |
@@ -215,6 +220,16 @@ plus the bound user and conversation; the fingerprint is then recomputed from th
 stored `args` and compared, which catches a tampered row and gives audit a
 stable, secret-free identifier for "the same operation".
 
+It is hashed over the **redacted** arguments. The digest reaches an incident
+event and a `logit.Log` payload, and an unsalted SHA-256 over raw arguments is
+reversible for a low-entropy value — a reader of either plane sees the argument
+*names* on the same line, so a six-digit `onetime_code` is a short offline
+search. Redaction happens inside `fingerprint()` so the value stored at proposal
+and the value recomputed at resolution cannot drift apart. The trade: two
+proposals differing only in a masked value dedupe to one card, which is right —
+the operator cannot tell them apart either, and the stored `args` remain the sole
+authority for what runs.
+
 ### Dedupe, supersession, and the per-conversation cap
 
 - A proposal whose `(conversation, tool_name, args_fingerprint)` already has a
@@ -243,10 +258,11 @@ stable, secret-free identifier for "the same operation".
 6. **Infrastructure mode** — answered *before* the caller's grants, so the
    refusal is about the installation, not about who is asking.
 7. **Live actor** — `User.objects.filter(pk=…, is_active=True)`.
-8. **Permission + `authorize`** against that live actor.
-9. **Literal superuser**, when declared.
+8. **Literal superuser**, when the live entry **or the row snapshot** declares it.
+9. **Permission + `authorize`** against that live actor.
 10. **Group activity** — `group.is_effectively_active()`.
-11. **Fresh auth**, when declared (see below).
+11. **Fresh auth**, when the live entry **or the row snapshot** declares it —
+    the stricter (shorter) of the two windows (see below).
 12. **Bound revision** — `preview` re-run and compared.
 13. **Atomic claim** — `filter(pk=…, state="pending", expires_at__gt=now).update(state="executing", modified=now)`.
 14. **Dispatch**, then persist the outcome and write the message.

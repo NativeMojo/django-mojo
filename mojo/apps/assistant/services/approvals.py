@@ -221,9 +221,22 @@ def fingerprint(tool_name, args):
     Evidence, not a key: resolution finds the row by id plus the bound user and
     conversation, then recomputes this from the STORED arguments to catch a
     tampered row and to give audit one identifier it can correlate on.
+
+    **Hashed over the REDACTED arguments**, never the raw ones. The digest lands
+    in incident event details and in a ``logit.Log`` payload, and an unsalted
+    SHA-256 over raw arguments is reversible for a low-entropy value: a reader of
+    either plane sees the argument NAMES on the same line, so a six-digit
+    ``onetime_code`` is a few million offline guesses away. Masking first means a
+    secret-bearing argument only ever contributes its mask.
+
+    Redaction happens INSIDE this function so the two sides — the value stored at
+    proposal and the value recomputed at resolution — cannot drift apart. The
+    trade is that two proposals differing only in a masked value now dedupe to one
+    card; that is correct, since the operator cannot tell them apart either, and
+    the stored ``args`` remain the sole authority for what actually runs.
     """
     return hashlib.sha256(
-        canonical_json({"tool": tool_name, "args": args or {}}).encode("utf-8")
+        canonical_json({"tool": tool_name, "args": redact(args or {})}).encode("utf-8")
     ).hexdigest()
 
 
@@ -329,7 +342,8 @@ def run_preview(entry, params, user):
                     if summary else ""),
         "details": (_bounded(redact(details), MAX_PREVIEW_BYTES)
                     if details is not None else None),
-        "revision": str(revision)[:128] if revision is not None else "",
+        "revision": (logit.mask_sensitive_data(str(revision))[:128]
+                     if revision is not None else ""),
     }
 
 
@@ -567,10 +581,16 @@ def resolve(user, action_id, decision, request=None, conversation_id=None,
     live_user = _reload_user(row.user_id)
     if live_user is None:
         _fail_permission(row, user, "user_inactive", _reporter=_reporter)
+    # Snapshot OR live entry, exactly as the infrastructure check above: a card
+    # that advertised `requires_superuser` to the operator must still demand one
+    # even if the gate was dropped from the registry after it was proposed.
+    # `user_can_use_tool` already covers the live-entry half; this keeps the
+    # specific failure code and closes the de-registration half.
+    if ((entry.get("requires_superuser") or row.requires_superuser)
+            and not getattr(live_user, "is_superuser", False)):
+        _fail_permission(row, live_user, "superuser_required", _reporter=_reporter)
     if not user_can_use_tool(live_user, entry):
         _fail_permission(row, live_user, "permission_lost", _reporter=_reporter)
-    if entry.get("requires_superuser") and not getattr(live_user, "is_superuser", False):
-        _fail_permission(row, live_user, "superuser_required", _reporter=_reporter)
     if row.group is not None and not row.group.is_effectively_active():
         _fail_permission(row, live_user, "group_inactive", _reporter=_reporter)
 
@@ -677,7 +697,11 @@ def _require_fresh_auth(entry, row, live_user, request, _reporter=None):
     """
     from mojo.apps.account.services import fresh_auth
 
-    window = entry.get("fresh_auth_seconds")
+    # Snapshot OR live entry, and the STRICTER (shorter) of the two windows.
+    # Dropping `fresh_auth_seconds` from the registry must not silently un-gate a
+    # pending card that told the operator it would ask for a step-up.
+    windows = [w for w in (row.fresh_auth_seconds, entry.get("fresh_auth_seconds")) if w]
+    window = min(windows) if windows else None
     if not window:
         return
     if request is None or getattr(request, "bearer", None) != "bearer":
