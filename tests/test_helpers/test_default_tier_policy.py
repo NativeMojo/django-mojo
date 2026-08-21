@@ -688,3 +688,45 @@ def test_ring_patch_targets(opts):
     assert len(hot) == 2 and len(cold) == 2, (
         f"partition must split 2 hot / 2 cold, got {len(hot)}/{len(cold)}"
     )
+
+
+@th.unit_test("policy: the cold_budget ratchet is two-sided")
+def test_cold_budget_two_sided(opts):
+    from testit import isolation
+
+    cold = [isolation.violation("patch_production", "x.py", 10, "patch('mojo.apps.aws.services.x')")]
+
+    over = isolation.evaluate_cold_budget(
+        {"default_core": True}, cold, origin="django_mojo", has_config=True)
+    assert over and "exceed" in over[0], (
+        f"cold sites with no budget (implicit 0) must fail as growth, got {over}"
+    )
+
+    exact = isolation.evaluate_cold_budget(
+        {"default_core": True, "cold_budget": 1}, cold,
+        origin="django_mojo", has_config=True)
+    assert exact == [], f"an exact budget must pass, got {exact}"
+
+    stale = isolation.evaluate_cold_budget(
+        {"default_core": True, "cold_budget": 5}, cold,
+        origin="django_mojo", has_config=True)
+    assert stale and "stale" in stale[0], (
+        f"remediation below budget must fail as stale headroom — one-sided "
+        f"budgets silently absorb new sites, got {stale}"
+    )
+
+    optin = isolation.evaluate_cold_budget(
+        {"requires_extra": ["extended"], "serial": True}, cold,
+        origin="django_mojo", has_config=True)
+    assert optin == [], f"opt-in packages are exempt from budgets, got {optin}"
+
+    consumer = isolation.evaluate_cold_budget(
+        {"default_core": True}, cold, origin="consumer", has_config=True)
+    assert consumer == [], f"consumer roots are exempt, got {consumer}"
+
+    bad = isolation.evaluate_cold_budget(
+        {"default_core": True, "cold_budget": True}, cold,
+        origin="django_mojo", has_config=True)
+    assert bad and "non-negative integer" in bad[0], (
+        f"a boolean/None budget must be rejected loudly, got {bad}"
+    )

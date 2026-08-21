@@ -804,6 +804,45 @@ def evaluate_package_state(config, violations, *, origin, has_config):
     return problems
 
 
+def evaluate_cold_budget(config, cold_violations, *, origin, has_config):
+    """Two-sided cold-site ratchet for one default-tier repository package.
+
+    `cold_budget` in TESTIT is the package's exact advisory-site count. Over
+    budget fails naming the new sites (the growth the ratchet exists to stop);
+    UNDER budget also fails ("budget stale — lower it") so remediation can
+    never accrue silent headroom. Absent key = budget 0: a new package starts
+    clean. Opt-in packages are exempt — their isolation story is serial
+    execution, not site accounting.
+
+    Returns a list of problem strings (empty = within budget).
+    """
+    if origin != "django_mojo" or not has_config:
+        return []
+    config = config or {}
+    if not bool(config.get("default_core", False)):
+        return []
+    budget = config.get("cold_budget", 0)
+    if not isinstance(budget, int) or isinstance(budget, bool) or budget < 0:
+        return [f"cold_budget must be a non-negative integer, got {budget!r}"]
+    count = len(cold_violations)
+    if count == budget:
+        return []
+    if count > budget:
+        lines = "\n".join(
+            f"    {row.file}:{row.line}: [{row.code}] {row.detail}"
+            for row in cold_violations)
+        return [
+            f"{count} advisory (cold) isolation site(s) exceed the package's "
+            f"cold_budget of {budget}. New app-internal patches of production "
+            f"code are not accepted in the default tier — give the entry "
+            f"point an injectable seam, or move the test to the package's "
+            f"*_extended_serial sibling. Sites:\n{lines}"]
+    return [
+        f"only {count} advisory (cold) isolation site(s) remain but "
+        f"cold_budget is {budget} — the budget is stale; lower it to {count} "
+        f"in this package's TESTIT so the headroom cannot absorb new sites"]
+
+
 def format_violations(violations):
     if not violations:
         return "no isolation violations"
