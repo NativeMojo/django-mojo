@@ -41,6 +41,13 @@ def _execute(name, params, user, approval):
     return get_registry()[name]["handler"](params, user, approval=approval)
 
 
+def _read(name, params, user):
+    """A read tool's handler, which must RETURN a refusal and never raise."""
+    from mojo.apps.assistant import get_registry
+
+    return get_registry()[name]["handler"](params, user)
+
+
 def _stub_approval(revision=""):
     """What `approvals.resolve` hands a handler: a consumed record."""
     return objict(uuid=uuid.uuid4(), revision=revision, conversation=None,
@@ -193,7 +200,7 @@ def test_rollback_preview_binds_and_refuses(opts):
         f"a release from another app was accepted for rollback: {foreign}"
 
 
-@th.django_unit_test("take_webapp_offline binds the address and the alias count")
+@th.django_unit_test("take_webapp_offline binds the address, its kind and the alias count")
 def test_offline_preview_binds_addresses(opts):
     from mojo.apps.edge.models import Vhost
 
@@ -206,13 +213,103 @@ def test_offline_preview_binds_addresses(opts):
                            opts.manager)
         assert preview["revision"] == (
             f"app:{opts.webapp.pk}|vhost:{opts.vhost.pk}"
-            f"|host:{opts.vhost.server_name}|aliases:1"), \
-            f"offline did not bind the address and alias count: {preview['revision']}"
+            f"|host:{opts.vhost.server_name}|kind:site_api|aliases:1"), \
+            f"offline did not bind the address, kind and alias count: {preview['revision']}"
         assert "kept" in _summarize("take_webapp_offline",
                                     {"webapp": opts.webapp.pk}, opts.manager), \
             "the offline card does not say the app and its versions are kept"
     finally:
         Vhost.objects.filter(pk=alias.pk).delete()
+
+
+@th.django_unit_test("the offline card does not overclaim for an API-backed address")
+def test_offline_card_matches_what_teardown_really_does(opts):
+    # `webapp_lifecycle.take_offline` deletes the primary vhost only for kind
+    # `site`. A `site_api` primary is unlinked but its enabled row survives and
+    # nodes keep serving it, so a card promising the address stops serving
+    # would be false. (The behaviour is deliberately unchanged; only the claim
+    # is corrected.)
+    from mojo.apps.edge.models import Vhost
+
+    static_vhost = make_vhost(opts.domain, opts.certificate,
+                              label=f"st{uuid.uuid4().hex[:6]}", kind="site")
+    static_app = make_webapp(opts.group, slug=f"st{uuid.uuid4().hex[:5]}",
+                             vhost=static_vhost)
+    params = {"reason": "seasonal shutdown"}
+
+    served_from_build = _preview(
+        "take_webapp_offline", dict(params, webapp=static_app.pk), opts.manager)
+    api_backed = _preview(
+        "take_webapp_offline", dict(params, webapp=opts.webapp.pk), opts.manager)
+
+    assert served_from_build["details"]["address_stops_serving"] is True, \
+        f"a build-served address was not reported as stopping: {served_from_build}"
+    assert "stop serving" in served_from_build["summary"], \
+        f"the build-served card lost its plain wording: {served_from_build['summary']}"
+    assert f"kind:{static_vhost.kind}" in served_from_build["revision"], \
+        f"the address kind was not bound: {served_from_build['revision']}"
+
+    assert api_backed["details"]["address_stops_serving"] is False, (
+        "an API-backed primary survives take_offline, so the card must not "
+        f"claim it stops serving: {api_backed}")
+    assert "KEEPS serving" in api_backed["summary"], \
+        f"the API-backed card still overclaims: {api_backed['summary']}"
+    assert "KEEPS serving" in _summarize(
+        "take_webapp_offline", dict(params, webapp=opts.webapp.pk), opts.manager), \
+        "the one-line card description still overclaims for an API-backed app"
+
+    # ...and the execution result says the same thing.
+    outcome = _execute("take_webapp_offline",
+                       dict(params, webapp=static_app.pk), opts.manager,
+                       _stub_approval())
+    assert outcome["address_stopped_serving"] is True and outcome["note"] is None, \
+        f"a build-served teardown reported a caveat it does not have: {outcome}"
+    assert not Vhost.objects.filter(pk=static_vhost.pk).exists(), \
+        "a `site` primary was not actually deleted"
+
+
+@th.django_unit_test("a malformed operation id is refused exactly like an unknown one")
+def test_malformed_operation_id_is_indistinguishable(opts):
+    from mojo.apps.assistant.services.tools.webapp import common
+
+    unknown = str(uuid.uuid4())
+    malformed = ("not-a-uuid", "", "   ", "12345", None,
+                 "'; DROP TABLE edge_web_app; --")
+
+    # The READ path must RETURN a refusal, never raise: an escaping
+    # ValidationError becomes a severity-6 assistant:error incident with a
+    # traceback on every call, which the model can trigger at will.
+    baseline = _read("get_webapp_setup_status", {"operation_id": unknown},
+                     opts.manager)
+    assert baseline == {"error": common.NO_OPERATION}, \
+        f"an unknown operation id did not give the shared refusal: {baseline}"
+    for value in malformed:
+        result = _read("get_webapp_setup_status", {"operation_id": value},
+                       opts.manager)
+        assert result == baseline, (
+            f"operation_id={value!r} is distinguishable from an unknown id — "
+            f"an oracle for which id shapes are real: {result}")
+
+    # ...and the PREVIEW path must raise the same refusal, not a generic
+    # precondition message that reads differently from a real not-found.
+    for tool_name, extra in (("answer_webapp_setup_step",
+                              {"step": "address", "choice": {"label": "app"}}),
+                             ("cancel_webapp_setup", {"reason": "stop this"})):
+        unknown_error = _refusal(tool_name,
+                                 dict(extra, operation_id=unknown), opts.manager)
+        assert unknown_error is not None and str(unknown_error) == common.NO_OPERATION, \
+            f"{tool_name} did not refuse an unknown id with the shared text: {unknown_error}"
+        for value in malformed:
+            error = _refusal(tool_name, dict(extra, operation_id=value),
+                             opts.manager)
+            assert error is not None, \
+                f"{tool_name} accepted operation_id={value!r}"
+            assert isinstance(error, common.Refused), (
+                f"{tool_name} let a non-refusal exception escape for "
+                f"operation_id={value!r}: {type(error).__name__}: {error}")
+            assert str(error) == str(unknown_error), (
+                f"{tool_name} distinguishes operation_id={value!r} from an "
+                f"unknown id: {error}")
 
 
 @th.django_unit_test("an app with no address has nothing to take offline")

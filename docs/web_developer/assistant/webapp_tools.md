@@ -96,6 +96,18 @@ the design, not an error state: re-read with `get_webapp_setup_status` and let
 the assistant propose the current step again. Render it as "this moved on,
 here is where it is now", not as a failure.
 
+### `take_webapp_offline` is honest about API-backed addresses
+
+An app served straight from its build loses its address outright. An app whose
+address also proxies upstream routes (`site_api`) is *unlinked* from that
+address, but the address keeps answering from those routes until they are
+removed — only the extra addresses stop. The card says which case it is:
+`preview.details.address_stops_serving` is the boolean, `preview.details.address_kind`
+is the vhost kind, and the summary says "KEEPS serving its upstream routes"
+when it applies. The execution result repeats it as `address_stopped_serving`
+plus a `note`. Render the caveat — an operator reading "offline" and getting a
+still-answering hostname is the failure this wording exists to prevent.
+
 ### The required reason
 
 Six tools take a `reason` (3–300 characters): `cancel_webapp_setup`,
