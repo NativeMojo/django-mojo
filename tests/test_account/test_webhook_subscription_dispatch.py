@@ -1,8 +1,11 @@
 """Tests for the two-tier webhook fan-out: dispatch() queues a fan-out job,
 handle_fanout() queries subscriptions and publishes per-receiver webhook jobs
 with signing inherited from publish_webhook(group=...).
+
+Failure paths inject local publisher/reporter fakes through handle_fanout's
+dependency seams (maestro item #1839) — nothing patches the shared jobs or
+incident modules, so parallel modules' publishes and events are untouched.
 """
-from unittest import mock
 from testit import helpers as th
 
 
@@ -285,10 +288,9 @@ def test_fanout_missing_group_fails_no_retry_and_reports_incident(opts):
     def fake_report_event(*args, **kwargs):
         incident_calls.append((args, kwargs))
 
-    # Patch the incident module the service imports. Use mock to avoid touching
-    # the real incident pipeline (which would write a DB row + side-effects).
-    with mock.patch("mojo.apps.incident.report_event", side_effect=fake_report_event):
-        result = handle_fanout(job)
+    # Inject the reporter through the seam — the real incident pipeline
+    # (DB row + side-effects) is never entered, and no shared module is patched.
+    result = handle_fanout(job, reporter=fake_report_event)
 
     assert result == "failed", f"missing group must produce 'failed', got {result!r}"
     assert job.metadata.get("error_type") == "webhook_fanout_group_missing", (
@@ -324,7 +326,6 @@ def test_fanout_per_row_failure_reports_incident_and_continues(opts):
     def fake_report_event(*args, **kwargs):
         incident_calls.append((args, kwargs))
 
-    real_publish_webhook = None
     # Original publish_webhook reference for the OK rows
     from mojo.apps import jobs as jobs_module
     real_publish_webhook = jobs_module.publish_webhook
@@ -342,11 +343,8 @@ def test_fanout_per_row_failure_reports_incident_and_continues(opts):
         "channel": "webhooks",
     })
 
-    with mock.patch(
-        "mojo.apps.account.services.webhooks.jobs.publish_webhook",
-        side_effect=failing_publish_webhook,
-    ), mock.patch("mojo.apps.incident.report_event", side_effect=fake_report_event):
-        result = handle_fanout(job)
+    result = handle_fanout(
+        job, publisher=failing_publish_webhook, reporter=fake_report_event)
 
     assert result == "success", f"fan-out must succeed (skip-and-continue), got {result!r}"
     assert job.metadata["published_count"] == 2, (

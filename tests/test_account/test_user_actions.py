@@ -14,7 +14,6 @@ self, or an admin with `users`/`manage_users`. There is no `current_password`
 gate: passwordless accounts (passkey / SMS-OTP) have no password to verify, and
 the authenticated request already proves identity.
 """
-from unittest import mock
 from testit import helpers as th
 
 
@@ -490,7 +489,6 @@ def test_users_perm_can_set_password_on_other_user(opts):
 @th.django_unit_test()
 def test_users_perm_can_disable_other_user(opts):
     """`users` perm (no manage_users) is now equivalent — can disable / reactivate."""
-    from unittest import mock as _mock
     from mojo.apps.account.models import User
 
     User.objects.filter(email__in=["user_actions_disable_admin@test.com", "user_actions_disable_target@test.com"]).delete()
@@ -512,8 +510,9 @@ def test_users_perm_can_disable_other_user(opts):
     target.save()
 
     assert opts.client.login("user_actions_disable_admin@test.com", "bare_pw_99"), "bare admin login failed"
-    with _mock.patch("mojo.apps.incident.report_event"):
-        resp = opts.client.post(f"/api/user/{target.pk}", {"disable": {"reason": "admin", "note": "users-perm test"}})
+    # No incident patch: the server is a separate process, so the old
+    # mock.patch("mojo.apps.incident.report_event") wrapper never reached it.
+    resp = opts.client.post(f"/api/user/{target.pk}", {"disable": {"reason": "admin", "note": "users-perm test"}})
     opts.client.logout()
 
     assert resp.status_code == 200, \

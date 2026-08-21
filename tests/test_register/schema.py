@@ -1,4 +1,9 @@
-"""Unit tests for register_schema service — no HTTP, no DB writes."""
+"""Unit tests for register_schema service — no HTTP, no DB writes.
+
+Config-shaped cases drive the pure normalization helpers directly
+(maestro item #1839) — the shared settings singleton is never rebound, so a
+parallel module's settings reads cannot observe a patched get().
+"""
 import datetime
 from testit import helpers as th
 
@@ -29,20 +34,10 @@ def test_resolve_fields_phone_only(opts):
         {"name": "dob",        "required": True},
         {"name": "password",   "required": True},
     ]
-    fields = rs._normalize_entry  # touch to confirm import
-    # Drive through resolve_fields by monkeypatching settings via the public
-    # API. Register fields now come from the auth config's AUTH_CONFIG.
-    from mojo.helpers.settings import settings
-    original_get = settings.get
-    def patched(key, default=None, **kwargs):
-        if key == "AUTH_CONFIG":
-            return {"registration": {"fields": raw}}
-        return original_get(key, default=default, **kwargs)
-    settings.get = patched
-    try:
-        out = rs.resolve_fields(group=None)
-    finally:
-        settings.get = original_get
+    # The pure normalization helper is exactly what resolve_fields applies to
+    # a configured AUTH_CONFIG list; driving it directly keeps this coverage
+    # parallel-safe (no shared settings singleton mutation).
+    out = rs._normalize_field_list(raw)
     names = [f["name"] for f in out]
     assert names == ["first_name", "last_name", "phone", "dob", "password"], \
         f"Phone-only config must produce exactly the configured fields in order, got {names}"
@@ -54,20 +49,10 @@ def test_resolve_fields_phone_only(opts):
 @th.django_unit_test("resolve_fields drops unknown field names silently")
 def test_resolve_fields_drops_unknown(opts):
     from mojo.apps.account.services import register_schema as rs
-    from mojo.helpers.settings import settings
-    original_get = settings.get
-    def patched(key, default=None, **kwargs):
-        if key == "AUTH_CONFIG":
-            return {"registration": {"fields": [
-                {"name": "email", "required": True},
-                {"name": "evil_admin_flag", "required": True},
-                {"name": "password", "required": True}]}}
-        return original_get(key, default=default, **kwargs)
-    settings.get = patched
-    try:
-        out = rs.resolve_fields(group=None)
-    finally:
-        settings.get = original_get
+    out = rs._normalize_field_list([
+        {"name": "email", "required": True},
+        {"name": "evil_admin_flag", "required": True},
+        {"name": "password", "required": True}])
     names = [f["name"] for f in out]
     assert "evil_admin_flag" not in names, \
         f"Unknown canonical names must be silently dropped, got {names}"
@@ -78,37 +63,18 @@ def test_resolve_fields_drops_unknown(opts):
 @th.django_unit_test("resolve_fields does not auto-add password, but forces it required when present")
 def test_resolve_fields_password_handling(opts):
     from mojo.apps.account.services import register_schema as rs
-    from mojo.helpers.settings import settings
-    original_get = settings.get
-
-    # Case 1: a schema that omits password stays passwordless — resolve_fields
+    # Case 1: a schema that omits password stays passwordless — normalization
     # must NOT auto-append a password field.
-    def patched_nopass(key, default=None, **kwargs):
-        if key == "AUTH_CONFIG":
-            return {"registration": {"fields": [{"name": "email", "required": True}]}}
-        return original_get(key, default=default, **kwargs)
-    settings.get = patched_nopass
-    try:
-        out = rs.resolve_fields(group=None)
-    finally:
-        settings.get = original_get
+    out = rs._normalize_field_list([{"name": "email", "required": True}])
     assert [f["name"] for f in out] == ["email"], \
         f"resolve_fields must NOT auto-append password — a schema may omit it " \
         f"for passwordless registration, got {[f['name'] for f in out]}"
 
     # Case 2: when password IS present there is no optional-password state —
     # it is forced required even if the config marks it optional.
-    def patched_optpass(key, default=None, **kwargs):
-        if key == "AUTH_CONFIG":
-            return {"registration": {"fields": [
-                {"name": "email", "required": True},
-                {"name": "password", "required": False}]}}
-        return original_get(key, default=default, **kwargs)
-    settings.get = patched_optpass
-    try:
-        out2 = rs.resolve_fields(group=None)
-    finally:
-        settings.get = original_get
+    out2 = rs._normalize_field_list([
+        {"name": "email", "required": True},
+        {"name": "password", "required": False}])
     by_name = {f["name"]: f for f in out2}
     assert "password" in by_name, \
         f"a configured password field must be kept, got {[f['name'] for f in out2]}"
@@ -283,22 +249,12 @@ def test_resolve_extra_fields_default(opts):
 @th.django_unit_test("resolve_extra_fields normalizes name/label/required")
 def test_resolve_extra_fields_normalizes(opts):
     from mojo.apps.account.services import register_schema as rs
-    from mojo.helpers.settings import settings
     raw = [
         {"name": "promo", "label": "Promo code", "required": True},
         "ref",                                   # string shorthand
         {"name": "tracking"},                    # label defaults from name
     ]
-    original_get = settings.get
-    def patched(key, default=None, **kwargs):
-        if key == "AUTH_CONFIG":
-            return {"registration": {"extra_fields": raw}}
-        return original_get(key, default=default, **kwargs)
-    settings.get = patched
-    try:
-        out = rs.resolve_extra_fields(group=None)
-    finally:
-        settings.get = original_get
+    out = rs._normalize_extra_field_list(raw)
     by_name = {ef["name"]: ef for ef in out}
     assert [ef["name"] for ef in out] == ["promo", "ref", "tracking"], \
         f"extra fields must keep configured order, got {[ef['name'] for ef in out]}"
@@ -315,7 +271,6 @@ def test_resolve_extra_fields_normalizes(opts):
 @th.django_unit_test("resolve_extra_fields drops canonical-colliding, blank, and duplicate names")
 def test_resolve_extra_fields_drops_bad(opts):
     from mojo.apps.account.services import register_schema as rs
-    from mojo.helpers.settings import settings
     raw = [
         {"name": "email"},        # collides with a canonical field -> dropped
         {"name": ""},             # blank -> dropped
@@ -324,16 +279,7 @@ def test_resolve_extra_fields_drops_bad(opts):
         {"name": "promo"},        # duplicate -> dropped
         {"label": "no name"},     # missing name -> dropped
     ]
-    original_get = settings.get
-    def patched(key, default=None, **kwargs):
-        if key == "AUTH_CONFIG":
-            return {"registration": {"extra_fields": raw}}
-        return original_get(key, default=default, **kwargs)
-    settings.get = patched
-    try:
-        out = rs.resolve_extra_fields(group=None)
-    finally:
-        settings.get = original_get
+    out = rs._normalize_extra_field_list(raw)
     assert [ef["name"] for ef in out] == ["promo"], \
         f"canonical-colliding, blank, nameless, and duplicate entries must all be " \
         f"dropped, leaving only ['promo'], got {[ef['name'] for ef in out]}"

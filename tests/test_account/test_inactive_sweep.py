@@ -1,6 +1,19 @@
-"""Tests for auto-disable inactive users and groups sweep."""
-from unittest import mock
+"""Tests for auto-disable inactive users and groups sweep.
+
+Parallel-safety: every call injects a local incident reporter and email
+sender through the service seams (maestro item #1839) — nothing here patches
+the shared incident module or the User class, so a concurrent module's
+events and emails are untouched.
+"""
 from testit import helpers as th
+
+
+def _null_reporter(*args, **kwargs):
+    return None
+
+
+def _null_send_email(user, template, context):
+    return None
 
 
 @th.django_unit_setup()
@@ -133,10 +146,8 @@ def setup_inactive_sweep(opts):
 @th.django_unit_test()
 def test_disable_inactive_user(opts):
     from mojo.apps.account.services.inactive import disable_inactive_users
-    from mojo.apps.account.models import User
 
-    with mock.patch("mojo.apps.incident.report_event"):
-        disabled = disable_inactive_users()
+    disabled = disable_inactive_users(reporter=_null_reporter)
 
     opts.stale_user.refresh_from_db()
     assert opts.stale_user.is_active is False, "Stale user (100 days) should be disabled"
@@ -146,11 +157,8 @@ def test_disable_inactive_user(opts):
 @th.django_unit_test()
 def test_warn_inactive_user(opts):
     from mojo.apps.account.services.inactive import warn_inactive_users
-    from mojo.apps.account.models import User
 
-    with mock.patch("mojo.apps.incident.report_event"), \
-         mock.patch.object(User, "send_template_email"):
-        warned = warn_inactive_users()
+    warned = warn_inactive_users(reporter=_null_reporter, send_email=_null_send_email)
 
     opts.warn_user.refresh_from_db()
     assert opts.warn_user.is_active is True, "Warned user should still be active"
@@ -164,8 +172,7 @@ def test_warn_inactive_user(opts):
 def test_staff_exempt(opts):
     from mojo.apps.account.services.inactive import disable_inactive_users
 
-    with mock.patch("mojo.apps.incident.report_event"):
-        disable_inactive_users()
+    disable_inactive_users(reporter=_null_reporter)
 
     opts.staff_user.refresh_from_db()
     assert opts.staff_user.is_active is True, "Staff user should NOT be disabled"
@@ -175,8 +182,7 @@ def test_staff_exempt(opts):
 def test_superuser_exempt(opts):
     from mojo.apps.account.services.inactive import disable_inactive_users
 
-    with mock.patch("mojo.apps.incident.report_event"):
-        disable_inactive_users()
+    disable_inactive_users(reporter=_null_reporter)
 
     opts.super_user.refresh_from_db()
     assert opts.super_user.is_active is True, "Superuser should NOT be disabled"
@@ -185,12 +191,9 @@ def test_superuser_exempt(opts):
 @th.django_unit_test()
 def test_protected_exempt(opts):
     from mojo.apps.account.services.inactive import disable_inactive_users, warn_inactive_users
-    from mojo.apps.account.models import User
 
-    with mock.patch("mojo.apps.incident.report_event"), \
-         mock.patch.object(User, "send_template_email"):
-        disable_inactive_users()
-        warn_inactive_users()
+    disable_inactive_users(reporter=_null_reporter)
+    warn_inactive_users(reporter=_null_reporter, send_email=_null_send_email)
 
     opts.protected_user.refresh_from_db()
     assert opts.protected_user.is_active is True, "Protected user (no_disable) should NOT be disabled"
@@ -200,8 +203,7 @@ def test_protected_exempt(opts):
 def test_never_login_exempt(opts):
     from mojo.apps.account.services.inactive import disable_inactive_users
 
-    with mock.patch("mojo.apps.incident.report_event"):
-        disable_inactive_users()
+    disable_inactive_users(reporter=_null_reporter)
 
     opts.never_login.refresh_from_db()
     assert opts.never_login.is_active is True, \
@@ -211,15 +213,10 @@ def test_never_login_exempt(opts):
 @th.django_unit_test()
 def test_warning_idempotent(opts):
     from mojo.apps.account.services.inactive import warn_inactive_users
-    from mojo.apps.account.models import User
 
-    with mock.patch("mojo.apps.incident.report_event"), \
-         mock.patch.object(User, "send_template_email") as mock_email:
-        warned = warn_inactive_users()
+    warn_inactive_users(reporter=_null_reporter, send_email=_null_send_email)
 
     # The already-warned user should NOT be warned again
-    # Only the warn_user (85 days, not yet warned) should be warned
-    # Count calls - the warned_user should not generate an email
     opts.warned_user.refresh_from_db()
     assert opts.warned_user.get_protected_metadata("disable_warned") is True, \
         "Already warned user should still have disable_warned flag"
@@ -241,10 +238,8 @@ def test_clear_stale_warnings(opts):
 @th.django_unit_test()
 def test_disable_inactive_group(opts):
     from mojo.apps.account.services.inactive import disable_inactive_groups
-    from mojo.apps.account.models import Group
 
-    with mock.patch("mojo.apps.incident.report_event"):
-        disabled = disable_inactive_groups()
+    disabled = disable_inactive_groups(reporter=_null_reporter)
 
     opts.stale_group.refresh_from_db()
     assert opts.stale_group.is_active is False, "Stale group (100 days) should be disabled"
@@ -254,11 +249,8 @@ def test_disable_inactive_group(opts):
 @th.django_unit_test()
 def test_warn_inactive_group(opts):
     from mojo.apps.account.services.inactive import warn_inactive_groups
-    from mojo.apps.account.models import User
 
-    with mock.patch("mojo.apps.incident.report_event"), \
-         mock.patch.object(User, "send_template_email"):
-        warned = warn_inactive_groups()
+    warned = warn_inactive_groups(reporter=_null_reporter, send_email=_null_send_email)
 
     opts.warn_group.refresh_from_db()
     assert opts.warn_group.is_active is True, "Warned group should still be active"
@@ -272,8 +264,7 @@ def test_warn_inactive_group(opts):
 def test_protected_group_exempt(opts):
     from mojo.apps.account.services.inactive import disable_inactive_groups
 
-    with mock.patch("mojo.apps.incident.report_event"):
-        disable_inactive_groups()
+    disable_inactive_groups(reporter=_null_reporter)
 
     opts.protected_group.refresh_from_db()
     assert opts.protected_group.is_active is True, \
@@ -284,8 +275,7 @@ def test_protected_group_exempt(opts):
 def test_group_null_activity_exempt(opts):
     from mojo.apps.account.services.inactive import disable_inactive_groups
 
-    with mock.patch("mojo.apps.incident.report_event"):
-        disable_inactive_groups()
+    disable_inactive_groups(reporter=_null_reporter)
 
     opts.new_group.refresh_from_db()
     assert opts.new_group.is_active is True, \
@@ -300,14 +290,17 @@ def test_incident_event_on_disable(opts):
     # Re-enable the stale user (may have been disabled by earlier test)
     User.objects.filter(pk=opts.stale_user.pk).update(is_active=True)
 
-    with mock.patch("mojo.apps.incident.report_event") as mock_report:
-        disable_inactive_users()
+    reported = []
 
-    assert mock_report.called, "report_event should be called when disabling users"
-    # Check that at least one call had the auto_disabled category
-    categories = [call.kwargs.get("category") for call in mock_report.call_args_list]
+    def capture(*args, **kwargs):
+        reported.append(kwargs)
+
+    disable_inactive_users(reporter=capture)
+
+    assert reported, "the reporter should be called when disabling users"
+    categories = [call.get("category") for call in reported]
     assert "account:auto_disabled" in categories, \
-        f"report_event should be called with category 'account:auto_disabled', got: {categories}"
+        f"reporter should receive category 'account:auto_disabled', got: {categories}"
 
 
 @th.django_unit_test()
@@ -325,22 +318,32 @@ def test_incident_event_on_warn(opts):
     opts.warn_user.last_activity = dates.subtract(days=85)
     opts.warn_user.save(update_fields=["last_activity"])
 
-    with mock.patch("mojo.apps.incident.report_event") as mock_report, \
-         mock.patch.object(User, "send_template_email"):
-        warn_inactive_users()
+    reported = []
 
-    assert mock_report.called, "report_event should be called when warning users"
-    categories = [call.kwargs.get("category") for call in mock_report.call_args_list]
+    def capture(*args, **kwargs):
+        reported.append(kwargs)
+
+    warn_inactive_users(reporter=capture, send_email=_null_send_email)
+
+    assert reported, "the reporter should be called when warning users"
+    categories = [call.get("category") for call in reported]
     assert "account:inactive_warning" in categories, \
-        f"report_event should be called with category 'account:inactive_warning', got: {categories}"
+        f"reporter should receive category 'account:inactive_warning', got: {categories}"
 
 
 @th.django_unit_test()
 def test_feature_flag_off(opts):
     from mojo.apps.account.asyncjobs import inactive_sweep
+    from mojo.helpers.settings import settings
 
-    with mock.patch("mojo.helpers.settings.settings.get", return_value=False):
-        results = inactive_sweep(None)
+    # The auto-disable flags default to False and the test project does not
+    # set them — assert that read directly, then prove the sweep is a no-op.
+    assert settings.get("ACCOUNT_AUTO_DISABLE_ENABLED", False) is False, \
+        "test project must not enable ACCOUNT_AUTO_DISABLE_ENABLED — this test asserts the off-by-default contract"
+    assert settings.get("GROUP_AUTO_DISABLE_ENABLED", False) is False, \
+        "test project must not enable GROUP_AUTO_DISABLE_ENABLED — this test asserts the off-by-default contract"
+
+    results = inactive_sweep(None)
 
     assert results == {}, f"With feature flags off, sweep should return empty results, got: {results}"
 
@@ -355,14 +358,11 @@ def test_zero_matches_no_error(opts):
         "inactive_test1@test.com", "inactive_test2@test.com",
     ]).update(is_active=False)
 
-    with mock.patch("mojo.apps.incident.report_event"):
-        disabled = disable_inactive_users()
+    disabled = disable_inactive_users(reporter=_null_reporter)
 
     # Should not error, just return 0
     assert disabled >= 0, f"disable_inactive_users should return >= 0, got: {disabled}"
 
-    with mock.patch("mojo.apps.incident.report_event"), \
-         mock.patch.object(User, "send_template_email"):
-        warned = warn_inactive_users()
+    warned = warn_inactive_users(reporter=_null_reporter, send_email=_null_send_email)
 
     assert warned >= 0, f"warn_inactive_users should return >= 0, got: {warned}"

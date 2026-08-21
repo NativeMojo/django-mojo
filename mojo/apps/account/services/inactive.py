@@ -46,10 +46,20 @@ def _clear_stale_warnings(Model, inactive_days):
     return cleared
 
 
-def warn_inactive_users():
-    """Send warning emails to users approaching the inactivity threshold."""
+def warn_inactive_users(reporter=None, send_email=None):
+    """Send warning emails to users approaching the inactivity threshold.
+
+    `reporter` and `send_email` default to incident.report_event and the
+    user's own send_template_email — tests inject local fakes instead of
+    patching the shared incident module or the User class.
+    """
     from mojo.apps.account.models import User
-    from mojo.apps.incident import report_event
+    if reporter is None:
+        from mojo.apps.incident import report_event
+        reporter = report_event
+    if send_email is None:
+        def send_email(user, template, context):
+            user.send_template_email(template, context=context)
 
     inactive_days = _get_account_inactive_days()
     warning_days = _get_account_warning_days()
@@ -75,9 +85,10 @@ def warn_inactive_users():
         if days_until < 0:
             days_until = 0
         try:
-            user.send_template_email(
+            send_email(
+                user,
                 "account_inactive_warning",
-                context={
+                {
                     "days_until_disable": days_until,
                     "inactive_days": inactive_days,
                 },
@@ -87,7 +98,7 @@ def warn_inactive_users():
 
         disable_service.mark_warning(user, days_until_disable=days_until)
 
-        report_event(
+        reporter(
             details=f"Inactive warning sent to user {user.username} (id={user.id}), {days_until} days until disable",
             title=f"Inactive warning: {user.username}",
             category="account:inactive_warning",
@@ -101,7 +112,7 @@ def warn_inactive_users():
     return warned
 
 
-def disable_inactive_users():
+def disable_inactive_users(reporter=None):
     """Disable users past the inactivity threshold."""
     from mojo.apps.account.models import User
     from mojo import errors as merrors
@@ -136,7 +147,8 @@ def disable_inactive_users():
             if disable_service.is_exempt(user):
                 continue
             try:
-                disable_service.disable_entity(user, reason="inactive", by_user=None)
+                disable_service.disable_entity(
+                    user, reason="inactive", by_user=None, reporter=reporter)
             except merrors.ValueException:
                 # Already disabled by a concurrent worker — skip.
                 continue
@@ -145,10 +157,15 @@ def disable_inactive_users():
     return disabled
 
 
-def warn_inactive_groups():
+def warn_inactive_groups(reporter=None, send_email=None):
     """Send warning emails to group admins for groups approaching inactivity threshold."""
     from mojo.apps.account.models import User, Group
-    from mojo.apps.incident import report_event
+    if reporter is None:
+        from mojo.apps.incident import report_event
+        reporter = report_event
+    if send_email is None:
+        def send_email(user, template, context):
+            user.send_template_email(template, context=context)
 
     inactive_days = _get_group_inactive_days()
     warning_days = _get_account_warning_days()
@@ -182,9 +199,10 @@ def warn_inactive_groups():
         else:
             for admin in admin_users:
                 try:
-                    admin.send_template_email(
+                    send_email(
+                        admin,
                         "group_inactive_warning",
-                        context={
+                        {
                             "group_name": group.name,
                             "group_id": group.id,
                             "days_until_disable": days_until,
@@ -196,7 +214,7 @@ def warn_inactive_groups():
 
         disable_service.mark_warning(group, days_until_disable=days_until)
 
-        report_event(
+        reporter(
             details=f"Inactive warning for group {group.name} (id={group.id}), {days_until} days until disable",
             title=f"Inactive group warning: {group.name}",
             category="group:inactive_warning",
@@ -209,7 +227,7 @@ def warn_inactive_groups():
     return warned
 
 
-def disable_inactive_groups():
+def disable_inactive_groups(reporter=None):
     """Disable groups past the inactivity threshold."""
     from mojo.apps.account.models import Group
     from mojo import errors as merrors
@@ -228,7 +246,8 @@ def disable_inactive_groups():
         if disable_service.is_exempt(group):
             continue
         try:
-            disable_service.disable_entity(group, reason="inactive", by_user=None)
+            disable_service.disable_entity(
+                group, reason="inactive", by_user=None, reporter=reporter)
         except merrors.ValueException:
             continue
         disabled += 1
