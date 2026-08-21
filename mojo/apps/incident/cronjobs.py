@@ -63,6 +63,15 @@ def replay_mojosec_handler_outbox(force=False, verbose=False, now=None):
         channel="cleanup", payload={})
 
 
+# Settles quiet MojoSec deployment cases, heals crashed case projections and
+# re-drives stranded case-routed receipts. System transitions only — no Events.
+@schedule(minutes="*/5")
+def settle_mojosec_cases(force=False, verbose=False, now=None):
+    jobs.publish(
+        func="mojo.apps.incident.services.mojosec_correlation.settle_sweep",
+        channel="cleanup", payload={})
+
+
 # Runs every 5 minutes — unblocks IPs whose blocked_until has passed
 @schedule(minutes="*/5")
 def sweep_expired_blocks(force=False, verbose=False, now=None):

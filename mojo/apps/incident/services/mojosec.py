@@ -22,6 +22,10 @@ logger = logit.get_logger(__name__, "incident.log")
 MAX_COMPRESSED_BYTES = protocol.MAX_BATCH_BYTES
 MAX_ERROR = 256
 LOCAL_ONLY_REPLAY_SCHEMA = "local_only_receipt_v1"
+# Case-routed receipts keep the full sensor event for replay, learning
+# exemplars and terminal conversion — deliberately NOT the local-only schema,
+# which mojosec_learning refuses as a feedback subject.
+CASE_ROUTED_REPLAY_SCHEMA = "case_routed_receipt_v1"
 KIND_POLICY = {
     "auth.ssh_login": {"level": 8},
     "auth.ssh_failure": {"level": 5},
@@ -372,6 +376,189 @@ def _accept_local_only(api_key, batch, sensor_event, digest):
         return receipt, True
 
 
+def _case_route_attempt_cap():
+    return settings.get_static("MOJOSEC_CASE_ROUTE_MAX_ATTEMPTS", 100, kind="int")
+
+
+def _routable_digest_tier(binding, sensor_event):
+    """True when this evidence is digest tier and may skip Event projection.
+
+    Bound web observations normalize to info/warning by construction. FIM
+    routes only for a valid trusted expected-change annotation; unannotated
+    changes, overflow and annotation errors stay immediate per-receipt
+    Events at their existing severity.
+    """
+    if binding["kind"] == "web":
+        return True
+    attributes = sensor_event.get("attributes")
+    return (sensor_event.get("kind") == "fim.change" and
+            isinstance(attributes, dict) and
+            mojosec_correlation._safe_expected(attributes) is not None)
+
+
+def _case_routed_replay(batch, sensor_event):
+    return {
+        "feature_schema": CASE_ROUTED_REPLAY_SCHEMA,
+        "schema": batch["schema"],
+        "version": batch["version"],
+        "sensor_id": batch["sensor_id"],
+        "policy_revision": batch["policy_revision"],
+        "disposition": "case_routed",
+        "event": sensor_event,
+    }
+
+
+def _accept_case_routed(api_key, batch, sensor_event, digest):
+    """Create the sticky eventless receipt that case contribution will own."""
+    from mojo.apps.incident.models import MojoSecReceipt
+
+    try:
+        with transaction.atomic():
+            receipt = MojoSecReceipt.objects.create(
+                api_key=api_key,
+                event=None,
+                sensor_id=batch["sensor_id"],
+                wire_event_id=sensor_event["id"],
+                payload_digest=digest,
+                protocol_version=batch["version"],
+                sensor_policy_revision=batch["policy_revision"],
+                publish_state=MojoSecReceipt.PUBLISH_PENDING,
+                handler_state=MojoSecReceipt.HANDLER_NONE,
+                case_routed=True,
+                replay_features=_case_routed_replay(batch, sensor_event),
+            )
+        return receipt, True
+    except IntegrityError:
+        receipt = MojoSecReceipt.objects.filter(
+            api_key=api_key, wire_event_id=sensor_event["id"]).first()
+        if receipt is None:
+            raise
+        return receipt, False
+
+
+def _mark_case_routed_published(receipt):
+    from mojo.apps.incident.models import MojoSecReceipt
+
+    MojoSecReceipt.objects.filter(pk=receipt.pk).exclude(
+        publish_state=MojoSecReceipt.PUBLISH_PUBLISHED).update(
+        publish_state=MojoSecReceipt.PUBLISH_PUBLISHED,
+        published_at=dates.utcnow(),
+        handler_state=MojoSecReceipt.HANDLER_NONE,
+        publish_attempts=F("publish_attempts") + 1,
+        last_error="",
+        modified=dates.utcnow())
+
+
+def _convert_case_routed(receipt, sensor_event=None):
+    """Terminal fallback: surface orphaned evidence as an ordinary Event.
+
+    Used when the enrollment binding is permanently unresolvable (policy
+    version bump, vhost disabled, target list gone) or transient failures
+    exhausted the attempt budget. Visible noise, never silent loss.
+    """
+    from mojo.apps.incident.models import MojoSecReceipt
+
+    with transaction.atomic():
+        locked = MojoSecReceipt.objects.select_for_update().get(pk=receipt.pk)
+        wire_id = locked.wire_event_id
+        if not locked.case_routed or locked.publish_state != \
+                MojoSecReceipt.PUBLISH_PENDING:
+            return {"id": wire_id, "status": "duplicate"}
+        replay = locked.replay_features if isinstance(
+            locked.replay_features, dict) else {}
+        payload = sensor_event or replay.get("event")
+        if not isinstance(payload, dict):
+            # No retained evidence to convert; terminal and honest.
+            locked.publish_state = MojoSecReceipt.PUBLISH_DEAD
+            locked.last_error = "case-routed receipt lost its replay evidence"
+            locked.publish_attempts += 1
+            locked.save(update_fields=[
+                "publish_state", "last_error", "publish_attempts", "modified"])
+            return {"id": wire_id, "status": "rejected",
+                    "reason": "case-routed evidence was lost before conversion"}
+        projection_batch = {
+            "sensor_id": locked.sensor_id,
+            "installation_key_id": locked.api_key_id,
+            "version": locked.protocol_version,
+            "policy_revision": locked.sensor_policy_revision,
+        }
+        event = _event_projection(projection_batch, payload)
+        locked.event = event
+        locked.case_routed = False
+        locked.save(update_fields=["event", "case_routed", "modified"])
+    mojosec_correlation._record_metric("route_conversions")
+    published, _did_publish = _publish_receipt(locked)
+    if published is None:
+        return {"id": wire_id, "status": "retry",
+                "reason": "central publication failed"}
+    published.refresh_from_db()
+    if not _queue_handler(published):
+        return {"id": wire_id, "status": "retry",
+                "reason": "handler dispatch was not durably queued"}
+    return {"id": wire_id, "status": "accepted"}
+
+
+def _finish_case_routed(receipt, sensor_event=None):
+    """Contribution IS publication for a case-routed receipt.
+
+    Returns the ack result for this delivery. The sensor redelivers on
+    `retry`; `retry_case_routed` covers a sensor that never comes back.
+    """
+    from mojo.apps.incident.models import MojoSecReceipt
+
+    replay = receipt.replay_features if isinstance(
+        receipt.replay_features, dict) else {}
+    payload = sensor_event or replay.get("event")
+    wire_id = receipt.wire_event_id
+    if receipt.publish_state == MojoSecReceipt.PUBLISH_PUBLISHED:
+        return {"id": wire_id, "status": "duplicate"}
+    if not isinstance(payload, dict):
+        return _convert_case_routed(receipt, sensor_event)
+    try:
+        case, contributed = mojosec_correlation.contribute(receipt, payload)
+    except Exception as err:
+        logger.exception(
+            "MojoSec case contribution failed for receipt %s", receipt.pk)
+        MojoSecReceipt.objects.filter(pk=receipt.pk).update(
+            publish_attempts=F("publish_attempts") + 1,
+            last_error=str(err)[:MAX_ERROR],
+            modified=dates.utcnow())
+        mojosec_correlation._record_metric("ack_retries")
+        if receipt.publish_attempts + 1 >= _case_route_attempt_cap():
+            return _convert_case_routed(receipt, sensor_event)
+        return {"id": wire_id, "status": "retry",
+                "reason": "case contribution failed"}
+    if case is None and not contributed:
+        # Binding or normalization no longer resolves — permanent for this
+        # receipt, so convert rather than strand it.
+        return _convert_case_routed(receipt, sensor_event)
+    _mark_case_routed_published(receipt)
+    if contributed:
+        mojosec_correlation._record_metric("events_suppressed")
+    return {"id": wire_id, "status": "accepted" if contributed else "duplicate"}
+
+
+def retry_case_routed(now=None, limit=100):
+    """Re-drive stranded case-routed receipts from their replay evidence."""
+    from mojo.apps.incident.models import MojoSecReceipt
+
+    now = now or dates.utcnow()
+    stranded = MojoSecReceipt.objects.filter(
+        case_routed=True,
+        publish_state=MojoSecReceipt.PUBLISH_PENDING,
+        modified__lt=now - dates.timedelta(seconds=60),
+    ).order_by("modified")[:limit]
+    retried = 0
+    for receipt in stranded:
+        try:
+            _finish_case_routed(receipt)
+            retried += 1
+        except Exception:
+            logger.exception(
+                "MojoSec case-routed retry failed for receipt %s", receipt.pk)
+    return retried
+
+
 def _publish_receipt(receipt):
     from mojo.apps.incident.models import MojoSecReceipt
 
@@ -382,6 +569,14 @@ def _publish_receipt(receipt):
             # joined side when select_related() is used here.
             locked = MojoSecReceipt.objects.select_for_update().get(pk=receipt.pk)
             if locked.publish_state == MojoSecReceipt.PUBLISH_PUBLISHED:
+                return locked, False
+            if locked.case_routed:
+                # Case contribution owns this receipt. The event_id-is-None
+                # branch below would dead-letter it and reject the ack, which
+                # deletes the sensor's spool copy — never allowed here.
+                logger.error(
+                    "case-routed MojoSec receipt %s reached _publish_receipt",
+                    locked.pk)
                 return locked, False
             if locked.event_id is None:
                 # The Event projection was pruned by retention; publication can
@@ -554,12 +749,27 @@ def ingest_batch(api_key, batch):
                         "status": "accepted" if accepted else "duplicate",
                     })
                 continue
-            receipt, created = _create_receipt(api_key, batch, sensor_event, digest)
+            binding = mojosec_correlation.binding_for(api_key.pk, sensor_event)
+            route_new = (
+                binding is not None and
+                binding.get("mode") == "authoritative" and
+                _routable_digest_tier(binding, sensor_event))
+            if route_new:
+                receipt, _created = _accept_case_routed(
+                    api_key, batch, sensor_event, digest)
+            else:
+                receipt, _created = _create_receipt(
+                    api_key, batch, sensor_event, digest)
             if receipt.payload_digest != digest:
                 results.append({
                     "id": sensor_event["id"], "status": "rejected",
                     "reason": "event id was already used for different evidence",
                 })
+                continue
+            if receipt.case_routed:
+                # Sticky: once routed, contribution owns the receipt on every
+                # later delivery — regardless of what the binding says now.
+                results.append(_finish_case_routed(receipt, sensor_event))
                 continue
             was_published = receipt.publish_state == receipt.PUBLISH_PUBLISHED
             receipt, did_publish = _publish_receipt(receipt)
@@ -655,6 +865,7 @@ def replay_handler_outbox(job=None, limit=100):
     dead_publishes = MojoSecReceipt.objects.filter(
         publish_state=MojoSecReceipt.PUBLISH_PENDING,
         event__isnull=True,
+        case_routed=False,
         created__lt=now - dates.timedelta(days=1),
     ).update(
         publish_state=MojoSecReceipt.PUBLISH_DEAD,

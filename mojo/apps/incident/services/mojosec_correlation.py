@@ -14,10 +14,17 @@ from mojo.helpers.settings import settings
 
 
 logger = logit.get_logger(__name__, "incident.log")
-EVALUATOR_VERSION = 1
+EVALUATOR_VERSION = 2
 MAX_SAMPLES = 8
+MAX_BREAKDOWN_OPERATIONS = 16
+MAX_BREAKDOWN_TIERS = 8
 DEFAULT_FUTURE_SKEW_SECONDS = 300
 MAX_FUTURE_SKEW_SECONDS = 3600
+DEFAULT_DEPLOY_QUIET_SECONDS = 60
+MIN_DEPLOY_QUIET_SECONDS = 10
+MAX_DEPLOY_QUIET_SECONDS = 900
+PROMOTED_CATEGORY = "mojosec.case.promoted"
+_URGENCY_RANK = {"": -1, "info": 0, "warning": 1, "high": 2, "critical": 3}
 _TOKEN = re.compile(r"^[A-Za-z0-9._:-]{1,96}$")
 _WORDPRESS = re.compile(r"^/(?:wp-admin|wp-login\.php|wp-content|xmlrpc\.php)(?:/|$)")
 _PHP = re.compile(r"\.(?:php[3-8]?|phtml)(?:/|$)")
@@ -48,6 +55,16 @@ def future_skew_seconds():
     if (not isinstance(value, int) or isinstance(value, bool) or
             not 0 <= value <= MAX_FUTURE_SKEW_SECONDS):
         return 0
+    return value
+
+
+def quiet_seconds():
+    """Bounded quiet window after which a deployment case settles."""
+    value = settings.get_static(
+        "MOJOSEC_DEPLOY_QUIET_SECONDS", DEFAULT_DEPLOY_QUIET_SECONDS)
+    if (not isinstance(value, int) or isinstance(value, bool) or
+            not MIN_DEPLOY_QUIET_SECONDS <= value <= MAX_DEPLOY_QUIET_SECONDS):
+        return DEFAULT_DEPLOY_QUIET_SECONDS
     return value
 
 
@@ -171,34 +188,53 @@ def _case_input(receipt, sensor_event, web_binding=None):
             "sample_key": _digest(family, network, resource_id, projected.get("path", "/")),
             "correlation_key": _digest(
                 "web", family, network, resource_id, policy_version),
+            "window_key": _digest(start.isoformat(), end.isoformat()),
         }
 
     if kind in ("fim.change", "fim.overflow", "fim.expected_change_error"):
-        start, end = _window(observed, 15)
         tier = _fim_tier(attributes.get("path"))
-        expected = _safe_expected(attributes)
+        expected = _safe_expected(attributes) if kind == "fim.change" else None
+        if expected:
+            # Trusted, provenance-backed deployment evidence: one case per
+            # sensor + deployment identity per UTC day. The quiet window
+            # drives the settled state, never the key, so redelivery and late
+            # evidence stay deterministic even for constant-id drivers.
+            operation = expected["operation_kind"]
+            deployment = expected["deployment_id"]
+            return {
+                "sensor_kind": "fim", "family": "deployment", "network": "",
+                "resource_id": f"installation:{receipt.api_key_id}",
+                "policy_version": 1,
+                "observed": observed, "window_start": observed,
+                "window_end": observed,
+                "occurrences": count, "projected_events": 1,
+                "urgency": "info", "urgency_reason": "trusted_deployment_change",
+                "deployment_id": deployment,
+                "breakdown": {"operation": operation, "tier": tier, "count": count},
+                "sample": {"operation": operation, "tier": tier},
+                "sample_key": _digest("deploy", operation, tier),
+                "correlation_key": _digest(
+                    "fim.deploy", receipt.sensor_id, deployment),
+                "window_key": _digest(
+                    "fim.deploy", deployment, observed.date().isoformat()),
+            }
+        start, end = _window(observed, 15)
         if kind == "fim.overflow":
             family = "overflow"
             urgency, reason = "critical", "fim_collector_overflow"
-        elif expected:
-            family = f"trusted_{expected['operation_kind']}"[:64]
-            urgency, reason = "info", "trusted_deployment_change"
         else:
             family = tier
             urgency, reason = "high", "unexplained_protected_change"
-        deployment = expected["deployment_id"] if expected else "untrusted"
-        sample = {
-            "family": family, "protected_tier": tier,
-            "operation": expected["operation_kind"] if expected else "unknown",
-        }
+        sample = {"family": family, "protected_tier": tier, "operation": "unknown"}
         return {
             "sensor_kind": "fim", "family": family, "network": "",
             "resource_id": f"installation:{receipt.api_key_id}", "policy_version": 1,
             "observed": observed, "window_start": start, "window_end": end,
             "occurrences": count, "projected_events": 1,
             "urgency": urgency, "urgency_reason": reason, "sample": sample,
-            "sample_key": _digest(tier, family, deployment),
-            "correlation_key": _digest("fim", tier, family, deployment),
+            "sample_key": _digest(tier, family, "untrusted"),
+            "correlation_key": _digest("fim", tier, family, "untrusted"),
+            "window_key": _digest(start.isoformat(), end.isoformat()),
         }
     return None
 
@@ -210,26 +246,42 @@ def _shadow_targets():
     targets = []
     for row in value:
         if not isinstance(row, dict) or not set(row).issubset(
-                {"installation_key_id", "vhost_ids", "include_fim"}):
+                {"installation_key_id", "vhost_ids", "include_fim", "mode"}):
             return []
         key_id = row.get("installation_key_id")
         vhost_ids = row.get("vhost_ids", [])
         include_fim = row.get("include_fim", False)
+        mode = row.get("mode", "shadow")
         if (not isinstance(key_id, int) or isinstance(key_id, bool) or key_id < 1 or
                 not isinstance(vhost_ids, list) or len(vhost_ids) > 32 or
                 any(not isinstance(item, int) or isinstance(item, bool) or item < 1
                     for item in vhost_ids) or
-                not isinstance(include_fim, bool)):
+                not isinstance(include_fim, bool) or
+                mode not in ("shadow", "authoritative")):
             return []
         targets.append({
             "installation_key_id": key_id,
             "vhost_ids": set(vhost_ids),
             "include_fim": include_fim,
+            "mode": mode,
         })
     return targets
 
 
+def installation_mode(installation_key_id):
+    """The enrollment mode for one installation, or None when un-enrolled."""
+    for target in _shadow_targets():
+        if target["installation_key_id"] == installation_key_id:
+            return target["mode"]
+    return None
+
+
 def _shadow_binding(receipt, sensor_event):
+    return binding_for(receipt.api_key_id, sensor_event)
+
+
+def binding_for(installation_key_id, sensor_event):
+    """Resolve the enrollment binding for one installation's sensor event."""
     from mojo import errors as merrors
     from mojo.apps.edge.models import Vhost
     from mojo.apps.edge import validators
@@ -240,10 +292,10 @@ def _shadow_binding(receipt, sensor_event):
     if not isinstance(attributes, dict):
         attributes = {}
     for target in _shadow_targets():
-        if target["installation_key_id"] != receipt.api_key_id:
+        if target["installation_key_id"] != installation_key_id:
             continue
         if kind and kind.startswith("fim.") and target["include_fim"]:
-            return {"kind": "fim"}
+            return {"kind": "fim", "mode": target["mode"]}
         if not kind or not kind.startswith("web."):
             continue
         projection = mojosec_evidence.project(
@@ -257,7 +309,7 @@ def _shadow_binding(receipt, sensor_event):
             continue
         vhost = Vhost.objects.select_related("domain").filter(
             pk=vhost_id, is_enabled=True,
-            domain__group__api_keys__pk=receipt.api_key_id).first()
+            domain__group__api_keys__pk=installation_key_id).first()
         if vhost is None:
             return None
         try:
@@ -274,8 +326,8 @@ def _shadow_binding(receipt, sensor_event):
                 not response_matches):
             return None
         return {
-            "kind": "web", "policy": policy, "projection": projection,
-            "resource_id": f"vhost:{vhost.pk}",
+            "kind": "web", "mode": target["mode"], "policy": policy,
+            "projection": projection, "resource_id": f"vhost:{vhost.pk}",
         }
     return None
 
@@ -293,8 +345,32 @@ def _record_metric(slug, count=1):
         logger.exception("MojoSec shadow metric failed for %s", slug)
 
 
+def _apply_breakdown(case, info):
+    """Fold one bounded operation/tier contribution into the deployment case."""
+    breakdown = case.breakdown if isinstance(case.breakdown, dict) else {}
+    operations = breakdown.get("operations")
+    if not isinstance(operations, dict):
+        operations = {}
+    key = info["operation"]
+    if key not in operations and len(operations) >= MAX_BREAKDOWN_OPERATIONS:
+        key = "_other"
+    operations[key] = operations.get(key, 0) + info["count"]
+    tiers = breakdown.get("tiers")
+    if not isinstance(tiers, dict):
+        tiers = {}
+    tier_key = info["tier"]
+    if tier_key not in tiers and len(tiers) >= MAX_BREAKDOWN_TIERS:
+        tier_key = "_other"
+    tiers[tier_key] = tiers.get(tier_key, 0) + info["count"]
+    case.breakdown = {"operations": operations, "tiers": tiers}
+
+
 def contribute(receipt, sensor_event):
-    """Contribute one receipt at most once; shadow failures never own ingestion."""
+    """Contribute one receipt at most once.
+
+    In shadow mode failures never own ingestion; for a case-routed receipt the
+    caller treats this as the authoritative publication act and acks from it.
+    """
     from mojo.apps.incident.models import (
         MojoSecCase, MojoSecCaseTransition, MojoSecReceipt)
 
@@ -307,16 +383,20 @@ def contribute(receipt, sensor_event):
     if normalized is None:
         _record_metric("failures")
         return None, False
-    window_key = _digest(
-        normalized["window_start"].isoformat(), normalized["window_end"].isoformat())
+    is_deployment = normalized["family"] == "deployment"
     with transaction.atomic():
         locked_receipt = MojoSecReceipt.objects.select_for_update().get(pk=receipt.pk)
         if locked_receipt.case_contributed_at is not None:
             return locked_receipt.mojosec_case, False
+        # A case-routed receipt projects no per-receipt Event, so its
+        # contribution never counts one; the legacy path still projects and
+        # keeps the counter meaning "Events actually projected".
+        projected_events = (
+            0 if locked_receipt.case_routed else normalized["projected_events"])
         case, created = MojoSecCase.objects.get_or_create(
             installation_key_id=locked_receipt.api_key_id,
             correlation_key=normalized["correlation_key"],
-            window_key=window_key,
+            window_key=normalized["window_key"],
             defaults={
                 "group_id": locked_receipt.api_key.group_id,
                 "sensor_id": locked_receipt.sensor_id,
@@ -324,6 +404,7 @@ def contribute(receipt, sensor_event):
                 "resource_id": normalized["resource_id"],
                 "family": normalized["family"],
                 "network": normalized["network"],
+                "deployment_id": normalized.get("deployment_id", ""),
                 "window_start": normalized["window_start"],
                 "window_end": normalized["window_end"],
                 "first_seen": normalized["observed"],
@@ -347,12 +428,23 @@ def contribute(receipt, sensor_event):
         case.samples = samples[:MAX_SAMPLES]
         case.occurrence_count += normalized["occurrences"]
         case.receipt_count += 1
-        case.projected_event_count += normalized["projected_events"]
+        case.projected_event_count += projected_events
         case.distinct_count += 1 if is_distinct else 0
         case.first_seen = min(case.first_seen, normalized["observed"])
         case.last_seen = max(case.last_seen, normalized["observed"])
-        urgency_rank = {"info": 0, "warning": 1, "high": 2, "critical": 3}
-        if urgency_rank[normalized["urgency"]] > urgency_rank[case.urgency]:
+        reopened = False
+        if is_deployment:
+            _apply_breakdown(case, normalized["breakdown"])
+            case.window_start = min(case.window_start, normalized["observed"])
+            case.window_end = max(case.window_end, normalized["observed"])
+            if case.state == MojoSecCase.STATE_SETTLED:
+                # A genuinely new receipt after the quiet window reopens the
+                # deployment summary; redeliveries short-circuited above.
+                case.state = MojoSecCase.STATE_OBSERVING
+                case.state_reason = "deployment_reopened"
+                case.settled_at = None
+                reopened = True
+        if _URGENCY_RANK[normalized["urgency"]] > _URGENCY_RANK[case.urgency]:
             case.urgency = normalized["urgency"]
             case.urgency_reason = normalized["urgency_reason"]
         if normalized["urgency"] in ("high", "critical"):
@@ -371,7 +463,7 @@ def contribute(receipt, sensor_event):
             "mojosec_case", "case_sample_key", "case_contributed_at", "modified"])
         transition = "opened" if created else "updated"
         if from_state != case.state or from_urgency != case.urgency:
-            transition = "promoted"
+            transition = "reopened" if reopened else "promoted"
         MojoSecCaseTransition.objects.create(
             case=case, receipt=locked_receipt,
             receipt_id_snapshot=locked_receipt.pk, transition=transition,
@@ -383,15 +475,237 @@ def contribute(receipt, sensor_event):
             distinct_count=case.distinct_count, sample_count=case.sample_count,
             overflow_count=case.overflow_count, policy_version=case.policy_version,
             evaluator_version=case.evaluator_version)
+        if (binding.get("mode") == "authoritative" and
+                _URGENCY_RANK[case.urgency] > _URGENCY_RANK.get(
+                    case.projected_urgency, -1) and
+                case.urgency in ("high", "critical")):
+            case_id = case.pk
+            transaction.on_commit(lambda: _project_case(case_id))
     _record_metric("receipts")
     _record_metric("occurrences", normalized["occurrences"])
     _record_metric(
         "compressed_occurrences",
-        max(0, normalized["occurrences"] - normalized["projected_events"]))
+        max(0, normalized["occurrences"] - projected_events))
     _record_metric("cases_opened" if created else "cases_updated")
+    if is_deployment and created:
+        _record_metric("deploy_cases_opened")
     _record_metric(f"urgency:{case.urgency}")
     if transition == "promoted":
         _record_metric("promotions")
     if case.overflow_count:
         _record_metric("overflow")
     return case, True
+
+
+def _projection_prefix(case_id, urgency):
+    return f"mojosec-case:{case_id}:{urgency}"
+
+
+def _dispatch_projection(case, event):
+    """Idempotently queue the promoted Event's RuleSet handlers, at most once.
+
+    Mirrors the receipt outbox discipline: strict dispatch with a stable
+    idempotency prefix, and `projection_dispatched_at` records durable
+    queueing so the sweep can retry without double-dispatching.
+    """
+    from mojo.apps.incident.models import MojoSecCase
+
+    dispatched = False
+    try:
+        incident = event.incident if event.incident_id else None
+        rule_set = incident.rule_set if incident is not None else None
+        if rule_set is None or not rule_set.handler:
+            dispatched = True
+        else:
+            dispatched = rule_set.run_handler(
+                event, incident,
+                idempotency_prefix=_projection_prefix(case.pk, case.urgency),
+                strict=True)
+    except Exception:
+        logger.exception(
+            "MojoSec case projection dispatch failed for case %s", case.pk)
+    if dispatched:
+        MojoSecCase.objects.filter(pk=case.pk).update(
+            projection_dispatched_at=dates.utcnow(), modified=dates.utcnow())
+    return dispatched
+
+
+def _project_case(case_id):
+    """Project one deliberate case-level Event for a high/critical promotion.
+
+    At most one Event per upward urgency step, enforced by the
+    `projected_urgency` ratchet under the case row lock; safe to call from
+    both the post-commit hook and the sweep. Shadow-mode installations never
+    project.
+    """
+    from mojo.apps.incident.models import Event, MojoSecCase, MojoSecCaseTransition
+
+    try:
+        with transaction.atomic():
+            case = MojoSecCase.objects.select_for_update().get(pk=case_id)
+            if case.urgency not in ("high", "critical"):
+                return None
+            if (_URGENCY_RANK[case.urgency] <=
+                    _URGENCY_RANK.get(case.projected_urgency, -1)):
+                return None
+            if installation_mode(case.installation_key_id) != "authoritative":
+                return None
+            level = 12 if case.urgency == "critical" else 8
+            event = Event(
+                category=PROMOTED_CATEGORY,
+                scope="mojosec",
+                level=level,
+                source_ip=None,
+                title=(
+                    f"MojoSec case promoted to {case.urgency}: "
+                    f"{case.family}")[:256],
+                details=(
+                    f"MojoSec case {case.pk} ({case.sensor_kind}/{case.family}) "
+                    f"was promoted to {case.urgency}: {case.urgency_reason}. "
+                    f"{case.occurrence_count} occurrence(s) across "
+                    f"{case.receipt_count} receipt(s)."
+                ),
+                model_name="mojosec_case",
+                model_id=case.pk,
+                metadata={
+                    "mojosec_case": {
+                        "case_id": case.pk,
+                        "sensor_kind": case.sensor_kind,
+                        "family": case.family,
+                        "network": case.network,
+                        "resource_id": case.resource_id,
+                        "urgency": case.urgency,
+                        "reason": case.urgency_reason,
+                        "occurrence_count": case.occurrence_count,
+                        "receipt_count": case.receipt_count,
+                    },
+                },
+            )
+            event.sync_metadata()
+            event.save()
+            publication = event.publish(
+                use_catchall=False,
+                dispatch_handlers=False,
+                allow_default_llm=False,
+                exact_category=True,
+            )
+            from_projected = case.projected_urgency
+            case.projected_urgency = case.urgency
+            case.projected_event_count += 1
+            # Null until dispatch is durably queued; None also when there is
+            # nothing to dispatch — resolved right after this transaction.
+            case.projection_dispatched_at = None
+            case.save(update_fields=[
+                "projected_urgency", "projected_event_count",
+                "projection_dispatched_at", "modified"])
+            MojoSecCaseTransition.objects.create(
+                case=case, receipt=None, receipt_id_snapshot=0,
+                transition="projection", reason=case.urgency_reason,
+                from_state=case.state, to_state=case.state,
+                from_urgency=from_projected, to_urgency=case.urgency,
+                occurrence_count=case.occurrence_count,
+                receipt_count=case.receipt_count,
+                projected_event_count=case.projected_event_count,
+                distinct_count=case.distinct_count,
+                sample_count=case.sample_count,
+                overflow_count=case.overflow_count,
+                policy_version=case.policy_version,
+                evaluator_version=case.evaluator_version,
+                projected_event=event,
+                projected_event_id_snapshot=event.pk)
+    except Exception:
+        logger.exception("MojoSec case projection failed for case %s", case_id)
+        _record_metric("projection_failures")
+        return None
+    _record_metric("case_events_projected")
+    if publication["should_dispatch"]:
+        _dispatch_projection(case, event)
+    else:
+        from mojo.apps.incident.models import MojoSecCase as CaseModel
+        CaseModel.objects.filter(pk=case.pk).update(
+            projection_dispatched_at=dates.utcnow(), modified=dates.utcnow())
+    return event
+
+
+def settle_sweep(job=None, now=None, limit=500):
+    """Settle quiet deployment cases and heal projection after a crash.
+
+    Runs every few minutes from cron. Settling is a system transition and
+    never an Event — real deploys stay invisible to operators.
+    """
+    from django.db.models import F
+    from mojo.apps.incident.models import MojoSecCase, MojoSecCaseTransition
+
+    now = now or dates.utcnow()
+    cutoff = now - datetime.timedelta(seconds=quiet_seconds())
+    settled = 0
+    candidates = list(MojoSecCase.objects.filter(
+        sensor_kind="fim", family="deployment",
+        state=MojoSecCase.STATE_OBSERVING,
+        last_seen__lt=cutoff).values_list("pk", flat=True)[:limit])
+    for case_id in candidates:
+        with transaction.atomic():
+            case = MojoSecCase.objects.select_for_update().get(pk=case_id)
+            if (case.state != MojoSecCase.STATE_OBSERVING or
+                    case.last_seen >= cutoff):
+                continue
+            case.state = MojoSecCase.STATE_SETTLED
+            case.state_reason = "deployment_quiet_window"
+            case.settled_at = now
+            case.save(update_fields=[
+                "state", "state_reason", "settled_at", "modified"])
+            MojoSecCaseTransition.objects.create(
+                case=case, receipt=None, receipt_id_snapshot=0,
+                transition="settled", reason="deployment_quiet_window",
+                from_state=MojoSecCase.STATE_OBSERVING,
+                to_state=MojoSecCase.STATE_SETTLED,
+                from_urgency=case.urgency, to_urgency=case.urgency,
+                occurrence_count=case.occurrence_count,
+                receipt_count=case.receipt_count,
+                projected_event_count=case.projected_event_count,
+                distinct_count=case.distinct_count,
+                sample_count=case.sample_count,
+                overflow_count=case.overflow_count,
+                policy_version=case.policy_version,
+                evaluator_version=case.evaluator_version)
+        settled += 1
+        _record_metric("deploy_cases_settled")
+    projected = 0
+    catchup = list(MojoSecCase.objects.filter(
+        state=MojoSecCase.STATE_ELEVATED,
+        urgency__in=("high", "critical")).exclude(
+        projected_urgency=F("urgency")).values_list("pk", flat=True)[:limit])
+    for case_id in catchup:
+        if _project_case(case_id) is not None:
+            projected += 1
+    redispatched = 0
+    stale_dispatch = MojoSecCase.objects.filter(
+        state=MojoSecCase.STATE_ELEVATED,
+        urgency=F("projected_urgency"),
+        projection_dispatched_at__isnull=True)[:limit]
+    for case in stale_dispatch:
+        transition = MojoSecCaseTransition.objects.filter(
+            case=case, transition="projection").order_by(
+            "-created", "-id").select_related("projected_event").first()
+        if transition is None:
+            continue
+        event = transition.projected_event
+        if event is None:
+            # The projected Event was pruned before dispatch could be
+            # confirmed; there is nothing left to hand the handlers.
+            MojoSecCase.objects.filter(pk=case.pk).update(
+                projection_dispatched_at=dates.utcnow(), modified=dates.utcnow())
+            continue
+        if _dispatch_projection(case, event):
+            redispatched += 1
+    from . import mojosec as mojosec_service
+    retried = mojosec_service.retry_case_routed(now=now, limit=limit)
+    if job is not None and hasattr(job, "add_log"):
+        job.add_log(
+            f"Settled {settled} deployment case(s); projected {projected}; "
+            f"re-dispatched {redispatched}; retried {retried} case-routed "
+            "receipt(s)")
+    return {
+        "settled": settled, "projected": projected,
+        "redispatched": redispatched, "retried": retried,
+    }
