@@ -22,6 +22,13 @@ from mojo.apps.edge.models.web_app_onboarding_operation import (
 
 
 SCHEMA_VERSION = 1
+# The surface identity a NON-browser caller (the Admin Assistant) starts and
+# continues its own onboarding operations under. `request_origin()` only ever
+# returns a `scheme://host` string, so this sentinel can never equal one: a
+# browser can never continue an assistant-created operation, and the assistant
+# can never continue a browser-created one. Each surface owns what it starts;
+# neither impersonates the other.
+ASSISTANT_ORIGIN = "assistant"
 MAX_ATTEMPTS = 8
 MAX_STATE_BYTES = 32768
 MAX_ACTIVITY = 80
@@ -174,21 +181,54 @@ def _save_state(operation, state, fields=None):
     operation.save(update_fields=list(dict.fromkeys(names)))
 
 
-def _assert_current(operation, request, mutate=False):
-    if getattr(request, "group_token", None) is not None:
+def _assert_actor_authority(operation, actor, has_group_token):
+    """The first four checks, in their original order. Origin is the caller's."""
+    if has_group_token:
         raise me.PermissionDeniedException("Group tokens cannot operate onboarding")
-    if operation.actor_id != getattr(request.user, "pk", None):
+    if operation.actor_id != getattr(actor, "pk", None):
         raise me.PermissionDeniedException("Only the initiating administrator may continue")
     if not operation.group.is_effectively_active():
         raise me.PermissionDeniedException("The onboarding group is no longer active")
-    if not webapp_authority.can_manage_group_webapps(
-            request.user, operation.group):
+    if not webapp_authority.can_manage_group_webapps(actor, operation.group):
         raise me.PermissionDeniedException(
             "WebApp and DNS management are no longer granted in this group")
+
+
+def assert_read_authority(operation, actor):
+    """May this actor READ this operation? Actor identity and live authority.
+
+    Deliberately origin-free, and therefore a deliberate RELAXATION of what
+    ``webapp/onboarding/detail`` enforces today: the same administrator may
+    report on a setup they started on the other surface, from either surface.
+    CONTINUING one stays origin-bound — see :func:`assert_continue_authority`.
+    """
+    _assert_actor_authority(operation, actor, has_group_token=False)
+
+
+def assert_continue_authority(operation, actor, origin, has_group_token=False):
+    """May this actor CONTINUE this operation from this surface?
+
+    The complete ``_assert_current`` contract with the origin supplied by the
+    caller instead of read off an HTTP request, so a non-browser surface passes
+    :data:`ASSISTANT_ORIGIN` rather than impersonating a browser Origin.
+    """
+    _assert_actor_authority(operation, actor, has_group_token)
+    if operation.origin != origin:
+        raise me.PermissionDeniedException("Onboarding must continue on its original origin")
+
+
+def _assert_current(operation, request, mutate=False):
+    _assert_actor_authority(
+        operation, getattr(request, "user", None),
+        getattr(request, "group_token", None) is not None)
     # These dedicated endpoints deliberately use the stricter actor + current
     # WebApp/DNS group-authority contract above.  RestMeta's generic request
     # group inference is a separate boundary and would turn a valid scoped
     # membership into an accidental global-permission requirement here.
+    #
+    # `request_origin` stays in its ORIGINAL position: it refuses a malformed
+    # or cross-origin Origin itself, so resolving it earlier would change which
+    # refusal an unauthorized cross-origin caller sees.
     if operation.origin != request_origin(request):
         raise me.PermissionDeniedException("Onboarding must continue on its original origin")
 
@@ -602,12 +642,43 @@ def create(group, actor, origin, payload, group_intent="existing"):
 
 
 def choose(operation, request, payload):
+    """Browser caller. Authority is asserted by ``_assert_current`` under the
+    row lock, exactly where and in the order it always was."""
+    return _choose(
+        operation, payload,
+        lambda locked: _assert_current(locked, request, mutate=True))
+
+
+def _carries_purchase(choice):
+    return bool(isinstance(choice, dict) and
+                (choice.get("purchase") or choice.get("confirm_token")))
+
+
+def choose_for_actor(operation, actor, origin, payload, has_group_token=False):
+    """Answer the current step as ``actor`` from ``origin``.
+
+    Domain purchase is refused here, at the SERVICE, for the assistant origin —
+    before the row lock and before any money can move. The one-use
+    ``confirm_token`` is a capability that must never enter model context, so
+    the exclusion is a property of this service rather than of whichever caller
+    happens to be wired up today.
+    """
+    if origin == ASSISTANT_ORIGIN and _carries_purchase(payload.get("choice") or {}):
+        raise me.PermissionDeniedException(
+            "Domain purchase is not available from this surface")
+    return _choose(
+        operation, payload,
+        lambda locked: assert_continue_authority(
+            locked, actor, origin, has_group_token=has_group_token))
+
+
+def _choose(operation, payload, assert_authority):
     raw_choice = payload.get("choice") or {}
     purchase_confirmation = None
     with transaction.atomic():
         locked = WebAppOnboardingOperation.objects.select_for_update().select_related(
             "group").get(pk=operation.pk)
-        _assert_current(locked, request, mutate=True)
+        assert_authority(locked)
         if locked.status in TERMINAL_STATUSES:
             raise me.ValueException("This onboarding operation is already finished")
         if (locked.lease_expires_at and
@@ -739,14 +810,29 @@ def choose(operation, request, payload):
     return locked
 
 
-@transaction.atomic
 def cancel(operation, request):
+    """Browser caller. Same checks, same order, same messages as always."""
+    return _cancel(
+        operation,
+        lambda locked: _assert_current(locked, request, mutate=True))
+
+
+def cancel_for_actor(operation, actor, origin, has_group_token=False):
+    """Cancel as ``actor`` from ``origin``. Completed resources are preserved."""
+    return _cancel(
+        operation,
+        lambda locked: assert_continue_authority(
+            locked, actor, origin, has_group_token=has_group_token))
+
+
+@transaction.atomic
+def _cancel(operation, assert_authority):
     # ``actor`` is nullable, so joining it under FOR UPDATE creates a nullable
-    # outer-join lock that PostgreSQL rejects.  _assert_current only needs the
-    # actor id and the concrete group.
+    # outer-join lock that PostgreSQL rejects.  The authority assertion only
+    # needs the actor id and the concrete group.
     locked = WebAppOnboardingOperation.objects.select_for_update().select_related(
         "group").get(pk=operation.pk)
-    _assert_current(locked, request, mutate=True)
+    assert_authority(locked)
     if locked.status in TERMINAL_STATUSES:
         return locked
     locked.status = STATUS_CANCELLED
