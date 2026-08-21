@@ -14,15 +14,34 @@ from mojo.helpers.settings import settings
 
 
 logger = logit.get_logger(__name__, "incident.log")
-EVALUATOR_VERSION = 2
+EVALUATOR_VERSION = 3
 MAX_SAMPLES = 8
 MAX_BREAKDOWN_OPERATIONS = 16
 MAX_BREAKDOWN_TIERS = 8
+MAX_CASE_SOURCES = 64
+MAX_CORROBORATING_CASES = 8
 DEFAULT_FUTURE_SKEW_SECONDS = 300
 MAX_FUTURE_SKEW_SECONDS = 3600
 DEFAULT_DEPLOY_QUIET_SECONDS = 60
 MIN_DEPLOY_QUIET_SECONDS = 10
 MAX_DEPLOY_QUIET_SECONDS = 900
+# Auth/privilege and service/host evidence the sensor already ships; these
+# are the only non-web/fim kinds enrollment may bind. session_open is
+# local-only in practice and carries no correlation value.
+HOST_KINDS = frozenset((
+    "auth.ssh_failure", "auth.ssh_login", "auth.sudo_command",
+    "auth.sudo_failure", "system.oom", "system.service_error"))
+# Digest tier under authoritative routing; oom (critical) and sudo_failure
+# (weak evidence) keep their immediate per-receipt Events and only contribute.
+ROUTABLE_HOST_KINDS = frozenset((
+    "auth.ssh_failure", "auth.ssh_login", "auth.sudo_command",
+    "system.service_error"))
+# Reasons that qualify a high/critical case to look for corroborating
+# evidence from other sensor kinds on the same node.
+CORROBORATION_REASONS = frozenset((
+    "unexplained_protected_change", "ssh_failure_then_success",
+    "service_failure_burst", "fim_collector_overflow",
+    "sustained_trusted_impossible_paths"))
 # Mirrors mojo/deploy/mojosec_changes.MAX_TTL_SECONDS: no journal operation
 # may promise a longer annotation lifetime, so a wider claim is not trusted.
 MAX_EXPECTED_TTL_SECONDS = 900
@@ -69,6 +88,40 @@ def quiet_seconds():
             not MIN_DEPLOY_QUIET_SECONDS <= value <= MAX_DEPLOY_QUIET_SECONDS):
         return DEFAULT_DEPLOY_QUIET_SECONDS
     return value
+
+
+def _bounded_static(name, default, low, high):
+    """Static-only integer setting clamped to its documented bounds."""
+    value = settings.get_static(name, default)
+    if (not isinstance(value, int) or isinstance(value, bool) or
+            not low <= value <= high):
+        return default
+    return value
+
+
+def ssh_promote_min_failures():
+    return _bounded_static("MOJOSEC_SSH_PROMOTE_MIN_FAILURES", 5, 1, 1000)
+
+
+def auth_elevate_occurrences():
+    return _bounded_static("MOJOSEC_AUTH_ELEVATE_OCCURRENCES", 50, 5, 100000)
+
+
+def host_elevate_occurrences():
+    return _bounded_static("MOJOSEC_HOST_ELEVATE_OCCURRENCES", 10, 2, 100000)
+
+
+def corroboration_window_seconds():
+    return _bounded_static(
+        "MOJOSEC_CORROBORATION_WINDOW_SECONDS", 3600, 300, 14400)
+
+
+def campaign_min_sources():
+    return _bounded_static("MOJOSEC_CAMPAIGN_MIN_SOURCES", 10, 3, 256)
+
+
+def block_min_occurrences():
+    return _bounded_static("MOJOSEC_BLOCK_MIN_OCCURRENCES", 12, 3, 10000)
 
 
 def _bounded_observed(observed, receipt_time):
@@ -157,7 +210,18 @@ def _safe_expected(attributes, observed):
     return {"deployment_id": deployment, "operation_kind": operation}
 
 
-def _case_input(receipt, sensor_event, web_binding=None):
+def _deployment_registered(installation_key_id, deployment_id, observed):
+    from mojo.apps.incident.models import MojoSecDeployment
+
+    return MojoSecDeployment.objects.filter(
+        installation_key_id=installation_key_id,
+        deployment_id=deployment_id,
+        expires_at__gte=observed).exists()
+
+
+def _case_input(receipt, sensor_event, web_binding=None, fim_binding=None):
+    from . import mojosec_evidence
+
     kind = sensor_event.get("kind")
     attributes = sensor_event.get("attributes")
     if not isinstance(attributes, dict):
@@ -200,6 +264,7 @@ def _case_input(receipt, sensor_event, web_binding=None):
             "observed": observed, "window_start": start, "window_end": end,
             "occurrences": count, "projected_events": 0 if is_redirect else 1,
             "urgency": urgency, "urgency_reason": reason, "sample": sample,
+            "source_ip": projection.get("source_ip"),
             "sample_key": _digest(family, network, resource_id, projected.get("path", "/")),
             "correlation_key": _digest(
                 "web", family, network, resource_id, policy_version),
@@ -211,6 +276,15 @@ def _case_input(receipt, sensor_event, web_binding=None):
         expected = (
             _safe_expected(attributes, observed)
             if kind == "fim.change" else None)
+        if (expected and fim_binding is not None and
+                fim_binding.get("require_registered_deployments") and
+                not _deployment_registered(
+                    receipt.api_key_id, expected["deployment_id"], observed)):
+            # The annotation is well-formed but its deployment identity was
+            # never pre-registered centrally. Under this opt-in trust bound
+            # the sensor's root assertion alone is not enough — the change is
+            # unexplained, immediate evidence, never a quiet deployment.
+            expected = None
         if expected:
             # Trusted, provenance-backed deployment evidence: one case per
             # sensor + deployment identity per UTC day. The quiet window
@@ -253,6 +327,115 @@ def _case_input(receipt, sensor_event, web_binding=None):
             "correlation_key": _digest("fim", tier, family, "untrusted"),
             "window_key": _digest(start.isoformat(), end.isoformat()),
         }
+
+    if kind in HOST_KINDS:
+        # Bounded, scrubbed fields only — the same projection the per-receipt
+        # Event path uses. Missing fields degrade to "unknown"; a routed
+        # receipt must never fail contribution on a field gap.
+        projection = mojosec_evidence.project(
+            kind, attributes, count, sensor_event.get("last_seen"))
+        evidence = projection["evidence"]
+        source_ip = projection["source_ip"]
+        start, end = _window(observed, 60)
+        window_key = _digest(start.isoformat(), end.isoformat())
+        base = {
+            "policy_version": 1, "observed": observed,
+            "window_start": start, "window_end": end,
+            "occurrences": count, "projected_events": 1,
+            "window_key": window_key, "wire_kind": kind,
+        }
+        if kind in ("auth.ssh_failure", "auth.ssh_login"):
+            user = evidence.get("user") or "unknown"
+            ip_key = source_ip or "unknown"
+            if kind == "auth.ssh_failure":
+                urgency, reason = "info", "ssh_failures_observed"
+            else:
+                urgency, reason = "info", "ssh_login"
+            base.update({
+                "sensor_kind": "auth", "family": "ssh",
+                # Exact IP in the key; the /24 bucket is display only. A
+                # same-subnet admin must never share a case with an attacker.
+                "network": _source_network(ip_key),
+                "resource_id": f"user:{user}"[:96],
+                "urgency": urgency, "urgency_reason": reason,
+                "source_ip": source_ip,
+                "breakdown": {"operation": kind, "tier": "auth", "count": count},
+                "sample": {"kind": kind, "user": user,
+                           "network": _source_network(ip_key)},
+                "sample_key": _digest(kind, ip_key, user),
+                "correlation_key": _digest(
+                    "auth.ssh", receipt.sensor_id, ip_key, user),
+            })
+            return base
+        if kind == "auth.sudo_command":
+            actor = evidence.get("actor") or "unknown"
+            target_user = evidence.get("target_user") or "unknown"
+            sample = {"kind": kind, "actor": actor, "target_user": target_user}
+            # Bounded identity only — never the exact command text, which
+            # stays on the receipt/Event for security-admin drill-down.
+            for field in ("command_path", "command_sha256"):
+                if evidence.get(field):
+                    sample[field] = evidence[field]
+            base.update({
+                "sensor_kind": "auth", "family": "sudo",
+                "network": "", "resource_id": f"user:{actor}"[:96],
+                "urgency": "info", "urgency_reason": "sudo_session",
+                "source_ip": source_ip,
+                "breakdown": {"operation": kind, "tier": "auth", "count": count},
+                "sample": sample,
+                "sample_key": _digest(
+                    kind, actor, target_user,
+                    evidence.get("command_sha256", "")),
+                "correlation_key": _digest(
+                    "auth.sudo", receipt.sensor_id, actor, target_user),
+            })
+            return base
+        if kind == "auth.sudo_failure":
+            # The sensor never populates actor/source on this kind (its
+            # fingerprint is bounded message text) — per-sensor keying is the
+            # only honest correlation available.
+            base.update({
+                "sensor_kind": "auth", "family": "sudo_failure",
+                "network": "",
+                "resource_id": f"installation:{receipt.api_key_id}",
+                "urgency": "warning", "urgency_reason": "sudo_failures_observed",
+                "breakdown": {"operation": kind, "tier": "auth", "count": count},
+                "sample": {"kind": kind},
+                "sample_key": _digest(kind, receipt.sensor_id),
+                "correlation_key": _digest(
+                    "auth.sudo_failure", receipt.sensor_id),
+            })
+            return base
+        unit = evidence.get("unit") or "unknown"
+        if kind == "system.service_error":
+            failure_kind = evidence.get("failure_kind") or "unknown"
+            base.update({
+                "sensor_kind": "host", "family": "service",
+                "network": "",
+                "resource_id": f"installation:{receipt.api_key_id}",
+                "urgency": "warning", "urgency_reason": "service_failure",
+                "breakdown": {"operation": unit[:96], "tier": failure_kind[:64],
+                              "count": count},
+                "sample": {"kind": kind, "unit": unit,
+                           "failure_kind": failure_kind},
+                "sample_key": _digest(kind, unit, failure_kind),
+                "correlation_key": _digest(
+                    "host.service", receipt.sensor_id, unit, failure_kind),
+            })
+            return base
+        # system.oom — kernel-transport only; always an immediate
+        # per-receipt Event as well, so this only accumulates case state.
+        base.update({
+            "sensor_kind": "host", "family": "oom",
+            "network": "",
+            "resource_id": f"installation:{receipt.api_key_id}",
+            "urgency": "critical", "urgency_reason": "oom_kill",
+            "breakdown": {"operation": unit[:96], "tier": "oom", "count": count},
+            "sample": {"kind": kind, "unit": unit},
+            "sample_key": _digest(kind, unit),
+            "correlation_key": _digest("host.oom", receipt.sensor_id),
+        })
+        return base
     return None
 
 
@@ -263,26 +446,41 @@ def _shadow_targets():
     targets = []
     for row in value:
         if not isinstance(row, dict) or not set(row).issubset(
-                {"installation_key_id", "vhost_ids", "include_fim", "mode"}):
+                {"installation_key_id", "vhost_ids", "include_fim", "mode",
+                 "include_host", "require_registered_deployments"}):
             return []
         key_id = row.get("installation_key_id")
         vhost_ids = row.get("vhost_ids", [])
         include_fim = row.get("include_fim", False)
+        include_host = row.get("include_host", False)
+        require_registered = row.get("require_registered_deployments", False)
         mode = row.get("mode", "shadow")
         if (not isinstance(key_id, int) or isinstance(key_id, bool) or key_id < 1 or
                 not isinstance(vhost_ids, list) or len(vhost_ids) > 32 or
                 any(not isinstance(item, int) or isinstance(item, bool) or item < 1
                     for item in vhost_ids) or
                 not isinstance(include_fim, bool) or
+                not isinstance(include_host, bool) or
+                not isinstance(require_registered, bool) or
                 mode not in ("shadow", "authoritative")):
             return []
         targets.append({
             "installation_key_id": key_id,
             "vhost_ids": set(vhost_ids),
             "include_fim": include_fim,
+            "include_host": include_host,
+            "require_registered_deployments": require_registered,
             "mode": mode,
         })
     return targets
+
+
+def installation_enrollment(installation_key_id):
+    """The full enrollment row for one installation, or None."""
+    for target in _shadow_targets():
+        if target["installation_key_id"] == installation_key_id:
+            return target
+    return None
 
 
 def installation_mode(installation_key_id):
@@ -312,7 +510,13 @@ def binding_for(installation_key_id, sensor_event):
         if target["installation_key_id"] != installation_key_id:
             continue
         if kind and kind.startswith("fim.") and target["include_fim"]:
-            return {"kind": "fim", "mode": target["mode"]}
+            return {
+                "kind": "fim", "mode": target["mode"],
+                "require_registered_deployments":
+                    target["require_registered_deployments"],
+            }
+        if kind in HOST_KINDS and target["include_host"]:
+            return {"kind": "host", "mode": target["mode"]}
         if not kind or not kind.startswith("web."):
             continue
         projection = mojosec_evidence.project(
@@ -382,6 +586,141 @@ def _apply_breakdown(case, info):
     case.breakdown = {"operations": operations, "tiers": tiers}
 
 
+def _breakdown_failures(case_or_breakdown):
+    breakdown = getattr(case_or_breakdown, "breakdown", case_or_breakdown)
+    if not isinstance(breakdown, dict):
+        return 0
+    operations = breakdown.get("operations")
+    if not isinstance(operations, dict):
+        return 0
+    value = operations.get("auth.ssh_failure", 0)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _apply_ssh_login_promotion(case, normalized):
+    """Promotion rules for one successful-login contribution, in-row.
+
+    Exact progression — this case's own IP (or its previous hourly window
+    twin) already failed >= threshold times — is critical and the only
+    block-eligible signal. Account-level progression (same account, other
+    IPs on this node) pages at high and never proposes enforcement: the
+    success may be the legitimate admin arriving mid-attack.
+    """
+    from mojo.apps.incident.models import MojoSecCase
+
+    threshold = ssh_promote_min_failures()
+    own_failures = _breakdown_failures(case)
+    if own_failures < threshold:
+        prev_start = normalized["window_start"] - datetime.timedelta(hours=1)
+        prev_key = _digest(
+            prev_start.isoformat(), normalized["window_start"].isoformat())
+        twin = MojoSecCase.objects.filter(
+            installation_key_id=case.installation_key_id,
+            correlation_key=case.correlation_key,
+            window_key=prev_key).first()
+        if twin is not None:
+            own_failures += _breakdown_failures(twin)
+    if own_failures >= threshold:
+        if _URGENCY_RANK[case.urgency] < _URGENCY_RANK["critical"]:
+            case.urgency = "critical"
+            case.urgency_reason = "ssh_failure_then_success"
+        return
+    horizon = normalized["observed"] - datetime.timedelta(hours=2)
+    others = MojoSecCase.objects.filter(
+        installation_key_id=case.installation_key_id,
+        sensor_id=case.sensor_id, sensor_kind="auth", family="ssh",
+        resource_id=case.resource_id,
+        last_seen__gte=horizon).exclude(pk=case.pk)[:32]
+    account_failures = sum(_breakdown_failures(row) for row in others)
+    if (account_failures >= threshold and
+            _URGENCY_RANK[case.urgency] < _URGENCY_RANK["high"]):
+        case.urgency = "high"
+        case.urgency_reason = "ssh_login_during_failure_burst"
+
+
+def _corroborate_case(case_id):
+    """Cross-kind promotion: bounded, indexed, at most once per case.
+
+    Runs post-commit after a qualifying high/critical contribution. Promotes
+    the triggering case to critical when >= 2 distinct sensor kinds show
+    warning+ evidence on the same node inside the corroboration window and
+    an fim-untrusted or auth participant anchors it.
+    """
+    from mojo.apps.incident.models import MojoSecCase, MojoSecCaseTransition
+
+    promoted = False
+    try:
+        with transaction.atomic():
+            case = MojoSecCase.objects.select_for_update().get(pk=case_id)
+            breakdown = case.breakdown if isinstance(case.breakdown, dict) else {}
+            if (case.urgency not in ("high", "critical") or
+                    case.urgency_reason == "corroborated_compromise" or
+                    "corroborated_with" in breakdown or
+                    case.projected_urgency == "critical" or
+                    case.sensor_kind == "campaign"):
+                return False
+            window = datetime.timedelta(seconds=corroboration_window_seconds())
+            # Only high/critical evidence corroborates. Warning-level noise
+            # (background scanner cases above all) is near-constant on any
+            # exposed node; letting it anchor would escalate every
+            # unannotated change to critical. The window is two-sided so
+            # late-arriving evidence never pairs across distant hours.
+            neighbors = list(
+                MojoSecCase.objects.filter(
+                    installation_key_id=case.installation_key_id,
+                    sensor_id=case.sensor_id,
+                    last_seen__gte=case.last_seen - window,
+                    last_seen__lte=case.last_seen + window,
+                    urgency__in=("high", "critical"),
+                ).exclude(pk=case.pk).exclude(sensor_kind="campaign")
+                .exclude(family="deployment")[:32])
+            participants = [case] + neighbors
+            if len({p.sensor_kind for p in participants}) < 2:
+                return False
+            anchored = any(
+                p.sensor_kind == "auth" or
+                (p.sensor_kind == "fim" and p.family != "deployment")
+                for p in participants)
+            if not anchored:
+                return False
+            from_state = case.state
+            from_urgency = case.urgency
+            case.urgency = "critical"
+            case.urgency_reason = "corroborated_compromise"
+            case.state = MojoSecCase.STATE_ELEVATED
+            case.state_reason = "corroborated_compromise"
+            breakdown["corroborated_with"] = [
+                row.pk for row in neighbors][:MAX_CORROBORATING_CASES]
+            case.breakdown = breakdown
+            case.save(update_fields=[
+                "urgency", "urgency_reason", "state", "state_reason",
+                "breakdown", "modified"])
+            MojoSecCaseTransition.objects.create(
+                case=case, receipt=None, receipt_id_snapshot=0,
+                transition="promoted", reason="corroborated_compromise",
+                from_state=from_state, to_state=case.state,
+                from_urgency=from_urgency, to_urgency=case.urgency,
+                occurrence_count=case.occurrence_count,
+                receipt_count=case.receipt_count,
+                projected_event_count=case.projected_event_count,
+                distinct_count=case.distinct_count,
+                sample_count=case.sample_count,
+                overflow_count=case.overflow_count,
+                policy_version=case.policy_version,
+                evaluator_version=case.evaluator_version)
+            promoted = True
+    except MojoSecCase.DoesNotExist:
+        return False
+    except Exception:
+        logger.exception("MojoSec corroboration failed for case %s", case_id)
+        _record_metric("failures")
+        return False
+    if promoted:
+        _record_metric("corroborations")
+        _project_case(case_id)
+    return promoted
+
+
 def contribute(receipt, sensor_event):
     """Contribute one receipt at most once.
 
@@ -396,7 +735,8 @@ def contribute(receipt, sensor_event):
         return None, False
     normalized = _case_input(
         receipt, sensor_event,
-        web_binding=binding if binding["kind"] == "web" else None)
+        web_binding=binding if binding["kind"] == "web" else None,
+        fim_binding=binding if binding["kind"] == "fim" else None)
     if normalized is None:
         _record_metric("failures")
         return None, False
@@ -449,9 +789,22 @@ def contribute(receipt, sensor_event):
         case.distinct_count += 1 if is_distinct else 0
         case.first_seen = min(case.first_seen, normalized["observed"])
         case.last_seen = max(case.last_seen, normalized["observed"])
+        source = normalized.get("source_ip")
+        if source:
+            sources = list(case.observed_sources) if isinstance(
+                case.observed_sources, list) else []
+            if source not in sources:
+                # Beyond the cap the counter is an upper bound: spilled IPs
+                # are not retained, so a spilled repeat counts again. The
+                # single-source proposal check (== 1) is far below the cap.
+                case.distinct_source_count += 1
+                if len(sources) < MAX_CASE_SOURCES:
+                    sources.append(source)
+                    case.observed_sources = sources
+        if isinstance(normalized.get("breakdown"), dict):
+            _apply_breakdown(case, normalized["breakdown"])
         reopened = False
         if is_deployment:
-            _apply_breakdown(case, normalized["breakdown"])
             case.window_start = min(case.window_start, normalized["observed"])
             case.window_end = max(case.window_end, normalized["observed"])
             if case.state == MojoSecCase.STATE_SETTLED:
@@ -472,6 +825,27 @@ def contribute(receipt, sensor_event):
             case.state_reason = "sustained_trusted_impossible_paths"
             case.urgency = "high"
             case.urgency_reason = "sustained_trusted_impossible_paths"
+        wire_kind = normalized.get("wire_kind", "")
+        operations = (
+            case.breakdown.get("operations", {})
+            if isinstance(case.breakdown, dict) else {})
+        if wire_kind == "auth.ssh_login":
+            _apply_ssh_login_promotion(case, normalized)
+        elif (wire_kind == "auth.ssh_failure" and
+                operations.get("auth.ssh_failure", 0) >=
+                auth_elevate_occurrences() and
+                _URGENCY_RANK[case.urgency] < _URGENCY_RANK["warning"]):
+            case.urgency = "warning"
+            case.urgency_reason = "ssh_failure_burst"
+        elif (wire_kind == "system.service_error" and
+                case.occurrence_count >= host_elevate_occurrences() and
+                _URGENCY_RANK[case.urgency] < _URGENCY_RANK["high"]):
+            case.urgency = "high"
+            case.urgency_reason = "service_failure_burst"
+        if (case.urgency in ("high", "critical") and
+                case.state != MojoSecCase.STATE_ELEVATED):
+            case.state = MojoSecCase.STATE_ELEVATED
+            case.state_reason = case.urgency_reason
         case.save()
         locked_receipt.mojosec_case = case
         locked_receipt.case_sample_key = normalized["sample_key"]
@@ -498,6 +872,12 @@ def contribute(receipt, sensor_event):
                 case.urgency in ("high", "critical")):
             case_id = case.pk
             transaction.on_commit(lambda: _project_case(case_id))
+        if (case.urgency in ("high", "critical") and
+                case.urgency_reason in CORROBORATION_REASONS and
+                (not isinstance(case.breakdown, dict) or
+                 "corroborated_with" not in case.breakdown)):
+            corroborate_id = case.pk
+            transaction.on_commit(lambda: _corroborate_case(corroborate_id))
     _record_metric("receipts")
     _record_metric("occurrences", normalized["occurrences"])
     _record_metric(
@@ -565,7 +945,16 @@ def _project_case(case_id):
             if (_URGENCY_RANK[case.urgency] <=
                     _URGENCY_RANK.get(case.projected_urgency, -1)):
                 return None
-            if installation_mode(case.installation_key_id) != "authoritative":
+            if case.sensor_kind == "campaign":
+                # A campaign spans installations in one Group; it surfaces
+                # when ANY member is authoritative — the stamped row is only
+                # a deterministic placeholder until item 1636's identity.
+                member_keys = set(case.members.values_list(
+                    "installation_key_id", flat=True)[:64])
+                if not any(installation_mode(key) == "authoritative"
+                           for key in member_keys):
+                    return None
+            elif installation_mode(case.installation_key_id) != "authoritative":
                 return None
             level = 12 if case.urgency == "critical" else 8
             event = Event(
@@ -587,6 +976,7 @@ def _project_case(case_id):
                 metadata={
                     "mojosec_case": {
                         "case_id": case.pk,
+                        "installation_key_id": case.installation_key_id,
                         "sensor_kind": case.sensor_kind,
                         "family": case.family,
                         "network": case.network,
@@ -598,6 +988,12 @@ def _project_case(case_id):
                     },
                 },
             )
+            corroborated = (
+                case.breakdown.get("corroborated_with")
+                if isinstance(case.breakdown, dict) else None)
+            if corroborated:
+                event.metadata["mojosec_case"]["corroborating_case_ids"] = (
+                    corroborated[:MAX_CORROBORATING_CASES])
             event.sync_metadata()
             event.save()
             publication = event.publish(

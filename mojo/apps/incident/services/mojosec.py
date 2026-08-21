@@ -395,21 +395,34 @@ def _case_route_attempt_cap():
     return settings.get_static("MOJOSEC_CASE_ROUTE_MAX_ATTEMPTS", 100, kind="int")
 
 
-def _routable_digest_tier(binding, sensor_event):
+def _routable_digest_tier(api_key, binding, sensor_event):
     """True when this evidence is digest tier and may skip Event projection.
 
     Bound web observations normalize to info/warning by construction. FIM
     routes only for a valid, unexpired, TTL-bounded trusted expected-change
-    annotation; unannotated changes, overflow and annotation errors stay
-    immediate per-receipt Events at their existing severity.
+    annotation (plus a live central registration when the enrollment opts
+    into require_registered_deployments); unannotated changes, overflow and
+    annotation errors stay immediate per-receipt Events at their existing
+    severity. Host routing covers the digest auth/service kinds; oom and
+    sudo_failure keep their immediate Events and only contribute.
     """
     if binding["kind"] == "web":
         return True
+    if binding["kind"] == "host":
+        return sensor_event.get("kind") in mojosec_correlation.ROUTABLE_HOST_KINDS
     attributes = sensor_event.get("attributes")
     observed = mojosec_correlation._observed(sensor_event.get("last_seen"))
-    return (sensor_event.get("kind") == "fim.change" and
-            isinstance(attributes, dict) and observed is not None and
-            mojosec_correlation._safe_expected(attributes, observed) is not None)
+    if (sensor_event.get("kind") != "fim.change" or
+            not isinstance(attributes, dict) or observed is None):
+        return False
+    expected = mojosec_correlation._safe_expected(attributes, observed)
+    if expected is None:
+        return False
+    if (binding.get("require_registered_deployments") and
+            not mojosec_correlation._deployment_registered(
+                api_key.pk, expected["deployment_id"], observed)):
+        return False
+    return True
 
 
 def _case_routed_replay(batch, sensor_event):
@@ -769,7 +782,7 @@ def ingest_batch(api_key, batch):
             route_new = (
                 binding is not None and
                 binding.get("mode") == "authoritative" and
-                _routable_digest_tier(binding, sensor_event))
+                _routable_digest_tier(api_key, binding, sensor_event))
             if route_new:
                 receipt, _created = _accept_case_routed(
                     api_key, batch, sensor_event, digest)
