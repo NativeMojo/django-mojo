@@ -203,6 +203,25 @@ def capacity_operation(job):
     return result
 
 
+def capacity_batch(job):
+    """Drive ONE capacity batch: each step is an ordinary capacity operation.
+
+    Published max_retries=0 for the same reason capacity_operation is: a
+    redelivered batch would re-run mutations against live infrastructure. The
+    batch record carries the failure instead — remaining steps are marked
+    not_attempted and nothing auto-resumes.
+    """
+    from mojo.apps.aws.services import capacity
+
+    batch_id = (job.payload or {}).get("batch")
+    if not batch_id:
+        job.add_log("capacity batch job carried no batch id", kind="error")
+        return "no_batch"
+    result = capacity.run_batch(batch_id)
+    job.add_log(f"capacity batch {batch_id} finished: {result}")
+    return result
+
+
 def check_version_drift(job):
     """Inventory managed-service versions and file at most ONE incident event.
 

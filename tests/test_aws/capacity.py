@@ -526,6 +526,120 @@ def test_terminate_requires_a_proven_drain(opts):
     _clear_claims()
 
 
+def _routed_ec2_client(rows_by_id):
+    """describe_instances answered per instance-id filter, like AWS does."""
+    client = mock.Mock()
+
+    def answer(Filters=None, **_kwargs):
+        wanted = []
+        for spec in Filters or []:
+            if spec.get("Name") == "instance-id":
+                wanted = spec.get("Values") or []
+        rows = [rows_by_id[value] for value in wanted if value in rows_by_id]
+        return {"Reservations": [{"Instances": rows}]}
+
+    client.describe_instances.side_effect = answer
+    return client
+
+
+@th.django_unit_test("a drained-out node terminates on a fresh EC2 tag proof, never on absence")
+def test_terminate_guard_deregistered_member(opts):
+    # A COMPLETED drain removes the target from its group entirely, so the
+    # drain→terminate composition used to 409 not_registered forever. The
+    # unregistered case now proves fleet membership from fresh EC2 facts.
+    from mojo.apps.aws.services import capacity
+
+    # NODE_B is gone from every group — only NODE_A is registered.
+    elbv2_client = _elbv2_client(health={GROUP_ARN: [_target(NODE_A, "healthy")]})
+
+    def attempt(row_b):
+        rows = {NODE_A: _instance(NODE_A, "mojo-api-a"), NODE_B: row_b}
+        with mock.patch.object(capacity, "_local_hostname", return_value="laptop"), \
+                mock.patch.object(capacity, "_dispatch") as dispatched:
+            record = capacity.apply(
+                _actor(), capacity.ACTION_TERMINATE_NODE, NODE_B,
+                elbv2_client=elbv2_client,
+                ec2_client=_routed_ec2_client(rows))
+        return record, dispatched
+
+    # django-mojo ownership tag: proven, claimed, dispatched.
+    tagged = _instance(NODE_B, "mojo-api-b")
+    tagged["Tags"].append({"Key": "managed-by", "Value": "django-mojo"})
+    record, dispatched = attempt(tagged)
+    assert dispatched.call_count == 1 and record["action"] == "terminate_node", \
+        "a drained-out, django-mojo-tagged node could not be terminated"
+    _clear_claims()
+
+    # The admin-capacity created-by tag is equally a fleet proof — it is what
+    # this feature stamps on every clone it launches.
+    cloned = _instance(NODE_B, "mojo-api-b-clone")
+    cloned["Tags"].append({"Key": "mojo:created-by", "Value": "admin-capacity"})
+    record, dispatched = attempt(cloned)
+    assert dispatched.call_count == 1, \
+        "a drained-out capacity-added clone could not be terminated"
+    _clear_claims()
+
+    # No ownership tag: refused. Absence of registration is not consent.
+    with mock.patch.object(capacity, "_local_hostname", return_value="laptop"), \
+            mock.patch.object(capacity, "_dispatch") as dispatched:
+        with th.assert_raises(capacity.CapacityError) as caught:
+            capacity.apply(
+                _actor(), capacity.ACTION_TERMINATE_NODE, NODE_B,
+                elbv2_client=elbv2_client,
+                ec2_client=_routed_ec2_client(
+                    {NODE_A: _instance(NODE_A, "mojo-api-a"),
+                     NODE_B: _instance(NODE_B, "mojo-api-b")}))
+    assert caught.exception.error_code == "not_fleet_member" \
+        and caught.exception.status == 409, \
+        f"an untagged instance was terminable: {caught.exception.error_code}"
+    assert dispatched.call_count == 0, "an untagged terminate still dispatched"
+
+    # Already terminated: refused as such, never re-terminated.
+    gone = _instance(NODE_B, "mojo-api-b", state="terminated")
+    gone["Tags"].append({"Key": "managed-by", "Value": "django-mojo"})
+    with mock.patch.object(capacity, "_local_hostname", return_value="laptop"), \
+            mock.patch.object(capacity, "_dispatch") as dispatched:
+        with th.assert_raises(capacity.CapacityError) as caught:
+            capacity.apply(
+                _actor(), capacity.ACTION_TERMINATE_NODE, NODE_B,
+                elbv2_client=elbv2_client,
+                ec2_client=_routed_ec2_client(
+                    {NODE_A: _instance(NODE_A, "mojo-api-a"), NODE_B: gone}))
+    assert caught.exception.error_code == "already_terminated", \
+        f"a terminated instance was terminable again: {caught.exception.error_code}"
+    assert dispatched.call_count == 0, "an already-terminated node still dispatched"
+
+    # A vanished instance is equally refused — nothing to prove membership on.
+    with mock.patch.object(capacity, "_local_hostname", return_value="laptop"), \
+            mock.patch.object(capacity, "_dispatch") as dispatched:
+        with th.assert_raises(capacity.CapacityError) as caught:
+            capacity.apply(
+                _actor(), capacity.ACTION_TERMINATE_NODE, NODE_B,
+                elbv2_client=elbv2_client,
+                ec2_client=_routed_ec2_client(
+                    {NODE_A: _instance(NODE_A, "mojo-api-a")}))
+    assert caught.exception.error_code == "not_fleet_member", \
+        f"a vanished instance was terminable: {caught.exception.error_code}"
+    assert dispatched.call_count == 0, "a vanished node still dispatched"
+
+    # Still registered and not drained: the refusal is unchanged.
+    registered = _elbv2_client(health={GROUP_ARN: [
+        _target(NODE_A, "healthy"), _target(NODE_B, "draining")]})
+    with mock.patch.object(capacity, "_local_hostname", return_value="laptop"), \
+            mock.patch.object(capacity, "_dispatch") as dispatched:
+        with th.assert_raises(capacity.CapacityError) as caught:
+            capacity.apply(
+                _actor(), capacity.ACTION_TERMINATE_NODE, NODE_B,
+                elbv2_client=registered,
+                ec2_client=_routed_ec2_client(
+                    {NODE_A: _instance(NODE_A, "mojo-api-a"),
+                     NODE_B: _instance(NODE_B, "mojo-api-b")}))
+    assert caught.exception.error_code == "not_drained", \
+        f"a still-draining node's refusal changed: {caught.exception.error_code}"
+    assert dispatched.call_count == 0, "a still-draining node still dispatched"
+    _clear_claims()
+
+
 @th.django_unit_test("a pinned EDGE_NODE_ID blocks adding a node, in the report and the apply")
 def test_node_id_pinned_blocks_add(opts):
     from mojo.apps.aws.services import capacity

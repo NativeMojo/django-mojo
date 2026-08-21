@@ -1,9 +1,11 @@
 """
 AWS Capacity REST Endpoints
 
-    GET  /api/aws/capacity         - the fleet, reader and replica picture (?refresh=1)
-    GET  /api/aws/capacity/status  - live progress for one capacity operation
-    POST /api/aws/capacity/apply   - request ONE capacity change
+    GET  /api/aws/capacity            - the fleet, reader and replica picture (?refresh=1)
+    GET  /api/aws/capacity/status     - progress for one operation OR one batch
+    POST /api/aws/capacity/apply      - request ONE capacity change
+    POST /api/aws/capacity/plan       - validate/word/price an ordered batch of changes
+    POST /api/aws/capacity/plan/apply - confirm a plan by id and run its steps
 
 The reads need ``manage_aws``. The write needs ``manage_aws`` AND a literal
 superuser — a stricter gate than the Maintenance apply next door, and
@@ -64,6 +66,11 @@ FLEET_ACTIONS = (capacity_service.ACTION_ADD_NODE,
                  capacity_service.ACTION_ENABLE_STABLE_IPS,
                  capacity_service.ACTION_DISABLE_STABLE_IPS)
 
+# The batch-level audit row plan/apply writes; per-step rows use the
+# AUDIT_ACTIONS names above and are written by the batch runner, since the
+# service path bypasses this layer.
+BATCH_AUDIT_ACTION = "aws_capacity_batch"
+
 
 def _truthy(value):
     return str(value or "").strip().lower() in ("1", "true", "yes")
@@ -120,12 +127,22 @@ def on_capacity(request):
 @md.GET("capacity/status")
 @md.requires_global_perms("manage_aws")
 def on_capacity_status(request):
-    """Live progress for one capacity operation, polled while it runs."""
-    operation = _text(request.DATA, "operation")
+    """Live progress for ONE operation or ONE batch, polled while it runs.
+
+    Exactly one of ``operation`` and ``batch`` — one polling URL for the
+    page, one permission row, and an ambiguous ask is a 400, never a guess.
+    """
+    operation = str(request.DATA.get("operation") or "").strip()
+    batch = str(request.DATA.get("batch") or "").strip()
+    if bool(operation) == bool(batch):
+        raise me.ValueException(
+            "state exactly one of operation or batch")
     try:
-        return JsonResponse({
-            "status": True,
-            "data": capacity_service.operation_status(operation)})
+        if batch:
+            data = capacity_service.batch_status(batch)
+        else:
+            data = capacity_service.operation_status(operation)
+        return JsonResponse({"status": True, "data": data})
     except capacity_service.CapacityError as error:
         return _error(error)
 
@@ -209,4 +226,54 @@ def on_capacity_apply(request):
     admin_platform.audit_after_commit(
         request.user, AUDIT_ACTIONS.get(action, "aws_capacity"),
         f"{resource or 'fleet'}:{result.get('id')}")
+    return JsonResponse({"status": True, "data": result})
+
+
+@md.POST("capacity/plan")
+@md.denies_key_backed_session()
+@md.requires_fresh_auth(seconds=600)
+@md.requires_global_perms("manage_aws")
+def on_capacity_plan(request):
+    """Validate an ordered batch of capacity steps; nothing mutates.
+
+    Carries the FULL apply gate even though it writes nothing to AWS: a plan
+    reveals intent, topology and cost — fail closed. There is no per-step
+    confirm_resource here by design: confirming the plan_id at apply is
+    confirming exactly the step list the server itself rendered.
+    """
+    denied = infrastructure.refuse("Planning capacity changes")
+    if denied is not None:
+        return denied
+    _require_superuser(request)
+    steps = request.DATA.get("steps")
+    if (not isinstance(steps, list) or not steps
+            or any(not isinstance(step, dict) for step in steps)):
+        raise me.ValueException(
+            "steps must be a non-empty list of step objects")
+    try:
+        result = capacity_service.plan_batch(request.user, steps)
+    except capacity_service.CapacityError as error:
+        return _error(error)
+    return JsonResponse({"status": True, "data": result})
+
+
+@md.POST("capacity/plan/apply")
+@md.denies_key_backed_session()
+@md.requires_fresh_auth(seconds=600)
+@md.requires_global_perms("manage_aws")
+def on_capacity_plan_apply(request):
+    """Confirm one stored plan by id; the steps run as a background batch."""
+    denied = infrastructure.refuse("Changing capacity")
+    if denied is not None:
+        return denied
+    _require_superuser(request)
+    plan_id = _text(request.DATA, "plan_id")
+    try:
+        result = capacity_service.apply_batch(request.user, plan_id)
+    except capacity_service.CapacityError as error:
+        return _error(error)
+    from mojo.apps.account.services import admin_platform
+    admin_platform.audit_after_commit(
+        request.user, BATCH_AUDIT_ACTION,
+        f"{result.get('id')}:{len(result.get('steps') or [])} steps")
     return JsonResponse({"status": True, "data": result})
