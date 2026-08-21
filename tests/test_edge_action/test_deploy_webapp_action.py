@@ -1,4 +1,5 @@
 import importlib.util
+from http.client import RemoteDisconnected
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -156,6 +157,47 @@ class TransportTests(unittest.TestCase):
                     "https://uploads.example/object", artifact.name,
                     {"x-amz-checksum-sha256": "bound"})
         self.assertEqual(opened.call_count, 2)
+
+    def test_presigned_upload_retries_remote_disconnect(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        client = deploy_action.Client(
+            "https://api.example.com", "secret", sleep=lambda _: None)
+        with tempfile.NamedTemporaryFile() as artifact:
+            artifact.write(b"bytes")
+            artifact.flush()
+            with mock.patch.object(
+                    deploy_action.request, "urlopen",
+                    side_effect=[RemoteDisconnected("temporary"), response]) as opened:
+                client.upload(
+                    "https://uploads.example/object", artifact.name,
+                    {"x-amz-checksum-sha256": "bound"})
+        self.assertEqual(
+            opened.call_count, 2,
+            "a remote disconnect should reopen and retry the presigned upload")
+
+    def test_presigned_upload_uses_bounded_backoff(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        waits = []
+        client = deploy_action.Client(
+            "https://api.example.com", "secret", sleep=waits.append)
+        interruptions = [error.URLError("temporary") for _ in range(6)]
+        with tempfile.NamedTemporaryFile() as artifact:
+            artifact.write(b"bytes")
+            artifact.flush()
+            with mock.patch.object(
+                    deploy_action.request, "urlopen",
+                    side_effect=interruptions + [response]) as opened:
+                client.upload(
+                    "https://uploads.example/object", artifact.name,
+                    {"x-amz-checksum-sha256": "bound"})
+        self.assertEqual(
+            opened.call_count, 7,
+            "the upload should retain a useful transient-failure retry budget")
+        self.assertEqual(
+            waits, [2, 4, 5, 5, 5, 5],
+            "upload retry delays should remain bounded")
 
 
 class ActionMetadataTests(unittest.TestCase):
