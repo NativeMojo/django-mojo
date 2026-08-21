@@ -1,1 +1,1 @@
-{"version": 1, "owner": "infrastructure", "assets": ["feature.js", "page.js", "styles.css"]}
+{"version": 1, "owner": "infrastructure", "assets": ["feature.js", "page.js", "capacity.js", "metrics.js", "chart.js", "maintenance.js", "styles.css"]}

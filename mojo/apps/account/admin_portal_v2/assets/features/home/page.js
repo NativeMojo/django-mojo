@@ -129,7 +129,13 @@ function v1Action(ctx, label, route) {
 function v2Action(ctx, label, route, fallback) {
   const enabled = {
     apps: ctx.features?.webapps?.enabled === true,
-    infrastructure: ctx.features?.platform?.enabled === true,
+    // Infrastructure is three capability-gated tabs, so the block alone is not
+    // enough: a caller with the platform block and none of the three grants
+    // gets no Infrastructure entry, and must be sent to v1 like anyone else.
+    // Same gate as features/infrastructure/feature.js.
+    infrastructure: ctx.features?.platform?.enabled === true
+      && ['capacity', 'metrics', 'maintenance'].some(
+        (name) => ctx.features.platform.capabilities?.[name] === true),
     domains: ctx.features?.advanced?.enabled === true,
     access: ctx.features?.people?.enabled === true,
     settings: ctx.features?.settings?.enabled === true,
