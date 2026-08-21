@@ -27,6 +27,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -47,6 +48,13 @@ LOCK_FILE = Path("uv.lock")
 
 PACKAGE_NAME = "django-mojo"
 PYPI_JSON_URL = "https://pypi.org/pypi/{name}/{version}/json"
+PYPI_SIMPLE_URL = "https://pypi.org/simple/{name}/"
+
+# How long to wait, after the upload, for the release to become resolvable by
+# the world. Overridable for tests; the default outlasts any normal CDN lag
+# by two orders of magnitude.
+VISIBILITY_TIMEOUT = float(os.environ.get("PUBLISH_VISIBLE_TIMEOUT", "600"))
+VISIBILITY_INTERVAL = float(os.environ.get("PUBLISH_VISIBLE_INTERVAL", "5"))
 
 # The files the agent is expected to have bumped and committed before calling us.
 VERSION_FILES = (PYPROJECT_FILE, INIT_FILE, LOCK_FILE)
@@ -406,6 +414,63 @@ def publish_to_pypi(dry_run=False):
     run(["uv", "publish"], dry_run=dry_run, capture=False)
 
 
+def _url_ok(url):
+    """(reached-with-200, body). Never raises — a poll survives blips."""
+    request = urllib.request.Request(url, headers={"Cache-Control": "no-cache"})
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return response.status == 200, response.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError):
+        return False, ""
+
+
+def wait_for_pypi_visibility(version, timeout=None, interval=None):
+    """Block until the uploaded release is resolvable by the world.
+
+    Two endpoints, deliberately: the JSON API reflects an upload almost
+    instantly and is what the fleet's pin resolver reads, while the Simple
+    index is what pip actually resolves through — a separately cached
+    document that lagged behind in every publish-then-deploy race. "Released"
+    means BOTH answer, so a deploy started the moment this script returns can
+    never ask for a version the world cannot yet see. (The node-side install
+    retries remain the belt for anything that still slips.)
+
+    A timeout warns and returns False instead of raising: the upload has
+    already happened and a PyPI version can never be re-cut, so aborting here
+    would misreport a release that shipped — and would strand a rerun behind
+    the already-on-PyPI precondition.
+    """
+    timeout = VISIBILITY_TIMEOUT if timeout is None else timeout
+    interval = VISIBILITY_INTERVAL if interval is None else interval
+    json_url = PYPI_JSON_URL.format(name=PACKAGE_NAME, version=version)
+    simple_url = PYPI_SIMPLE_URL.format(name=PACKAGE_NAME)
+    # Filenames normalize the dashes; anchor the version so 1.15.1 can never
+    # satisfy a wait for 1.15.13.
+    marker = re.compile(
+        re.escape(PACKAGE_NAME.replace("-", "_")) + "-"
+        + re.escape(version) + r"[.-]")
+    say(f"waiting for {PACKAGE_NAME} {version} to be resolvable on PyPI...")
+    started = time.monotonic()
+    deadline = started + timeout
+    while True:
+        json_ok, _ = _url_ok(json_url)
+        simple_ok = False
+        if json_ok:
+            reached, body = _url_ok(simple_url)
+            simple_ok = reached and bool(marker.search(body))
+        if json_ok and simple_ok:
+            say(f"{PACKAGE_NAME} {version} is resolvable "
+                f"(JSON API + Simple index, {time.monotonic() - started:.0f}s)")
+            return True
+        if time.monotonic() >= deadline:
+            say(f"WARNING: {PACKAGE_NAME} {version} is uploaded but not yet "
+                f"resolvable everywhere (json_api={json_ok}, "
+                f"simple_index={simple_ok}) — hold deploys until it is; "
+                "node installs retry on their own regardless")
+            return False
+        time.sleep(interval)
+
+
 def tag_release(version, branch, dry_run=False):
     tag = f"v{version}"
     run(["git", "tag", "-a", tag, "-m", f"Release {tag}"], dry_run=dry_run, capture=False)
@@ -495,15 +560,24 @@ def main():
         build(dry_run=args.dry_run)
         push_source(branch, dry_run=args.dry_run)
 
+        visible = True
         if args.nopypi:
             say("skipping PyPI upload (--nopypi)")
         else:
             publish_to_pypi(dry_run=args.dry_run)
+            if not args.dry_run:
+                visible = wait_for_pypi_visibility(version)
 
         tag_release(version, branch, dry_run=args.dry_run)
         post_release_notes(version, note, dry_run=args.dry_run)
 
-        say(f"released {version}" if not args.dry_run else f"dry run complete for {version}")
+        if args.dry_run:
+            say(f"dry run complete for {version}")
+        elif visible:
+            say(f"released {version}")
+        else:
+            say(f"released {version} — but it is NOT yet resolvable on PyPI "
+                "(see the WARNING above); hold deploys until it is")
 
     except PublishError as err:
         print(f"ERROR: {err}", file=sys.stderr)
