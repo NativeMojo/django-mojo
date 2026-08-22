@@ -214,7 +214,27 @@ oauth_server.www_authenticate(path, error="insufficient_scope", scope="mcp")
 oauth_server.list_grants(user=some_user)
 oauth_server.revoke_grant_by_id(grant_id, actor=request.user)
 oauth_server.revoke_all_grants(actor=request.user)
+
+# An Admin surface that owns ONE resource scopes and bounds its reads:
+oauth_server.list_grants(resource_path="/api/assistant/mcp", limit=200)
+oauth_server.count_grants(resource_path="/api/assistant/mcp")
+oauth_server.revoke_all_grants(actor=request.user,
+                               resource_path="/api/assistant/mcp")
 ```
+
+`resource_path` scopes by the resource's **path**, never its full URL: the URL
+embeds `BASE_URL`, so matching on it would hide still-valid grants after a
+public-address change. The SQL suffix filter is a superset and every caller
+re-confirms the parsed path in Python before listing or revoking a row. `limit`
+bounds the answer in SQL; `count_grants` is the matching `COUNT(*)`, so a sliced
+listing can still report an honest total. All three default to the previous
+behaviour — every grant, every resource, unbounded.
+
+`revoke_all_grants` is one bulk `UPDATE` on the scoped active set. Deactivating
+the row is what kills the credential (`validate_access` filters `is_active=True`
+and `_check_refreshable` refuses an inactive grant), so the per-row column
+rotation `revoke_grant` performs is not repeated here; the audit is one
+`oauth:grant_revoked` line per affected user carrying that user's count.
 
 ### Clients
 

@@ -46,6 +46,10 @@ RESOURCE = BASE + MCP_PATH
 PRM_PATH = "/.well-known/oauth-protected-resource" + MCP_PATH
 PRM_URL = BASE + PRM_PATH
 CLIENT_IDS = ("assistant-setup-mcp-client-a", "assistant-setup-mcp-client-b")
+OTHER_PATH = "/api/other/door"
+OTHER_RESOURCE = BASE + OTHER_PATH
+KEY_GROUP = "assistant setup mcp key group"
+KEY_NAME = "assistant setup mcp key"
 AUTH_TIME = 1700000000
 
 
@@ -58,7 +62,8 @@ def _wipe():
     and this module's own OAuth rows go with them: a stranded verdict or grant
     would make the next test read a state it did not create.
     """
-    from mojo.apps.account.models import OAuthClient, OAuthGrant, Setting
+    from mojo.apps.account.models import (
+        ApiKey, Group, OAuthClient, OAuthGrant, Setting)
     from mojo.helpers.redis import get_connection
 
     Setting.objects.filter(key__in=KEYS).delete()
@@ -68,6 +73,8 @@ def _wipe():
             redis.hdel(Setting._redis_key(), key)
     OAuthGrant.objects.filter(client__client_id__in=CLIENT_IDS).delete()
     OAuthClient.objects.filter(client_id__in=CLIENT_IDS).delete()
+    ApiKey.objects.filter(name=KEY_NAME).delete()
+    Group.objects.filter(name=KEY_GROUP).delete()
     try:
         get_connection().delete(DISCOVERY_CACHE_KEY)
     except Exception:
@@ -643,8 +650,49 @@ def test_mcp_switch_round_trip(opts):
                     _admin(opts), enabled=False, model="", mcp_enabled=bad)
         assert settings.get("ASSISTANT_MCP_ENABLED", False, kind="bool") is False, \
             "a refused mcp_enabled still moved the switch"
+
+        # --- the audit names the direction, and does not collapse ----------
+        # report_event_suppressed dedupes on (category, key) for an hour, so a
+        # bare "mcp_enabled" would turn on -> off -> on into ONE event that
+        # cannot say which way the door moved.
+        from mojo.apps import incident
+        from mojo.apps.logit.models import Log
+
+        Log.objects.filter(model_name="account.User",
+                           model_id=opts.assistant_admin_id,
+                           kind="assistant:mcp_switch").delete()
+        filed = []
+
+        def _record(details, key=None, **kwargs):
+            filed.append(key or "")
+            return True
+
+        with mock.patch.object(incident, "report_event_suppressed", _record):
+            assistant_setup.save(
+                _admin(opts), enabled=False, model="", mcp_enabled=True)
+            assistant_setup.save(
+                _admin(opts), enabled=False, model="", mcp_enabled=False)
+        switched = [key for key in filed if "mcp_enabled" in key]
+        assert len(set(switched)) == 2, \
+            f"switching on and off share one suppression key, so an hour of " \
+            f"flipping files a single ambiguous event: {switched!r}"
+        assert any("mcp_enabled:on" in key for key in switched) and \
+            any("mcp_enabled:off" in key for key in switched), \
+            f"the audit key does not name the direction: {switched!r}"
+
+        lines = list(Log.objects.filter(
+            model_name="account.User", model_id=opts.assistant_admin_id,
+            kind="assistant:mcp_switch").order_by("pk").values_list("log", flat=True))
+        assert len(lines) == 2, \
+            f"two switch writes did not leave two audit lines on the actor: {lines!r}"
+        assert "switched on" in lines[0] and "switched off" in lines[1], \
+            f"the switch audit lines do not name their direction: {lines!r}"
     finally:
         _wipe()
+        from mojo.apps.logit.models import Log as _Log
+        _Log.objects.filter(model_name="account.User",
+                            model_id=opts.assistant_admin_id,
+                            kind="assistant:mcp_switch").delete()
 
 
 @th.django_unit_test("flipping the switch opens and closes the live MCP door")
@@ -727,12 +775,29 @@ def test_revoke_one_and_all(opts):
             grant_one, pair_one = _make_grant(admin, client_a)
             grant_two, pair_two = _make_grant(admin, client_b)
             grant_three, pair_three = _make_grant(agent, client_a)
+            # A grant at a DIFFERENT registered resource. This surface owns
+            # remote agent access, not every OAuth resource the installation
+            # may protect, so it must neither list nor sweep this one.
+            other_grant, _other_pair = _make_grant(
+                admin, client_a, OTHER_RESOURCE)
             assistant_setup.save(
                 admin, enabled=False, model="", mcp_enabled=True)
 
             listed = assistant_setup.state()["mcp"]
             assert listed["grant_count"] == 3, \
                 f"the Admin does not list all three connections: {listed!r}"
+            assert all(row["resource"] == RESOURCE for row in listed["grants"]), \
+                f"the connected-agents list is not scoped to the MCP resource " \
+                f"path: {[row['resource'] for row in listed['grants']]!r}"
+
+            # The bound lives in SQL, and the count still sees past it.
+            assert len(oauth_server.list_grants(
+                resource_path=MCP_PATH, limit=2)) == 2, \
+                "list_grants ignored its row bound"
+            assert oauth_server.count_grants(resource_path=MCP_PATH) == 3, \
+                "the grant count cannot see past the slice"
+            assert oauth_server.count_grants(resource_path=OTHER_PATH) == 1, \
+                "the count is not scoped by resource path"
             emails = {row["user"]["email"] for row in listed["grants"]}
             assert emails == {ADMIN_EMAIL, AGENT_EMAIL}, \
                 f"the connected-agents list does not name both operators: {emails!r}"
@@ -779,6 +844,38 @@ def test_revoke_one_and_all(opts):
                 with th.assert_raises(merrors.ValueException):
                     assistant_setup.revoke_grant(admin, bad)
 
+            # --- a key-backed session is not a person --------------------
+            # Two defences, and both are asserted: the model refuses to link a
+            # key to a superuser AT ALL, and the endpoint refuses the most
+            # authority a key can carry regardless of whose identity it holds.
+            from mojo.apps.account.models import ApiKey, Group
+
+            ApiKey.objects.filter(name=KEY_NAME).delete()
+            Group.objects.filter(name=KEY_GROUP).delete()
+            key_group = Group.objects.create(name=KEY_GROUP, kind="organization")
+            with th.assert_raises(merrors.PermissionDeniedException):
+                ApiKey.create_for_group(
+                    group=key_group, name=KEY_NAME,
+                    permissions={"admin": True}, user=admin, override_user=True)
+            assert not ApiKey.objects.filter(name=KEY_NAME).exists(), \
+                "a refused superuser-linked API key was stored anyway"
+            _api_key, key_token = ApiKey.create_for_group(
+                group=key_group, name=KEY_NAME,
+                permissions={"manage_settings": True, "admin": True})
+            origin = opts.client.host.rstrip("/")
+            before = assistant_setup.state()["mcp"]["grant_count"]
+            for payload in ({"action": "revoke_grant", "grant_id": grant_three.pk},
+                            {"action": "revoke_all_grants"}):
+                resp = opts.client.post(
+                    "/api/account/admin/assistant", json=payload,
+                    headers={"Authorization": f"apikey {key_token}",
+                             "Origin": origin})
+                assert resp.status_code != 200, \
+                    f"a key-backed session reached {payload['action']}: " \
+                    f"{resp.status_code} {resp.body}"
+            assert assistant_setup.state()["mcp"]["grant_count"] == before, \
+                "a key-backed session disconnected an agent"
+
             # --- over the wire -------------------------------------------
             assert opts.client.login(ADMIN_EMAIL, ADMIN_PASSWORD), \
                 "assistant admin login failed"
@@ -804,8 +901,12 @@ def test_revoke_one_and_all(opts):
                 f"disconnect-all did not report the remaining connection: " \
                 f"{response.json['data']!r}"
 
-            assert oauth_server.list_grants() == [], \
+            assert oauth_server.list_grants(resource_path=MCP_PATH) == [], \
                 "a live grant survived disconnect-all"
+            surviving = oauth_server.list_grants(resource_path=OTHER_PATH)
+            assert len(surviving) == 1 and surviving[0]["id"] == other_grant.pk, \
+                f"disconnect-all swept a grant at another resource path: " \
+                f"{surviving!r}"
             for token in (pair_two["access_token"], pair_three["access_token"]):
                 resp = opts.client.post(
                     MCP_PATH, _rpc(1, "ping"), headers=_auth(token))
@@ -921,8 +1022,14 @@ def test_discovery_check_verdicts(opts):
             origin=BASE, transport=_Transport(
                 {PRM_URL: requests.exceptions.ConnectionError("down")}))
         assert verdict["code"] == "unreachable" and \
-            verdict["detail"].startswith("The public address could not be fetched"), \
+            verdict["detail"] == messages["fetch"], \
             f"an unreachable front door was not reported: {verdict!r}"
+        # The fixed sentence is the point: safe_fetch's own failure strings name
+        # the host they could not reach, and no detail may ever carry one.
+        assert "{" not in messages["fetch"], \
+            f"the fetch verdict still interpolates: {messages['fetch']!r}"
+        assert "oauth.testit.example" not in verdict["detail"], \
+            f"the fetch verdict named the host it could not reach: {verdict!r}"
 
         # --- a page load never probes --------------------------------------
         get_connection().delete(DISCOVERY_CACHE_KEY)

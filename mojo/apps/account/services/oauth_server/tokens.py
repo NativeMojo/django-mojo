@@ -315,8 +315,38 @@ def _iso(value):
     return value.isoformat() if value is not None else None
 
 
-def list_grants(user=None, include_inactive=False):
-    """Every grant, newest first, as plain dicts for the Admin surface."""
+def _scope_to_path(query, resource_path):
+    """Narrow a grant queryset to one registered resource, by PATH.
+
+    By path and never by full URL: the resource URL embeds ``BASE_URL``, so
+    matching on it would make a public-address change silently hide grants that
+    are still perfectly valid at the same endpoint. The SQL suffix match is a
+    SUPERSET — ``https://x/nested/api/assistant/mcp`` also ends with
+    ``/api/assistant/mcp`` — so every caller that lists or acts on the rows
+    re-confirms the parsed path through ``_has_path``.
+    """
+    if resource_path is None:
+        return query
+    return query.filter(resource__endswith=resource_path)
+
+
+def _has_path(resource, resource_path):
+    if resource_path is None:
+        return True
+    try:
+        return urlsplit(resource or "").path == resource_path
+    except ValueError:
+        return False
+
+
+def list_grants(user=None, include_inactive=False, resource_path=None, limit=None):
+    """Grants, newest first, as plain dicts for the Admin surface.
+
+    ``resource_path`` scopes the answer to one registered resource; ``limit``
+    bounds it in SQL rather than in Python, so an installation with a large
+    grant table never loads rows the caller is going to drop. Both default to
+    the previous behaviour: every grant, unbounded.
+    """
     from mojo.apps.account.models.oauth_grant import OAuthGrant
 
     now = dates.utcnow()
@@ -325,8 +355,13 @@ def list_grants(user=None, include_inactive=False):
         query = query.filter(user=user)
     if not include_inactive:
         query = query.filter(is_active=True, refresh_expires__gt=now)
+    query = _scope_to_path(query, resource_path).order_by("-created")
+    if limit is not None:
+        query = query[:int(limit)]
     rows = []
-    for grant in query.order_by("-created"):
+    for grant in query:
+        if not _has_path(grant.resource, resource_path):
+            continue
         rows.append({
             "id": grant.pk,
             "client": {
@@ -361,18 +396,71 @@ def revoke_grant_by_id(grant_id, actor=None):
     return revoke_grant(grant, reason="admin", actor=actor)
 
 
-def revoke_all_grants(actor=None, user=None):
-    """Revoke every live grant (optionally for one user). Returns the count."""
+def count_grants(user=None, include_inactive=False, resource_path=None):
+    """How many grants ``list_grants`` covers, without loading any of them.
+
+    Counted on the same SQL predicate ``list_grants`` selects on, so a caller
+    that slices with ``limit`` can still report an honest total.
+    """
     from mojo.apps.account.models.oauth_grant import OAuthGrant
 
-    query = OAuthGrant.objects.filter(is_active=True).select_related("user")
+    query = OAuthGrant.objects.all()
     if user is not None:
         query = query.filter(user=user)
-    count = 0
-    for grant in query:
-        if revoke_grant(grant, reason="admin", actor=actor):
-            count += 1
-    return count
+    if not include_inactive:
+        query = query.filter(is_active=True, refresh_expires__gt=dates.utcnow())
+    return _scope_to_path(query, resource_path).count()
+
+
+def _log_bulk_revocation(owners, actor):
+    """One audit line per affected USER, carrying that user's count.
+
+    Bounded by operators rather than by connections: a sweep of a thousand
+    grants held by three people writes three lines, not a thousand.
+    """
+    from mojo.apps.account.models import User
+
+    by = f" by {getattr(actor, 'username', actor)}" if actor is not None else ""
+    for owner in User.objects.filter(pk__in=list(owners.keys())):
+        try:
+            owner.log(
+                f"{owners[owner.pk]} OAuth grant(s) revoked (admin){by}",
+                "oauth:grant_revoked")
+        except Exception:
+            logit.exception(
+                "oauth: could not write the bulk grant_revoked audit line")
+
+
+def revoke_all_grants(actor=None, user=None, resource_path=None):
+    """Revoke every live grant (optionally one user's, or one resource path).
+
+    ONE bulk UPDATE rather than a per-row ``revoke_grant`` loop: deactivating
+    the row is what every credential check actually reads — ``validate_access``
+    filters ``is_active=True`` and ``_check_refreshable`` refuses an inactive
+    grant — so the column rotation a single revocation performs is not needed to
+    kill a credential here. Only the ids and owners are read, never whole rows.
+
+    Returns the number of rows the UPDATE moved.
+    """
+    from mojo.apps.account.models.oauth_grant import OAuthGrant
+
+    query = OAuthGrant.objects.filter(is_active=True)
+    if user is not None:
+        query = query.filter(user=user)
+    query = _scope_to_path(query, resource_path)
+    targets = []
+    owners = {}
+    for pk, user_id, resource in query.values_list("pk", "user_id", "resource"):
+        if not _has_path(resource, resource_path):
+            continue
+        targets.append(pk)
+        owners[user_id] = owners.get(user_id, 0) + 1
+    if not targets:
+        return 0
+    updated = OAuthGrant.objects.filter(pk__in=targets, is_active=True).update(
+        is_active=False, revoked_reason="admin", modified=dates.utcnow())
+    _log_bulk_revocation(owners, actor)
+    return updated
 
 
 # --- confinement ----------------------------------------------------------

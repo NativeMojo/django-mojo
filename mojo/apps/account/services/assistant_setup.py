@@ -42,7 +42,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from mojo import errors as merrors
-from mojo.helpers import llm
+from mojo.helpers import llm, logit
 from mojo.helpers.redis import get_connection
 from mojo.helpers.safe_fetch import safe_fetch
 from mojo.helpers.settings import settings
@@ -88,7 +88,10 @@ DISCOVERY_MESSAGES = {
     "wrong_document": "The public address answered something other than the "
                       "discovery document — nginx is not forwarding "
                       "/.well-known/ to the application.",
-    "fetch": "The public address could not be fetched: {error}",
+    # No interpolation: safe_fetch's connect/resolve failures name the host
+    # they could not reach, and a redirect hop that fails to resolve reports
+    # the HOP's hostname. A fixed sentence keeps every detail free of one.
+    "fetch": "The public address could not be fetched from this server.",
 }
 
 # The two credentials an owner can store, check and clear. Each has its own
@@ -328,9 +331,10 @@ def _judge_discovery(result, error, expected):
         if error.startswith(("Too many redirects", "Redirect ")):
             return _discovery_record(
                 False, "unreachable", DISCOVERY_MESSAGES["redirected"], expected)
+        # Everything else — a refused connection, a timeout, an unresolvable
+        # host, an unresolvable redirect HOP — is one fixed sentence.
         return _discovery_record(
-            False, "unreachable",
-            DISCOVERY_MESSAGES["fetch"].format(error=error), expected)
+            False, "unreachable", DISCOVERY_MESSAGES["fetch"], expected)
     if result.status_code != 200:
         return _discovery_record(
             False, "unreachable",
@@ -416,16 +420,20 @@ def mcp_state(check=False):
         discovery = discovery_cached(expected)
     else:
         discovery = dict(UNCHECKED)
+    # Scoped to the MCP resource by PATH, and bounded in SQL: this surface owns
+    # remote agent access, not every OAuth resource the installation may protect,
+    # and a page load must not load a grant table it is going to slice. The count
+    # is a separate COUNT(*), so it stays honest past the slice.
     # Names and dates only — list_grants carries no token, jti or hash.
-    grants = oauth_server.list_grants()
     return {
         "enabled": enabled,
         "path": path,
         "url": expected,
         "discovery_url": resources.prm_url(origin, path) if origin else "",
         "discovery": discovery,
-        "grants": grants[:MAX_GRANT_ROWS],
-        "grant_count": len(grants),
+        "grants": oauth_server.list_grants(
+            resource_path=path, limit=MAX_GRANT_ROWS),
+        "grant_count": oauth_server.count_grants(resource_path=path),
     }
 
 
@@ -591,7 +599,13 @@ def _write_secret(key, value):
     transaction.on_commit(row.push_to_cache)
 
 
-def _audit(actor, fields, outcome):
+def _audit(actor, fields, outcome, budget=None, window=3600):
+    """File one suppressed incident event for an owner edit.
+
+    ``budget`` belongs on any caller that mints an UNBOUNDED number of distinct
+    keys — the per-grant revoke key does, one per id — so per-key suppression
+    cannot be turned into an unbounded event flood.
+    """
     actor_id = getattr(actor, "pk", None)
     changed = ",".join(sorted(fields)) or "none"
 
@@ -601,9 +615,28 @@ def _audit(actor, fields, outcome):
             f"Assistant setup actor={actor_id} fields={changed} "
             f"outcome={outcome}",
             title="Assistant setup changed", category="admin_settings", level=5,
-            key=f"assistant-setup:{actor_id}:{changed}:{outcome}")
+            key=f"assistant-setup:{actor_id}:{changed}:{outcome}",
+            window=window, budget=budget)
 
     transaction.on_commit(write)
+
+
+def _log_switch(actor, enabled):
+    """A durable, direction-naming line on the actor for every switch write.
+
+    The incident event is suppressed once per ``(category, key)`` per hour, so
+    it is a "something changed" signal rather than a history. This is not
+    suppressed: on -> off -> on inside one hour reads as three lines naming
+    three directions, the way ``oauth_server.revoke_grant`` logs each
+    revocation on its own.
+    """
+    try:
+        actor.log(
+            f"Remote agent access (MCP) switched {'on' if enabled else 'off'}",
+            "assistant:mcp_switch")
+    except Exception:
+        logit.exception(
+            "assistant setup: could not write the mcp switch audit line")
 
 
 def _credential_edit(label, candidate, clear):
@@ -676,7 +709,11 @@ def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
         _write_value(ENABLED_KEY, bool(enabled))
         if mcp_enabled is not None:
             _write_value(MCP_ENABLED_KEY, mcp_enabled)
-            changed.append("mcp_enabled")
+            # The DIRECTION is part of the key, not just the message: a bare
+            # "mcp_enabled" would collapse on -> off -> on into one ambiguous
+            # event under the hourly (category, key) suppression.
+            changed.append(f"mcp_enabled:{'on' if mcp_enabled else 'off'}")
+            _log_switch(actor, mcp_enabled)
             # "Flip on, check now" must never show yesterday's answer.
             transaction.on_commit(_discovery_cache_delete)
         if model:
@@ -710,16 +747,24 @@ def revoke_grant(actor, grant_id):
         raise merrors.ValueException("grant_id must be a positive integer")
     revoked = oauth_server.revoke_grant_by_id(grant_id, actor=actor)
     # Keyed per grant id so report_event_suppressed's hourly (category, key)
-    # dedupe never swallows a second grant's revocation.
-    _audit(actor, [f"revoke_grant:{grant_id}"], "revoked" if revoked else "not_found")
+    # dedupe never swallows a second grant's revocation — and budgeted, because
+    # a distinct key per id is exactly the unbounded-key case the budget exists
+    # for.
+    _audit(actor, [f"revoke_grant:{grant_id}"],
+           "revoked" if revoked else "not_found", budget=50)
     return 1 if revoked else 0
 
 
 def revoke_all_grants(actor):
-    """Disconnect every remote agent, for every user. Returns the count."""
+    """Disconnect every remote agent at the MCP door, for every user.
+
+    Scoped to this resource path: an installation may protect other resources
+    with the same authorization server, and the Assistant's setup view is not
+    where those get swept.
+    """
     from mojo.apps.account.services import oauth_server
 
     system_settings.require_system_admin(actor)
-    count = oauth_server.revoke_all_grants(actor=actor)
-    _audit(actor, ["revoke_all_grants"], f"revoked:{count}")
+    count = oauth_server.revoke_all_grants(actor=actor, resource_path=mcp_path())
+    _audit(actor, ["revoke_all_grants"], f"revoked:{count}", budget=50)
     return count

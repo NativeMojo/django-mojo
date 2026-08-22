@@ -265,7 +265,12 @@ export function mountSetup({ctx, panel, onBack}) {
             + 'the address; the sign-in service is discovered automatically.'}))),
       h('div', {class: 'assistant-setup-row'},
         h('div', {}, h('strong', {text: 'Discovery check'}),
-          h('span', {text: discoveryLine(state.mcp.discovery)})),
+          h('span', {text: discoveryLine(state.mcp.discovery)}),
+          // Text, never a link: the operator can paste it into a browser to
+          // see for themselves what their front door serves.
+          state.mcp.discovery_url
+            ? h('span', {text: `Discovery document: ${state.mcp.discovery_url}`})
+            : null),
         checkDiscovery),
       state.mcp.discovery.code === 'unreachable'
         ? h('div', {class: 'assistant-alert is-warning', role: 'alert'},

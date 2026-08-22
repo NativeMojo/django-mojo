@@ -195,6 +195,9 @@ def test_mcp_rest_contract(opts):
     assert opts.client.login(CONTRACT_ADMIN, CONTRACT_PASSWORD), \
         "the contract superuser could not sign in"
     origin = opts.client.host.rstrip("/")
+    # Relative, never absolute: a sibling serial module legitimately owns a row
+    # for this key, and "no row exists anywhere" would flake on its state.
+    before = Setting.objects.filter(key="ASSISTANT_MCP_ENABLED").count()
     refused = (
         # A present non-boolean is a 400, never coerced.
         ({"action": "save", "enabled": False, "model": "", "mcp_enabled": "yes"},
@@ -214,7 +217,7 @@ def test_mcp_rest_contract(opts):
         assert response.status_code == 400, \
             f"{why} was not refused: {response.status_code} {response.body}"
     opts.client.logout()
-    assert not Setting.objects.filter(key="ASSISTANT_MCP_ENABLED").exists(), \
+    assert Setting.objects.filter(key="ASSISTANT_MCP_ENABLED").count() == before, \
         "a refused body still wrote the remote agent access switch"
 
     assert opts.client.login(CONTRACT_REGULAR, CONTRACT_PASSWORD), \

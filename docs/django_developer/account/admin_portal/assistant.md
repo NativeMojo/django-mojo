@@ -260,21 +260,75 @@ If the server already has `location ^~ /.well-known/ { root …; }` — some ACM
 layouts do — that prefix wins over a plain one, and these two must be declared
 `^~` as well.
 
+### Scoped to this resource, by path
+
+The connected-agents list and the disconnect-all sweep both pass
+`resource_path=mcp_path()` to `oauth_server.list_grants` / `count_grants` /
+`revoke_all_grants`. This surface owns remote agent access, not every OAuth
+resource the installation may protect, so a grant issued for some other
+registered resource is neither shown here nor swept by "Disconnect all".
+
+Scoping is by **path**, never by the full resource URL: the URL embeds
+`BASE_URL`, so matching on it would make a public-address change silently hide
+grants that are still perfectly valid at the same endpoint (#2613's rule). The
+SQL filter is a suffix match, which is a superset — `https://x/nested/api/…`
+also ends with `/api/…` — so every caller re-confirms the parsed path in Python
+before listing or revoking a row.
+
+The list is bounded in SQL (`limit=MAX_GRANT_ROWS`, 200) rather than sliced in
+Python, and `grant_count` is a separate `COUNT(*)` on the same predicate, so a
+large grant table is never loaded to draw one page and the number stays honest
+past the slice.
+
 ### Revocation
 
 `assistant_setup.revoke_grant(actor, grant_id)` and `revoke_all_grants(actor)`
 ride the existing POST boundary (fresh auth, same-Origin, and a live literal
 superuser re-proven inside `system_settings.require_system_admin`) rather than a
-new endpoint. They delegate to `oauth_server.revoke_grant_by_id` /
-`revoke_all_grants`, which randomise every column a live credential resolves
-through — so the access token is refused at the door and the refresh token at
-the token service on their next use.
+new endpoint.
+
+`revoke_grant_by_id` is the single-row path and randomises every column a live
+credential resolves through, so the access token is refused at the door and the
+refresh token at the token service on their next use.
+
+`revoke_all_grants` is one bulk `UPDATE` over the scoped active set instead of a
+per-row loop inside the request. Deactivating the row is what every credential
+check actually reads — `validate_access` filters `is_active=True` and
+`_check_refreshable` refuses an inactive grant — so the column rotation is not
+needed for the sweep. Only ids and owner ids are read, never whole rows, and the
+audit is **one `oauth:grant_revoked` line per affected user carrying that user's
+count**: bounded by operators rather than by connections.
 
 Both answer a count, never a 404: an unknown or already-dead id is `0`, and the
-page repaints from the fresh state either way. The audit is the existing
-`_audit` path, keyed **per grant id**, so `report_event_suppressed`'s hourly
-`(category, key)` dedupe cannot swallow a second grant's revocation; the
-per-grant `oauth:grant_revoked` user-log line comes from the OAuth server.
+page repaints from the fresh state either way. The `_audit` incident event is
+keyed **per grant id** so `report_event_suppressed`'s hourly `(category, key)`
+dedupe cannot swallow a second grant's revocation, and carries `budget=50`
+because a distinct key per id is exactly the unbounded-key case the budget
+exists for.
+
+The switch write is audited the same way, with the **direction in the key**
+(`mcp_enabled:on` / `mcp_enabled:off`) plus an unsuppressed
+`assistant:mcp_switch` line on the actor — otherwise on → off → on inside one
+hour would file a single event that cannot say which way the door moved.
+
+### Accepted properties
+
+Two things this design deliberately keeps, recorded so a later reader does not
+re-litigate them:
+
+* **The self-check is a reachability oracle, and that is accepted.** It performs
+  an HTTPS `GET` against exactly one host — the operator's own `BASE_URL`, never
+  a caller-supplied address — and reports the status it answered with. The only
+  caller who can reach it is a live literal superuser, who already owns the
+  System Setup surface that sets `BASE_URL` in the first place. `allow_hosts`
+  covers that one initial URL and no redirect hop, `schemes=("https",)`, and no
+  response body or hostname ever reaches the operator-visible `detail`.
+* **`assistant_mcp` is installation state published to every Admin reader.** It
+  rides in the bootstrap capabilities exactly like `assistant_ready`, so any
+  caller who can open the Admin learns whether remote agent access is on and
+  reachable. It carries no address, no grant and no credential, and the panel
+  needs it to render the chip; this is the same disclosure the existing
+  readiness bit already makes.
 
 ---
 
