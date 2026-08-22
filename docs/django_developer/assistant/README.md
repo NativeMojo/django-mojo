@@ -55,6 +55,27 @@ User sends message via REST
 > transports, and the tool → Admin-twin → gates table for all 38 built-in
 > mutating tools.
 
+### Transports
+
+The agent loop above is one of three ways a tool call reaches
+`agent._execute_tool` — the single dispatch function all of them share, which is
+why the permission gate and the approval gate live there and nowhere else.
+
+```
+REST   POST /api/assistant            → run_assistant     → _execute_tool
+WS     assistant_message              → run_assistant_ws  → _execute_tool
+MCP    POST /api/assistant/mcp        → mcp/server.py     → _execute_tool
+```
+
+The **MCP transport** is a stateless JSON-RPC resource server for remote AI
+clients that signed in through this installation's own OAuth 2.1 server. It
+runs no LLM of its own — the client's model does the reasoning and this
+installation only executes tools — and it dispatches through a *projected*
+registry, so the Admin's own conversation tools are not offered. It is off by
+default. See [MCP transport](mcp.md), and
+[account/oauth_server](../account/oauth_server.md) for token issuance and
+confinement.
+
 ## Two-Tier Tool Loading
 
 Tools are split into two tiers to reduce token usage on every turn. The LLM starts with a small set of core tools and loads domain-specific tools on demand.
@@ -292,6 +313,8 @@ credential nobody proved.
 | `LLM_ADMIN_SYSTEM_PROMPT` | (built-in) | Override the default system prompt |
 | `LLM_ADMIN_PROMPT_CACHE_ENABLED` | `True` | Enable Anthropic prompt caching on assistant LLM calls (see [Prompt Caching](#prompt-caching)) |
 | `LLM_ADMIN_APPROVAL_TTL` | `600` | Seconds an operator has to approve a mutating action before it expires. Clamped to 60–3600. See [Approvals](approvals.md). |
+| `ASSISTANT_MCP_ENABLED` | `False` | Whether the MCP endpoint accepts remote AI clients. Read on every request, so it takes effect immediately in both directions; catalog-protected from the generic settings API. See [MCP transport](mcp.md). |
+| `ASSISTANT_MCP_PATH` | `api/assistant/mcp` | Request path of the MCP endpoint, also the registered OAuth resource path. Deployment file only; changing it needs a restart. |
 | `LLM_BROWSE_MAX_LENGTH` | `20000` | Max character length of content returned by `browse_url` and `read_docs` |
 | `LLM_BROWSE_TIMEOUT` | `10` | HTTP request timeout in seconds for `browse_url` |
 | `LLM_DOCS_BASE_URL` | `https://raw.githubusercontent.com/NativeMojo/django-mojo/refs/heads/main/docs/` | Base URL for fetching framework docs via `read_docs` |
@@ -1549,3 +1572,6 @@ Test files:
 - `tests/test_assistant/14_test_memory_cleanup.py` — Nightly cleanup: mechanical phase (orphans, size prune, suspicious scan), dreaming phase (should_dream, dream_tier, apply_dream_actions)
 - `tests/test_assistant/32_test_context_refs.py` — `add_context` tool: valid refs, invalid model/app/pk filtering, DENY_AI_VIEW filtering, mixed refs, empty input, `_validate_block` for context type, `_extract_context_refs` helper
 - `tests/test_assistant/33_test_prompt_caching.py` — Prompt caching: `cache_control` injection/omission, usage round-trip, `_accumulate_usage` summation and null tolerance, `run_assistant()` usage persistence and per-turn logging, `Message.usage` graph exposure and nullability, zero-cache one-time warning
+- `tests/test_assistant/44_test_mcp_server.py` — MCP protocol and dispatch: JSON-RPC framing and classification, `initialize` negotiation, notifications/batches/unknown methods, the tool projection and its annotations, the lazy per-grant conversation, the approval card a mutating call returns, the conversation scope of the two MCP-only read tools, and every refusal string and incident level ([MCP transport](mcp.md))
+- `tests/test_assistant/45_test_mcp_gate.py` — MCP door: the token-kind gate and its challenges, the disabled endpoint over the wire (including that its rate-limit bucket is never touched), the `assistant_mcp` body label, and the descriptors, catalog protection, OAuth resource registration and route wiring
+- `tests/test_assistant_extended_serial/44_test_mcp_wire.py` — MCP end to end with the switch on: transport and challenges, protocol shapes, a real `block_ip` proposal only the operator's own session can resolve, and the switch taking effect with no reload

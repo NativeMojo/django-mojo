@@ -42,6 +42,24 @@ Consequences worth stating explicitly, because they are the point:
   `agent.VALID_BLOCK_TYPES`, so a model-emitted ` ```assistant_block ` claiming
   `type: "approval"` is dropped by `_validate_block()`.
 
+### MCP is a third PROPOSING transport, and it can never resolve
+
+`mojo/apps/assistant/mcp/server.py` dispatches a remote AI client's `tools/call`
+through the same `_execute_tool`, so a mutating tool called over MCP produces an
+ordinary `PendingAction` — bound to the calling operator, in that grant's own
+conversation — and returns `approvals.proposal_result()` as the tool result.
+Nothing runs. That is the whole reason remote access is safe to offer: the
+external model proposes, and the operator still resolves in the Admin.
+
+**Resolution stays REST/WS with an interactive session.** An MCP access token's
+audience is the MCP path and nothing else, so presenting it at
+`POST /api/assistant/action` is a 401 at the framework chokepoint — there is no
+code path that lets a remote client approve its own proposal. The client can
+only *watch*, through the two MCP-only read tools (`list_pending_actions`,
+`get_pending_action`), and only for cards it proposed itself: both are scoped to
+its conversation, because `render_block` ships redacted `args` and up to 8 KB of
+`preview`. See [MCP transport](mcp.md).
+
 ---
 
 ## The state machine
