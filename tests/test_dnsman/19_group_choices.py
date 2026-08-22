@@ -359,6 +359,11 @@ def test_query_counts(opts):
     def run(params=None, path=PATH, expect_error=False):
         request = factory.get(path) if params is None else factory.get(path, data=params)
         request.user = opts.manager
+        # CaptureQueriesContext records start/end indexes into Django's bounded
+        # query deque.  Once a long suite fills that deque both indexes remain
+        # at its max length while new queries rotate through, yielding an empty
+        # capture.  Query-count assertions must start with their own clean log.
+        connection.queries_log.clear()
         with CaptureQueriesContext(connection) as captured:
             try:
                 result = on_credential_group_choice(request)
@@ -377,6 +382,15 @@ def test_query_counts(opts):
         assert '"account_group"."name"' in select_clause, select_clause
         assert "is_active" not in select_clause and "parent_id" not in select_clause, (
             f"choice query selected fields beyond id/name: {select_clause}")
+
+    # Reproduce the full-suite condition locally so this test cannot regress
+    # to depending on how many database queries earlier modules happened to
+    # execute.
+    query_limit = connection.queries_log.maxlen
+    connection.queries_log.extend(
+        [{"sql": "-- earlier suite query", "time": "0"}] * query_limit)
+    assert len(connection.queries_log) == query_limit, \
+        "the regression setup must saturate Django's bounded query log"
 
     exact, exact_queries = run({"id": opts.alpha.pk})
     assert exact["count"] == 1 and len(exact_queries) == 1, exact_queries
