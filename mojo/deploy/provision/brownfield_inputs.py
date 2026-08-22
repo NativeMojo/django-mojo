@@ -71,6 +71,7 @@ PROFILE_KEYS = frozenset(("profile_arn", "role_arn", "managed"))
 MANAGED_PROFILE_KEYS = frozenset(("profile_name", "role_name"))
 BALANCER_KEYS = frozenset((
     "name", "api_target_group", "certbot_target_group", "subnet_ids",
+    "api_health_path", "certbot_health_path",
 ))
 CREDENTIAL_KEYS = frozenset((
     "object", "provider", "metadata_key",
@@ -229,6 +230,10 @@ def to_spec(manifest, project_root=None):
     built.api_target_group_name = manifest["load_balancer"]["api_target_group"]
     built.certbot_target_group_name = manifest[
         "load_balancer"]["certbot_target_group"]
+    built.api_health_path = manifest["load_balancer"].get(
+        "api_health_path", spec_module.HEALTH_PATH_DEFAULT)
+    built.certbot_health_path = manifest["load_balancer"].get(
+        "certbot_health_path", spec_module.HEALTH_PATH_DEFAULT)
     built.want_balancer = True
     built.stable_node_ips = False
     built.manage_dns = manifest["manage_dns"]
@@ -441,7 +446,9 @@ def _nodes(value, network, path, account_id):
 def _balancer(value, network, path):
     label = f"{path}.load_balancer"
     _object(value, BALANCER_KEYS, label)
-    _required(value, BALANCER_KEYS, label)
+    required = set(BALANCER_KEYS) - {
+        "api_health_path", "certbot_health_path"}
+    _required(value, required, label)
     declared = {row["id"] for row in network["public_subnets"]}
     subnets = value["subnet_ids"]
     if not isinstance(subnets, list) or len(subnets) != 2 or len(
@@ -457,6 +464,30 @@ def _balancer(value, network, path):
                 value_name or ""):
             raise inputs.EnvFileError(
                 f"{label}.{key} is not a valid ELB name")
+    for key in ("api_health_path", "certbot_health_path"):
+        if key in value:
+            _health_path(value[key], f"{label}.{key}")
+
+
+def _health_path(value, label):
+    if not isinstance(value, str):
+        raise inputs.EnvFileError(f"{label} must be an absolute HTTP path")
+    if not spec_module.HEALTH_PATH_MIN <= len(
+            value) <= spec_module.HEALTH_PATH_MAX:
+        raise inputs.EnvFileError(
+            f"{label} must be {spec_module.HEALTH_PATH_MIN}.."
+            f"{spec_module.HEALTH_PATH_MAX} characters")
+    if any(char.isspace() or ord(char) < 32 or ord(char) == 127
+           for char in value):
+        raise inputs.EnvFileError(
+            f"{label} cannot contain whitespace or control characters")
+    if not value.startswith("/") or value.startswith("//"):
+        raise inputs.EnvFileError(
+            f"{label} must be an absolute path, not a scheme or host")
+    if "?" in value or "#" in value:
+        raise inputs.EnvFileError(
+            f"{label} cannot contain a query string or fragment")
+    return value
 
 
 def _handoff(raw, path, account_id, region):

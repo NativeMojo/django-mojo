@@ -1329,6 +1329,91 @@ def test_balancer_target_group_uses_tcp_with_a_separate_health_check_protocol(op
                  "check is for")
 
 
+def _custom_health_topology():
+    from mojo.deploy.provision import brownfield_inputs
+    from .brownfield_fixture import raw_manifest
+
+    raw = raw_manifest()
+    raw["load_balancer"]["api_health_path"] = "/api/maestro/node/ready"
+    raw["load_balancer"]["certbot_health_path"] = "/certbot/ready"
+    return brownfield_inputs.to_spec(brownfield_inputs.validate(raw))
+
+
+@th.django_unit_test("brownfield target-group creates carry the declared health paths")
+def test_balancer_creates_brownfield_groups_with_declared_health_paths(opts):
+    from mojo.deploy.provision import balancer
+    from mojo.deploy.provision import spec as spec_module
+
+    spec = _custom_health_topology()
+    wanted = balancer.target_group_specs(spec, VPC_ID)
+    th.assert_eq(wanted["api"]["HealthCheckPath"],
+                 "/api/maestro/node/ready",
+                 "the API group must use application-owned readiness")
+    th.assert_eq(wanted["certbot"]["HealthCheckPath"], "/certbot/ready",
+                 "the certbot group must use its independently declared path")
+
+    client, stubber = _stub("elbv2")
+    for role in ("api", "certbot"):
+        request = wanted[role]
+        stubber.add_response(
+            "create_target_group",
+            {"TargetGroups": [{"TargetGroupArn": f"arn:tg:{role}"}]},
+            dict(request, Tags=spec_module.tag_list(
+                spec, "balancer", name=request["Name"])))
+    findings, actions = [], []
+    with stubber:
+        arns = balancer._ensure_target_groups(
+            client, spec, {}, wanted, findings, actions, apply=True)
+
+    _assert_no_blind(findings,
+                     "declared health paths must be valid ELBv2 create fields")
+    stubber.assert_no_pending_responses()
+    th.assert_eq(arns, {"api": "arn:tg:api", "certbot": "arn:tg:certbot"},
+                 "both created target-group ARNs must remain available to listeners")
+    details = {action.target: action.detail for action in actions}
+    th.assert_in("/api/maestro/node/ready",
+                 details[wanted["api"]["Name"]],
+                 "the reviewed preview action must bind the API health path")
+    th.assert_in("/certbot/ready", details[wanted["certbot"]["Name"]],
+                 "the reviewed preview action must bind the certbot health path")
+
+
+@th.django_unit_test("owned brownfield target groups converge health-path drift in place")
+def test_balancer_modifies_owned_brownfield_health_path_drift(opts):
+    from mojo.deploy.provision import balancer, report
+
+    spec = _custom_health_topology()
+    wanted = balancer.target_group_specs(spec, VPC_ID)
+    existing = {}
+    client, stubber = _stub("elbv2")
+    for role in ("api", "certbot"):
+        existing[role] = dict(
+            wanted[role], TargetGroupArn=f"arn:tg:{role}",
+            HealthCheckPath=balancer.HEALTH_PATH)
+        stubber.add_response("modify_target_group", {}, {
+            "TargetGroupArn": f"arn:tg:{role}",
+            "HealthCheckPath": wanted[role]["HealthCheckPath"],
+        })
+
+    findings, actions = [], []
+    with stubber:
+        arns = balancer._ensure_target_groups(
+            client, spec, {"target_groups": existing}, wanted,
+            findings, actions, apply=True)
+
+    _assert_no_blind(findings,
+                     "health-path drift must produce valid ModifyTargetGroup calls")
+    stubber.assert_no_pending_responses()
+    th.assert_eq(arns, {"api": "arn:tg:api", "certbot": "arn:tg:certbot"},
+                 "in-place health convergence must preserve target-group identity")
+    th.assert_eq(
+        sorted(_codes(findings, report.DRIFT)),
+        ["target_group.api.health_check", "target_group.certbot.health_check"],
+        "both owned groups must report their health-path drift")
+    th.assert_eq([action.verb for action in actions], ["modify", "modify"],
+                 "mutable path drift must plan modifications, never replacements")
+
+
 @th.django_unit_test("a target group that AWS made immutable is reported, never modified")
 def test_balancer_reports_manual_for_an_immutable_target_group_field(opts):
     from mojo.deploy.provision import balancer, report
