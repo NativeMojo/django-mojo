@@ -185,7 +185,8 @@ export function toneFor(row) {
 // to Home and silently loses the reader.
 const V2_ROUTES = new Set([
   'home', 'apps', 'apps-serving', 'infrastructure',
-  'domains', 'dns', 'certificates', 'credentials', 'access',
+  'domains', 'dns', 'certificates', 'credentials',
+  'access', 'users', 'groups', 'keys', 'security', 'activity',
   'settings', 'settings-sms', 'settings-email',
 ]);
 

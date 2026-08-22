@@ -13,7 +13,6 @@
     "assets/components/network.js",
     "assets/components/operations.js",
     "assets/components/overlays.js",
-    "assets/components/placeholder.js",
     "assets/components/relationship.js",
     "assets/components/routes.js",
     "assets/components/rows.css",
