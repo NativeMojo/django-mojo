@@ -34,8 +34,9 @@ TOOLS_COPY = (
     "account; changes still need your approval in the Admin")
 API_COPY = (
     "Full API access as {email} — everything your account can do through the "
-    "API, and nothing more. The Assistant's approval step does not apply to "
-    "direct API calls.")
+    "API, and nothing more, including approving the Assistant's own pending "
+    "actions. The Assistant's approval step does not apply to direct API "
+    "calls.")
 
 
 class RedirectableError(Exception):

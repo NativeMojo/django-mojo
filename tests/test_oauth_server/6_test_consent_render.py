@@ -474,6 +474,7 @@ def test_api_scope_consent(opts):
     tools_line = "the same permissions as your account"
     api_line = "Full API access as"
     disclaimer = "approval step does not apply"
+    included = "own pending actions"
 
     # `api` alone, with no `resource`: the root is the only eligible entry, so
     # the omitted parameter still defaults unambiguously.
@@ -486,6 +487,10 @@ def test_api_scope_consent(opts):
     assert_true(disclaimer in html,
                 "the page must warn that the Assistant's approval step does not "
                 "apply to direct API calls — that is the whole difference")
+    assert_true(included in html,
+                "the page must name the sharpest consequence of that equality: "
+                "the grant can approve the Assistant's own pending actions, "
+                "because the person's session can")
     assert_true(tools_line not in html,
                 "an api-only request must not claim the tool door was granted")
     assert_true(f"Access to: {ROOT_RESOURCE}" in html,

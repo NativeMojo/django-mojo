@@ -423,18 +423,31 @@ def revoke_grant_by_id(grant_id, actor=None):
 def count_grants(user=None, include_inactive=False, resource_path=None):
     """How many grants ``list_grants`` covers, without loading any of them.
 
-    Counted on the same SQL predicate ``list_grants`` selects on, so a caller
-    that slices with ``limit`` can still report an honest total.
-    ``resource_path`` takes one path or several, exactly as there.
+    Counted on the same SQL predicate ``list_grants`` selects on AND through the
+    same ``_has_path`` re-check, so a caller that slices with ``limit`` can
+    still report an honest total. ``resource_path`` takes one path or several,
+    exactly as there.
+
+    The re-check is why this is not a bare ``COUNT(*)``: the SQL suffix match is
+    a SUPERSET (``https://x/nested/api`` also ends with ``/api``), so counting
+    in the database alone would report rows that ``list_grants`` drops and
+    ``revoke_all_grants`` refuses to touch — an Admin page saying "3 active"
+    above two rows that Disconnect all then reports sweeping one of. Only the
+    resource column is read, never whole rows.
     """
     from mojo.apps.account.models.oauth_grant import OAuthGrant
 
+    paths = _paths(resource_path)
     query = OAuthGrant.objects.all()
     if user is not None:
         query = query.filter(user=user)
     if not include_inactive:
         query = query.filter(is_active=True, refresh_expires__gt=dates.utcnow())
-    return _scope_to_path(query, _paths(resource_path)).count()
+    query = _scope_to_path(query, paths)
+    if paths is None:
+        return query.count()
+    return sum(1 for resource in query.values_list("resource", flat=True)
+               if _has_path(resource, paths))
 
 
 def _log_bulk_revocation(owners, actor):

@@ -178,6 +178,35 @@ def test_admin_api_spans_resources(opts):
     assert_eq(tokens.count_grants(user=user, resource_path=RESOURCE_PATH), 1,
               "a bare string must still mean exactly that one path")
 
+    # A MOJO_APPEND_SLASH deployment registers and stores the SLASHED path, so
+    # the Admin's scoping has to be given that exact string. This is the shape
+    # that silently listed nothing when the path was re-derived unslashed.
+    slashed_path = RESOURCE_PATH + "/"
+    slashed = _grant(resource=ORIGIN + slashed_path)
+    assert_eq([row["id"] for row in
+               tokens.list_grants(user=user, resource_path=[slashed_path])],
+              [slashed.pk],
+              "a slashed resource path must list its own grant and no other")
+    assert_eq(tokens.count_grants(user=user, resource_path=[slashed_path]), 1,
+              "the count must agree with the listing for a slashed path")
+    assert_eq(len(tokens.list_grants(user=user, resource_path=[RESOURCE_PATH])), 1,
+              "the unslashed path must NOT collect the slashed resource's grant "
+              "— they are different resources")
+    assert_eq(tokens.revoke_all_grants(user=user, resource_path=[slashed_path]), 1,
+              "the sweep must reach a grant stored at a slashed resource path")
+
+    # The SQL suffix filter is a superset, so the count has to re-check the
+    # parsed path in Python or it reports rows the listing drops.
+    nested = _grant(resource=f"{ORIGIN}/nested{RESOURCE_PATH}")
+    assert_eq(tokens.count_grants(user=user, resource_path=[RESOURCE_PATH]),
+              len(tokens.list_grants(user=user, resource_path=[RESOURCE_PATH])),
+              "count_grants must agree with list_grants: the SQL endswith match "
+              "also catches /nested/api/… and only the Python re-check drops it")
+    assert_eq(tokens.count_grants(user=user, resource_path=[RESOURCE_PATH]), 1,
+              "a grant at a DIFFERENT resource whose URL merely ends with this "
+              "path must not be counted")
+    OAuthGrant.objects.filter(pk=nested.pk).delete()
+
     assert_eq(tokens.revoke_all_grants(user=user, resource_path=both), 2,
               "the sweep must move both resources' rows in one UPDATE")
     survivors = tokens.list_grants(user=user)

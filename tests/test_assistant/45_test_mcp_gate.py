@@ -443,5 +443,54 @@ def test_configured_path_is_the_single_source(opts):
               "the challenge's resource path must be the configured one")
     assert_true(oauth_server.resolve(live) is not None,
                 f"the OAuth resource must be registered at exactly the "
-                f"configured path — validate_access compares it to request.path "
-                f"exactly — got no entry for {live!r}")
+                f"configured path — validate_access resolves it from the token "
+                f"audience exactly — got no entry for {live!r}")
+
+    # The Admin surface is the FOURTH consumer of this path, and it must not
+    # re-derive it: under MOJO_APPEND_SLASH the helper appends a trailing slash,
+    # so a re-derived unslashed path would make `resource__endswith` match none
+    # of the grants actually stored, and every connection would go unlisted and
+    # unswept by Disconnect all.
+    from mojo.apps.account.services import assistant_setup
+
+    assert_eq(assistant_setup.mcp_path(), live,
+              f"the Admin's connect address and grant scoping must be the SAME "
+              f"path the resource is registered at, got "
+              f"{assistant_setup.mcp_path()!r} vs {live!r}")
+    assert_true(assistant_setup.api_root() in assistant_setup.grant_paths()
+                and live in assistant_setup.grant_paths(),
+                f"both remote-agent resources must be in the Admin's scope, "
+                f"got {assistant_setup.grant_paths()!r}")
+
+
+@th.django_unit_test("a REST API root of / is refused, and the tool door still registers")
+def test_root_prefix_registration_is_refused(opts):
+    from mojo.apps.account.services.oauth_server import resources
+    from mojo.apps.assistant.apps import register_oauth_resources
+
+    # MOJO_PREFIX="" resolves API_ROOT to "/". A prefix resource there would
+    # cover every path this host serves — the hosted sign-in pages and anything
+    # else sharing the host — so it is refused and `api` is simply not offered.
+    registry = resources.ResourceRegistry()
+    result = register_oauth_resources(MCP_PATH, "/", lambda: True,
+                                      registry=registry)
+    assert_true(result is None,
+                f"registering the API root at / must be refused, got {result!r}")
+    assert_eq(registry.paths(), [MCP_PATH],
+              f"the MCP door must still register when the root is refused — "
+              f"the tool door is unaffected, got {registry.paths()}")
+    assert_eq(resources.offered_scopes(registry), ["mcp"],
+              "an installation with no usable API root must not advertise the "
+              "api scope at all")
+
+    # A real root registers both, and the door sits beneath it.
+    ordinary = resources.ResourceRegistry()
+    entry = register_oauth_resources(MCP_PATH, "/api", lambda: True,
+                                     registry=ordinary)
+    assert_true(entry is not None and entry.prefix is True,
+                f"an ordinary API root must register as a prefix resource, "
+                f"got {entry!r}")
+    assert_eq(sorted(ordinary.paths()), sorted([MCP_PATH, "/api"]),
+              f"both resources must register, got {ordinary.paths()}")
+    assert_true(resources.covers(entry, MCP_PATH),
+                "the tool door must sit beneath the registered root")

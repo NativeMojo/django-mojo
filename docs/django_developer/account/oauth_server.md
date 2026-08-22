@@ -61,8 +61,11 @@ class AppConfig(BaseAppConfig):
 `register_resource(path, scopes, enabled, prefix=False)`:
 
 - **`path`** is the absolute request path exactly as routed — a leading slash,
-  no trailing slash. The comparison against `request.path` is exact string
-  equality with no normalisation.
+  no trailing slash. The **token audience** is always resolved by exact string
+  equality with no normalisation. What that path then covers depends on the
+  entry: an exact resource matches `request.path` by the same exact equality,
+  while a prefix resource also accepts any path strictly beneath it (see
+  `covers`, below). No normalisation happens in either case.
 
   > **Register the path as Django routes it, not as you wish it looked.**
   > Confinement compares the literal `request.path`. A `MOJO_APPEND_SLASH=True`
@@ -240,6 +243,31 @@ its own session token: the same permission checks, the same group scoping, the
 same 440 when a step-up endpoint wants a recent login. Nothing about it widens a
 permission.
 
+**Accepted, and worth stating plainly, because "the same as a session" has sharp
+edges:**
+
+- **Owner-only surfaces are reachable.** `require_request_admin`, System Setup
+  and Admin settings answer an `api` grant exactly as they answer that person's
+  browser session, subject to the same step-up window — the grant carries the
+  `auth_time` of the session that approved it, so a stale one gets 440 and the
+  only way forward is re-consent. A grant held by a superuser is a superuser
+  credential; that is the equality, not a gap in it.
+- **It can approve the Assistant's own pending actions.** `POST
+  /api/assistant/action` gates on `request.bearer == "bearer"` and
+  `denies_key_backed_session`, both of which an `api` grant passes. It gains no
+  reach by doing so — it could make the same mutation directly, under the same
+  permission, superuser and fresh-auth gates — but the approval step stops being
+  a second party for that grant. The consent screen says so in those words.
+- **`generate_api_key` is reachable, and a minted key outlives the grant.** It
+  is a separate credential with its own lifetime, revoked on its own, exactly as
+  a key minted from a browser session is. A Security follow-up is filed for a
+  fresh-auth gate on that endpoint; it is not part of this feature.
+
+These follow from the requester's rule — an `api` grant equals a session token
+in reach — rather than qualifying it. What bounds the credential is that it is
+short-lived, absolutely capped at 30 days, revocable from the Admin, and dies
+with the person's `auth_key`.
+
 **What `api` is not.**
 
 - It is **not** a session. It cannot approve a new grant
@@ -249,11 +277,20 @@ permission.
 - It is **not** reach outside the root. `/.well-known/…` and anything else above
   or beside `API_ROOT` refuses it, with no challenge.
 - It does **not** carry the Assistant's approval step. The consent screen says
-  so in those words: a direct API call is a direct API call.
+  so in those words — including that approving the Assistant's own pending
+  actions is part of what is being granted.
 
 Both scopes ride the one `ASSISTANT_MCP_ENABLED` switch — "remote agents may
 sign in" — and both kinds of grant are listed and revoked from the same Admin
 section.
+
+**An installation with `MOJO_PREFIX=""` offers no `api` scope at all.** The root
+would resolve to `/`, and a prefix resource there covers every path the host
+serves — the hosted sign-in pages and any other product sharing the host, not
+merely the REST API. `register` refuses it (`ValueError`) and the assistant app
+skips that one registration with a `logit.error`, so the tool door still works
+and discovery simply never advertises `api`. Fail-closed, and visible in the
+log rather than silent.
 
 **One grant can serve both doors** only while the MCP path sits beneath
 `API_ROOT`, which the shipped default (`/api/assistant/mcp` under `/api`) does.
@@ -326,13 +363,15 @@ oauth_server.list_grants(resource_path=["/api/assistant/mcp", "/api"])
 `resource_path` scopes by the resource's **path**, never its full URL: the URL
 embeds `BASE_URL`, so matching on it would hide still-valid grants after a
 public-address change. It takes **one path or several** — a list becomes one
-`OR` predicate, so a caller spanning two resources still gets one honest
-`COUNT(*)` and one bulk `UPDATE` rather than two of each. The SQL suffix filter
-is a superset and every caller re-confirms the parsed path in Python before
-listing or revoking a row. `limit` bounds the answer in SQL; `count_grants` is
-the matching `COUNT(*)`, so a sliced listing can still report an honest total.
-All three default to the previous behaviour — every grant, every resource,
-unbounded; an empty list selects nothing.
+`OR` predicate, so a caller spanning two resources still gets one query and one
+bulk `UPDATE` rather than two of each. The SQL suffix filter is a **superset**
+(`https://x/nested/api` also ends with `/api`), so all three re-confirm the
+parsed path in Python before counting, listing or revoking a row —
+`count_grants` included, which is why it reads the `resource` column rather than
+issuing a bare `COUNT(*)`. That is what makes the number it reports equal to
+what is listed and what a sweep would touch, past the `limit` slice. All three
+default to the previous behaviour — every grant, every resource, unbounded; an
+empty list selects nothing.
 
 `revoke_all_grants` is one bulk `UPDATE` on the scoped active set. Deactivating
 the row is what kills the credential (`validate_access` filters `is_active=True`
@@ -447,8 +486,9 @@ Approve / Deny.
 **One sentence per granted scope**, tools first: `mcp` renders "Use the
 Assistant's tools as {email} — the same permissions as your account; changes
 still need your approval in the Admin", and `api` adds "Full API access as
-{email} — everything your account can do through the API, and nothing more. The
-Assistant's approval step does not apply to direct API calls." The `{email}`
+{email} — everything your account can do through the API, and nothing more,
+including approving the Assistant's own pending actions. The Assistant's
+approval step does not apply to direct API calls." The `{email}`
 placeholder is filled in client-side once `/me` answers; the sentences
 themselves are rendered and autoescaped by the template, so no server value is
 concatenated into executable text.

@@ -1,6 +1,8 @@
 from django.apps import AppConfig as BaseAppConfig
 from django.utils.module_loading import autodiscover_modules
 
+from mojo.helpers import logit
+
 
 class AppConfig(BaseAppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
@@ -46,23 +48,21 @@ class AppConfig(BaseAppConfig):
         `mcp api` grant at the root reaching the door, which then answers 401
         because the root does not cover it. Fail-closed, and the same caveat a
         SCRIPT_NAME-mounted deployment already carries.
+
+        The work is in `register_oauth_resources()` so it can be driven with an
+        explicit root and registry from a test, rather than through `ready()`.
         """
         from django.apps import apps
 
         if not apps.is_installed("mojo.apps.account"):
             return
-        from mojo.apps.account.services import oauth_server
         from mojo.apps.assistant.mcp import auth as mcp_auth
         from mojo.helpers.request import API_ROOT
         from mojo.helpers.settings import settings
 
-        def enabled():
-            return settings.get("ASSISTANT_MCP_ENABLED", False, kind="bool")
-
-        oauth_server.register_resource(
-            mcp_auth.configured_path(), ["mcp"], enabled)
-        oauth_server.register_resource(
-            API_ROOT, ["mcp", "api"], enabled, prefix=True)
+        register_oauth_resources(
+            mcp_auth.configured_path(), API_ROOT,
+            lambda: settings.get("ASSISTANT_MCP_ENABLED", False, kind="bool"))
 
     def register_settings_descriptors(self):
         """Advertise the Assistant's configuration in the Admin catalog.
@@ -132,3 +132,35 @@ class AppConfig(BaseAppConfig):
             "OAuth resource path.",
             "string", "api/assistant/mcp", resolver="static", writable="none",
             owner="Deployment settings", change_behavior="restart"))
+
+
+def register_oauth_resources(mcp_path, api_root, enabled, registry=None):
+    """Register the MCP door and, when it is safe to, the REST API root.
+
+    Both ride the ONE `enabled` callable — ASSISTANT_MCP_ENABLED means "remote
+    agents may sign in", for either kind of access — and it is re-read on every
+    check, so the switch is immediate in both directions.
+
+    `api_root == "/"` (an installation with `MOJO_PREFIX=""`) is REFUSED, and
+    the MCP registration still proceeds. A prefix resource is covered by
+    `path.rstrip("/") + "/"`, so a root entry would reach every path this host
+    serves — the hosted sign-in pages and any other product sharing the host,
+    not merely the REST API. "Full API access" cannot honestly mean that, so
+    such an installation simply does not offer the `api` scope: discovery never
+    advertises it and consent answers `invalid_scope`. The tool door is
+    unaffected.
+    """
+    from mojo.apps.account.services import oauth_server
+
+    oauth_server.register_resource(mcp_path, ["mcp"], enabled, registry=registry)
+    if not str(api_root or "").strip("/"):
+        logit.error(
+            "assistant.mcp",
+            f"the REST API root resolves to {api_root!r}; refusing to register "
+            f"a prefix OAuth resource at the site root, where it would cover "
+            f"every path this host serves. Full API access (the `api` scope) "
+            f"is not offered on this installation — set MOJO_PREFIX to mount "
+            f"the API under a path.")
+        return None
+    return oauth_server.register_resource(
+        api_root, ["mcp", "api"], enabled, registry=registry, prefix=True)

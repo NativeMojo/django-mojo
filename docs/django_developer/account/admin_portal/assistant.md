@@ -287,9 +287,12 @@ also ends with `/api/…` — so every caller re-confirms the parsed path in Pyt
 before listing or revoking a row.
 
 The list is bounded in SQL (`limit=MAX_GRANT_ROWS`, 200) rather than sliced in
-Python, and `grant_count` is a separate `COUNT(*)` on the same predicate, so a
-large grant table is never loaded to draw one page and the number stays honest
-past the slice.
+Python, and `grant_count` is a separate query on the same predicate **and the
+same Python path re-check**, so a large grant table is never loaded to draw one
+page and the number stays honest past the slice. The re-check is not optional
+there: the SQL suffix match is a superset, so a bare `COUNT(*)` could say
+"3 active" above two listed rows that Disconnect all then reports sweeping one
+of.
 
 ### Revocation
 

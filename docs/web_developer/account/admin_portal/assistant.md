@@ -246,10 +246,16 @@ Disconnect every remote agent, for every user.
 
 Exactly that one key. `revoked` is the number of connections killed.
 
-Both actions are scoped to the **two** remote-agent resources — the MCP endpoint
-and the REST API root — so Disconnect all sweeps a full-API connection as well
-as a tool-door one. A grant this installation issued for some other protected
-resource is neither listed above nor swept here.
+The listing, the count and **Disconnect all** are scoped to the **two**
+remote-agent resources — the MCP endpoint and the REST API root — so
+Disconnect all sweeps a full-API connection as well as a tool-door one, and a
+grant this installation issued for some other protected resource is neither
+listed above nor swept here.
+
+**`revoke_grant` is not path-scoped.** It revokes by id, whatever resource that
+grant names. It is owner-only and the id has to come from somewhere, so this is
+not a way to reach grants the page does not show — but do not read it as a
+scoped operation.
 
 ---
 

@@ -87,10 +87,13 @@ identical.
 
 Three things to know:
 
-- **An MCP client's built-in sign-in cannot obtain `api`.** It names the MCP
-  endpoint as its resource, and the server echoes the requested resource rather
-  than upgrading it. Asking for `api` there answers `invalid_scope`. Drive the
-  flow yourself if you want full API access.
+- **A client that names the MCP resource cannot obtain `api`.** The server
+  echoes the requested `resource` rather than upgrading it, so asking for `api`
+  alongside `resource=…/api/assistant/mcp` answers `invalid_scope`. A client
+  that **omits** `resource` and asks for `api` binds the API root instead — the
+  consent page names the exact resource it is about to grant, so the user sees
+  which one they are approving. Most MCP clients name the MCP endpoint in their
+  built-in sign-in, so drive the flow yourself if you want full API access.
 - **`api` alone does not open the tool door.** It authenticates at
   `/api/assistant/mcp` but the door answers `403 insufficient_scope`. Ask for
   `scope=mcp api`.

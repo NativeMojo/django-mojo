@@ -289,6 +289,11 @@ grant_type=refresh_token
 **The refresh token rotates on every use.** Store the new one from every
 response; the old one stops working.
 
+**If you send `scope` on a refresh, echo the string the token response gave you,
+byte for byte** — the server compares it to the stored value, so `api mcp` is
+not `mcp api` and a de-duplicated or re-ordered string is `invalid_grant`.
+Omitting `scope` entirely is always safe.
+
 Two things to know:
 
 - **A lost response is forgiven for 30 seconds.** If your request succeeded but
