@@ -72,6 +72,13 @@ def _wipe():
         for key in KEYS:
             redis.hdel(Setting._redis_key(), key)
     OAuthGrant.objects.filter(client__client_id__in=CLIENT_IDS).delete()
+    # Sibling opt-in modules (the MCP wire flow) leave their grants active at
+    # the MCP path, and this module asserts installation-wide totals for
+    # that path, so anything it does not own is put out of the count first.
+    OAuthGrant.objects.filter(
+        is_active=True, resource__endswith=MCP_PATH,
+    ).exclude(client__client_id__in=CLIENT_IDS).update(
+        is_active=False, revoked_reason="test_wipe")
     OAuthClient.objects.filter(client_id__in=CLIENT_IDS).delete()
     ApiKey.objects.filter(name=KEY_NAME).delete()
     Group.objects.filter(name=KEY_GROUP).delete()
