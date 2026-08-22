@@ -32,6 +32,7 @@ import {
   remove as removeOperation, upsert as upsertOperation,
 } from '../../components/operations.js';
 import {egressPanel} from './egress.js';
+import {runnersPanel} from './runners.js';
 
 const CAPACITY_PATH = '/api/aws/capacity';
 const STATUS_PATH = '/api/aws/capacity/status';
@@ -239,6 +240,12 @@ export function capacityTab(ctx, signal = null, actions = null) {
   let planError = null;
   let planTimer = null;
   let planKey = '';
+
+  // The heartbeat roster is evidence about the nodes above it, not staged
+  // state, so it is built ONCE and re-used by every render — the disclosure
+  // keeps what the operator opened and what it already read. Null for a caller
+  // without the platform-view grant. See runners.js.
+  const runners = runnersPanel(ctx, signal);
 
   const managed = () => report?.mode !== 'external';
   const offer = (name) => report?.actions?.[name] || {offered: false, blocked_reason: null};
@@ -1065,6 +1072,8 @@ export function capacityTab(ctx, signal = null, actions = null) {
       // holds its own server-side claim, so it never joins the staged plan —
       // it applies itself and publishes its own operation. See egress.js.
       egressPanel({report, managed, offer, signal, reload: () => load(true)}),
+      // Heartbeats from those same nodes, one deliberate click down.
+      runners,
       cachePanel(),
       databasePanel(),
       warningsPanel(),

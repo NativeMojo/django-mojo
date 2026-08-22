@@ -116,6 +116,15 @@ p.settings-note{margin:0}
 .evidence-json{margin:8px 0 0;padding:9px;border-radius:7px;background:var(--surface-2);color:var(--text);font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
 .email-recommendations .small{font-size:10px}
 
+/* Security posture: the read-only platform evidence behind the Security &
+   operations row. One line per control, the dot carrying the on/off state the
+   collector reported — nothing here is derived. See posture.js. */
+.settings-posture{margin-top:14px}
+.settings-posture-head{margin:0;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.settings-posture-list{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px}
+.settings-posture-list li{display:flex;align-items:center;gap:8px;font-size:12px}
+.settings-posture-slot .settings-lead{margin-bottom:4px}
+
 @media(max-width:760px){.settings-toolbar,.settings-toolbar .search{width:100%}.settings-categories{width:100%;flex-wrap:nowrap;overflow-x:auto;padding-bottom:3px}.settings-categories button{white-space:nowrap}.settings-methods{grid-template-columns:repeat(2,minmax(0,1fr))}}
 /* A settings row's value is a sentence and its right side is a pointer, so on a
    phone they stack instead of competing for the same line. */

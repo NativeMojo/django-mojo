@@ -254,6 +254,33 @@ html[data-theme="dark"] {
   line-height: 1.55;
 }
 
+/* ── Capacity: the edge-runner roster ────────────────────────────────────── */
+
+/* Read-only evidence about the nodes above it, collapsed by default: the
+   platform read is paid only when the disclosure is opened. See runners.js. */
+.fleet-runners {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.fleet-runners-body {
+  margin-top: 8px;
+}
+
+.fleet-runners-line {
+  max-width: 72ch;
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.fleet-runners .fleet-members {
+  padding: 0;
+  border-top: 0;
+  background: transparent;
+}
+
 /* ── Capacity: the apply bar ─────────────────────────────────────────────── */
 
 /* Nothing is applied from a control. The staged changes collect here, priced

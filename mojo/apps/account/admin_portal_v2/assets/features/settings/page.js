@@ -29,6 +29,8 @@ import {errorState, skeletonState} from '../../components/views.js';
 import {actionFor, agoText, defaultSuffix, detailHref, hostOf, isMono,
   sentence, toneFor, verifyIsCurrent} from './language.js';
 import {authPanel, geoipPanel, settingPanel, smsPanel, topologyPanel} from './panels.js';
+import {POSTURE_CORPUS, POSTURE_FOCUS, POSTURE_SECTION, postureAvailable,
+  posturePanel, postureRow} from './posture.js';
 
 const INTEGRATIONS = 'Integrations';
 // The six descriptors the GeoIP row speaks for. They keep their individual
@@ -240,10 +242,26 @@ function buildGroups(report, state, ctx) {
         build: () => catalogRow(row, state, null, ctx)}));
     groups.push({label: section, items});
   });
+  // The live security evidence joins the section whose settings it reports on.
+  // If this installation's catalog has no such section, the row still needs a
+  // home rather than being dropped — it gets its own group, last.
+  if (postureAvailable(ctx)) {
+    const href = routeHref('settings', {...state, focus: POSTURE_FOCUS});
+    const item = {corpus: POSTURE_CORPUS,
+      build: () => linkRow(postureRow(href), href)};
+    const security = groups.find((group) => group.label === POSTURE_SECTION);
+    if (security) security.items.push(item);
+    else groups.push({label: POSTURE_SECTION, items: [item]});
+  }
   return groups.filter((group) => group.items.length);
 }
 
-function panelFor(focus, report, actions) {
+function panelFor(focus, report, actions, ctx) {
+  // Read-only, and not a catalog descriptor: the posture drill-in reads the
+  // platform collector itself, so it answers before any key lookup.
+  if (focus === POSTURE_FOCUS) {
+    return postureAvailable(ctx) ? posturePanel(ctx) : null;
+  }
   if (focus === 'geoip') return report.provider_setup ? geoipPanel(report, actions) : null;
   if (focus === 'sms') return report.provider_setup ? smsPanel(report, actions) : null;
   const byKey = Object.fromEntries((report.entries || []).map((row) => [row.key, row]));
@@ -267,17 +285,31 @@ function integrationsOnlyPage(ctx) {
     smsAvailable(ctx) ? smsLinkRow(null) : null,
     emailAvailable(ctx) ? emailLinkRow() : null,
   ].filter(Boolean);
+  // The posture evidence rides its own permission tier, not the catalog's, so
+  // a caller who holds it keeps it even here — losing it with the catalog
+  // would be the drill-in going missing for exactly the reader it is for.
+  const postureHref = routeHref('settings', {focus: POSTURE_FOCUS});
   return h('div', {class: 'page row-page settings-page'},
     pageHeader('Configuration', 'Settings',
       'The integrations you can open on this installation.'),
     rowSection(INTEGRATIONS, rows),
+    postureAvailable(ctx)
+      ? rowSection(POSTURE_SECTION,
+        [linkRow(postureRow(postureHref), postureHref)])
+      : null,
     h('p', {class: 'settings-note',
       text: 'The full setting catalog needs the settings permission on this '
         + 'installation.'}));
 }
 
 export async function settingsPage(ctx, route, signal) {
-  if (!catalogAvailable(ctx)) return integrationsOnlyPage(ctx);
+  if (!catalogAvailable(ctx)) {
+    // Its own tier, its own drill-in: the posture panel opens for this caller
+    // too, without a catalog read the server would refuse.
+    const focus = decodeRouteState().state.focus || '';
+    if (focus === POSTURE_FOCUS && postureAvailable(ctx)) return posturePanel(ctx, signal);
+    return integrationsOnlyPage(ctx);
+  }
   const root = h('div', {class: 'page row-page settings-page'}, skeletonState('Loading Settings', 7));
   let statusText = '';
   async function load() {
@@ -332,7 +364,7 @@ export async function settingsPage(ctx, route, signal) {
       const decoded = decodeRouteState();
       const focus = decoded.state.focus || '';
       if (focus) {
-        const detail = panelFor(focus, report, actions);
+        const detail = panelFor(focus, report, actions, ctx);
         // An unknown or unavailable focus is not an error page: the list is a
         // correct answer to "show me settings".
         if (detail) { root.replaceChildren(detail); return; }
