@@ -164,6 +164,7 @@ placing a file with the same path in your project's `TEMPLATES` directories.
 | `login.html` | Login page — extends base; all views + methods from auth config |
 | `register.html` | Registration page — extends base; redirects to `/passkey` when `passkey_prompt != off` |
 | `passkey_enroll.html` | Standalone passkey enrollment page |
+| `oauth_consent.html` | OAuth 2.1 consent screen — extends base; see [oauth_server.md](oauth_server.md) |
 | `bouncer_challenge.html` | Bouncer challenge (default branded, opt-in override per group) |
 | `bouncer_decoy.html` | Honeypot decoy login page |
 
@@ -361,6 +362,7 @@ explanation.
 | `/{BOUNCER_LOGIN_PATH}` | GET | `on_login_page` | Bouncer-gated login page |
 | `/{BOUNCER_REGISTER_PATH}` | GET | `on_register_page` | Bouncer-gated registration page |
 | `/{BOUNCER_PASSKEY_PATH}` | GET | `on_passkey_enroll_page` | Passkey enrollment (authenticated) |
+| `/{OAUTH_SERVER_PATH}/authorize` | GET | `on_authorize` | OAuth 2.1 consent screen — not bouncer-gated; redirects to `/{BOUNCER_LOGIN_PATH}?redirect=` when there is no session. `X-Frame-Options: DENY` unconditionally |
 | `/{BOUNCER_CONTACT_PATH}` | GET | `on_contact_page` | Bouncer-gated contact/support page |
 | `/login` | GET | `on_decoy_page` | Honeypot decoy |
 | `/login` | POST | `on_decoy_post` | Dead endpoint — logs, returns fake error |

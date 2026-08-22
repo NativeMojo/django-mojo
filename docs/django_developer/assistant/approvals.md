@@ -11,6 +11,13 @@ renders an operator-facing card, and returns a tool result that says plainly tha
 nothing happened. Only `approvals.resolve()` — driven by a human decision arriving
 over REST or the WebSocket — ever calls a mutating handler.
 
+The one exception is state the caller alone owns: a tool may declare an
+`owner_state` predicate, and when it returns exactly `True` for a call — a
+user-tier memory, a user-tier skill the caller owns — the handler runs directly
+and files the same success event. Shared state (global and group tiers, anyone
+else's skill) still takes the card. See
+[Declaring a mutating tool](#declaring-a-mutating-tool).
+
 - Service: `mojo/apps/assistant/services/approvals.py`
 - Record: `mojo/apps/assistant/models/pending_action.py`
 - Gate: `_execute_tool()` in `mojo/apps/assistant/services/agent.py`
@@ -28,10 +35,18 @@ could reach its handler, and it does not.
 
 Consequences worth stating explicitly, because they are the point:
 
-- **No opt-out flag exists.** A per-tool exemption is the first thing a future
-  tool author would reach for, and it would undo the guarantee. `write_memory`,
-  `delete_memory` and the three skill writers are gated too: a global memory is a
-  standing instruction and a skill is a stored program, so a model that can
+- **No opt-out FLAG exists — only a per-call predicate.** A per-tool exemption is
+  the first thing a future tool author would reach for, and it would undo the
+  guarantee. The one exemption that exists, `owner_state`, is not a flag: it is a
+  `(params, user) -> bool` evaluated against the arguments of *this* call, and
+  only a literal `True` opens the direct path. False, a truthy non-bool, a
+  raising predicate, or no predicate all propose the card. The success event
+  fires either way.
+  `write_memory`, `delete_memory` and the three skill writers declare it for the
+  caller's OWN tier only — a user-tier memory, a user-tier skill the caller owns.
+  Global and group memories, global and group skills, and anyone else's skill
+  (superuser included) still propose: a global memory is a standing instruction
+  and a shared skill is a stored program every user replays, so a model that can
   rewrite either without an operator is the prompt-injection amplifier this
   boundary exists to close. `export_data` is gated because writing arbitrary
   model rows to a downloadable URL is exfiltration.
@@ -41,6 +56,36 @@ Consequences worth stating explicitly, because they are the point:
 - **The model cannot forge a card.** `approval` is deliberately absent from
   `agent.VALID_BLOCK_TYPES`, so a model-emitted ` ```assistant_block ` claiming
   `type: "approval"` is dropped by `_validate_block()`.
+
+### MCP is a third PROPOSING transport, and it can never resolve
+
+`mojo/apps/assistant/mcp/server.py` dispatches a remote AI client's `tools/call`
+through the same `_execute_tool`, so a mutating tool called over MCP produces an
+ordinary `PendingAction` — bound to the calling operator, in that grant's own
+conversation — and returns `approvals.proposal_result()` as the tool result.
+Nothing runs. That is the whole reason remote access is safe to offer: the
+external model proposes, and the operator still resolves in the Admin.
+
+**Resolution stays REST/WS with an interactive session.** An MCP access token's
+audience is the MCP path and nothing else, so presenting it at
+`POST /api/assistant/action` is a 401 at the framework chokepoint — there is no
+code path that lets a remote client approve its own proposal. The client can
+only *watch*, through the two MCP-only read tools (`list_pending_actions`,
+`get_pending_action`), and only for cards it proposed itself: both are scoped to
+its conversation, because `render_block` ships redacted `args` and up to 8 KB of
+`preview`. See [MCP transport](mcp.md).
+
+**Accepted property: a remote client can seed the operator's own chat context.**
+A client holding an `mcp` grant writes the operator's `user`-tier memories and
+their own skills directly, and both feed that operator's chat assistant system
+prompt — so an external model can put text in front of the model the operator
+talks to. This is accepted, not overlooked: the grant already acts as that
+operator, who could type the same thing into chat themselves, and the blast
+radius stops at their own tier — no other user's context is reachable. It also
+does not compound into a mutation, because a planted skill is only a suggestion:
+replaying one still routes every mutating step through this gate, and
+`_execute_parallel_plan_steps` refuses mutating steps outright. An operator who
+does not want that should not grant `mcp`.
 
 ---
 
@@ -109,7 +154,7 @@ yesterday's rules.
 
 ## Declaring a mutating tool
 
-All six arguments are accepted by both `register_tool()` and `@tool(...)`.
+All seven arguments are accepted by both `register_tool()` and `@tool(...)`.
 
 | Argument | Meaning |
 |---|---|
@@ -118,12 +163,62 @@ All six arguments are accepted by both `register_tool()` and `@tool(...)`.
 | `requires_managed_infrastructure=False` | Tool is hidden from the model and refused at proposal and execution when `infrastructure.is_external()`. |
 | `summarize=None` | `(params, user) -> str`. One operator-facing sentence for the card. Must contain no secret. Default: `"<tool_name> will run with the arguments below."` |
 | `preview=None` | `(params, user) -> {"summary": str, "details": <json>, "revision": str}`. Read-only. See below. |
+| `owner_state=None` | `(params, user) -> bool`. When it returns **exactly `True`** for a call, the handler runs directly on every transport and the `assistant:tool:<name>` event still fires; anything else proposes a card. Only for state the caller alone owns. See below. |
 | `authorize=None` | `(user) -> bool`, allowed on **any** tool, mutating or not. See below. |
 
-**Passing any of the first five without `mutates=True` raises `ValueError` at
+**Passing any of the first six without `mutates=True` raises `ValueError` at
 import time.** A misdeclared tool breaks the import rather than degrading
 silently. `fresh_auth_seconds` must be a positive `int` or `None`;
-`summarize`/`preview`/`authorize` must be callable or `None`.
+`summarize`/`preview`/`owner_state`/`authorize` must be callable or `None`.
+
+**`owner_state` cannot be combined with `fresh_auth_seconds`,
+`requires_managed_infrastructure` or `preview`** — also a `ValueError` at import.
+Those three are enforced only inside `propose()`/`resolve()`, so a tool that
+declared one and then skipped the card would silently lose the gate.
+`requires_superuser` and `authorize` stay legal: both run in `user_can_use_tool`,
+before the branch that can exempt a call. `summarize` stays legal too — it only
+ever renders a card.
+
+### `owner_state(params, user)`
+
+The exemption for state the caller alone owns. `_owner_state_decision()` in
+`agent.py` calls it inside a `try` and compares with `is True`:
+
+```python
+owner_state=lambda params, user: params.get("tier") == "user"
+```
+
+- It is decided **per call**, against the live arguments — and, where ownership
+  is a row, against the live database. `_owns_skill` in
+  `services/tools/skills.py` reads the targeted skill's `tier` and `user_id` at
+  dispatch time; a skill id belonging to anyone else proposes.
+- **Skipping the card never skips argument validation.** `_owner_state_decision`
+  runs `approvals.normalize_args()` on the input FIRST, then evaluates the
+  predicate on the normalized arguments and dispatches those — so an
+  owner-state handler receives exactly what an approved one would: declared keys
+  only, types checked, unknown keys dropped. A refused argument set is an
+  ordinary tool error with no card, no record and no incident, identical to what
+  `propose()` returns for the same input.
+- **`_owns_skill` authorizes on the skill's CURRENT `tier` and `user_id`**, which
+  is safe only because `update_skill` can never write either — see the comment on
+  `UPDATABLE` in `services/skills.py`. Adding a scope field there would let a
+  caller edit their own user-tier skill into a global one with no card.
+- **`is True`, not `bool(...)`.** `authorize` uses truthiness because that gate
+  *closes*; this one *opens*, so a predicate that accidentally returns a model
+  instance or a non-empty string must not open it.
+- **The permission gate runs first.** A caller who cannot use the tool is refused
+  before the predicate is evaluated, so a predicate that touches the database
+  adds no existence oracle.
+- **A raising predicate proposes**, and the exception is logged. Fail closed.
+- **The success event still fires.** A direct execution files the same
+  `assistant:tool:<name>` level-5 event `approvals.resolve()` files for an
+  approved one, with the same title, `model_name` and `model_id`, and only when
+  the handler returned a non-error result — so RuleSets keyed on it keep firing
+  and a failed direct write looks like a failed approved one.
+- A skill id that matches **no row** returns `True`, so the handler's own
+  `Skill N not found` comes back as an ordinary tool error rather than a card the
+  operator would approve for nothing. A non-integer id returns `False` and is
+  refused by `normalize_args` with no record created.
 
 ### `authorize(user)`
 
@@ -403,8 +498,9 @@ portal.
 | `create_scheduled_task`, `update_scheduled_task`, `delete_scheduled_task` | jobs | `manage_jobs` | `jobs/rest/scheduled_task.py` — RestMeta CRUD | — |
 | `create_group`, `invite_to_group` | groups | `manage_groups` | `account/rest/group.py` — RestMeta CRUD + `group/member/invite` | — |
 | `save_model_instance`, `delete_model_instance`, `export_data` | models | `view_admin` | generic RestMeta CRUD; no single twin | — |
-| `write_memory`, `delete_memory` | memory | `assistant` | `assistant/rest/memory.py` — `requires_perms('assistant')` | — |
-| `save_skill`, `update_skill`, `delete_skill` | skills | `assistant` | `assistant/rest/assistant.py` skill CRUD | — |
+| `write_memory`, `delete_memory` | memory | `assistant` | `assistant/rest/memory.py` — `requires_perms('assistant')` | `owner_state` (`tier == "user"`) |
+| `save_skill` | skills | `assistant` | `assistant/rest/assistant.py` skill CRUD | `owner_state` (`tier == "user"`) |
+| `update_skill`, `delete_skill` | skills | `assistant` | `assistant/rest/assistant.py` skill CRUD | `owner_state` (the caller's own user-tier skill) |
 | `set_metric_gauge` | metrics | `write_metrics` | `metrics/rest/values.py` `value/set` | — |
 | `send_notification` | comms | `comms` | `account/rest/notification.py` — RestMeta CRUD | — |
 | `retry_platform_deployment`, `verify_platform_deployment`, `converge_platform_deployment` | cloud | `manage_platform`, `admin` | `account/rest/admin_platform.py` deploy retry/verify/converge (`denies_key_backed_session` + `requires_fresh_auth(600)`; **no** `infrastructure.refuse()`) | `fresh_auth_seconds=600`, `summarize`, `preview` |
@@ -439,7 +535,7 @@ failure mode this table exists to make visible.
 
 - `mojo/apps/assistant/services/approvals.py` — the protocol
 - `mojo/apps/assistant/models/pending_action.py` — the record and `effective_state()`
-- `mojo/apps/assistant/services/agent.py` — the gate in `_execute_tool`, `approval` kwarg in `_call_handler`, prompt corrections
+- `mojo/apps/assistant/services/agent.py` — the gate in `_execute_tool`, `_owner_state_decision()`, `approval` kwarg in `_call_handler`, prompt corrections
 - `mojo/apps/assistant/rest/assistant.py` — `POST`/`GET /api/assistant/action`
 - `mojo/apps/assistant/handler.py` — `assistant_approval` over the socket
 - `mojo/apps/realtime/handler.py` — the server-stamped `_bearer` on every delivered message

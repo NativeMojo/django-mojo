@@ -10,6 +10,17 @@ DUID_HEADER = f"HTTP_{DUID_HEADER}"
 
 REQUEST_PARSER = RequestDataParser()
 API_ROOT = "/" + settings.get_static("MOJO_PREFIX", "api/").strip("/")
+# The OAuth server's path root is read here separately, from the same setting
+# the service reads: mojo/helpers must not import mojo.apps at import time.
+OAUTH_ROOT = "/" + settings.get_static("OAUTH_SERVER_PATH", "api/account/oauth").strip("/")
+# Same rule for the Assistant's MCP door: read from the same setting the app
+# reads, here rather than by importing it. The empty/"/"-only fallback mirrors
+# mcp/auth.configured_path() — a blank setting must not turn this into "/" and
+# label every POST to the site root as MCP traffic.
+ASSISTANT_MCP_DEFAULT = "api/assistant/mcp"
+ASSISTANT_MCP_ROOT = "/" + (
+    str(settings.get_static("ASSISTANT_MCP_PATH", ASSISTANT_MCP_DEFAULT) or "").strip().strip("/")
+    or ASSISTANT_MCP_DEFAULT)
 
 def parse_request_data(request):
     """
@@ -82,6 +93,21 @@ def is_key_backed_session(request):
     # credential-mutation blocks). Use is_request_user() only where the
     # question is genuinely "is request.user a User model instance"
     # (attribution).
+    #
+    # An OAuth-grant session (request.oauth_grant, token_type="mcp") is
+    # deliberately NOT key-backed, and the reason is what the grant IS rather
+    # than where it can arrive: it is the person's own session, consented to on
+    # this installation's sign-in page, carrying their auth_time and dying with
+    # their auth_key. A grant holding the `api` scope reaches every endpoint
+    # their session JWT reaches — denies_key_backed_session endpoints included,
+    # generate_api_key among them — because that is exactly the equality the
+    # consent screen states. An `mcp`-only grant never leaves its tool door.
+    # A confined credential (an ApiKey, a group token) is the opposite: a
+    # secret in a config file that acts for somebody, which is what
+    # denies_key_backed_session exists to keep away from credential mutation.
+    # The signal a tool reads for "this is a remote agent, not a person" is
+    # request_meta.bearer == "mcp", stamped by the assistant's
+    # _build_request_meta. See docs/django_developer/account/oauth_server.md.
     return restricted_identity(request) is not None
 
 
@@ -119,6 +145,19 @@ def sensitive_body_label(request):
     # allowed to set the key) and into requests.log.
     if path == f"{API_ROOT}/account/admin/assistant":
         return "assistant_setup"
+    # The MCP door carries tool ARGUMENTS in the request and tool RESULTS in the
+    # response — data the chat path never puts on the wire. Without this entry
+    # LOGIT_REQUEST_BODY / LOGIT_DB_ALL would write both verbatim.
+    if method == "POST" and path == ASSISTANT_MCP_ROOT:
+        return "assistant_mcp"
+    # OAuth 2.1 credential carriers: `token` bodies hold a code_verifier or a
+    # refresh token, `revoke` a live token, and `approve` the session bearer
+    # plus the PKCE material. `register` and the discovery documents carry no
+    # secret, so they are deliberately absent.
+    if method == "POST" and path in (f"{OAUTH_ROOT}/token", f"{OAUTH_ROOT}/revoke"):
+        return "oauth_token"
+    if method == "POST" and path == f"{OAUTH_ROOT}/approve":
+        return "oauth_approve"
     if path == f"{API_ROOT}/edge/webapp/link_key":
         return "webapp_deployment_key"
     if method == "POST" and path in (

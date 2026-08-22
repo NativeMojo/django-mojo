@@ -214,6 +214,10 @@ def on_admin_bootstrap(request):
         # is the only honest source — the panel hides the editor instead of
         # offering a control that 403s.
         "assistant_setup": bool(request.user.is_superuser),
+        # Installation state, not authority: remote agent access is switched
+        # on, the assistant app is installed, and a public address resolves —
+        # so a remote client could actually find and reach the door.
+        "assistant_mcp": assistant_setup.mcp_ready(),
     }
     edge = {
         "available": False,

@@ -313,6 +313,14 @@ def update_skill(user, skill_id, group=None, **fields):
     if skill.tier == "user" and not user.is_superuser and skill.user_id != user.pk:
         return {"error": "You can only modify your own skills"}
 
+    # SCOPE IS NOT UPDATABLE, and that is load-bearing beyond this function.
+    # `tools/skills.py::_owns_skill` authorizes an `owner_state` direct execution
+    # on the row's CURRENT `tier` and `user_id`, read just before this runs. That
+    # is only safe because no update can move a skill between scopes: adding
+    # `tier`, `user`, `user_id` or `group` here would let a caller edit their own
+    # user-tier skill into a global one with no approval card — the exact write
+    # the gate exists to catch. Scope changes belong to the REST layer, behind
+    # `Skill.RestMeta.SAVE_PERMS`.
     UPDATABLE = {"name", "description", "triggers", "steps", "auto_execute", "is_active"}
     to_update = {k: v for k, v in fields.items() if k in UPDATABLE}
 

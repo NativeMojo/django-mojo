@@ -17,6 +17,7 @@
 - [Auth Pages](auth_pages.md) — Hosted `/auth`, `/register`, and `/passkey` pages; bouncer integration, OAuth, SMS login, multi-tenant group forwarding
 - [Auth Config](auth_config.md) — Per-group auth-page configuration (theme / login / registration); resolution order, schema, validation, migration from flat `AUTH_*` settings
 - [OAuth / Social Login](oauth.md) — Provider setup, auto-link logic, email verification, MFA behaviour, adding new providers
+- [OAuth 2.1 Authorization Server](oauth_server.md) — Issuing resource-confined credentials to third-party apps: the resource registry, PKCE + consent, the `token_type="mcp"` branch of `validate_jwt`, `WWW-Authenticate`, rotation and revocation
 - [Email Change](email_change.md) — Self-service email address change flow
 - [API Keys](api_keys.md) — Group-scoped programmatic access, permissions, token lifecycle
 - [Group-Scoped Tokens](auth.md#group-scoped-tokens) — `Authorization: grouptoken` — a stateless bearer that authenticates as a real user but is capped at one group; `group_token.mint()`, epoch revocation, opt-in registration, writing group-token-safe endpoints

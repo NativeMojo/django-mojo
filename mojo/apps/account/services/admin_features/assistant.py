@@ -21,6 +21,9 @@ def describe(request, capabilities):
         # the panel can render the not-configured state instead of a composer.
         "ready": bool(installed and capabilities.get("assistant_ready")),
         "setup": bool(installed and capabilities.get("assistant_setup")),
+        # Like `ready`, a fact about the installation that never feeds
+        # `enabled`: remote agent access is on and reachable.
+        "mcp": bool(installed and capabilities.get("assistant_mcp")),
     }
     # `enabled` reads the authority value ALONE — never any(values.values()).
     # `ready` is installation state, so folding it in would mount the panel for

@@ -10,6 +10,7 @@ Helpers live in `mojo/helpers/`. Import directly — no registration required.
 - [content_guard](content_guard.md) — Content moderation for usernames and text
 - [crypto](crypto.md) — Encryption, hashing, signing
 - [request](request.md) — Request parsing and client info
+- [safe_fetch](safe_fetch.md) — SSRF-safe outbound fetch for caller-supplied URLs
 - [response](response.md) — JSON response helpers
 - [llm](llm.md) — LLM model discovery, API key management, quick Claude calls
 - [redis](redis.md) — Redis client and caching

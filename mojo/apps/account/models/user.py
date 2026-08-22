@@ -1777,6 +1777,15 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 pass
             return key_record.user, None
 
+        if jwt_data.get("token_type") == "mcp":
+            # An OAuth 2.1 access token. Confined to the ONE registered
+            # resource path named by its `aud` — see
+            # services/oauth_server/tokens.validate_access for the full rule.
+            # It is checked here, in the single function every Bearer request
+            # passes through, so no endpoint can forget it.
+            from mojo.apps.account.services.oauth_server import tokens as oauth_tokens
+            return oauth_tokens.validate_access(token, jwt_data, request)
+
         user = User.objects.filter(id=jwt_data.uid).last()
         if user is None:
             return None, "Invalid token user"

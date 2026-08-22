@@ -74,9 +74,15 @@ class MojoMiddleware:
             request._raw_body = str(request.body)
         else:
             request._raw_body = None
-        if is_mojosec_batch:
-            # Authentication and the bounded receiver consume this stream.
-            # Generic middleware must never materialize or parse sensor evidence.
+        if is_mojosec_batch or sensitive_body == "assistant_mcp":
+            # mojosec: authentication and the bounded receiver consume this
+            # stream. assistant_mcp: the MCP resource server reads request.body
+            # itself, and its JSON-RPC envelope must never BECOME request.DATA —
+            # a parsed `params.arguments` would ride into the incident an
+            # unhandled 500 files, and a top-level "group" beside "jsonrpc"
+            # would let the dispatcher rebind request.group to an arbitrary
+            # tenant. Generic middleware must never materialize or parse either
+            # body.
             request.DATA = objict()
         else:
             request.DATA = rhelper.parse_request_data(request)

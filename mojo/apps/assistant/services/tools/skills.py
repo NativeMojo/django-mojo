@@ -1,5 +1,27 @@
 """Skill tools — find, save, list, and delete learned skills."""
 from mojo.apps.assistant import tool
+from mojo.apps.assistant.services.tools.memory import _user_tier
+
+
+def _owns_skill(params, user):
+    """Owner-state predicate: the targeted skill is the caller's own user-tier skill.
+
+    An id that resolves to nothing returns True so the handler's own not-found
+    error comes back directly rather than as a card nobody can usefully approve;
+    a non-integer id returns False and is refused by ``normalize_args`` with no
+    record. Reads ``params`` only — the handler's own ``pop("skill_id")`` runs
+    after this.
+    """
+    skill_id = params.get("skill_id")
+    if isinstance(skill_id, bool) or not isinstance(skill_id, int):
+        return False
+    from mojo.apps.assistant.models import Skill
+
+    row = Skill.objects.filter(pk=skill_id).values_list("tier", "user_id").first()
+    if row is None:
+        return True
+    tier, owner_id = row
+    return tier == "user" and owner_id == user.pk
 
 
 @tool(
@@ -60,6 +82,7 @@ def _tool_find_skill(params, user):
     permission="assistant",
     core=True,
     mutates=True,
+    owner_state=_user_tier,
     description=(
         "Save a new skill or update an existing one. A skill is a reusable "
         "multi-step procedure with trigger phrases. When the user teaches you "
@@ -69,7 +92,9 @@ def _tool_find_skill(params, user):
         "- description: what this step does\n"
         "- params: parameters to pass to the tool (optional)\n"
         "- condition: when to execute this step, e.g., 'previous_step.count > 0' (optional)\n\n"
-        "If a skill with the same name already exists in the same scope, it is updated."
+        "If a skill with the same name already exists in the same scope, it is updated.\n\n"
+        "A user-tier skill is saved immediately; global and group skills require "
+        "operator approval."
     ),
     input_schema={
         "type": "object",
@@ -169,10 +194,13 @@ def _tool_list_skills(params, user):
     permission="assistant",
     core=True,
     mutates=True,
+    owner_state=_owns_skill,
     description=(
         "Update part of an existing skill. Pass only the fields you want to "
         "change — everything else stays the same. Use find_skill first to "
-        "see the current definition if needed."
+        "see the current definition if needed.\n\n"
+        "A skill you own (user tier) is changed immediately; any other skill "
+        "requires operator approval."
     ),
     input_schema={
         "type": "object",
@@ -236,9 +264,12 @@ def _tool_update_skill(params, user):
     permission="assistant",
     core=True,
     mutates=True,
+    owner_state=_owns_skill,
     description=(
         "Delete a learned skill by its ID. You must be the skill owner or "
-        "an admin. Use list_skills first to find the skill ID."
+        "an admin. Use list_skills first to find the skill ID.\n\n"
+        "A skill you own (user tier) is deleted immediately; any other skill "
+        "requires operator approval."
     ),
     input_schema={
         "type": "object",

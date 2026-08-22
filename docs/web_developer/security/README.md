@@ -740,8 +740,13 @@ See [Incident API: Request LLM Analysis](../logging/incidents.md#request-llm-ana
 | `MOJOSEC_LEARNING_EVALUATION_RETENTION_DAYS` | `90` | Offline replay/shadow summary retention; clamped to 30–3,650 days |
 | `LLM_HANDLER_API_KEY` | `None` | Claude API key (enables LLM agent). An owner can also store it from the built-in Admin's Assistant setup |
 | `LLM_HANDLER_MODEL` | (auto-detect) | Claude model for LLM agent. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
+| `ASSISTANT_MCP_ENABLED` | `False` | Remote agent access (MCP door); switched from the Admin, never from `/api/settings` |
 | `INCIDENT_EMAIL_FROM` | `None` | SES mailbox for incident emails |
 | `ADMIN_PORTAL_URL` | `None` | URL for deep links in notifications |
+
+`ASSISTANT_MCP_ENABLED` is the only one of these an operator flips from a UI: it lives in the built-in Admin's Assistant setup view, alongside the connect address, a discovery self-check and the list of connected agents — see [the Assistant setup API](../account/admin_portal/assistant.md). Remote clients authenticate with OAuth grants rather than API keys, and any of them can be disconnected from that same view; [Connecting an AI client over MCP](../assistant/mcp.md) is the operator's runbook.
+
+A connection is one of two kinds, shown in the **Access** column: tool-door access (`mcp`), where every change still waits for an approval in the Admin, or **full API access** (`api`), which equals that person's own session token in reach — the same permissions, nothing more — with no approval step on direct API calls. Both are revoked from the same place; a credential a full-API connection mints in turn (an API key, for instance) has its own lifetime and is revoked separately, exactly as one minted from a browser session would be.
 
 ## IPSet Bulk Blocking
 

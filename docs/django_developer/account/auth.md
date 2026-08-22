@@ -879,6 +879,22 @@ Returns the authenticated user's own record using their `pk`.
 4. `request.user` set to the resolved user (or anonymous)
 5. `request.group` set if `group` param present, the group is **effectively** active (it and every ancestor — DM-048), and user is a member (an inactive group's id — including an active child under a deactivated ancestor — resolves to no group, same as a nonexistent one)
 
+**The `mcp` branch.** A JWT carrying `token_type="mcp"` is an OAuth 2.1 access
+token issued by this installation's [authorization server](oauth_server.md). It
+takes its own branch in `validate_jwt`, which accepts it **only** on the request
+path named by its `aud` claim, and only while that path is a registered, enabled
+resource with a live grant behind it. It also refuses outright when there is no
+`request` — which is what stops the refresh endpoint or the realtime consumer
+turning one into a session. On success it stamps `request.oauth_grant`. Session
+JWTs and `user_api_key` JWTs carry no `aud` and never reach this code.
+
+**`WWW-Authenticate` on the 401.** A bad bearer never reaches a view — the
+middleware answers 401 before dispatch — so the mcp branch stamps
+`request.www_authenticate` on every refusal at a live resource path and the
+middleware copies it onto its response. Nothing else stamps that attribute, so
+no other endpoint's 401 grows the header. `mojo/middleware/cors.py` exposes it
+so a browser client can read it.
+
 **Malformed headers don't error.** If the `Authorization` value isn't exactly `<scheme>
 <token>`, the middleware treats the request as unauthenticated and continues — it does not
 500. A bare scheme-less single token is exposed on `request.auth_token` (prefix `"raw"`) so a

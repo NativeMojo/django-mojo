@@ -166,19 +166,27 @@ class CORSMiddleware:
         # Allow all methods to minimize preflight requests
         response['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS'
 
-        # Allow common headers to minimize preflight requests
+        # Allow common headers to minimize preflight requests.
+        # MCP-Protocol-Version is sent by every browser-hosted MCP client on the
+        # 2025-06-18 revision; without it here their preflight fails and the
+        # Assistant's MCP door is unreachable from a browser.
         response['Access-Control-Allow-Headers'] = (
             'Accept, Accept-Encoding, Authorization, Content-Type, '
             'Origin, User-Agent, X-Requested-With, X-CSRFToken, '
-            f'X-API-Key, {DUID_HEADER}, Cache-Control, Pragma'
+            f'X-API-Key, {DUID_HEADER}, Cache-Control, Pragma, '
+            'MCP-Protocol-Version'
         )
 
         # Long preflight cache (24 hours)
         response['Access-Control-Max-Age'] = '86400'
 
         # Expose headers that frontend might need
+        # WWW-Authenticate is exposed so a browser-hosted OAuth/MCP client can
+        # read the RFC 9728 challenge off a 401 and discover where to
+        # authenticate. Without it the header is present but unreadable to JS.
         response['Access-Control-Expose-Headers'] = (
-            'Content-Disposition, X-Total-Count, X-Bouncer-Muid, X-Bouncer-Reason'
+            'Content-Disposition, X-Total-Count, X-Bouncer-Muid, '
+            'X-Bouncer-Reason, WWW-Authenticate'
         )
 
         return response

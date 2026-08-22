@@ -48,7 +48,7 @@ def register_tool(name, description, input_schema, handler,
                   permission, mutates=False, domain="custom", core=False,
                   fresh_auth_seconds=None, requires_superuser=False,
                   requires_managed_infrastructure=False, summarize=None,
-                  preview=None, authorize=None):
+                  preview=None, owner_state=None, authorize=None):
     """
     Register a tool that the LLM assistant can call.
 
@@ -61,7 +61,9 @@ def register_tool(name, description, input_schema, handler,
                       (checked against ``user.has_permission``).
         mutates:      If True the tool changes data. A mutating tool NEVER runs
                       on the model's call — it produces a PendingAction the
-                      operator must approve (see ``services/approvals.py``).
+                      operator must approve (see ``services/approvals.py``) —
+                      unless it declares ``owner_state`` and that predicate
+                      returns exactly True for the call.
         domain:       Logical grouping (security, jobs, users, groups, metrics, custom).
         core:         If True, tool is always sent to the LLM. If False,
                       tool is only sent when its domain is loaded.
@@ -88,6 +90,15 @@ def register_tool(name, description, input_schema, handler,
                       refused as an ordinary tool error with no record created,
                       so a per-object authority check may live here and fail
                       closed.
+        owner_state:  ``(params, user) -> bool``. When it returns exactly True
+                      for a call, the handler runs directly on every transport
+                      and the ``assistant:tool:<name>`` event still fires;
+                      False, any non-True value, or an exception proposes an
+                      approval card. Use it only for state the caller alone
+                      owns. It cannot be combined with ``fresh_auth_seconds``,
+                      ``requires_managed_infrastructure`` or ``preview``, which
+                      are enforced only inside the approval path a direct
+                      execution skips.
 
     authorize:        ``(user) -> bool``, allowed on ANY tool (mutating or not).
                       Evaluated in ADDITION to ``user.has_permission(permission)``
@@ -106,6 +117,7 @@ def register_tool(name, description, input_schema, handler,
         "requires_managed_infrastructure": requires_managed_infrastructure,
         "summarize": summarize,
         "preview": preview,
+        "owner_state": owner_state,
     }
     if not mutates:
         declared = [key for key, value in gates.items() if value]
@@ -122,9 +134,19 @@ def register_tool(name, description, input_schema, handler,
         if fresh_auth_seconds <= 0:
             raise ValueError(
                 f"Assistant tool '{name}': fresh_auth_seconds must be a positive int or None")
-    for key in ("summarize", "preview"):
+    for key in ("summarize", "preview", "owner_state"):
         if gates[key] is not None and not callable(gates[key]):
             raise ValueError(f"Assistant tool '{name}': {key} must be callable or None")
+    if owner_state is not None:
+        # These three run only inside propose()/resolve(). A tool that both
+        # skipped the card AND declared one of them would silently lose the
+        # gate, so refuse the combination at import instead.
+        for key in ("fresh_auth_seconds", "requires_managed_infrastructure", "preview"):
+            if gates[key]:
+                raise ValueError(
+                    f"Assistant tool '{name}': owner_state cannot be combined with "
+                    f"{key} — that gate is enforced only inside the approval path, "
+                    f"which a direct execution skips")
     if authorize is not None and not callable(authorize):
         raise ValueError(f"Assistant tool '{name}': authorize must be callable or None")
 
@@ -144,6 +166,7 @@ def register_tool(name, description, input_schema, handler,
         "requires_managed_infrastructure": bool(requires_managed_infrastructure),
         "summarize": summarize,
         "preview": preview,
+        "owner_state": owner_state,
         "authorize": authorize,
     }
 
@@ -157,7 +180,7 @@ def register_tools(tools):
 def tool(name, domain, permission, input_schema, description,
          mutates=False, core=False, fresh_auth_seconds=None,
          requires_superuser=False, requires_managed_infrastructure=False,
-         summarize=None, preview=None, authorize=None):
+         summarize=None, preview=None, owner_state=None, authorize=None):
     """
     Decorator that registers a function as an assistant tool.
 
@@ -195,6 +218,7 @@ def tool(name, domain, permission, input_schema, description,
             requires_managed_infrastructure=requires_managed_infrastructure,
             summarize=summarize,
             preview=preview,
+            owner_state=owner_state,
             authorize=authorize,
         )
         return func

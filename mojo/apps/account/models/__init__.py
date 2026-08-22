@@ -9,6 +9,9 @@ from .api_key import ApiKey
 from .totp import UserTOTP
 from .user_api_key import UserAPIKey
 from .oauth import OAuthConnection
+from .oauth_client import OAuthClient
+from .oauth_grant import OAuthGrant
+from .oauth_code import OAuthCode
 from .notification import Notification
 from .setting import Setting
 from .bouncer_device import BouncerDevice

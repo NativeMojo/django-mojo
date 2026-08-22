@@ -49,12 +49,18 @@ def _build_request_meta(request):
         key_backed = bool(request_helpers.is_key_backed_session(request))
     except Exception:
         key_backed = True
+    # An OAuth grant is the marker for a remote MCP caller. request.bearer
+    # stays "bearer" (the middleware overwrites it, and changing it would make
+    # fresh_auth skip step-up for these callers), so the grant attribute is
+    # what tells a tool it is not talking to a person at a keyboard.
+    bearer = "mcp" if getattr(request, "oauth_grant", None) is not None \
+        else getattr(request, "bearer", None)
     return objict.objict(
         ip=getattr(request, "ip", None),
         user_agent=getattr(request, "META", {}).get("HTTP_USER_AGENT", ""),
         path=getattr(request, "path", ""),
         method=getattr(request, "method", ""),
-        bearer=getattr(request, "bearer", None),
+        bearer=bearer,
         key_backed=key_backed,
     )
 
@@ -835,6 +841,49 @@ def _extract_context_refs(tool_blocks, tool_results):
     return refs
 
 
+def _owner_state_decision(tool_entry, tool_input, user):
+    """Whether this call may skip the approval card, and on WHICH arguments.
+
+    Returns an ``objict`` with three fields:
+
+    * ``exempt`` — True only when the entry's ``owner_state`` predicate returned
+      exactly True. Fail closed: no predicate, a falsy result, a truthy NON-bool
+      result, or a raising predicate all mean "propose an approval card". The
+      exemption has to be earned per call — it is never a flag on the tool.
+    * ``args`` — what to dispatch. For an entry carrying ``owner_state`` these
+      are the NORMALIZED arguments, because the direct path skips
+      ``approvals.propose()`` and would otherwise be the one route to a handler
+      that never validated its input. ``normalize_args`` drops unknown keys and
+      checks declared types, so a handler cannot receive a field the schema never
+      promised. For every other entry the raw input is passed through untouched.
+    * ``error`` — set when the arguments were REFUSED. The call becomes an
+      ordinary tool error with no card, no record and no incident — the same
+      outcome ``propose()`` produces for a rejected argument set.
+
+    Normalizing before evaluating the predicate is deliberate: the predicate then
+    reads the same values the handler will, and a bad ``tier`` or ``skill_id`` is
+    refused by the schema rather than silently steering the routing decision.
+    """
+    decision = objict.objict(exempt=False, args=tool_input, error=None)
+    predicate = tool_entry.get("owner_state")
+    if predicate is None:
+        return decision
+    try:
+        decision.args = approvals.normalize_args(
+            tool_entry["definition"].get("input_schema"), tool_input)
+    except approvals.ArgumentError as exc:
+        decision.args = tool_input
+        decision.error = {"error": str(exc)}
+        return decision
+    try:
+        decision.exempt = predicate(decision.args, user) is True
+    except Exception:
+        logger.exception("owner_state raised for tool '%s' — proposing instead",
+                         tool_entry["definition"]["name"])
+        decision.exempt = False
+    return decision
+
+
 def _execute_tool(
         block, registry, user, conversation, tools, on_event, tool_calls_made,
         request_meta=None, _reporter=None, pending_actions=None):
@@ -845,9 +894,12 @@ def _execute_tool(
     This is the ONLY place a tool handler is dispatched from an agent turn, and
     both ``run_assistant`` and ``run_assistant_ws`` funnel through it — which is
     why the approval gate lives here and nowhere else. A ``mutates=True`` tool
-    never reaches ``_call_handler``: it produces a ``PendingAction`` the operator
-    must resolve (see ``services/approvals.py``). No prompt wording can route
-    around this.
+    never reaches ``_call_handler`` from here unless its ``owner_state``
+    predicate returns exactly True for this call; otherwise it produces a
+    ``PendingAction`` the operator must resolve (see ``services/approvals.py``).
+    No prompt wording can route around this. An owner-state call is dispatched on
+    ``normalize_args``-validated arguments, so skipping the card never means
+    skipping argument validation.
 
     Returns a dict with 'tool_use_id' and 'result' for building tool_results.
     """
@@ -858,6 +910,14 @@ def _execute_tool(
     tool_id = block["id"]
 
     tool_entry = registry.get(tool_name)
+    # The permission gate decides FIRST and its answer is reused below, so the
+    # owner_state predicate — which may read the database — never runs for a
+    # caller who cannot use the tool.
+    allowed = bool(tool_entry) and user_can_use_tool(user, tool_entry)
+    owner = (_owner_state_decision(tool_entry, tool_input, user) if allowed
+             else objict.objict(exempt=False, args=tool_input, error=None))
+    call_args = owner.args
+
     if not tool_entry:
         tool_result = {"error": f"Unknown tool: {tool_name}"}
         logger.warning("LLM requested unknown tool: %s", tool_name)
@@ -868,7 +928,7 @@ def _execute_tool(
             f"User: {user.email} (id={user.pk}), conv={conversation.pk}",
             user=user, _reporter=_reporter,
         )
-    elif not user_can_use_tool(user, tool_entry):
+    elif not allowed:
         # `authorize` failing is deliberately indistinguishable from a missing
         # permission — same tool error, same event.
         perm = tool_entry["permission"]
@@ -884,8 +944,17 @@ def _execute_tool(
             f"(requires '{perm}'). conv={conversation.pk}",
             user=user, _reporter=_reporter,
         )
-    elif tool_entry.get("mutates"):
-        # THE GATE. A mutating tool call is a PROPOSAL, never an execution.
+    elif owner.error is not None:
+        # An owner-state tool whose arguments the schema refuses. `propose()`
+        # answers a rejected argument set exactly this way — an ordinary tool
+        # error, no record, no incident — so the direct path does too, and it
+        # never reaches a predicate or a handler.
+        tool_result = owner.error
+        logger.info("Refused arguments for owner-state tool %s: %s",
+                    tool_name, tool_result["error"])
+    elif tool_entry.get("mutates") and not owner.exempt:
+        # THE GATE. A mutating tool call is a PROPOSAL, never an execution
+        # (owner-state calls branch to the direct path below).
         try:
             tool_result, approval_block = approvals.propose(
                 user, conversation, tool_name, tool_entry, tool_input,
@@ -913,37 +982,49 @@ def _execute_tool(
                 user=user, _reporter=_reporter,
             )
     else:
+        # `call_args` is the raw input for every read-only and meta tool, and the
+        # normalized input for an owner-state tool taking the direct path.
         try:
             if on_event:
                 on_event("tool_call", {
                     "tool": tool_name,
-                    "input": tool_input,
+                    "input": call_args,
                 })
             tool_result = _call_handler(
-                tool_entry["handler"], tool_input, user, request_meta, conversation,
+                tool_entry["handler"], call_args, user, request_meta, conversation,
             )
             tool_calls_made.append({
                 "tool": tool_name,
-                "input": tool_input,
+                "input": call_args,
             })
             # Handle meta-tools — side effects in the agent loop
             if tool_name == "load_tools":
                 added = _handle_load_tools(
-                    conversation, tool_input, tools, user,
+                    conversation, call_args, tools, user,
                 )
                 if added:
                     logger.info("Loaded %d tools for domains via load_tools, conv=%s",
                                 len(added), conversation.pk)
             _handle_plan_tool(
-                conversation, tool_name, tool_input, tool_result, on_event,
+                conversation, tool_name, call_args, tool_result, on_event,
             )
-            # The `assistant:tool:<name>` success event now fires from
-            # approvals.resolve(), the only place a mutating tool can run.
+            if tool_entry.get("mutates") and not (
+                    isinstance(tool_result, dict) and "error" in tool_result):
+                # Owner-state direct execution. Same category, level and shape
+                # as the event approvals.resolve() files for an approved
+                # execution, so RuleSets keyed on it keep firing. Every other
+                # mutating tool still reports from approvals.resolve().
+                _report_event(
+                    f"assistant:tool:{tool_name}", 5, f"Assistant tool: {tool_name}",
+                    f"User {user.email} (id={user.pk}) executed owner-state mutating "
+                    f"tool '{tool_name}' directly. conv={conversation.pk}",
+                    user=user, model_name="account.User", model_id=user.pk,
+                    _reporter=_reporter)
         except Exception as exc:
             logger.exception("Tool %s failed", tool_name)
             tool_result = {"error": f"Tool '{tool_name}' encountered an internal error."}
             try:
-                input_keys = list(tool_input.keys()) if isinstance(tool_input, dict) else []
+                input_keys = list(call_args.keys()) if isinstance(call_args, dict) else []
             except Exception:
                 input_keys = []
             _report_event(

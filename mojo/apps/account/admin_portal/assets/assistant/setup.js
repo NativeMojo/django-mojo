@@ -14,8 +14,9 @@
 // a masked placeholder reads as "a value is already here", and these fields
 // always mean "replace it".
 
-import {api, h, icon} from '../core.js';
-import {announce, runAction, toast} from '../components/actions.js';
+import {api, formatDate, h, icon} from '../core.js';
+import {announce, copyButton, runAction, toast} from '../components/actions.js';
+import {confirmAction} from '../components/overlays.js';
 import {errorState, loadingState} from '../components/views.js';
 
 const ENDPOINT = '/api/account/admin/assistant';
@@ -48,6 +49,52 @@ function verifyLine(verify) {
     : 'This stored key has not been checked yet.';
 }
 
+function mcpReadiness(state) {
+  if (!state.assistant_installed) return 'The assistant application must be installed.';
+  if (!state.mcp.enabled) {
+    return 'Off. Remote agents cannot discover or sign in; existing connections '
+      + 'are paused, not revoked.';
+  }
+  if (!state.mcp.url) {
+    return 'On, but no public address is configured — set the Public API address '
+      + 'in System Setup before a client can connect.';
+  }
+  return 'On. Agents connect through this installation’s own sign-in page; '
+    + 'nothing is pasted.';
+}
+
+function discoveryLine(discovery) {
+  return discovery.checked_at
+    ? `${discovery.detail} (${formatDate(discovery.checked_at)})`
+    : 'Not checked yet. Checks run at most once a minute.';
+}
+
+// What a connection can actually reach. `tools` is the Assistant's tool door,
+// where every change still needs an approval; `api` is full REST reach as that
+// person, where the approval step does not apply.
+const ACCESS_LABELS = {
+  tools: 'Tools',
+  api: 'Full API',
+  both: 'Tools + full API',
+};
+
+function grantRow(grant, disconnect) {
+  const td = (text) => h('td', {text});
+  const client = grant.client || {};
+  const user = grant.user || {};
+  const button = h('button', {class: 'button ghost compact', type: 'button'}, 'Disconnect');
+  button.addEventListener('click', (event) => runAction(
+    event.currentTarget, () => disconnect(grant), {pendingLabel: 'Disconnecting…'}));
+  return h('tr', {},
+    td(client.name || client.client_id || 'Unknown client'),
+    td(user.email || ''),
+    td(ACCESS_LABELS[grant.access] || ACCESS_LABELS.tools),
+    td(formatDate(grant.created)),
+    td(grant.last_used ? formatDate(grant.last_used) : 'Never'),
+    td(formatDate(grant.expires)),
+    h('td', {}, button));
+}
+
 export function mountSetup({ctx, panel, onBack}) {
   const host = h('div', {class: 'assistant-setup'});
   let disposed = false;
@@ -55,6 +102,7 @@ export function mountSetup({ctx, panel, onBack}) {
   function paint(state) {
     if (disposed) return;
     const enabled = h('input', {type: 'checkbox', checked: state.enabled});
+    const mcpEnabled = h('input', {type: 'checkbox', checked: state.mcp.enabled});
     const handlerKey = h('input', {type: 'password', autocomplete: 'off', spellcheck: 'false'});
     const clearHandlerKey = h('input', {type: 'checkbox'});
     const apiKey = h('input', {type: 'password', autocomplete: 'off', spellcheck: 'false'});
@@ -72,6 +120,9 @@ export function mountSetup({ctx, panel, onBack}) {
     const refresh = h('button', {class: 'icon-button', type: 'button',
       'aria-label': 'Refresh the model list'}, icon('refresh'));
     const back = h('button', {class: 'button ghost compact', type: 'button'}, 'Back to chat');
+    const checkDiscovery = h('button', {class: 'button ghost compact', type: 'button'}, 'Check now');
+    const revokeAll = h('button', {class: 'button danger compact', type: 'button',
+      disabled: state.mcp.grant_count === 0}, 'Disconnect all');
 
     save.addEventListener('click', (event) => runAction(event.currentTarget, async () => {
       const payload = {
@@ -80,6 +131,7 @@ export function mountSetup({ctx, panel, onBack}) {
         model: model.value.trim(),
         clear_api_key: clearKey.checked,
         clear_handler_api_key: clearHandlerKey.checked,
+        mcp_enabled: mcpEnabled.checked,
       };
       // A key field is omitted rather than sent empty: an empty string is not
       // a credential, and "leave it alone" must not read as "store nothing".
@@ -115,7 +167,48 @@ export function mountSetup({ctx, panel, onBack}) {
       paint(fresh);
     }, {announceLabel: 'Refreshing the model list'}));
 
+    async function disconnect(grant) {
+      const client = grant.client || {};
+      const user = grant.user || {};
+      const {confirmed} = await confirmAction({
+        title: 'Disconnect this agent?',
+        copy: `${client.name || client.client_id || 'This client'} connected as `
+          + `${user.email || 'an operator'} loses access immediately. `
+          + 'It can reconnect by signing in again.',
+        confirmLabel: 'Disconnect', danger: true});
+      if (!confirmed) return;
+      const result = await api(ENDPOINT, {method: 'POST',
+        body: JSON.stringify({action: 'revoke_grant', grant_id: grant.id})});
+      toast(result.revoked ? 'Agent disconnected.' : 'That connection was already gone.');
+      await syncReadiness(result.state);
+      paint(result.state);
+    }
+
+    checkDiscovery.addEventListener('click', (event) => runAction(
+      event.currentTarget, async () => {
+        // The one control allowed to reach this installation's own public
+        // address; the server caches a network verdict for 60 seconds.
+        paint(await api(`${ENDPOINT}?check=discovery`));
+      }, {pendingLabel: 'Checking…'}));
+
+    revokeAll.addEventListener('click', (event) => runAction(
+      event.currentTarget, async () => {
+        const {confirmed} = await confirmAction({
+          title: 'Disconnect every agent?',
+          copy: `All ${state.mcp.grant_count} connected agents lose access `
+            + 'immediately. Each can reconnect by signing in again.',
+          confirmLabel: 'Disconnect all', danger: true});
+        if (!confirmed) return;
+        const result = await api(ENDPOINT, {method: 'POST',
+          body: JSON.stringify({action: 'revoke_all_grants'})});
+        toast(`Disconnected ${result.revoked} agent(s).`);
+        await syncReadiness(result.state);
+        paint(result.state);
+      }, {pendingLabel: 'Disconnecting…'}));
+
     back.addEventListener('click', () => { onBack?.(); });
+
+    const address = state.mcp.url || '<connect address>';
 
     host.replaceChildren(
       h('h3', {text: 'Assistant setup'}),
@@ -158,6 +251,59 @@ export function mountSetup({ctx, panel, onBack}) {
       h('div', {class: 'assistant-setup-row'},
         h('div', {}, h('span', {text: 'Re-read the model catalogue from the provider.'})),
         refresh),
+
+      h('h4', {text: 'Remote agent access (MCP)'}),
+      h('p', {class: 'assistant-note', text: mcpReadiness(state)}),
+      h('label', {class: 'check-field'}, mcpEnabled,
+        h('span', {text: 'Allow remote agents to connect'})),
+      h('div', {class: 'assistant-setup-row'},
+        h('div', {}, h('strong', {text: 'Connect address'}),
+          h('span', {text: state.mcp.url || 'Available once a public address is configured.'})),
+        state.mcp.url ? copyButton(state.mcp.url) : null),
+      h('details', {class: 'assistant-connect'},
+        h('summary', {text: 'How to connect a client'}),
+        h('dl', {class: 'assistant-kv'},
+          h('dt', {text: 'Claude Code'}),
+          h('dd', {},
+            h('code', {text: `claude mcp add --scope user --transport http admin-assistant ${address}`}),
+            h('small', {text: 'then run /mcp inside Claude Code to sign in.'})),
+          h('dt', {text: 'Claude Desktop / claude.ai'}),
+          h('dd', {text: 'Settings → Connectors → Add custom connector, paste the '
+            + 'address, and sign in when prompted.'}),
+          h('dt', {text: 'ChatGPT'}),
+          h('dd', {text: 'Settings → Connectors → Developer mode → Create, paste '
+            + 'the address; the sign-in service is discovered automatically.'}))),
+      h('div', {class: 'assistant-setup-row'},
+        h('div', {}, h('strong', {text: 'Discovery check'}),
+          h('span', {text: discoveryLine(state.mcp.discovery)}),
+          // Text, never a link: the operator can paste it into a browser to
+          // see for themselves what their front door serves.
+          state.mcp.discovery_url
+            ? h('span', {text: `Discovery document: ${state.mcp.discovery_url}`})
+            : null),
+        checkDiscovery),
+      state.mcp.discovery.code === 'unreachable'
+        ? h('div', {class: 'assistant-alert is-warning', role: 'alert'},
+            h('strong', {text: 'Clients cannot discover the sign-in service.'}),
+            'nginx must forward /.well-known/oauth-authorization-server/ and '
+            + '/.well-known/oauth-protected-resource/ to the application — the '
+            + 'location block is in the Admin docs under Remote agent access.')
+        : null,
+      h('div', {class: 'assistant-setup-row'},
+        h('div', {}, h('strong', {text: 'Connected agents'}),
+          h('span', {text: `${state.mcp.grant_count} active`})),
+        revokeAll),
+      state.mcp.grants.length
+        ? h('div', {class: 'assistant-block assistant-grants'},
+            h('div', {class: 'table-wrap'},
+              h('table', {},
+                h('thead', {}, h('tr', {}, ...['Client', 'Signed in as', 'Access',
+                  'Connected', 'Last used', 'Expires', ''].map((label) => h('th', {scope: 'col', text: label})))),
+                h('tbody', {}, ...state.mcp.grants.map((grant) => grantRow(grant, disconnect))))),
+            h('p', {class: 'assistant-note', text: 'Full API rows can call every '
+              + 'API as that person; the approval step does not apply to those calls.'}))
+        : h('p', {class: 'assistant-note', text: 'No agent is connected.'}),
+
       h('div', {class: 'form-actions'}, back, save));
   }
 
@@ -165,17 +311,20 @@ export function mountSetup({ctx, panel, onBack}) {
     const current = ctx.features?.assistant?.capabilities;
     if (!current) return;
     const ready = Boolean(state.enabled && state.key.configured);
-    if (current.ready === ready) return;
+    const mcp = Boolean(state.assistant_installed && state.mcp?.enabled && state.mcp?.url);
+    if (current.ready === ready && current.mcp === mcp) return;
     // Re-read the bootstrap rather than trusting this page's arithmetic: the
-    // server owns that predicate, and the composer appears (or does not) on its
-    // answer without a reload.
+    // server owns both predicates, and the composer and the "Remote access on"
+    // chip follow its answer without a reload.
     try {
       const bootstrap = await api('/api/account/admin/bootstrap');
       const next = bootstrap.features?.assistant?.capabilities;
       if (next) Object.assign(current, next);
     } catch (_) {
       current.ready = ready;
+      current.mcp = mcp;
     }
+    panel.syncChrome?.();
   }
 
   host.replaceChildren(loadingState('Loading Assistant setup'));

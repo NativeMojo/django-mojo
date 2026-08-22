@@ -48,6 +48,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | [docit/](docit/README.md) | Documentation system |
 | [assistant/](assistant/README.md) | LLM admin assistant — architecture, tools, extensibility, custom tool registration |
 | [assistant/approvals](assistant/approvals.md) | The approval boundary in front of every mutating assistant tool — `PendingAction`, the gate arguments, the transports, the audit trail |
+| [assistant/mcp](assistant/mcp.md) | The Assistant's MCP transport — the stateless resource server at `/api/assistant/mcp`, the enabled gate, the token-kind checks, the tool projection and the per-grant conversation |
 | [assistant/cloud_tools](assistant/cloud_tools.md) | The assistant's cloud/fleet domain — the twenty tools, the Admin endpoint each mirrors, the gates they declare, bounding and redaction |
 | [assistant/webapp_tools](assistant/webapp_tools.md) | The assistant's `webapp` domain — two-tier authority, the tool table, the bound revisions, `ASSISTANT_ORIGIN`, and the three exclusions |
 | [github/](github/README.md) | GitHub App integration — GitHubInstall model, JWT/token service, webhook verification, OAuth login |

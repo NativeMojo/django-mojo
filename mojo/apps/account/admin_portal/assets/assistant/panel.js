@@ -47,6 +47,11 @@ export function install({ctx, app}) {
 
   const body = h('div', {class: 'assistant-body', 'aria-live': 'off'});
   const status = h('span', {class: 'assistant-status', role: 'status', 'aria-live': 'polite'});
+  // The head carries the one-word fact; the setup view carries the sentence.
+  // `capabilities` is the same object setup.js mutates after a save, so
+  // syncChrome() needs no observer.
+  const remote = h('span', {class: 'assistant-remote', text: 'Remote access on',
+    hidden: !capabilities.mcp});
   let controls = {};
   const newButton = h('button', {
     class: 'icon-button', type: 'button', 'aria-label': 'New conversation',
@@ -68,7 +73,7 @@ export function install({ctx, app}) {
     onclick: () => setOpen(false),
   }, icon('close'));
   const head = h('div', {class: 'assistant-head'},
-    icon('assistant'), h('strong', {text: 'Assistant'}), status,
+    icon('assistant'), h('strong', {text: 'Assistant'}), status, remote,
     h('div', {class: 'assistant-head-actions'}, newButton, historyButton,
       capabilities.setup ? setupButton : null, closeButton));
   const aside = h('aside', {
@@ -177,6 +182,7 @@ export function install({ctx, app}) {
     capabilities,
     ctx,
     setControls(next) { controls = next || {}; },
+    syncChrome() { remote.hidden = !capabilities.mcp; },
     showSetup: () => showSetup(),
     open: () => setOpen(true),
     close: () => setOpen(false),
