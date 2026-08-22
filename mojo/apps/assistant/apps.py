@@ -15,19 +15,37 @@ class AppConfig(BaseAppConfig):
         self.register_oauth_resource()
 
     def register_oauth_resource(self):
-        """Declare the MCP endpoint to the account app's authorization server.
+        """Declare the two remote-agent resources to the authorization server.
 
-        Registration is what makes `/api/assistant/mcp` a resource the server
-        will mint tokens for and confine them to; the `enabled` callable is
-        re-read on every check, so ASSISTANT_MCP_ENABLED takes effect
-        immediately in both directions. Guarded on the account app being
+        Registration is what makes a path a resource the server will mint
+        tokens for and confine them to. Two are declared here, behind ONE
+        switch — ASSISTANT_MCP_ENABLED means "remote agents may sign in", for
+        either kind of access:
+
+        * the MCP door, EXACT, offering only `mcp`. A token minted for it
+          authenticates at that one path and nowhere else.
+        * the REST API root, a PREFIX resource offering `mcp` and `api`. A
+          token minted for it with the consented `api` scope reaches every
+          endpoint beneath the root exactly as the person's own session would,
+          and nothing outside it.
+
+        The `enabled` callable is re-read on every check, so the switch takes
+        effect immediately in both directions. Guarded on the account app being
         installed: the assistant can ship without it.
 
-        The path comes from `mcp_auth.configured_path()`, the same helper the
-        route and the challenge use. `validate_access` compares the token
-        audience's path to `request.path` EXACTLY, so a registration that
-        disagreed with the route by one trailing slash would refuse every token
-        this server had just minted.
+        The MCP path comes from `mcp_auth.configured_path()`, the same helper
+        the route and the challenge use. `validate_access` resolves the token
+        audience's path EXACTLY, so a registration that disagreed with the
+        route by one trailing slash would refuse every token this server had
+        just minted.
+
+        One grant can serve both doors only while the MCP path sits BENEATH
+        `API_ROOT` — which the shipped default (`/api/assistant/mcp` under
+        `/api`) does. An installation that moves ASSISTANT_MCP_PATH outside the
+        root keeps both resources working separately; what it loses is the
+        `mcp api` grant at the root reaching the door, which then answers 401
+        because the root does not cover it. Fail-closed, and the same caveat a
+        SCRIPT_NAME-mounted deployment already carries.
         """
         from django.apps import apps
 
@@ -35,12 +53,16 @@ class AppConfig(BaseAppConfig):
             return
         from mojo.apps.account.services import oauth_server
         from mojo.apps.assistant.mcp import auth as mcp_auth
+        from mojo.helpers.request import API_ROOT
         from mojo.helpers.settings import settings
 
+        def enabled():
+            return settings.get("ASSISTANT_MCP_ENABLED", False, kind="bool")
+
         oauth_server.register_resource(
-            mcp_auth.configured_path(),
-            ["mcp"],
-            lambda: settings.get("ASSISTANT_MCP_ENABLED", False, kind="bool"))
+            mcp_auth.configured_path(), ["mcp"], enabled)
+        oauth_server.register_resource(
+            API_ROOT, ["mcp", "api"], enabled, prefix=True)
 
     def register_settings_descriptors(self):
         """Advertise the Assistant's configuration in the Admin catalog.

@@ -33,14 +33,22 @@ def authorization_server_metadata(origin, registry=None):
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
         "revocation_endpoint_auth_methods_supported": ["none"],
-        "scopes_supported": ["mcp"],
+        # The union of what the ENABLED resources actually offer, so an
+        # installation that registers only the exact MCP door never advertises
+        # a scope nothing here would honour.
+        "scopes_supported": resources.offered_scopes(registry),
         "authorization_response_iss_parameter_supported": True,
         "client_id_metadata_document_supported": True,
     }
 
 
 def protected_resource_metadata(origin, path, registry=None):
-    """RFC 9728 metadata for one resource, or None when it is not live."""
+    """RFC 9728 metadata for one resource, or None when it is not live.
+
+    The lookup is EXACT even for a prefix resource: the document exists at the
+    registered path and nowhere beneath it, so a client never receives a
+    ``resource`` value that disagrees with the path it asked about.
+    """
     if not origin:
         return None
     entry = resources.resolve(path, registry)

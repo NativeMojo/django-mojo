@@ -95,9 +95,16 @@ def is_key_backed_session(request):
     # (attribution).
     #
     # An OAuth-grant session (request.oauth_grant, token_type="mcp") is
-    # deliberately NOT key-backed: unlike an ApiKey or a group token it can only
-    # ever arrive at the one registered resource path its audience names, so it
-    # never reaches a denies_key_backed_session endpoint to be refused there.
+    # deliberately NOT key-backed, and the reason is what the grant IS rather
+    # than where it can arrive: it is the person's own session, consented to on
+    # this installation's sign-in page, carrying their auth_time and dying with
+    # their auth_key. A grant holding the `api` scope reaches every endpoint
+    # their session JWT reaches — denies_key_backed_session endpoints included,
+    # generate_api_key among them — because that is exactly the equality the
+    # consent screen states. An `mcp`-only grant never leaves its tool door.
+    # A confined credential (an ApiKey, a group token) is the opposite: a
+    # secret in a config file that acts for somebody, which is what
+    # denies_key_backed_session exists to keep away from credential mutation.
     # The signal a tool reads for "this is a remote agent, not a person" is
     # request_meta.bearer == "mcp", stamped by the assistant's
     # _build_request_meta. See docs/django_developer/account/oauth_server.md.

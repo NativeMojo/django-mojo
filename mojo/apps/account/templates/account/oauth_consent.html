@@ -27,7 +27,14 @@
     </p>
     <p class="mat-view-sub" id="oauth-resource">Access to: {{ requested_resource }}</p>
     <p class="mat-view-sub" id="oauth-redirect-host">You will be sent back to {{ redirect_host }}</p>
-    <p class="mat-view-sub" id="oauth-access-copy">{{ access_copy }}</p>
+    {% comment %}
+       One line per granted scope — the tool door, full API access, or both.
+       All autoescaped; the "{email}" placeholder in each is filled in below
+       once /me answers.
+    {% endcomment %}
+    {% for line in access_lines %}
+    <p class="mat-view-sub oauth-access-copy">{{ line }}</p>
+    {% endfor %}
     <p class="mat-view-sub" id="oauth-identity-row" style="display:none">
         Signed in as <strong id="oauth-identity"></strong>
     </p>
@@ -65,7 +72,6 @@
     var AUTH_URL = "{{ auth_url|default:'/auth'|escapejs }}";
     var APPROVE_URL = "{{ approve_url|escapejs }}";
     var DENY_URL = "{{ deny_url|escapejs }}";
-    var ACCESS_COPY = "{{ access_copy|escapejs }}";
 
     var payload = {};
     try {
@@ -99,8 +105,13 @@
         var row = document.getElementById("oauth-identity-row");
         document.getElementById("oauth-identity").textContent = who;
         row.style.display = "";
-        document.getElementById("oauth-access-copy").textContent =
-            ACCESS_COPY.replace("{email}", who);
+        // The lines are already in the DOM, autoescaped by the template; only
+        // the placeholder is replaced, so no server value is ever concatenated
+        // into executable text here either.
+        var lines = document.querySelectorAll(".oauth-access-copy");
+        for (var i = 0; i < lines.length; i++) {
+            lines[i].textContent = lines[i].textContent.replace("{email}", who);
+        }
     }).catch(function () { toLogin(); });
 
     var approveBtn = document.getElementById("btn-oauth-approve");
