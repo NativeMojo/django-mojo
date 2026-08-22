@@ -210,7 +210,11 @@ export function mountSetup({ctx, panel, onBack}) {
 
     const address = state.mcp.url || '<connect address>';
 
-    host.replaceChildren(
+    // replaceChildren is a raw DOM call, not h(): a null child becomes the
+    // text "null" on screen. Conditional children (the discovery alert) are
+    // collected and filtered first — the same hazard webapps' manageSection
+    // names.
+    host.replaceChildren(...[
       h('h3', {text: 'Assistant setup'}),
       h('p', {class: 'assistant-note', text: readiness(state)}),
       h('label', {class: 'check-field'}, enabled, h('span', {text: 'Assistant enabled'})),
@@ -304,7 +308,8 @@ export function mountSetup({ctx, panel, onBack}) {
               + 'API as that person; the approval step does not apply to those calls.'}))
         : h('p', {class: 'assistant-note', text: 'No agent is connected.'}),
 
-      h('div', {class: 'form-actions'}, back, save));
+      h('div', {class: 'form-actions'}, back, save),
+    ].filter(Boolean));
   }
 
   async function syncReadiness(state) {
