@@ -75,6 +75,18 @@ only *watch*, through the two MCP-only read tools (`list_pending_actions`,
 its conversation, because `render_block` ships redacted `args` and up to 8 KB of
 `preview`. See [MCP transport](mcp.md).
 
+**Accepted property: a remote client can seed the operator's own chat context.**
+A client holding an `mcp` grant writes the operator's `user`-tier memories and
+their own skills directly, and both feed that operator's chat assistant system
+prompt — so an external model can put text in front of the model the operator
+talks to. This is accepted, not overlooked: the grant already acts as that
+operator, who could type the same thing into chat themselves, and the blast
+radius stops at their own tier — no other user's context is reachable. It also
+does not compound into a mutation, because a planted skill is only a suggestion:
+replaying one still routes every mutating step through this gate, and
+`_execute_parallel_plan_steps` refuses mutating steps outright. An operator who
+does not want that should not grant `mcp`.
+
 ---
 
 ## The state machine
@@ -169,7 +181,7 @@ ever renders a card.
 
 ### `owner_state(params, user)`
 
-The exemption for state the caller alone owns. `_owner_state_exempt()` in
+The exemption for state the caller alone owns. `_owner_state_decision()` in
 `agent.py` calls it inside a `try` and compares with `is True`:
 
 ```python
@@ -180,6 +192,17 @@ owner_state=lambda params, user: params.get("tier") == "user"
   is a row, against the live database. `_owns_skill` in
   `services/tools/skills.py` reads the targeted skill's `tier` and `user_id` at
   dispatch time; a skill id belonging to anyone else proposes.
+- **Skipping the card never skips argument validation.** `_owner_state_decision`
+  runs `approvals.normalize_args()` on the input FIRST, then evaluates the
+  predicate on the normalized arguments and dispatches those — so an
+  owner-state handler receives exactly what an approved one would: declared keys
+  only, types checked, unknown keys dropped. A refused argument set is an
+  ordinary tool error with no card, no record and no incident, identical to what
+  `propose()` returns for the same input.
+- **`_owns_skill` authorizes on the skill's CURRENT `tier` and `user_id`**, which
+  is safe only because `update_skill` can never write either — see the comment on
+  `UPDATABLE` in `services/skills.py`. Adding a scope field there would let a
+  caller edit their own user-tier skill into a global one with no card.
 - **`is True`, not `bool(...)`.** `authorize` uses truthiness because that gate
   *closes*; this one *opens*, so a predicate that accidentally returns a model
   instance or a non-empty string must not open it.
@@ -512,7 +535,7 @@ failure mode this table exists to make visible.
 
 - `mojo/apps/assistant/services/approvals.py` — the protocol
 - `mojo/apps/assistant/models/pending_action.py` — the record and `effective_state()`
-- `mojo/apps/assistant/services/agent.py` — the gate in `_execute_tool`, `_owner_state_exempt()`, `approval` kwarg in `_call_handler`, prompt corrections
+- `mojo/apps/assistant/services/agent.py` — the gate in `_execute_tool`, `_owner_state_decision()`, `approval` kwarg in `_call_handler`, prompt corrections
 - `mojo/apps/assistant/rest/assistant.py` — `POST`/`GET /api/assistant/action`
 - `mojo/apps/assistant/handler.py` — `assistant_approval` over the socket
 - `mojo/apps/realtime/handler.py` — the server-stamped `_bearer` on every delivered message

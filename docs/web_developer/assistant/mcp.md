@@ -140,6 +140,15 @@ in its `instructions`:
 > operator's own memory and skills (tier "user", or a skill they own) run
 > immediately and return the result.
 
+Know what that last sentence means before you use it: a memory or skill your
+client writes feeds the **operator's own chat assistant** — user-tier memories
+and skills are injected into its system prompt. That is by design, because your
+grant acts as that operator and they could type the same thing into chat
+themselves, and it reaches nobody else's context. It is still their assistant,
+so write what they asked you to write. A skill you save is a suggestion, not a
+capability: replaying one cannot execute a mutating tool without the operator
+approving a card.
+
 ### tools/call
 
 ```json

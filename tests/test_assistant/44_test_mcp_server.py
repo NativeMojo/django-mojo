@@ -628,6 +628,26 @@ def test_call_owner_state_writers(opts):
         assert_eq(success[0].get("uid"), opts.admin.pk,
                   "the event must bind the connected operator")
 
+        # SUPPRESSION MUST NOT SWALLOW THE AUDIT TRAIL. Every other category on
+        # this transport is filed at most once per hour; `assistant:tool:*` is
+        # the record that a write actually happened, so a second direct write
+        # must file a second event rather than vanish into the window.
+        result = _call(opts, "write_memory",
+                       {"tier": "user", "key": OWNER_KEY, "value": "written again"},
+                       hide_infrastructure=False, reporter=reporter)
+        assert_eq(result["isError"], False,
+                  f"the second user-tier write must also succeed, got {result}")
+        success = [e for e in events
+                   if e.get("category") == "assistant:tool:write_memory"]
+        assert_eq(len(success), 2,
+                  f"two direct writes must file two assistant:tool:write_memory "
+                  f"events — suppressing the audit trail would record only the "
+                  f"first write of the hour, got {len(success)}")
+        for event in success:
+            assert_true("key" not in event,
+                        f"an assistant:tool:* event must bypass the suppression "
+                        f"reporter entirely, got kwargs {sorted(event)}")
+
         result = _call(opts, "write_memory",
                        {"tier": "group", "key": OWNER_KEY, "value": "shared"},
                        hide_infrastructure=False, reporter=reporter)
