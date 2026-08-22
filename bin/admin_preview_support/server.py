@@ -976,7 +976,7 @@ def main():
     parser.add_argument("--metrics-state", choices=("live", "empty", "unconfigured", "denied", "partial"), default="live")
     parser.add_argument("--maintenance-state", choices=("findings", "denied", "in_flight", "stalled", "unavailable", "framework_pinned", "framework_none", "clear"), default="findings")
     parser.add_argument("--deployments-state", choices=("mixed", "converged", "failed", "empty"), default="mixed")
-    parser.add_argument("--capacity-state", choices=("healthy", "single_node", "adding", "denied", "no_reader", "node_id_pinned", "external_mode", "stable_ips_off", "stable_ips_partial", "egress_unknown", "balancer_less"), default="healthy")
+    parser.add_argument("--capacity-state", choices=("healthy", "single_node", "adding", "denied", "no_reader", "node_id_pinned", "external_mode", "stable_ips_off", "stable_ips_partial", "egress_unknown", "balancer_less", "transitioning"), default="healthy")
     # The messaging fixtures have always carried these scenarios; they were
     # reachable only through the gallery defaults until the v2 Settings
     # sub-pages needed to be QA'd against each one.
