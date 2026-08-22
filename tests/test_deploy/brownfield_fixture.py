@@ -43,7 +43,7 @@ def raw_manifest():
             "subnet_group_name": "orchestra-db",
             "security_group_ids": ["sg-1123456789abcdef0"],
             "credential": {
-                "provider": "s3", "metadata_key": "database",
+                "provider": "s3", "metadata_key": "application-user",
                 "object": {"bucket": "maestro-prod-config", "key": "secrets/db.json",
                            "version_id": "dbversion1", "sha256": SHA_A},
             },

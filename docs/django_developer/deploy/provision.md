@@ -73,7 +73,7 @@ is:
     "security_group_ids": ["sg-1123456789abcdef0"],
     "credential": {
       "provider": "s3",
-      "metadata_key": "database",
+      "metadata_key": "application-user",
       "object": {"bucket": "maestro-prod-config", "key": "secrets/db.json", "version_id": "db-version", "sha256": "<64 lowercase hex>"}
     }
   },
@@ -132,6 +132,14 @@ name pair, never both. `compatibility_instance_ids` are explicit existing
 servers that may temporarily join the shadow target groups; they are not
 adopted as managed nodes.
 
+For the database credential, `metadata_key` names the S3 user-metadata field
+whose non-secret value must equal `database.application_user`; discovery
+refuses a missing or different value without reading the object body. For an
+authenticated cache credential the declared metadata key must likewise exist
+with a non-empty proof value. This proves the declared credential identity,
+not connectivity: the node-side `SELECT 1` and `PING` evidence remains a hard
+pre-cutover gate.
+
 ### The brownfield safety boundary
 
 `fleet-status` reads and validates the exact account, region, VPC, subnets and
@@ -158,6 +166,12 @@ the exact `managed-by`, project, environment, fleet and resource-role tags.
 Same-name collisions fail closed. The SDK client independently rejects every
 mutation method outside the allowlist, and the reviewed preview independently
 checks an exact step/verb/resource-name matrix.
+
+An existing owned node is eligible for target registration only when its
+declared instance type, exact AMI, VPC, subnet, AZ, instance profile, sole
+security group, running state, root-volume size and root-volume encryption all
+match. Hardware or storage drift is blocking; a matching Name tag never makes
+the node usable by itself.
 
 Two preview rows deliberately cover subordinate calls as one logical resource
 convergence: creating an instance profile includes attaching its newly created

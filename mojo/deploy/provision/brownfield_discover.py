@@ -255,7 +255,8 @@ def _database(clients, manifest, network, findings, observed, inventory):
     }
     _credential_metadata(clients, wanted["credential"], findings,
                          "database credential", inventory,
-                         manifest["account_id"])
+                         manifest["account_id"],
+                         expected_metadata_value=wanted["application_user"])
 
 
 def _cache(clients, manifest, network, findings, observed, inventory):
@@ -272,6 +273,7 @@ def _cache(clients, manifest, network, findings, observed, inventory):
     checks = (
         ("ARN", group.get("ARN"), wanted["replication_group_arn"]),
         ("identifier", group.get("ReplicationGroupId"), wanted["identifier"]),
+        ("engine", str(group.get("Engine") or "").strip().lower(), "valkey"),
         ("status", group.get("Status"), "available"),
         ("endpoint", endpoint.get("Address"), wanted["endpoint"]),
         ("port", endpoint.get("Port"), wanted["port"]),
@@ -350,7 +352,8 @@ def _storage(clients, manifest, findings, observed, inventory):
     observed.stage1 = discover.wrap(objects.get("stage1"))
 
 
-def _head_object(s3, reference, findings, label, expected_owner):
+def _head_object(s3, reference, findings, label, expected_owner,
+                 metadata_key=None, expected_metadata_value=None):
     answer = _read(findings, "s3.head_object",
                    lambda: s3.head_object(
                        Bucket=reference["bucket"], Key=reference["key"],
@@ -365,19 +368,37 @@ def _head_object(s3, reference, findings, label, expected_owner):
     if not checksum_matches:
         _mismatch(findings, f"{label} object sha256 metadata", checksum or None,
                   reference["sha256"])
-    return {"bucket": reference["bucket"], "key": reference["key"],
-            "version_id": version, "etag": answer.get("ETag"),
-            "content_length": answer.get("ContentLength"),
-            "sha256_matches": checksum_matches}
+    result = {"bucket": reference["bucket"], "key": reference["key"],
+              "version_id": version, "etag": answer.get("ETag"),
+              "content_length": answer.get("ContentLength"),
+              "sha256_matches": checksum_matches}
+    if metadata_key:
+        normalized_key = metadata_key.lower()
+        proof = metadata.get(normalized_key)
+        if proof in (None, ""):
+            _mismatch(findings, f"{label} metadata key {normalized_key}",
+                      proof, "a non-empty metadata proof")
+        if (expected_metadata_value is not None
+                and proof != expected_metadata_value):
+            _mismatch(findings, f"{label} application user metadata",
+                      proof, expected_metadata_value)
+        result["metadata_key"] = normalized_key
+        result["metadata_proven"] = bool(
+            proof not in (None, "")
+            and (expected_metadata_value is None
+                 or proof == expected_metadata_value))
+    return result
 
 
 def _credential_metadata(clients, reference, findings, label, inventory,
-                         expected_owner):
+                         expected_owner, expected_metadata_value=None):
     provider = reference["provider"]
     object_ref = reference["object"]
     if provider == "s3":
-        metadata = _head_object(clients.get("s3"), object_ref, findings, label,
-                                expected_owner)
+        metadata = _head_object(
+            clients.get("s3"), object_ref, findings, label, expected_owner,
+            metadata_key=reference["metadata_key"],
+            expected_metadata_value=expected_metadata_value)
     else:
         secret_id = object_ref["bucket"]
         answer = _read(findings, "secretsmanager.describe_secret",
@@ -580,6 +601,7 @@ def _profiles(clients, manifest, findings, observed, inventory):
 
 
 def _instances(clients, topology, manifest, findings, observed, inventory):
+    ec2 = clients.get("ec2")
     declared_ids = list(manifest.get("compatibility_instance_ids") or ())
     declarations = list(manifest["nodes"]["items"])
     filters = [
@@ -588,9 +610,22 @@ def _instances(clients, topology, manifest, findings, observed, inventory):
          "Values": ["pending", "running", "stopping", "stopped"]},
     ]
     owned_answer = _read(findings, "ec2.describe_instances",
-                         lambda: clients.get("ec2").describe_instances(
-                             Filters=filters), {})
+                         lambda: ec2.describe_instances(Filters=filters), {})
     candidates = _reservation_instances(owned_answer)
+    volume_ids = []
+    for row in candidates:
+        root_name = row.get("RootDeviceName") or "/dev/xvda"
+        for mapping in row.get("BlockDeviceMappings") or []:
+            volume_id = (mapping.get("Ebs") or {}).get("VolumeId")
+            if mapping.get("DeviceName") == root_name and volume_id:
+                volume_ids.append(volume_id)
+    volume_rows = []
+    if volume_ids:
+        volume_answer = _read(
+            findings, "ec2.describe_volumes",
+            lambda: ec2.describe_volumes(VolumeIds=sorted(set(volume_ids))), {})
+        volume_rows = volume_answer.get("Volumes") or []
+    volumes = {row.get("VolumeId"): row for row in volume_rows}
     by_name = {}
     for row in candidates:
         by_name.setdefault(discover.tags_of(row).get("Name"), []).append(row)
@@ -624,6 +659,9 @@ def _instances(clients, topology, manifest, findings, observed, inventory):
         expected_profile = declaration.get("instance_profile_arn") or (
             profiles.get(declaration["role"]) or {}).get("profile_arn")
         checks = (
+            ("instance type", row.get("InstanceType"),
+             manifest["nodes"]["instance_type"]),
+            ("AMI", row.get("ImageId"), manifest["nodes"]["ami_id"]),
             ("VPC", row.get("VpcId"), manifest["network"]["vpc_id"]),
             ("subnet", row.get("SubnetId"), declaration["subnet_id"]),
             ("AZ", (row.get("Placement") or {}).get("AvailabilityZone"),
@@ -650,12 +688,26 @@ def _instances(clients, topology, manifest, findings, observed, inventory):
                       f"node {declaration['name']} security groups",
                       group_ids, expected_groups)
             valid = False
+        root_name = row.get("RootDeviceName") or "/dev/xvda"
+        root_mapping = next((mapping for mapping in
+                             row.get("BlockDeviceMappings") or []
+                             if mapping.get("DeviceName") == root_name), None)
+        root_volume_id = ((root_mapping or {}).get("Ebs") or {}).get("VolumeId")
+        root_volume = volumes.get(root_volume_id) or {}
+        for label, current, expected in (
+                ("root volume size", root_volume.get("Size"),
+                 manifest["nodes"]["volume_gb"]),
+                ("root volume encryption", root_volume.get("Encrypted"), True)):
+            if current != expected:
+                _mismatch(findings, f"node {declaration['name']} {label}",
+                          current, expected)
+                valid = False
         if valid:
             instances.append(row)
     compatibility = []
     if declared_ids:
         compat_answer = _read(findings, "ec2.describe_instances",
-                              lambda: clients.get("ec2").describe_instances(
+                              lambda: ec2.describe_instances(
                                   InstanceIds=declared_ids), {})
         compatibility = _reservation_instances(compat_answer)
         by_id = {row.get("InstanceId"): row for row in compatibility}
@@ -673,7 +725,8 @@ def _instances(clients, topology, manifest, findings, observed, inventory):
     observed.instances = discover.wrap(instances)
     observed.compatibility_instances = discover.wrap(compatibility)
     inventory["instances"] = {
-        "owned": [_instance_inventory(row) for row in instances],
+        "owned": [_instance_inventory(
+            row, volumes.get(_root_volume_id(row))) for row in instances],
         "compatibility": [_instance_inventory(row) for row in compatibility],
     }
 
@@ -1053,11 +1106,24 @@ def _reservation_instances(answer):
     return rows
 
 
-def _instance_inventory(row):
+def _instance_inventory(row, root_volume=None):
     return {"id": row.get("InstanceId"), "vpc_id": row.get("VpcId"),
             "subnet_id": row.get("SubnetId"),
             "state": (row.get("State") or {}).get("Name"),
-            "name": discover.tags_of(row).get("Name")}
+            "name": discover.tags_of(row).get("Name"),
+            "instance_type": row.get("InstanceType"),
+            "image_id": row.get("ImageId"),
+            "root_volume": ({"id": (root_volume or {}).get("VolumeId"),
+                             "size": (root_volume or {}).get("Size"),
+                             "encrypted": (root_volume or {}).get("Encrypted")}
+                            if root_volume is not None else None)}
+
+
+def _root_volume_id(row):
+    root_name = row.get("RootDeviceName") or "/dev/xvda"
+    mapping = next((item for item in row.get("BlockDeviceMappings") or []
+                    if item.get("DeviceName") == root_name), None)
+    return ((mapping or {}).get("Ebs") or {}).get("VolumeId")
 
 
 def _not_found(err):

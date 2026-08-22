@@ -28,6 +28,7 @@ BUCKET_RE = re.compile(
     r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 VERSION_RE = re.compile(r"^[A-Za-z0-9._+/=]+$")
 IAM_NAME_RE = re.compile(r"^[A-Za-z0-9+=,.@_-]{1,64}$")
+DB_USER_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
 TOP_KEYS = frozenset((
     "schema_version", "account_id", "region", "project", "environment",
@@ -260,6 +261,9 @@ def _database(value, path, account_id, region):
     if int(value["port"]) != spec_module.DB_PORT:
         raise inputs.EnvFileError(
             f"{label}.port must be {spec_module.DB_PORT}")
+    if not DB_USER_RE.match(value["application_user"] or ""):
+        raise inputs.EnvFileError(
+            f"{label}.application_user must be a PostgreSQL role identifier")
     _credential(value["credential"], f"{label}.credential")
     _security_groups(value["security_group_ids"],
                      f"{label}.security_group_ids")
@@ -438,6 +442,9 @@ def _credential(value, label):
     if not ID_RE.match(value["metadata_key"] or ""):
         raise inputs.EnvFileError(
             f"{label}.metadata_key is not a safe metadata identifier")
+    if value["metadata_key"].lower() == "sha256":
+        raise inputs.EnvFileError(
+            f"{label}.metadata_key cannot reuse the sha256 integrity field")
 
 
 def _object_ref(value, label):

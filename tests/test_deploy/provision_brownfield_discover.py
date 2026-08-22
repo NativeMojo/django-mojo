@@ -106,6 +106,140 @@ def test_node_observation_validates_vpc_subnet_profile_role_and_security_group(o
 
 
 @th.django_unit_test()
+def test_owned_node_hardware_and_root_volume_drift_are_each_withheld(opts):
+    from mojo.deploy.provision import brownfield_discover, report
+
+    spec = topology()
+    manifest = spec.brownfield_manifest
+    manifest["compatibility_instance_ids"] = []
+    declaration = manifest["nodes"]["items"][0]
+    tags = {
+        "Name": declaration["name"], "managed-by": "django-mojo",
+        "mojo:project": spec.project, "mojo:env": spec.env,
+        "mojo:fleet": spec.fleet, "mojo:role": "node",
+        "mojo:application-role": declaration["role"],
+    }
+
+    def rows(case):
+        instance = {
+            "InstanceId": "i-aaaaaaaaaaaaaaaaa",
+            "InstanceType": manifest["nodes"]["instance_type"],
+            "ImageId": manifest["nodes"]["ami_id"],
+            "VpcId": manifest["network"]["vpc_id"],
+            "SubnetId": declaration["subnet_id"],
+            "Placement": {"AvailabilityZone": declaration["availability_zone"]},
+            "State": {"Name": "running"},
+            "IamInstanceProfile": {"Arn": declaration["instance_profile_arn"]},
+            "SecurityGroups": [{"GroupId":
+                manifest["network"]["node_security_group_id"]}],
+            "RootDeviceName": "/dev/xvda",
+            "BlockDeviceMappings": [{"DeviceName": "/dev/xvda",
+                                     "Ebs": {"VolumeId": "vol-aaaaaaaa"}}],
+            "Tags": [{"Key": key, "Value": value} for key, value in tags.items()],
+        }
+        volume = {"VolumeId": "vol-aaaaaaaa",
+                  "Size": manifest["nodes"]["volume_gb"], "Encrypted": True}
+        if case == "instance type":
+            instance["InstanceType"] = "t3.large"
+        elif case == "AMI":
+            instance["ImageId"] = "ami-deadbeef"
+        elif case == "root volume size":
+            volume["Size"] += 1
+        elif case == "root volume encryption":
+            volume["Encrypted"] = False
+        return instance, volume
+
+    for case in ("instance type", "AMI", "root volume size",
+                 "root volume encryption"):
+        instance, volume = rows(case)
+
+        class _EC2:
+            def describe_instances(self, **kwargs):
+                return {"Reservations": [{"Instances": [instance]}]}
+
+            def describe_volumes(self, **kwargs):
+                return {"Volumes": [volume]}
+
+        findings, observed, inventory = [], objict(), {}
+        observed.brownfield_profiles = {
+            "api": {"profile_arn": declaration["instance_profile_arn"]}}
+        brownfield_discover._instances(
+            _Clients(ec2=_EC2()), spec, manifest, findings, observed, inventory)
+        th.assert_eq(list(observed.instances), [],
+                     f"{case} drift must never reach balancer input")
+        th.assert_true(any(case in item.message and item.status == report.BLIND
+                           for item in findings),
+                       f"{case} drift must fail closed: {findings}")
+
+
+@th.django_unit_test()
+def test_cache_engine_must_be_valkey(opts):
+    from mojo.deploy.provision import brownfield_discover, report
+
+    spec = topology()
+    wanted = spec.brownfield_manifest["cache"]
+
+    class _Cache:
+        def describe_replication_groups(self, **kwargs):
+            return {"ReplicationGroups": [{
+                "ARN": wanted["replication_group_arn"],
+                "ReplicationGroupId": wanted["identifier"], "Engine": "redis",
+                "Status": "available", "TransitEncryptionEnabled": True,
+                "AuthTokenEnabled": False,
+                "NodeGroups": [{"PrimaryEndpoint": {
+                    "Address": wanted["endpoint"], "Port": wanted["port"]}}],
+                "SecurityGroups": [{"SecurityGroupId":
+                    wanted["security_group_ids"][0]}],
+                "CacheSubnetGroupName": wanted["subnet_group_name"],
+            }]}
+
+        def describe_cache_subnet_groups(self, **kwargs):
+            return {"CacheSubnetGroups": [{
+                "CacheSubnetGroupName": wanted["subnet_group_name"],
+                "VpcId": spec.brownfield_manifest["network"]["vpc_id"]}]}
+
+    findings, observed, inventory = [], objict(), {}
+    brownfield_discover._cache(
+        _Clients(elasticache=_Cache()), spec.brownfield_manifest,
+        spec.brownfield_manifest["network"], findings, observed, inventory)
+    th.assert_true(any("Valkey engine" in item.message
+                       and item.status == report.BLIND for item in findings),
+                   f"Redis must not satisfy an exact Valkey declaration: {findings}")
+
+
+@th.django_unit_test()
+def test_credential_metadata_key_and_application_user_are_enforced(opts):
+    from mojo.deploy.provision import brownfield_discover, report
+
+    spec = topology()
+    credential = spec.brownfield_manifest["database"]["credential"]
+
+    class _S3:
+        def __init__(self, metadata):
+            self.metadata = metadata
+
+        def head_object(self, **kwargs):
+            return {"VersionId": credential["object"]["version_id"],
+                    "Metadata": dict(self.metadata,
+                                     sha256=credential["object"]["sha256"]),
+                    "ETag": "etag", "ContentLength": 10}
+
+    for metadata, expected_phrase in (({}, "metadata key"),
+                                      ({"application-user": "wrong"},
+                                       "application user metadata")):
+        findings, inventory = [], {}
+        brownfield_discover._credential_metadata(
+            _Clients(s3=_S3(metadata)), credential, findings,
+            "database credential", inventory,
+            spec.brownfield_manifest["account_id"],
+            expected_metadata_value=spec.brownfield_manifest[
+                "database"]["application_user"])
+        th.assert_true(any(expected_phrase in item.message
+                           and item.status == report.BLIND for item in findings),
+                       f"{expected_phrase} must fail closed: {findings}")
+
+
+@th.django_unit_test()
 def test_telemetry_exact_name_collisions_are_recorded_not_adopted(opts):
     from mojo.deploy.provision import brownfield_discover, report
 

@@ -15,7 +15,7 @@ ALLOWED_READS = {
         "describe_addresses", "describe_availability_zones",
         "describe_images", "describe_instances", "describe_key_pairs",
         "describe_route_tables", "describe_security_groups",
-        "describe_subnets", "describe_vpcs",
+        "describe_subnets", "describe_volumes", "describe_vpcs",
     )),
     "rds": frozenset(("describe_db_clusters", "describe_db_subnet_groups")),
     "elasticache": frozenset((
