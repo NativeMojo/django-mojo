@@ -1056,6 +1056,9 @@ function donePanel(state, finish) {
   const op = state.operation;
   const host = (op.evidence || {}).address?.hostname;
   const app = op.resources?.webapp;
+  // An adopted app that already had a release is not starting from a welcome
+  // page — the run put its current deploy back on the new address.
+  const restoredDeploy = state.adopt?.current_release;
   if (state.nameFirst && app && !state.landed) {
     // A name-first run made exactly one decision, and the outcome is already
     // true: the app is live. Ending on a congratulations screen with a button
@@ -1077,7 +1080,9 @@ function donePanel(state, finish) {
   return h('div', {class: 'wizard-panel'}, stepBar(state, 4),
     h('div', {class: 'result-state success'}, icon('check'),
       h('div', {}, h('strong', {text: 'You’re live!'}),
-        h('p', {}, 'Your app is up', host ? h('span', {}, ' at ', h('code', {text: host})) : null, ', serving a welcome page until your first deploy.'))),
+        h('p', {}, 'Your app is up', host ? h('span', {}, ' at ', h('code', {text: host})) : null,
+          restoredDeploy ? ', applying its current deploy across your fleet.'
+            : ', serving a welcome page until your first deploy.'))),
     h('div', {class: 'form-actions'},
       h('button', {class: 'button primary', type: 'button', onclick: () => { finish(); if (app) location.hash = routeHref('apps', {webapp: app, tab: 'setup'}); }}, 'Set up deploys'),
       h('button', {class: 'button ghost', type: 'button', onclick: finish}, 'Done')));

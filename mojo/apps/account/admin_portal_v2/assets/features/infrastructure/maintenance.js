@@ -457,7 +457,10 @@ export async function maintenanceTab(ctx, signal = null) {
       // manage_aws but no platform read still gets the AWS half of the page.
       const [versions, overview] = await Promise.all([
         api(`${VERSIONS_PATH}${refresh ? '?refresh=1' : ''}`, {signal}),
-        api(FRAMEWORK_PATH, {signal}).catch(() => null),
+        // Refresh means both halves: a cached framework read would answer
+        // Refresh with the same sentence the operator just asked to re-check.
+        api(`${FRAMEWORK_PATH}${refresh ? '?refresh=1' : ''}`, {signal})
+          .catch(() => null),
       ]);
       report = versions;
       framework = overview;

@@ -209,5 +209,9 @@ export async function changeAddressFor(ctx, app, reload) {
     group_id: full.group?.id, slug: full.slug, display_name: full.display_name,
     environment: full.environment, bucket: full.bucket, github_repository: full.github_repository,
     deployment_ref: full.deployment_ref, build_output: full.build_output,
+    // Carried so the wizard's done panel can say what actually happens next:
+    // an app that already has a release gets that deploy applied across the
+    // fleet, not the welcome page a brand-new app starts on.
+    current_release: full.current_release,
   });
 }

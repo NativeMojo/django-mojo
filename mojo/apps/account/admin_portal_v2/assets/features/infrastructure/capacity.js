@@ -57,10 +57,14 @@ const BLOCKED_COPY = {
   infrastructure_external: 'external infrastructure mode — capacity is applied by your infrastructure team\'s IaC',
   node_id_pinned: 'this fleet pins EDGE_NODE_ID, so a new node could never prove its own identity — remove the pin first',
   no_source_node: 'no healthy, running node is available to clone',
+  instances_unavailable: 'EC2 did not answer, so node inventory and controls are unavailable',
   last_healthy_target: 'this is the last healthy target — removing it would take the fleet out of service',
   no_database: 'no RDS database was found in this region',
+  databases_unavailable: 'RDS did not answer completely, so database controls are unavailable',
   no_reader: 'this database has no reader to remove',
   no_cache_group: 'no ElastiCache replication group was found in this region',
+  caches_unavailable: 'ElastiCache did not answer completely, so cache controls are unavailable',
+  resource_transitioning: 'AWS reports a member transition in progress — inspect and refresh instead of replaying a mutation',
   cluster_mode_unsupported: 'cluster-mode enabled — its replica count is a resharding decision, not a capacity change',
 };
 
@@ -97,6 +101,10 @@ const SETTLING_RESOURCE = new Set([
 ]);
 
 const WAITING_NOTE = 'no actions until the provider confirms it';
+// A member AWS has not settled, and a node the balancer never registered.
+// Both are provider truth the report carries per member — v1's sentences.
+const TRANSITION_NOTE = 'provider transition in progress — inspect and refresh';
+const UNREGISTERED_NOTE = 'not registered — inspect and reconcile provider state';
 
 function deltaText(value) {
   if (value === null || value === undefined) return '';
@@ -572,7 +580,10 @@ export function capacityTab(ctx, signal = null, actions = null) {
         nodes[0]?.instance_type ? `× ${nodes[0].instance_type}` : '',
         nodes.length
           ? `${healthy} of ${nodes.length} healthy${settling ? ` · ${settling} still joining` : ''}`
-          : 'none registered'),
+          // Not "none registered": the read may have found nothing at all,
+          // and an empty EC2 answer is not the same claim as an empty
+          // balancer. v1's sentence, unchanged.
+          : 'No owned EC2 node was found'),
       tile('Redis', cache ? `1+${cache.replica_count || 0}` : '—', '',
         cache
           ? `primary + ${cache.replica_count || 0} replica${cache.replica_count === 1 ? '' : 's'} · ${cache.status}`
@@ -604,9 +615,11 @@ export function capacityTab(ctx, signal = null, actions = null) {
 
     // A node the balancer has not finished checking, or one this batch is
     // already changing, carries no control: acting on it would be acting on a
-    // state nobody has confirmed yet.
+    // state nobody has confirmed yet. `can_drain` is the server's own verdict
+    // per node — registered, running, and not already leaving — and it is the
+    // only thing that may say a drain is possible.
     const removable = (row) => managed() && drain.offered && !row.self
-      && !want.removeNodes.has(row.id) && !settlingNode(row)
+      && row.can_drain && !want.removeNodes.has(row.id) && !settlingNode(row)
       && (!row.healthy || healthyLeft > 1);
 
     const bumpDown = () => {
@@ -629,14 +642,19 @@ export function capacityTab(ctx, signal = null, actions = null) {
       const leaving = want.removeNodes.has(row.id);
       const step = batchStep(row.id);
       const settling = settlingNode(row);
+      // The balancer's target state only means something for a node the
+      // balancer knows about. An unregistered one is described by EC2's own
+      // instance state, and says plainly that it is not registered.
+      const shownState = row.registered ? row.state : row.instance_state;
       const labels = [
         row.self ? 'this node' : '', row.primary ? 'certbot primary' : '',
+        row.registered ? '' : 'not registered',
       ].filter(Boolean).join(' · ');
       const state = leaving ? {tone: 'warn', label: 'Will drain'}
         : step ? {tone: 'pend', label: step.kind === 'remove' ? 'Removing' : 'Changing', spinner: true}
           : row.healthy ? {tone: 'ok', label: 'Healthy'}
-            : settling ? {tone: 'pend', label: row.state || 'joining', spinner: true}
-              : {tone: 'warn', label: row.state || 'unknown'};
+            : settling ? {tone: 'pend', label: shownState || 'joining', spinner: true}
+              : {tone: 'warn', label: shownState || 'unknown'};
       const note = step ? phaseLine(step)
         : labels || (settling ? 'registered, waiting on the balancer\'s first health check' : '');
       const side = leaving
@@ -647,7 +665,8 @@ export function capacityTab(ctx, signal = null, actions = null) {
             onclick: () => { want.removeNodes.add(row.id); render(); }}, 'Remove')
           : h('span', {class: 'fleet-floor',
             text: row.self ? 'answering this request'
-              : settling || step ? WAITING_NOTE : ''});
+              : settling || step ? WAITING_NOTE
+                : row.registered ? '' : UNREGISTERED_NOTE});
       return memberRow({
         state, name: row.name || row.id, chips: [row.instance_type],
         note, side, modifier: leaving ? 'leaving' : settling || step ? 'pending' : '',
@@ -717,10 +736,15 @@ export function capacityTab(ctx, signal = null, actions = null) {
       const impactNote = row.resize_impact === 'rolling'
         ? 'Resize rolls replicas first, then a brief failover — one short interruption.'
         : 'No replica: the cache is down while its node is replaced.';
-      const memberState = settling
-        ? {tone: 'pend', label: row.status || 'changing', spinner: true}
-        : row.status === 'available'
-          ? {tone: 'ok', label: 'Healthy'} : {tone: 'warn', label: row.status || 'unknown'};
+      // Per MEMBER, never per group: ElastiCache reports a group "available"
+      // while one of its nodes is still being replaced, and calling that node
+      // Healthy is the lie this page exists to avoid.
+      const memberState = (member) => {
+        if (settling) return {tone: 'pend', label: row.status || 'changing', spinner: true};
+        return member.lifecycle_state === 'available'
+          ? {tone: 'ok', label: 'Healthy'}
+          : {tone: 'warn', label: member.status || 'unknown'};
+      };
       return {
         controls: offered ? h('div', {class: 'fleet-controls'},
           h('div', {class: 'fleet-control'},
@@ -752,8 +776,11 @@ export function capacityTab(ctx, signal = null, actions = null) {
           : h('p', {class: 'fleet-blocked', text: blocked}),
         members: [
           ...(row.members || []).map((member) => memberRow({
-            state: memberState, name: member.id || member,
+            state: memberState(member), name: member.id || member,
             chips: [member.node_type || row.node_type, member.role || ''],
+            note: !settling && member.lifecycle_state !== 'available'
+              ? TRANSITION_NOTE : '',
+            modifier: settling || member.lifecycle_state !== 'available' ? 'pending' : '',
           })),
           ...Array.from({length: Math.max(0, wanted - current)}, () => memberRow({
             state: {tone: 'pend', label: 'Planned'}, name: 'new replica',
@@ -801,10 +828,16 @@ export function capacityTab(ctx, signal = null, actions = null) {
     function writerSizeControl(row) {
       const currentType = row.writer_instance_class || row.instance_class;
       const target = row.kind === 'aurora' ? row.writer : row.identifier;
-      if (!resize.offered) {
+      // Three refusals, in the server's own order: the action is not offered
+      // at all, this cluster is mid-transition, or the writer instance itself
+      // is not in a state RDS will resize.
+      const writer = (row.members || []).find((member) => member.role === 'writer');
+      if (!resize.offered || row.blocked_reason || (writer && !writer.can_resize)) {
         return sizePlaceholder('Writer size',
           currentType || (row.kind === 'aurora' ? 'Aurora' : ''),
-          blockedText(resize) || 'Resizing is not available.');
+          row.blocked_reason
+            ? blockedText({offered: false, blocked_reason: row.blocked_reason})
+            : blockedText(resize) || 'Resizing is not available.');
       }
       if (!target) {
         return sizePlaceholder('Writer size', currentType || 'Aurora',
@@ -824,13 +857,21 @@ export function capacityTab(ctx, signal = null, actions = null) {
 
     function readerSizeControl(row) {
       const readers = row.readers || [];
+      const readerMembers = (row.members || []).filter(
+        (member) => member.role === 'reader');
       const classes = readers.map(
         (reader) => (row.reader_instance_classes || {})[reader]).filter(Boolean);
       const shared = classes.length && classes.every((cls) => cls === classes[0])
         ? classes[0] : null;
-      if (!resize.offered) {
+      // One staged size applies to every reader, so one reader RDS will not
+      // resize blocks the control — a partial fan-out is not what was asked
+      // for.
+      if (!resize.offered || row.blocked_reason
+          || readerMembers.some((member) => !member.can_resize)) {
         return sizePlaceholder('Reader size', shared || '',
-          blockedText(resize) || 'Resizing is not available.');
+          row.blocked_reason
+            ? blockedText({offered: false, blocked_reason: row.blocked_reason})
+            : blockedText(resize) || 'Resizing is not available.');
       }
       if (!readers.length) {
         return sizePlaceholder('Reader size', '', 'No readers to size.');
@@ -858,35 +899,51 @@ export function capacityTab(ctx, signal = null, actions = null) {
       const adding = want.dbAdd.get(row.identifier) || 0;
       const removingHere = readers.filter((reader) => want.dbRemove.has(reader));
       const count = readers.length - removingHere.length + adding;
-      // The cluster's own status is the only lifecycle state the report
-      // carries about its members. While RDS says it is mid-change, no member
-      // of it is called Healthy and none of them offers an action.
+      // Each member carries its own RDS lifecycle state and its own verdict on
+      // what may be done to it. The cluster's status is the weaker fact: it can
+      // read "available" while one instance is still being modified, so it is
+      // only a fallback for a member the report does not describe.
+      const memberFor = (identifier) => (row.members || []).find(
+        (member) => member.id === identifier) || {};
+      const removableReaders = readers.filter(
+        (reader) => memberFor(reader).can_remove);
       const settling = settlingResource(row);
-      const memberState = settling
-        ? {tone: 'pend', label: row.status || 'changing', spinner: true}
-        : row.status === 'available'
-          ? {tone: 'ok', label: 'Healthy'} : {tone: 'warn', label: row.status || 'unknown'};
+      const memberState = (member, fallback = '') => {
+        if (settling) {
+          return {tone: 'pend', label: row.status || 'changing', spinner: true};
+        }
+        return member.lifecycle_state === 'available'
+          ? {tone: 'ok', label: 'Healthy'}
+          : {tone: 'warn', label: member.status || fallback || 'unknown'};
+      };
+      const writerMember = memberFor(row.writer || row.identifier);
 
       const readerRow = (reader) => {
         const leaving = want.dbRemove.has(reader);
         const step = batchStep(reader);
+        const member = memberFor(reader);
+        const available = member.lifecycle_state === 'available';
         const state = leaving ? {tone: 'warn', label: 'Will remove'}
           : step ? {tone: 'pend', label: step.kind === 'remove' ? 'Removing' : 'Changing', spinner: true}
-            : memberState;
+            : memberState(member);
         const side = leaving
           ? h('button', {class: 'fleet-link undo', type: 'button',
             onclick: () => { want.dbRemove.delete(reader); render(); }}, 'Keep it')
-          : remove.offered && !settling && !step
+          : remove.offered && member.can_remove && !settling && !step
             ? h('button', {class: 'fleet-link', type: 'button',
               onclick: () => { want.dbRemove.add(reader); render(); }}, 'Remove')
             : settling || step
-              ? h('span', {class: 'fleet-floor', text: WAITING_NOTE}) : null;
+              ? h('span', {class: 'fleet-floor', text: WAITING_NOTE})
+              : available
+                ? null
+                : h('span', {class: 'fleet-floor', text: TRANSITION_NOTE});
         return memberRow({
           state, name: reader,
           chips: [(row.reader_instance_classes || {})[reader], 'reader'],
           note: step ? phaseLine(step) : '',
           side,
-          modifier: leaving ? 'leaving' : settling || step ? 'pending' : '',
+          modifier: leaving ? 'leaving'
+            : settling || step || !available ? 'pending' : '',
         });
       };
 
@@ -896,14 +953,14 @@ export function capacityTab(ctx, signal = null, actions = null) {
             h('span', {class: 'fleet-label', text: `Read replicas · ${row.identifier}`}),
             stepper({
               value: count,
-              canDown: adding > 0 || (remove.offered && !settling && readers.some(
-                (reader) => !want.dbRemove.has(reader))),
-              canUp: add.offered || removingHere.length > 0,
+              canDown: adding > 0 || (remove.offered && !settling
+                && removableReaders.some((reader) => !want.dbRemove.has(reader))),
+              canUp: (add.offered && !row.blocked_reason) || removingHere.length > 0,
               downTitle: 'one fewer reader', upTitle: 'one more reader',
               onDown: () => {
                 if (adding > 0) { want.dbAdd.set(row.identifier, adding - 1); }
                 else {
-                  const pick = [...readers].reverse().find(
+                  const pick = [...removableReaders].reverse().find(
                     (reader) => !want.dbRemove.has(reader));
                   if (pick) want.dbRemove.add(pick);
                 }
@@ -924,9 +981,13 @@ export function capacityTab(ctx, signal = null, actions = null) {
           readerSizeControl(row)) : null,
         members: [
           memberRow({
-            state: memberState, name: row.writer || row.identifier,
+            state: memberState(writerMember, row.status),
+            name: row.writer || row.identifier,
             chips: [row.writer_instance_class || row.instance_class, 'writer'],
-            modifier: settling ? 'pending' : '',
+            note: !settling && writerMember.lifecycle_state !== 'available'
+              ? TRANSITION_NOTE : '',
+            modifier: settling
+              || writerMember.lifecycle_state !== 'available' ? 'pending' : '',
           }),
           ...readers.map(readerRow),
           ...Array.from({length: adding}, () => memberRow({
