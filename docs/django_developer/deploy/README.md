@@ -440,6 +440,21 @@ processing, `nginx -t` gate + reload, systemd + cron install from
 `var/deploy/`, the structural stale-cron sweep, `var/logs` ownership, restart,
 and a `PROBE_URL` health gate.
 
+Repository vhosts remain authoritative across that convergence, with one
+narrow exception for a certificate already issued on the node. When the
+repository and installed vhost each contain exactly one TLS server with the
+same normalized `server_name` set, `post_deploy.sh` may carry forward only
+the installed `ssl_certificate` and `ssl_certificate_key` values. The pair
+must be the canonical same-revision Certbot `live/<lineage>` symlinks, resolve
+to root-owned files in that lineage's `archive/` directory, and traverse
+root-owned lineage directories; none may be group- or world-writable. The
+installed vhost itself must be a safe regular file. Every other directive
+comes from the repository. Ambiguous TLS servers or certificate directives,
+mixed paths, renamed hosts, unsafe metadata, destination symlinks, and files
+that change while inspected fail the deploy without logging certificate
+paths. A fresh node, or an unambiguous absolute non-Certbot placeholder pair,
+uses the repository bytes unchanged.
+
 The framework install is a **convergence, never a one-shot veto**. The target
 (the `--framework` pin, or on bare runs the newest version per PyPI's JSON
 API) is first confirmed to exist against the JSON API — the endpoint that

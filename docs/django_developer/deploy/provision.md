@@ -907,20 +907,25 @@ step 7. That skip — not the staging dry run — is what makes a re-run safe.
 
 ### Two things that look like over-engineering and are not
 
-Both come from the same fact: **`ec2_deploy.sh` does an unconditional `cp -f`
-of the shipped nginx configs on every run.**
+The repository still owns the vhost on every run. Released framework
+convergence preserves only a rigorously validated existing Certbot certificate
+pair; it does not retain certbot-added includes, redirects, comments, routes,
+or other installed-node edits.
 
 **Step 1 is unconditional.** Guarding it behind "only rewrite if it still says
-`yourdomain.com`" looks like caution — it is not. Any operator edit to
-`app.conf` was already destroyed by that `cp -f` one step earlier, so the
-guard protects nothing; and on a resumed node the placeholder is always back,
-so the guard would fire exactly when it should not.
+`yourdomain.com`" looks like caution — it is not. Repository convergence owns
+every non-certificate directive, so an installed-node edit to `server_name`
+is not durable. The only retained installed values are a proven certificate
+pair whose normalized names already match the repository. Step 1 therefore
+remains the idempotent authority for the configured apex.
 
-**The skip branch still rewrites the certificate paths.** That same `cp -f`
-reset `ssl_certificate` and `ssl_certificate_key` to the snakeoil placeholder.
-Skipping certbot without re-pointing them leaves a resumed node serving a
-**self-signed certificate with a perfectly good Let's Encrypt one sitting
-unused on disk** — which reads as a certificate failure and is not one.
+**The skip branch still rewrites the certificate paths.** It is the final
+certificate convergence step and remains necessary for nodes created by an
+older framework, manually repaired nodes, and interrupted runs. With current
+frameworks an ordinary repository deploy keeps a proven matching lineage, so
+the project can safely ship a snakeoil first-boot placeholder without later
+replacing the issued certificate. Anything ambiguous or unsafe is refused
+instead of silently downgrading to that placeholder.
 
 And the skip check is expiry **and** a SAN match, not expiry alone: an
 operator who changed `apex_domain` between runs holds a completely unexpired
