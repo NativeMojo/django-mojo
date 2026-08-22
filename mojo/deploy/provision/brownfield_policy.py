@@ -34,7 +34,7 @@ ALLOWED_READS = {
     "elbv2": frozenset((
         "describe_listeners", "describe_load_balancer_attributes",
         "describe_load_balancers", "describe_tags", "describe_target_groups",
-        "describe_target_health",
+        "describe_target_group_attributes", "describe_target_health",
     )),
     "logs": frozenset(("describe_log_groups", "list_tags_log_group")),
     "cloudwatch": frozenset(("describe_alarms", "list_tags_for_resource")),
@@ -44,6 +44,7 @@ ALLOWED_MUTATIONS = {
     "ec2": frozenset(("run_instances", "allocate_address")),
     "elbv2": frozenset((
         "create_target_group", "modify_target_group",
+        "modify_target_group_attributes",
         "create_load_balancer", "modify_load_balancer_attributes",
         "create_listener", "register_targets",
     )),

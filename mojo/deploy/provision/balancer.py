@@ -77,6 +77,20 @@ def target_group_specs(spec, vpc_id):
     }
 
 
+def target_group_attributes(spec):
+    """Desired brownfield-only attributes, absent from managed topology."""
+    if not spec.fleet:
+        return {}
+    answer = {}
+    for role, field in (("api", "api_preserve_client_ip"),
+                        ("certbot", "certbot_preserve_client_ip")):
+        value = getattr(spec, field, None)
+        if value is not None:
+            answer[role] = {
+                "preserve_client_ip.enabled": "true" if value else "false"}
+    return answer
+
+
 def ensure_balancer(clients, spec, observed, apply=False):
     findings, actions = [], []
     result = report.Result()
@@ -129,7 +143,14 @@ def ensure_balancer(clients, spec, observed, apply=False):
             f"apply creates it across {len(subnet_ids) or spec_module.AZ_COUNT} "
             f"public subnet(s) with "
             f"{'temporary AWS addresses' if preserved_mode else 'a fixed address in each'}"))
-        actions.append(report.Action(STEP, "create", names["balancer"]))
+        nlb_security_group_id = getattr(
+            spec, "nlb_security_group_id", None) if spec.fleet else None
+        create_detail = (json.dumps(
+            {"SecurityGroups": [nlb_security_group_id]}, sort_keys=True,
+            separators=(",", ":"), ensure_ascii=True)
+            if nlb_security_group_id else None)
+        actions.append(report.Action(
+            STEP, "create", names["balancer"], create_detail))
         if not apply:
             if spec.fleet:
                 if not preserved_mode:
@@ -158,11 +179,13 @@ def ensure_balancer(clients, spec, observed, apply=False):
                 return findings, actions, result
         placement = ({"Subnets": list(subnet_ids)} if preserved_mode else
                      {"SubnetMappings": mappings})
+        security_groups = ({"SecurityGroups": [nlb_security_group_id]}
+                           if nlb_security_group_id else {})
         created = report.safe(
             findings, STEP, "elbv2.create_load_balancer",
             lambda: elbv2.create_load_balancer(
                 Name=names["balancer"], Type="network",
-                Scheme="internet-facing", **placement,
+                Scheme="internet-facing", **placement, **security_groups,
                 Tags=spec_module.tag_list(spec, "balancer",
                                           name=names["balancer"])))
         if not created:
@@ -191,6 +214,7 @@ def _ensure_target_groups(elbv2, spec, observed, wanted, findings, actions,
                           apply):
     arns = {}
     existing = observed.get("target_groups") or {}
+    wanted_attributes = target_group_attributes(spec)
     for role, request in wanted.items():
         found = existing.get(role)
         if not found:
@@ -204,6 +228,12 @@ def _ensure_target_groups(elbv2, spec, observed, wanted, findings, actions,
                 STEP, "create", request["Name"],
                 f"{request['Protocol']}:{request['Port']} health "
                 f"{request['HealthCheckProtocol']}{request['HealthCheckPath']}"))
+            attributes = wanted_attributes.get(role)
+            if attributes:
+                actions.append(report.Action(
+                    STEP, "modify", request["Name"], json.dumps(
+                        attributes, sort_keys=True, separators=(",", ":"),
+                        ensure_ascii=True)))
             if apply and request.get("VpcId"):
                 created = report.safe(
                     findings, STEP, "elbv2.create_target_group",
@@ -212,8 +242,23 @@ def _ensure_target_groups(elbv2, spec, observed, wanted, findings, actions,
                             Tags=spec_module.tag_list(spec, "balancer",
                                                       name=name), **r))
                 if created:
-                    arns[role] = (created.get("TargetGroups")
-                                  or [{}])[0].get("TargetGroupArn")
+                    arn = (created.get("TargetGroups")
+                           or [{}])[0].get("TargetGroupArn")
+                    if arn and attributes:
+                        changed = report.safe(
+                            findings, STEP,
+                            "elbv2.modify_target_group_attributes",
+                            lambda arn=arn, attributes=dict(attributes):
+                            elbv2.modify_target_group_attributes(
+                                TargetGroupArn=arn,
+                                Attributes=[
+                                    {"Key": key, "Value": value}
+                                    for key, value in sorted(
+                                        attributes.items())]))
+                        if changed is not None:
+                            arns[role] = arn
+                    elif arn:
+                        arns[role] = arn
             continue
 
         if not spec.fleet:
@@ -263,6 +308,33 @@ def _ensure_target_groups(elbv2, spec, observed, wanted, findings, actions,
             findings.append(report.existing(
                 STEP, f"target_group.{role}.ok",
                 f"{request['Name']} matches the topology"))
+        desired_attributes = wanted_attributes.get(role)
+        if desired_attributes:
+            current_attributes = found.get("TargetGroupAttributes") or {}
+            attribute_changes = {
+                key: value for key, value in desired_attributes.items()
+                if current_attributes.get(key) != value}
+            if attribute_changes:
+                findings.append(report.drift(
+                    STEP, f"target_group.{role}.attributes",
+                    f"{request['Name']} differs on "
+                    f"{', '.join(sorted(attribute_changes))}",
+                    "apply modifies the exact owned target group in place"))
+                actions.append(report.Action(
+                    STEP, "modify", request["Name"], json.dumps(
+                        attribute_changes, sort_keys=True,
+                        separators=(",", ":"), ensure_ascii=True)))
+                if apply:
+                    report.safe(
+                        findings, STEP,
+                        "elbv2.modify_target_group_attributes",
+                        lambda arn=found.get("TargetGroupArn"),
+                        changes=dict(attribute_changes):
+                        elbv2.modify_target_group_attributes(
+                            TargetGroupArn=arn,
+                            Attributes=[
+                                {"Key": key, "Value": value}
+                                for key, value in sorted(changes.items())]))
     return arns
 
 

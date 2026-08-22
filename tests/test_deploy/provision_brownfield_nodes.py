@@ -205,6 +205,7 @@ def test_preserved_mode_prepares_two_az_nlb_with_temporary_addresses(opts):
     from mojo.deploy.provision import balancer
 
     spec = handoff_topology()
+    spec.nlb_security_group_id = "sg-3123456789abcdef0"
     observed = objict(
         vpc_id=spec.brownfield_manifest["network"]["vpc_id"],
         node_records=[{"instance_id": "i-serving", "serving_target": True}],
@@ -231,6 +232,16 @@ def test_preserved_mode_prepares_two_az_nlb_with_temporary_addresses(opts):
             return lambda **kwargs: {}
 
     elb = _ELB()
+    _findings, preview_actions, _result = balancer.ensure_balancer(
+        _ClientsForBalancer(ec2=_EC2(), elbv2=elb), spec, observed,
+        apply=False)
+    create_action = next(
+        row for row in preview_actions
+        if row.verb == "create" and row.target == spec.nlb_name)
+    th.assert_eq(
+        create_action.detail,
+        '{"SecurityGroups":["sg-3123456789abcdef0"]}',
+        "preview/action CAS must bind the irreversible create-time NLB SG")
     balancer.ensure_balancer(
         _ClientsForBalancer(ec2=_EC2(), elbv2=elb), spec, observed,
         apply=True)
@@ -238,6 +249,9 @@ def test_preserved_mode_prepares_two_az_nlb_with_temporary_addresses(opts):
                  f"AWS must assign temporary addresses in both AZs: {elb.request}")
     th.assert_eq("SubnetMappings" in elb.request, False,
                  f"live allocation ids must not reach preparation: {elb.request}")
+    th.assert_eq(elb.request["SecurityGroups"],
+                 ["sg-3123456789abcdef0"],
+                 f"the NLB SG must be attached irreversibly at create: {elb.request}")
 
 
 @th.django_unit_test()

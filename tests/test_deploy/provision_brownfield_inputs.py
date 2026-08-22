@@ -95,6 +95,58 @@ def test_balancer_health_paths_reject_urls_injection_and_bad_lengths(opts):
 
 
 @th.django_unit_test()
+def test_balancer_client_ip_posture_is_strict_optional_and_digest_bound(opts):
+    from mojo.deploy.provision import brownfield_inputs
+
+    plain = brownfield_inputs.validate(raw_manifest())
+    plain_spec = brownfield_inputs.to_spec(plain)
+    th.assert_eq(plain_spec.api_preserve_client_ip, None,
+                 "omission must preserve AWS/framework behavior")
+    th.assert_eq(plain_spec.certbot_preserve_client_ip, None,
+                 "the HTTP target group must also remain undeclared by default")
+    th.assert_eq(plain_spec.nlb_security_group_id, None,
+                 "omission must preserve the legacy NLB create request")
+
+    raw = raw_manifest()
+    raw["load_balancer"]["api_preserve_client_ip"] = False
+    raw["load_balancer"]["certbot_preserve_client_ip"] = True
+    declared = brownfield_inputs.validate(raw)
+    topology = brownfield_inputs.to_spec(declared)
+    th.assert_eq(topology.api_preserve_client_ip, False,
+                 "an explicit false value must survive normalization")
+    th.assert_eq(topology.certbot_preserve_client_ip, True,
+                 "an explicit true value must survive normalization")
+    th.assert_true(declared["manifest_digest"] != plain["manifest_digest"],
+                   "client-IP posture must be bound into the manifest digest")
+
+    for invalid in (None, 0, 1, "false", "true", [], {}):
+        bad = raw_manifest()
+        bad["load_balancer"]["api_preserve_client_ip"] = invalid
+        message = _error(bad)
+        th.assert_in("api_preserve_client_ip", message,
+                     f"non-boolean {invalid!r} must fail closed: {message}")
+
+    secured = raw_manifest()
+    secured["load_balancer"]["security_group_id"] = (
+        "sg-3123456789abcdef0")
+    secured_manifest = brownfield_inputs.validate(secured)
+    secured_spec = brownfield_inputs.to_spec(secured_manifest)
+    th.assert_eq(secured_spec.nlb_security_group_id,
+                 "sg-3123456789abcdef0",
+                 "the irreversible NLB create-time SG must reach the spec")
+    th.assert_true(
+        secured_manifest["manifest_digest"] != plain["manifest_digest"],
+        "the exact NLB security group must be manifest-digest bound")
+    for invalid in (None, "", "sg-short", "SG-3123456789abcdef0",
+                    "sg-3123456789abcdefg", 7):
+        bad = raw_manifest()
+        bad["load_balancer"]["security_group_id"] = invalid
+        message = _error(bad)
+        th.assert_in("security_group_id", message,
+                     f"invalid NLB SG {invalid!r} must fail closed: {message}")
+
+
+@th.django_unit_test()
 def test_manifest_rejects_ambiguous_roles_versions_and_accounts(opts):
     from mojo.deploy.provision import brownfield_inputs
 

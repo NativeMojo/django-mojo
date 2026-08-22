@@ -71,7 +71,8 @@ PROFILE_KEYS = frozenset(("profile_arn", "role_arn", "managed"))
 MANAGED_PROFILE_KEYS = frozenset(("profile_name", "role_name"))
 BALANCER_KEYS = frozenset((
     "name", "api_target_group", "certbot_target_group", "subnet_ids",
-    "api_health_path", "certbot_health_path",
+    "api_health_path", "certbot_health_path", "api_preserve_client_ip",
+    "certbot_preserve_client_ip", "security_group_id",
 ))
 CREDENTIAL_KEYS = frozenset((
     "object", "provider", "metadata_key",
@@ -81,6 +82,7 @@ CANARY_KEYS = frozenset((
     "expected_status", "expected_marker", "timeout", "target", "addresses",
 ))
 ALLOCATION_RE = re.compile(r"^eipalloc-[0-9a-f]+$")
+SECURITY_GROUP_RE = re.compile(r"^sg-[0-9a-f]{8,17}$")
 
 # Fields whose presence would make the committed declaration a credential,
 # even if a caller tries to hide one in an otherwise unknown nested object.
@@ -234,6 +236,12 @@ def to_spec(manifest, project_root=None):
         "api_health_path", spec_module.HEALTH_PATH_DEFAULT)
     built.certbot_health_path = manifest["load_balancer"].get(
         "certbot_health_path", spec_module.HEALTH_PATH_DEFAULT)
+    built.api_preserve_client_ip = manifest["load_balancer"].get(
+        "api_preserve_client_ip")
+    built.certbot_preserve_client_ip = manifest["load_balancer"].get(
+        "certbot_preserve_client_ip")
+    built.nlb_security_group_id = manifest["load_balancer"].get(
+        "security_group_id")
     built.want_balancer = True
     built.stable_node_ips = False
     built.manage_dns = manifest["manage_dns"]
@@ -447,7 +455,8 @@ def _balancer(value, network, path):
     label = f"{path}.load_balancer"
     _object(value, BALANCER_KEYS, label)
     required = set(BALANCER_KEYS) - {
-        "api_health_path", "certbot_health_path"}
+        "api_health_path", "certbot_health_path", "api_preserve_client_ip",
+        "certbot_preserve_client_ip", "security_group_id"}
     _required(value, required, label)
     declared = {row["id"] for row in network["public_subnets"]}
     subnets = value["subnet_ids"]
@@ -467,6 +476,14 @@ def _balancer(value, network, path):
     for key in ("api_health_path", "certbot_health_path"):
         if key in value:
             _health_path(value[key], f"{label}.{key}")
+    for key in ("api_preserve_client_ip", "certbot_preserve_client_ip"):
+        if key in value and not isinstance(value[key], bool):
+            raise inputs.EnvFileError(f"{label}.{key} must be a boolean")
+    if "security_group_id" in value and (
+            not isinstance(value["security_group_id"], str)
+            or not SECURITY_GROUP_RE.match(value["security_group_id"] or "")):
+        raise inputs.EnvFileError(
+            f"{label}.security_group_id must be an exact security-group id")
 
 
 def _health_path(value, label):

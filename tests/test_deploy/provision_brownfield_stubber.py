@@ -105,6 +105,53 @@ def test_stubber_validates_sts_ec2_and_owned_tag_request_shapes(opts):
 
 
 @th.django_unit_test()
+def test_stubber_validates_target_group_attribute_request_shapes(opts):
+    from botocore.stub import Stubber
+
+    elbv2 = _client("elbv2")
+    arn = ("arn:aws:elasticloadbalancing:us-west-2:123456789012:"
+           "targetgroup/maestro-shadow-api/1234567890123456")
+    stubber = Stubber(elbv2)
+    load_balancer_arn = (
+        "arn:aws:elasticloadbalancing:us-west-2:123456789012:"
+        "loadbalancer/net/maestro-shadow-nlb/1234567890123456")
+    create_request = {
+        "Name": "maestro-shadow-nlb", "Type": "network",
+        "Scheme": "internet-facing",
+        "Subnets": ["subnet-0123456789abcdef0",
+                    "subnet-1123456789abcdef0"],
+        "SecurityGroups": ["sg-3123456789abcdef0"],
+        "Tags": [{"Key": "managed-by", "Value": "django-mojo"}],
+    }
+    stubber.add_response("create_load_balancer", {"LoadBalancers": [{
+        "LoadBalancerArn": load_balancer_arn,
+    }]}, create_request)
+    stubber.add_response("describe_target_group_attributes", {
+        "Attributes": [{"Key": "preserve_client_ip.enabled",
+                        "Value": "false"}],
+    }, {"TargetGroupArn": arn})
+    stubber.add_response("modify_target_group_attributes", {
+        "Attributes": [{"Key": "preserve_client_ip.enabled",
+                        "Value": "false"}],
+    }, {"TargetGroupArn": arn,
+        "Attributes": [{"Key": "preserve_client_ip.enabled",
+                        "Value": "false"}]})
+    with stubber:
+        created = elbv2.create_load_balancer(**create_request)
+        observed = elbv2.describe_target_group_attributes(
+            TargetGroupArn=arn)
+        changed = elbv2.modify_target_group_attributes(
+            TargetGroupArn=arn, Attributes=[{
+                "Key": "preserve_client_ip.enabled", "Value": "false"}])
+    stubber.assert_no_pending_responses()
+    th.assert_eq(created["LoadBalancers"][0]["LoadBalancerArn"],
+                 load_balancer_arn,
+                 "the provider model must accept an NLB SG at creation")
+    th.assert_eq(observed, changed,
+                 "exact describe/modify attribute request shapes must match")
+
+
+@th.django_unit_test()
 def test_stubber_validates_rds_cache_and_s3_metadata_request_shapes(opts):
     from botocore.stub import Stubber
     from mojo.deploy.provision import brownfield_discover

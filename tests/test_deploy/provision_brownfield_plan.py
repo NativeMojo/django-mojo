@@ -44,6 +44,43 @@ def test_health_path_value_is_bound_into_the_preview_action_digest(opts):
         "changing only the desired health path must change the action digest")
 
 
+def _client_ip_modify_action(value):
+    from mojo.deploy.provision import balancer
+
+    spec = topology()
+    spec.api_preserve_client_ip = value
+    vpc_id = spec.brownfield_manifest["network"]["vpc_id"]
+    wanted = balancer.target_group_specs(spec, vpc_id)
+    current = "false" if value else "true"
+    existing = {
+        role: dict(request, TargetGroupArn=f"arn:tg:{role}",
+                   TargetGroupAttributes={"preserve_client_ip.enabled": current})
+        for role, request in wanted.items()}
+    findings, actions = [], []
+    balancer._ensure_target_groups(
+        None, spec, {"target_groups": existing}, wanted,
+        findings, actions, apply=False)
+    return [action for action in actions if action.target == wanted["api"]["Name"]][0]
+
+
+@th.django_unit_test()
+def test_client_ip_value_is_bound_into_the_preview_action_digest(opts):
+    from mojo.deploy.provision import brownfield_plan
+
+    disabled = _client_ip_modify_action(False)
+    enabled = _client_ip_modify_action(True)
+    th.assert_eq(json.loads(disabled.detail),
+                 {"preserve_client_ip.enabled": "false"},
+                 "preview evidence must carry the exact disabled posture")
+    th.assert_eq(json.loads(enabled.detail),
+                 {"preserve_client_ip.enabled": "true"},
+                 "preview evidence must carry the exact enabled posture")
+    th.assert_true(
+        brownfield_plan._action_digest([disabled])
+        != brownfield_plan._action_digest([enabled]),
+        "changing only source-IP posture must change the action digest")
+
+
 @th.django_unit_test()
 def test_apply_reobserves_and_refuses_dependency_digest_drift(opts):
     from mojo.deploy.provision import brownfield_plan
