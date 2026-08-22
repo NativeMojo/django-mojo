@@ -233,10 +233,27 @@ def is_ready():
 def mcp_path():
     """The absolute request path the MCP door is routed and registered at.
 
-    ``get_static`` (deployment file only), the same expression the assistant
-    app's ``register_oauth_resource`` uses — so the address this page shows,
-    the document it probes and the registered resource can never disagree.
+    Delegated to ``mcp_auth.configured_path()`` — the ONE helper the route, the
+    OAuth registration and the challenge all call — rather than re-derived
+    here. Re-deriving it was subtly wrong under ``MOJO_APPEND_SLASH``: the
+    helper appends the trailing slash, so the resource actually registered and
+    stored on every grant is ``/api/assistant/mcp/`` while this returned the
+    unslashed form. The Admin's ``resource__endswith`` filter then matched
+    nothing, and every tool-door connection went unlisted and unswept by
+    Disconnect all.
+
+    The lazy import and the ``is_installed`` guard follow the rest of this
+    module: ``rest/admin_portal.py`` imports it at URL-load time, and the
+    assistant app is optional. Without it, the fallback is the same expression
+    ``configured_path`` uses for a deployment that has no assistant installed —
+    nothing can be registered there anyway.
     """
+    from django.apps import apps
+
+    if apps.is_installed("mojo.apps.assistant"):
+        from mojo.apps.assistant.mcp import auth as mcp_auth
+
+        return mcp_auth.configured_path()
     return "/" + str(settings.get_static(
         MCP_PATH_KEY, MCP_DEFAULT_PATH)).strip("/")
 

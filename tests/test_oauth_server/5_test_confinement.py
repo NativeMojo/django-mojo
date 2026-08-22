@@ -246,6 +246,36 @@ def test_exact_resource_beside_a_root(opts):
                 f"beneath its root, including the MCP door, got {error!r}")
 
 
+@th.django_unit_test("an aud beneath a live prefix resource is still not a resource")
+def test_unregistered_aud_beneath_a_prefix(opts):
+    from mojo.apps.account.services.oauth_server import tokens
+
+    # The aud names a path that is COVERED by the live root but is not itself
+    # registered. `resolve` is exact and must never fall back to a containing
+    # prefix: if it did, any path beneath the root could be minted as its own
+    # resource and would then authenticate there.
+    unregistered = ROOT_PATH + "/not-registered"
+    _grant, token, payload = _grant_and_token(
+        resource=ORIGIN + unregistered, scopes=["mcp", "api"])
+    registry = _root_registry()
+
+    for path, why in ((unregistered, "the path its own aud names"),
+                      (ROOT_PATH, "the live root above it"),
+                      (ROOT_PATH + "/account/user/me", "anywhere else beneath it")):
+        request = th.get_mock_request(path=path)
+        user, error = tokens.validate_access(
+            token, payload, request, registry=registry)
+        assert_true(user is None,
+                    f"a token whose aud is not a REGISTERED resource must be "
+                    f"refused at {why} ({path}) — resolve is exact and must not "
+                    f"fall back to the prefix that contains it")
+        assert_eq(error, "Invalid token",
+                  f"the refusal at {path} must be generic, got {error!r}")
+        assert_true(getattr(request, "www_authenticate", None) is None,
+                    f"the aud resolves no resource at all, so {path} must not "
+                    f"be told where to authenticate")
+
+
 @th.django_unit_test("a grant at a prefix resource without the api scope is refused")
 def test_root_grant_needs_the_api_scope(opts):
     from mojo.apps.account.services.oauth_server import tokens

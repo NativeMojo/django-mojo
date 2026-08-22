@@ -106,6 +106,28 @@ def test_prefix_resources(opts):
     assert_true(registry.resolve("/api/testit/oauth-registry-bad") is None,
                 "a refused registration must not leave an entry behind")
 
+    # A prefix resource at the SITE ROOT is refused outright. `covers` compares
+    # against `path.rstrip("/") + "/"`, so "/" would cover every path this host
+    # serves — the hosted sign-in pages included — not merely the REST API.
+    for root in ("/", "//"):
+        raised = False
+        try:
+            registry.register(root, ["mcp", "api"], lambda: True, prefix=True)
+        except ValueError:
+            raised = True
+        assert_true(raised,
+                    f"register({root!r}, prefix=True) must raise — a prefix "
+                    f"resource at the site root is full reach over the whole "
+                    f"host, which no consent screen can honestly describe")
+        assert_true(registry.resolve(root) is None,
+                    f"the refused root registration must leave no entry at {root!r}")
+    # An EXACT resource at "/" is still allowed — it is one path, not a subtree.
+    exact_root = resources.ResourceRegistry()
+    exact_root.register("/", ["mcp"], lambda: True)
+    assert_true(exact_root.resolve("/") is not None,
+                "the refusal must be about the prefix flag, not the path: an "
+                "exact resource at / covers exactly one request path")
+
     # Discovery advertises the union of what the ENABLED entries offer.
     assert_eq(discovery.authorization_server_metadata(
         ORIGIN, registry=registry)["scopes_supported"], ["mcp", "api"],

@@ -527,6 +527,9 @@ def test_api_scope_wire(opts):
             assert_true("approval step does not apply" in html,
                         "the page must warn that the Assistant's approval step "
                         "does not cover direct API calls")
+            assert_true("own pending actions" in html,
+                        "the page must say that full API access includes "
+                        "approving the Assistant's own pending actions")
             assert_true("the same permissions as your account" in html,
                         "the tool-door sentence must still be shown when `mcp` "
                         "is granted too")

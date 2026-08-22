@@ -65,12 +65,22 @@ class ResourceRegistry:
         a prefix resource that did not offer `api` would be a full-reach
         resource nothing had to ask for, and an exact resource offering `api`
         would advertise a scope its confinement cannot honour.
+
+        A prefix resource at ``/`` is refused outright. ``covers`` compares
+        against ``path.rstrip("/") + "/"``, so a root entry would cover EVERY
+        path this host serves — the hosted sign-in pages, another product's
+        endpoints, anything a reverse proxy maps here — not merely the REST
+        API. An installation with ``MOJO_PREFIX=""`` therefore offers no `api`
+        scope at all rather than one that means "the whole host".
         """
         if not isinstance(path, str) or not path.startswith("/"):
             raise ValueError("resource path must be an absolute request path")
         if not callable(enabled):
             raise ValueError("resource `enabled` must be a callable")
         scopes = list(scopes or [])
+        if prefix and not path.strip("/"):
+            raise ValueError(
+                "a prefix resource may not be registered at the site root")
         if prefix and API_SCOPE not in scopes:
             raise ValueError("a prefix resource must offer the api scope")
         if not prefix and API_SCOPE in scopes:
