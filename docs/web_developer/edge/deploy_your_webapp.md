@@ -281,7 +281,8 @@ button is right there.
   - **Take offline.** Stop serving the address while keeping the app and all
     its build history. Any custom addresses you added go quiet with it — an app
     that's "offline" should not still be answering on your own domain. You can
-    put it back later.
+    put it back later. Custom API/path routes are kept with the app and return
+    when you restore its address; the extra address names themselves are not.
   - **Delete.** Remove the app entirely. Its serving setup and deploy key are
     torn down together, cleanly.
 

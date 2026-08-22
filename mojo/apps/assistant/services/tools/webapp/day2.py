@@ -199,21 +199,18 @@ def _tool_detach_webapp_address(params, user, approval=None):
 def _offline_effect(primary):
     """What ``take_offline`` really does to THIS primary address.
 
-    ``webapp_lifecycle.take_offline`` deletes the primary vhost only when its
-    kind is ``site``. A ``site_api`` primary is unlinked from the app, but its
-    enabled ``Vhost`` row survives — and desired state selects every enabled
-    vhost in the pool, so nodes keep rendering it and the address goes on
-    answering from its upstream routes. A card that said "the address stops
-    serving" would be false for that kind, so the wording branches on it and
-    the kind is bound into the approval.
-
-    The behaviour itself is deliberately untouched here: it is the REST detach
-    handler's long-standing behaviour, lifted verbatim into the shared service,
-    and changing it belongs in its own item.
+    ``webapp_lifecycle.take_offline`` deletes the primary vhost for both serving
+    kinds (``site`` and ``site_api``), so the address stops answering either
+    way; it refuses outright — touching nothing — for any other kind, and when
+    an alias is also another app's primary address. The kind is still bound
+    into the approval so the card describes exactly the address that was
+    there, and the wording only degrades for a kind the service would refuse.
     """
+    from mojo.apps.edge.services import webapp_lifecycle
+
     if primary is None:
         return "", True
-    return primary.kind, primary.kind == "site"
+    return primary.kind, primary.kind in webapp_lifecycle.SERVING_KINDS
 
 
 def _summarize_offline(params, user):

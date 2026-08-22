@@ -711,6 +711,35 @@ def test_release_bucket_cors_missing_warns_without_apply(opts):
 
 
 @th.django_unit_test()
+def test_release_bucket_wildcard_cors_warns_without_claiming_uploads_are_blocked(opts):
+    from mojo.apps.fileman.models import FileManager
+    from mojo.apps.aws.services import aws_check
+
+    FileManager.objects.filter(
+        user__isnull=True, group__isnull=True, backend_type=FileManager.AWS_S3,
+    ).delete()
+    s3 = mock.Mock()
+    s3.get_bucket_cors.return_value = {"CORSRules": [{
+        "AllowedOrigins": ["*"],
+        "AllowedMethods": ["GET", "HEAD", "PUT", "POST", "DELETE"],
+        "AllowedHeaders": ["*"],
+    }]}
+    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()), \
+            mock.patch.object(aws_check, "_release_buckets",
+                              return_value=["release-media"]):
+        report = aws_check.AWSCheckRunner(
+            clients={"s3": s3, "sts": _verified_sts()}).run(["s3"])
+    item = next(row for row in report["items"] if row["code"] == "release_bucket.cors")
+    assert item["status"] == "warn", \
+        f"wildcard CORS must still request the tight portal rule: {item}"
+    assert "dedicated" in item["message"].lower() and "block" not in item["message"].lower(), \
+        f"the wildcard rule was described untruthfully: {item}"
+    assert "without replacing" in item["remediation"].lower(), \
+        f"the non-destructive repair contract was not explained: {item}"
+    s3.put_bucket_cors.assert_not_called()
+
+
+@th.django_unit_test()
 def test_release_bucket_cors_apply_merges_one_tight_rule(opts):
     from mojo.apps.fileman.models import FileManager
     from mojo.apps.aws.services import aws_check
@@ -1841,4 +1870,3 @@ def test_bootstrap_refuses_a_domain_owned_by_another_group(opts):
     codes = [item["code"] for item in runner.results]
     assert "dns.domain_not_owned" in codes, \
         f"a domain owned by another group must fail closed before any write, got {codes}"
-

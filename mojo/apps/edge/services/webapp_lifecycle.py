@@ -14,29 +14,63 @@ only the caller knows who is asking.
 
 from django.db import transaction
 
+from mojo import errors as me
+
+
+SERVING_KINDS = ("site", "site_api")
+
 
 def take_offline(web_app):
-    """Take a site offline: unlink and delete its serving vhost, keep the app.
+    """Take an app offline: unlink and delete its serving vhost, keep the app.
 
     The vhost's own ``delete()`` publishes fleet convergence, so nodes drop the
-    server block without waiting for the sweep.
+    server block without waiting for the sweep. Both serving kinds go —
+    ``site`` and ``site_api`` — so an API-backed app stops answering too.
 
     Every ALIAS address goes too, in the same transaction. "Offline" that left
     the customer's own domain serving would be the opposite of what was asked,
     and desired state drops an app's alias rows the moment it has no primary
     anyway (see ``releases.desired_webapps``).
+
+    The vhost and every alias are row-locked alongside the app, and the
+    operation refuses — touching nothing — when an alias is also another app's
+    primary address, when an alias has a non-serving kind, or when the primary
+    is not a serving address: each is a state no correct attach/alias flow
+    produces, and deleting through it would take a *different* app offline.
     """
     from mojo.apps.edge.models import Vhost, WebApp
 
     with transaction.atomic():
         locked = WebApp.objects.select_for_update().get(pk=web_app.pk)
-        vhost = locked.vhost
+        vhost = None
+        if locked.vhost_id:
+            vhost = Vhost.objects.select_for_update().get(pk=locked.vhost_id)
+        aliases = list(Vhost.objects.select_for_update().filter(
+            alias_of=locked).order_by("pk"))
+        conflicting_owner = WebApp.objects.filter(
+            vhost_id__in=[alias.pk for alias in aliases],
+        ).exclude(pk=locked.pk).exists()
+        if conflicting_owner:
+            raise me.ValueException(
+                "This WebApp has an alias also used as another app's primary "
+                "address and cannot be taken offline safely.")
+        if any(alias.kind not in SERVING_KINDS for alias in aliases):
+            raise me.ValueException(
+                "This WebApp has an invalid alias address and cannot be "
+                "taken offline safely.")
         if vhost is not None:
+            if vhost.kind not in SERVING_KINDS or vhost.alias_of_id is not None:
+                raise me.ValueException(
+                    "Only a site address can be taken offline from a WebApp.")
+            # A VhostRoute is materialized serving state and dies with this
+            # vhost. Capture the custom (non-auth) contract on the WebApp first
+            # so restoring an address can reproduce it exactly.
+            from mojo.apps.edge.services import webapp_serving
+            webapp_serving.capture_desired_routes(locked, vhost)
             locked.vhost = None
             locked.save(update_fields=["vhost", "modified"])
-            if vhost.kind == "site":
-                vhost.delete()
-        for alias in Vhost.objects.filter(alias_of=locked):
+            vhost.delete()
+        for alias in aliases:
             alias.delete()
     return {"webapp": web_app.pk, "address": None}
 

@@ -21,7 +21,13 @@ def on_admin_assistant(request):
     # Every other read serves the shared 24h cache, so drawing this page costs
     # no provider round trip.
     refresh = request.DATA.get("refresh") == "models"
-    return assistant_setup.state(refresh=refresh)
+    # `check=discovery` is the operator's explicit "is my front door actually
+    # forwarding the discovery documents" control, and the ONLY read that makes
+    # an outbound request — to this installation's own public address, never a
+    # provider. It is rate-limited by a 60 second server-side cache, and
+    # drawing the page without it costs no request at all.
+    check = request.DATA.get("check") == "discovery"
+    return assistant_setup.state(refresh=refresh, check=check)
 
 
 @md.POST("account/admin/assistant")
@@ -36,24 +42,50 @@ def on_admin_assistant_mutate(request):
     # An exact key set, never a superset: silently ignoring a field a browser
     # sent is how it ends up believing it saved something this call never wrote.
     if action == "verify":
-        if keys - {"action", "api_key"}:
-            raise merrors.ValueException("Verify accepts only action and api_key")
-        result = assistant_setup.verify(request.user, request.DATA.get("api_key"))
+        if keys - {"action", "api_key", "target"}:
+            raise merrors.ValueException(
+                "Verify accepts only action, api_key, and target")
+        result = assistant_setup.verify(
+            request.user, request.DATA.get("api_key"),
+            target=request.DATA.get("target"))
         return {"schema_version": assistant_setup.SCHEMA_VERSION,
                 "verified": True, "result": result,
                 "state": assistant_setup.state()}
     if action == "save":
-        if keys - {"action", "enabled", "model", "api_key", "clear_api_key"}:
+        if keys - {"action", "enabled", "model", "api_key", "clear_api_key",
+                   "handler_api_key", "clear_handler_api_key", "mcp_enabled"}:
             raise merrors.ValueException(
-                "Save accepts only action, enabled, model, api_key, and clear_api_key")
+                "Save accepts only action, enabled, model, api_key, clear_api_key, "
+                "handler_api_key, clear_handler_api_key, and mcp_enabled")
         saved = assistant_setup.save(
             request.user,
             enabled=request.DATA.get("enabled") is True,
             model=request.DATA.get("model"),
             api_key=request.DATA.get("api_key"),
-            clear_api_key=request.DATA.get("clear_api_key") is True)
+            clear_api_key=request.DATA.get("clear_api_key") is True,
+            handler_api_key=request.DATA.get("handler_api_key"),
+            clear_handler_api_key=request.DATA.get("clear_handler_api_key") is True,
+            # Raw, never coerced: a JSON `null` arrives as None and means
+            # "leave the switch alone"; the service refuses every other
+            # non-boolean rather than reading it as an intent.
+            mcp_enabled=request.DATA.get("mcp_enabled"))
         # Both actions answer with the fresh state, so a second editor holding a
         # stale page sees the truth on its very next call.
         return {"schema_version": assistant_setup.SCHEMA_VERSION,
                 "saved": True, "state": saved}
-    raise merrors.ValueException("action must be verify or save")
+    if action == "revoke_grant":
+        if keys != {"action", "grant_id"}:
+            raise merrors.ValueException(
+                "Revoke requires exactly action and grant_id")
+        revoked = assistant_setup.revoke_grant(
+            request.user, request.DATA.get("grant_id"))
+        return {"schema_version": assistant_setup.SCHEMA_VERSION,
+                "revoked": revoked, "state": assistant_setup.state()}
+    if action == "revoke_all_grants":
+        if keys != {"action"}:
+            raise merrors.ValueException("Revoke all requires exactly action")
+        revoked = assistant_setup.revoke_all_grants(request.user)
+        return {"schema_version": assistant_setup.SCHEMA_VERSION,
+                "revoked": revoked, "state": assistant_setup.state()}
+    raise merrors.ValueException(
+        "action must be verify, save, revoke_grant, or revoke_all_grants")

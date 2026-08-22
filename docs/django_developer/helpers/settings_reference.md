@@ -882,9 +882,31 @@ restart. See
 
 ### OAUTH
 
+Social-login (client-side) keys:
+
 - `OAUTH_ALLOW_REGISTRATION`
 - `OAUTH_REDIRECT_URI`
 - `OAUTH_STATE_TTL`
+
+Authorization-server keys — see
+[account/oauth_server.md](../account/oauth_server.md). All five are read with
+`get_static`, i.e. the **deployment file only**: a `manage_settings` holder must
+not be able to lengthen a credential lifetime through a database `Setting` row.
+Changing any of them needs a restart.
+
+- `OAUTH_SERVER_PATH` — string, default `api/account/oauth`. Path root of the
+  authorization server's endpoints. The same constant derives the issuer, the
+  route registrations and the request-logging labels, so they cannot disagree.
+- `OAUTH_ACCESS_TTL` — int seconds, default `3600`. Access-token lifetime.
+- `OAUTH_REFRESH_TTL_DAYS` — int days, default `30`. Absolute ceiling on a
+  grant, measured from consent and never slid by a refresh.
+- `OAUTH_REFRESH_GRACE_SECONDS` — int seconds, default `30`. How long a rotated
+  refresh token is forgiven as a lost response before reuse counts as replay
+  and revokes the grant family.
+- `OAUTH_CODE_TTL` — int seconds, default `300`. Authorization-code lifetime.
+
+The authorization server is inert until `BASE_URL` is set **and** at least one
+registered resource is enabled; until then every endpoint answers 404.
 
 ### OPENAPI
 

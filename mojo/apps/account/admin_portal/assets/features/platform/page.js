@@ -28,7 +28,9 @@ function operatorChecks(checks = []) {
     code: typeof check.code === 'string' && check.code ? check.code : 'unknown',
     explanation: typeof check.explanation === 'string' && check.explanation
       ? check.explanation : 'Readiness check',
-    remediation: typeof check.remediation === 'string' ? check.remediation : '',
+    remediation: check.status === 'pass' ? ''
+      : typeof check.remediation === 'string' ? check.remediation : '',
+    fixable: check.status === 'pass' ? false : check.fixable === true,
   })).filter((check) => check.code !== 'django.static_directories' &&
     (check.code !== 'django.local_request' || check.details?.target_source === 'configured_static'));
 }
@@ -41,30 +43,61 @@ function isReadinessCheck(value) {
   return isReadinessObject(value) && READINESS_SEVERITY.includes(value.status);
 }
 
+function validCoverage(value, returned = null) {
+  if (!isReadinessObject(value)) return false;
+  const fields = ['total', 'returned', 'omitted'];
+  if (!fields.every((key) => Number.isSafeInteger(value[key]) && value[key] >= 0)) return false;
+  return value.returned + value.omitted === value.total &&
+    (returned === null || value.returned === returned);
+}
+
+function validSummary(value, total) {
+  return isReadinessObject(value) && READINESS_SEVERITY.every((key) =>
+    Number.isSafeInteger(value[key]) && value[key] >= 0) &&
+    READINESS_SEVERITY.reduce((sum, key) => sum + value[key], 0) === total;
+}
+
 function operatorReport(report) {
   const source = isReadinessObject(report) ? report : {};
   const hasSections = Array.isArray(source.sections);
   const rawSections = hasSections ? source.sections : [];
   let truncated = source.truncated === true || !hasSections;
-  const summary = {pass: 0, warn: 0, fail: 0, pending: 0};
+  const visibleSummary = {pass: 0, warn: 0, fail: 0, pending: 0};
   const sections = [];
   rawSections.forEach((section) => {
     if (!isReadinessObject(section)) { truncated = true; return; }
     const rawChecks = Array.isArray(section.checks) ? section.checks : [];
     if (!Array.isArray(section.checks) || rawChecks.some((check) => !isReadinessCheck(check))) truncated = true;
     const checks = operatorChecks(rawChecks);
-    checks.forEach((check) => { if (check.status in summary) summary[check.status] += 1; });
-    const status = READINESS_SEVERITY.find((value) => checks.some((check) => check.status === value)) || 'pass';
-    if (checks.length) sections.push({
+    checks.forEach((check) => { if (check.status in visibleSummary) visibleSummary[check.status] += 1; });
+    const coverage = validCoverage(section.coverage, rawChecks.length) ? section.coverage : null;
+    if (!coverage && section.coverage !== undefined) truncated = true;
+    const derivedStatus = READINESS_SEVERITY.find((value) => checks.some((check) => check.status === value)) || 'pass';
+    const status = coverage && READINESS_SEVERITY.includes(section.status)
+      ? section.status : derivedStatus;
+    if (checks.length || coverage?.total) sections.push({
       ...section,
       code: typeof section.code === 'string' && section.code ? section.code : 'unknown',
       label: typeof section.label === 'string' && section.label ? section.label : 'Readiness section',
       checks,
       status,
+      fixable: status === 'pass' ? false : section.fixable === true,
     });
   });
-  const overall = READINESS_SEVERITY.find((value) => summary[value]) || 'pass';
+  const checkCoverage = validCoverage(source.coverage?.checks)
+    ? source.coverage.checks : null;
+  if (source.coverage?.checks !== undefined && !checkCoverage) truncated = true;
+  const summary = checkCoverage && validSummary(source.summary, checkCoverage.total)
+    ? {...source.summary} : visibleSummary;
+  const derivedOverall = READINESS_SEVERITY.find((value) => summary[value]) || 'pass';
+  const overall = checkCoverage && READINESS_SEVERITY.includes(source.overall)
+    ? source.overall : derivedOverall;
   return {...source, sections, summary, overall, truncated};
+}
+
+function actionableSections(report) {
+  return (report?.sections || []).filter((section) =>
+    section.fixable === true && section.status !== 'pass').map((section) => section.code);
 }
 
 function checkAction(section, check, config, actions) {
@@ -84,18 +117,25 @@ function checkAction(section, check, config, actions) {
 }
 
 function reportView(report, options, actions) {
+  const omittedChecks = report?.coverage?.checks?.omitted;
   const partial = report?.truncated === true ? h('div', {class: 'callout warning'}, icon('alert'),
-    h('p', {text: 'Only part of this readiness report could be shown. Truncated or malformed entries were omitted; rerun the checks for a complete report.'})) : null;
+    h('p', {text: Number.isSafeInteger(omittedChecks)
+      ? `${omittedChecks} readiness result${omittedChecks === 1 ? '' : 's'} could not be shown within the safety limit. Status totals still cover every result.`
+      : 'Only part of this readiness report could be shown. Truncated or malformed entries were omitted; rerun the checks for a complete report.'})) : null;
   if (!report?.sections?.length) return h('div', {}, partial,
     h('div', {class: 'empty'}, h('p', {text: partial ? 'No valid readiness checks were returned.' : 'Run checks to create a readiness report.'})));
   const byCode = new Map((options?.sections || []).map((entry) => [entry.code, entry]));
   return h('div', {class: 'setup-sections'}, partial, ...report.sections.map((section) => {
     const config = byCode.get(section.code) || {};
     const sectionActions = h('div', {class: 'section-actions'},
-      h('button', {class: 'button ghost compact', onclick: () => actions.create('check', section.code)}, icon('refresh'), 'Check'));
+      h('button', {class: 'button ghost compact', onclick: () => actions.refresh()}, icon('refresh'), 'Check'));
+    const coverage = validCoverage(section.coverage) ? section.coverage : null;
+    const countLabel = coverage
+      ? `${coverage.total} readiness checks · ${coverage.returned} shown`
+      : `${section.checks.length} readiness checks`;
     return h('section', {class: 'panel setup-section', 'data-section': section.code, 'data-focus': section.code},
       h('div', {class: 'panel-heading'}, h('div', {}, h('div', {class: 'heading-line'}, h('h2', {text: section.label}), badge(section.status.toUpperCase(), statusTone(section.status))),
-        h('p', {text: `${section.checks.length} readiness checks`})), sectionActions),
+        h('p', {text: countLabel})), sectionActions),
       h('div', {class: 'check-list'}, ...section.checks.map((check) =>
         h('article', {class: 'check-row', 'data-check': check.code, 'data-focus': check.code},
           h('div', {class: `status-dot ${statusTone(check.status)}`, title: check.status}),
@@ -309,12 +349,18 @@ export async function setupPage(ctx, signal = null) {
   }
 
   const actions = {
+    refresh: async () => {
+      await setupAction('Checking System Setup', 'Reading authoritative readiness without making changes', async () => {
+        await refreshReport();
+      });
+    },
     create: async (mode, section = '') => {
       await setupAction(mode === 'fix' ? 'Repairing System Setup' : 'Checking System Setup',
         section ? `Preparing ${section.replaceAll('_', ' ')}` : 'Preparing the durable operation', async (busy) => {
           replayKey = replayKey || crypto.randomUUID();
           try {
-            operation = await apiOnce('/api/account/admin/setup/create', {method: 'POST', signal, body: JSON.stringify({mode, section, replay_key: replayKey})});
+            const sections = mode === 'fix' && !section ? actionableSections(report) : undefined;
+            operation = await apiOnce('/api/account/admin/setup/create', {method: 'POST', signal, body: JSON.stringify({mode, section, sections, replay_key: replayKey})});
           } catch (error) {
             if (signal?.aborted || error?.code === 'fresh_auth_required') throw error;
             options = await api('/api/account/admin/setup/options', {signal});
@@ -347,8 +393,8 @@ export async function setupPage(ctx, signal = null) {
   function render() {
     root.replaceChildren(...[
       pageHeader('Installation control plane', 'System Setup', 'Configure a new installation, repair partial setup, and prove every dependency from one place.', [
-        h('button', {class: 'button ghost', disabled: activeAction || driving, onclick: () => actions.create('check')}, icon('refresh'), 'Run all checks'),
-        h('button', {class: 'button primary', disabled: activeAction || driving || (operation && !TERMINAL.has(operation.status)), onclick: () => actions.create('fix')}, icon('settings'), 'Fix all'),
+        h('button', {class: 'button ghost', disabled: activeAction || driving, onclick: () => actions.refresh()}, icon('refresh'), 'Run all checks'),
+        h('button', {class: 'button primary', disabled: activeAction || driving || !actionableSections(report).length || (operation && !TERMINAL.has(operation.status)), onclick: () => actions.create('fix')}, icon('settings'), 'Fix all'),
       ]),
       infrastructureNote(ctx),
       actionError ? errorState(actionError) : null,

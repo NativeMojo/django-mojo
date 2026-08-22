@@ -44,9 +44,11 @@ retry.
 {
   "status": true,
   "data": {
-    "schema_version": 1,
+    "schema_version": 2,
     "region": "us-east-1",
     "mode": "managed",
+    "identity": {"project": "mojo", "environment": "prod"},
+    "identity_available": true,
     "generated_at": "2026-08-18T18:00:00+00:00",
     "node_id_pinned": false,
     "nodes": {
@@ -54,13 +56,15 @@ retry.
       "groups": [{"arn": "...", "name": "mojo-api", "target_type": "instance", "port": 443, "protocol": "TCP"}],
       "instances": [
         {"id": "i-0a1b…", "name": "mojo-api-a", "state": "healthy",
-         "instance_state": "running", "instance_type": "m6i.large",
+         "instance_state": "running", "lifecycle_state": "available",
+         "instance_type": "m6i.large", "registered": true, "can_drain": true,
          "zone": "us-east-1a", "public_ip": "203.0.113.10", "healthy": true,
          "self": true, "primary": true, "added_by_capacity": false,
          "stable_ip": true, "groups": ["arn:…targetgroup/mojo-api/…"]}
       ],
       "self": "i-0a1b…",
-      "self_check": "matched"
+      "self_check": "matched", "serving_available": true,
+      "inventory_available": true
     },
     "databases": [
       {"identifier": "mojo-prod-aurora", "kind": "aurora", "engine": "aurora-postgresql",
@@ -68,6 +72,16 @@ retry.
        "readers": ["mojo-prod-aurora-2"],
        "writer_instance_class": "db.r6g.xlarge",
        "reader_instance_classes": {"mojo-prod-aurora-2": "db.t4g.medium"},
+       "reader_statuses": {"mojo-prod-aurora-2": "creating"},
+       "members": [
+         {"id": "mojo-prod-aurora-1", "role": "writer", "status": "available",
+          "lifecycle_state": "available", "instance_class": "db.r6g.xlarge",
+          "can_resize": true, "can_remove": false},
+         {"id": "mojo-prod-aurora-2", "role": "reader", "status": "creating",
+          "lifecycle_state": "creating", "instance_class": "db.t4g.medium",
+          "can_resize": false, "can_remove": false}
+       ],
+       "blocked_reason": "resource_transitioning",
        "reader_endpoint": "…cluster-ro-….rds.amazonaws.com",
        "endpoint": "…cluster-….rds.amazonaws.com"}
     ],
@@ -92,7 +106,10 @@ retry.
       {"identifier": "mojo-prod-redis", "status": "available", "replica_count": 1,
        "cluster_enabled": false, "automatic_failover_on": true, "multi_az_on": true,
        "node_type": "cache.t4g.micro", "resize_impact": "rolling",
-       "members": [{"id": "…-001", "role": "primary"}, {"id": "…-002", "role": "replica"}],
+       "members": [
+         {"id": "…-001", "role": "primary", "status": "available", "lifecycle_state": "available"},
+         {"id": "…-002", "role": "replica", "status": "available", "lifecycle_state": "available"}
+       ],
        "min_replicas": 1, "blocked_reason": null}
     ],
     "sizes": {
@@ -148,6 +165,23 @@ Three things a client must not re-derive:
 - **`mode`.** `"external"` means this installation's AWS estate is applied by
   an external IaC pipeline. Every apply answers 403; the read still works.
 
+`identity` is the provision declaration used to scope AWS discovery. With it,
+EC2 nodes, RDS clusters/instances, ElastiCache groups, serving targets, and the
+balancer-less address fallback are admitted only by exact project/environment
+and role tags. A similarly named resource is not ownership proof.
+If a declaration exists but is ambiguous or invalid, `identity_available` is
+false, every action is blocked `identity_unavailable`, the warning names the
+configuration problem, and the server performs no broad AWS inventory reads.
+Only a project with no environment declaration at all retains the legacy
+serving-only behavior.
+
+Node inventory is independent of load-balancer registration. An owned pending,
+running, stopping, stopped, or shutting-down EC2 instance remains in
+`nodes.instances`; `registered` tells whether ELB currently contains it,
+`instance_state` preserves AWS's word, and `lifecycle_state` normalizes it to
+`available`, `creating`, `deleting`, or `error`. Render `can_drain` exactly as
+returned. A balancerless running node is visible but not drainable.
+
 `warnings` carries a degraded section. A section that could not be read comes
 back empty **and** named here — never silently empty.
 
@@ -164,6 +198,14 @@ can warn honestly. Aurora rows carry `writer_instance_class` and
 `reader_instance_classes` (per reader); standalone rows already carried
 `instance_class` and now fold each replica's class into
 `reader_instance_classes` too.
+
+Database and cache members also carry their own provider `status` and
+normalized `lifecycle_state`. Database members add `can_resize` and
+`can_remove`; render controls only from those fields. A parent cluster/group
+may say `available` while one member is still creating or deleting, so the
+parent status must never be copied onto its children. `blocked_reason:
+"resource_transitioning"` disables changes for the affected resource until a
+fresh read reports every member available.
 
 **`reader_routing` is the serving process's self-report** on whether reader
 traffic is actually configured — the settings behind it are file-only and read
@@ -193,8 +235,8 @@ blocked `policy_unavailable`.
 
 **Balancer-less installs** get a read-only answer instead of a dead end: when
 the serving read succeeds but no instance is registered behind any balancer,
-`fallback_attached` lists every Elastic IP attached to an EC2 instance in the
-region — `{instance, instance_name, public_ip, allocation_id, managed}` — so a
+`fallback_attached` lists Elastic IPs attached to an **owned** EC2 instance —
+`{instance, instance_name, public_ip, allocation_id, managed}` — so a
 single-node estate still shows the address to give providers. These rows are
 report-only: they never feed the allowlist in `addresses`, never make either
 action available, and the panel renders them "managed outside this portal". Cost
@@ -270,7 +312,7 @@ itself.
 {
   "status": true,
   "data": {
-    "schema_version": 1,
+    "schema_version": 2,
     "id": "9f1c…",
     "action": "add_node",
     "resource": "i-0a1b…",
@@ -370,7 +412,7 @@ the same resource (`conflicting_steps`).
 {
   "status": true,
   "data": {
-    "schema_version": 1,
+    "schema_version": 2,
     "id": "5b0c…",
     "created": "2026-08-20T18:00:00+00:00",
     "expires_in": 300,
@@ -440,7 +482,7 @@ Exactly one of `operation` and `batch` per request (both or neither is a
 {
   "status": true,
   "data": {
-    "schema_version": 1,
+    "schema_version": 2,
     "id": "9c2f…",
     "plan_id": "5b0c…",
     "actor": 1,
@@ -511,6 +553,7 @@ operation record instead.
 |---|---|---|
 | `infrastructure_external` | 403 | `INFRASTRUCTURE_MODE=external`. No caller may change capacity here. `data` carries `mode` and `setting` |
 | `invalid_request` | 400 | Unknown action, missing identifier, missing/ill-typed `count` or `apply_immediately` |
+| `identity_unavailable` | 503 | A selected, malformed, or ambiguous provision environment prevents exact ownership proof. Correct the declaration; capacity performs no account-wide fallback |
 | `node_id_pinned` | 409 | The fleet pins `EDGE_NODE_ID`, so a new node could never prove its own identity |
 | `no_source_node` | 409 | No healthy, running fleet member is available to clone |
 | `not_registered` | 409 | A **drain** named an instance not registered behind any load balancer. (Terminate no longer refuses this shape — see `not_fleet_member`) |
@@ -526,6 +569,7 @@ operation record instead.
 | `automatic_failover_requires_replica` | 409 | Failover or Multi-AZ is on, so the group must keep at least one replica |
 | `no_change` | 409 | The group already has that many replicas, a resize named the size the resource already runs, or a disable found nothing to detach |
 | `not_settled` | 409 | A resize was asked of a resource that is not settled. The message quotes the provider's state verbatim (`modifying`, `deleting`, …) and attributes nothing — the state may be AWS background work. Routine background states are allowed through: cache `snapshotting`; RDS `backing-up`, `storage-optimization`, `maintenance` |
+| `resource_transitioning` | 409 | The fresh report shows a database/cache parent or member creating, deleting, modifying, or otherwise not available. Refresh and inspect; the control is not safe yet |
 | `no_fleet_nodes` | 409 | No node is registered behind a load balancer, so there is nothing to give a stable address to |
 | `address_not_eligible` | 409 | An explicitly assigned allocation is associated, unknown, or carries no django-mojo ownership tag. The remedy (tag it in the console) is in the message |
 | `capacity_in_progress` | 409 | Another capacity change holds the single-flight claim. **All adds share one claim; enable and disable of stable IPs share another; a cache resize and a replica-count change on the same group share that group's claim** |
@@ -534,6 +578,7 @@ operation record instead.
 | `provider_denied` | 403 | AWS refused. `data.failure.iam_action` names the missing grant — and nothing else |
 | `provider_unavailable` | 503 | A retryable AWS failure |
 | `provider_error` | 502 | Any other AWS failure |
+| `mutation_state_unknown` | 502 | AWS may have accepted a write whose response could not be confirmed. The claim stays held; refresh the report and reconcile provider state. **Do not replay the mutation** |
 | `operation_not_found` | 404 | Unknown operation id (status only) |
 | `conflicting_steps` | 409 | A batch both resizes and removes the same resource. `data.step` names the step (plan only) |
 | `report_degraded` | 503 | An AWS read touching a planned section did not answer completely — retry; never rendered as "unknown resource" (plan and plan/apply) |
@@ -567,7 +612,8 @@ of the refused step.
 | `address_failed` | An address could not be attached. On `add_node` the clone is running and **deliberately not registered** — a node whose egress nobody allowlisted must not serve |
 | `address_unverified` | The verify re-read did not show the expected associations. Run the action again — both stable-ips operations converge only what is missing |
 | `policy_unreadable` | `add_node` could not read the stable-IPs policy, so the node was **not registered** rather than admitted unaddressed |
-| `operation_failed` | An unexpected error. Re-read `/api/aws/capacity` before retrying |
+| `mutation_state_unknown` | A provider write may have succeeded but its result could not be confirmed. Refresh and reconcile the provider inventory; **do not replay** |
+| `operation_failed` | An unexpected post-acceptance failure leaves the outcome uncertain. Refresh and reconcile provider state; **do not replay** |
 
 ### Warning codes (non-fatal, on the operation)
 

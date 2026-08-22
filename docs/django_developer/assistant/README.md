@@ -55,6 +55,27 @@ User sends message via REST
 > transports, and the tool → Admin-twin → gates table for all 38 built-in
 > mutating tools.
 
+### Transports
+
+The agent loop above is one of three ways a tool call reaches
+`agent._execute_tool` — the single dispatch function all of them share, which is
+why the permission gate and the approval gate live there and nowhere else.
+
+```
+REST   POST /api/assistant            → run_assistant     → _execute_tool
+WS     assistant_message              → run_assistant_ws  → _execute_tool
+MCP    POST /api/assistant/mcp        → mcp/server.py     → _execute_tool
+```
+
+The **MCP transport** is a stateless JSON-RPC resource server for remote AI
+clients that signed in through this installation's own OAuth 2.1 server. It
+runs no LLM of its own — the client's model does the reasoning and this
+installation only executes tools — and it dispatches through a *projected*
+registry, so the Admin's own conversation tools are not offered. It is off by
+default. See [MCP transport](mcp.md), and
+[account/oauth_server](../account/oauth_server.md) for token issuance and
+confinement.
+
 ## Two-Tier Tool Loading
 
 Tools are split into two tiers to reduce token usage on every turn. The LLM starts with a small set of core tools and loads domain-specific tools on demand.
@@ -203,27 +224,45 @@ model from the built-in Admin, without editing a settings file.
 read *and* write — see
 [the API reference](../../web_developer/account/admin_portal/assistant.md)).
 
-### The five protected keys
+### The seven protected keys
 
 | Key | Owned by | Stored as |
 |---|---|---|
 | `LLM_ADMIN_ENABLED` | `assistant_setup` | Plain global `Setting` row |
-| `LLM_ADMIN_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row |
+| `LLM_ADMIN_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row — the Assistant's own key, optional |
 | `LLM_ADMIN_MODEL` | `assistant_setup` | Plain row, absent means automatic |
-| `LLM_ADMIN_VERIFY_STATE` | `assistant_setup` | How the STORED key last checked |
-| `LLM_HANDLER_API_KEY` | The deployment file | Never written from Admin |
+| `LLM_ADMIN_VERIFY_STATE` | `assistant_setup` | How the STORED Assistant key last checked |
+| `LLM_HANDLER_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row — the **platform** key |
+| `LLM_HANDLER_VERIFY_STATE` | `assistant_setup` | How the STORED platform key last checked |
+| `ASSISTANT_MCP_ENABLED` | descriptor: this app · writer: `assistant_setup` | Plain global row — the remote agent access (MCP) switch, off by default |
 
-All five are **catalog-protected**: `admin_settings.is_catalog_protected()`
+All seven are **catalog-protected**: `admin_settings.is_catalog_protected()`
 returns true, so `Setting.set()`, the generic `/api/settings` REST surface, a
-shell save and every other writer refuse them. The four writable keys have one
-dedicated escape — `row.save(_protected_writer=<key>)` — and the writer must
-name the exact key the row carries, so no writer can smuggle a different
-protected key past the guard.
+shell save and every other writer refuse them. Each has one dedicated escape —
+`row.save(_protected_writer=<key>)` — and the writer must name the exact key
+the row carries, so no writer can smuggle a different protected key past the
+guard.
 
-`LLM_HANDLER_API_KEY` is protected **read-only**. A global database row would
-outrank the deployment file (`SettingsHelper.get` reads database rows before
-`django.conf`), which would make a value labelled "Deployment settings" a lie.
-Nothing writes it; it stays visible as provenance.
+`LLM_HANDLER_API_KEY` is the **platform** credential: incident triage and the
+LLM agent read it, and it is the Assistant's fallback. It is settable from the
+same owner editor as the Assistant key (`handler_api_key` /
+`clear_handler_api_key` on `save`, `target: "handler"` on `verify`). A value in
+the deployment file still applies when no row is stored, and `state()` reports
+which one is live as `handler_key.source` (`admin` / `deployment` / `none`).
+The incident readers resolve it at call time, so a key stored from the Admin
+takes effect without a restart.
+
+`ASSISTANT_MCP_ENABLED` is the **remote agent access** switch. Its descriptor is
+registered by this application (`apps.py`), because an installation without the
+assistant should not advertise a setting it does not read; its writer is
+`assistant_setup.save(..., mcp_enabled=...)`, and its consumers are the MCP
+door's own gate and the OAuth resource registration's `enabled` callable, both
+of which re-read it on every request. It is independent of `LLM_ADMIN_ENABLED`
+and of every credential — a remote client brings its own model — and it is off
+by default. `ASSISTANT_MCP_PATH` is deployment-file-only and is not writable
+from anywhere. See
+[the Admin panel docs](../account/admin_portal/assistant.md#remote-agent-access)
+for the self-check, the nginx requirement and revocation.
 
 ### Writes go through the guarded save path, never `.update()`
 
@@ -249,13 +288,15 @@ credential and protect it accordingly.
 
 ```
 LLM_ADMIN_API_KEY (Admin row)  ->  LLM_ADMIN_API_KEY (deployment file)
-                               ->  LLM_HANDLER_API_KEY (deployment fallback)
+                               ->  LLM_HANDLER_API_KEY (Admin row)
+                               ->  LLM_HANDLER_API_KEY (deployment file)
 ```
 
 This is existing behaviour, not new code: `llm.get_api_key()` already prefers
 `LLM_ADMIN_API_KEY`, and a database row already outranks the file. `state()`
 reports which one is live as `key.source` (`admin` / `deployment` / `fallback` /
-`none`) with a four-character hint, and never the value.
+`none`) with a four-character hint, and never the value; `fallback` means the
+Assistant is resolving through the platform key.
 
 ### Verification
 
@@ -285,6 +326,8 @@ credential nobody proved.
 | `LLM_ADMIN_SYSTEM_PROMPT` | (built-in) | Override the default system prompt |
 | `LLM_ADMIN_PROMPT_CACHE_ENABLED` | `True` | Enable Anthropic prompt caching on assistant LLM calls (see [Prompt Caching](#prompt-caching)) |
 | `LLM_ADMIN_APPROVAL_TTL` | `600` | Seconds an operator has to approve a mutating action before it expires. Clamped to 60–3600. See [Approvals](approvals.md). |
+| `ASSISTANT_MCP_ENABLED` | `False` | Whether the MCP endpoint accepts remote AI clients. Read on every request, so it takes effect immediately in both directions; catalog-protected from the generic settings API. See [MCP transport](mcp.md). |
+| `ASSISTANT_MCP_PATH` | `api/assistant/mcp` | Request path of the MCP endpoint, also the registered OAuth resource path. Deployment file only; changing it needs a restart. |
 | `LLM_BROWSE_MAX_LENGTH` | `20000` | Max character length of content returned by `browse_url` and `read_docs` |
 | `LLM_BROWSE_TIMEOUT` | `10` | HTTP request timeout in seconds for `browse_url` |
 | `LLM_DOCS_BASE_URL` | `https://raw.githubusercontent.com/NativeMojo/django-mojo/refs/heads/main/docs/` | Base URL for fetching framework docs via `read_docs` |
@@ -417,7 +460,7 @@ bound to the originating browser Origin.
 
 | Tool | Permission | Mutates | Description |
 |---|---|---|---|
-| `browse_url` | `view_admin` | No | Fetch a web page and return clean readable text. Supports an optional CSS selector to narrow content to a specific element. Only `http`/`https` URLs are allowed; private/internal IPs are blocked (SSRF protection). Content is truncated to `LLM_BROWSE_MAX_LENGTH` chars. |
+| `browse_url` | `view_admin` | No | Fetch a web page and return clean readable text. Supports an optional CSS selector to narrow content to a specific element. Only `http`/`https` URLs are allowed; private/internal IPs are blocked (SSRF protection, via `mojo.helpers.safe_fetch`). Content is truncated to `LLM_BROWSE_MAX_LENGTH` chars. |
 
 ### Docs Domain (`view_admin`)
 
@@ -658,19 +701,20 @@ Each step object:
 | Tool | Permission | Mutates | Description |
 |---|---|---|---|
 | `read_memory` | `assistant` | No | Read stored memory entries grouped by tier. The system prompt already injects memories, but this tool lets the LLM check raw keys before updating or deleting. |
-| `write_memory` | `assistant` | Yes | Store or update a memory entry. Requires `tier`, `key`, `value`. Enforces key format, size limits, and secret detection. |
-| `delete_memory` | `assistant` | Yes | Delete a memory entry by tier and key. |
+| `write_memory` | `assistant` | Yes | Store or update a memory entry. Requires `tier`, `key`, `value`. Enforces key format, size limits, and secret detection. **Owner-state:** a `user`-tier write runs immediately; `global` and `group` produce an approval card. |
+| `delete_memory` | `assistant` | Yes | Delete a memory entry by tier and key. **Owner-state:** a `user`-tier delete runs immediately; `global` and `group` produce an approval card. |
 
 ### Skills Domain (`assistant`)
 
-All four tools are `core=True` — always available without calling `load_tools`.
+All five tools are `core=True` — always available without calling `load_tools`.
 
 | Tool | Permission | Core | Mutates | Description |
 |---|---|---|---|---|
 | `find_skill` | `assistant` | Yes | No | Search for a skill by keywords. Returns matching skills with full step definitions for replay. |
-| `save_skill` | `assistant` | Yes | Yes | Create or update a skill with name, description, trigger phrases, and ordered steps. Upserts on name within the same scope. |
+| `save_skill` | `assistant` | Yes | Yes | Create or update a skill with name, description, trigger phrases, and ordered steps. Upserts on name within the same scope. **Owner-state:** a `user`-tier save runs immediately; `global` and `group` produce an approval card. |
 | `list_skills` | `assistant` | Yes | No | List all accessible skills grouped by tier. Returns summaries (no step details). |
-| `delete_skill` | `assistant` | Yes | Yes | Delete a skill by ID. Owner or admin only. |
+| `update_skill` | `assistant` | Yes | Yes | Partial update of a skill by ID. **Owner-state:** your own user-tier skill is changed immediately; any other skill produces an approval card. |
+| `delete_skill` | `assistant` | Yes | Yes | Delete a skill by ID. Owner or admin only. **Owner-state:** your own user-tier skill is deleted immediately; any other skill produces an approval card. |
 
 See [skills.md](skills.md) for the full model reference, service API, step format, and settings.
 
@@ -1022,16 +1066,17 @@ def _tool_query_orders(params, user):
 | `permission` | Yes | Permission string checked via `user.has_permission()` |
 | `description` | Yes | Human-readable description shown to the LLM |
 | `input_schema` | Yes | JSON Schema dict for the tool's parameters |
-| `mutates` | No | Default `False`. If `True`, the tool **cannot execute on the model's call** — it produces an approval the operator must resolve. See [Approvals](approvals.md). |
+| `mutates` | No | Default `False`. If `True`, the tool **cannot execute on the model's call** — it produces an approval the operator must resolve, unless an `owner_state` predicate returns `True` for that call. See [Approvals](approvals.md). |
 | `core` | No | Default `False`. If `True`, tool is always sent to the LLM (two-tier tier 1). Set this for tools that should be available in every conversation without loading a domain. |
 | `fresh_auth_seconds` | No | Mutating only. Recency window mirroring `@md.requires_fresh_auth(seconds=N)` on the Admin twin. Forces REST-only resolution. |
 | `requires_superuser` | No | Mutating only. AND-check for a live literal `User.is_superuser`. |
 | `requires_managed_infrastructure` | No | Mutating only. Hidden and refused when `INFRASTRUCTURE_MODE=external`. |
 | `summarize` | No | Mutating only. `(params, user) -> str` — the card's one sentence. |
 | `preview` | No | Mutating only. `(params, user) -> {"summary", "details", "revision"}`, read-only; the revision is bound and re-checked. Raising it refuses the proposal. |
+| `owner_state` | No | Mutating only. `(params, user) -> bool`. Returning **exactly `True`** runs the handler directly on every transport (the `assistant:tool:<name>` event still fires); anything else proposes a card. Only for state the caller alone owns. Cannot be combined with `fresh_auth_seconds`, `requires_managed_infrastructure` or `preview`. |
 | `authorize` | No | **Any** tool. `(user) -> bool`, evaluated in addition to `permission` wherever that check runs. |
 
-> Passing any of the five mutating-only gates without `mutates=True` raises
+> Passing any of the six mutating-only gates without `mutates=True` raises
 > `ValueError` **at import time** — a misdeclared tool breaks the import rather
 > than degrading into a silent no-op.
 
@@ -1542,3 +1587,6 @@ Test files:
 - `tests/test_assistant/14_test_memory_cleanup.py` — Nightly cleanup: mechanical phase (orphans, size prune, suspicious scan), dreaming phase (should_dream, dream_tier, apply_dream_actions)
 - `tests/test_assistant/32_test_context_refs.py` — `add_context` tool: valid refs, invalid model/app/pk filtering, DENY_AI_VIEW filtering, mixed refs, empty input, `_validate_block` for context type, `_extract_context_refs` helper
 - `tests/test_assistant/33_test_prompt_caching.py` — Prompt caching: `cache_control` injection/omission, usage round-trip, `_accumulate_usage` summation and null tolerance, `run_assistant()` usage persistence and per-turn logging, `Message.usage` graph exposure and nullability, zero-cache one-time warning
+- `tests/test_assistant/44_test_mcp_server.py` — MCP protocol and dispatch: JSON-RPC framing and classification, `initialize` negotiation, notifications/batches/unknown methods, the tool projection and its annotations, the lazy per-grant conversation, the approval card a mutating call returns, the conversation scope of the two MCP-only read tools, and every refusal string and incident level ([MCP transport](mcp.md))
+- `tests/test_assistant/45_test_mcp_gate.py` — MCP door: the token-kind gate and its challenges, the disabled endpoint over the wire (including that its rate-limit bucket is never touched), the `assistant_mcp` body label, and the descriptors, catalog protection, OAuth resource registration and route wiring
+- `tests/test_assistant_extended_serial/44_test_mcp_wire.py` — MCP end to end with the switch on: transport and challenges, protocol shapes, a real `block_ip` proposal only the operator's own session can resolve, and the switch taking effect with no reload

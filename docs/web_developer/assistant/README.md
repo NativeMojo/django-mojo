@@ -20,6 +20,7 @@ LLM-powered admin assistant accessed via REST. Send natural language queries abo
 | `GET /api/assistant/conversation` | List conversations |
 | `GET /api/assistant/conversation/<id>` | Conversation detail (`?graph=detail` for messages and `pending_actions`) |
 | `DELETE /api/assistant/conversation/<id>` | Delete a conversation |
+| `POST /api/assistant/mcp` | MCP endpoint for remote AI clients ([MCP](mcp.md)) — off by default, OAuth 2.1 tokens only, never a browser session |
 
 ### Send Message
 

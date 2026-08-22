@@ -240,6 +240,46 @@ def promote(web_app, release, user=None):
     return deployment
 
 
+def reconcile_current_release(web_app):
+    """Reapply an existing desired release after an address is restored.
+
+    A deployment that finished while the WebApp had no vhost was honestly
+    marked live with no fleet target. Linking a new vhost changes that fact,
+    so a prior LIVE row cannot prove the new address has release bytes. Create
+    one fresh convergence attempt, while making retries reuse any attempt that
+    is already active. The same release is its own rollback target: a failed
+    node pass must not erase the WebApp's durable desired release.
+    """
+    from django.db import transaction
+    from mojo.apps.edge.services import webapp_deploy
+
+    with transaction.atomic():
+        # PostgreSQL refuses FOR UPDATE across the nullable current_release
+        # outer join. Lock only the WebApp row, then read the immutable release
+        # by its now-stable id.
+        locked = WebApp.objects.select_for_update().get(pk=web_app.pk)
+        if locked.vhost_id is None or locked.current_release_id is None:
+            return None
+        release = WebAppRelease.objects.get(pk=locked.current_release_id)
+        active = WebAppDeployment.objects.filter(
+            webapp=locked, release=release,
+            status__in=ACTIVE_STATUSES,
+        ).order_by("-created").first()
+        if active is not None:
+            return active
+        deployment = WebAppDeployment.objects.create(
+            webapp=locked, release=release, previous_release=release,
+            release_previous_status=release.status)
+        transaction.on_commit(
+            lambda deployment_id=deployment.pk:
+            webapp_deploy.publish_or_restore(deployment_id),
+            robust=True)
+
+    logit.info(
+        f"edge: {locked.slug} reapplying {release.version} to restored address")
+    return deployment
+
+
 def deploy_verified(release):
     """Deploy every verified release; CI completion is the control plane."""
     return promote(release.webapp, release)

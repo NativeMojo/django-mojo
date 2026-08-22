@@ -335,7 +335,7 @@ response.
 | GET | `/api/edge/webapp/summaries` | Bounded list projection for the merged Admin Deployments lane: one slim summary-v1-subset item per visible app (`webapp` identity, `address` + `certificate`, `current_release` + `source`, `latest_deployment` + its own `release`), ordered by slug, `{schema_version: 1, items, count, limit: 50, truncated, fleet}` — see [the envelope](#the-summaries-envelope). Scope is exactly the REST list's — global-or-group `VIEW_PERMS`, always intersected with a caller-supplied `?group=`. | Human-only (key-backed sessions refused); `view_dns` / `manage_dns` / `security` globally or in at least one group |
 | GET | `/api/edge/webapp/deployment?webapp=<id>` (and `/deployment/<pk>`) | Deployment (fleet-convergence) history, group-scoped. Read-only; a cross-tenant id is not readable. | `view_dns` / `manage_dns` / `security` |
 | POST | `/api/edge/webapp/rollback` | Repoint the app at an already-verified earlier release. Body `{webapp, release}`. A foreign release id 404s; a `pending` (unverified) release is refused. | Human-only (CI keys denied), fresh-auth; `manage_webapp` + explicit object check |
-| POST | `/api/edge/webapp/detach_address` | Take the app offline: unlink and delete its serving vhost, keep the app and its release history. Every extra ("alias") address is removed with it. | Human-only, fresh-auth; `manage_webapp` |
+| POST | `/api/edge/webapp/detach_address` | Take the app offline. Body `{webapp}`; returns `{webapp, address: null}` after unlinking and deleting its `site` or `site_api` serving vhost while keeping the app and its release history. Every extra ("alias") address is removed with it. Invalid non-site ownership is refused without partial teardown. | Human-only, fresh-auth; `manage_webapp` + explicit object check |
 | POST | `/api/edge/webapp/attach_domain` | Point one more address you own at this app. Body `{webapp, hostname, retry_certificate?}`. Returns `{webapp, status, hostname, reason, dns, ...}` — see [the status table](#attaching-your-own-domain-to-an-app) below. Safe to call again — that *is* the "check again" action — and it makes at most one provider write per call. An address that can never work here (a wildcard, the bare domain, a deeper name, one already serving something else) is an error, not a status. | Human-only (CI keys denied), fresh-auth; `manage_webapp` + explicit object check |
 | GET | `/api/edge/webapp/attach_preview?webapp=<id>&hostname=<name>` | What `attach_domain` **would** do with that hostname, without doing any of it. Returns `{webapp, status, hostname, ...}`: `ready` (plus `dns` and `domain: {id, name}`), `needs_domain` (plus the same `reason` the write returns), or `unusable` (plus the sentence the write would have refused with). Free to call on every keystroke — no DNS lookup, no certificate work, no write — and it deliberately does **not** say whether the address is already taken; the write answers that at submit. **No step-up — it is a read**, but it carries the *write's* permission because it is a question about a write. | Human-only (CI keys denied); `manage_webapp` + explicit object check |
 | POST | `/api/edge/webapp/detach_domain` | Remove one extra address. Body `{webapp, vhost}` — the `vhost` id from the address list. Returns `{webapp, status: "detached", hostname}`. The app's own address and another app's address both 404 (the same non-disclosing answer either way). The app, its certificate and its releases are untouched — take the app's *own* address down with `detach_address` instead. | Human-only, fresh-auth; `manage_webapp` + explicit object check |
@@ -398,6 +398,13 @@ An app always has exactly **one** address of its own — the one onboarding gave
 it. `attach_domain` adds **extra** addresses ("aliases") that serve the
 identical release. The app's own address never moves; changing it is still the
 change-address flow.
+
+An attached address also serves the primary address's complete route contract:
+hosted sign-in/account routes and every application route use the same proven
+upstreams. Calling Check again repairs missing rows without duplicating them.
+It does not silently settle conflicts: an alias-only path, a different
+destination for the same path, or both `/path` and legacy `/path/` rows is a
+plain refusal that must be resolved first.
 
 `attach_domain` is a **status machine you re-enter**, not a one-shot. Call it,
 render what comes back, and call it again with the same `hostname` when the

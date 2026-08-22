@@ -983,6 +983,7 @@ def main():
     parser.add_argument("--sms-state", choices=("configured", "unset", "test_mode", "verify_failed", "not_installed"), default="configured")
     parser.add_argument("--email-state", choices=("configured", "unset", "conflict"), default="configured")
     parser.add_argument("--assistant-state", choices=("configured", "unset", "fallback", "verify_failed", "disabled"), default="configured")
+    parser.add_argument("--assistant-mcp-state", choices=("off", "reachable", "unreachable", "connected"), default="connected")
     parser.add_argument("--infrastructure-mode", choices=("managed", "external"), default="managed")
     parser.add_argument("--upstream", help="Public HTTPS django-mojo origin for live QA")
     args = parser.parse_args()
@@ -1013,6 +1014,7 @@ def main():
        sms_state=args.sms_state,
        email_state=args.email_state,
        assistant_state=args.assistant_state,
+       assistant_mcp_state=args.assistant_mcp_state,
        infrastructure_mode=args.infrastructure_mode)
     PreviewHandler.upstream = upstream
     PreviewHandler.setup_behavior = args.setup_state

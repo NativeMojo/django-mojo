@@ -96,15 +96,16 @@ the design, not an error state: re-read with `get_webapp_setup_status` and let
 the assistant propose the current step again. Render it as "this moved on,
 here is where it is now", not as a failure.
 
-### `take_webapp_offline` is honest about API-backed addresses
+### `take_webapp_offline` stops every serving address, or refuses
 
-An app served straight from its build loses its address outright. An app whose
-address also proxies upstream routes (`site_api`) is *unlinked* from that
-address, but the address keeps answering from those routes until they are
-removed — only the extra addresses stop. The card says which case it is:
-`preview.details.address_stops_serving` is the boolean, `preview.details.address_kind`
-is the vhost kind, and the summary says "KEEPS serving its upstream routes"
-when it applies. The execution result repeats it as `address_stopped_serving`
+Both serving kinds (`site` and `site_api`) and every extra address stop
+answering in one transaction. The operation refuses — and the tool reports
+`offline_refused` with the service's sentence — when an extra address is also
+another app's primary, when an extra address has an invalid kind, or when the
+primary is not a serving address. The card still reports
+`preview.details.address_kind` (the vhost kind) and
+`preview.details.address_stops_serving` (true for every serving kind), and the
+execution result repeats it as `address_stopped_serving`
 plus a `note`. Render the caveat — an operator reading "offline" and getting a
 still-answering hostname is the failure this wording exists to prevent.
 

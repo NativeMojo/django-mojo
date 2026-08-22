@@ -294,15 +294,18 @@ def test_aurora_reader_dispatch(opts):
     from mojo.helpers.aws import rds
 
     client, stubber = _stub("rds")
+    tags = {"managed-by": "django-mojo", "mojo:env": "prod",
+            "mojo:project": "mojo-test", "mojo:role": "database"}
     stubber.add_response("create_db_instance", {"DBInstance": {}}, {
         "DBInstanceIdentifier": f"{CLUSTER}-reader-abcd1234",
         "DBClusterIdentifier": CLUSTER,
         "DBInstanceClass": "db.r6g.large",
-        "Engine": "aurora-postgresql"})
+        "Engine": "aurora-postgresql",
+        "Tags": [{"Key": key, "Value": tags[key]} for key in sorted(tags)]})
     with stubber:
         rds.create_cluster_reader(
             CLUSTER, f"{CLUSTER}-reader-abcd1234", "db.r6g.large",
-            "aurora-postgresql", client=client)
+            "aurora-postgresql", tags=tags, client=client)
     stubber.assert_no_pending_responses()
 
 
@@ -311,14 +314,17 @@ def test_standalone_reader_dispatch(opts):
     from mojo.helpers.aws import rds
 
     client, stubber = _stub("rds")
+    tags = {"managed-by": "django-mojo", "mojo:env": "prod",
+            "mojo:project": "mojo-test", "mojo:role": "database"}
     stubber.add_response("create_db_instance_read_replica", {"DBInstance": {}}, {
         "DBInstanceIdentifier": f"{STANDALONE}-reader-abcd1234",
         "SourceDBInstanceIdentifier": STANDALONE,
-        "DBInstanceClass": "db.m6g.large"})
+        "DBInstanceClass": "db.m6g.large",
+        "Tags": [{"Key": key, "Value": tags[key]} for key in sorted(tags)]})
     with stubber:
         rds.create_read_replica(
             STANDALONE, f"{STANDALONE}-reader-abcd1234", "db.m6g.large",
-            client=client)
+            tags=tags, client=client)
     stubber.assert_no_pending_responses()
 
 

@@ -35,16 +35,23 @@ FLEET_PROVIDER_KEYS = frozenset({
     "GEOIP_MOJO_SYNC_ENABLED", "GEOIP_API_KEY_MOJO",
     "ADMIN_PROVIDER_SETUP_REVISION", "ADMIN_PROVIDER_VERIFY_STATE",
 })
-# The Assistant's own keys.  The writable four are owned by
-# ``services/assistant_setup`` and reached only through the owner-tier endpoint;
-# ``LLM_HANDLER_API_KEY`` joins them read-only because a global database row
-# would outrank the deployment file (``helpers/settings/helper.py``) and make a
-# descriptor labelled "Deployment settings" a lie.
+# The Assistant keys.  All seven are owned by ``services/assistant_setup`` and
+# reached only through the owner-tier endpoint: the Assistant's own credential,
+# model and flag, the PLATFORM credential ``LLM_HANDLER_API_KEY`` (every LLM
+# feature, and the Assistant's fallback), and ``ASSISTANT_MCP_ENABLED``, the
+# remote agent access (MCP) switch whose descriptor is registered by the
+# assistant app.  A global database row outranks the deployment file
+# (``helpers/settings/helper.py``), which is exactly why the generic settings
+# surface must refuse them and only the owner editor may write.
 ASSISTANT_WRITABLE_KEYS = frozenset({
     "LLM_ADMIN_ENABLED", "LLM_ADMIN_API_KEY", "LLM_ADMIN_MODEL",
-    "LLM_ADMIN_VERIFY_STATE",
+    "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY", "LLM_HANDLER_VERIFY_STATE",
+    "ASSISTANT_MCP_ENABLED",
 })
-ASSISTANT_KEYS = ASSISTANT_WRITABLE_KEYS | {"LLM_HANDLER_API_KEY"}
+# Every Assistant key the generic global writers must refuse.  Protection and
+# writability are separate questions: this set is what fails closed, and it may
+# hold a key whose owner editor does not exist yet.
+ASSISTANT_KEYS = ASSISTANT_WRITABLE_KEYS | frozenset({"ASSISTANT_MCP_ENABLED"})
 # Keys whose one dedicated writer may pass ``_protected_writer=<key>`` through
 # ``Setting.save``.  Naming the key twice is the point: a writer proves it owns
 # exactly the row it is saving, so a shared helper cannot smuggle a different
@@ -467,6 +474,37 @@ def register_core_descriptors():
                    effective_semantics="Defaults merged with the safe override",
                    writable="owner", owner="Settings authentication editor",
                    change_behavior="typed_owner"),
+        # The OAuth 2.1 authorization server. All five are read file-only:
+        # a credential lifetime must not be extendable from the database
+        # settings plane by a manage_settings holder.
+        Descriptor("OAUTH_SERVER_PATH", "OAuth server path", "Sign-in & registration",
+                   "Path root of the OAuth authorization server's endpoints.", "string",
+                   "api/account/oauth", resolver="static", writable="none",
+                   owner="Deployment settings", change_behavior="restart"),
+        Descriptor("OAUTH_ACCESS_TTL", "OAuth access token lifetime",
+                   "Sign-in & registration",
+                   "How long an issued OAuth access token stays valid.", "integer",
+                   3600, resolver="static", writable="none",
+                   owner="Deployment settings", change_behavior="restart",
+                   unit="seconds"),
+        Descriptor("OAUTH_REFRESH_TTL_DAYS", "OAuth refresh token lifetime",
+                   "Sign-in & registration",
+                   "Absolute ceiling on an OAuth grant, measured from consent.",
+                   "integer", 30, resolver="static", writable="none",
+                   owner="Deployment settings", change_behavior="restart",
+                   unit="days"),
+        Descriptor("OAUTH_REFRESH_GRACE_SECONDS", "OAuth refresh grace window",
+                   "Sign-in & registration",
+                   "How long a rotated refresh token is forgiven as a lost response.",
+                   "integer", 30, resolver="static", writable="none",
+                   owner="Deployment settings", change_behavior="restart",
+                   unit="seconds"),
+        Descriptor("OAUTH_CODE_TTL", "OAuth authorization code lifetime",
+                   "Sign-in & registration",
+                   "How long an issued OAuth authorization code stays usable.",
+                   "integer", 300, resolver="static", writable="none",
+                   owner="Deployment settings", change_behavior="restart",
+                   unit="seconds"),
         Descriptor("ALLOW_EMAIL_CHANGE", "Allow email changes", "Users",
                    "Let users change their own email address.", "boolean", True,
                    resolver="dynamic", writable="catalog", owner="Settings",

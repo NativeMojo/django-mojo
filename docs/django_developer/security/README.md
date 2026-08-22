@@ -496,7 +496,7 @@ The LLM agent provides autonomous security triage. When invoked via the `llm://`
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `LLM_HANDLER_API_KEY` | None | Anthropic API key. **Required** to enable LLM handlers. |
+| `LLM_HANDLER_API_KEY` | None | Anthropic API key. **Required** to enable LLM handlers. Settable from the built-in Admin's Assistant setup (stored encrypted; read at call time, no restart needed). |
 | `LLM_HANDLER_MODEL` | (auto-detect) | Model to use for triage. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
 
 If `LLM_HANDLER_API_KEY` is not set, `llm://` handlers silently skip.
@@ -504,6 +504,18 @@ If `LLM_HANDLER_API_KEY` is not set, `llm://` handlers silently skip.
 Both settings are read at invocation time (not at startup), so changes take effect on the next LLM job without a server restart.
 
 **Dependency:** The LLM agent requires the `anthropic` Python package (`anthropic>=0.52.0`), which is included as a framework dependency.
+
+### Remote agent access (MCP)
+
+A separate credential surface, off by default and unrelated to the keys above. `ASSISTANT_MCP_ENABLED` opens `/api/assistant/mcp` to remote AI clients; it is switched from the built-in Admin's Assistant setup only (catalog-protected, so `/api/settings` and every other generic writer refuse it) and is re-read on every request, so closing it takes effect immediately on every node.
+
+The credentials are **OAuth grants, never API keys**: a client signs in through this installation's own sign-in page and receives an access token confined to the resource it consented to, plus a rotating refresh token. Two kinds exist, chosen by the consented scope: `mcp` reaches the tool door alone, and `api` — full REST access as that person — reaches every endpoint their own session token reaches, and nothing outside the API root. An `api` grant is therefore equal to a session token in reach, not more: it widens no permission, it honours the same step-up (`requires_fresh_auth`) rules, and it is revocable from the Admin at any time. A credential it mints in turn — an API key, say — is a separate credential with its own lifetime and is revoked separately, exactly as one minted from a browser session would be. Every active grant is listed in the Assistant setup view — client, operator, connected, last used, expiry — and the owner can disconnect one or all of them. Revocation randomises every column a live credential resolves through, so the access token is refused at the door and the refresh token at the token service on their next use. Switching the door off makes grants dormant rather than revoked: they stop working and stay listed.
+
+What lands in the audit trail: `oauth:grant_created` and `oauth:grant_revoked` user-log lines per grant, and an `admin_settings` "Assistant setup changed" incident event (level 5) for the switch and for each revocation, keyed per grant id so the hourly suppression cannot swallow a second one.
+
+The setup view also carries an owner-only self-check that fetches this installation's own public address and reports the HTTP status it answered with — a status-code oracle for the operator's **own** hostname, behind a superuser-only read, throttled by a 60-second Redis cache. Redirects are never followed. When Redis is unavailable the throttle is lost, not the refusal.
+
+See [the OAuth authorization server](../../web_developer/account/oauth_server.md) for the flow and [the Admin panel docs](../account/admin_portal/assistant.md#remote-agent-access) for the switch, the nginx requirement and revocation.
 
 ### Available Tools
 
@@ -897,7 +909,7 @@ Single-server job functions follow the engine's calling convention: `func(job)` 
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `LLM_HANDLER_API_KEY` | None | Anthropic API key. Required for `llm://` handlers. |
+| `LLM_HANDLER_API_KEY` | None | Anthropic API key. Required for `llm://` handlers. Also settable from the built-in Admin's Assistant setup. |
 | `LLM_HANDLER_MODEL` | (auto-detect) | Claude model for triage. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
 
 ### OSSEC Settings

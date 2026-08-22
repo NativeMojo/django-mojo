@@ -1,8 +1,14 @@
 # Approvals — resolving a mutating assistant action
 
-Every assistant tool that changes data is gated. When the model calls one, the
-server does **not** run it. It creates a pending action, sends you an `approval`
-block, and waits for a real human decision.
+Every assistant tool that changes **shared** data is gated. When the model calls
+one, the server does **not** run it. It creates a pending action, sends you an
+`approval` block, and waits for a real human decision.
+
+Writes to the operator's own assistant state are the exception: a memory in the
+`user` tier, or a user-tier skill they own, is saved, updated or deleted
+immediately and the tool returns its ordinary result — no card, nothing for you
+to render. Global and group memories, global and group skills, and anyone else's
+skill still produce a card.
 
 Your job as a client is small and exact:
 
@@ -300,9 +306,28 @@ saves a round trip, and it cannot serve step-up cards at all.
 
 ---
 
+## Cards can also come from a remote AI client
+
+A third transport can *propose*: an AI client connected over
+[MCP](mcp.md) calls the same tools, and one that changes shared data produces the
+same `PendingAction` and the same `approval` block, bound to the operator whose
+account authorized that connection. Those cards live in their own conversation
+(titled `MCP: <client name>`) and reach the Admin the same way any other card
+does. The same exception applies there: that client can save the operator's own
+user-tier memories and skills directly, and those writes never reach your UI as a
+card.
+
+**Only an interactive session can resolve one.** An MCP token is refused at
+`POST /api/assistant/action` with a `401`, so a remote client can never approve
+its own proposal — it can only poll its own cards and wait. Nothing changes for
+your client: render and resolve them exactly as above.
+
+---
+
 ## See also
 
 - [Block Rendering Guide](blocks.md) — every block type, including `approval`
 - [Assistant REST + WebSocket reference](README.md)
+- [Connecting an AI client over MCP](mcp.md) — the third proposing transport
 - [Server-side protocol](../../django_developer/assistant/approvals.md) — the
   gates, the audit trail, and how to declare a mutating tool

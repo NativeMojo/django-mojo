@@ -3,12 +3,14 @@
 from collections import OrderedDict
 import http.client
 import ipaddress
+import json
 import socket
 import ssl
 from urllib.parse import urlsplit
 
 from django.utils import timezone
 
+from mojo.apps.account.services import setup_safety
 from mojo.apps.account.services.setup_safety import sanitize
 from mojo.helpers.settings import settings
 
@@ -16,6 +18,7 @@ from mojo.helpers.settings import settings
 SCHEMA_VERSION = 1
 STATUSES = ("pass", "warn", "fail", "pending")
 LOCAL_API_SOURCES = ("configured_static", "request_server_port", "default_80")
+SECTION_CHECK_LIMIT = 64
 _SECTIONS = OrderedDict()
 
 
@@ -62,13 +65,15 @@ def result(code, status, explanation, remediation="", fixable=False,
            required_choice=None, details=None):
     if status not in STATUSES:
         raise ValueError(f"invalid readiness status: {status}")
+    passing = status == "pass"
     safe = {
         "code": str(code)[:120],
         "status": status,
         "explanation": str(explanation)[:500],
-        "remediation": str(remediation)[:500],
-        "fixable": bool(fixable),
-        "required_choice": sanitize(required_choice) if isinstance(required_choice, dict) else None,
+        "remediation": "" if passing else str(remediation)[:500],
+        "fixable": False if passing else bool(fixable),
+        "required_choice": (sanitize(required_choice)
+                            if not passing and isinstance(required_choice, dict) else None),
     }
     if isinstance(details, dict):
         safe["details"] = sanitize({
@@ -84,6 +89,54 @@ def _section_status(checks):
         if status in values:
             return status
     return "pass"
+
+
+def _status_from_counts(counts):
+    for status in ("fail", "pending", "warn"):
+        if counts.get(status, 0):
+            return status
+    return "pass"
+
+
+def _item_cost(value):
+    """Mirror the sanitizer's item accounting for an already-safe report."""
+    if isinstance(value, dict):
+        return 1 + sum(_item_cost(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return 1 + sum(_item_cost(item) for item in value)
+    return 1
+
+
+def _fits_report(report):
+    # The sanitizer reserves 4096 bytes for structural overhead. Keep another
+    # 4096 bytes for escaping and key names so it never has to silently choose
+    # which typed row survives.
+    return (_item_cost(report) <= setup_safety.MAX_ITEMS - 4 and
+            len(json.dumps(report, separators=(",", ":"), default=str).encode("utf-8"))
+            <= setup_safety.MAX_SERIALIZED_BYTES - 8192)
+
+
+def _normalize_checks(entry, raw_checks):
+    """Count every result while retaining only bounded severity-first detail."""
+    counts = {status: 0 for status in STATUSES}
+    buckets = {status: [] for status in STATUSES}
+    actionable = False
+    for raw in raw_checks:
+        if not isinstance(raw, dict):
+            raise ValueError("section check rows must be objects")
+        check = result(**raw)
+        status = check["status"]
+        counts[status] += 1
+        actionable = actionable or bool(check["fixable"] and status != "pass")
+        if len(buckets[status]) < SECTION_CHECK_LIMIT:
+            buckets[status].append(check)
+    retained = []
+    for status in ("fail", "pending", "warn", "pass"):
+        retained.extend(buckets[status][:SECTION_CHECK_LIMIT - len(retained)])
+        if len(retained) >= SECTION_CHECK_LIMIT:
+            break
+    can_fix = bool(entry.get("fix") or entry["code"] == "django")
+    return counts, retained, bool(can_fix and actionable)
 
 
 def _sanitize_report(report):
@@ -119,6 +172,27 @@ def _sanitize_report(report):
         clean_section["checks"] = checks
         sections.append(clean_section)
     safe["sections"] = sections
+    returned_checks = 0
+    for section_report in sections:
+        returned = len(section_report["checks"])
+        returned_checks += returned
+        coverage = section_report.get("coverage")
+        if isinstance(coverage, dict) and isinstance(coverage.get("total"), int):
+            total = max(returned, coverage["total"])
+            section_report["coverage"] = {
+                "total": total, "returned": returned, "omitted": total - returned}
+            if total != returned:
+                partial = True
+    coverage = safe.get("coverage")
+    if isinstance(coverage, dict):
+        check_coverage = coverage.get("checks")
+        if isinstance(check_coverage, dict) and isinstance(check_coverage.get("total"), int):
+            total = max(returned_checks, check_coverage["total"])
+            coverage["checks"] = {
+                "total": total, "returned": returned_checks,
+                "omitted": total - returned_checks}
+            if total != returned_checks:
+                partial = True
     if partial:
         safe["truncated"] = True
     return safe
@@ -130,7 +204,8 @@ def run(section=None, context=None):
         selected = [item for item in selected if item["code"] == section]
         if not selected:
             raise ValueError(f"unknown readiness section: {section}")
-    reports = []
+    collected = []
+    summary = {status: 0 for status in STATUSES}
     for entry in selected:
         try:
             checks = entry["check"](context or {})
@@ -138,29 +213,99 @@ def run(section=None, context=None):
                 checks = [checks]
             if not isinstance(checks, list):
                 raise ValueError("section check must return a result or result list")
-            checks = [result(**item) for item in checks[:64]]
+            counts, retained, fixable = _normalize_checks(entry, checks)
         except Exception:
-            checks = [result(
+            retained = [result(
                 f"{entry['code']}.check_error", "fail",
                 "The readiness check could not complete safely.",
                 "Inspect the server log for this check and rerun it.")]
-        status = _section_status(checks)
-        reports.append({
-            "code": entry["code"], "label": entry["label"], "status": status,
-            "fixable": bool(entry["fix"]), "checks": checks,
+            counts = {status: int(status == "fail") for status in STATUSES}
+            fixable = False
+        for status in STATUSES:
+            summary[status] += counts[status]
+        collected.append({
+            "code": entry["code"], "label": entry["label"],
+            "status": _status_from_counts(counts),
+            "fixable": fixable, "checks": [],
+            "coverage": {
+                "total": sum(counts.values()), "returned": 0,
+                "omitted": sum(counts.values()),
+            },
+            "_candidates": retained,
         })
-    overall = _section_status(reports)
-    summary = {status: 0 for status in STATUSES}
-    for section_report in reports:
-        for check in section_report["checks"]:
-            summary[check["status"]] += 1
-    return _sanitize_report({
+
+    total_checks = sum(summary.values())
+    report = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": timezone.now().isoformat(),
-        "overall": overall,
+        "overall": _status_from_counts(summary),
         "summary": summary,
-        "sections": reports,
-    })
+        "sections": [],
+        "coverage": {
+            "sections": {"total": len(collected), "returned": 0,
+                         "omitted": len(collected)},
+            "checks": {"total": total_checks, "returned": 0,
+                       "omitted": total_checks},
+        },
+    }
+
+    # Represent as many sections as the unchanged global safety budget permits
+    # before spending any of that budget on optional check detail.
+    for item in collected:
+        section_report = {key: value for key, value in item.items()
+                          if key != "_candidates"}
+        candidate = dict(report)
+        candidate["sections"] = [*report["sections"], section_report]
+        candidate["coverage"] = {
+            **report["coverage"],
+            "sections": {
+                "total": len(collected),
+                "returned": len(candidate["sections"]),
+                "omitted": len(collected) - len(candidate["sections"]),
+            },
+        }
+        if not _fits_report(candidate):
+            break
+        report = candidate
+
+    # Round-robin gives every returned section one severity-first row before a
+    # verbose provider can consume the remaining budget. Details are optional;
+    # if one detail object would crowd out typed rows, retain the finding
+    # without details and announce that coverage is partial.
+    candidates = [item["_candidates"] for item in collected[:len(report["sections"])]]
+    for index in range(SECTION_CHECK_LIMIT):
+        made_progress = False
+        for section_index, rows in enumerate(candidates):
+            if index >= len(rows):
+                continue
+            check = rows[index]
+            trial_check = check
+            for compact in (False, True):
+                trial = json.loads(json.dumps(report, default=str))
+                if compact and "details" in check:
+                    trial_check = {key: value for key, value in check.items()
+                                   if key != "details"}
+                trial["sections"][section_index]["checks"].append(trial_check)
+                returned = sum(len(item["checks"]) for item in trial["sections"])
+                trial["coverage"]["checks"]["returned"] = returned
+                trial["coverage"]["checks"]["omitted"] = total_checks - returned
+                coverage = trial["sections"][section_index]["coverage"]
+                coverage["returned"] = len(trial["sections"][section_index]["checks"])
+                coverage["omitted"] = coverage["total"] - coverage["returned"]
+                if _fits_report(trial):
+                    report = trial
+                    made_progress = True
+                    break
+            else:
+                return _sanitize_report({**report, "truncated": True})
+        if not made_progress:
+            break
+
+    partial = (report["coverage"]["sections"]["omitted"] > 0 or
+               report["coverage"]["checks"]["omitted"] > 0)
+    if partial:
+        report["truncated"] = True
+    return _sanitize_report(report)
 
 
 class UnsafePublicProbe(ValueError):

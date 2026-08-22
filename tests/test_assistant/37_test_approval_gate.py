@@ -24,16 +24,27 @@ from testit.helpers import assert_eq, assert_true
 
 TEST_EMAIL = "approval-gate-admin@example.com"
 OTHER_EMAIL = "approval-gate-other@example.com"
+NOPERM_EMAIL = "approval-gate-noperm@example.com"
 TEST_PASSWORD = "TestPass1!"
 TEST_PERM = "testit_approvals"
 TEST_DOMAIN = "testit_approvals"
+
+# Every memory key and skill name this module writes. `13_test_memory.py` may
+# wipe `assistant:memory:*` from a parallel module, so the owner-state tests
+# assert on the HANDLER'S return value and the record count, never a re-read.
+OWNER_PREFIX = "testit-owner-"
+OWNER_KEY = OWNER_PREFIX + "note"
 
 # Handler call recorder. testit parallelizes at MODULE level and runs the tests
 # inside a module sequentially, so a module-local list is safe here.
 CALLS = []
 
+# Every owner_state evaluation, so a test can prove the predicate never ran.
+PREDICATE_CALLS = []
+
 # Flags the fixture tools read, so one registration can exercise every branch.
-FLAGS = objict.objict(authorize=True, preview_raises=False, revision="rev-1")
+FLAGS = objict.objict(authorize=True, preview_raises=False, revision="rev-1",
+                      owner_state=False)
 
 
 def _record(params, user, approval=None):
@@ -78,6 +89,23 @@ def _tool_preview(params, user, approval=None):
 def _tool_superuser(params, user, approval=None):
     _record(params, user, approval)
     return {"ok": True}
+
+
+def _tool_owner(params, user, approval=None):
+    _record(params, user, approval)
+    target = params.get("target")
+    if target == "fail":
+        return {"error": "The note is stuck.", "error_code": "note_stuck"}
+    if target == "boom":
+        raise RuntimeError("owner handler exploded")
+    return {"ok": True, "target": target}
+
+
+def _owner_state(params, user):
+    PREDICATE_CALLS.append({"params": dict(params), "user_id": user.pk})
+    if FLAGS.owner_state == "raise":
+        raise RuntimeError("owner_state exploded")
+    return FLAGS.owner_state
 
 
 def _authorize(user):
@@ -143,6 +171,12 @@ def _register_test_tools():
         permission=TEST_PERM, mutates=True, domain=TEST_DOMAIN, core=False,
         requires_superuser=True,
     )
+    register_tool(
+        name="testit_approval_owner", description="Fixture owner-state tool",
+        input_schema=_RUN_SCHEMA, handler=_tool_owner,
+        permission=TEST_PERM, mutates=True, domain=TEST_DOMAIN, core=False,
+        owner_state=_owner_state,
+    )
 
 
 @th.django_unit_setup()
@@ -152,7 +186,8 @@ def setup_approval_gate(opts):
 
     _register_test_tools()
 
-    User.objects.filter(email__in=[TEST_EMAIL, OTHER_EMAIL]).delete()
+    User.objects.filter(
+        email__in=[TEST_EMAIL, OTHER_EMAIL, NOPERM_EMAIL]).delete()
 
     opts.admin = User.objects.create_user(
         username=TEST_EMAIL, email=TEST_EMAIL, password=TEST_PASSWORD)
@@ -168,6 +203,15 @@ def setup_approval_gate(opts):
     for perm in ["view_admin", "assistant", TEST_PERM]:
         opts.other.add_permission(perm)
 
+    # Holds `assistant` but NOT the fixture tools' own permission, so
+    # `user_can_use_tool` refuses before any owner_state predicate can run.
+    opts.noperm = User.objects.create_user(
+        username=NOPERM_EMAIL, email=NOPERM_EMAIL, password=TEST_PASSWORD)
+    opts.noperm.is_email_verified = True
+    opts.noperm.save()
+    for perm in ["view_admin", "assistant"]:
+        opts.noperm.add_permission(perm)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -175,9 +219,23 @@ def setup_approval_gate(opts):
 
 def _reset(opts):
     del CALLS[:]
+    del PREDICATE_CALLS[:]
     FLAGS.authorize = True
     FLAGS.preview_raises = False
     FLAGS.revision = "rev-1"
+    FLAGS.owner_state = False
+
+
+def _recorder():
+    """A call-local incident reporter: a list plus the callable that fills it."""
+    events = []
+
+    def report(details, **kwargs):
+        row = dict(kwargs)
+        row["details"] = details
+        events.append(row)
+
+    return events, report
 
 
 def _conversation(opts, title, user=None):
@@ -188,7 +246,8 @@ def _conversation(opts, title, user=None):
     return Conversation.objects.create(user=owner, title=title)
 
 
-def _dispatch(opts, conversation, tool_name, args, user=None, pending=None):
+def _dispatch(opts, conversation, tool_name, args, user=None, pending=None,
+              reporter=None):
     """Run one tool call through the real agent dispatch path."""
     from mojo.apps.assistant import get_registry
     from mojo.apps.assistant.services.agent import _execute_tool
@@ -196,7 +255,7 @@ def _dispatch(opts, conversation, tool_name, args, user=None, pending=None):
     result = _execute_tool(
         {"type": "tool_use", "id": "fixture-1", "name": tool_name, "input": args},
         get_registry(), user or opts.admin, conversation, [], None, [],
-        pending_actions=pending,
+        pending_actions=pending, _reporter=reporter,
     )
     return ujson.loads(result["content"])
 
@@ -297,6 +356,7 @@ def test_gate_argument_requires_mutates(opts):
         "requires_managed_infrastructure": True,
         "summarize": (lambda params, user: "x"),
         "preview": (lambda params, user: {}),
+        "owner_state": (lambda params, user: True),
     }
     for name, value in cases.items():
         raised = None
@@ -334,6 +394,457 @@ def test_gate_argument_requires_mutates(opts):
     except ValueError as exc:
         raised = exc
     assert_true(raised is not None, "a non-callable authorize must raise ValueError")
+
+    raised = None
+    try:
+        register_tool(
+            name="testit_bad_owner_state", description="d",
+            input_schema={"type": "object", "properties": {}},
+            handler=(lambda params, user: {}), permission=TEST_PERM,
+            mutates=True, domain=TEST_DOMAIN, owner_state="not-callable")
+    except ValueError as exc:
+        raised = exc
+    assert_true(raised is not None, "a non-callable owner_state must raise ValueError")
+
+
+@th.django_unit_test("owner_state cannot be combined with an approval-path-only gate")
+def test_owner_state_refuses_approval_path_gates(opts):
+    from mojo.apps.assistant import get_registry, register_tool
+
+    # These three are enforced only inside propose()/resolve(), which a direct
+    # execution skips — so pairing them with owner_state must fail at import.
+    for name, value in (("fresh_auth_seconds", 600),
+                        ("requires_managed_infrastructure", True),
+                        ("preview", (lambda params, user: {}))):
+        raised = None
+        try:
+            register_tool(
+                name=f"testit_bad_owner_with_{name}", description="d",
+                input_schema={"type": "object", "properties": {}},
+                handler=(lambda params, user: {}), permission=TEST_PERM,
+                mutates=True, domain=TEST_DOMAIN,
+                owner_state=(lambda params, user: True), **{name: value})
+        except ValueError as exc:
+            raised = exc
+        assert_true(raised is not None,
+                    f"owner_state combined with {name} must raise ValueError at "
+                    f"registration")
+
+    # requires_superuser and authorize both run in user_can_use_tool, BEFORE the
+    # branch that can exempt a call, so they stay legal alongside owner_state.
+    allowed = {
+        "testit_ok_owner_superuser": {"requires_superuser": True},
+        "testit_ok_owner_authorize": {"authorize": (lambda user: True)},
+    }
+    try:
+        for tool_name, kwargs in allowed.items():
+            register_tool(
+                name=tool_name, description="d",
+                input_schema={"type": "object", "properties": {}},
+                handler=(lambda params, user: {}), permission=TEST_PERM,
+                mutates=True, domain=TEST_DOMAIN,
+                owner_state=(lambda params, user: True), **kwargs)
+            assert_true(tool_name in get_registry(),
+                        f"owner_state with {sorted(kwargs)} must register, "
+                        f"those gates run before the branch")
+    finally:
+        for tool_name in allowed:
+            get_registry().pop(tool_name, None)
+
+
+# ---------------------------------------------------------------------------
+# owner_state — the per-call exemption
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("owner_state=True runs the handler directly and still files the event")
+def test_owner_state_true_executes_directly(opts):
+    from mojo.apps.assistant.models import PendingAction
+
+    _reset(opts)
+    conv = _conversation(opts, "approval-owner-direct")
+    events, reporter = _recorder()
+    FLAGS.owner_state = True
+    payload = _dispatch(opts, conv, "testit_approval_owner",
+                        {"target": "alpha"}, reporter=reporter)
+
+    assert_eq(payload.get("ok"), True,
+              f"owner_state=True must return the handler's own result, got {payload}")
+    assert_eq(payload.get("target"), "alpha",
+              f"the handler must see its arguments, got {payload}")
+    assert_eq(len(CALLS), 1,
+              f"the handler must run exactly once, ran {len(CALLS)}")
+    assert_true(CALLS[0]["action_id"] is None,
+                "a direct execution carries no PendingAction")
+    assert_eq(PendingAction.objects.filter(conversation=conv).count(), 0,
+              "an exempted call must not create an approval record")
+
+    success = [e for e in events
+               if e.get("category") == "assistant:tool:testit_approval_owner"]
+    assert_eq(len(success), 1,
+              f"a direct owner-state execution must file exactly one "
+              f"assistant:tool:<name> event, got {[e.get('category') for e in events]}")
+    assert_eq(success[0].get("level"), 5,
+              f"the event must mirror approvals.resolve() at level 5, got "
+              f"{success[0].get('level')}")
+    assert_eq(success[0].get("uid"), opts.admin.pk,
+              "the event must bind the executing operator")
+    assert_eq(success[0].get("model_name"), "account.User",
+              f"the event must carry the same model_name approvals.resolve() "
+              f"files, got {success[0].get('model_name')}")
+    assert_eq(success[0].get("model_id"), opts.admin.pk,
+              "the event must carry the operator's own pk as model_id")
+
+
+@th.django_unit_test("only a literal True exempts — False, truthy non-bools and raises propose")
+def test_owner_state_false_truthy_and_raising_propose(opts):
+    from mojo.apps.assistant.models import PendingAction
+
+    _reset(opts)
+    conv = _conversation(opts, "approval-owner-closed")
+    for index, value in enumerate((False, "yes", 1, "raise")):
+        FLAGS.owner_state = value
+        payload = _dispatch(opts, conv, "testit_approval_owner",
+                            {"target": f"closed-{index}"})
+        assert_eq(payload.get("status"), "approval_required",
+                  f"owner_state returning {value!r} must still propose a card, "
+                  f"got {payload}")
+
+    assert_eq(len(CALLS), 0,
+              f"a non-True owner_state must never reach the handler, ran {len(CALLS)}")
+    assert_eq(PendingAction.objects.filter(conversation=conv).count(), 4,
+              "each refused argument set must produce its own approval record")
+
+
+@th.django_unit_test("a failing direct owner-state call files no success event")
+def test_owner_state_direct_errors_fire_no_success_event(opts):
+    from mojo.apps.assistant.models import PendingAction
+
+    _reset(opts)
+    conv = _conversation(opts, "approval-owner-errors")
+    FLAGS.owner_state = True
+
+    events, reporter = _recorder()
+    payload = _dispatch(opts, conv, "testit_approval_owner",
+                        {"target": "fail"}, reporter=reporter)
+    assert_eq(payload.get("error"), "The note is stuck.",
+              f"a handler error must come back to the model unchanged, got {payload}")
+    assert_eq([e.get("category") for e in events
+               if str(e.get("category")).startswith("assistant:tool:")], [],
+              "a handler that returned an error must file no success event")
+
+    events, reporter = _recorder()
+    payload = _dispatch(opts, conv, "testit_approval_owner",
+                        {"target": "boom"}, reporter=reporter)
+    assert_true("internal error" in (payload.get("error") or ""),
+                f"a raising handler must return the generic internal error, got {payload}")
+    categories = [e.get("category") for e in events]
+    assert_eq(categories.count("assistant:error"), 1,
+              f"a raising handler must file exactly one assistant:error, got {categories}")
+    assert_eq([c for c in categories if str(c).startswith("assistant:tool:")], [],
+              "a raising handler must file no success event")
+
+    assert_eq(len(CALLS), 2, f"both handlers must have run, ran {len(CALLS)}")
+    assert_eq(PendingAction.objects.filter(conversation=conv).count(), 0,
+              "a failed direct execution must not fall back to a card")
+
+
+@th.django_unit_test("owner_state never runs for a caller who cannot use the tool")
+def test_owner_state_never_runs_without_permission(opts):
+    from mojo.apps.assistant.models import PendingAction
+
+    _reset(opts)
+    conv = _conversation(opts, "approval-owner-noperm", user=opts.noperm)
+    FLAGS.owner_state = True
+    payload = _dispatch(opts, conv, "testit_approval_owner",
+                        {"target": "alpha"}, user=opts.noperm)
+
+    assert_true("error" in payload and "Permission denied" in payload["error"],
+                f"a caller without the tool's permission must be refused, got {payload}")
+    assert_eq(len(PREDICATE_CALLS), 0,
+              f"the permission gate must precede the predicate, so owner_state "
+              f"must never be evaluated — it ran {len(PREDICATE_CALLS)} time(s)")
+    assert_eq(len(CALLS), 0, "a refused caller must never reach the handler")
+    assert_eq(PendingAction.objects.filter(conversation=conv).count(), 0,
+              "a refused caller must not create an approval record")
+
+
+@th.django_unit_test("the five built-in writers execute directly only for the caller's own tier")
+def test_builtin_writers_owner_state(opts):
+    from mojo.apps.assistant.models import PendingAction, Skill
+    from mojo.apps.assistant.services import memory as memory_service
+
+    _reset(opts)
+    conv = _conversation(opts, "approval-owner-builtins")
+    Skill.objects.filter(name__startswith=OWNER_PREFIX).delete()
+
+    def cards():
+        return PendingAction.objects.filter(conversation=conv).count()
+
+    try:
+        # --- memory: the caller's own tier runs, shared tiers propose ---------
+        payload = _dispatch(opts, conv, "write_memory",
+                            {"tier": "user", "key": OWNER_KEY, "value": "direct"})
+        assert_true(payload.get("status") in ("created", "updated"),
+                    f"a user-tier memory write must execute directly, got {payload}")
+        assert_eq(cards(), 0, "a user-tier memory write must create no card")
+
+        payload = _dispatch(opts, conv, "write_memory",
+                            {"tier": "global", "key": OWNER_KEY, "value": "shared"})
+        assert_eq(payload.get("status"), "approval_required",
+                  f"a global memory write must still propose, got {payload}")
+        assert_eq(cards(), 1, "a global memory write must create exactly one card")
+
+        # A parallel module may wipe `assistant:memory:*` between the write and
+        # this delete, so assert the DISPATCH outcome (direct, not a card) —
+        # never that the entry was still there to remove.
+        payload = _dispatch(opts, conv, "delete_memory",
+                            {"tier": "user", "key": OWNER_KEY})
+        assert_true(payload.get("status") != "approval_required",
+                    f"a user-tier memory delete must execute directly, got {payload}")
+        assert_eq(cards(), 1, "a user-tier memory delete must create no card")
+
+        payload = _dispatch(opts, conv, "delete_memory",
+                            {"tier": "group", "key": OWNER_KEY})
+        assert_eq(payload.get("status"), "approval_required",
+                  f"a group memory delete must still propose, got {payload}")
+        assert_eq(cards(), 2, "a group memory delete must create exactly one card")
+
+        # --- skills: the caller's own user-tier skill runs --------------------
+        payload = _dispatch(opts, conv, "save_skill", {
+            "tier": "user", "name": OWNER_PREFIX + "skill",
+            "description": "Owner-state fixture skill",
+            "steps": [{"tool": "read_memory", "description": "read"}],
+        })
+        assert_true("skill" in payload,
+                    f"a user-tier skill save must execute directly, got {payload}")
+        assert_eq(cards(), 2, "a user-tier skill save must create no card")
+        own_id = payload["skill"]["id"]
+
+        payload = _dispatch(opts, conv, "save_skill", {
+            "tier": "global", "name": OWNER_PREFIX + "global",
+            "description": "Owner-state fixture global skill",
+            "steps": [{"tool": "read_memory", "description": "read"}],
+        })
+        assert_eq(payload.get("status"), "approval_required",
+                  f"a global skill save must still propose, got {payload}")
+        assert_eq(cards(), 3, "a global skill save must create exactly one card")
+
+        payload = _dispatch(opts, conv, "update_skill",
+                            {"skill_id": own_id, "description": "Updated by owner"})
+        assert_true("skill" in payload,
+                    f"updating your own user-tier skill must execute directly, "
+                    f"got {payload}")
+        assert_eq(cards(), 3, "updating your own skill must create no card")
+
+        other = Skill.objects.create(
+            user=opts.other, tier="user", name=OWNER_PREFIX + "other",
+            description="Another operator's skill",
+            steps=[{"tool": "read_memory", "description": "read"}])
+        payload = _dispatch(opts, conv, "update_skill",
+                            {"skill_id": other.pk, "description": "Not yours"})
+        assert_eq(payload.get("status"), "approval_required",
+                  f"another operator's skill must still propose, got {payload}")
+        assert_eq(cards(), 4, "another operator's skill must create exactly one card")
+
+        shared = Skill.objects.create(
+            tier="global", name=OWNER_PREFIX + "shared",
+            description="A shared skill every user replays",
+            steps=[{"tool": "read_memory", "description": "read"}])
+        payload = _dispatch(opts, conv, "update_skill",
+                            {"skill_id": shared.pk, "description": "Not shared state"})
+        assert_eq(payload.get("status"), "approval_required",
+                  f"a global skill must still propose, got {payload}")
+        assert_eq(cards(), 5, "a global skill must create exactly one card")
+
+        missing_id = 2 ** 30
+        payload = _dispatch(opts, conv, "update_skill",
+                            {"skill_id": missing_id, "description": "Nothing there"})
+        assert_eq(payload.get("error"), f"Skill {missing_id} not found",
+                  f"a stale id must come back as the handler's own not-found "
+                  f"error, not a card, got {payload}")
+        assert_eq(cards(), 5, "a stale id must not mint a card nobody can use")
+
+        payload = _dispatch(opts, conv, "delete_skill", {"skill_id": other.pk})
+        assert_eq(payload.get("status"), "approval_required",
+                  f"deleting another operator's skill must propose, got {payload}")
+        assert_eq(cards(), 6, "deleting another operator's skill must create a card")
+        assert_true(Skill.objects.filter(pk=other.pk).exists(),
+                    "a proposed delete must not have run")
+
+        payload = _dispatch(opts, conv, "delete_skill", {"skill_id": own_id})
+        assert_true("deleted" in (payload.get("message") or ""),
+                    f"deleting your own skill must execute directly, got {payload}")
+        assert_eq(cards(), 6, "deleting your own skill must create no card")
+        assert_true(not Skill.objects.filter(pk=own_id).exists(),
+                    "the direct delete must actually have removed the skill")
+    finally:
+        Skill.objects.filter(name__startswith=OWNER_PREFIX).delete()
+        PendingAction.objects.filter(conversation=conv).delete()
+        try:
+            memory_service.delete_memory(opts.admin, "user", OWNER_KEY)
+        except Exception:
+            pass
+
+
+@th.django_unit_test("the direct path validates arguments the way the card path does")
+def test_owner_state_direct_path_normalizes_arguments(opts):
+    from mojo.apps.assistant.models import PendingAction, Skill
+
+    _reset(opts)
+    conv = _conversation(opts, "approval-owner-normalize")
+    Skill.objects.filter(name__startswith=OWNER_PREFIX).delete()
+
+    def cards():
+        return PendingAction.objects.filter(conversation=conv).count()
+
+    try:
+        saved = _dispatch(opts, conv, "save_skill", {
+            "tier": "user", "name": OWNER_PREFIX + "normalize",
+            "description": "Owner-state normalization fixture",
+            "steps": [{"tool": "read_memory", "description": "read"}],
+        })
+        own_id = saved["skill"]["id"]
+
+        # An UNDECLARED key is DROPPED before dispatch, exactly as
+        # `approvals.propose` drops it. Forwarding it would collide with the
+        # handler's own `group=` keyword and crash inside the tool.
+        events, reporter = _recorder()
+        payload = _dispatch(opts, conv, "update_skill",
+                            {"skill_id": own_id, "group": 1}, reporter=reporter)
+        assert_true("error" in payload,
+                    f"an update carrying nothing but an undeclared key has no "
+                    f"field left to change, got {payload}")
+        assert_true("internal error" not in payload["error"],
+                    f"the undeclared key must be dropped before dispatch, not "
+                    f"reach the handler and crash it, got {payload}")
+        assert_eq([e.get("category") for e in events], [],
+                  f"a handler that refused cleanly must file nothing, got "
+                  f"{[e.get('category') for e in events]}")
+        assert_eq(cards(), 0, "a dropped argument must not produce a card")
+
+        # A DECLARED key of the wrong type is refused by the schema, before the
+        # predicate runs — an ordinary tool error with no card and no incident,
+        # the same outcome `propose()` gives a rejected argument set.
+        events, reporter = _recorder()
+        payload = _dispatch(opts, conv, "write_memory",
+                            {"tier": "user", "key": ["a"], "value": "x"},
+                            reporter=reporter)
+        assert_true("error" in payload and "key" in payload["error"],
+                    f"a wrongly typed argument must be refused by the schema, "
+                    f"got {payload}")
+        assert_true("internal error" not in payload["error"],
+                    f"the refusal must name the argument, not degrade into the "
+                    f"generic internal error, got {payload}")
+        assert_eq([e.get("category") for e in events], [],
+                  f"a refused argument set files no incident at all, got "
+                  f"{[e.get('category') for e in events]}")
+        assert_eq(cards(), 0, "a refused argument set must not produce a card")
+        assert_eq(len(CALLS), 0,
+                  "neither refused call may reach a fixture handler")
+
+        payload = _dispatch(opts, conv, "update_skill",
+                            {"skill_id": own_id, "description": "Still direct"})
+        assert_true("skill" in payload,
+                    f"a valid owner-state call must still execute directly, "
+                    f"got {payload}")
+        assert_eq(cards(), 0, "a valid owner-state call must not produce a card")
+    finally:
+        Skill.objects.filter(name__startswith=OWNER_PREFIX).delete()
+        PendingAction.objects.filter(conversation=conv).delete()
+
+
+@th.django_unit_test("update_skill cannot move a skill between scopes")
+def test_update_skill_cannot_change_scope(opts):
+    """The invariant `_owns_skill` rests on.
+
+    The predicate authorizes a direct execution on the row's CURRENT `tier` and
+    `user_id`. If `update_skill` could write either, a caller would edit their
+    own user-tier skill into a global one with no approval card — the exact
+    write the gate exists to catch.
+    """
+    from mojo.apps.account.models import Group
+    from mojo.apps.assistant.models import Skill
+    from mojo.apps.assistant.services.skills import update_skill
+
+    _reset(opts)
+    Skill.objects.filter(name__startswith=OWNER_PREFIX).delete()
+    Group.objects.filter(name=OWNER_PREFIX + "group").delete()
+    try:
+        group = Group.objects.create(name=OWNER_PREFIX + "group",
+                                     kind="organization")
+        skill = Skill.objects.create(
+            user=opts.admin, tier="user", name=OWNER_PREFIX + "scope",
+            description="Scope invariant fixture",
+            steps=[{"tool": "read_memory", "description": "read"}])
+
+        # `tier` and `user_id` are the two scope keys that can reach `**fields`.
+        # UPDATABLE must drop both.
+        result = update_skill(
+            opts.admin, skill.pk, group=group, description="Still mine",
+            tier="global", user_id=opts.other.pk)
+        assert_true("error" not in result,
+                    f"the one declared field must still update, got {result}")
+
+        # `user` and `group` cannot even be EXPRESSED as updatable fields: both
+        # are the function's own parameters. `user` collides outright, and
+        # `group` binds to the CALLER's ambient group — which the group_id
+        # assertion below proves is never written onto a user-tier row. The tool
+        # path never gets that far either: `normalize_args` drops both as
+        # undeclared keys before dispatch.
+        raised = None
+        try:
+            update_skill(opts.admin, skill.pk, description="x", user=opts.other)
+        except TypeError as exc:
+            raised = exc
+        assert_true(raised is not None,
+                    "'user' must not be expressible as an updatable field — it "
+                    "binds to update_skill's own first parameter")
+
+        skill.refresh_from_db()
+        assert_eq(skill.tier, "user",
+                  f"update_skill must never move a skill between tiers — "
+                  f"_owns_skill authorizes on the CURRENT tier, got {skill.tier}")
+        assert_eq(skill.user_id, opts.admin.pk,
+                  f"update_skill must never reassign ownership — _owns_skill "
+                  f"authorizes on the CURRENT user_id, got {skill.user_id}")
+        assert_true(skill.group_id is None,
+                    f"update_skill must never attach the caller's ambient group "
+                    f"to a user-tier skill, got group_id={skill.group_id}")
+        assert_eq(skill.description, "Still mine",
+                  f"the declared field must have been applied, got "
+                  f"{skill.description!r}")
+    finally:
+        Skill.objects.filter(name__startswith=OWNER_PREFIX).delete()
+        Group.objects.filter(name=OWNER_PREFIX + "group").delete()
+
+
+@th.django_unit_test("a read-only tool files no assistant:tool:<name> event")
+def test_read_only_tool_files_no_success_event(opts):
+    """`assistant:tool:*` means a MUTATING tool ran.
+
+    It is filed by `approvals.resolve()` for an approved execution and by the
+    owner-state direct path. A read dispatched through the same function must
+    stay out of that category, or the audit trail stops meaning anything.
+    """
+    _reset(opts)
+    conv = _conversation(opts, "approval-readonly-events")
+
+    events, reporter = _recorder()
+    payload = _dispatch(opts, conv, "testit_approval_read", {}, reporter=reporter)
+    assert_eq(payload.get("read"), True,
+              f"the fixture read tool must still execute inline, got {payload}")
+    assert_eq([e.get("category") for e in events], [],
+              f"a read-only tool must file no incident at all, got "
+              f"{[e.get('category') for e in events]}")
+
+    events, reporter = _recorder()
+    payload = _dispatch(opts, conv, "read_memory", {}, reporter=reporter)
+    assert_true("error" not in payload,
+                f"read_memory must execute inline, got {payload}")
+    assert_eq([e.get("category") for e in events
+               if str(e.get("category")).startswith("assistant:tool:")], [],
+              f"a built-in read must never file the mutating-tool success "
+              f"event, got {[e.get('category') for e in events]}")
 
 
 # ---------------------------------------------------------------------------

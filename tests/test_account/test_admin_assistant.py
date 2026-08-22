@@ -36,6 +36,34 @@ def _code(text):
                      if not line.strip().startswith("//"))
 
 
+CONTRACT_ADMIN = "assistant-contract-admin@test.com"
+CONTRACT_REGULAR = "assistant-contract-regular@test.com"
+CONTRACT_PASSWORD = "Assistant_contract_99"
+
+
+@th.django_unit_setup()
+def setup_assistant_contract(opts):
+    """Two test-owned identities. No Setting row and no shared object is touched."""
+    from mojo.apps.account.models import User
+
+    User.objects.filter(email__in=[CONTRACT_ADMIN, CONTRACT_REGULAR]).delete()
+    admin = User.objects.create_user(
+        username=CONTRACT_ADMIN, email=CONTRACT_ADMIN, password=CONTRACT_PASSWORD)
+    admin.is_active = True
+    admin.is_email_verified = True
+    admin.requires_mfa = False
+    admin.is_superuser = True
+    admin.save()
+    regular = User.objects.create_user(
+        username=CONTRACT_REGULAR, email=CONTRACT_REGULAR,
+        password=CONTRACT_PASSWORD)
+    regular.is_active = True
+    regular.is_email_verified = True
+    regular.requires_mfa = False
+    regular.permissions = {"manage_settings": True}
+    regular.save()
+
+
 # ---------------------------------------------------------------------------
 # Bootstrap capability and feature descriptor
 # ---------------------------------------------------------------------------
@@ -55,9 +83,10 @@ def test_assistant_feature_provider_contract(opts):
 
     granted = admin_features.bootstrap_features(None, {
         "assistant": True, "assistant_ready": True, "assistant_setup": True,
+        "assistant_mcp": True,
     })["assistant"]
     assert granted["enabled"] is True and granted["capabilities"] == {
-        "view": True, "ready": True, "setup": True}, \
+        "view": True, "ready": True, "setup": True, "mcp": True}, \
         f"a fully granted caller did not get the Assistant panel: {granted!r}"
 
     # `ready` is installation state, not authority. Folding it into `enabled`
@@ -67,6 +96,14 @@ def test_assistant_feature_provider_contract(opts):
     })["assistant"]
     assert ready_only["enabled"] is False, \
         f"installation readiness enabled the panel without authority: {ready_only!r}"
+
+    # `mcp` is the same kind of fact: remote agent access being reachable is
+    # not a reason to mount a panel for a caller with no authority.
+    mcp_only = admin_features.bootstrap_features(None, {
+        "assistant": False, "assistant_mcp": True,
+    })["assistant"]
+    assert mcp_only["enabled"] is False and mcp_only["capabilities"]["mcp"] is True, \
+        f"remote agent access enabled the panel without authority: {mcp_only!r}"
 
 
 @th.django_unit_test("the Admin bootstrap gates the Assistant on view_admin alone")
@@ -79,6 +116,8 @@ def test_assistant_bootstrap_capabilities(opts):
         "readiness is not read from the setup service"
     assert '"assistant_setup": bool(request.user.is_superuser)' in source, \
         "the setup capability is not the literal-superuser predicate the writer enforces"
+    assert '"assistant_mcp": assistant_setup.mcp_ready()' in source, \
+        "remote agent access readiness is not read from the setup service"
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +154,91 @@ def test_admin_assistant_rest_decorators(opts):
 
 
 # ---------------------------------------------------------------------------
+# Remote agent access (MCP)
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("the remote agent access state has a fixed, credential-free shape")
+def test_mcp_state_shape(opts):
+    from mojo.apps.account.services import assistant_setup
+
+    state = assistant_setup.mcp_state()
+    assert set(state) == {"enabled", "path", "url", "discovery_url", "discovery",
+                          "grants", "grant_count"}, \
+        f"the remote agent access state drifted: {sorted(state)}"
+    assert set(state["discovery"]) == {"ok", "code", "detail", "checked_at"}, \
+        f"the discovery record drifted — `resource` is bookkeeping and must not " \
+        f"reach the wire: {state['discovery']!r}"
+    assert state["path"] == "/api/assistant/mcp", \
+        f"the connect path is not the registered resource path: {state['path']!r}"
+    assert isinstance(state["enabled"], bool), \
+        f"the switch is not reported as a boolean: {state['enabled']!r}"
+    assert len(state["grants"]) <= assistant_setup.MAX_GRANT_ROWS, \
+        f"the grant list is not bounded: {len(state['grants'])} rows"
+    if state["grant_count"] <= assistant_setup.MAX_GRANT_ROWS:
+        assert state["grant_count"] == len(state["grants"]), \
+            f"the grant count disagrees with the listed rows: " \
+            f"{state['grant_count']} vs {len(state['grants'])}"
+
+    # A plain read must never reach the network, and Redis being unavailable is
+    # simply "not checked yet".
+    cached = assistant_setup.discovery_cached()
+    assert set(cached) == {"ok", "code", "detail", "checked_at"}, \
+        f"the cached discovery record drifted: {cached!r}"
+    assert isinstance(assistant_setup.mcp_ready(), bool), \
+        "mcp_ready() is not a boolean the bootstrap can publish"
+
+
+@th.django_unit_test("the MCP contract refuses every malformed body and every non-owner")
+def test_mcp_rest_contract(opts):
+    from mojo.apps.account.models import Setting
+
+    assert opts.client.login(CONTRACT_ADMIN, CONTRACT_PASSWORD), \
+        "the contract superuser could not sign in"
+    origin = opts.client.host.rstrip("/")
+    # Relative, never absolute: a sibling serial module legitimately owns a row
+    # for this key, and "no row exists anywhere" would flake on its state.
+    before = Setting.objects.filter(key="ASSISTANT_MCP_ENABLED").count()
+    refused = (
+        # A present non-boolean is a 400, never coerced.
+        ({"action": "save", "enabled": False, "model": "", "mcp_enabled": "yes"},
+         "a string mcp_enabled"),
+        ({"action": "revoke_grant"}, "a revoke with no grant_id"),
+        ({"action": "revoke_grant", "grant_id": "1"}, "a string grant_id"),
+        ({"action": "revoke_grant", "grant_id": 1, "extra": 1},
+         "a revoke carrying an extra field"),
+        ({"action": "revoke_all_grants", "extra": 1},
+         "a revoke-all carrying an extra field"),
+        ({"action": "nope"}, "an unknown action"),
+    )
+    for payload, why in refused:
+        response = opts.client.post(
+            "/api/account/admin/assistant", json=payload,
+            headers={"Origin": origin})
+        assert response.status_code == 400, \
+            f"{why} was not refused: {response.status_code} {response.body}"
+    opts.client.logout()
+    assert Setting.objects.filter(key="ASSISTANT_MCP_ENABLED").count() == before, \
+        "a refused body still wrote the remote agent access switch"
+
+    assert opts.client.login(CONTRACT_REGULAR, CONTRACT_PASSWORD), \
+        "the contract manage_settings holder could not sign in"
+    origin = opts.client.host.rstrip("/")
+    probe = opts.client.get("/api/account/admin/assistant?check=discovery")
+    assert probe.status_code in (403, 404), \
+        f"a manage_settings holder ran the discovery self-check: " \
+        f"{probe.status_code} {probe.body}"
+    for payload in ({"action": "revoke_grant", "grant_id": 1},
+                    {"action": "revoke_all_grants"}):
+        response = opts.client.post(
+            "/api/account/admin/assistant", json=payload,
+            headers={"Origin": origin})
+        assert response.status_code in (403, 404, 440), \
+            f"a manage_settings holder reached {payload['action']}: " \
+            f"{response.status_code} {response.body}"
+    opts.client.logout()
+
+
+# ---------------------------------------------------------------------------
 # Key protection
 # ---------------------------------------------------------------------------
 
@@ -125,9 +249,20 @@ def test_assistant_keys_are_catalog_protected(opts):
     from mojo.apps.account.services import admin_settings
 
     for key in ("LLM_ADMIN_ENABLED", "LLM_ADMIN_API_KEY", "LLM_ADMIN_MODEL",
-                "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY"):
+                "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY",
+                "LLM_HANDLER_VERIFY_STATE", "ASSISTANT_MCP_ENABLED"):
         assert admin_settings.is_catalog_protected(key), \
             f"{key} can still be written through the generic settings API"
+
+    # The remote-agent door's switch is settable from the Admin, so its one
+    # dedicated writer needs the escape — and nothing else may write it: a
+    # global row outranks the deployment file on every node.
+    assert "ASSISTANT_MCP_ENABLED" in admin_settings.ASSISTANT_WRITABLE_KEYS, \
+        "the MCP switch has no owner editor, so the Admin cannot store it"
+    assert "ASSISTANT_MCP_ENABLED" in admin_settings.PROTECTED_WRITER_KEYS, \
+        "the MCP switch has no dedicated-writer escape, so its own writer is blocked"
+    with th.assert_raises(merrors.PermissionDeniedException):
+        Setting.set("ASSISTANT_MCP_ENABLED", True)
 
     # The one dedicated writer names the key it is saving, and the row must
     # carry that same key — so a writer cannot smuggle a different one past it.
@@ -135,8 +270,14 @@ def test_assistant_keys_are_catalog_protected(opts):
         "the assistant keys have no dedicated-writer escape, so their own writer is blocked"
     assert "GEOIP_API_KEY_MOJO" in admin_settings.PROTECTED_WRITER_KEYS, \
         "the pre-existing provider-setup escape was dropped"
-    assert "LLM_HANDLER_API_KEY" not in admin_settings.PROTECTED_WRITER_KEYS, \
-        "the deployment fallback gained a database writer — it must stay file-owned"
+    # The platform key is settable from the Admin, so its one dedicated writer
+    # must have the escape too — and nothing else may write it.
+    assert "LLM_HANDLER_API_KEY" in admin_settings.PROTECTED_WRITER_KEYS, \
+        "the platform LLM key has no dedicated-writer escape, so the Admin cannot store it"
+    assert "LLM_HANDLER_VERIFY_STATE" in admin_settings.PROTECTED_WRITER_KEYS, \
+        "the platform key's verification record has no dedicated writer"
+    with th.assert_raises(merrors.PermissionDeniedException):
+        Setting.set("LLM_HANDLER_API_KEY", "sk-should-never-store-either")
 
     with th.assert_raises(merrors.PermissionDeniedException):
         Setting.set("LLM_ADMIN_API_KEY", "sk-should-never-store")

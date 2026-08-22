@@ -94,6 +94,10 @@ def node_policy_document(spec):
     account = spec.account_id or "*"
     log_group_arn = (f"arn:aws:logs:{spec.region}:{account}:log-group:"
                      f"{names['log_group_prefix']}/*")
+    architecture = spec_module.architecture_for(spec.node_type)
+    ami_parameter = spec_module.SSM_AMI_PARAMETERS[architecture]
+    ami_parameter_arn = (
+        f"arn:aws:ssm:{spec.region}::parameter{ami_parameter}")
     return {
         "Version": "2012-10-17",
         "Statement": [
@@ -102,6 +106,12 @@ def node_policy_document(spec):
                 "Effect": "Allow",
                 "Action": list(SETUP_ACTIONS),
                 "Resource": "*",
+            },
+            {
+                "Sid": "DjangoMojoAmiParameter",
+                "Effect": "Allow",
+                "Action": ["ssm:GetParameter"],
+                "Resource": ami_parameter_arn,
             },
             {
                 "Sid": "DjangoMojoAgentLogs",

@@ -299,7 +299,12 @@ def test_500_page_shows_only_the_reference(opts):
     resp = _dispatch(RuntimeError(secret), _request(path=path, accept=BROWSER["Accept"]))
     body = _body(resp)
 
-    event = Event.objects.filter(id__gt=before).order_by("id").first()
+    event = Event.objects.filter(
+        id__gt=before,
+        category="rest_error",
+        details=f"Rest Exception: {secret}",
+        metadata__http_path=path,
+    ).get()
     assert event is not None, "the 500 must still file an incident"
     assert resp.status_code == 500, f"the HTML 500 must carry status 500, got {resp.status_code}"
     assert "Something went wrong on our end" in body, \

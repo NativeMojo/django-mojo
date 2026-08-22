@@ -114,7 +114,7 @@ good re-save whenever the cache has lapsed and the API is down.
 | Setting | Purpose |
 |---|---|
 | `LLM_ADMIN_API_KEY` | Checked first by `get_api_key()` |
-| `LLM_HANDLER_API_KEY` | Fallback |
+| `LLM_HANDLER_API_KEY` | Fallback — the platform key, settable from the built-in Admin's Assistant setup |
 | `LLM_ADMIN_MODEL` | If set, `get_model()` returns this (explicit pin) |
 | `LLM_HANDLER_MODEL` | Second-tier pin |
 

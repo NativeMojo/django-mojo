@@ -1,6 +1,7 @@
 """Crash-safe App -> Address -> GitHub -> Verify onboarding orchestration."""
 
 import hashlib
+import ipaddress
 import json
 import uuid
 from datetime import timedelta
@@ -992,9 +993,19 @@ def _advance_app(operation):
     existing = WebApp.objects.filter(group=operation.group,
                                      slug=profile["slug"]).first()
     if existing is not None:
-        compatible = all(getattr(existing, field) == profile[field] for field in (
+        existing_profile = {
+            field: getattr(existing, field) for field in (
             "display_name", "environment", "bucket", "github_repository",
-            "deployment_ref", "build_output"))
+            "deployment_ref", "build_output")}
+        # Before display names were required by onboarding, valid WebApps
+        # commonly stored a blank one and rendered their slug as the fallback.
+        # _profile applies that same fallback to new receipts. Treat those two
+        # persisted representations as equivalent without weakening any other
+        # profile field or accepting a genuinely different nonblank name.
+        existing_profile["display_name"] = (
+            existing_profile["display_name"] or existing.slug)
+        compatible = all(existing_profile[field] == profile[field]
+                         for field in existing_profile)
         if not compatible:
             raise me.ValueException(
                 "A WebApp with this slug exists with a different profile")
@@ -1020,6 +1031,50 @@ def _record_values(record):
     return sorted(str(value).rstrip(".") for value in (
         getattr(record, "record_values", None) or
         (record.get("record_values") if isinstance(record, dict) else []) or []))
+
+
+def _matching_legacy_address_records(records, target):
+    """Return legacy A/AAAA rows only when they exactly reach ``target``.
+
+    Older MojoLand installs wrote the node address directly. Current installs
+    use the platform hostname as a CNAME so fleet changes do not strand apps.
+    A managed restore may migrate that old shape, but only when every address
+    in each legacy row exactly matches the current destination's live answers.
+    Foreign records and mixed record types remain a hard refusal.
+    """
+    from mojo.apps.edge.services import public_probe
+
+    try:
+        answers = public_probe.public_addresses(target)
+    except public_probe.UnsafePublicProbe:
+        return []
+    expected = {4: set(), 6: set()}
+    for answer in answers:
+        try:
+            address = ipaddress.ip_address(answer)
+        except (TypeError, ValueError):
+            continue
+        expected[address.version].add(str(address))
+    if not expected[4] and not expected[6]:
+        return []
+
+    matched = []
+    for record in records:
+        kind = str(getattr(
+            record, "type", record.get("type", "") if isinstance(record, dict)
+            else "")).upper()
+        if kind not in ("A", "AAAA"):
+            return []
+        version = 4 if kind == "A" else 6
+        try:
+            actual = {str(ipaddress.ip_address(value))
+                      for value in _record_values(record)}
+        except ValueError:
+            return []
+        if not actual or actual != expected[version]:
+            return []
+        matched.append(record)
+    return matched
 
 
 def _advance_address(operation):
@@ -1081,6 +1136,15 @@ def _advance_address(operation):
     operation.domain = domain
     operation.dns_provider = domain.provider
 
+    # Capture pre-migration live routes before a change-address operation
+    # retires their vhost, and fail before any DNS write if the durable route
+    # contract cannot be served safely on the selected domain.
+    web_app = WebApp.objects.get(pk=operation.web_app_id)
+    from mojo.apps.edge.services import webapp_serving
+    if web_app.vhost_id is not None:
+        webapp_serving.capture_desired_routes(web_app)
+    webapp_serving.validate_desired_routes(web_app, domain)
+
     hostname = f"{label}.{domain.name}"
     # One resolver decides the serving destination for every provider: it
     # validates the value, rejects a self-referential hostname, and raises
@@ -1124,9 +1188,23 @@ def _advance_address(operation):
         cnames = [row for row in same_name
                   if str(getattr(row, "type", row.get("type", ""))).upper() == "CNAME"]
         conflicts = [row for row in same_name if row not in cnames]
-        if conflicts or len(cnames) > 1:
+        if len(cnames) > 1:
             raise me.ValueException(
                 "The selected hostname has ambiguous or non-CNAME DNS records")
+        if conflicts:
+            legacy = [] if cnames else _matching_legacy_address_records(
+                conflicts, target)
+            if len(legacy) != len(conflicts):
+                raise me.ValueException(
+                    "The selected hostname has ambiguous or non-CNAME DNS records")
+            # A provider write may succeed and then time out. That is safe:
+            # the next attempt either sees the same exact legacy row and
+            # retries its delete, or sees no row and writes the desired CNAME.
+            for row in legacy:
+                kind = str(getattr(
+                    row, "type", row.get("type", "") if isinstance(row, dict)
+                    else "")).upper()
+                dns.delete_record(domain, kind, hostname, _record_values(row))
         if cnames and _record_values(cnames[0]) != [target]:
             raise me.ValueException(
                 "The selected hostname has a foreign CNAME value")
@@ -1264,21 +1342,35 @@ def _advance_address(operation):
     from mojo.apps.edge.services import webapp_auth_routes
     vhost, _, _ = webapp_auth_routes.reconcile(vhost)
     operation.vhost = vhost
-    web_app = WebApp.objects.get(pk=operation.web_app_id)
-    old_site_vhost = None
-    if web_app.vhost_id not in (None, vhost.pk):
-        previous = Vhost.objects.filter(pk=web_app.vhost_id).first()
-        if previous is None or previous.kind not in ("site", "site_api"):
-            raise me.ValueException(
-                "The WebApp is already linked to an incompatible address")
-        # Change-address: the old address kept serving until the new vhost and
-        # certificate were ready (they are, here). Retire it now — its delete
-        # publishes convergence so nodes drop the old server block.
-        old_site_vhost = previous
-    web_app.vhost = vhost
-    web_app.save(update_fields=["vhost", "modified"])
-    if old_site_vhost is not None:
-        old_site_vhost.delete()
+    with transaction.atomic():
+        web_app = WebApp.objects.select_for_update().get(pk=web_app.pk)
+        old_site_vhost = None
+        if web_app.vhost_id not in (None, vhost.pk):
+            previous = Vhost.objects.select_for_update().filter(
+                pk=web_app.vhost_id).first()
+            if previous is None or previous.kind not in ("site", "site_api"):
+                raise me.ValueException(
+                    "The WebApp is already linked to an incompatible address")
+            # Re-capture under the final app lock. Provider work can take long
+            # enough for a concurrent serving edit; the address swap must use
+            # that latest committed route contract, not the early preflight.
+            webapp_serving.capture_desired_routes(web_app, previous)
+            webapp_serving.validate_desired_routes(web_app, domain)
+            # Change-address: the old address kept serving until the new vhost
+            # and certificate were ready (they are, here). Retire it only after
+            # the new materialized routes exist in this same transaction.
+            old_site_vhost = previous
+        web_app.vhost = vhost
+        web_app.save(update_fields=["vhost", "modified"])
+        webapp_serving.reconcile_desired_routes(web_app)
+        if old_site_vhost is not None:
+            old_site_vhost.delete()
+        if web_app.current_release_id is not None:
+            # A release previously promoted while this app had no address has
+            # no fleet proof for the new vhost. Reapply the durable desired
+            # release; retries reuse an already-active attempt.
+            from mojo.apps.edge.services import releases
+            releases.reconcile_current_release(web_app)
     operation.evidence = dict(
         operation.evidence or {}, address=address_evidence(
             status="verified", dns="verified",
