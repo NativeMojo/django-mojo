@@ -34,6 +34,17 @@ MCP_PATH = "/api/assistant/mcp"
 # inside a module sequentially, so a module-local list is safe here.
 CALLS = []
 
+# The built-in writers that carry an `owner_state` predicate: they are offered
+# over MCP, and a call touching only the operator's own tier executes directly.
+OWNER_STATE_WRITERS = ("write_memory", "delete_memory",
+                       "save_skill", "update_skill", "delete_skill")
+
+# Every memory key and skill name this module writes. `13_test_memory.py` may
+# wipe `assistant:memory:*` from a parallel module, so these assertions read the
+# handler's return value and the record count, never Redis.
+OWNER_PREFIX = "testit-mcp-owner-"
+OWNER_KEY = OWNER_PREFIX + "note"
+
 
 def _tool_read(params, user, *, request_meta=None, conversation=None):
     CALLS.append({
@@ -397,10 +408,16 @@ def test_tools_list_projection(opts):
         assert_true(hidden not in names,
                     f"{hidden} is a conversation/chat-state tool and must never "
                     f"be offered over MCP")
-    for kept in ("read_memory", "find_skill", "list_skills"):
+    for kept in ("read_memory", "find_skill", "list_skills",
+                 "write_memory", "delete_memory",
+                 "save_skill", "update_skill", "delete_skill"):
         assert_true(kept in names,
-                    f"{kept} is a read and must stay available over MCP, got "
-                    f"{sorted(names)[:20]}")
+                    f"{kept} operates on the operator's own assistant state and "
+                    f"must be offered over MCP, got {sorted(names)[:20]}")
+    for writer in OWNER_STATE_WRITERS:
+        listed_writer = next(t for t in tools if t["name"] == writer)
+        assert_eq(listed_writer["annotations"]["destructiveHint"], True,
+                  f"{writer} changes data and must advertise destructiveHint")
 
     registry = get_registry()
     for tool in tools:
@@ -575,6 +592,121 @@ def test_call_mutating_tool_returns_card(opts):
               f"another user's card must be refused identically, got {_text(other)}")
 
 
+@th.django_unit_test("owner-state writers execute over MCP for the operator's own tier")
+def test_call_owner_state_writers(opts):
+    from mojo.apps.assistant.models import PendingAction, Skill
+    from mojo.apps.assistant.services import memory as memory_service
+
+    del CALLS[:]
+    Skill.objects.filter(name__startswith=OWNER_PREFIX).delete()
+
+    def cards():
+        return PendingAction.objects.filter(
+            conversation_id__in=list(
+                _mcp_conversations(opts).values_list("pk", flat=True))).count()
+
+    # Other tests in this module leave their own cards behind, so count DELTAS.
+    baseline = cards()
+    mine = []
+    events, reporter = _recorder()
+    try:
+        result = _call(opts, "write_memory",
+                       {"tier": "user", "key": OWNER_KEY, "value": "from the client"},
+                       hide_infrastructure=False, reporter=reporter)
+        assert_eq(result["isError"], False,
+                  f"a user-tier memory write must succeed over MCP, got {result}")
+        assert_true(result["structuredContent"].get("status") in ("created", "updated"),
+                    f"the client must get the handler's own result, not a card, "
+                    f"got {result['structuredContent']}")
+        assert_eq(cards(), baseline,
+                  "a user-tier memory write must create no approval record")
+        success = [e for e in events
+                   if e.get("category") == "assistant:tool:write_memory"]
+        assert_eq(len(success), 1,
+                  f"a direct write over MCP must still file its success event, "
+                  f"got {[e.get('category') for e in events]}")
+        assert_eq(success[0].get("uid"), opts.admin.pk,
+                  "the event must bind the connected operator")
+
+        result = _call(opts, "write_memory",
+                       {"tier": "group", "key": OWNER_KEY, "value": "shared"},
+                       hide_infrastructure=False, reporter=reporter)
+        card = result["structuredContent"]
+        assert_eq(card.get("status"), "approval_required",
+                  f"a group-tier write is shared state and must propose, got {card}")
+        row = PendingAction.objects.filter(
+            uuid=uuid_module.UUID(card["action_id"])).first()
+        assert_true(row is not None, "the group-tier proposal must create a record")
+        mine.append(row.pk)
+        assert_eq(row.conversation_id, _mcp_conversations(opts).first().pk,
+                  "the card must be bound to this grant's own conversation")
+        assert_eq(cards(), baseline + 1,
+                  "a group-tier write must create exactly one approval record")
+
+        result = _call(opts, "save_skill", {
+            "tier": "user", "name": OWNER_PREFIX + "skill",
+            "description": "Saved by the remote client",
+            "steps": [{"tool": "read_memory", "description": "read"}],
+        }, hide_infrastructure=False, reporter=reporter)
+        assert_eq(result["isError"], False,
+                  f"a user-tier skill save must succeed over MCP, got {result}")
+        assert_true("skill" in result["structuredContent"],
+                    f"the client must get the saved skill back, got "
+                    f"{result['structuredContent']}")
+        own_id = result["structuredContent"]["skill"]["id"]
+
+        theirs = Skill.objects.create(
+            user=opts.limited, tier="user", name=OWNER_PREFIX + "theirs",
+            description="Another operator's skill",
+            steps=[{"tool": "read_memory", "description": "read"}])
+        result = _call(opts, "update_skill",
+                       {"skill_id": theirs.pk, "description": "Not yours"},
+                       hide_infrastructure=False, reporter=reporter)
+        assert_eq(result["structuredContent"].get("status"), "approval_required",
+                  f"another operator's skill must still propose, got "
+                  f"{result['structuredContent']}")
+        mine.append(PendingAction.objects.filter(
+            uuid=uuid_module.UUID(result["structuredContent"]["action_id"])
+        ).values_list("pk", flat=True).first())
+        assert_eq(cards(), baseline + 2,
+                  "another operator's skill must create exactly one more record")
+
+        result = _call(opts, "update_skill",
+                       {"skill_id": own_id, "description": "Updated by the client"},
+                       hide_infrastructure=False, reporter=reporter)
+        assert_true("skill" in result["structuredContent"],
+                    f"updating your own skill must execute, got "
+                    f"{result['structuredContent']}")
+
+        missing_id = 2 ** 30
+        result = _call(opts, "update_skill",
+                       {"skill_id": missing_id, "description": "Nothing there"},
+                       hide_infrastructure=False, reporter=reporter)
+        assert_eq(result["isError"], True,
+                  f"a stale id must be an ordinary tool error, got {result}")
+        assert_true("not found" in _text(result).get("error", ""),
+                    f"a stale id must return the handler's own not-found error, "
+                    f"got {_text(result)}")
+
+        result = _call(opts, "delete_skill", {"skill_id": own_id},
+                       hide_infrastructure=False, reporter=reporter)
+        assert_true("deleted" in (result["structuredContent"].get("message") or ""),
+                    f"deleting your own skill must execute, got "
+                    f"{result['structuredContent']}")
+        assert_true(not Skill.objects.filter(pk=own_id).exists(),
+                    "the direct delete must actually have removed the skill")
+        assert_eq(cards(), baseline + 2,
+                  "the stale id, the owned update and the owned delete must all "
+                  "have created no further approval record")
+    finally:
+        Skill.objects.filter(name__startswith=OWNER_PREFIX).delete()
+        PendingAction.objects.filter(pk__in=[pk for pk in mine if pk]).delete()
+        try:
+            memory_service.delete_memory(opts.admin, "user", OWNER_KEY)
+        except Exception:
+            pass
+
+
 @th.django_unit_test("hidden, unknown, infrastructure and unpermitted names all refuse")
 def test_call_refusals(opts):
     del CALLS[:]
@@ -706,7 +838,7 @@ def test_incident_volume_is_bounded(opts):
     get_connection().delete(notice_key(category, key))
 
 
-@th.django_unit_test("discovery, chat-state and LLM-spending tools are all projected out")
+@th.django_unit_test("discovery and LLM-spending tools are projected out; the memory/skill writers are offered")
 def test_hidden_tool_families(opts):
     from mojo.apps.assistant import get_registry
     from mojo.apps.assistant.mcp import server
@@ -741,6 +873,14 @@ def test_hidden_tool_families(opts):
         assert_true(kept in listed,
                     f"{kept} is a READ of the assistant's own state and must "
                     f"stay available, got {sorted(listed)[:20]}")
+
+    for writer in OWNER_STATE_WRITERS:
+        assert_true(writer not in server.HIDDEN_TOOLS,
+                    f"{writer} writes state the operator alone owns and must "
+                    f"no longer be hidden from the MCP transport")
+        assert_true(writer in listed,
+                    f"{writer} must be offered to a client holding `assistant`, "
+                    f"got {sorted(listed)[:20]}")
 
 
 @th.django_unit_test("the per-grant conversation is created exactly once")

@@ -5,7 +5,8 @@ one rule shapes the whole module: **there is no second dispatch path**. A
 registry tool called over MCP is executed by ``agent._execute_tool`` — the same
 function both agent loops use — so the approval gate, the permission gate, the
 ``assistant:*`` incident events and the tool-result serialization are the chat
-path's behaviour rather than a re-implementation that could drift from it.
+path's behaviour rather than a re-implementation that could drift from it. An
+``owner_state`` exemption is decided by ``_execute_tool``, never here.
 
 What IS specific to this transport:
 
@@ -76,16 +77,7 @@ _META_TOOLS = frozenset(agent.META_TOOLS) | frozenset({
     "list_tools", "add_context",
 })
 
-# 2. Writers of the CHAT assistant's own state. Exposing them would put
-#    approval cards for the operator's own assistant memory and skills in front
-#    of an external client for no benefit. The READERS — `read_memory`,
-#    `find_skill`, `list_skills` — stay.
-_CHAT_STATE_WRITERS = frozenset({
-    "write_memory", "delete_memory",
-    "save_skill", "update_skill", "delete_skill",
-})
-
-# 3. Reads that SPEND the platform LLM credential. `analyze_image` sends an
+# 2. Reads that SPEND the platform LLM credential. `analyze_image` sends an
 #    image plus a client-chosen prompt to `helpers.llm` on
 #    `LLM_HANDLER_API_KEY`, and read-only tools carry no approval gate — so
 #    over MCP it is an unmetered spend of the installation's own credential,
@@ -95,13 +87,15 @@ _LLM_SPENDING_READS = frozenset({
     "analyze_image",
 })
 
-HIDDEN_TOOLS = _META_TOOLS | _CHAT_STATE_WRITERS | _LLM_SPENDING_READS
+HIDDEN_TOOLS = _META_TOOLS | _LLM_SPENDING_READS
 
 INSTRUCTIONS = (
     "Tools run with the connected operator's own permissions. A tool that "
-    "changes data never executes here: it returns an approval card (status "
-    "approval_required) that the operator resolves in the Admin. Poll "
-    "get_pending_action with the action_id to learn the outcome."
+    "changes shared data never executes here: it returns an approval card "
+    "(status approval_required) that the operator resolves in the Admin; poll "
+    "get_pending_action with the action_id to learn the outcome. Writes to the "
+    "operator's own memory and skills (tier \"user\", or a skill they own) run "
+    "immediately and return the result."
 )
 
 READ_ONLY_ANNOTATIONS = {"readOnlyHint": True, "destructiveHint": False}
