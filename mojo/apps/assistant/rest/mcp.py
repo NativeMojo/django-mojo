@@ -37,10 +37,28 @@ from django.http import Http404, HttpResponse
 from django.urls import get_resolver
 
 from mojo import decorators as md
-from mojo.helpers.settings import settings
+from mojo.helpers import logit
 from mojo.apps.assistant.mcp import auth as mcp_auth
 from mojo.apps.assistant.mcp import protocol, server
 from mojo.apps.assistant.services import agent
+
+logger = logit.get_logger(__name__, "assistant.log")
+
+
+def _internal_error():
+    """The one thing an unexpected exception in this view may say on the wire.
+
+    Without it an exception raised OUTSIDE `server.handle` — reading the body,
+    building the request meta, serializing the response — escapes to
+    `dispatch_error_handler`, which files an incident carrying `request.DATA`
+    and, when LOGIT_RETURN_REAL_ERROR is on, returns `str(err)` to an
+    unauthenticated caller. `server.handle` already maps its own failures to
+    -32603; this closes the same hole around it.
+    """
+    return mcp_auth.raw_response(
+        protocol.error_message(
+            None, protocol.INTERNAL_ERROR, protocol.INTERNAL_ERROR_MESSAGE),
+        500)
 
 
 @md.rate_limit("assistant_mcp", ip_limit=120)
@@ -78,12 +96,18 @@ def _serve(request):
     return mcp_auth.raw_response(payload, status)
 
 
-@md.URL("/" + settings.get_static(
-    "ASSISTANT_MCP_PATH", "api/assistant/mcp").strip("/"))
+@md.URL(mcp_auth.configured_path())
 @md.public_endpoint(
     "MCP resource server: the project 404 while disabled, then in-body auth — "
     "an OAuth grant carrying the mcp scope, checked in mcp/auth.py")
 def on_assistant_mcp(request):
-    if not mcp_auth.is_enabled():
-        return get_resolver().resolve_error_handler(404)(request, exception=Http404())
-    return _serve(request)
+    try:
+        if not mcp_auth.is_enabled():
+            return get_resolver().resolve_error_handler(404)(
+                request, exception=Http404())
+        return _serve(request)
+    except Exception:
+        # Nothing but the generic JSON-RPC internal error reaches the wire; the
+        # detail goes to assistant.log, where it is access-controlled.
+        logger.exception("MCP request failed outside the protocol handler")
+        return _internal_error()
