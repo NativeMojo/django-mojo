@@ -69,6 +69,15 @@ function discoveryLine(discovery) {
     : 'Not checked yet. Checks run at most once a minute.';
 }
 
+// What a connection can actually reach. `tools` is the Assistant's tool door,
+// where every change still needs an approval; `api` is full REST reach as that
+// person, where the approval step does not apply.
+const ACCESS_LABELS = {
+  tools: 'Tools',
+  api: 'Full API',
+  both: 'Tools + full API',
+};
+
 function grantRow(grant, disconnect) {
   const td = (text) => h('td', {text});
   const client = grant.client || {};
@@ -79,6 +88,7 @@ function grantRow(grant, disconnect) {
   return h('tr', {},
     td(client.name || client.client_id || 'Unknown client'),
     td(user.email || ''),
+    td(ACCESS_LABELS[grant.access] || ACCESS_LABELS.tools),
     td(formatDate(grant.created)),
     td(grant.last_used ? formatDate(grant.last_used) : 'Never'),
     td(formatDate(grant.expires)),
@@ -287,9 +297,11 @@ export function mountSetup({ctx, panel, onBack}) {
         ? h('div', {class: 'assistant-block assistant-grants'},
             h('div', {class: 'table-wrap'},
               h('table', {},
-                h('thead', {}, h('tr', {}, ...['Client', 'Signed in as', 'Connected',
-                  'Last used', 'Expires', ''].map((label) => h('th', {scope: 'col', text: label})))),
-                h('tbody', {}, ...state.mcp.grants.map((grant) => grantRow(grant, disconnect))))))
+                h('thead', {}, h('tr', {}, ...['Client', 'Signed in as', 'Access',
+                  'Connected', 'Last used', 'Expires', ''].map((label) => h('th', {scope: 'col', text: label})))),
+                h('tbody', {}, ...state.mcp.grants.map((grant) => grantRow(grant, disconnect))))),
+            h('p', {class: 'assistant-note', text: 'Full API rows can call every '
+              + 'API as that person; the approval step does not apply to those calls.'}))
         : h('p', {class: 'assistant-note', text: 'No agent is connected.'}),
 
       h('div', {class: 'form-actions'}, back, save));

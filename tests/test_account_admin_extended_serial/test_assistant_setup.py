@@ -48,6 +48,10 @@ PRM_URL = BASE + PRM_PATH
 CLIENT_IDS = ("assistant-setup-mcp-client-a", "assistant-setup-mcp-client-b")
 OTHER_PATH = "/api/other/door"
 OTHER_RESOURCE = BASE + OTHER_PATH
+# The second resource this surface owns: the REST API root, where an `api`
+# grant is bound. Listed, counted and swept together with the MCP door.
+API_ROOT_PATH = "/api"
+API_ROOT_RESOURCE = BASE + API_ROOT_PATH
 KEY_GROUP = "assistant setup mcp key group"
 KEY_NAME = "assistant setup mcp key"
 AUTH_TIME = 1700000000
@@ -73,12 +77,15 @@ def _wipe():
             redis.hdel(Setting._redis_key(), key)
     OAuthGrant.objects.filter(client__client_id__in=CLIENT_IDS).delete()
     # Sibling opt-in modules (the MCP wire flow) leave their grants active at
-    # the MCP path, and this module asserts installation-wide totals for
-    # that path, so anything it does not own is put out of the count first.
-    OAuthGrant.objects.filter(
-        is_active=True, resource__endswith=MCP_PATH,
-    ).exclude(client__client_id__in=CLIENT_IDS).update(
-        is_active=False, revoked_reason="test_wipe")
+    # BOTH paths this surface owns, and this module asserts installation-wide
+    # totals for them, so anything it does not own is put out of the count
+    # first. The API root belongs in that sweep for the same reason the MCP
+    # path does: a stranded full-API grant would drift every total below.
+    for path in (MCP_PATH, API_ROOT_PATH):
+        OAuthGrant.objects.filter(
+            is_active=True, resource__endswith=path,
+        ).exclude(client__client_id__in=CLIENT_IDS).update(
+            is_active=False, revoked_reason="test_wipe")
     OAuthClient.objects.filter(client_id__in=CLIENT_IDS).delete()
     ApiKey.objects.filter(name=KEY_NAME).delete()
     Group.objects.filter(name=KEY_GROUP).delete()
@@ -589,11 +596,12 @@ def _auth(token):
     return {"Authorization": f"Bearer {token}"}
 
 
-def _make_grant(user, client, resource=RESOURCE):
+def _make_grant(user, client, resource=RESOURCE, scopes=None):
     """A live grant plus the raw credential pair a client would hold."""
     from mojo.apps.account.services.oauth_server import tokens
 
-    grant = tokens.create_grant(user, client, ["mcp"], resource, AUTH_TIME)
+    grant = tokens.create_grant(
+        user, client, scopes or ["mcp"], resource, AUTH_TIME)
     return grant, tokens.issue_tokens(grant)
 
 
@@ -787,15 +795,26 @@ def test_revoke_one_and_all(opts):
             # may protect, so it must neither list nor sweep this one.
             other_grant, _other_pair = _make_grant(
                 admin, client_a, OTHER_RESOURCE)
+            # A connection at the API ROOT, consented to for both kinds of
+            # access. This surface owns it too — one switch, two doors.
+            api_grant, api_pair = _make_grant(
+                admin, client_a, API_ROOT_RESOURCE, scopes=["mcp", "api"])
             assistant_setup.save(
                 admin, enabled=False, model="", mcp_enabled=True)
 
             listed = assistant_setup.state()["mcp"]
-            assert listed["grant_count"] == 3, \
-                f"the Admin does not list all three connections: {listed!r}"
-            assert all(row["resource"] == RESOURCE for row in listed["grants"]), \
-                f"the connected-agents list is not scoped to the MCP resource " \
-                f"path: {[row['resource'] for row in listed['grants']]!r}"
+            assert listed["grant_count"] == 4, \
+                f"the Admin does not list all four connections: {listed!r}"
+            assert all(row["resource"] in (RESOURCE, API_ROOT_RESOURCE)
+                       for row in listed["grants"]), \
+                f"the connected-agents list is not scoped to the two resource " \
+                f"paths: {[row['resource'] for row in listed['grants']]!r}"
+            access = {row["id"]: row["access"] for row in listed["grants"]}
+            assert access[api_grant.pk] == "both", \
+                f"a grant carrying mcp and api must read as both: {access!r}"
+            assert access[grant_one.pk] == "tools" \
+                and access[grant_two.pk] == "tools", \
+                f"a tool-door grant must read as tools: {access!r}"
 
             # The bound lives in SQL, and the count still sees past it.
             assert len(oauth_server.list_grants(
@@ -803,8 +822,19 @@ def test_revoke_one_and_all(opts):
                 "list_grants ignored its row bound"
             assert oauth_server.count_grants(resource_path=MCP_PATH) == 3, \
                 "the grant count cannot see past the slice"
+            assert oauth_server.count_grants(
+                resource_path=[MCP_PATH, API_ROOT_PATH]) == 4, \
+                "the count does not span both resources in one predicate"
             assert oauth_server.count_grants(resource_path=OTHER_PATH) == 1, \
                 "the count is not scoped by resource path"
+
+            # The full-API token is the person's session: it reaches an
+            # ordinary REST endpoint no mcp-only token can.
+            resp = opts.client.get(
+                "/api/account/user/me", headers=_auth(api_pair["access_token"]))
+            assert resp.status_code == 200, \
+                f"a full-API grant could not reach an ordinary REST endpoint: " \
+                f"{resp.status_code} {resp.body}"
             emails = {row["user"]["email"] for row in listed["grants"]}
             assert emails == {ADMIN_EMAIL, AGENT_EMAIL}, \
                 f"the connected-agents list does not name both operators: {emails!r}"
@@ -895,7 +925,7 @@ def test_revoke_one_and_all(opts):
                 f"the owner could not disconnect an agent: " \
                 f"{response.status_code} {response.body}"
             data = response.json["data"]
-            assert data["revoked"] == 1 and data["state"]["mcp"]["grant_count"] == 1, \
+            assert data["revoked"] == 1 and data["state"]["mcp"]["grant_count"] == 2, \
                 f"the revoke answer or its fresh state is wrong: {data!r}"
             response = opts.client.post(
                 "/api/account/admin/assistant",
@@ -904,12 +934,18 @@ def test_revoke_one_and_all(opts):
             assert response.status_code == 200, \
                 f"the owner could not disconnect every agent: " \
                 f"{response.status_code} {response.body}"
-            assert response.json["data"]["revoked"] == 1, \
-                f"disconnect-all did not report the remaining connection: " \
-                f"{response.json['data']!r}"
+            assert response.json["data"]["revoked"] == 2, \
+                f"disconnect-all did not report the remaining connections at " \
+                f"BOTH resources: {response.json['data']!r}"
 
-            assert oauth_server.list_grants(resource_path=MCP_PATH) == [], \
+            assert oauth_server.list_grants(
+                resource_path=[MCP_PATH, API_ROOT_PATH]) == [], \
                 "a live grant survived disconnect-all"
+            resp = opts.client.get(
+                "/api/account/user/me", headers=_auth(api_pair["access_token"]))
+            assert resp.status_code == 401, \
+                f"a full-API token survived disconnect-all: " \
+                f"{resp.status_code} {resp.body}"
             surviving = oauth_server.list_grants(resource_path=OTHER_PATH)
             assert len(surviving) == 1 and surviving[0]["id"] == other_grant.pk, \
                 f"disconnect-all swept a grant at another resource path: " \

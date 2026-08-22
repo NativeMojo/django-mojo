@@ -27,6 +27,9 @@ CHOICES = [
 # --- remote agent access (MCP) ---------------------------------------------
 MCP_PATH = "/api/assistant/mcp"
 MCP_URL = "https://admin.example.com/api/assistant/mcp"
+# The second registered resource: the REST API root, reached with the `api`
+# scope. Grants at both paths are listed, counted and swept together.
+API_ROOT_URL = "https://admin.example.com/api"
 MCP_DISCOVERY_URL = (
     "https://admin.example.com/.well-known/oauth-protected-resource"
     "/api/assistant/mcp")
@@ -58,7 +61,7 @@ MCP_GRANTS = [
      "client": {"id": 7, "client_id": "https://claude.ai/.well-known/mcp-client",
                 "name": "Claude"},
      "user": {"id": 1, "email": "ian@example.com", "display_name": "Ian Smith"},
-     "resource": MCP_URL, "scopes": ["mcp"],
+     "resource": MCP_URL, "scopes": ["mcp"], "access": "tools",
      "created": "2026-08-18T14:05:00+00:00",
      "last_used": "2026-08-21T17:40:00+00:00",
      "expires": "2026-09-17T14:05:00+00:00",
@@ -66,10 +69,21 @@ MCP_GRANTS = [
     {"id": 42,
      "client": {"id": 8, "client_id": "dcr-2f9c41a7", "name": "Claude Code"},
      "user": {"id": 2, "email": "avery@example.com", "display_name": "Avery Cole"},
-     "resource": MCP_URL, "scopes": ["mcp"],
+     "resource": MCP_URL, "scopes": ["mcp"], "access": "tools",
      "created": "2026-08-20T09:12:00+00:00",
      "last_used": None,
      "expires": "2026-09-19T09:12:00+00:00",
+     "is_active": True, "revoked_reason": ""},
+    # A connection at the API ROOT, consented to with both scopes: the Access
+    # column has to be visibly different from the tool-door rows, or the
+    # preview would show a table that cannot tell them apart.
+    {"id": 43,
+     "client": {"id": 9, "client_id": "dcr-8b31e04f", "name": "Ops script"},
+     "user": {"id": 2, "email": "avery@example.com", "display_name": "Avery Cole"},
+     "resource": API_ROOT_URL, "scopes": ["mcp", "api"], "access": "both",
+     "created": "2026-08-21T11:48:00+00:00",
+     "last_used": "2026-08-22T08:05:00+00:00",
+     "expires": "2026-09-20T11:48:00+00:00",
      "is_active": True, "revoked_reason": ""},
 ]
 
