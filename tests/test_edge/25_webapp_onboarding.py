@@ -968,6 +968,42 @@ def test_change_address_swaps_vhost(opts):
         "the old serving vhost was not retired after the swap"
 
 
+@th.django_unit_test("restoring an address reapplies an existing live release")
+def test_restore_address_reconciles_current_release(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.services import releases, webapp_onboarding
+    from tests.test_edge._helpers import make_release
+
+    declare_pools()
+    domain = make_domain(group=opts.group, provider="route53")
+    make_certificate(domain)
+    web_app = make_webapp(opts.group, slug="restorelive")
+    release = make_release(web_app, "restore-live-v1", status="live")
+    web_app.current_release = release
+    web_app.save(update_fields=["current_release", "modified"])
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    op = WebAppOnboardingOperation.objects.create(
+        group=opts.group, actor=opts.actor, web_app=web_app,
+        origin="https://example.com", replay_fingerprint=uuid.uuid4().hex,
+        cursor="address", state={"profile": {}, "choices": {
+            "address": {"label": "restorelive", "domain": domain.pk}}})
+
+    def run():
+        with mock.patch("mojo.apps.dnsman.services.dns.list_records",
+                        return_value=[]), \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record"), \
+                mock.patch.object(releases, "reconcile_current_release") as reconcile:
+            outcome = webapp_onboarding._advance_address(op)
+            return outcome, reconcile
+
+    outcome, reconcile = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert outcome is True, f"address restore did not finish: {outcome}"
+    reconcile.assert_called_once()
+    assert reconcile.call_args.args[0].pk == web_app.pk, \
+        "address restore reconciled another WebApp's release"
+
+
 @th.django_unit_test("wait exhaustion parks as waiting and never fails terminally")
 def test_wait_exhaustion_parks(opts):
     from unittest import mock

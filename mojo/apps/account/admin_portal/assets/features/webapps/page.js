@@ -149,6 +149,7 @@ async function changeAddressFor(ctx, app, reload) {
     group_id: full.group?.id, slug: full.slug, display_name: full.display_name,
     environment: full.environment, bucket: full.bucket, github_repository: full.github_repository,
     deployment_ref: full.deployment_ref, build_output: full.build_output,
+    current_release: full.current_release,
   });
 }
 

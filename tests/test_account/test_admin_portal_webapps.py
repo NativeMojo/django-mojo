@@ -279,6 +279,11 @@ def test_addressless_webapp_row_reaches_management(opts):
     assert "'Finish setup'" in window and "changeAddressFor(ctx, app, reload)" in window \
         and "deleteWebApp(app, reload)" in window, \
         "the addressless row lost its inline finish-setup and delete actions"
+    assert "current_release: full.current_release" in page, \
+        "the repair wizard cannot distinguish an existing deploy from a new app"
+    assert "applying its current deploy across your fleet" in (
+        root / "mojo/apps/account/admin_portal/assets/features/webapps/wizard.js").read_text(), \
+        "address restore still claims an already-deployed app is showing a welcome page"
     # Setup stays one click away: the Overview tab offers Set address for an
     # addressless app, so reaching the app page doesn't hide the common action.
     overview = page[page.index("section === 'overview'"):page.index("section === 'deploys'")]

@@ -1348,6 +1348,12 @@ def _advance_address(operation):
     web_app.save(update_fields=["vhost", "modified"])
     if old_site_vhost is not None:
         old_site_vhost.delete()
+    if web_app.current_release_id is not None:
+        # A release previously promoted while this app had no address has no
+        # fleet proof for the new vhost. Reapply the durable desired release;
+        # retries reuse an already-active attempt.
+        from mojo.apps.edge.services import releases
+        releases.reconcile_current_release(web_app)
     operation.evidence = dict(
         operation.evidence or {}, address=address_evidence(
             status="verified", dns="verified",
