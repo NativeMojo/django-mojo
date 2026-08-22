@@ -15,6 +15,7 @@ size that is deliberate: the fleet is a handful of long-lived boxes that hold a
 Let's Encrypt lineage, so "replace on a whim" is not the behaviour you want.
 """
 
+import shlex
 import time
 
 from mojo.deploy.provision import discover, report
@@ -69,7 +70,7 @@ USER_DATA_BUDGET = 4096
 CONFIG_SYNC_OWNER = "ec2-user:www"
 
 
-def stage0_user_data(spec, hostname):
+def stage0_user_data(spec, hostname, declaration=None):
     """The first thing the box runs, and almost nothing.
 
     Identity, swap, `var/bootstrap.conf`, and then it hands over: it downloads
@@ -87,7 +88,43 @@ def stage0_user_data(spec, hostname):
     """
     names = spec_module.names(spec)
     bucket = names["config_bucket"]
+    declaration = declaration or {"role": "default",
+                                  "serving_target": True}
+    stage1 = (spec.bootstrap_objects.get("stage1")
+              if spec.fleet else None)
+    live_config = (spec.bootstrap_objects.get("live_config")
+                   if spec.fleet else None)
+    role_document = (spec.role_document if spec.fleet else None)
     script_uri = f"s3://{bucket}/{names['stage1_script_object']}"
+    if spec.fleet:
+        hostname_lines = [
+            f"hostnamectl set-hostname {_shell(hostname)}",
+            f"echo {_shell(hostname)} > /etc/hostname",
+            f"sed -i {_shell(f's/^127.0.0.1.*/127.0.0.1   localhost {hostname}/')} "
+            f"/etc/hosts",
+        ]
+        config_lines = [
+            f"AWS_REGION={_shell(spec.region)}",
+            f"AWS_CONFIG_BUCKET={_shell(bucket)}",
+            f"AWS_CONFIG_PREFIX={_shell(names['config_prefix'])}",
+            f"MOJO_NODE_ROLE={_shell(declaration.get('role'))}",
+            f"CONFIG_SYNC_OWNER={_shell(CONFIG_SYNC_OWNER)}",
+        ]
+    else:
+        # Managed stage 0 is an existing compatibility contract. Fleet-only
+        # quoting/role metadata must not change its rendered bytes.
+        hostname_lines = [
+            f"hostnamectl set-hostname {hostname}",
+            f"echo '{hostname}' > /etc/hostname",
+            f"sed -i \"s/^127.0.0.1.*/127.0.0.1   localhost {hostname}/\" "
+            f"/etc/hosts",
+        ]
+        config_lines = [
+            f"AWS_REGION={spec.region}",
+            f"AWS_CONFIG_BUCKET={bucket}",
+            f"AWS_CONFIG_PREFIX={names['config_prefix']}",
+            f"CONFIG_SYNC_OWNER={CONFIG_SYNC_OWNER}",
+        ]
 
     script = "\n".join([
         "#!/bin/bash",
@@ -95,9 +132,7 @@ def stage0_user_data(spec, hostname):
         "exec >> /var/log/mojo-stage0.log 2>&1",
         f"echo \"stage0 $(date -Is) {hostname}\"",
         "",
-        f"hostnamectl set-hostname {hostname}",
-        f"echo '{hostname}' > /etc/hostname",
-        f"sed -i \"s/^127.0.0.1.*/127.0.0.1   localhost {hostname}/\" /etc/hosts",
+    ] + hostname_lines + [
         "",
         "# Swap. Small instances run close enough to their memory ceiling that",
         "# a traffic spike turns into the OOM killer reaping the app rather",
@@ -117,16 +152,33 @@ def stage0_user_data(spec, hostname):
         f"mkdir -p {PROJ_PATH}/var",
         f"install -m 0600 /dev/null {PROJ_PATH}/var/bootstrap.conf",
         f"cat > {PROJ_PATH}/var/bootstrap.conf <<'MOJOCONF'",
-        f"AWS_REGION={spec.region}",
-        f"AWS_CONFIG_BUCKET={bucket}",
-        f"AWS_CONFIG_PREFIX={names['config_prefix']}",
-        f"CONFIG_SYNC_OWNER={CONFIG_SYNC_OWNER}",
+    ] + config_lines + [
         "CONFIG_SYNC_RESTART=true",
         "MOJOCONF",
         "",
         "# Stage 1. Downloaded with the instance role, never with a key.",
-        f"aws s3 cp --region {spec.region} \\",
-        f"  {script_uri} {PROJ_PATH}/var/stage1.sh",
+    ] + (_pinned_download_lines(
+        stage1, f"{PROJ_PATH}/var/stage1.sh", spec.region)
+        if stage1 else [
+            f"aws s3 cp --region {spec.region} \\",
+            f"  {script_uri} {PROJ_PATH}/var/stage1.sh",
+        ]) + ([
+        "# Seed the exact live application config without copying or",
+        "# republishing its S3 dependency. Future config-sync convergence",
+        "# reads only the separate migration-owned fleet_config prefix.",
+    ] + _pinned_download_lines(
+        live_config, f"{PROJ_PATH}/var/django.conf", spec.region) + [
+        f"chown {CONFIG_SYNC_OWNER} {PROJ_PATH}/var/django.conf",
+        f"chmod 0640 {PROJ_PATH}/var/django.conf",
+    ] if live_config else []) + ([
+        "# Opaque application role. Root owns the immutable document; the",
+        "# application decides what its contents mean.",
+    ] + _pinned_download_lines(
+        role_document, "/etc/mojo/node-role.json", spec.region,
+        directory="/etc/mojo") + [
+        "chown root:root /etc/mojo/node-role.json",
+        "chmod 0600 /etc/mojo/node-role.json",
+    ] if role_document else []) + [
         f"chmod 0700 {PROJ_PATH}/var/stage1.sh",
         f"exec bash {PROJ_PATH}/var/stage1.sh",
         "",
@@ -180,7 +232,13 @@ def ensure_nodes(clients, spec, observed, apply=False):
     key_name = observed.get("key_pair_name") or names["key_pair"]
 
     instance_ids = []
-    for index, hostname in enumerate(names["nodes"]):
+    node_records = []
+    declarations = (list(spec.node_declarations) if spec.fleet else [
+        {"name": hostname, "role": "default", "serving_target": True}
+        for hostname in names["nodes"]])
+    profiles = observed.get("brownfield_profiles") or {}
+    for index, declaration in enumerate(declarations):
+        hostname = declaration["name"]
         existing = _instance_by_name(observed, hostname)
         if existing:
             findings.append(report.existing(
@@ -188,6 +246,11 @@ def ensure_nodes(clients, spec, observed, apply=False):
                 f"{hostname} is {existing.get('InstanceId')} "
                 f"({(existing.get('State') or {}).get('Name')})"))
             instance_ids.append(existing.get("InstanceId"))
+            node_records.append({"instance_id": existing.get("InstanceId"),
+                                 "hostname": hostname,
+                                 "role": declaration.get("role"),
+                                 "serving_target": bool(
+                                     declaration.get("serving_target"))})
             _report_node_drift(hostname, existing, spec, image_id, findings)
             continue
 
@@ -215,13 +278,38 @@ def ensure_nodes(clients, spec, observed, apply=False):
                 "fix what the bootstrap_payload step reported — usually an "
                 "unpublished version pin — and re-run"))
             continue
+        subnet_id = declaration.get("subnet_id") or subnet_ids[
+            index % len(subnet_ids)]
+        selected_profile = profile_name
+        if spec.fleet:
+            profile = profiles.get(declaration.get("role")) or {}
+            selected_profile = (profile.get("profile_arn")
+                                or profile.get("profile_name"))
         launched = _launch(ec2, spec, names, hostname, image_id,
-                           subnet_ids[index % len(subnet_ids)], sg_id,
-                           profile_name, key_name, findings)
+                           subnet_id, sg_id, selected_profile, key_name,
+                           findings, declaration=declaration)
         if launched:
             instance_ids.append(launched)
+            node_records.append({"instance_id": launched,
+                                 "hostname": hostname,
+                                 "role": declaration.get("role"),
+                                 "serving_target": bool(
+                                     declaration.get("serving_target"))})
 
     result.set("instance_ids", instance_ids)
+    result.set("node_records", node_records)
+    if spec.fleet:
+        proofs = [
+            {"role": declaration.get("role"), "node": declaration.get("name"),
+             "database": "SELECT 1", "cache": "PING"}
+            for declaration in declarations]
+        result.set("required_canary_proofs", proofs)
+        findings.append(report.manual(
+            STEP, "node.data_plane_canary",
+            "every declared node role still requires a redacted database "
+            "SELECT 1 and cache PING from the launched node",
+            "record those proofs without secret values before any DNS or EIP "
+            "cutover; the provisioner intentionally has metadata-only access"))
 
     addresses = _ensure_addresses(ec2, spec, observed, names, instance_ids,
                                   findings, actions, apply)
@@ -250,7 +338,7 @@ def _report_node_drift(hostname, instance, spec, image_id, findings):
 
 
 def _launch(ec2, spec, names, hostname, image_id, subnet_id, sg_id,
-            profile_name, key_name, findings):
+            profile_name, key_name, findings, declaration=None):
     request = {
         "ImageId": image_id,
         "InstanceType": spec.node_type,
@@ -259,7 +347,9 @@ def _launch(ec2, spec, names, hostname, image_id, subnet_id, sg_id,
         "KeyName": key_name,
         "SubnetId": subnet_id,
         "SecurityGroupIds": [sg_id],
-        "IamInstanceProfile": {"Name": profile_name},
+        "IamInstanceProfile": ({"Arn": profile_name}
+                               if str(profile_name).startswith("arn:")
+                               else {"Name": profile_name}),
         # IMDSv2 required, because the node receives its AWS credential through
         # that instance profile and IMDSv1 hands it to anything that can make
         # an outbound request from the box.
@@ -269,22 +359,49 @@ def _launch(ec2, spec, names, hostname, image_id, subnet_id, sg_id,
             "Ebs": {"VolumeSize": spec.node_volume_gb, "VolumeType": "gp3",
                     "Encrypted": True, "DeleteOnTermination": True},
         }],
-        "UserData": stage0_user_data(spec, hostname),
+        "UserData": stage0_user_data(spec, hostname, declaration),
         # Instance AND volume tagged in the launch call. A run_instances that
         # succeeds followed by a create_tags that does not would leave an
         # instance this package cannot see and cannot remove, and the next run
         # would launch a second one.
         "TagSpecifications": (
-            spec_module.tag_specifications(spec, "node", "instance",
-                                           name=hostname)
-            + spec_module.tag_specifications(spec, "node", "volume",
-                                             name=hostname)),
+            (spec_module.node_tag_specifications(
+                spec, declaration, "instance", name=hostname)
+             + spec_module.node_tag_specifications(
+                 spec, declaration, "volume", name=hostname))
+            if spec.fleet else
+            (spec_module.tag_specifications(spec, "node", "instance",
+                                            name=hostname)
+             + spec_module.tag_specifications(spec, "node", "volume",
+                                              name=hostname))),
     }
     response = _run_with_profile_retry(ec2, request, findings)
     if not response:
         return None
     launched = (response.get("Instances") or [{}])[0]
     return launched.get("InstanceId")
+
+
+def _pinned_download_lines(reference, destination, region, directory=None):
+    """S3 object-version download plus an exact SHA-256 gate."""
+    lines = []
+    if directory:
+        lines.append(f"mkdir -p {_shell(directory)}")
+    lines.extend((
+        f"aws s3api get-object --region={_shell(region)} \\",
+        f"  --bucket={_shell(reference['bucket'])} "
+        f"--key={_shell(reference['key'])} \\",
+        f"  --version-id={_shell(reference['version_id'])} "
+        f"{_shell(destination)} >/dev/null",
+        f"printf '%s  %s\\n' {_shell(reference['sha256'])} "
+        f"{_shell(destination)} | sha256sum -c -",
+    ))
+    return lines
+
+
+def _shell(value):
+    """One canonical quoting seam for every manifest-derived shell value."""
+    return shlex.quote(str(value))
 
 
 def _run_with_profile_retry(ec2, request, findings):

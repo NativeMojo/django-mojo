@@ -281,6 +281,23 @@ class Spec:
         self.config_bucket = None
         self.cloudtrail_bucket = None
 
+        # Brownfield fleet fields are populated only by brownfield_inputs.
+        # Keeping the seams on Spec lets the existing node and balancer
+        # ensure-functions remain the single implementation of those resource
+        # types while every managed default above stays unchanged.
+        self.fleet = None
+        self.node_declarations = []
+        self.role_document = None
+        self.bootstrap_objects = {}
+        self.bootstrap_prefix = None
+        self.config_prefix = None
+        self.metrics_namespace = None
+        self.compatibility_instance_ids = []
+        self.nlb_subnet_ids = []
+        self.nlb_name = None
+        self.api_target_group_name = None
+        self.certbot_target_group_name = None
+
         for key, value in overrides.items():
             if not hasattr(self, key):
                 raise AttributeError(
@@ -340,7 +357,7 @@ def names(spec):
     base = f"{spec.project}-{spec.env}"
     db_name = re.sub(r"[^a-z0-9]", "", f"{spec.project}{spec.env}")
     log_prefix = f"{LOG_GROUP_ROOT}/{base}"
-    return {
+    resolved = {
         "base": base,
         "vpc": f"{base}-vpc",
         "internet_gateway": f"{base}-igw",
@@ -401,6 +418,17 @@ def names(spec):
         "log_group_prefix": log_prefix,
         "log_groups": {kind: f"{log_prefix}/{kind}" for kind in LOG_GROUP_KINDS},
     }
+    if spec.fleet:
+        resolved["nodes"] = [row["name"] for row in spec.node_declarations]
+        resolved["bootstrap_prefix"] = spec.bootstrap_prefix
+        resolved["stage1_script_object"] = (
+            spec.bootstrap_objects.get("stage1") or {}).get("key")
+        resolved["config_prefix"] = spec.config_prefix
+        resolved["metrics_namespace"] = spec.metrics_namespace
+        resolved["balancer"] = spec.nlb_name
+        resolved["api_target_group"] = spec.api_target_group_name
+        resolved["certbot_target_group"] = spec.certbot_target_group_name
+    return resolved
 
 
 def validate_names(spec):
@@ -425,6 +453,9 @@ def validate_names(spec):
             problems.append(
                 f"{label} {slug!r} is {len(slug)} characters — the cap is "
                 f"{SLUG_MAX}, because every derived name is built from it")
+
+    if spec.fleet:
+        return _validate_brownfield_names(spec, problems)
 
     if spec.preset not in PRESETS:
         problems.append(
@@ -474,6 +505,41 @@ def validate_names(spec):
     return problems
 
 
+def _validate_brownfield_names(spec, problems):
+    """Validate the exact fleet vocabulary without admitting a new preset.
+
+    Brownfield is an input mode, not a managed capacity preset. Keeping this
+    seam separate means ``build(..., preset="brownfield")`` remains invalid and
+    the four managed topology presets retain their existing contract.
+    """
+    if not spec.region:
+        problems.append("region is required")
+    if problems:
+        return problems
+
+    resolved = names(spec)
+    for key in ("balancer", "api_target_group", "certbot_target_group"):
+        value = resolved[key]
+        if not value or len(value) > ELB_NAME_MAX:
+            problems.append(
+                f"{key} name {value!r} must be present and no longer than "
+                f"{ELB_NAME_MAX} characters")
+    declared = list(spec.node_declarations or ())
+    node_names = [row.get("name") for row in declared]
+    if len(declared) != spec.node_count:
+        problems.append(
+            f"node_count is {spec.node_count}, but the fleet declares "
+            f"{len(declared)} node(s)")
+    if len(node_names) != len(set(node_names)):
+        problems.append("brownfield node names must be unique")
+    if wants_balancer(spec) and not any(
+            row.get("serving_target") for row in declared):
+        problems.append(
+            "a brownfield fleet with an NLB needs at least one serving_target "
+            "node")
+    return problems
+
+
 def _identifier_problems(label, value, cap):
     problems = []
     if not IDENTIFIER_RE.match(value or ""):
@@ -502,7 +568,26 @@ def TAGS(spec, role):
         "Env": spec.env,
     }
     tags.update(MANAGED_BY)
+    if spec.fleet:
+        tags["mojo:fleet"] = spec.fleet
     return tags
+
+
+def node_tags(spec, declaration):
+    """Creation-time tags for one role-bearing brownfield node."""
+    tags = TAGS(spec, "node")
+    if spec.fleet:
+        tags["mojo:application-role"] = declaration.get("role")
+    return tags
+
+
+def node_tag_specifications(spec, declaration, resource_type, name=None):
+    tags = node_tags(spec, declaration)
+    if name:
+        tags["Name"] = name
+    return [{"ResourceType": resource_type,
+             "Tags": [{"Key": key, "Value": tags[key]}
+                      for key in sorted(tags)]}]
 
 
 def tag_list(spec, role, name=None):
@@ -539,6 +624,10 @@ def owns(tags, spec, role=None):
     if tags.get("mojo:project") != spec.project:
         return False
     if tags.get("mojo:env") != spec.env:
+        return False
+    if spec.fleet and (
+            tags.get("managed-by") != "django-mojo"
+            or tags.get("mojo:fleet") != spec.fleet):
         return False
     if role is not None and tags.get("mojo:role") != role:
         return False

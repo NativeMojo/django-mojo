@@ -127,7 +127,8 @@ def _assume(boto3, role_arn, region):
         region_name=region)
 
 
-def build_clients(profile=None, role_arn=None, region=None, session=None):
+def build_clients(profile=None, role_arn=None, region=None, session=None,
+                  mutation_policy=None):
     """The `discover.Clients` every ensure function in this package takes.
 
     Built ONCE per invocation and threaded through, not rebuilt per step: the
@@ -137,7 +138,7 @@ def build_clients(profile=None, role_arn=None, region=None, session=None):
     if session is None:
         session = build_session(profile=profile, role_arn=role_arn,
                                 region=region)
-    return discover.Clients(session=session)
+    return discover.Clients(session=session, mutation_policy=mutation_policy)
 
 
 def identify(clients):

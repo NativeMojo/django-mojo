@@ -6,6 +6,8 @@
     python3 -m mojo.deploy.provision configure       # config, nodes, HTTPS
     python3 -m mojo.deploy.provision admin           # first superuser + link
     python3 -m mojo.deploy.provision status          # what is there now
+    python3 -m mojo.deploy.provision fleet-status --fleet shadow
+    python3 -m mojo.deploy.provision fleet-apply --fleet shadow --dry-run
 
 THIS FILE CREATES NO AWS RESOURCE. Every AWS mutation belongs to `plan.apply()`;
 this is prompting, a preview, a confirmation and rendering. That separation is
@@ -51,6 +53,8 @@ prompted at import time would fire during that check.
 import sys
 
 from mojo.deploy.provision import certificate as certificate_module
+from mojo.deploy.provision import brownfield_inputs, brownfield_plan
+from mojo.deploy.provision import brownfield_policy
 from mojo.deploy.provision import clients as clients_module
 from mojo.deploy.provision import (checkout, discover, github, inputs, plan,
                                    remote, render, report, storage)
@@ -141,7 +145,7 @@ def build_parser():
                     "idempotently. Creates and modifies; never deletes.")
     commands = parser.add_subparsers(
         dest="command", required=True,
-        metavar="{init,apply,configure,admin,status}")
+        metavar="{init,apply,configure,admin,status,fleet-status,fleet-apply}")
     commands.add_parser(
         "init", parents=[shared],
         help="ask the eight questions and write the environment file")
@@ -187,6 +191,21 @@ def build_parser():
     status.add_argument(
         "--json", action="store_true",
         help="emit findings, steps and inventory as JSON")
+    fleet_shared = argparse.ArgumentParser(add_help=False)
+    fleet_shared.add_argument("--fleet", required=True,
+                              help="aws/fleets/<fleet>.json to use")
+    fleet_shared.add_argument("--project-root", default=".")
+    fleet_shared.add_argument("--profile")
+    fleet_shared.add_argument("--role-arn")
+    fleet_shared.add_argument("--dry-run", action="store_true")
+    fleet_shared.add_argument("--yes", action="store_true")
+    fleet_status = commands.add_parser(
+        "fleet-status", parents=[fleet_shared],
+        help="validate exact brownfield dependencies and preview the shadow fleet")
+    fleet_status.add_argument("--json", action="store_true")
+    commands.add_parser(
+        "fleet-apply", parents=[fleet_shared],
+        help="revalidate and create only the declared shadow nodes/NLB")
     return parser
 
 
@@ -212,6 +231,10 @@ def main(argv, console=None):
             return run_configure(args, console)
         if args.command == "admin":
             return run_admin(args, console)
+        if args.command == "fleet-status":
+            return run_fleet_status(args, console)
+        if args.command == "fleet-apply":
+            return run_fleet_apply(args, console)
         return run_status(args, console)
     except KeyboardInterrupt:
         print("\ninterrupted — re-run `apply` to pick up where this stopped; "
@@ -223,6 +246,13 @@ def main(argv, console=None):
     except clients_module.CredentialError as err:
         print(f"error: {err}", file=sys.stderr)
         return EXIT_USAGE
+    except brownfield_policy.BrownfieldCallBlocked as err:
+        print(f"error: brownfield safety boundary refused the run: {err}",
+              file=sys.stderr)
+        return EXIT_FINDINGS
+    except brownfield_plan.DependencyDriftError as err:
+        print(f"error: {err}", file=sys.stderr)
+        return EXIT_FINDINGS
 
 
 # ── init ────────────────────────────────────────────────────────────────────
@@ -292,6 +322,124 @@ def run_init(args, console):
                     "builds one environment. When you want it:")
         console.say("  python3 -m mojo.deploy.provision init --env staging")
     return EXIT_OK
+
+
+# ── exact-resource brownfield fleets ───────────────────────────────────────
+
+def _fleet(args, console, announce=True):
+    path = brownfield_inputs.fleet_path(args.project_root, args.fleet)
+    manifest = brownfield_inputs.load(path)
+    if manifest["fleet"] != args.fleet:
+        raise inputs.EnvFileError(
+            f"{path} declares fleet {manifest['fleet']!r}, not "
+            f"{args.fleet!r}")
+    topology = brownfield_inputs.to_spec(manifest,
+                                         project_root=args.project_root)
+    connection = clients_module.build_clients(
+        profile=args.profile, role_arn=args.role_arn,
+        region=topology.region,
+        mutation_policy=brownfield_policy.MutationPolicy())
+    identity = clients_module.identify(connection)
+    if announce:
+        console.say(f"account {identity['account_id']} · {topology.region} · "
+                    f"fleet {topology.fleet} · exact-resource brownfield")
+        console.say(f"  as {identity.get('arn')}")
+    return manifest, topology, connection
+
+
+def run_fleet_status(args, console):
+    manifest, topology, connection = _fleet(
+        args, console, announce=not args.json)
+    findings, actions, run = brownfield_plan.observe(connection, topology)
+    if args.json:
+        import json
+        console.say(json.dumps({
+            "account_id": run.observed.get("account_id"),
+            "region": topology.region, "fleet": topology.fleet,
+            "manifest_digest": manifest["manifest_digest"],
+            "dependency_digest": run.observed.get("dependency_digest"),
+            "action_digest": run.observed.get("action_digest"),
+            "inventory": run.observed.get("dependency_inventory"),
+            "steps": {name: dict(step) for name, step in run.steps.items()},
+            **report.Report(findings, actions).as_dict(),
+        }, indent=2, default=str))
+    else:
+        render_findings(findings, console.say)
+        _render_fleet_preview(topology, findings, actions, run, console)
+        console.say("")
+        console.say("fleet-status is read-only: nothing was created or changed.")
+    return EXIT_FINDINGS if run.blocking else EXIT_OK
+
+
+def run_fleet_apply(args, console):
+    manifest, topology, connection = _fleet(args, console)
+    findings, actions, preview = brownfield_plan.observe(connection, topology)
+    render_findings(findings, console.say)
+    _render_fleet_preview(topology, findings, actions, preview, console)
+    if preview.blocking:
+        console.say("")
+        console.say("The exact dependency boundary is not clean, so apply is "
+                    "refused before its first mutation.")
+        return EXIT_FINDINGS
+    if args.dry_run:
+        console.say("")
+        console.say("--dry-run: nothing was created. Re-run without it to "
+                    "prepare the shadow fleet.")
+        return EXIT_OK
+    if not args.yes:
+        if not console.is_interactive():
+            print("error: stdin is not a terminal and --yes was not given; "
+                  "there is nobody to confirm the exact fleet preview.",
+                  file=sys.stderr)
+            return EXIT_USAGE
+        if not console.confirm(
+                f"\nCreate only the shadow fleet resources in account "
+                f"{preview.observed.get('account_id')} / {topology.region}?"):
+            console.say("nothing was created.")
+            return EXIT_OK
+    expected_digest = preview.observed.get("dependency_digest")
+    expected_action_digest = preview.observed.get("action_digest")
+    console.say("")
+    findings, actions, run = brownfield_plan.apply(
+        connection, topology, expected_digest=expected_digest,
+        expected_action_digest=expected_action_digest)
+    render_findings(findings, console.say)
+    render_summary(findings, run, console.say)
+    return _exit_for(run)
+
+
+def _render_fleet_preview(topology, findings, actions, run, console):
+    creates = sum(1 for action in actions if action.verb == "create")
+    modifies = sum(1 for action in actions if action.verb != "create")
+    inventory = run.observed.get("dependency_inventory") or {}
+    dependency_fields = len(_fleet_leaves(inventory))
+    console.say("")
+    console.say("─" * 72)
+    console.say(f"  account: {run.observed.get('account_id')}  "
+                f"region: {topology.region}  fleet: {topology.fleet}")
+    console.say(f"  dependency digest: "
+                f"{run.observed.get('dependency_digest')}")
+    console.say(f"  action digest: {run.observed.get('action_digest')}")
+    console.say(f"  allowed actions: {creates} create · {modifies} modify  "
+                f"read-only dependency fields: {dependency_fields}")
+    console.say("  forced false: manage/publish DNS · certificates/ACM · "
+                "preserved-EIP handoff · database/cache/storage writes")
+    console.say("  no teardown exists; only fleet-tagged preparation "
+                "resources are eligible for convergence")
+
+
+def _fleet_leaves(value):
+    if isinstance(value, dict):
+        rows = []
+        for item in value.values():
+            rows.extend(_fleet_leaves(item))
+        return rows
+    if isinstance(value, list):
+        rows = []
+        for item in value:
+            rows.extend(_fleet_leaves(item))
+        return rows
+    return [value]
 
 
 # ── status ──────────────────────────────────────────────────────────────────
