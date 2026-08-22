@@ -64,8 +64,8 @@ NODES_KEYS = frozenset((
     "profiles", "session_manager",
 ))
 NODE_KEYS = frozenset((
-    "name", "role", "serving_target", "subnet_id", "availability_zone",
-    "instance_profile_arn",
+    "name", "role", "serving_target", "request_service", "subnet_id",
+    "availability_zone", "instance_profile_arn",
 ))
 PROFILE_KEYS = frozenset(("profile_arn", "role_arn", "managed"))
 MANAGED_PROFILE_KEYS = frozenset(("profile_name", "role_name"))
@@ -380,7 +380,8 @@ def _nodes(value, network, path, account_id):
     for index, node in enumerate(items):
         node_label = f"{label}.items[{index}]"
         _object(node, NODE_KEYS, node_label)
-        _required(node, set(NODE_KEYS) - {"instance_profile_arn"}, node_label)
+        _required(node, set(NODE_KEYS) - {
+            "instance_profile_arn", "request_service"}, node_label)
         if not NODE_NAME_RE.match(node["name"] or ""):
             raise inputs.EnvFileError(
                 f"{node_label}.name must be a lowercase hostname label")
@@ -388,6 +389,9 @@ def _nodes(value, network, path, account_id):
             raise inputs.EnvFileError(
                 f"{node_label}.role is not an opaque role name")
         _boolean(node["serving_target"], f"{node_label}.serving_target")
+        if "request_service" in node:
+            _boolean(node["request_service"],
+                     f"{node_label}.request_service")
         if node["subnet_id"] not in subnet_ids:
             raise inputs.EnvFileError(
                 f"{node_label}.subnet_id is not a declared public subnet")

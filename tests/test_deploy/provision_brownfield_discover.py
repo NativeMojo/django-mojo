@@ -1,3 +1,5 @@
+import base64
+
 from objict import objict
 from testit import helpers as th
 
@@ -170,6 +172,121 @@ def test_owned_node_hardware_and_root_volume_drift_are_each_withheld(opts):
         th.assert_true(any(case in item.message and item.status == report.BLIND
                            for item in findings),
                        f"{case} drift must fail closed: {findings}")
+
+
+@th.django_unit_test()
+def test_request_service_role_drift_requires_node_replacement(opts):
+    from mojo.deploy.provision import brownfield_discover, report
+
+    spec = topology()
+    manifest = spec.brownfield_manifest
+    manifest["compatibility_instance_ids"] = []
+    declaration = manifest["nodes"]["items"][0]
+    declaration["request_service"] = False
+    tags = {
+        "Name": declaration["name"], "managed-by": "django-mojo",
+        "mojo:project": spec.project, "mojo:env": spec.env,
+        "mojo:fleet": spec.fleet, "mojo:role": "node",
+        "mojo:application-role": declaration["role"],
+    }
+    instance = {
+        "InstanceId": "i-aaaaaaaaaaaaaaaaa",
+        "InstanceType": manifest["nodes"]["instance_type"],
+        "ImageId": manifest["nodes"]["ami_id"],
+        "VpcId": manifest["network"]["vpc_id"],
+        "SubnetId": declaration["subnet_id"],
+        "Placement": {"AvailabilityZone": declaration["availability_zone"]},
+        "State": {"Name": "running"},
+        "IamInstanceProfile": {"Arn": declaration["instance_profile_arn"]},
+        "SecurityGroups": [{"GroupId":
+            manifest["network"]["node_security_group_id"]}],
+        "RootDeviceName": "/dev/xvda",
+        "BlockDeviceMappings": [{"DeviceName": "/dev/xvda",
+                                 "Ebs": {"VolumeId": "vol-aaaaaaaa"}}],
+        "Tags": [{"Key": key, "Value": value} for key, value in tags.items()],
+    }
+
+    class _EC2:
+        def describe_instances(self, **kwargs):
+            return {"Reservations": [{"Instances": [instance]}]}
+
+        def describe_volumes(self, **kwargs):
+            return {"Volumes": [{"VolumeId": "vol-aaaaaaaa",
+                                  "Size": manifest["nodes"]["volume_gb"],
+                                  "Encrypted": True}]}
+
+    findings, observed, inventory = [], objict(), {}
+    observed.brownfield_profiles = {
+        "api": {"profile_arn": declaration["instance_profile_arn"]}}
+    brownfield_discover._instances(
+        _Clients(ec2=_EC2()), spec, manifest, findings, observed, inventory)
+
+    th.assert_eq(list(observed.instances), [],
+                 "a legacy request-serving node must not be reported as "
+                 "request_service=false merely because the manifest changed")
+    th.assert_true(any("request-service" in item.message
+                       and item.status == report.BLIND for item in findings),
+                   f"request-role drift must block for replacement: {findings}")
+
+
+@th.django_unit_test()
+def test_explicit_request_role_requires_exact_launch_user_data(opts):
+    from mojo.deploy.provision import brownfield_discover, report
+
+    spec = topology()
+    manifest = spec.brownfield_manifest
+    manifest["compatibility_instance_ids"] = []
+    declaration = manifest["nodes"]["items"][0]
+    declaration["request_service"] = False
+    tags = {
+        "Name": declaration["name"], "managed-by": "django-mojo",
+        "mojo:project": spec.project, "mojo:env": spec.env,
+        "mojo:fleet": spec.fleet, "mojo:role": "node",
+        "mojo:application-role": declaration["role"],
+        "mojo:request-service": "false",
+    }
+    instance = {
+        "InstanceId": "i-aaaaaaaaaaaaaaaaa",
+        "InstanceType": manifest["nodes"]["instance_type"],
+        "ImageId": manifest["nodes"]["ami_id"],
+        "VpcId": manifest["network"]["vpc_id"],
+        "SubnetId": declaration["subnet_id"],
+        "Placement": {"AvailabilityZone": declaration["availability_zone"]},
+        "State": {"Name": "running"},
+        "IamInstanceProfile": {"Arn": declaration["instance_profile_arn"]},
+        "SecurityGroups": [{"GroupId":
+            manifest["network"]["node_security_group_id"]}],
+        "RootDeviceName": "/dev/xvda",
+        "BlockDeviceMappings": [{"DeviceName": "/dev/xvda",
+                                 "Ebs": {"VolumeId": "vol-aaaaaaaa"}}],
+        "Tags": [{"Key": key, "Value": value} for key, value in tags.items()],
+    }
+
+    class _EC2:
+        def describe_instances(self, **kwargs):
+            return {"Reservations": [{"Instances": [instance]}]}
+
+        def describe_volumes(self, **kwargs):
+            return {"Volumes": [{"VolumeId": "vol-aaaaaaaa",
+                                  "Size": manifest["nodes"]["volume_gb"],
+                                  "Encrypted": True}]}
+
+        def describe_instance_attribute(self, **kwargs):
+            return {"UserData": {"Value": base64.b64encode(
+                b"#!/bin/bash\n# stale request-serving bootstrap\n").decode(
+                    "ascii")}}
+
+    findings, observed, inventory = [], objict(), {}
+    observed.brownfield_profiles = {
+        "api": {"profile_arn": declaration["instance_profile_arn"]}}
+    brownfield_discover._instances(
+        _Clients(ec2=_EC2()), spec, manifest, findings, observed, inventory)
+
+    th.assert_eq(list(observed.instances), [],
+                 "a matching mutable tag must not override wrong launch evidence")
+    th.assert_true(any("request-role user data digest" in item.message
+                       and item.status == report.BLIND for item in findings),
+                   f"wrong immutable launch evidence must block: {findings}")
 
 
 @th.django_unit_test()

@@ -239,6 +239,29 @@ EOF
     cat > "$STUB/systemctl" <<'EOF'
 #!/bin/bash
 echo "CMD systemctl $*" >> "$CALLLOG"
+case "$*" in
+    "disable --now mojo-asgi.service")
+        [ -f "$STUBCTL/asgi.absent" ] && exit 1
+        [ -f "$STUBCTL/asgi.revoke_fail" ] && exit 1
+        touch "$STUBCTL/asgi.inactive" "$STUBCTL/asgi.disabled"
+        exit 0 ;;
+    "show --property=LoadState --value mojo-asgi.service")
+        [ -f "$STUBCTL/asgi.query_fail" ] && exit 1
+        if [ -f "$STUBCTL/asgi.absent" ]; then echo not-found; else echo loaded; fi
+        exit 0 ;;
+    "show --property=ActiveState --value mojo-asgi.service")
+        [ -f "$STUBCTL/asgi.query_fail" ] && exit 1
+        if [ -f "$STUBCTL/asgi.inactive" ] || [ -f "$STUBCTL/asgi.absent" ]; then
+            echo inactive
+        else
+            echo active
+        fi
+        exit 0 ;;
+    "show --property=UnitFileState --value mojo-asgi.service")
+        [ -f "$STUBCTL/asgi.query_fail" ] && exit 1
+        if [ -f "$STUBCTL/asgi.disabled" ]; then echo disabled; else echo enabled; fi
+        exit 0 ;;
+esac
 case "$1 $2" in
     "is-active --quiet") [ ! -f "$STUBCTL/mojosec.inactive" ]; exit $? ;;
     "is-enabled --quiet") [ ! -f "$STUBCTL/mojosec.disabled" ]; exit $? ;;
@@ -255,7 +278,10 @@ EOF
     cat > "$STUB/stat" <<'EOF'
 #!/bin/bash
 # Fallback ownership probe: the harness models root-owned /etc seams.
-echo 0
+case "$*" in
+    *"%a"*) cat "$STUBCTL/stat.mode" 2>/dev/null || echo 600 ;;
+    *)      cat "$STUBCTL/stat.owner" 2>/dev/null || echo 0 ;;
+esac
 EOF
     chmod +x "$STUB/stat"
 
@@ -266,6 +292,15 @@ EOF
 #!/bin/bash
 echo "CMD python3 \$*" >> "\$CALLLOG"
 case "\$*" in
+    "-m mojo.deploy.request_service")
+        value="\$(cat "\$STUBCTL/request_service.value" 2>/dev/null || echo true)"
+        if [ "\$value" = error ]; then
+            echo "request-service: sealed authority refused" >&2
+            exit 2
+        fi
+        printf '%s\n' "\$value"
+        exit 0
+        ;;
     *"- __mojo_tls_vhost__ "*)
         exec env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$REPO" "$REAL_PYTHON3" "\$@"
         ;;
@@ -344,6 +379,10 @@ run_post_deploy_env() { # VAR=val ... -- args...
         LOGROTATE_ETC="$TMP/logrotate_etc" PATH="$STUB:$PATH" \
         MOJOSEC_PYTHON=python3 \
         bash "$PROJ/aws/post_deploy.sh" "$@" )
+}
+
+set_request_service() { # exact sealed stage-0 projection value
+    printf '%s\n' "$1" > "$CTL/request_service.value"
 }
 
 # ── tests ────────────────────────────────────────────────────────────────────
@@ -674,7 +713,101 @@ assert_no_file "$TMP/nginx_etc/conf.d/sample.example.conf" \
 assert_has "$OUT" "converged 2 vhost(s)" "conf.d convergence logs its count"
 assert_not_in_log "migrate" "bare invocation never migrates"
 
+echo "post_deploy.sh: sealed request-service selection is strict and role-local"
+setup_env
+set_request_service true
+run_post_deploy > "$OUT" 2>&1
+assert_eq "$?" 0 "explicit request_service=true preserves a successful request deploy"
+assert_in_log "CMD systemctl restart mojo-asgi" \
+    "explicit true follows the existing ASGI restart path"
+assert_in_log "CMD curl .*https://127.0.0.1/api/version" \
+    "explicit true keeps the request readiness probe"
+
+setup_env
+set_request_service false
+run_post_deploy > "$OUT" 2>&1
+assert_eq "$?" 0 "request_service=false completes without framework ASGI"
+assert_in_log "CMD systemctl disable --now mojo-asgi.service" \
+    "a non-request node revokes an existing framework request service"
+assert_order "disable --now mojo-asgi.service" "CMD pip install -r" \
+    "request authority is revoked before dependency or project convergence"
+assert_not_in_log "CMD systemctl restart mojo-asgi" \
+    "a non-request node never restarts framework ASGI"
+assert_not_in_log "CMD curl .*https://127.0.0.1/api/version" \
+    "intentional ASGI absence skips the request probe"
+assert_has "$OUT" "framework request service disabled" \
+    "non-request success names the lifecycle it proved"
+assert_file "$PROJ/var/deploy/post_deploy.sh" \
+    "non-request success still snapshots rollback's canonical script"
+
+setup_env
+set_request_service False
+run_post_deploy > "$OUT" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    ok "a malformed sealed value fails closed"
+else
+    fail "a malformed sealed value was treated as request authority"
+fi
+assert_in_log "CMD systemctl disable --now mojo-asgi.service" \
+    "malformed request authority is actively revoked"
+assert_not_in_log "CMD pip install -r" \
+    "malformed authority aborts before deployment work"
+
+setup_env
+set_request_service error
+run_post_deploy > "$OUT" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    ok "a refused sealed authority fails closed"
+else
+    fail "a refused sealed authority granted request authority"
+fi
+assert_in_log "CMD systemctl disable --now mojo-asgi.service" \
+    "a refused sealed authority revokes request authority"
+
+setup_env
+set_request_service false
+touch "$CTL/asgi.revoke_fail"
+run_post_deploy > "$OUT" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    ok "failed request-service revocation aborts the deploy"
+else
+    fail "failed request-service revocation was reported ready"
+fi
+assert_has "$OUT" "unsafe ActiveState active" \
+    "revocation failure names the still-active authority"
+assert_not_in_log "CMD pip install -r" \
+    "revocation failure stops before dependency work"
+
+setup_env
+set_request_service false
+touch "$CTL/asgi.absent"
+run_post_deploy > "$OUT" 2>&1
+assert_eq "$?" 0 "an intentionally absent ASGI unit is a safe non-request state"
+assert_not_in_log "CMD systemctl restart mojo-asgi" \
+    "an absent ASGI unit is never resurrected"
+
+setup_env
+set_request_service false
+touch "$CTL/asgi.query_fail"
+run_post_deploy > "$OUT" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    ok "a systemd state-query failure aborts non-request readiness"
+else
+    fail "a systemd state-query failure false-passed non-request readiness"
+fi
+assert_has "$OUT" "cannot verify mojo-asgi LoadState" \
+    "a state-query failure names the unproved systemd state"
+assert_not_in_log "CMD pip install -r" \
+    "an unproved systemd state stops before dependency work"
+
 echo "post_deploy.sh: the run records its own phase timings, under update.sh's pass"
+setup_env
+run_post_deploy > "$OUT" 2>&1
+assert_eq "$?" 0 "phase-timing fixture completes the request path"
 assert_file "$PROJ/var/deploy/phase_timings" "post_deploy recorded phase timings"
 pd_field() { awk -v n="$1" '{print $n}' "$PROJ/var/deploy/phase_timings" 2>/dev/null; }
 assert_eq "$(pd_field 2 | tr '\n' ' ')" \

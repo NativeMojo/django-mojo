@@ -107,8 +107,8 @@ is:
     "key_pair_name": "maestro-prod",
     "session_manager": true,
     "items": [
-      {"name": "maestro-api-1", "role": "api", "serving_target": true, "subnet_id": "subnet-0123456789abcdef0", "availability_zone": "us-west-2a", "instance_profile_arn": "arn:aws:iam::123456789012:instance-profile/maestro-api-fleet"},
-      {"name": "maestro-worker-1", "role": "worker", "serving_target": false, "subnet_id": "subnet-1123456789abcdef0", "availability_zone": "us-west-2b", "instance_profile_arn": "arn:aws:iam::123456789012:instance-profile/maestro-worker-fleet"}
+      {"name": "maestro-api-1", "role": "api", "serving_target": true, "request_service": true, "subnet_id": "subnet-0123456789abcdef0", "availability_zone": "us-west-2a", "instance_profile_arn": "arn:aws:iam::123456789012:instance-profile/maestro-api-fleet"},
+      {"name": "maestro-worker-1", "role": "worker", "serving_target": false, "request_service": false, "subnet_id": "subnet-1123456789abcdef0", "availability_zone": "us-west-2b", "instance_profile_arn": "arn:aws:iam::123456789012:instance-profile/maestro-worker-fleet"}
     ],
     "profiles": {
       "api": {"profile_arn": "arn:aws:iam::123456789012:instance-profile/maestro-api-fleet", "role_arn": "arn:aws:iam::123456789012:role/maestro-api-fleet"},
@@ -246,6 +246,42 @@ prefix. The role document is root-owned `0600`, and `MOJO_NODE_ROLE` plus
 `mojo:application-role` carry the opaque application role through boot and
 inventory. Only `serving_target` nodes, plus explicit compatibility instance
 ids, enter the API target group; workers do not.
+
+`nodes.items[].request_service` is a separate optional boolean. Omission or
+`true` preserves the canonical django-mojo ASGI install, restart and request
+probe. `false` makes canonical post-deploy stop and disable
+`mojo-asgi.service`, verify that request authority is gone, and skip only its
+restart/probe. For an explicit selection, stage 0 writes it into root-owned `0600`
+`/etc/mojo/request-service.conf`; post-deploy and config sync open and validate
+that sealed file without sourcing it and fail closed on malformed or unsealed
+declarations. A persistent systemd drop-in requires the root-only
+`/etc/mojo/request-service.enabled` marker, which false roles remove. That
+durable refusal survives an older framework rollback or manual start.
+`CONFIG_SYNC_RESTART=false` remains a defense in depth, not authority.
+
+An explicit selection is recorded at launch in the
+`mojo:request-service=true|false` tag; omission preserves the pre-feature
+provider shape and a missing tag remains compatible with the legacy `true`
+role only. For explicit declarations discovery also reads the exact EC2 launch
+user data and compares its SHA-256-bound bytes with the currently declared
+stage-0 projection. A requested false role against missing/true evidence, or
+any other mismatch, blocks convergence and requires deliberate node
+replacement. The mutable tag alone is never proof, and discovery never reports
+the manifest's desired value as observed state. Before cutover, the required
+node-side canary additionally proves the sealed `/etc` authority and the exact
+active/enabled or inactive/disabled systemd state.
+The ordinary brownfield observation principal therefore needs
+`ec2:DescribeInstanceAttribute` in addition to `ec2:DescribeInstances`; the
+closed runtime allowlist admits only the former's `userData` request made with
+an exact declared instance id.
+
+Do not infer `request_service` from `serving_target`. The former controls the
+local **framework ASGI lifecycle**; the latter controls **NLB registration**.
+An application-owned Sites or MCP service may therefore be a serving target
+with framework ASGI disabled. The project's own post-deploy layer remains
+responsible for starting and proving MCP, scheduler, executor, Sites,
+singleton or other opaque role services. django-mojo does not interpret the
+role document or claim those services are healthy.
 
 The managed runtime policy grants unversioned `GetObject` only below declared
 storage prefixes and `GetObjectVersion` only on the exact bootstrap and
@@ -840,8 +876,8 @@ the remedy rather than reporting a converge that did not happen.
 
 Stage 1 writes it between `ec2_deploy.sh` and `config_sync` — after the
 former's `var/` ownership sweep, and before the latter's
-`CONFIG_SYNC_RESTART` restart, which would otherwise bring the app up on the
-wrong profile.
+role-aware `CONFIG_SYNC_RESTART` restart, which would otherwise bring a request
+node up on the wrong profile.
 
 ## Stage 0 and stage 1
 
@@ -855,6 +891,10 @@ enforced in code. It sets the hostname, makes swap, writes
 `CONFIG_SYNC_OWNER=ec2-user:www`, `CONFIG_SYNC_RESTART=true`), then downloads
 `stage1.sh` from the config bucket and execs it. Logged to
 `/var/log/mojo-stage0.log`.
+
+An explicit fleet request role additionally installs the sealed authority and
+durable systemd drop-in under root-owned `/etc`; omitted fleet declarations and
+managed stage-0 bytes remain exactly pre-feature compatible.
 
 **No credential appears in user data.** It is readable from IMDS by anything
 on the box and echoed back by `describe-instance-attribute` to anyone with EC2

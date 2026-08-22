@@ -476,6 +476,11 @@ def validate_names(spec):
         problems.append(
             "NLB security and client-IP controls are brownfield-only "
             "declarations")
+    if not spec.fleet and any(
+            "request_service" in row
+            for row in (spec.node_declarations or ())):
+        problems.append(
+            "request_service is a brownfield-only node declaration")
 
     if spec.fleet:
         return _validate_brownfield_names(spec, problems)
@@ -601,6 +606,9 @@ def node_tags(spec, declaration):
     tags = TAGS(spec, "node")
     if spec.fleet:
         tags["mojo:application-role"] = declaration.get("role")
+        if "request_service" in declaration:
+            tags["mojo:request-service"] = (
+                "true" if declaration["request_service"] else "false")
     return tags
 
 

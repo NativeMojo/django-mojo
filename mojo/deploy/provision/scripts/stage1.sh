@@ -32,9 +32,9 @@
 #      already substituted with this environment's three log-group names.
 #      A failed install WARNS and continues: logging is not worth failing a
 #      bootstrap over, and a re-run picks it up.
-#   8. config_sync LAST. It publishes var/django.conf and, because
-#      CONFIG_SYNC_RESTART=true, restarts mojo-asgi — which must not happen
-#      until var/profile exists, or the app comes up on settings.local.
+#   8. config_sync LAST. It publishes var/django.conf and may restart
+#      mojo-asgi when the root-sealed request role permits it — which must not
+#      happen until var/profile exists, or the app comes up on settings.local.
 #
 # Idempotent: every step is safe to re-run, and a resumed bootstrap is a plain
 # re-execution of this file.
@@ -213,8 +213,9 @@ fi
 
 # ── 8. the application config ────────────────────────────────────────────────
 # LAST. This installs var/django.conf from the config bucket and, with
-# CONFIG_SYNC_RESTART=true, restarts mojo-asgi — which is only correct once
-# var/profile above says prod.
+# CONFIG_SYNC_RESTART=true, restarts mojo-asgi only when the root-sealed
+# request-service role permits it. Any restart is only correct once var/profile
+# above says prod.
 #
 # BEST-EFFORT on first boot, deliberately. On a fresh account the node always
 # boots before the operator's `configure` step has published django.conf, so
@@ -223,7 +224,7 @@ fi
 # is the authoritative convergence; this sync is just the fast path when the
 # config already exists.
 
-log "syncing django.conf and restarting the app"
+log "syncing django.conf with role-aware service activation"
 python3 -m mojo.deploy.config_sync --config "$BOOTSTRAP_CONF" || \
     warn "django.conf is not published yet — expected on first boot; the configure step converges this node"
 

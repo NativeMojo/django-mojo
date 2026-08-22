@@ -5,6 +5,9 @@ class _Raw:
     def describe_vpcs(self):
         return {"Vpcs": []}
 
+    def describe_instance_attribute(self, **kwargs):
+        return {"UserData": {"Value": ""}}
+
     def describe_cache_clusters(self, **kwargs):
         return {"CacheClusters": []}
 
@@ -43,6 +46,10 @@ def test_positive_client_policy_blocks_every_unlisted_mutation_via_getattr(opts)
                  "explicit read operations must remain reachable")
     th.assert_eq(client.run_instances(), {"Instances": []},
                  "declared preparation mutations must remain reachable")
+    th.assert_eq(client.describe_instance_attribute(
+        InstanceId="i-1", Attribute="userData"),
+        {"UserData": {"Value": ""}},
+        "exact launch user-data evidence must remain readable")
     cache_client = discover.GuardedClient(
         _Raw(), "elasticache", brownfield_policy.MutationPolicy())
     th.assert_eq(cache_client.describe_cache_clusters(

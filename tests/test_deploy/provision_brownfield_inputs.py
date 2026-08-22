@@ -210,6 +210,39 @@ def test_manifest_rejects_string_booleans_and_prefix_containment(opts):
 
 
 @th.django_unit_test()
+def test_node_request_service_is_strict_optional_and_digest_bound(opts):
+    from mojo.deploy.provision import brownfield_inputs
+
+    omitted = brownfield_inputs.validate(raw_manifest())
+    th.assert_true(
+        "request_service" not in omitted["nodes"]["items"][0],
+        "normalization must not rewrite an omitted compatibility declaration")
+
+    for selected in (True, False):
+        raw = raw_manifest()
+        raw["nodes"]["items"][0]["request_service"] = selected
+        declared = brownfield_inputs.validate(raw)
+        topology = brownfield_inputs.to_spec(declared)
+        th.assert_eq(
+            topology.node_declarations[0]["request_service"], selected,
+            f"the exact {selected!r} lifecycle must survive manifest-to-spec")
+        th.assert_true(
+            declared["manifest_digest"] != omitted["manifest_digest"],
+            "an explicit per-node lifecycle must change the manifest digest")
+
+    for invalid in ("false", 0, 1, None, [], {}):
+        raw = raw_manifest()
+        raw["nodes"]["items"][0]["request_service"] = invalid
+        message = _error(raw)
+        th.assert_in(
+            "request_service", message,
+            f"invalid request_service {invalid!r} must name its field: {message}")
+        th.assert_in(
+            "JSON boolean", message,
+            f"invalid request_service {invalid!r} must fail closed: {message}")
+
+
+@th.django_unit_test()
 def test_brownfield_dns_boundary_is_explicit_serialized_false(opts):
     missing = raw_manifest()
     missing.pop("manage_dns")
@@ -324,6 +357,12 @@ def test_to_spec_is_separate_and_managed_defaults_do_not_move(opts):
                  "fleet ownership must be present at resource creation")
     th.assert_eq(tags["mojo:application-role"], "api",
                  "the opaque application role must be tagged at creation")
+    th.assert_true("mojo:request-service" not in tags,
+                   "omission must preserve the pre-feature provider tag shape")
+    explicit = dict(fleet.node_declarations[0], request_service=True)
+    explicit_tags = spec_module.node_tags(fleet, explicit)
+    th.assert_eq(explicit_tags["mojo:request-service"], "true",
+                 "an explicit framework request role must be tagged at launch")
     th.assert_eq(spec_module.validate_names(fleet), [],
                  "a validated manifest must pass the separate fleet name seam")
     th.assert_eq(fleet.bootstrap_objects["live_config"]["version_id"],

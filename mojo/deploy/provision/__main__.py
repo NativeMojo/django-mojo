@@ -636,7 +636,13 @@ def _render_fleet_preview(topology, findings, actions, run, console):
                 f"region: {topology.region}  fleet: {topology.fleet}")
     console.say(f"  dependency digest: "
                 f"{run.observed.get('dependency_digest')}")
+    console.say(f"  manifest digest: {topology.manifest_digest}")
     console.say(f"  action digest: {run.observed.get('action_digest')}")
+    for declaration in topology.node_declarations:
+        if "request_service" in declaration:
+            selected = str(declaration["request_service"]).lower()
+            console.say(f"  node request service: {declaration['name']}="
+                        f"{selected}")
     console.say(f"  allowed actions: {creates} create · {modifies} modify  "
                 f"read-only dependency fields: {dependency_fields}")
     console.say("  forced false: manage/publish DNS · certificates/ACM · "

@@ -1,5 +1,7 @@
 """Botocore-model validation for exact brownfield discovery requests."""
 
+import base64
+
 from objict import objict
 from testit import helpers as th
 
@@ -32,6 +34,7 @@ def test_stubber_validates_sts_ec2_and_owned_tag_request_shapes(opts):
     manifest = spec.brownfield_manifest
     manifest["compatibility_instance_ids"] = []
     declaration = manifest["nodes"]["items"][0]
+    declaration["request_service"] = True
     tags = [
         {"Key": "Name", "Value": declaration["name"]},
         {"Key": "managed-by", "Value": "django-mojo"},
@@ -40,6 +43,7 @@ def test_stubber_validates_sts_ec2_and_owned_tag_request_shapes(opts):
         {"Key": "mojo:fleet", "Value": spec.fleet},
         {"Key": "mojo:role", "Value": "node"},
         {"Key": "mojo:application-role", "Value": declaration["role"]},
+        {"Key": "mojo:request-service", "Value": "true"},
     ]
     sts, ec2, elbv2 = _client("sts"), _client("ec2"), _client("elbv2")
     sts_stub, ec2_stub, elb_stub = Stubber(sts), Stubber(ec2), Stubber(elbv2)
@@ -74,6 +78,13 @@ def test_stubber_validates_sts_ec2_and_owned_tag_request_shapes(opts):
         "VolumeId": "vol-aaaaaaaa", "Size": manifest["nodes"]["volume_gb"],
         "Encrypted": True,
     }]}, {"VolumeIds": ["vol-aaaaaaaa"]})
+    from mojo.deploy.provision import nodes
+    user_data = nodes.stage0_user_data(
+        spec, declaration["name"], declaration).encode("utf-8")
+    ec2_stub.add_response("describe_instance_attribute", {
+        "InstanceId": "i-aaaaaaaaaaaaaaaaa",
+        "UserData": {"Value": base64.b64encode(user_data).decode("ascii")},
+    }, {"InstanceId": "i-aaaaaaaaaaaaaaaaa", "Attribute": "userData"})
     balancer_arn = ("arn:aws:elasticloadbalancing:us-west-2:123456789012:"
                     "loadbalancer/net/maestro-shadow-nlb/abc")
     ownership = [

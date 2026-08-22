@@ -13,7 +13,8 @@ ALLOWED_READS = {
     "sts": frozenset(("get_caller_identity",)),
     "ec2": frozenset((
         "describe_addresses", "describe_availability_zones",
-        "describe_images", "describe_instances", "describe_key_pairs",
+        "describe_images", "describe_instance_attribute",
+        "describe_instances", "describe_key_pairs",
         "describe_route_tables", "describe_security_groups",
         "describe_subnets", "describe_volumes", "describe_vpcs",
     )),

@@ -188,6 +188,25 @@ Read from `/opt/api/var/bootstrap.conf`, deliberately **not** from
 service name. It cannot itself come from bootstrap config, and `--config` is
 the existing escape hatch.
 
+### Brownfield request-service authority
+
+An explicit brownfield declaration makes stage 0 write the framework request role at
+`/etc/mojo/request-service.conf`, root-owned mode `0600`. The file contains
+exactly one `MOJO_REQUEST_SERVICE=true` or `false` line. Readers first open and
+validate the real parent directory as root-owned and non-writable, then use its
+descriptor plus `O_NOFOLLOW` to open and validate the leaf. They fail closed on
+any malformed or unsealed path. `/opt/api/var/bootstrap.conf` is therefore
+never request-role authority.
+
+A persistent `mojo-asgi.service` systemd drop-in requires the root-only
+`/etc/mojo/request-service.enabled` marker. A false role removes that marker,
+so an older framework rollback, a manual start, or a writable-bootstrap edit
+cannot resurrect framework ASGI. Config sync consults the same sealed
+authority before restarting the default framework service. Custom
+`CONFIG_SYNC_SERVICE` units remain application-owned and independent. Absence
+of the authority preserves managed, omitted, and pre-feature request-serving
+behavior without changing their stage-0 provider bytes.
+
 ### Publishing, and `CONFIG_SYNC_REQUIRE_SHA`
 
 The integrity check compares the downloaded bytes against the object's
@@ -645,7 +664,7 @@ was installed **before** the run, not after.
 |---|---|---|---|
 | `PROJ_PATH` | both scripts, locate fallback, certbot_sync | `/opt/api` | The deployed tree |
 | `SANITY_URL` | `update.sh` | `http://127.0.0.1/api/version` | Passed as `--url` to **every** `sanity_check` (canary and rollback) |
-| `PROBE_URL` | `post_deploy.sh` | `http://127.0.0.1/api/version` | The post-restart curl gate. Point it at a vhost that proxies straight to the asgi socket — a port-80 server that 301s everything false-passes `curl -f` |
+| `PROBE_URL` | `post_deploy.sh` | `http://127.0.0.1/api/version` | The post-restart curl gate when the sealed request-service authority is absent/true. Point it at a vhost that proxies straight to the asgi socket — a port-80 server that 301s everything false-passes `curl -f` |
 | `APP_USER` | `post_deploy.sh` → `@APP_USER@` | `ec2-user` | Owns the tree, runs the job engines |
 | `WEB_USER` | `post_deploy.sh` → `@WEB_USER@` | `www` | Runs the asgi app behind nginx |
 | `ASGI_WORKERS` | `post_deploy.sh` → `@WORKERS@` | `4` | uvicorn worker count in `mojo-asgi.service` |
@@ -717,9 +736,12 @@ mojo/deploy/templates/systemd/   mojo-asgi.service  config-sync.service  config-
 engine), writes the results 0644 into `<dest>/{cron.d,systemd}`, then overlays
 the project's own `aws/cron.d/` and `aws/nginx/systemd/` files verbatim. It
 dies loudly on an unwritable dest or any placeholder left unsubstituted.
-`post_deploy` requires the rendered `mojo-asgi.service`; without it the web app
-cannot start. An empty cron set is a housekeeping warning, never an application
-rollback.
+`post_deploy` always requires and installs the rendered `mojo-asgi.service`, so
+managed assets and future request-role transitions keep one byte-identical
+contract. Its local lifecycle is selected separately on brownfield nodes:
+omission/true preserves restart + probe; false stops and disables the unit,
+proves it inactive and disabled, and skips that intentional request probe. An
+empty cron set is a housekeeping warning, never an application rollback.
 
 On a root, production-shaped `${PROJ_PATH}/var/deploy` invocation, `render`
 also converges nginx's persistent spill contract before it writes templates.
