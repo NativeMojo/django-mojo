@@ -16,6 +16,43 @@ let reauthClose = null; let opBannerDispose = null; let disposeAssistant = null;
 // unknown route.
 const HOME_ROUTE = 'home';
 
+// v1 hashes operators have bookmarked or been sent. Each maps to the v2 route
+// that carries the same subject, and the query state rides along — so an old
+// `#/fleet` lands on Capacity and an old `#/routes?vhost=31` keeps its filter.
+// v1's Metrics used `tab` for the charted resource kind; v2's Infrastructure
+// uses `tab` for its own tabs, so that one value moves to `kind`. System Setup
+// is still the current Admin's page, so its alias leaves v2 for it.
+const LEGACY_ROUTES = {
+  dashboard: {route: 'home'},
+  'messaging-sms': {route: 'settings-sms'},
+  'messaging-email': {route: 'settings-email'},
+  metrics: {route: 'infrastructure', state: {tab: 'metrics'}, rename: {tab: 'kind'}},
+  maintenance: {route: 'infrastructure', state: {tab: 'maintenance'}},
+  fleet: {route: 'infrastructure', state: {tab: 'capacity'}},
+  vhosts: {route: 'apps-serving', state: {tab: 'vhosts'}},
+  routes: {route: 'apps-serving', state: {tab: 'routes'}},
+  upstreams: {route: 'apps-serving', state: {tab: 'upstreams'}},
+};
+
+// Rewrites a legacy hash in place (no history entry: Back still leaves the
+// portal the way the operator arrived). Returns true when the page must not
+// render because the hash has left v2 altogether.
+function resolveLegacyRoute() {
+  const requested = decodeRouteState();
+  if (requested.route === 'setup') {
+    location.assign(`${context.admin_path || '/admin/'}#/setup`);
+    return true;
+  }
+  const legacy = LEGACY_ROUTES[requested.route];
+  if (!legacy) return false;
+  const state = {...requested.state};
+  for (const [from, to] of Object.entries(legacy.rename || {})) {
+    if (state[from] != null && state[to] == null) { state[to] = state[from]; delete state[from]; }
+  }
+  history.replaceState({}, '', routeHref(legacy.route, {...state, ...(legacy.state || {})}));
+  return false;
+}
+
 function routeName() { return decodeRouteState().route; }
 
 function navigate(route, {replace = false, state = {}} = {}) {
@@ -123,6 +160,7 @@ function setDocumentTitle(pageTitle) {
 
 async function render() {
   if (!context) return;
+  if (resolveLegacyRoute()) return;
   const requestedRoute = routeName(); const feature = featureForRoute(requestedRoute, context);
   const route = feature.routes.includes(requestedRoute) ? requestedRoute : HOME_ROUTE;
   if (route !== requestedRoute) history.replaceState({}, '', routeHref(route));
