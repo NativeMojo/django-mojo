@@ -48,10 +48,14 @@ export const BLOCKED_COPY = {
   infrastructure_external: 'external infrastructure mode — capacity is applied by your infrastructure team\'s IaC',
   node_id_pinned: 'this fleet pins EDGE_NODE_ID, so a new node could never prove its own identity — remove the pin first',
   no_source_node: 'no healthy, running node is available to clone',
+  instances_unavailable: 'EC2 did not answer, so node inventory and controls are unavailable',
   last_healthy_target: 'this is the last healthy target — removing it would take the fleet out of service',
   no_database: 'no RDS database was found in this region',
+  databases_unavailable: 'RDS did not answer completely, so database controls are unavailable',
   no_reader: 'this database has no reader to remove',
   no_cache_group: 'no ElastiCache replication group was found in this region',
+  caches_unavailable: 'ElastiCache did not answer completely, so cache controls are unavailable',
+  resource_transitioning: 'AWS reports a member transition in progress — inspect and refresh instead of replaying a mutation',
   cluster_mode_unsupported: 'cluster-mode enabled — its replica count is a resharding decision, not a capacity change',
   already_enabled: 'on — every node holds its stable address',
   not_enabled: 'stable outbound IPs are off and nothing is attached',
@@ -428,7 +432,7 @@ export async function capacityPanel(ctx, signal = null) {
   }
 
   function nodeRow(row) {
-    const value = row.state || 'unknown';
+    const value = (row.registered ? row.state : row.instance_state) || 'unknown';
     const running = progressRow(row.id, row.id, value);
     if (running) return running;
     const labels = [
@@ -450,13 +454,14 @@ export async function capacityPanel(ctx, signal = null) {
       control = null;
     } else if (drained && terminate.offered) {
       control = {label: 'Terminate…', run: () => terminateNode(row)};
-    } else if (!drained && !draining && drain.offered) {
+    } else if (!drained && !draining && drain.offered && row.can_drain) {
       control = {label: 'Drain…', run: () => drainNode(row)};
     }
     const blocked = row.self
       ? 'this is the node answering your request'
       : draining ? 'draining — terminate becomes available when it finishes'
-        : drained ? blockedDetail(terminate) : blockedDetail(drain);
+        : !row.registered ? 'not registered — inspect and reconcile provider state'
+          : drained ? blockedDetail(terminate) : blockedDetail(drain);
     const node = statusRow({
       tone: row.healthy ? 'ok' : drained ? 'muted' : 'warn',
       name: row.id, value, mono: true,
@@ -636,13 +641,18 @@ export async function capacityPanel(ctx, signal = null) {
         const readerRunning = progressRow(reader, reader, 'reader');
         if (readerRunning) { rows.push(readerRunning); continue; }
         const remove = action(REMOVE_READER);
+        const member = (row.members || []).find((item) => item.id === reader) || {};
+        const available = member.lifecycle_state === 'available';
         rows.push(wire(statusRow({
-          tone: 'muted', name: reader, value: 'reader', mono: true,
-          detail: remove.offered
+          tone: available ? 'muted' : 'warn', name: reader,
+          value: available ? 'reader' : (member.status || 'unknown'), mono: true,
+          detail: remove.offered && member.can_remove
             ? 'standby read capacity; this app reads from the primary'
-            : blockedDetail(remove),
-          detailTone: remove.offered ? '' : 'warning',
-          action: remove.offered ? {label: 'Remove…', href: '#'} : null,
+            : !available ? 'provider transition in progress — inspect and refresh'
+              : blockedDetail(remove),
+          detailTone: remove.offered && member.can_remove ? '' : 'warning',
+          action: remove.offered && member.can_remove
+            ? {label: 'Remove…', href: '#'} : null,
         }), () => removeReader(reader)));
       }
     }
@@ -650,13 +660,14 @@ export async function capacityPanel(ctx, signal = null) {
   }
 
   function cacheRows() {
-    return (report?.caches || []).map((row) => {
+    const rows = [];
+    for (const row of report?.caches || []) {
       const running = progressRow(row.identifier, row.identifier, '');
-      if (running) return running;
+      if (running) { rows.push(running); continue; }
       const change = action(SET_CACHE_REPLICAS);
       const offered = change.offered && !row.blocked_reason;
       const count = Number(row.replica_count || 0);
-      return wire(statusRow({
+      rows.push(wire(statusRow({
         tone: row.status === 'available' ? 'ok' : 'warn',
         name: row.identifier,
         value: `${count} replica${count === 1 ? '' : 's'}`,
@@ -667,8 +678,21 @@ export async function capacityPanel(ctx, signal = null) {
             ? {offered: false, blocked_reason: row.blocked_reason} : change),
         detailTone: offered ? '' : 'warning',
         action: offered ? {label: 'Replicas…', href: '#'} : null,
-      }), () => setReplicas(row));
-    });
+      }), () => setReplicas(row)));
+      for (const member of row.members || []) {
+        const available = member.lifecycle_state === 'available';
+        rows.push(statusRow({
+          tone: available ? 'muted' : 'warn',
+          name: member.id || 'cache member',
+          value: available ? (member.role || 'member') : (member.status || 'unknown'),
+          mono: true,
+          detail: available ? 'provider reports available'
+            : 'provider transition in progress — inspect and refresh',
+          detailTone: available ? '' : 'warning',
+        }));
+      }
+    }
+    return rows;
   }
 
   function warningRows() {
@@ -694,7 +718,7 @@ export async function capacityPanel(ctx, signal = null) {
         : healthy ? 'warn' : 'danger',
       message: instances.length
         ? `${healthy} of ${instances.length} node${instances.length === 1 ? '' : 's'} healthy`
-        : 'No node is registered behind a load balancer',
+        : 'No owned EC2 node was found',
       sub,
       observedAt: report?.generated_at,
       onRefresh: () => load(true)});

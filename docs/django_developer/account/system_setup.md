@@ -216,13 +216,22 @@ unlabeled high-entropy opaque values; and removes URL userinfo and query values.
 Readiness results and logs use fixed schemas rather than accepting arbitrary
 provider payload fields.
 
-When a collection reaches a bound, the sanitizer omits its remaining entries
-instead of appending a scalar sentinel and sets `truncated: true` on the root
-envelope. The readiness boundary additionally removes any incomplete section or
-check object, so `sections` and `checks` remain typed arrays whose retained rows
-always carry a supported status. The built-in Admin shows the valid subset with
-an explicit partial-report warning; it also applies the same defense to malformed
-responses from older servers.
+Readiness collection counts and grades every returned check before selecting
+bounded display detail. Each section has `coverage: {total, returned, omitted}`;
+the report has the same counters for both `sections` and `checks`. Selection is
+severity-first and round-robin across sections, so a verbose provider cannot
+hide a later failure or consume every display row. The complete `summary` and
+`overall` describe all collected checks, not only those returned in `checks`.
+
+When a collection reaches a bound, the remaining detail is omitted instead of
+receiving a scalar sentinel, and the root carries `truncated: true`. The
+readiness boundary removes incomplete section/check objects and recomputes the
+coverage counters after sanitization, so typed arrays and partial-coverage
+claims cannot disagree. A `pass` result is normalized to empty `remediation`,
+`fixable: false`, and no `required_choice`; section fixability is true only when
+the section has both a supported repair path and a non-passing fixable result.
+The Admin preserves authoritative totals and statuses while defensively
+normalizing malformed responses from older servers.
 
 The depth budget includes the framework envelope without consuming ordinary
 scalar check details or choice enum values; genuinely deeper provider-owned
@@ -241,6 +250,13 @@ time no older than 600 seconds. Options, readiness, and detail are read-only and
 do not use that freshness gate. The REST handlers and their complete schemas
 are documented in the web-developer
 [System Setup API](../../web_developer/account/system_setup.md).
+
+The packaged Admin's **Run all checks** action calls the readiness GET directly;
+it does not create a durable check operation. **Fix all** sends the stable
+section codes from that authoritative report, and the service accepts only
+registered fixable codes. The selected codes are captured in the replay
+fingerprint and materialized as operation steps; an empty selection contains
+only final read-only proof and schedules no mutation.
 
 ## Built-in Admin source gate
 
@@ -309,6 +325,31 @@ and turns it into a selector; the Setup service still rediscovers and validates
 the exact selection before mutation. Copy explicitly tells the operator that
 adoption preserves objects and unrelated configuration. The BASE_URL suggestion
 is rendered only for the `base_url` step and can never label an AWS choice.
+
+## Not reachable from the Admin Assistant
+
+Setup **repair** is deliberately absent from the Assistant's `cloud` domain, and
+it is a boundary rather than an omission. Every setup mutation — `create`,
+`choose`, `advance`, `cancel` — is bound to the browser Origin that started it:
+`request_origin` demands a same-origin `Origin` header and
+`_assert_bound_origin` compares it to the operation's stored `bound_origin`,
+on top of `require_request_admin`'s interactive, non-key-backed superuser
+session. Driving any of that from chat would mean forging that binding, which
+is the one thing an assistant tool must never do. Unbinding the origin would be
+separate, security-owned work.
+
+What IS reachable is read-only and request-free: `system_readiness.run(section,
+context)` behind `get_setup_readiness`, and `system_setup.serialize(operation)`
+behind `get_setup_operation`, which reports honest progress on an operation a
+human started in the Admin. Both tools additionally re-check an active literal
+superuser (`system_settings.require_system_admin`) and refuse any session whose
+`request_meta` is not an interactive bearer — the chat-path expression of
+`@md.denies_key_backed_session()` plus `require_request_admin`. Because there is
+no originating HTTP request, the local API probe can only be the configured one
+or the port-80 default; the port-80 case is reported as `unavailable`, naming
+`SYSTEM_SETUP_LOCAL_API_URL`, never as a failure the Admin would not show.
+
+See [assistant/cloud_tools.md](../assistant/cloud_tools.md).
 
 ## REST boundary
 

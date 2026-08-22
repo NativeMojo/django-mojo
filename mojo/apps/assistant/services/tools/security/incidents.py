@@ -180,7 +180,7 @@ def _tool_get_incident_timeline(params, user):
     name="update_incident",
     domain="security",
     permission="manage_security",
-    description="Change an incident's status and add a history note. IMPORTANT: Confirm with the user before executing.",
+    description="Change an incident's status and add a history note. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -208,7 +208,7 @@ def _tool_update_incident(params, user):
     name="bulk_update_incidents",
     domain="security",
     permission="manage_security",
-    description="Resolve or ignore multiple incidents at once (max 100 per call). IMPORTANT: Confirm with the user before executing.",
+    description="Resolve or ignore multiple incidents at once (max 100 per call). Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -251,7 +251,7 @@ def _tool_bulk_update_incidents(params, user):
     name="merge_incidents",
     domain="security",
     permission="manage_security",
-    description="Merge source incidents into a target incident. Moves all events from sources to target, then deletes sources. IMPORTANT: Confirm with the user before executing.",
+    description="Merge source incidents into a target incident. Moves all events from sources to target, then deletes sources. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {

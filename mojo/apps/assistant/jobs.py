@@ -1,11 +1,12 @@
 """
-Nightly memory cleanup job for the admin assistant.
+Nightly jobs for the admin assistant.
 
-Two phases:
-  Phase 1 (mechanical): orphan cleanup, size enforcement, suspicious patterns
-  Phase 2 (dreaming): LLM-assisted consolidation, runs conditionally
+  assistant_memory_cleanup — two phases:
+      Phase 1 (mechanical): orphan cleanup, size enforcement, suspicious patterns
+      Phase 2 (dreaming): LLM-assisted consolidation, runs conditionally
+  assistant_approval_sweep — persist lapsed approval states and prune old rows.
 
-Register as a scheduled job via the jobs framework:
+Register as scheduled jobs via the jobs framework:
     from mojo.apps import jobs
     jobs.publish("mojo.apps.assistant.jobs.assistant_memory_cleanup")
 """
@@ -13,6 +14,23 @@ from mojo.helpers import logit
 from mojo.helpers.settings import settings
 
 logger = logit.get_logger("assistant", "assistant.log")
+
+APPROVAL_RETENTION_DAYS = 30
+
+
+def assistant_approval_sweep(payload=None):
+    """Persist what lazy evaluation already knows, and prune terminal rows.
+
+    Correctness does not depend on this job: ``PendingAction.effective_state()``
+    already treats a lapsed pending as expired and a stalled ``executing`` row as
+    an unknown outcome, which is exactly why the sweep can never race a live
+    resolution. Its jobs are to keep the state queryable and the table bounded.
+    """
+    from mojo.apps.assistant.services import approvals
+
+    stats = approvals.sweep(retention_days=APPROVAL_RETENTION_DAYS)
+    logger.info("approval sweep complete: %s", stats)
+    return stats
 
 
 def assistant_memory_cleanup(payload=None):

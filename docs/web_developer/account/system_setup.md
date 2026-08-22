@@ -101,18 +101,15 @@ and key returns the original operation with `replayed: true`.
 ## Run checks
 
 ```http
-POST /api/account/admin/setup/create
-Origin: https://admin.example.com
+GET /api/account/admin/setup/readiness
 Authorization: Bearer <interactive-superuser-jwt>
-Content-Type: application/json
-
-{"mode":"check","replay_key":"client-generated-uuid"}
 ```
 
-Call `advance` once with the returned operation id. The terminal operation has
-`status: "succeeded"` even when the readiness report contains a failed check;
-the operation successfully measured the system. Use `report.overall` for
-readiness.
+This is the packaged Admin's **Run all checks** path and does not create durable
+operation state. The compatibility check-operation API remains available for
+clients that need a durable measurement record. Its terminal operation can
+have `status: "succeeded"` while the stored report contains a failed check; use
+`report.overall` for readiness.
 
 Reports use `schema_version: 1` and the statuses `pass`, `warn`, `fail`, and
 `pending`. Every check includes `code`, `explanation`, `remediation`,
@@ -125,12 +122,18 @@ report shape is:
   "generated_at": "2026-08-10T03:00:00+00:00",
   "overall": "fail",
   "summary": {"pass": 6, "warn": 0, "fail": 1, "pending": 0},
+  "coverage": {
+    "sections": {"total": 1, "returned": 1, "omitted": 0},
+    "checks": {"total": 7, "returned": 1, "omitted": 6}
+  },
+  "truncated": true,
   "sections": [
     {
       "code": "django",
       "label": "Django installation",
       "status": "fail",
       "fixable": true,
+      "coverage": {"total": 7, "returned": 1, "omitted": 6},
       "checks": [
         {
           "code": "django.base_url",
@@ -147,8 +150,20 @@ report shape is:
 ```
 
 Aggregate status uses the severity order `fail`, `pending`, `warn`, then
-`pass`. `GET readiness` returns this report directly. A check operation stores
-the same shape in `operation.report`.
+`pass`. `summary` and `overall` cover every collected check, including omitted
+display detail. Each `coverage` object states exact total, returned, and omitted
+counts; `truncated: true` means at least one detail row or malformed legacy row
+was omitted. Selection is severity-first and fair across sections, so a failure
+after a section's display limit remains in the overall grade and is preferred
+for display. `GET readiness` returns this report directly. A check operation
+stores the same shape in `operation.report`.
+
+Passing checks always have empty `remediation`, `fixable: false`, and
+`required_choice: null`, even if an individual provider checker supplied stale
+repair fields. A section is fixable only when a supported repair path and a
+non-passing fixable check are both present. Clients must treat status,
+remediation, and fixability as independent fields rather than inferring one from
+another.
 
 `django.local_request` is returned only when the deployment explicitly sets
 `SYSTEM_SETUP_LOCAL_API_URL`; its bounded `details.target_source` is then
@@ -165,6 +180,23 @@ Create with `mode: "fix"`, then call `advance` one step at a time. Persist only
 the operation id in browser state. The server owns the cursor, definition versions,
 choice revisions,
 lease, log, and report.
+
+For **Fix all**, send `sections` as the bounded list of non-passing fixable
+section codes from the readiness GET:
+
+```json
+{
+  "mode": "fix",
+  "sections": ["django", "aws_s3"],
+  "replay_key": "client-generated-uuid"
+}
+```
+
+`sections` is valid only for an unscoped fix operation. Unknown, non-fixable,
+or oversized selections are rejected; duplicates are normalized before the
+replay fingerprint is calculated. Omitting `sections` preserves legacy full-fix
+behavior for older clients. Passing `[]` schedules final read-only proof only
+and no mutations.
 
 When `status` is `waiting_for_choice`, render the exact
 `current_step.choice_schema`. Submit:
@@ -279,10 +311,12 @@ material even under innocent field names; pre-bounds huge strings before
 inspection; and removes URL userinfo and query values, including presigned queries.
 At a bounded collection edge, the remaining entries are omitted and the root
 envelope carries `truncated: true`; typed `sections` and `checks` arrays never
-receive a scalar sentinel. A `"[truncated]"` value can still replace an
-overlong or over-deep scalar leaf. Clients should render the retained rows and
-tell operators that the report is partial. They should also ignore malformed
-section/check entries from older servers rather than failing the whole view.
+receive a scalar sentinel. Coverage counters are recomputed after sanitization,
+while complete summary totals remain authoritative. A `"[truncated]"` value can
+still replace an overlong or over-deep scalar leaf. Clients should render the
+retained rows, preserve the complete totals, and state the exact omitted count.
+They should also ignore malformed section/check entries from older servers
+rather than failing the whole view.
 
 The framework envelope is included in that bound without consuming ordinary
 scalar check details or choice enum values. Deeper provider-owned structures
@@ -423,6 +457,22 @@ safe `request_id`, and `iam_action` only for an authorization denial. Successful
 checks may also include their documented bounded domain fields. Display the
 exact denied IAM action as remediation. Never expect raw AWS messages,
 credentials, provider payloads, or request parameters.
+
+## The Admin Assistant cannot repair setup
+
+The Assistant's `cloud` domain exposes System Setup **read-only**:
+`get_setup_readiness` (run one readiness section) and `get_setup_operation`
+(progress on an operation a human started here). There is no chat equivalent of
+`create`, `choose`, `advance` or `cancel`.
+
+That is by design, not a gap. Every setup mutation is bound to the browser
+Origin that started it, and the server compares the request's `Origin` against
+the operation's stored origin on every step — so a setup operation can only be
+driven from the same Admin tab that began it. Both read tools additionally
+require an active superuser on an interactive session and refuse an API key.
+
+If a user asks the Assistant to fix setup, the correct outcome is the readiness
+report plus a pointer back to this page.
 
 ## Protected settings
 

@@ -214,7 +214,7 @@ def _tool_get_queue_health(params, user):
     name="cancel_job",
     domain="jobs",
     permission="manage_jobs",
-    description="Request cancellation of a job. IMPORTANT: Confirm with the user before executing.",
+    description="Request cancellation of a job. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -288,7 +288,7 @@ def _tool_list_scheduled_tasks(params, user):
         "Create a scheduled task for the user. "
         "Requires: name, task_type (job/webhook/llm), run_times (list of HH:MM, max 2), job_config. "
         "Optional: run_days (list of weekday ints 0-6, empty=every day), notify (list of channels), run_once. "
-        "IMPORTANT: Confirm with the user before executing."
+        "Requires operator approval: calling this tool creates an approval card and does not execute."
     ),
     input_schema={
         "type": "object",
@@ -350,7 +350,7 @@ def _tool_create_scheduled_task(params, user):
     permission="manage_jobs",
     description=(
         "Update an existing scheduled task. Provide the task ID and any fields to change. "
-        "IMPORTANT: Confirm with the user before executing."
+        "Requires operator approval: calling this tool creates an approval card and does not execute."
     ),
     input_schema={
         "type": "object",
@@ -399,7 +399,7 @@ def _tool_update_scheduled_task(params, user):
     name="delete_scheduled_task",
     domain="jobs",
     permission="manage_jobs",
-    description="Delete a scheduled task. IMPORTANT: Confirm with the user before executing.",
+    description="Delete a scheduled task. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -426,7 +426,7 @@ def _tool_delete_scheduled_task(params, user):
     name="retry_job",
     domain="jobs",
     permission="manage_jobs",
-    description="Retry a failed job. IMPORTANT: Confirm with the user before executing.",
+    description="Retry a failed job. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -503,7 +503,7 @@ def _validate_job_func(func):
         "(1) Fresh run — provide func (dotted path) and optional payload. "
         "(2) Rerun from template — provide job_id of an existing job to clone it. "
         "Exactly one of func or job_id is required. "
-        "IMPORTANT: Confirm with the user before executing."
+        "Requires operator approval: calling this tool creates an approval card and does not execute."
     ),
     input_schema={
         "type": "object",
@@ -570,7 +570,7 @@ def _tool_run_job(params, user):
     description=(
         "Immediately execute a scheduled task, regardless of its schedule or enabled state. "
         "Publishes a job that runs the task right now. "
-        "IMPORTANT: Confirm with the user before executing."
+        "Requires operator approval: calling this tool creates an approval card and does not execute."
     ),
     input_schema={
         "type": "object",

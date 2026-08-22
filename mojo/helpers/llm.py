@@ -260,6 +260,55 @@ def _pick_best_model(models, family_keyword):
     return max(candidates, key=_rank_key)["id"]
 
 
+def model_choices(refresh=False, loader=None):
+    """Suggestions for a model picker: ``[{"id", "label"}]``, never empty.
+
+    Suggestions only. Nothing validates a saved pin against this list — the
+    list is network-dependent, so validating against it would reject a
+    perfectly good re-save whenever the 24h cache has lapsed and the API is
+    unreachable.
+
+    Reads the shared cache by default and does NOT fetch: a settings page that
+    fetched on every render would spend an Anthropic round trip to draw a
+    dropdown. ``refresh=True`` is the operator's explicit "refresh the
+    catalogue" control. ``loader`` is a seam for tests.
+
+    A candidate key is never accepted here: fetching under an unsaved key would
+    write the shared 24h cache from a credential the installation is not
+    running.
+    """
+    if loader is None:
+        loader = (lambda: get_models(force_refresh=True)) if refresh else _cache_get
+    try:
+        models = loader()
+    except Exception as err:
+        logger.warning(f"Model catalogue unavailable for the picker: {str(err)[:200]}")
+        models = None
+
+    entries = []
+    for model in models or []:
+        if not isinstance(model, dict) or not isinstance(model.get("id"), str):
+            continue
+        if not any(family in model["id"] for family in _USE_TO_FAMILY.values()):
+            continue
+        entries.append(model)
+
+    if not entries:
+        # A picker with nothing in it looks broken, and the three aliases are
+        # exactly what resolution would fall back to anyway.
+        return [{"id": _FALLBACKS[use], "label": _FALLBACKS[use]}
+                for use in ("general", "powerful", "fast")]
+
+    entries.sort(key=_rank_key, reverse=True)
+    choices = []
+    for model in entries[:40]:
+        label = model.get("display_name")
+        if not isinstance(label, str) or not label:
+            label = model["id"]
+        choices.append({"id": model["id"], "label": label})
+    return choices
+
+
 def get_model(use="general"):
     """
     Return the best model ID for a given use case.

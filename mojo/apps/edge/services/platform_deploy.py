@@ -38,6 +38,32 @@ MAX_HANDOFF_JOBS = 8
 MAX_PHASES = 32
 PHASE_NAME_PATTERN = re.compile(r"^[a-z_]{1,32}$")
 
+# Which recovery control each attempt state earns. Until now this lived only in
+# the browser (admin_portal/assets/features/webapps/api.js) and the endpoints
+# enforced no status at all, so a caller that was not the Admin page could ask
+# for a control the Admin would never have offered. Hoisted here so a
+# non-browser caller — the Assistant's cloud tools — can refuse exactly what
+# the Admin never offers, from the same table the page renders from.
+ACTIONS_BY_STATUS = {
+    PlatformDeployment.STATUS_FAILED: ("retry", "verify"),
+    PlatformDeployment.STATUS_VERIFIED: ("verify", "converge"),
+    PlatformDeployment.STATUS_PARTIAL: ("verify", "converge"),
+    PlatformDeployment.STATUS_UNKNOWN: ("verify", "converge"),
+    PlatformDeployment.STATUS_CONVERGED: ("verify",),
+}
+
+# An attempt the orchestrator is still driving earns NO control: poking it
+# mid-flight only confuses the evidence. Derived from the model rather than
+# retyped, so the two can never disagree.
+ACTIVE_STATUSES = frozenset(PlatformDeployment.ACTIVE_STATUSES)
+
+
+def actions_for_status(status):
+    """The recovery controls the Admin offers for one attempt status."""
+    if status in ACTIVE_STATUSES:
+        return ()
+    return ACTIONS_BY_STATUS.get(status, ())
+
 
 def _text(value, limit=MAX_TEXT):
     value = str(value or "").replace("\r", " ").replace("\n", " ")
@@ -650,9 +676,19 @@ def last_converged_deployment():
 
 
 def same_sha_retry(row, actor, created_by=None, idempotency_key=None):
-    deployment, _replayed = create(
+    """Retry one proven SHA through the same coordination path as a deploy.
+
+    Creating the durable row alone leaves it in ``requested`` forever: no
+    target lease is armed and no orchestrator job is published.  Re-enter the
+    uniform receiver so an active deploy chains the target and an idle fleet
+    starts the retry immediately.
+    """
+    from mojo.apps.edge.services import deploy
+
+    _started, deployment = deploy.request_deploy(
         row.sha, actor=actor, source="admin_retry", created_by=created_by,
-        idempotency_key=idempotency_key, retry_of=row)
+        idempotency_key=idempotency_key, retry_of=row,
+        return_deployment=True)
     return deployment
 
 

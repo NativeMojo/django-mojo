@@ -37,7 +37,7 @@ def on_setup_create(request):
     mode = request.DATA.get("mode")
     operation, replayed = system_setup.create(
         request, mode, request.DATA.get("section", ""),
-        request.DATA.get("replay_key", ""))
+        request.DATA.get("replay_key", ""), request.DATA.get("sections"))
     data = system_setup.serialize(operation)
     data["replayed"] = replayed
     return data

@@ -146,6 +146,19 @@ def test_secret_free_workflow(opts):
         "generated workflow embedded credential material"
 
 
+@th.django_unit_test("generated workflow versions every GitHub Actions attempt")
+def test_workflow_uses_unique_attempt_version(opts):
+    from mojo.apps.edge.services import webapp_onboarding
+
+    web_app = make_webapp(opts.group, slug="appattemptversion")
+    yaml = webapp_onboarding.workflow(web_app, "https://api.example.com")["yaml"]
+
+    assert "version: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}" in yaml, \
+        "workflow reruns would reuse the commit-only immutable release version"
+    assert "version: ${{ github.sha }}\n" not in yaml, \
+        "workflow retained the commit-only release version"
+
+
 @th.django_unit_test("public verification rejects mixed private DNS before connecting")
 def test_public_probe_rejects_mixed_dns(opts):
     from mojo.apps.edge.services import public_probe
@@ -485,6 +498,40 @@ def test_existing_profile_different_uuid_compatibility(opts):
 
     assert created is True and replay_created is False and first.pk == second.pk, \
         "a different UUID broke concrete-group profile reconciliation"
+
+
+@th.django_unit_test("legacy blank display names remain adoptable during address restore")
+def test_advance_app_adopts_legacy_blank_display_name(opts):
+    from mojo import errors as me
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_onboarding
+
+    web_app = make_webapp(opts.group, slug="legacy-blank-name")
+    web_app.display_name = ""
+    web_app.save(update_fields=["display_name", "modified"])
+    profile = {
+        "slug": web_app.slug, "display_name": web_app.slug,
+        "environment": web_app.environment, "bucket": web_app.bucket,
+        "github_repository": web_app.github_repository,
+        "deployment_ref": web_app.deployment_ref,
+        "build_output": web_app.build_output,
+    }
+    operation = WebAppOnboardingOperation.objects.create(
+        group=opts.group, actor=opts.actor, origin="https://example.com",
+        replay_fingerprint=uuid.uuid4().hex, state={"profile": profile})
+
+    assert webapp_onboarding._advance_app(operation) is True, \
+        "the legacy WebApp was not adopted"
+    assert operation.web_app_id == web_app.pk and operation.cursor == "address", \
+        "adoption did not continue the existing WebApp's address restore"
+
+    web_app.display_name = "A genuinely different name"
+    web_app.save(update_fields=["display_name", "modified"])
+    refused = WebAppOnboardingOperation.objects.create(
+        group=opts.group, actor=opts.actor, origin="https://example.com",
+        replay_fingerprint=uuid.uuid4().hex, state={"profile": profile})
+    with th.assert_raises(me.ValueException):
+        webapp_onboarding._advance_app(refused)
 
 
 @th.django_unit_test("API-key and group-token requests cannot enter onboarding")
@@ -917,6 +964,89 @@ def test_change_address_swaps_vhost(opts):
         "the old serving vhost was not retired after the swap"
 
 
+@th.django_unit_test("restoring an address reapplies an existing live release")
+def test_restore_address_reconciles_current_release(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.services import releases, webapp_onboarding
+    from tests.test_edge._helpers import make_release
+
+    declare_pools()
+    domain = make_domain(group=opts.group, provider="route53")
+    make_certificate(domain)
+    web_app = make_webapp(opts.group, slug="restorelive")
+    release = make_release(web_app, "restore-live-v1", status="live")
+    web_app.current_release = release
+    web_app.save(update_fields=["current_release", "modified"])
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    op = WebAppOnboardingOperation.objects.create(
+        group=opts.group, actor=opts.actor, web_app=web_app,
+        origin="https://example.com", replay_fingerprint=uuid.uuid4().hex,
+        cursor="address", state={"profile": {}, "choices": {
+            "address": {"label": "restorelive", "domain": domain.pk}}})
+
+    def run():
+        with mock.patch("mojo.apps.dnsman.services.dns.list_records",
+                        return_value=[]), \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record"), \
+                mock.patch.object(releases, "reconcile_current_release") as reconcile:
+            outcome = webapp_onboarding._advance_address(op)
+            return outcome, reconcile
+
+    outcome, reconcile = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert outcome is True, f"address restore did not finish: {outcome}"
+    reconcile.assert_called_once()
+    assert reconcile.call_args.args[0].pk == web_app.pk, \
+        "address restore reconciled another WebApp's release"
+
+
+@th.django_unit_test("restoring an offline address retains custom serving routes")
+def test_restore_address_reconciles_custom_routes(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.models import VhostRoute, WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_lifecycle, webapp_onboarding
+    from tests.test_edge._helpers import make_route
+
+    declare_pools()
+    domain = make_domain(group=opts.group, provider="route53")
+    certificate = make_certificate(domain)
+    primary = make_vhost(
+        domain, certificate, label="restore-routes", kind="site_api")
+    web_app = make_webapp(
+        opts.group, slug="restore-routes", vhost=primary)
+    custom_upstream = make_upstream(group=opts.group)
+    # This is deliberately a materialized VhostRoute with no new desired-state
+    # row: it is the exact shape already installed before this migration lands.
+    make_route(primary, "/api", custom_upstream)
+
+    webapp_lifecycle.take_offline(web_app)
+    web_app.refresh_from_db()
+    assert web_app.vhost_id is None, \
+        "the custom route prevented the app from going offline"
+
+    operation = WebAppOnboardingOperation.objects.create(
+        group=opts.group, actor=opts.actor, web_app=web_app,
+        origin="https://example.com", replay_fingerprint=uuid.uuid4().hex,
+        cursor="address", state={"profile": {}, "choices": {
+            "address": {"label": "restore-routes", "domain": domain.pk}}})
+
+    def run():
+        with mock.patch(
+                "mojo.apps.dnsman.services.dns.list_records",
+                return_value=[]), mock.patch(
+                "mojo.apps.dnsman.services.dns.upsert_record"):
+            return webapp_onboarding._advance_address(operation)
+
+    outcome = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert outcome is True, f"address restore did not finish: {outcome}"
+    web_app.refresh_from_db()
+    assert VhostRoute.objects.filter(
+        vhost=web_app.vhost, path_prefix="/api",
+        upstream=custom_upstream,
+    ).exists(), "address restore silently discarded the app's custom /api route"
+
+
 @th.django_unit_test("wait exhaustion parks as waiting and never fails terminally")
 def test_wait_exhaustion_parks(opts):
     from unittest import mock
@@ -1117,6 +1247,69 @@ def test_advance_address_wildcard_covers_no_write(opts):
     op.web_app.refresh_from_db()
     assert op.web_app.vhost_id is not None, \
         "the wildcard-covered address produced no serving vhost"
+
+
+@th.django_unit_test("a matching legacy A record is migrated to the managed CNAME")
+def test_advance_address_migrates_matching_legacy_a(opts):
+    from objict import objict
+
+    from mojo.apps.edge.services import webapp_onboarding
+
+    declare_pools()
+    domain = make_domain(group=opts.group, provider="route53")
+    make_certificate(domain)
+    op = _address_operation(opts, domain, label="legacy-a", slug="legacy-a")
+    hostname = f"legacy-a.{domain.name}"
+    address = "93.184.216.34"
+    zone = [objict(type="A", name=hostname,
+                   record_values=[address], ttl=60)]
+    answers = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "",
+                (address, 443))]
+
+    def run():
+        with mock.patch("socket.getaddrinfo", return_value=answers), \
+                mock.patch("mojo.apps.dnsman.services.dns.list_records",
+                           return_value=zone), \
+                mock.patch("mojo.apps.dnsman.services.dns.delete_record") as delete, \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert:
+            outcome = webapp_onboarding._advance_address(op)
+            return outcome, delete, upsert
+
+    outcome, delete, upsert = with_setting(
+        "EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert outcome is True, f"the matching legacy A record did not migrate: {outcome}"
+    delete.assert_called_once_with(domain, "A", hostname, [address])
+    upsert.assert_called_once_with(domain, "CNAME", hostname, [TARGET], ttl=300)
+
+
+@th.django_unit_test("a foreign A record is refused and never overwritten")
+def test_advance_address_refuses_foreign_a(opts):
+    from objict import objict
+
+    from mojo import errors as me
+    from mojo.apps.edge.services import webapp_onboarding
+
+    domain = make_domain(group=opts.group, provider="route53")
+    op = _address_operation(opts, domain, label="foreign-a", slug="foreign-a")
+    hostname = f"foreign-a.{domain.name}"
+    zone = [objict(type="A", name=hostname,
+                   record_values=["198.51.100.40"], ttl=60)]
+    answers = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "",
+                ("93.184.216.34", 443))]
+
+    def run():
+        with mock.patch("socket.getaddrinfo", return_value=answers), \
+                mock.patch("mojo.apps.dnsman.services.dns.list_records",
+                           return_value=zone), \
+                mock.patch("mojo.apps.dnsman.services.dns.delete_record") as delete, \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert:
+            with th.assert_raises(me.ValueException):
+                webapp_onboarding._advance_address(op)
+            return delete, upsert
+
+    delete, upsert = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    delete.assert_not_called()
+    upsert.assert_not_called()
 
 
 @th.django_unit_test("a managed domain issues the apex+wildcard certificate profile")
@@ -1674,6 +1867,56 @@ def test_ancestor_domain_write_requires_owning_group_authority(opts):
         "the parent-granted onboarding produced no serving vhost"
 
 
+@th.django_unit_test("address changes refuse an incompatible durable route before DNS")
+def test_address_change_preflights_desired_route_tenancy(opts):
+    from mojo import errors as me
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_onboarding
+    from tests.test_edge._helpers import make_route
+
+    declare_pools()
+    parent, child, _ = _fresh_group_tree()
+    actor, _, _, _ = make_group_member(
+        ["manage_webapp", "manage_dns"], group=parent)
+    old_domain = make_domain(group=child, provider="route53")
+    old_vhost = make_vhost(
+        old_domain, make_certificate(old_domain), label="old", kind="site_api")
+    web_app = make_webapp(child, slug=f"routepre{uuid.uuid4().hex[:6]}",
+                          vhost=old_vhost)
+    private_upstream = make_upstream(group=child)
+    make_route(old_vhost, "/api", private_upstream)
+
+    parent_domain = make_domain(group=parent, provider="route53")
+    make_certificate(parent_domain)
+    operation = WebAppOnboardingOperation.objects.create(
+        group=child, actor=actor, web_app=web_app,
+        origin="https://example.com", replay_fingerprint=uuid.uuid4().hex,
+        cursor="address", state={"profile": {}, "choices": {
+            "address": {"label": "new", "domain": parent_domain.pk}}})
+
+    def run():
+        with mock.patch(
+                "mojo.apps.dnsman.services.dns.list_records") as listed, \
+                mock.patch(
+                    "mojo.apps.dnsman.services.dns.upsert_record") as upsert:
+            try:
+                webapp_onboarding._advance_address(operation)
+                error = None
+            except me.ValueException as exc:
+                error = exc
+            return error, listed, upsert
+
+    error, listed, upsert = with_setting(
+        "EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert error is not None and "/api" in str(error), \
+        f"the incompatible stored route was not refused plainly: {error}"
+    listed.assert_not_called()
+    upsert.assert_not_called()
+    web_app.refresh_from_db()
+    assert web_app.vhost_id == old_vhost.pk, \
+        "a refused route preflight still moved the app's serving address"
+
+
 @th.django_unit_test("an address serving another app is refused before any cert work")
 def test_advance_address_refuses_foreign_apps_vhost(opts):
     from mojo import errors as me
@@ -1782,3 +2025,226 @@ def test_options_reports_apps_domain(opts):
         f"a domain-less group still resolved an apps domain: {none['apps_domain']}"
     assert none["apps_domain_error"] == webapp_apps_domain.NO_DOMAIN_REASON, \
         f"the domain-less reason was not the plain-language one: {none}"
+
+
+# ---------------------------------------------------------------------------
+# actor/origin seams (item 2571): the assistant continues its OWN operations
+# ---------------------------------------------------------------------------
+def _seam_operation(opts, origin, cursor="github"):
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+
+    web_app = make_webapp(opts.group, slug=f"seam{uuid.uuid4().hex[:6]}")
+    return WebAppOnboardingOperation.objects.create(
+        group=opts.group, actor=opts.actor, web_app=web_app, origin=origin,
+        replay_fingerprint=uuid.uuid4().hex, cursor=cursor,
+        state={"profile": {"slug": web_app.slug}, "choices": {}, "intent": {}})
+
+
+def _seam_state(operation):
+    operation.refresh_from_db()
+    return {
+        "choices": (operation.state or {}).get("choices"),
+        "intent": (operation.state or {}).get("intent"),
+        "status": operation.status,
+        "cursor": operation.cursor,
+        "attempts": operation.attempts,
+        "revision": operation.revision,
+        "last_error": operation.last_error,
+        "activity": [row.get("message") for row in (operation.activity or [])],
+    }
+
+
+@th.django_unit_test("read authority is actor-bound and deliberately origin-free")
+def test_read_authority_is_origin_free(opts):
+    from mojo import errors as me
+    from mojo.apps.edge.services import webapp_onboarding
+
+    operation = _seam_operation(opts, webapp_onboarding.ASSISTANT_ORIGIN)
+    # No raise: the SAME administrator may report on a setup they started on
+    # the other surface. Continuing it is what stays origin-bound.
+    webapp_onboarding.assert_read_authority(operation, opts.actor)
+
+    stranger, _, _ = make_user(["manage_webapp", "manage_dns"])
+    with th.assert_raises(me.PermissionDeniedException):
+        webapp_onboarding.assert_read_authority(operation, stranger)
+
+
+@th.django_unit_test("continue authority binds the origin and refuses group tokens")
+def test_continue_authority_binds_origin(opts):
+    from mojo import errors as me
+    from mojo.apps.edge.services import webapp_onboarding
+
+    operation = _seam_operation(opts, webapp_onboarding.ASSISTANT_ORIGIN)
+    webapp_onboarding.assert_continue_authority(
+        operation, opts.actor, webapp_onboarding.ASSISTANT_ORIGIN)
+
+    with th.assert_raises(me.PermissionDeniedException):
+        webapp_onboarding.assert_continue_authority(
+            operation, opts.actor, "https://admin.example.com")
+
+    browser = _seam_operation(opts, "https://admin.example.com")
+    with th.assert_raises(me.PermissionDeniedException):
+        webapp_onboarding.assert_continue_authority(
+            browser, opts.actor, webapp_onboarding.ASSISTANT_ORIGIN)
+
+    token_error = None
+    try:
+        webapp_onboarding.assert_continue_authority(
+            operation, opts.actor, webapp_onboarding.ASSISTANT_ORIGIN,
+            has_group_token=True)
+    except me.PermissionDeniedException as exc:
+        token_error = exc
+    assert token_error is not None and "Group tokens" in str(token_error), \
+        f"a group token continued onboarding: {token_error}"
+
+
+@th.django_unit_test("_assert_current keeps its refusal order for a cross-origin stranger")
+def test_assert_current_refusal_order_unchanged(opts):
+    from django.test import RequestFactory
+
+    from mojo import errors as me
+    from mojo.apps.edge.services import webapp_onboarding
+
+    operation = _seam_operation(opts, "https://admin.example.com")
+    stranger, _, _ = make_user(["manage_webapp", "manage_dns"])
+    request = RequestFactory().post(
+        "/api/edge/webapp/onboarding/choose",
+        HTTP_ORIGIN="https://evil.example.com", secure=True,
+        HTTP_HOST="admin.example.com")
+    request.user = stranger
+    request.group_token = None
+
+    error = None
+    try:
+        webapp_onboarding._assert_current(operation, request, mutate=True)
+    except me.PermissionDeniedException as exc:
+        error = exc
+    assert error is not None, "a foreign actor continued another admin's onboarding"
+    assert str(error) == "Only the initiating administrator may continue", (
+        "the foreign-actor refusal changed once the origin check moved; a "
+        f"cross-origin request now answers first: {error}")
+
+
+@th.django_unit_test("choose_for_actor and the browser choose produce identical state")
+def test_choose_for_actor_matches_browser_choose(opts):
+    from django.test import RequestFactory
+
+    from mojo.apps.edge.services import webapp_onboarding
+
+    browser_op = _seam_operation(opts, "https://admin.example.com")
+    assistant_op = _seam_operation(opts, webapp_onboarding.ASSISTANT_ORIGIN)
+    payload = {"revision": browser_op.revision, "step": "github",
+               "choice": {"skip": True}}
+
+    request = RequestFactory().post(
+        "/api/edge/webapp/onboarding/choose",
+        HTTP_ORIGIN="https://admin.example.com", secure=True,
+        HTTP_HOST="admin.example.com")
+    request.user = opts.actor
+    request.group_token = None
+
+    webapp_onboarding.choose(browser_op, request, dict(payload))
+    webapp_onboarding.choose_for_actor(
+        assistant_op, opts.actor, webapp_onboarding.ASSISTANT_ORIGIN,
+        dict(payload))
+
+    assert _seam_state(browser_op) == _seam_state(assistant_op), (
+        "the assistant and browser choose paths diverged: "
+        f"{_seam_state(browser_op)} vs {_seam_state(assistant_op)}")
+    assert _seam_state(assistant_op)["choices"] == {"github": {"skip": True}}, \
+        f"the choice was not recorded: {_seam_state(assistant_op)}"
+
+
+@th.django_unit_test("choose_for_actor refuses domain purchase from the assistant origin")
+def test_choose_for_actor_refuses_purchase(opts):
+    from mojo import errors as me
+    from mojo.apps.edge.services import webapp_onboarding
+
+    operation = _seam_operation(
+        opts, webapp_onboarding.ASSISTANT_ORIGIN, cursor="address")
+    before = _seam_state(operation)
+    for choice in ({"label": "app", "purchase": 7},
+                   {"label": "app", "confirm_token": "one-use-token"}):
+        error = None
+        try:
+            webapp_onboarding.choose_for_actor(
+                operation, opts.actor, webapp_onboarding.ASSISTANT_ORIGIN,
+                {"revision": operation.revision, "step": "address",
+                 "choice": choice})
+        except me.PermissionDeniedException as exc:
+            error = exc
+        assert error is not None, \
+            f"the assistant origin reached the money path with {choice}"
+        assert "purchase is not available" in str(error), \
+            f"the purchase refusal changed wording: {error}"
+    assert _seam_state(operation) == before, \
+        "a refused purchase choice still mutated the operation"
+
+
+@th.django_unit_test("cancel_for_actor cancels and preserves committed resources")
+def test_cancel_for_actor_matches_browser_cancel(opts):
+    from mojo.apps.edge.models import WebApp
+    from mojo.apps.edge.services import webapp_onboarding
+
+    operation = _seam_operation(opts, webapp_onboarding.ASSISTANT_ORIGIN)
+    cancelled = webapp_onboarding.cancel_for_actor(
+        operation, opts.actor, webapp_onboarding.ASSISTANT_ORIGIN)
+
+    assert cancelled.status == "cancelled", \
+        f"cancel_for_actor did not cancel the operation: {cancelled.status}"
+    assert WebApp.objects.filter(pk=operation.web_app_id).exists(), \
+        "cancelling deleted the committed recoverable WebApp"
+
+
+@th.django_unit_test("webapp_lifecycle.take_offline drops the address and every alias")
+def test_lifecycle_take_offline_parity(opts):
+    from mojo.apps.edge.models import Vhost, WebApp
+    from mojo.apps.edge.services import webapp_lifecycle
+
+    domain = make_domain(group=opts.group)
+    certificate = make_certificate(domain)
+    primary = make_vhost(domain, certificate, label=f"off{uuid.uuid4().hex[:6]}")
+    site = make_webapp(opts.group, slug=f"off{uuid.uuid4().hex[:6]}", vhost=primary)
+    alias = make_vhost(domain, certificate, label=f"al{uuid.uuid4().hex[:6]}",
+                       kind="site_api", alias_of=site)
+
+    result = webapp_lifecycle.take_offline(site)
+
+    assert result == {"webapp": site.pk, "address": None}, \
+        f"take_offline changed the REST detach payload: {result}"
+    assert WebApp.objects.filter(pk=site.pk).exists(), \
+        "take_offline deleted the whole app"
+    site.refresh_from_db()
+    assert site.vhost_id is None, "take_offline left the app linked to its vhost"
+    assert not Vhost.objects.filter(pk=primary.pk).exists(), \
+        "take_offline left the primary address serving"
+    assert not Vhost.objects.filter(pk=alias.pk).exists(), \
+        "take_offline left a custom domain serving after going offline"
+
+
+@th.django_unit_test("webapp_lifecycle.teardown removes the app, key, and every address")
+def test_lifecycle_teardown_parity(opts):
+    from mojo.apps.account.models import ApiKey
+    from mojo.apps.edge.models import Vhost, WebApp
+    from mojo.apps.edge.services import webapp_keys, webapp_lifecycle
+
+    domain = make_domain(group=opts.group)
+    certificate = make_certificate(domain)
+    primary = make_vhost(domain, certificate, label=f"del{uuid.uuid4().hex[:6]}",
+                         kind="site_api")
+    site = make_webapp(opts.group, slug=f"del{uuid.uuid4().hex[:6]}", vhost=primary)
+    alias = make_vhost(domain, certificate, label=f"dal{uuid.uuid4().hex[:6]}",
+                       kind="site_api", alias_of=site)
+    _, key, _, _ = webapp_keys.link(site)
+    site.refresh_from_db()
+
+    result = webapp_lifecycle.teardown(site)
+
+    assert result == {"webapp": site.pk, "deleted": True}, \
+        f"teardown did not report the deletion: {result}"
+    assert not WebApp.objects.filter(pk=site.pk).exists(), \
+        "teardown left the app row behind"
+    assert not Vhost.objects.filter(pk__in=[primary.pk, alias.pk]).exists(), \
+        "teardown orphaned a serving address"
+    assert ApiKey.objects.get(pk=key.pk).is_active is False, \
+        "teardown left the CI deploy key active"

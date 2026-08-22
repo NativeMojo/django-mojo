@@ -1,0 +1,4 @@
+interface:
+  display_name: "Request"
+  short_description: "File a new work request into the local planning inbox"
+  default_prompt: "Use $request to capture this ask as a structured item in planning/inbox/."

@@ -482,6 +482,21 @@ def test_identity_policy_scopes_logs_actions_to_the_project_log_group_prefix(opt
                  f"separate statement, so a later hardening pass can narrow "
                  f"the setup one without taking logging with it: "
                  f"{sorted(by_sid)}")
+    th.assert_in("DjangoMojoAmiParameter", by_sid,
+                 f"the node runs the provisioning convergence with its "
+                 f"instance role, so its exact public AMI parameter needs a "
+                 f"separate least-privilege read grant: {sorted(by_sid)}")
+
+    ami = by_sid["DjangoMojoAmiParameter"]
+    architecture = spec_module.architecture_for(spec.node_type)
+    parameter = spec_module.SSM_AMI_PARAMETERS[architecture]
+    th.assert_eq(ami["Action"], ["ssm:GetParameter"],
+                 "AMI resolution needs GetParameter only — no SSM wildcard "
+                 "or write action belongs on the managed node role")
+    th.assert_eq(
+        ami["Resource"], f"arn:aws:ssm:{REGION}::parameter{parameter}",
+        "the grant must name only the architecture-specific public AL2023 "
+        "parameter consumed by this topology")
 
     logs = by_sid["DjangoMojoAgentLogs"]
     expected = (f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:"
@@ -2067,4 +2082,3 @@ def test_nodes_stable_ips_behind_balancer(opts):
     th.assert_eq(address_codes, [],
                  f"the balancer path reported address work it must not do: "
                  f"{address_codes}")
-

@@ -39,6 +39,8 @@ VERSION="9.9.9-test"
 
 PY3="$REPO/.venv/bin/python3"
 [ -x "$PY3" ] || PY3="$(command -v python3)"
+export FRAMEWORK_REPO="$REPO"
+export FRAMEWORK_PY3="$PY3"
 
 PASS=0
 FAIL=0
@@ -183,6 +185,12 @@ EOF
     cat > "$STUB/python3" <<'EOF'
 #!/bin/bash
 echo "CMD python3 $*" >> "$CALLLOG"
+case "$*" in
+    -m\ mojo.deploy\ render\ *)
+        env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$FRAMEWORK_REPO" \
+            "$FRAMEWORK_PY3" "$@"
+        ;;
+esac
 EOF
 
     # chown to ec2-user:www cannot work in a temp dir as a normal user, and the
@@ -238,10 +246,21 @@ if [ -f "$PROJ/aws/ec2_bootstrap.sh" ]; then ok "the tree is unpacked into PROJ_
 assert_before "app.tar.gz" "CMD ec2_bootstrap.sh" "the tarball is unpacked BEFORE ec2_bootstrap.sh runs (it lives inside it)"
 assert_before "CMD ec2_bootstrap.sh" "CMD pip install --upgrade django-mojo==${VERSION}" \
     "the version pin runs AFTER ec2_bootstrap.sh, so it overwrites the unpinned install"
-assert_before "CMD pip install --upgrade django-mojo==${VERSION}" "CMD ec2_deploy.sh" \
-    "the pin is in place before the project deploy runs"
+RENDER_CALL="CMD python3 -m mojo.deploy render --dest $PROJ/var/deploy --project-path $PROJ --app-user ec2-user --web-user www --workers 4"
+assert_before "CMD pip install --upgrade django-mojo==${VERSION}" "$RENDER_CALL" \
+    "the JUST-PINNED framework renders its installed templates"
+assert_before "$RENDER_CALL" "CMD ec2_deploy.sh" \
+    "the rendered node contract exists before the project deploy converges systemd"
 assert_has "$CALLLOG" "CMD pip install --upgrade django-mojo==${VERSION}" \
     "the provisioning pin targets the exact resolved version"
+assert_has "$CALLLOG" "$RENDER_CALL" \
+    "stage 1 materializes the installed framework templates into var/deploy"
+assert_has "$PROJ/var/deploy/systemd/mojo-asgi.service" "User=www" \
+    "the fresh node has a rendered ASGI unit"
+assert_has "$PROJ/var/deploy/systemd/config-sync.service" "mojo.deploy.config_sync" \
+    "the fresh node has a rendered config-sync unit"
+assert_lacks "$PROJ/var/deploy/systemd/mojo-asgi.service" "@PROJ_PATH@" \
+    "no template placeholder survives first-boot materialization"
 
 echo "stage1.sh: a stale catalog is retried through the caches, then converges"
 setup_tree
@@ -317,7 +336,13 @@ setup_stubs
 cat > "$STUB/python3" <<'EOF'
 #!/bin/bash
 echo "CMD python3 $*" >> "$CALLLOG"
-case "$*" in *config_sync*) exit 1 ;; esac
+case "$*" in
+    -m\ mojo.deploy\ render\ *)
+        env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$FRAMEWORK_REPO" \
+            "$FRAMEWORK_PY3" "$@"
+        ;;
+    *config_sync*) exit 1 ;;
+esac
 EOF
 chmod +x "$STUB/python3"
 run_stage1; rc=$?

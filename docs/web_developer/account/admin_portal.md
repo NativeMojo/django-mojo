@@ -146,11 +146,16 @@ key** (rotate `MOJO_DEPLOY_KEY`), and a **Danger** area (take
 offline via `POST /api/edge/webapp/detach_address`, and safe-delete the app —
 **change address moved to Serving**, beside the address it changes; Danger is
 destructive actions only).
-Take-offline and delete both remove every alias address in the same
-transaction — an app that is offline must not still answer on a customer's own
-domain — and `manage_webapp` on the app is not enough to attach an address
-under a **parent** workspace's domain: writing that record or requesting its
-certificate needs manage authority in the workspace that owns the domain.
+Take-offline handles either supported serving shape (`site` or `site_api`) and,
+like delete, removes every alias address in the same transaction — an app that
+is offline must not still answer on a customer's own domain. A malformed link
+to a non-site vhost or an invalid alias kind is refused without unlinking or
+deleting anything. Custom path routes are retained as app desired state and
+rematerialized when the primary address is restored; hosted-auth routes remain
+derived. `manage_webapp` on the app is not enough to attach an
+address under a **parent** workspace's domain: writing that record or
+requesting its certificate needs manage authority in the workspace that owns
+the domain.
 
 The **Serving** tab is one read, `GET /api/edge/webapp/serving`, painted as
 four cards — Address, Certificate, How it's served, Routes:
@@ -177,10 +182,15 @@ four cards — Address, Certificate, How it's served, Routes:
   resolved sign-in and account prefixes) are badged **Managed for you** and
   carry no Remove; the rest have **Add route**
   (`POST /api/edge/webapp/add_route`) and a confirmed **Remove**
-  (`POST /api/edge/webapp/remove_route`).
+  (`POST /api/edge/webapp/remove_route`). `/path` and a legacy stored `/path/`
+  are one identity: a lone legacy row heals to canonical on add, either single
+  spelling is removable, and a duplicate pair is refused as ambiguous.
 
 Every write on this tab applies to the app's own address **and** every extra
-address it answers on, in one transaction. A caller who may read but not save
+address it answers on, in one transaction. Attaching an extra address copies
+this same complete route contract, including application routes as well as the
+platform-managed auth paths, and refuses any conflicting alias route rather
+than silently repointing it. A caller who may read but not save
 gets the same four cards with values and no controls: the read evaluates
 `SAVE_PERMS` non-raisingly and returns `serving.pools: null` and
 `upstreams: null`, so the deployment's fleet inventory is never handed to a
@@ -271,6 +281,11 @@ on localhost. External OAuth callbacks are not supported. Deterministic fixture
 mode remains the correct way to exercise write, busy, 440, error, and
 ambiguous-response states without mutating a live installation.
 
+Alongside those lanes the portal carries one **shell-level panel**: the
+Assistant. It is docked to the right of every page, has no route and no
+navigation entry, and survives route changes because the shell replaces only the
+page content node. It is gated by `features.assistant`, never by a lane.
+
 The packaged portal is divided into seven fixed, capability-gated feature lanes.
 Primary navigation is Dashboard, Deployments, Domains & DNS, Serving, People,
 Activity, Metrics, Maintenance, and Settings, then literal-superuser System
@@ -354,10 +369,23 @@ Bootstrap returns both the stable flat `capabilities` object and a namespaced
     "activity": {"id": "activity", "enabled": true,
                  "capabilities": {"view_logs": true,
                                   "view_security": true,
-                                  "manage_security": false}}
+                                  "manage_security": false}},
+    "assistant": {"id": "assistant", "enabled": true,
+                  "capabilities": {"view": true, "ready": true,
+                                   "setup": true}}
   }
 }
 ```
+
+The `assistant` namespace is **not a navigation lane** — it has no route and no
+sidebar entry. `view` decides whether the Assistant panel is mounted at all
+(`view_admin` alone, because the assistant WebSocket handler admits nothing
+else); `ready` says the feature is switched on and a credential resolves, so a
+false `ready` means render the not-configured state instead of a composer; and
+`setup` says the caller may open the owner-only setup view
+([Assistant setup API](admin_portal/assistant.md)). `enabled` follows `view`
+alone: readiness is a fact about the installation, and folding it in would offer
+a chat panel whose every message the server refuses.
 
 Unknown namespaces are not loaded. Malformed server provider output disables
 that namespace. The browser registry likewise imports a fixed set of local

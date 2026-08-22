@@ -147,25 +147,17 @@ def on_webapp_detach_address(request):
     the customer's own domain serving would be the opposite of what was asked,
     and desired state drops an app's alias rows the moment it has no primary
     anyway (see `releases.desired_webapps`).
-    """
-    from django.db import transaction
 
-    from mojo.apps.edge.models import Vhost
+    The transaction itself lives in `services/webapp_lifecycle.take_offline` —
+    the Admin Assistant's `take_webapp_offline` tool calls the same function,
+    so the two surfaces cannot drift.
+    """
+    from mojo.apps.edge.services import webapp_lifecycle
 
     web_app = WebApp.get_instance_or_404(request.DATA.get("webapp"))
     WebApp.rest_check_permission_or_raise(
         request, ["SAVE_PERMS", "VIEW_PERMS"], web_app)
-    with transaction.atomic():
-        locked = WebApp.objects.select_for_update().get(pk=web_app.pk)
-        vhost = locked.vhost
-        if vhost is not None:
-            locked.vhost = None
-            locked.save(update_fields=["vhost", "modified"])
-            if vhost.kind == "site":
-                vhost.delete()
-        for alias in Vhost.objects.filter(alias_of=locked):
-            alias.delete()
-    return dict(webapp=web_app.pk, address=None)
+    return webapp_lifecycle.take_offline(web_app)
 
 
 def _flag(value):

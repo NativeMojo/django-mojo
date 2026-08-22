@@ -208,6 +208,19 @@ class ActionMetadataTests(unittest.TestCase):
         self.assertIn("::add-mask::${MOJO_DEPLOY_KEY}", body)
         self.assertIn("python3 \"${GITHUB_ACTION_PATH}/deploy.py\"", body)
 
+    def test_example_versions_every_github_attempt(self):
+        body = (ACTION_DIR / "README.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "version: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+            body,
+            "the shipped example must not reuse an immutable release across reruns",
+        )
+        self.assertNotIn(
+            "version: ${{ github.sha }}\n",
+            body,
+            "the shipped example retained the commit-only release version",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

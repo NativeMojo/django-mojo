@@ -58,7 +58,7 @@ def _tool_query_ip_history(params, user):
     name="block_ip",
     domain="security",
     permission="manage_security",
-    description="Block an IP address fleet-wide. IMPORTANT: Confirm with the user before executing.",
+    description="Block an IP address fleet-wide. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -97,7 +97,7 @@ def _tool_block_ip(params, user):
     name="unblock_ip",
     domain="security",
     permission="manage_security",
-    description="Unblock a blocked IP address fleet-wide. IMPORTANT: Confirm with the user before executing.",
+    description="Unblock a blocked IP address fleet-wide. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -126,7 +126,7 @@ def _tool_unblock_ip(params, user):
     name="whitelist_ip",
     domain="security",
     permission="manage_security",
-    description="Add an IP to the whitelist. Whitelisted IPs are never auto-blocked. Also unblocks the IP if currently blocked. IMPORTANT: Confirm with the user before executing.",
+    description="Add an IP to the whitelist. Whitelisted IPs are never auto-blocked. Also unblocks the IP if currently blocked. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -151,7 +151,7 @@ def _tool_whitelist_ip(params, user):
     name="unwhitelist_ip",
     domain="security",
     permission="manage_security",
-    description="Remove an IP from the whitelist. IMPORTANT: Confirm with the user before executing.",
+    description="Remove an IP from the whitelist. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {

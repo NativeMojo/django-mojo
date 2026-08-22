@@ -100,7 +100,7 @@ def _tool_get_ticket(params, user):
     name="create_ticket",
     domain="security",
     permission="manage_security",
-    description="Create a ticket for human review. IMPORTANT: Confirm with the user before executing.",
+    description="Create a ticket for human review. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -140,7 +140,7 @@ def _tool_create_ticket(params, user):
     name="update_ticket",
     domain="security",
     permission="manage_security",
-    description="Update a ticket's status, priority, category, or assignee. Adds an audit note. IMPORTANT: Confirm with the user before executing.",
+    description="Update a ticket's status, priority, category, or assignee. Adds an audit note. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -212,7 +212,7 @@ def _tool_update_ticket(params, user):
     name="add_ticket_note",
     domain="security",
     permission="manage_security",
-    description="Add a note to a ticket. IMPORTANT: Confirm with the user before executing.",
+    description="Add a note to a ticket. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {

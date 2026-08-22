@@ -117,6 +117,63 @@ def test_verified_release_deploys(opts):
         "verified completion did not start deployment"
 
 
+@th.django_unit_test("restoring an address redeploys the already-current release")
+def test_reconcile_current_release_creates_fresh_fleet_attempt(opts):
+    from unittest import mock
+
+    from django.db import transaction
+    from mojo.apps.edge.models import WebAppDeployment
+    from mojo.apps.edge.services import releases, webapp_deploy
+
+    vhost = make_vhost(opts.domain, opts.certificate, label="reconcile-fresh")
+    webapp = make_webapp(opts.group, slug="reconcile-fresh", vhost=vhost)
+    release = make_release(webapp, "reconcile-fresh-v1", status="live")
+    webapp.current_release = release
+    webapp.save(update_fields=["current_release", "modified"])
+    old = WebAppDeployment.objects.create(
+        webapp=webapp, release=release, status="live")
+    callbacks = []
+    with mock.patch.object(
+            transaction, "on_commit",
+            side_effect=lambda callback, **kwargs: callbacks.append(callback)), \
+            mock.patch.object(webapp_deploy, "publish_or_restore") as publish:
+        deployment = releases.reconcile_current_release(webapp)
+        assert callbacks, "address restore did not register an after-commit deploy"
+        callbacks[0]()
+
+    assert deployment.pk != old.pk and deployment.status == "queued", \
+        "the old live row suppressed the restored address's fleet attempt"
+    assert deployment.release_id == release.pk \
+        and deployment.previous_release_id == release.pk, \
+        "a same-release reconcile lost its rollback-safe desired release"
+    publish.assert_called_once_with(deployment.pk)
+
+
+@th.django_unit_test("an active same-release reconcile is idempotent")
+def test_reconcile_current_release_reuses_active_attempt(opts):
+    from unittest import mock
+
+    from django.db import transaction
+    from mojo.apps.edge.models import WebAppDeployment
+    from mojo.apps.edge.services import releases
+
+    vhost = make_vhost(opts.domain, opts.certificate, label="reconcile-active")
+    webapp = make_webapp(opts.group, slug="reconcile-active", vhost=vhost)
+    release = make_release(webapp, "reconcile-active-v1", status="live")
+    webapp.current_release = release
+    webapp.save(update_fields=["current_release", "modified"])
+    active = WebAppDeployment.objects.create(
+        webapp=webapp, release=release, previous_release=release,
+        release_previous_status="live", status="deploying")
+
+    with mock.patch.object(transaction, "on_commit") as on_commit:
+        deployment = releases.reconcile_current_release(webapp)
+
+    assert deployment.pk == active.pk, \
+        "a retry created a second deployment for the same desired release"
+    on_commit.assert_not_called()
+
+
 @th.django_unit_test("promotion has no endpoint and rollback stays human-only")
 def test_no_manual_promote_endpoint(opts):
     # Forward promotion is still not an endpoint: deployment starts only from

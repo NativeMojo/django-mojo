@@ -102,7 +102,7 @@ def _tool_get_ruleset(params, user):
     name="create_rule",
     domain="security",
     permission="manage_security",
-    description="Create a new event rule set (created DISABLED for human review). Use to auto-handle recurring event patterns. IMPORTANT: Confirm with the user before executing.",
+    description="Create a new event rule set (created DISABLED for human review). Use to auto-handle recurring event patterns. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -211,7 +211,7 @@ def _tool_create_rule(params, user):
     name="add_rule_condition",
     domain="security",
     permission="manage_security",
-    description="Add a field-level rule condition to an existing rule set. IMPORTANT: Confirm with the user before executing.",
+    description="Add a field-level rule condition to an existing rule set. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -256,7 +256,7 @@ def _tool_add_rule_condition(params, user):
     name="update_ruleset",
     domain="security",
     permission="manage_security",
-    description="Update fields on an existing rule set. Only provided fields are changed. Use to enable assistant-proposed rules after review. IMPORTANT: Confirm with the user before executing.",
+    description="Update fields on an existing rule set. Only provided fields are changed. Use to enable assistant-proposed rules after review. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {

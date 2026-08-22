@@ -149,6 +149,7 @@ async function changeAddressFor(ctx, app, reload) {
     group_id: full.group?.id, slug: full.slug, display_name: full.display_name,
     environment: full.environment, bucket: full.bucket, github_repository: full.github_repository,
     deployment_ref: full.deployment_ref, build_output: full.build_output,
+    current_release: full.current_release,
   });
 }
 
@@ -481,9 +482,10 @@ async function manageSection(ctx, app, summary, section, body, reload, current =
   const deleteApp = h('button', {class: 'button danger', onclick: () => deleteWebApp(app, async () => {
     body.dispatchEvent(new CustomEvent('mojo-webapp-deleted', {bubbles: true}));
   })}, icon('trash'), 'Delete app');
-  body.replaceChildren(
+  body.replaceChildren(...[
     takeOffline ? h('div', {class: 'danger-row'}, h('div', {}, h('strong', {text: 'Take offline'}), h('p', {class: 'muted small', text: 'Stop serving the app without deleting it.'})), takeOffline) : null,
-    h('div', {class: 'danger-row danger'}, h('div', {}, h('strong', {text: 'Delete this app'}), h('p', {class: 'muted small', text: 'Remove the app and everything about it. Permanent.'})), deleteApp));
+    h('div', {class: 'danger-row danger'}, h('div', {}, h('strong', {text: 'Delete this app'}), h('p', {class: 'muted small', text: 'Remove the app and everything about it. Permanent.'})), deleteApp),
+  ].filter(Boolean));
 }
 
 // The one delete flow, shared by the app page's Danger tab and the list row's
@@ -880,9 +882,9 @@ async function webappDetailPage(ctx, webappId, signal = null) {
       history.replaceState({}, '', routeHref('deployments', {webapp: webappId, tab: id === 'overview' ? '' : id}));
       await section(id);
     }});
-    const standing = summary.current_release ? 'serving your latest deploy'
-      : address.hostname ? 'serving a welcome page — nothing deployed yet'
-        : 'not reachable — setup never finished';
+    const standing = !address.hostname ? 'not reachable — no address is configured'
+      : summary.current_release ? 'serving your latest deploy'
+        : 'serving a welcome page — nothing deployed yet';
     root.replaceChildren(
       backLink(),
       pageHeader('Control plane', app.display_name || app.slug,

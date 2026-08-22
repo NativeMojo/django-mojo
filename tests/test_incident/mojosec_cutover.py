@@ -375,8 +375,14 @@ def test_web_probes_route_and_promotion_projects_once(opts):
     rule_set = RuleSet.objects.create(
         name=f"{PREFIX} promoted", category="mojosec.case.promoted",
         priority=10, handler="notify://security@example.test")
-    first = _web_event("e1" + "0" * 62, opts.cutover_vhost_id, count=600)
-    second = _web_event("e2" + "0" * 62, opts.cutover_vhost_id, count=500)
+    # 15:12 keeps a clear hour on both sides of every other fixture in this
+    # file — the sustained promotion under test must not pick up cross-kind
+    # corroboration (#2105), which has its own coverage in
+    # mojosec_promotion.py.
+    first = _web_event("e1" + "0" * 62, opts.cutover_vhost_id, count=600,
+                       observed="2026-08-18T15:12:00Z")
+    second = _web_event("e2" + "0" * 62, opts.cutover_vhost_id, count=500,
+                        observed="2026-08-18T15:12:00Z")
     with mock.patch.object(
             mojosec_correlation.settings, "get_static",
             side_effect=_settings(opts)), \
@@ -602,8 +608,11 @@ def test_case_read_contract_carries_cutover_fields(opts):
         f"/api/incident/mojosec/case?state=settled&deployment_id={DEPLOY_ID}")
     th.assert_eq(settled.status_code, 200,
                  f"the settled/deployment filters must be accepted: {settled.response}")
+    # Scoped by deployment_id: the list is global and other test files
+    # legitimately create their own deployment cases in the shared database.
     listed = opts.client.get(
-        "/api/incident/mojosec/case?family=deployment&page_size=5")
+        f"/api/incident/mojosec/case?family=deployment"
+        f"&deployment_id={DEPLOY_ID}&page_size=5")
     th.assert_eq(listed.status_code, 200,
                  f"the family filter must be accepted: {listed.response}")
     th.assert_true(listed.response.data,

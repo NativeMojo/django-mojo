@@ -11,6 +11,16 @@ LLM-powered admin assistant accessed via REST. Send natural language queries abo
 
 ## Endpoints
 
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/assistant` | Send a message, get the assistant's response |
+| `POST /api/assistant/action` | Approve or cancel a pending mutating action ([Approvals](approvals.md)) |
+| `GET /api/assistant/action` | Your own approval cards with their current state |
+| `POST /api/assistant/context` | Start a conversation pre-loaded with a model record |
+| `GET /api/assistant/conversation` | List conversations |
+| `GET /api/assistant/conversation/<id>` | Conversation detail (`?graph=detail` for messages and `pending_actions`) |
+| `DELETE /api/assistant/conversation/<id>` | Delete a conversation |
+
 ### Send Message
 
 ```
@@ -247,6 +257,13 @@ GET /api/assistant/conversation
 ```
 
 List the requesting user's past conversations. Admins see all conversations; non-admins see only their own.
+
+> **Filter by `user` unless you mean it.** `Conversation.VIEW_PERMS` accepts
+> `view_admin` outright and `owner` is only the *fallback*, so an unfiltered list
+> returns **every** operator's conversation titles to a `view_admin` holder. A
+> per-operator history list must pass `?user=<your id>`. (Continuation stays
+> owner-only regardless: both the REST and WebSocket paths look a conversation
+> up with `user=<caller>`.)
 
 **Permission**: `view_admin`
 
@@ -534,7 +551,7 @@ The assistant uses a two-tier system to manage which tools are active in each co
 
 **Core tools** are always available from the first message: memory, models, docs, web, logs, and file tools. These handle general queries.
 
-**Domain tools** (security, jobs, users, groups, metrics, docit) are loaded on demand. When the assistant needs domain-specific capabilities, it calls the built-in `load_tools` tool first. You will see this reflected in `tool_calls_made`:
+**Domain tools** (security, jobs, users, groups, metrics, docit, cloud, webapp) are loaded on demand. When the assistant needs domain-specific capabilities, it calls the built-in `load_tools` tool first. You will see this reflected in `tool_calls_made`:
 
 ```json
 "tool_calls_made": [
@@ -563,6 +580,9 @@ The assistant checks the user's permissions before executing each tool. The tool
 | `view_groups` | Query groups, group detail, group members, group activity |
 | `view_logs` | Query the audit log trail (logit.Log) — request history, model changes, API errors, custom events |
 | `assistant` | Read, write, and delete memory entries and skills across all tiers (subject to per-tier access rules) |
+| `manage_aws` | Fleet capacity and operation status, managed-engine upgrades and their live status, CloudWatch resources and metrics (`cloud` domain — see [cloud_tools.md](cloud_tools.md)). The capacity **writes** additionally require a literal superuser and are absent from every listing without one; the engine upgrade additionally requires `manage_platform` or `admin`. |
+| `view_platform` / `manage_platform` | Platform sections, framework status and recorded version drift; `manage_platform` (or `admin`) adds deploy retry/verify/converge and the framework update (`cloud` domain) |
+| WebApp authority in any workspace (group `security`, or `manage_webapp` + `manage_dns`) | The `webapp` domain: guided app setup, addresses and certificates, serving and routes, deployment history and evidence, rollback, take offline, delete, and turning a deploy key off. Listed only for operators who hold that authority somewhere, on top of `view_admin` — see [webapp_tools.md](webapp_tools.md) |
 | *(any authenticated user)* | `search_docs` — search the documentation knowledge base (docit domain, `permission: "all"`). Load it with `load_tools(domain="docit")`, which itself requires `view_admin`. Every authenticated user may **call** it, but results are scoped to the asking user's own groups — same rule as `GET /api/docit/search` (see [docit/README.md](../docit/README.md#knowledge-base-search)). |
 
 Users without any of these permissions will receive: `"You don't have permissions for any assistant tools."`
@@ -809,27 +829,48 @@ const resp2 = await fetch('/api/assistant', {
 
 ## Mutating Operations
 
-Tools that modify data (block IP, cancel job, update incident, create ticket) require `manage_*` permissions. The LLM confirms with the user before executing these using **action blocks** (see [Action Blocks](#action-blocks)).
+Tools that modify data (block IP, disable user, cancel job, update incident, create ticket) require `manage_*` permissions **and** an explicit operator approval. The server does not run them when the model asks — it creates a pending action and sends you an `approval` block.
 
-The typical flow:
+The flow:
 
 1. User: "Block IP 1.2.3.4"
-2. Assistant sends an `action` block: "Block IP 1.2.3.4 for 24 hours?" with **Confirm** / **Cancel** buttons
-3. User clicks **Confirm** — client sends `assistant_action` message with `value: "confirm"`
-4. Assistant: "Done. IP 1.2.3.4 has been blocked for 86400 seconds."
+2. The model calls `block_ip`. The server stores a pending action and returns an **`approval` block** — nothing has happened yet. It arrives in `pending_actions` on the REST response, or as an `assistant_approval_required` WebSocket event.
+3. Your panel renders the card with fixed **Approve** / **Cancel** controls, showing the exact arguments that will run.
+4. The operator clicks Approve. You `POST /api/assistant/action` with `{action_id, decision: "approve"}` (or send `assistant_approval` over the socket for cards that do not require step-up auth).
+5. The server re-checks every gate against a freshly reloaded user, runs the tool once, and returns the resolved block plus a server-authored message id.
 
-See [Action Block Interaction Flow](#action-block-interaction-flow) for the full client-side wiring.
+Key consequences for a client:
+
+- **The `action` quick-reply block carries no authority.** It never executes anything; its `action_id` is discarded server-side. Do not build mutation confirmations on it.
+- **The model cannot emit an `approval` block.** A model-generated one is dropped before it reaches you, so a card in your UI is always server-issued.
+- **A card may require step-up auth** (`requires_fresh_auth: true`). Those resolve over REST only, after re-authentication.
+- **A multi-step procedure pauses at the card** and resumes from the operator's next message — the approval path never calls the language model.
+
+Full contract, including the block schema, both transports, the single failure body and the code → status table: **[Approvals](approvals.md)**.
 
 ## WebSocket Interface
 
 For real-time chat UIs, the assistant supports a WebSocket interface alongside REST. Conversation CRUD stays as REST; the actual chat flows over the existing realtime WebSocket connection.
+
+Two properties of this transport decide how a client has to be written:
+
+* **Events fan out to every socket the user holds.** The server publishes to the
+  user, not to the socket that asked, so a second tab receives the first tab's
+  events too. `request_id` is the **only** safe correlation key: mint one per
+  turn and drop every `assistant_*` event whose `request_id` you did not mint.
+* **The server closes an idle authenticated socket after 30 seconds of _client_
+  silence.** Server→client events do not reset that timer — only inbound
+  messages do. Send `{"action": "ping"}` on an interval well under 30s (the
+  built-in Admin uses 12s) for as long as the socket is open, including while a
+  long turn is running and while your UI is closed with a turn pending.
 
 ### Client-to-Server Messages
 
 | Message type | When to send | Key fields |
 |---|---|---|
 | `assistant_message` | User sends a chat message | `message` (string), `request_id` (canonical UUID, recommended), `conversation_id` (int, optional) |
-| `assistant_action` | User clicks a button in an action block | `value` (string), `request_id` (canonical UUID, recommended), `conversation_id` (int) |
+| `assistant_action` | User clicks a button in a **quick-reply** action block | `value` (string), `request_id` (canonical UUID, recommended), `conversation_id` (int) |
+| `assistant_approval` | Operator approves or cancels an **approval** card | `action_id` (uuid string), `decision` (`"approve"` \| `"cancel"`), `conversation_id` (int), `request_id` (canonical UUID, recommended) |
 
 **`assistant_message`**:
 
@@ -853,7 +894,23 @@ ws.send(JSON.stringify({
 }));
 ```
 
-The server converts `assistant_action` into a regular user message containing the chosen value and continues the conversation. No special server-side state is needed. `request_id` is optional for older clients, but new clients should send a fresh canonical UUID for every message or action. The server rejects malformed IDs before storing the message and echoes a valid ID on every event for that turn.
+The server converts `assistant_action` into a regular user message containing the chosen value and continues the conversation. No special server-side state is needed, and **no mutation can happen through it** — the `action_id` field is accepted for backward compatibility and discarded.
+
+**`assistant_approval`** — the only client message that can cause a mutation:
+
+```javascript
+ws.send(JSON.stringify({
+    type: 'assistant_approval',
+    action_id: block.action_id,   // from the approval block
+    decision: 'approve',          // or 'cancel'
+    request_id: crypto.randomUUID(),
+    conversation_id: 42,
+}));
+```
+
+Available only for cards with `requires_fresh_auth: false`; the socket authenticates once at connect and holds no per-message token, so a step-up card is refused with `{"type": "assistant_error", "code": "reauth_required", "action_id": …}` and must be re-submitted to `POST /api/assistant/action` after re-authentication. Never put a token in this message — one that is present is ignored, not honoured. See [Approvals](approvals.md).
+
+`request_id` is optional for older clients, but new clients should send a fresh canonical UUID for every message, action or approval. The server rejects malformed IDs before doing any work and echoes a valid ID on every event for that turn.
 
 ### Server-to-Client Events
 
@@ -866,8 +923,11 @@ The server publishes events to the user's WebSocket topic as the assistant proce
 | `assistant_tool_call` | Each time a tool is called | `{conversation_id, request_id, tool, input}` |
 | `assistant_plan` | After the assistant creates a task plan | `{conversation_id, request_id, plan}` |
 | `assistant_plan_update` | After each plan step status changes | `{conversation_id, request_id, plan_id, step_id, status, summary}` |
+| `assistant_approval_required` | A mutating tool produced an approval card | `{conversation_id, request_id, action_id, block}` |
+| `assistant_approval_ack` | An `assistant_approval` decision was accepted for processing | `{conversation_id, request_id, action_id}` |
+| `assistant_approval_result` | The action was resolved (terminal for that action) | `{conversation_id, request_id, action_id, block, message_id}` |
 | `assistant_response` | Final LLM response (terminal event) | `{conversation_id, request_id, message_id, created, response, tool_calls_made, blocks}` |
-| `assistant_error` | On failure (terminal event) | `{conversation_id, request_id, error}` |
+| `assistant_error` | On failure (terminal event) | `{conversation_id, request_id, error}`, plus `code` (and `action_id`) on an approval refusal |
 
 **`assistant_text` payload fields**:
 
@@ -995,6 +1055,12 @@ All events arrive as `{"type": "assistant_*", ...}` directly on the WebSocket. T
 The REST endpoints (`GET /api/assistant/conversation`, etc.) continue to work for listing and retrieving conversation history.
 
 ### Action Block Interaction Flow
+
+> **An `action` block is a quick reply, not a confirmation.** Clicking a button
+> sends its `value` back as an ordinary chat message and nothing more — the
+> `action_id` below is accepted by the server and discarded, and this path has
+> never been able to execute anything. Mutations are gated by a server-issued
+> `approval` card instead; see **[Approvals](approvals.md)**.
 
 When the assistant responds with an `action` block (see [Action Blocks](#action-blocks)), the user must click one of the provided buttons. Here is the full interaction pattern:
 
@@ -1125,7 +1191,9 @@ For dashboard-style key metrics.
 
 #### `action`
 
-For mutating operations that need user confirmation. Render as a card with buttons. When the user clicks a button, send an `assistant_action` WebSocket message.
+A **quick reply**: a card with preset answers to a question the assistant asked. When the user clicks a button, send an `assistant_action` WebSocket message and its `value` is replayed as an ordinary chat message.
+
+> This block carries **no authority**. It cannot execute anything, and its `action_id` is discarded by the server. Mutating operations use the server-issued `approval` block instead — see [Approvals](approvals.md).
 
 ```json
 {
@@ -1150,6 +1218,33 @@ For mutating operations that need user confirmation. Render as a card with butto
 **Rendering guidance**: Disable all buttons on the card immediately when the user clicks one, to prevent double-submission. The server will send `assistant_thinking` then `assistant_response` as normal after receiving the action.
 
 See [Action Block Interaction Flow](#action-block-interaction-flow) in the WebSocket section for the full wiring example.
+
+#### `approval`
+
+Server-issued, never model-generated. A mutating tool produced a pending action and is waiting for the operator. Render fixed **Approve** / **Cancel** controls — there is no `actions` array — and resolve the decision through `POST /api/assistant/action` or the `assistant_approval` WebSocket message.
+
+```json
+{
+    "type": "approval",
+    "action_id": "9f1c6a2e-3d47-4b8a-9c11-8f0d2e5b7a34",
+    "conversation_id": 812,
+    "tool": "block_ip",
+    "title": "Block Ip",
+    "description": "block_ip will run with the arguments below.",
+    "args": {"ip": "203.0.113.10", "reason": "brute force", "ttl": 3600},
+    "preview": null,
+    "requires_fresh_auth": false,
+    "requires_superuser": false,
+    "expires_at": "2026-08-21T18:30:00Z",
+    "state": "pending",
+    "result": null,
+    "failure_code": ""
+}
+```
+
+Arrives in `pending_actions` on a REST response, in the `assistant_approval_required` WebSocket event, and in the `blocks` array of the turn's message in history. Only `state: "pending"` is actionable; render every other state inert. `args`, `description` and `preview` values originate from a language model — render them as **text, never HTML**.
+
+Full field reference, both transports, the step-up handoff and the single failure contract: **[Approvals](approvals.md)**.
 
 #### `list`
 

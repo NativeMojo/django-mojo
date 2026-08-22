@@ -7,6 +7,9 @@ import {featureForRoute, installFeatureStyles, navigationFor} from './features/r
 const app = document.getElementById('app');
 let context = null; let content = null; let navigation = null; let title = null;
 let generation = 0; let controller = null; let dispose = null;
+// Its own binding: `dispose` above belongs to the current page and is
+// nulled by every navigation, and the panel deliberately outlives those.
+let disposeAssistant = null;
 let reauthClose = null;
 
 function routeName() { return decodeRouteState().route; }
@@ -105,11 +108,15 @@ async function start() {
   window.MojoAuth.init({baseURL: location.origin});
   context = await api('/api/account/admin/bootstrap');
   installFeatureStyles(context); mountShell(); await render();
+  if (context.features?.assistant?.enabled === true) {
+    const {install} = await import('./assistant/panel.js');
+    disposeAssistant = install({ctx: context, app}).dispose;
+  }
 }
 
 function showFatal(error) {
   if (error?.code === 'fresh_auth_required') return;
-  controller?.abort(); dispose?.(); closeAllOverlays();
+  controller?.abort(); dispose?.(); disposeAssistant?.(); disposeAssistant = null; closeAllOverlays();
   const adminPath = `/${location.pathname.split('/').filter(Boolean)[0] || 'admin'}/`;
   setDocumentTitle('Could not load');
   app.replaceChildren(h('div', {class: 'fatal'}, icon('alert'), h('h1', {text: 'Admin could not load'}), h('p', {text: error.message}), h('a', {class: 'button primary', href: `/auth?redirect=${encodeURIComponent(adminPath)}`}, 'Sign in again')));

@@ -146,6 +146,13 @@ For an existing system FileManager with direct uploads enabled, read-only mode
 reports missing or incomplete CORS. Rerun with `--apply --section s3` to merge
 the standard wildcard upload rule without replacing unrelated CORS rules.
 
+WebApp release buckets use a separate, tighter check. The portal needs one
+dedicated rule for its exact HTTPS origin, `PUT`, `content-type`, and
+`x-amz-checksum-sha256`. A pre-existing wildcard rule may already permit the
+request, so read-only mode truthfully reports that the dedicated rule is
+missing rather than claiming uploads are blocked. Apply appends the exact rule
+without replacing or interpreting unrelated CORS rules.
+
 `versions` is the one section that is not in the default set: select it with
 `--section versions`. It can only report PASS, WARN or PENDING, so a run made
 before its extra IAM actions are granted cannot exit 1 in CI. See

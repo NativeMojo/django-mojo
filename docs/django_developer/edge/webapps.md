@@ -137,7 +137,10 @@ Rows are neither editable nor deletable.
 The canonical GitHub action retries the current presigned PUT when S3 returns
 a transient HTTP status or the runner encounters a timeout, connection reset,
 or remote disconnect. Backoff is bounded; permanent HTTP failures still fail
-immediately, and rerunning the same immutable release remains safe.
+immediately. The generated workflow versions releases with the commit SHA,
+GitHub run id, and run-attempt number. Retries inside one attempt reuse its
+immutable release, while a workflow rerun creates a distinct release even for
+the same commit.
 
 Manifest paths are relative and slash-delimited. Each segment accepts letters,
 digits, `.`, `_`, `-`, `!`, and `~`; the last two are required by Next.js
@@ -195,9 +198,11 @@ never overwrite a newer one. Periodic and startup convergence remain the
 backstop for nodes that were offline during the snapshot.
 
 There is no manual hold or promotion endpoint. The protected GitHub branch is
-the human control plane. Intentional rollback means rerunning the workflow for
-an older commit; its immutable manifest is reused and the same deployment
-coordinator converges it.
+the human control plane. Intentional rollback is the human-only Admin action:
+it repoints the site to an existing verified release and the same deployment
+coordinator converges it. Rerunning a workflow for an older commit creates a
+new immutable release and is a new deployment, not a rollback of release
+state.
 
 ## Permissions
 
@@ -780,8 +785,13 @@ request) requires `webapp_authority.can_manage_group_webapps(actor,
 domain.group)` — checked before any provider read or write.
 
 On success the alias vhost is created as `kind="site_api"`, `spa=True`, the
-primary's `pool`, and the covering certificate, then
-`webapp_auth_routes.reconcile()` runs on it.
+primary's `pool`, and the covering certificate, then `_reconcile_routes()`
+copies the primary's **complete route contract**. Hosted-auth is first
+reconciled on the primary; its proven upstream is passed explicitly to the
+alias, and every application route copies its upstream FK from the primary
+row. Re-checking is idempotent. A duplicate logical path, an alias-only path,
+or the same path pointing at another upstream is refused atomically rather
+than guessed at or silently rewritten.
 
 `detach(web_app, vhost)` removes one alias — `Vhost.delete()` publishes fleet
 convergence on commit, so nodes drop the server block without waiting for the
@@ -863,6 +873,12 @@ now iterates serving **vhosts** rather than apps, and `rendered_contract` uses
 alias without them would serve the SPA with no `/auth` route: logging in on the
 custom domain would 404 while the platform address worked.
 
+Attach also reconciles the primary's application routes onto the alias. Auth
+routes are not re-derived independently on each hostname: the primary proves
+the hosted-auth upstream once, and the alias receives that exact destination.
+That keeps custom domains and the platform address on one route contract even
+when configuration discovery would otherwise be ambiguous.
+
 ### Teardown
 
 Both teardown paths delete alias vhosts **in the same transaction** as the
@@ -872,7 +888,13 @@ thing that owns them, one explicit `Vhost.delete()` each:
   *rows* without running `Vhost.delete()`, so nodes would keep serving every
   custom domain until the next sweep.
 - `edge/webapp/detach_address` — "offline" that left the customer's own domain
-  serving is the opposite of what was asked.
+  serving is the opposite of what was asked. It deletes both `site` and
+  `site_api` primaries; a malformed link to another vhost kind, or an invalid
+  alias kind, is refused before anything is unlinked or deleted. The app's
+  object permission check and exact `alias_of=web_app` query keep unrelated
+  tenants and vhosts outside the transaction. Before the primary is deleted,
+  its non-managed routes are captured as `WebAppRoute` desired state. A later
+  address restore rematerializes them; managed auth routes remain derived.
 
 Onboarding's address step also refuses an existing vhost that is an alias —
 including **this** app's own alias. Adopting it as the primary would leave one
@@ -911,7 +933,7 @@ decorator gates the verb, never the specific row).
 | `edge/deployment`, `edge/deployment/<pk>` | GET | Fleet-convergence history. Filter a list with `?webapp=<id>`. Read-only; rows are made by promote/rollback only, and a cross-tenant id is not readable. |
 | `edge/webapp/rollback` | POST | Repoint a site at an already-verified earlier release. **Human-only**: `denies_key_backed_session` keeps CI keys out, so "deployment starts only from release completion" still holds for automation. A foreign release id 404s; a `pending` release is refused. Returns `webapp_deploy.payload(...)`. |
 | `edge/webapp/health` | GET | On-demand public HTTPS reachability of the live address: `healthy` / `unhealthy` / `not_configured` (no vhost). Never echoes a raw probe exception. |
-| `edge/webapp/detach_address` | POST | Take a site offline: unlink and delete its serving vhost, keep the app. Every alias address goes with it. |
+| `edge/webapp/detach_address` | POST | Take a site offline. Body `{webapp}`; returns `{webapp, address: null}` after retaining its custom route intent, then unlinking and deleting its `site` or `site_api` serving vhost while keeping the app. Every alias address goes with it. Restoring an address rematerializes the retained routes. Malformed non-site ownership is refused before any teardown. Human-only, fresh-auth, `manage_webapp`, plus the explicit object check. |
 | `edge/webapp/attach_domain` | POST | Point one more address (an **[alias](#extra-addresses-aliases)**) at this site. Body `{webapp, hostname, retry_certificate?}`; returns `webapp_alias.attach()` plus `webapp` — `status` (`needs_domain` / `records_needed` / `certificate_pending` / `certificate_failed` / `attached`), a plain `reason`, `dns` (`managed` / `external`) and, when the caller has records to publish, `records`. Re-enterable: the UI's Check button is this same call, and an already-attached address makes no provider write. `retry_certificate` goes through `_flag()`, not `bool()` — a browser sends form values as strings and `bool("false")` is True, so only a real `True` or `"1"`/`"true"`/`"yes"`/`"on"` counts; everything else, junk included, is False. Human-only, fresh-auth, plus the explicit object check. |
 | `edge/webapp/attach_preview` | GET | What `attach_domain` **would** do with `{webapp, hostname}`, without doing any of it — `webapp_alias.preview()` plus `webapp`: `status` (`ready` / `needs_domain` / `unusable`), `hostname`, and for `ready` the `dns` mode and `domain` (`{id, name}`). Deliberately **not** this file's read idiom: it answers a question about a write, so it carries the write's `manage_webapp` and the same explicit object check — but **no** step-up, because it changes nothing. Its only client is the manager-gated add-an-address dialog, which calls it as you type. Reports no occupancy, and an ancestor-authority denial propagates as a denial rather than a verdict. |
 | `edge/webapp/detach_domain` | POST | Remove one alias address. Body `{webapp, vhost}`; the address is scoped to this app's **aliases**, so the app's own address and a foreign one both 404 rather than disclose. The certificate and the app are untouched. Human-only, fresh-auth, plus the explicit object check. |
@@ -919,8 +941,8 @@ decorator gates the verb, never the specific row).
 | `edge/webapp/serving` | GET | Everything about how this app is served, as one payload — see [Serving](#serving-address-certificate-shape-and-paths). A read: `VIEW_PERMS`, no step-up. `serving.pools` and `upstreams` are populated **only** when the caller also passes `SAVE_PERMS` (evaluated non-raisingly with `rest_check_permission`); a viewer gets `null` for both. |
 | `edge/webapp/serving` | POST | Change `pool`, `spa` and/or `certificate`. Everything else in the body is ignored — `kind` in particular, because the serving shape decides which fields the renderer has a branch for at all. Applies to the primary **and every alias**, primary first. Human-only, fresh-auth, plus the explicit object check. Returns the same payload as the GET, with editables. |
 | `edge/webapp/certificate` | POST | Request a certificate covering this app's address **alone**. Requesting only — switching is a separate `serving` save. Body `{webapp}`. Human-only, fresh-auth, plus the explicit object check *and* the domain-owning-group authority check below. |
-| `edge/webapp/add_route` | POST | Send one path to a declared destination, on the primary and every alias. Body `{webapp, path_prefix, upstream}`. Refuses a [managed prefix](#managed-prefixes-are-derived), a prefix already pointing elsewhere, a destination outside `webapp_auth_routes._accessible_upstreams`, and any app whose primary is not `site_api`. |
-| `edge/webapp/remove_route` | POST | Stop sending one path elsewhere, on the primary and every alias. Body `{webapp, path_prefix}`. Refuses a managed prefix, and a prefix that is not set up. |
+| `edge/webapp/add_route` | POST | Retain one custom path as `WebAppRoute` desired state and send it to a declared destination on the primary and every alias. Body `{webapp, path_prefix, upstream}`. Refuses a [managed prefix](#managed-prefixes-are-derived), a prefix already pointing elsewhere, a destination outside `webapp_auth_routes._accessible_upstreams`, and any app whose primary is not `site_api`. `/path` and a legacy `/path/` row are one identity: one legacy row heals to canonical; both spellings together are refused as ambiguous. |
+| `edge/webapp/remove_route` | POST | Remove one retained custom path and stop sending it elsewhere on the primary and every alias. Body `{webapp, path_prefix}`. Refuses a managed prefix, a prefix that is not set up, and an ambiguous canonical-plus-trailing-slash duplicate. Either single spelling is removed. |
 | `DELETE edge/webapp/<pk>` | DELETE | **Safe delete.** `WebApp.on_rest_delete` runs the teardown — deactivate + unlink the `MOJO_DEPLOY_KEY` credential, delete the serving vhost and every [alias](#extra-addresses-aliases) vhost — in the **same** transaction as the row delete. The framework's `on_rest_pre_delete` hook runs *outside* the delete transaction, so it is the wrong hook: teardown there could commit while the row delete fails. A bare cascade orphaned the vhost and left the CI key active. Release bytes in S3 are intentionally left. |
 
 `rollback` is `releases.promote` with an earlier release — the same idempotent,
@@ -928,6 +950,15 @@ supersede-safe primitive as forward promotion, under a `select_for_update` row
 lock. A deployment row cascade-deleted with its WebApp (safe-delete racing an
 in-flight deploy) makes `webapp_deploy.orchestrate` a superseded no-op rather
 than a crashing `DoesNotExist`.
+
+The two destructive transactions above — take-offline and safe-delete — live in
+`services/webapp_lifecycle.py` (`take_offline`, `teardown`). The REST detach
+handler and `WebApp.on_rest_delete` are thin callers, and so is the Admin
+Assistant, which reaches this same day-2 surface through its `webapp` tool
+domain (`docs/django_developer/assistant/webapp_tools.md`). Chat gets the same
+services under the same authority and the same fresh-auth windows; minting or
+rotating `MOJO_DEPLOY_KEY`, buying a domain, and uploading a build are not
+available there and stay portal-only.
 
 ### Serving: address, certificate, shape, and paths
 
@@ -980,6 +1011,23 @@ app's own invariant. Primary first, always.
 Each `Vhost.save()` publishes convergence for the pool it left and the pool it
 joined (`convergence.publish_after_commit(previous_pool, self.pool)`), so a
 pool move republishes both fleets without a bespoke path.
+
+Route identity is canonical without abandoning legacy rows: `/reports` and a
+stored `/reports/` mean the same path. `add_route` heals one safe legacy row to
+`/reports`; `remove_route` finds and removes either spelling. If both rows
+exist, the service refuses the ambiguous identity before touching any address.
+The same canonicalization and duplicate refusal runs while copying a primary's
+route contract to a new or existing alias.
+
+Custom route intent lives in `WebAppRoute`; `VhostRoute` is its per-address
+materialization. `add_route` and `remove_route` update both layers in the same
+transaction. `take_offline` first captures the primary's current non-managed
+rows, which is the upgrade bridge for apps created before the desired-state
+table existed, then deletes the primary and aliases. Address onboarding
+validates every retained upstream against the selected domain before any DNS
+write and recreates the custom rows after hosted-auth reconciliation. A route
+that would cross tenants or use a retired destination is refused visibly; it
+is never silently omitted.
 
 Two refusals `apply` raises before it writes anything:
 

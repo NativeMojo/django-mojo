@@ -62,7 +62,7 @@ from mojo.helpers.settings import settings
 
 logger = logit.get_logger("aws_capacity", "aws.log")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 CACHE_PREFIX = "mojo:aws:capacity"
 REPORT_TTL = 120
 # 90 minutes: an add that captures a fresh AMI, boots, converges and proves can
@@ -151,6 +151,53 @@ DEFAULT_IMAGE_MAX_AGE_DAYS = 14
 DEFAULT_NODE_ROOT = "/opt/api"
 IMAGE_TAG_VALUE = "admin-capacity"
 RDS_SETTLED = "available"
+
+_SPEC_UNSET = object()
+
+
+def _lifecycle(status, available):
+    """Normalize provider words without hiding the provider's raw status."""
+    value = str(status or "").strip().lower()
+    if value == available:
+        return "available"
+    if value in ("pending", "creating", "starting", "rebooting", "modifying",
+                 "scaling", "backing-up", "storage-optimization", "maintenance"):
+        return "creating"
+    if value in ("deleting", "shutting-down", "terminating"):
+        return "deleting"
+    return "error"
+
+
+def _configured_spec():
+    """The provisioned environment this running installation represents.
+
+    Capacity is allowed to fall back to its legacy serving-only view when the
+    project has no django-mojo environment declaration.  Once a declaration is
+    present, project/environment ownership is authoritative and every broader
+    account inventory is narrowed to it.
+    """
+    try:
+        from mojo.apps.aws.services import infra_setup
+        fleet_spec, problem = infra_setup._resolve_spec()
+    except Exception:
+        logger.exception("capacity: provisioned environment could not be resolved")
+        raise CapacityError(
+            "The provisioned project and environment could not be resolved, "
+            "so capacity access is disabled.", "identity_unavailable", 503) \
+            from None
+    if problem is None:
+        return fleet_spec
+    details = problem.get("details") if isinstance(problem, dict) else {}
+    # A project that never declared an environment keeps the historical
+    # serving-only view.  A selected, malformed, or ambiguous declaration is
+    # different: identity was intended but cannot be proven, so broad account
+    # discovery would cross the ownership boundary.
+    if (details or {}).get("environment_count") == 0 \
+            and not (details or {}).get("selected"):
+        return None
+    raise CapacityError(
+        "The provisioned project and environment could not be resolved, so "
+        "capacity access is disabled.", "identity_unavailable", 503)
 
 
 class CapacityError(Exception):
@@ -414,6 +461,17 @@ def _serving(client=None, region=None):
     return elbv2_helper.serving_map(client=client, region=region)
 
 
+def _fleet_serving(elbv2_client=None, ec2_client=None, region=None):
+    """Fresh serving state narrowed to this configured environment."""
+    serving = _serving(client=elbv2_client, region=region)
+    fleet_spec = _configured_spec()
+    if fleet_spec is None:
+        return serving
+    facts = ec2_helper.fleet_instance_map(
+        fleet_spec.project, fleet_spec.env, client=ec2_client, region=region)
+    return _owned_serving(serving, facts)
+
+
 def _groups_holding(serving, instance_id):
     return [group for group in (serving.get("groups") or [])
             if any(target.get("id") == instance_id
@@ -590,42 +648,72 @@ def _node_rows(serving, facts_map, self_id, primary):
     before choosing one to drain — but it is not a refusal, and an added clone
     never becomes primary by accident because it takes its own hostname.
     """
-    rows = []
-    seen = set()
+    targets = {}
+    target_groups = {}
     for group in serving.get("groups") or []:
         for target in group.get("targets") or []:
             identifier = target.get("id")
             if not identifier or not str(identifier).startswith("i-"):
                 continue
-            if identifier in seen:
-                continue
-            seen.add(identifier)
-            facts = (facts_map or {}).get(identifier) or {}
-            rows.append({
-                "id": identifier,
-                "name": facts.get("name") or identifier,
-                "state": target.get("state"),
-                "instance_state": facts.get("state"),
-                "instance_type": facts.get("instance_type"),
-                "zone": facts.get("availability_zone"),
-                "public_ip": facts.get("public_ip"),
-                "healthy": target.get("state") == "healthy",
-                "self": identifier == self_id,
-                "primary": _is_primary(facts, primary),
-                "added_by_capacity": (facts.get("tags") or {}).get(
-                    ec2_helper.CREATED_BY_TAG) == "admin-capacity",
-                "groups": [],
-            })
-    by_id = {row["id"]: row for row in rows}
-    for group in serving.get("groups") or []:
-        for target in group.get("targets") or []:
-            row = by_id.get(target.get("id"))
-            if row is not None and group.get("arn") not in row["groups"]:
-                row["groups"].append(group.get("arn"))
+            targets.setdefault(identifier, []).append(target.get("state"))
+            target_groups.setdefault(identifier, []).append(group.get("arn"))
+    identifiers = list((facts_map or {}).keys())
+    identifiers += [value for value in targets if value not in identifiers]
+    rows = []
+    for identifier in identifiers:
+        facts = (facts_map or {}).get(identifier) or {}
+        states = targets.get(identifier) or []
+        target_state = ("healthy" if "healthy" in states else
+                        next((value for value in states if value), None))
+        provider_state = facts.get("state")
+        lifecycle = _lifecycle(provider_state, "running")
+        registered = bool(states)
+        healthy = (registered and target_state == "healthy"
+                   and provider_state == "running")
+        can_drain = (registered and provider_state == "running"
+                     and target_state not in (
+                         "draining", "unhealthy.draining", "unused"))
+        rows.append({
+            "id": identifier,
+            "name": facts.get("name") or identifier,
+            "state": target_state or "unregistered",
+            "instance_state": provider_state,
+            "lifecycle_state": lifecycle,
+            "instance_type": facts.get("instance_type"),
+            "zone": facts.get("availability_zone"),
+            "public_ip": facts.get("public_ip"),
+            "healthy": healthy,
+            "registered": registered,
+            "can_drain": can_drain,
+            "self": identifier == self_id,
+            "primary": _is_primary(facts, primary),
+            "added_by_capacity": (facts.get("tags") or {}).get(
+                ec2_helper.CREATED_BY_TAG) == "admin-capacity",
+            "groups": list(dict.fromkeys(target_groups.get(identifier) or [])),
+        })
     return rows
 
 
-def _database_rows(rds_client=None, region=None):
+def _owned_serving(serving, owned_ids):
+    """Keep only target rows proven to belong to this project/environment."""
+    allowed = set(owned_ids or [])
+    if serving is None:
+        return None
+    groups = []
+    for group in serving.get("groups") or []:
+        row = dict(group)
+        row["targets"] = [target for target in group.get("targets") or []
+                          if target.get("id") in allowed]
+        if row["targets"]:
+            groups.append(row)
+    balancer_arns = {arn for group in groups
+                     for arn in group.get("balancers") or []}
+    balancers = [row for row in serving.get("balancers") or []
+                 if row.get("arn") in balancer_arns]
+    return {"balancers": balancers, "groups": groups}
+
+
+def _database_rows(rds_client=None, region=None, fleet_spec=None):
     """Every Aurora cluster and standalone instance, with its reader picture.
 
     django-mojo does NOT consume a reader endpoint today: DATABASES points at
@@ -636,16 +724,38 @@ def _database_rows(rds_client=None, region=None):
     rows = []
     clusters = rds_helper.cluster_statuses(client=rds_client, region=region)
     instances = rds_helper.instance_statuses(client=rds_client, region=region)
+    if fleet_spec is not None:
+        clusters = {identifier: facts for identifier, facts in clusters.items()
+                    if provision_spec.owns(facts.get("tags"), fleet_spec,
+                                           role="database")}
+        instances = {identifier: facts for identifier, facts in instances.items()
+                     if provision_spec.owns(facts.get("tags"), fleet_spec,
+                                            role="database")}
     for identifier in sorted(clusters):
         detail = rds_helper.cluster_members(
             identifier, client=rds_client, region=region) or {}
+        writer = detail.get("writer")
+        readers = list(detail.get("readers") or [])
+        member_rows = []
+        for member in ([writer] if writer else []) + readers:
+            facts = instances.get(member) or {}
+            status = facts.get("status")
+            role = "writer" if member == writer else "reader"
+            lifecycle = _lifecycle(status, RDS_SETTLED)
+            member_rows.append({
+                "id": member, "role": role, "status": status,
+                "lifecycle_state": lifecycle,
+                "instance_class": facts.get("instance_class"),
+                "can_resize": lifecycle == "available",
+                "can_remove": role == "reader" and lifecycle == "available",
+            })
         rows.append({
             "identifier": identifier,
             "kind": "aurora",
             "engine": detail.get("engine"),
             "status": clusters[identifier].get("status"),
-            "writer": detail.get("writer"),
-            "readers": list(detail.get("readers") or []),
+            "writer": writer,
+            "readers": readers,
             # Per-instance classes out of the ONE describe `instances` already
             # holds — the writer and each reader carry independent sizes, and
             # that asymmetry (big writer, smaller readers) is the point.
@@ -653,7 +763,11 @@ def _database_rows(rds_client=None, region=None):
                 instances.get(detail.get("writer")) or {}).get("instance_class"),
             "reader_instance_classes": {
                 reader: (instances.get(reader) or {}).get("instance_class")
-                for reader in detail.get("readers") or []},
+                for reader in readers},
+            "reader_statuses": {
+                reader: (instances.get(reader) or {}).get("status")
+                for reader in readers},
+            "members": member_rows,
             "reader_endpoint": detail.get("reader_endpoint"),
             "endpoint": detail.get("endpoint"),
         })
@@ -677,6 +791,18 @@ def _database_rows(rds_client=None, region=None):
             "readers": [],
             "reader_instance_classes": {},
             "endpoint": detail.get("endpoint"),
+            "members": [{
+                "id": identifier,
+                "role": "reader" if detail.get("is_replica") else "writer",
+                "status": instances[identifier].get("status"),
+                "lifecycle_state": _lifecycle(
+                    instances[identifier].get("status"), RDS_SETTLED),
+                "instance_class": detail.get("instance_class"),
+                "can_resize": _lifecycle(
+                    instances[identifier].get("status"), RDS_SETTLED) == "available",
+                "can_remove": bool(detail.get("is_replica")) and _lifecycle(
+                    instances[identifier].get("status"), RDS_SETTLED) == "available",
+            }],
         })
     # A standalone replica belongs to its source's row, not its own.
     sources = {row["identifier"]: row for row in rows if row["kind"] == "standalone"}
@@ -686,17 +812,53 @@ def _database_rows(rds_client=None, region=None):
             source["readers"].append(row["identifier"])
             source["reader_instance_classes"][row["identifier"]] = \
                 row.get("instance_class")
-    return [row for row in rows if not row.get("is_replica")]
+            source.setdefault("reader_statuses", {})[row["identifier"]] = \
+                row.get("status")
+            source.setdefault("members", []).extend(row.get("members") or [])
+    result = [row for row in rows if not row.get("is_replica")]
+    for row in result:
+        transitioning = any(member.get("lifecycle_state") != "available"
+                            for member in row.get("members") or [])
+        if row.get("status") != RDS_SETTLED or transitioning:
+            row["blocked_reason"] = "resource_transitioning"
+        else:
+            row["blocked_reason"] = None
+    return result
 
 
-def _cache_rows(cache_client=None, region=None):
+def _cache_rows(cache_client=None, region=None, fleet_spec=None):
     """Every replication group, with the facts the replica floor depends on."""
     rows = []
-    for facts in elasticache_helper.replication_groups(
-            client=cache_client, region=region):
+    groups = elasticache_helper.replication_groups(
+        client=cache_client, region=region)
+    member_groups = (elasticache_helper.group_statuses(
+        client=cache_client, region=region) if fleet_spec is not None else {})
+    for facts in groups:
+        if fleet_spec is not None:
+            tags = elasticache_helper.replication_group_tags(
+                facts.get("arn"), client=cache_client, region=region)
+            if not provision_spec.owns(tags, fleet_spec, role="cache"):
+                continue
         blocked = None
         if facts.get("cluster_enabled"):
             blocked = elasticache_helper.CLUSTER_MODE_UNSUPPORTED
+        status_rows = {
+            member.get("id"): member
+            for member in ((member_groups.get(facts.get("identifier")) or {}).get(
+                "members") or [])}
+        members = []
+        for member in facts.get("members") or []:
+            member = dict(member)
+            provider = status_rows.get(member.get("id")) or {}
+            member["status"] = provider.get("status") or facts.get("status")
+            member["lifecycle_state"] = _lifecycle(
+                member.get("status"), elasticache_helper.SETTLED)
+            members.append(member)
+        transitioning = (facts.get("status") != elasticache_helper.SETTLED
+                          or any(member.get("lifecycle_state") != "available"
+                                 for member in members))
+        if blocked is None and transitioning:
+            blocked = "resource_transitioning"
         rows.append({
             "identifier": facts.get("identifier"),
             "status": facts.get("status"),
@@ -713,7 +875,7 @@ def _cache_rows(cache_client=None, region=None):
                               if (facts.get("automatic_failover_on")
                                   and int(facts.get("replica_count") or 0) >= 1)
                               else "downtime"),
-            "members": facts.get("members"),
+            "members": members,
             # The lowest count this group may be moved to. One, not zero, when
             # anything would fail over onto a replica that would no longer be
             # there.
@@ -808,36 +970,82 @@ def _offers(envelope):
     def offer(name, blocked):
         offers[name] = {"offered": blocked is None, "blocked_reason": blocked}
 
+    if envelope.get("identity_available") is False:
+        for name in ACTIONS:
+            offer(name, "identity_unavailable")
+        return offers
+
     node_block = None
     if external:
         node_block = infrastructure.ERROR_CODE
+    elif nodes.get("serving_available") is False:
+        node_block = "fleet_unavailable"
+    elif nodes.get("inventory_available") is False:
+        node_block = "instances_unavailable"
     elif envelope.get("node_id_pinned"):
         node_block = "node_id_pinned"
     elif not healthy:
         node_block = "no_source_node"
     offer(ACTION_ADD_NODE, node_block)
 
+    def can_drain(row):
+        if "can_drain" in row:
+            return bool(row.get("can_drain"))
+        # Cached v1 reports predate explicit capabilities. Their registered
+        # target state plus running EC2 state is the evidence they contain.
+        return (row.get("instance_state") == "running"
+                and row.get("state") not in (
+                    "draining", "unhealthy.draining", "unused"))
+
+    safely_drainable = any(
+        can_drain(row) and (not row.get("healthy") or len(healthy) > 1)
+        for row in instances)
     remove_block = infrastructure.ERROR_CODE if external else (
-        "last_healthy_target" if len(healthy) <= 1 else None)
+        "fleet_unavailable" if nodes.get("serving_available") is False else
+        "instances_unavailable" if nodes.get("inventory_available") is False else
+        "last_healthy_target" if not safely_drainable else None)
     offer(ACTION_DRAIN_NODE, remove_block)
     offer(ACTION_TERMINATE_NODE, infrastructure.ERROR_CODE if external else None)
 
+    databases = envelope.get("databases") or []
+    database_members = []
+    for row in databases:
+        resources = ([row.get("writer") or row.get("identifier")]
+                     + list(row.get("readers") or []))
+        for resource in resources:
+            member = _db_member(envelope, resource)
+            if member is not None:
+                database_members.append(member)
     database_block = infrastructure.ERROR_CODE if external else (
-        None if envelope.get("databases") else "no_database")
+        "databases_unavailable" if envelope.get("databases_available") is False else
+        None if databases else "no_database")
+    if database_block is None and not any(
+            row.get("blocked_reason") is None for row in databases):
+        database_block = "resource_transitioning"
     offer(ACTION_ADD_READER, database_block)
     offer(ACTION_REMOVE_READER, infrastructure.ERROR_CODE if external else (
-        None if any(row.get("readers") for row in envelope.get("databases") or [])
+        "databases_unavailable" if envelope.get("databases_available") is False else
+        None if any(member.get("can_remove") for member in database_members)
         else "no_reader"))
 
+    caches = envelope.get("caches") or []
     cache_block = infrastructure.ERROR_CODE if external else (
-        None if envelope.get("caches") else "no_cache_group")
+        "caches_unavailable" if envelope.get("caches_available") is False else
+        None if caches else "no_cache_group")
+    if cache_block is None and not any(
+            row.get("blocked_reason") is None for row in caches):
+        cache_block = "resource_transitioning"
     offer(ACTION_SET_CACHE_REPLICAS, cache_block)
 
     # The resizes share their family's availability: a region with a cache
     # group can resize it, a region with a database can resize an instance.
     # Per-group cluster-mode blocking rides on each cache row's blocked_reason.
     offer(ACTION_RESIZE_CACHE, cache_block)
-    offer(ACTION_RESIZE_DATABASE, database_block)
+    database_resize_block = database_block
+    if database_resize_block is None and not any(
+            member.get("can_resize") for member in database_members):
+        database_resize_block = "resource_transitioning"
+    offer(ACTION_RESIZE_DATABASE, database_resize_block)
 
     egress = envelope.get("egress") or {}
 
@@ -878,7 +1086,15 @@ def _offers(envelope):
     return offers
 
 
-def _build(elbv2_client=None, ec2_client=None, rds_client=None, cache_client=None):
+def _build(elbv2_client=None, ec2_client=None, rds_client=None, cache_client=None,
+           fleet_spec=_SPEC_UNSET):
+    identity_error = None
+    if fleet_spec is _SPEC_UNSET:
+        try:
+            fleet_spec = _configured_spec()
+        except CapacityError as err:
+            fleet_spec = None
+            identity_error = err
     envelope = {
         "schema_version": SCHEMA_VERSION,
         "region": _region(),
@@ -890,46 +1106,91 @@ def _build(elbv2_client=None, ec2_client=None, rds_client=None, cache_client=Non
         "databases": [],
         "caches": [],
         "warnings": [],
+        "identity_available": identity_error is None,
+        "identity": ({"project": fleet_spec.project, "environment": fleet_spec.env}
+                     if fleet_spec is not None else None),
     }
+    if identity_error is not None:
+        envelope["warnings"].append({
+            "code": "identity", "iam_action": None, "aws_code": None,
+            "message": identity_error.message,
+        })
+        envelope["nodes"].update({
+            "serving_available": False, "inventory_available": False,
+        })
+        envelope["databases_available"] = False
+        envelope["caches_available"] = False
+        envelope["egress"] = {
+            "enabled": False, "available": False,
+            "fleet_available": False, "addresses_available": False,
+            "policy_available": False, "fallback_attached": [],
+            "addresses": [], "attached": [], "pending_nodes": [],
+            "reserved": [], "to_allocate": 0,
+            "monthly_usd_per_address": EIP_MONTHLY_USD,
+        }
+        envelope["reader_routing"] = _reader_routing(envelope)
+        envelope["sizes"] = _size_catalog()
+        envelope["actions"] = _offers(envelope)
+        return envelope
     serving = _collect(envelope, "serving", "elasticloadbalancing:DescribeTargetHealth",
                        lambda: _serving(client=elbv2_client))
-    if serving is not None:
-        ids = sorted({target.get("id")
-                      for group in serving.get("groups") or []
-                      for target in group.get("targets") or []
-                      if str(target.get("id") or "").startswith("i-")})
-        # ONE describe_instances for the whole panel: the self check, the
-        # primary flag, the instance types and the capacity-added tag all come
-        # out of the same read.
-        facts = {}
-        if ids:
-            facts = _collect(envelope, "instances", "ec2:DescribeInstances",
+    ids = sorted({target.get("id")
+                  for group in (serving or {}).get("groups") or []
+                  for target in group.get("targets") or []
+                  if str(target.get("id") or "").startswith("i-")})
+    # One provider inventory covers registered AND transitional/unregistered
+    # members.  A failed serving read must not erase EC2 facts we can still
+    # report, and a failed EC2 read must not turn targets into healthy clones.
+    inventory = {}
+    inventory_available = True
+    if fleet_spec is not None:
+        inventory = _collect(
+            envelope, "instances", "ec2:DescribeInstances",
+            lambda: ec2_helper.fleet_instance_map(
+                fleet_spec.project, fleet_spec.env, client=ec2_client))
+    elif ids:
+        inventory = _collect(envelope, "instances", "ec2:DescribeInstances",
                              lambda: ec2_helper.instance_map(
-                                 ids, client=ec2_client)) or {}
-        self_id, self_status = _self_id(facts) if facts else (None, "unavailable")
-        envelope["nodes"] = {
-            "balancers": serving.get("balancers") or [],
-            "groups": [{key: group[key] for key in
-                        ("arn", "name", "target_type", "port", "protocol")}
-                       for group in serving.get("groups") or []],
-            "instances": _node_rows(serving, facts, self_id, _primary_host()),
-            "self": self_id,
-            "self_check": self_status,
-        }
+                                 ids, client=ec2_client))
+    inventory_available = inventory is not None
+    facts = inventory or {}
+    serving_view = (_owned_serving(serving, facts)
+                    if fleet_spec is not None and serving is not None
+                    else serving or {"balancers": [], "groups": []})
+    self_id, self_status = _self_id(facts) if facts else (None, "unavailable")
+    envelope["nodes"] = {
+        "balancers": serving_view.get("balancers") or [],
+        "groups": [{key: group[key] for key in
+                    ("arn", "name", "target_type", "port", "protocol")}
+                   for group in serving_view.get("groups") or []],
+        "instances": _node_rows(
+            serving_view, facts, self_id, _primary_host()),
+        "self": self_id,
+        "self_check": self_status,
+        "serving_available": serving is not None,
+        "inventory_available": inventory_available,
+    }
+    egress_serving = None if serving is None else serving_view
     addresses = _collect(envelope, "addresses", "ec2:DescribeAddresses",
                          lambda: ec2_helper.address_map(client=ec2_client))
-    envelope["egress"] = _egress_envelope(serving, addresses)
-    if serving is not None and addresses is not None and not _fleet_ids(serving):
+    envelope["egress"] = _egress_envelope(egress_serving, addresses)
+    if egress_serving is not None and addresses is not None \
+            and not _fleet_ids(egress_serving):
         envelope["egress"]["fallback_attached"] = _fallback_attached(
-            addresses, envelope, ec2_client=ec2_client)
+            addresses, envelope, ec2_client=ec2_client,
+            owned_ids=set(facts) if fleet_spec is not None else None)
     held = {row.get("instance") for row in envelope["egress"]["attached"]}
     for row in envelope["nodes"]["instances"]:
         row["stable_ip"] = row["id"] in held
     databases = _collect(envelope, "databases", "rds:DescribeDBClusters",
-                         lambda: _database_rows(rds_client=rds_client))
+                         lambda: _database_rows(
+                             rds_client=rds_client, fleet_spec=fleet_spec))
+    envelope["databases_available"] = databases is not None
     envelope["databases"] = databases or []
     caches = _collect(envelope, "caches", "elasticache:DescribeReplicationGroups",
-                      lambda: _cache_rows(cache_client=cache_client))
+                      lambda: _cache_rows(
+                          cache_client=cache_client, fleet_spec=fleet_spec))
+    envelope["caches_available"] = caches is not None
     envelope["caches"] = caches or []
     envelope["reader_routing"] = _reader_routing(envelope)
     # Static data, no provider read — no _collect wrapper needed.
@@ -1031,7 +1292,7 @@ def _egress_envelope(serving, addresses):
     }
 
 
-def _fallback_attached(addresses, envelope, ec2_client=None):
+def _fallback_attached(addresses, envelope, ec2_client=None, owned_ids=None):
     """Balancer-less installs: what holds a stable address anyway. Read-only.
 
     With no registered fleet there is nothing for the toggle to manage — but
@@ -1040,7 +1301,8 @@ def _fallback_attached(addresses, envelope, ec2_client=None):
     Association to an EC2 INSTANCE is the filter: an address held by a load
     balancer or a NAT gateway is inbound plumbing, not node egress.
     """
-    held = [row for row in addresses or [] if row.get("instance_id")]
+    held = [row for row in addresses or [] if row.get("instance_id")
+            and (owned_ids is None or row.get("instance_id") in owned_ids)]
     if not held:
         return []
     ids = sorted({row["instance_id"] for row in held})
@@ -1178,6 +1440,22 @@ def _refuse_external(action_label):
 FLEET_IDENTITY_TAGS = ("mojo:project", "mojo:env")
 
 
+def _owned_resource(tags, role):
+    fleet_spec = _configured_spec()
+    return (fleet_spec is None
+            or provision_spec.owns(tags, fleet_spec, role=role))
+
+
+def _capacity_tags(tags, role):
+    """Only non-secret ownership tags that may be copied to a new member."""
+    fleet_spec = _configured_spec()
+    if fleet_spec is not None:
+        return provision_spec.TAGS(fleet_spec, role)
+    allowed = set(FLEET_IDENTITY_TAGS) | {"mojo:role", "managed-by"}
+    return {key: value for key, value in (tags or {}).items()
+            if key in allowed and value}
+
+
 def _identity_matches(candidate_tags, reference_tags):
     """Exact fleet identity: project AND env equal, both present on both sides.
 
@@ -1311,7 +1589,8 @@ def apply(actor, action, resource="", **params):
 
 def _apply_node(actor, action, resource, elbv2_client=None, ec2_client=None, **_ignored):
     try:
-        serving = _serving(client=elbv2_client)
+        serving = _fleet_serving(
+            elbv2_client=elbv2_client, ec2_client=ec2_client)
     except ProviderCallError as err:
         raise _provider_error(
             err, "AWS did not report the serving tier, so no node change is "
@@ -1401,24 +1680,46 @@ def _apply_reader(actor, action, resource, rds_client=None, **params):
         if action == ACTION_ADD_READER:
             cluster = rds_helper.cluster_members(resource, client=rds_client)
             if cluster is not None:
+                if not _owned_resource(cluster.get("tags"), "database"):
+                    raise CapacityError(
+                        f"AWS reports no database called {resource} for this "
+                        f"project and environment.", "resource_not_found", 404)
+                if cluster.get("status") != RDS_SETTLED:
+                    raise CapacityError(
+                        f"{resource} is {cluster.get('status')}; adding a reader "
+                        f"needs it settled — try again when it reports available.",
+                        "not_settled", 409)
                 detail = {"kind": "aurora", "cluster": resource,
                           "instance_class": params.get("instance_class")
                           or _default_class(cluster, rds_client),
-                          "engine": cluster.get("engine")}
+                          "engine": cluster.get("engine"),
+                          "tags": _capacity_tags(
+                              cluster.get("tags"), "database")}
             else:
                 source = rds_helper.instance_role(resource, client=rds_client)
                 if source is None:
                     raise CapacityError(
                         f"AWS reports no database called {resource}.",
                         "resource_not_found", 404)
+                if not _owned_resource(source.get("tags"), "database"):
+                    raise CapacityError(
+                        f"AWS reports no database called {resource} for this "
+                        f"project and environment.", "resource_not_found", 404)
                 if source.get("is_replica"):
                     raise CapacityError(
                         f"{resource} is itself a read replica. Add the reader "
                         f"to its source database instead.",
                         "not_a_source", 409)
+                if source.get("status") != RDS_SETTLED:
+                    raise CapacityError(
+                        f"{resource} is {source.get('status')}; adding a reader "
+                        f"needs it settled — try again when it reports available.",
+                        "not_settled", 409)
                 detail = {"kind": "standalone", "source": resource,
                           "instance_class": source.get("instance_class"),
-                          "engine": source.get("engine")}
+                          "engine": source.get("engine"),
+                          "tags": _capacity_tags(
+                              source.get("tags"), "database")}
             detail["reader_id"] = _reader_id(resource)
             claim = _claim(action, resource, getattr(actor, "pk", None))
             record = _new_operation(action, resource, actor, claim, detail)
@@ -1432,6 +1733,15 @@ def _apply_reader(actor, action, resource, rds_client=None, **params):
             raise CapacityError(
                 f"AWS reports no database instance called {resource}.",
                 "resource_not_found", 404)
+        if not _owned_resource(target.get("tags"), "database"):
+            raise CapacityError(
+                f"AWS reports no database instance called {resource} for this "
+                f"project and environment.", "resource_not_found", 404)
+        if target.get("status") != RDS_SETTLED:
+            raise CapacityError(
+                f"{resource} is {target.get('status')}; removal needs it "
+                f"settled — inspect the provider state instead of replaying.",
+                "not_settled", 409)
         cluster_id = target.get("cluster")
         if cluster_id:
             cluster = rds_helper.cluster_members(cluster_id, client=rds_client) or {}
@@ -1500,12 +1810,26 @@ def _apply_cache(actor, resource, count=None, apply_immediately=None,
         raise CapacityError(
             f"AWS reports no replication group called {resource}.",
             "resource_not_found", 404)
+    fleet_spec = _configured_spec()
+    if fleet_spec is not None:
+        tags = elasticache_helper.replication_group_tags(
+            facts.get("arn"), client=cache_client)
+        if not provision_spec.owns(tags, fleet_spec, role="cache"):
+            raise CapacityError(
+                f"AWS reports no replication group called {resource} for this "
+                f"project and environment.", "resource_not_found", 404)
     if facts.get("cluster_enabled"):
         raise CapacityError(
             f"{resource} is cluster-mode enabled. Its replica count is a "
             f"per-shard resharding decision, not a capacity change, and this "
             f"control does not make it.",
             elasticache_helper.CLUSTER_MODE_UNSUPPORTED, 409)
+    status = str(facts.get("status") or "").lower()
+    if status != elasticache_helper.SETTLED:
+        raise CapacityError(
+            f"{resource} is {status}; changing replicas needs it settled — "
+            f"inspect the provider state and try only when it reports available.",
+            "not_settled", 409)
     current = int(facts.get("replica_count") or 0)
     if wanted < 0:
         raise CapacityError("count cannot be negative", "invalid_request")
@@ -1562,6 +1886,14 @@ def _apply_resize_cache(actor, resource, size=None, apply_immediately=None,
         raise CapacityError(
             f"AWS reports no replication group called {resource}.",
             "resource_not_found", 404)
+    fleet_spec = _configured_spec()
+    if fleet_spec is not None:
+        tags = elasticache_helper.replication_group_tags(
+            facts.get("arn"), client=cache_client)
+        if not provision_spec.owns(tags, fleet_spec, role="cache"):
+            raise CapacityError(
+                f"AWS reports no replication group called {resource} for this "
+                f"project and environment.", "resource_not_found", 404)
     if facts.get("cluster_enabled"):
         raise CapacityError(
             f"{resource} is cluster-mode enabled. Sizing a sharded group is a "
@@ -1620,6 +1952,10 @@ def _apply_resize_database(actor, resource, size=None, apply_immediately=None,
             raise CapacityError(
                 f"AWS reports no database instance called {resource}.",
                 "resource_not_found", 404)
+        if not _owned_resource(role.get("tags"), "database"):
+            raise CapacityError(
+                f"AWS reports no database instance called {resource} for this "
+                f"project and environment.", "resource_not_found", 404)
         status = str(role.get("status") or "").lower()
         # backing-up / storage-optimization / maintenance are routine RDS
         # background windows in which a class change is permitted. Anything
@@ -1727,7 +2063,8 @@ def _apply_stable_ips(actor, action, assign=None, elbv2_client=None,
                       ec2_client=None, **_ignored):
     """Guards, plan, claim, policy write, dispatch — for the fleet switch."""
     try:
-        serving = _serving(client=elbv2_client)
+        serving = _fleet_serving(
+            elbv2_client=elbv2_client, ec2_client=ec2_client)
     except ProviderCallError as err:
         raise _provider_error(
             err, "AWS did not report the serving tier, so the fleet's "
@@ -1970,6 +2307,28 @@ def _db_role(envelope, resource):
     return None, None
 
 
+def _db_member(envelope, resource):
+    for row in envelope.get("databases") or []:
+        for member in row.get("members") or []:
+            if member.get("id") == resource:
+                return member
+        # Compatibility for cached v1 reports written before per-member truth
+        # shipped.  Their parent status is the only evidence they contain;
+        # fresh reports always take the branch above.
+        if resource == row.get("writer") or resource == row.get("identifier"):
+            available = row.get("status") == RDS_SETTLED
+            return {"id": resource, "role": "writer",
+                    "status": row.get("status"), "can_resize": available,
+                    "can_remove": False}
+        if resource in row.get("readers") or []:
+            status = (row.get("reader_statuses") or {}).get(
+                resource, row.get("status"))
+            available = status == RDS_SETTLED
+            return {"id": resource, "role": "reader", "status": status,
+                    "can_resize": available, "can_remove": available}
+    return None
+
+
 def _fleet_fingerprint(envelope):
     """sha256 of the STRUCTURAL facts a plan's safety depends on.
 
@@ -1999,6 +2358,23 @@ def _fleet_fingerprint(envelope):
                   "databases": databases, "caches": caches}
     return hashlib.sha256(
         json.dumps(projection, sort_keys=True).encode()).hexdigest()
+
+
+def fleet_revision(refresh=False):
+    """The structural fleet fingerprint, for callers that must bind to it.
+
+    The same value ``plan_batch`` stores and ``apply_batch`` re-derives, exposed
+    for a caller whose safety depends on "the fleet has not moved since I asked"
+    — the Assistant's capacity approvals bind it as their revision and refuse
+    when it changes between proposal and approval.
+
+    ``refresh=False`` reads the 120s report cache, which is right at proposal
+    time (the operator is looking at that same picture). Pass ``refresh=True``
+    at execution: an early check against a cached envelope can pass on a fleet
+    that has already moved, and only a fresh read answers the question the
+    binding is actually asking.
+    """
+    return _fleet_fingerprint(report(refresh=refresh))
 
 
 def _refuse_degraded(envelope, actions):
@@ -2089,18 +2465,29 @@ def _validate_step(index, raw, envelope, planned):
     if action == ACTION_ADD_NODE:
         step["resource"] = resource = ""
     elif action == ACTION_ADD_READER:
-        if not any(row.get("identifier") == resource
-                   for row in envelope.get("databases") or []):
+        database = next((row for row in envelope.get("databases") or []
+                         if row.get("identifier") == resource), None)
+        if database is None:
             _refuse_step(index,
                          f"the report lists no database called "
                          f"{resource or '(missing)'}.",
                          "resource_not_found", 404)
+        if database.get("blocked_reason"):
+            _refuse_step(index, f"{resource} is blocked: "
+                         f"{database['blocked_reason']}.",
+                         database["blocked_reason"], 409)
     elif action == ACTION_REMOVE_READER:
         role, _class = _db_role(envelope, resource)
         if role != "reader":
             _refuse_step(index,
                          f"{resource or '(missing)'} is not a read replica in "
                          f"the report.", "not_a_reader", 409)
+        member = _db_member(envelope, resource) or {}
+        if not member.get("can_remove"):
+            _refuse_step(index,
+                         f"{resource} is {member.get('status') or 'not settled'}; "
+                         f"inspect and refresh instead of replaying removal.",
+                         "resource_transitioning", 409)
     elif action in (ACTION_SET_CACHE_REPLICAS, ACTION_RESIZE_CACHE):
         row = _cache_row(envelope, resource)
         if row is None:
@@ -2119,6 +2506,12 @@ def _validate_step(index, raw, envelope, planned):
                          f"the report lists no database instance called "
                          f"{resource or '(missing)'}.",
                          "resource_not_found", 404)
+        member = _db_member(envelope, resource) or {}
+        if not member.get("can_resize"):
+            _refuse_step(index,
+                         f"{resource} is {member.get('status') or 'not settled'}; "
+                         f"resize is unavailable during a provider transition.",
+                         "resource_transitioning", 409)
     else:
         row = _node_row(envelope, resource)
         if row is None:
@@ -2753,18 +3146,27 @@ def run_operation(operation_id):
         runner(record)
     except ProviderCallError as err:
         detail = err.detail()
-        _fail(record,
-              "provider_denied" if err.denied else "provider_error",
-              "AWS refused or could not complete this change.",
-              # Mutation state unknown means a retry could double-apply, so the
-              # claim is deliberately held until its TTL.
-              hold_claim=err.mutation_state != "none",
-              failure=detail)
+        uncertain = err.mutation_state != "none"
+        _fail(
+            record,
+            "provider_denied" if err.denied else (
+                "mutation_state_unknown" if uncertain else "provider_error"),
+            ("AWS may have accepted this change, but its result could not be "
+             "confirmed. Inspect the fresh capacity report and reconcile the "
+             "provider state; do not replay this mutation."
+             if uncertain else
+             "AWS refused or could not complete this change."),
+            # Any attempted mutation is inspect/reconcile-only.  Holding the
+            # claim makes a second request impossible while its result is
+            # uncertain.
+            hold_claim=uncertain,
+            failure=detail)
     except Exception:
         logger.exception("capacity: operation %s raised", operation_id)
         _fail(record, "operation_failed",
-              "This operation stopped with an unexpected error. Check the "
-              "capacity report before retrying.", hold_claim=True)
+              "This operation stopped after its result became uncertain. "
+              "Inspect the fresh capacity report and reconcile the provider "
+              "state; do not replay this mutation.", hold_claim=True)
     return str((_read_operation(operation_id) or {}).get("state") or STATE_FAILED)
 
 
@@ -3133,7 +3535,7 @@ def _run_enable_stable_ips(record):
 
 
 def _enable_stable_ips(record):
-    serving = _serving()
+    serving = _fleet_serving()
     fleet = _fleet_ids(serving)
     if not fleet:
         return _fail(record, "no_fleet_nodes",
@@ -3225,7 +3627,7 @@ def _run_disable_stable_ips(record):
 
 
 def _disable_stable_ips(record):
-    serving = _serving()
+    serving = _fleet_serving()
     fleet = _fleet_ids(serving)
     expected = record["detail"].get("attached") or []
     if not fleet and expected:
@@ -3339,10 +3741,11 @@ def _run_add_reader(record):
     if detail.get("kind") == "aurora":
         rds_helper.create_cluster_reader(
             detail["cluster"], reader_id, detail.get("instance_class"),
-            detail.get("engine"))
+            detail.get("engine"), tags=detail.get("tags"))
     else:
         rds_helper.create_read_replica(
-            detail["source"], reader_id, detail.get("instance_class"))
+            detail["source"], reader_id, detail.get("instance_class"),
+            tags=detail.get("tags"))
     invalidate()
     _advance(record, "settling", "waiting for AWS to bring the reader up")
     deadline = time.time() + RDS_TIMEOUT

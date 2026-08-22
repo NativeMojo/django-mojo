@@ -81,12 +81,40 @@ response = llm.call(
 
 Raises `ValueError` if no API key is configured. Other API errors propagate from the anthropic SDK.
 
+## `model_choices()` — picker suggestions
+
+```python
+from mojo.helpers import llm
+
+llm.model_choices()               # from the shared 24h cache, no network call
+llm.model_choices(refresh=True)   # explicit operator-driven refresh
+```
+
+Returns `[{"id", "label"}]`, capped at 40, filtered to the opus/sonnet/haiku
+families and sorted newest-first by the same `_rank_key` `get_model()` uses. The
+label is the API's `display_name`, or the id when it has none.
+
+**It never returns an empty list.** When the catalogue is unavailable — no key
+yet, or the API is unreachable — it returns the three `_FALLBACKS` aliases,
+which is exactly what resolution would fall back to anyway. A picker with
+nothing in it looks broken.
+
+It reads the cache by default and does **not** fetch: a settings page that
+fetched on every render would spend a provider round trip to draw a dropdown.
+It also never accepts a candidate key, because fetching under an unsaved
+credential would write the shared 24-hour cache from a key the installation is
+not running.
+
+These are suggestions only. Nothing validates a saved pin against this list: the
+list is network-dependent, so validating against it would refuse a perfectly
+good re-save whenever the cache has lapsed and the API is down.
+
 ## Settings
 
 | Setting | Purpose |
 |---|---|
 | `LLM_ADMIN_API_KEY` | Checked first by `get_api_key()` |
-| `LLM_HANDLER_API_KEY` | Fallback |
+| `LLM_HANDLER_API_KEY` | Fallback — the platform key, settable from the built-in Admin's Assistant setup |
 | `LLM_ADMIN_MODEL` | If set, `get_model()` returns this (explicit pin) |
 | `LLM_HANDLER_MODEL` | Second-tier pin |
 

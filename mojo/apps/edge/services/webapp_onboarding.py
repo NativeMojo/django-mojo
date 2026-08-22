@@ -1,6 +1,7 @@
 """Crash-safe App -> Address -> GitHub -> Verify onboarding orchestration."""
 
 import hashlib
+import ipaddress
 import json
 import uuid
 from datetime import timedelta
@@ -22,6 +23,13 @@ from mojo.apps.edge.models.web_app_onboarding_operation import (
 
 
 SCHEMA_VERSION = 1
+# The surface identity a NON-browser caller (the Admin Assistant) starts and
+# continues its own onboarding operations under. `request_origin()` only ever
+# returns a `scheme://host` string, so this sentinel can never equal one: a
+# browser can never continue an assistant-created operation, and the assistant
+# can never continue a browser-created one. Each surface owns what it starts;
+# neither impersonates the other.
+ASSISTANT_ORIGIN = "assistant"
 MAX_ATTEMPTS = 8
 MAX_STATE_BYTES = 32768
 MAX_ACTIVITY = 80
@@ -174,21 +182,62 @@ def _save_state(operation, state, fields=None):
     operation.save(update_fields=list(dict.fromkeys(names)))
 
 
-def _assert_current(operation, request, mutate=False):
-    if getattr(request, "group_token", None) is not None:
+def _assert_actor_authority(operation, actor, has_group_token):
+    """The first four checks, in their original order. Origin is the caller's."""
+    if has_group_token:
         raise me.PermissionDeniedException("Group tokens cannot operate onboarding")
-    if operation.actor_id != getattr(request.user, "pk", None):
+    if operation.actor_id != getattr(actor, "pk", None):
         raise me.PermissionDeniedException("Only the initiating administrator may continue")
     if not operation.group.is_effectively_active():
         raise me.PermissionDeniedException("The onboarding group is no longer active")
-    if not webapp_authority.can_manage_group_webapps(
-            request.user, operation.group):
+    if not webapp_authority.can_manage_group_webapps(actor, operation.group):
         raise me.PermissionDeniedException(
             "WebApp and DNS management are no longer granted in this group")
+
+
+def assert_read_authority(operation, actor):
+    """May this actor READ this operation? Actor identity and live authority.
+
+    Deliberately origin-free, and therefore a deliberate RELAXATION of what
+    ``webapp/onboarding/detail`` enforces today: the same administrator may
+    report on a setup they started on the other surface, from either surface.
+    CONTINUING one stays origin-bound — see :func:`assert_continue_authority`.
+
+    ``has_group_token=False`` is an assumption about the CALLER, and what
+    upholds it is that every assistant entry point carries
+    ``@md.requires_global_perms('view_admin', 'assistant')``
+    (``assistant/rest/assistant.py``), whose wrapper refuses a
+    ``GroupScopedToken`` unconditionally — before any tool runs. A future
+    caller reached from a surface WITHOUT that decorator must pass its own
+    flag through :func:`assert_continue_authority` instead of using this.
+    """
+    _assert_actor_authority(operation, actor, has_group_token=False)
+
+
+def assert_continue_authority(operation, actor, origin, has_group_token=False):
+    """May this actor CONTINUE this operation from this surface?
+
+    The complete ``_assert_current`` contract with the origin supplied by the
+    caller instead of read off an HTTP request, so a non-browser surface passes
+    :data:`ASSISTANT_ORIGIN` rather than impersonating a browser Origin.
+    """
+    _assert_actor_authority(operation, actor, has_group_token)
+    if operation.origin != origin:
+        raise me.PermissionDeniedException("Onboarding must continue on its original origin")
+
+
+def _assert_current(operation, request, mutate=False):
+    _assert_actor_authority(
+        operation, getattr(request, "user", None),
+        getattr(request, "group_token", None) is not None)
     # These dedicated endpoints deliberately use the stricter actor + current
     # WebApp/DNS group-authority contract above.  RestMeta's generic request
     # group inference is a separate boundary and would turn a valid scoped
     # membership into an accidental global-permission requirement here.
+    #
+    # `request_origin` stays in its ORIGINAL position: it refuses a malformed
+    # or cross-origin Origin itself, so resolving it earlier would change which
+    # refusal an unauthorized cross-origin caller sees.
     if operation.origin != request_origin(request):
         raise me.PermissionDeniedException("Onboarding must continue on its original origin")
 
@@ -614,12 +663,43 @@ def create(group, actor, origin, payload, group_intent="existing"):
 
 
 def choose(operation, request, payload):
+    """Browser caller. Authority is asserted by ``_assert_current`` under the
+    row lock, exactly where and in the order it always was."""
+    return _choose(
+        operation, payload,
+        lambda locked: _assert_current(locked, request, mutate=True))
+
+
+def _carries_purchase(choice):
+    return bool(isinstance(choice, dict) and
+                (choice.get("purchase") or choice.get("confirm_token")))
+
+
+def choose_for_actor(operation, actor, origin, payload, has_group_token=False):
+    """Answer the current step as ``actor`` from ``origin``.
+
+    Domain purchase is refused here, at the SERVICE, for the assistant origin —
+    before the row lock and before any money can move. The one-use
+    ``confirm_token`` is a capability that must never enter model context, so
+    the exclusion is a property of this service rather than of whichever caller
+    happens to be wired up today.
+    """
+    if origin == ASSISTANT_ORIGIN and _carries_purchase(payload.get("choice") or {}):
+        raise me.PermissionDeniedException(
+            "Domain purchase is not available from this surface")
+    return _choose(
+        operation, payload,
+        lambda locked: assert_continue_authority(
+            locked, actor, origin, has_group_token=has_group_token))
+
+
+def _choose(operation, payload, assert_authority):
     raw_choice = payload.get("choice") or {}
     purchase_confirmation = None
     with transaction.atomic():
         locked = WebAppOnboardingOperation.objects.select_for_update().select_related(
             "group").get(pk=operation.pk)
-        _assert_current(locked, request, mutate=True)
+        assert_authority(locked)
         if locked.status in TERMINAL_STATUSES:
             raise me.ValueException("This onboarding operation is already finished")
         if (locked.lease_expires_at and
@@ -751,14 +831,29 @@ def choose(operation, request, payload):
     return locked
 
 
-@transaction.atomic
 def cancel(operation, request):
+    """Browser caller. Same checks, same order, same messages as always."""
+    return _cancel(
+        operation,
+        lambda locked: _assert_current(locked, request, mutate=True))
+
+
+def cancel_for_actor(operation, actor, origin, has_group_token=False):
+    """Cancel as ``actor`` from ``origin``. Completed resources are preserved."""
+    return _cancel(
+        operation,
+        lambda locked: assert_continue_authority(
+            locked, actor, origin, has_group_token=has_group_token))
+
+
+@transaction.atomic
+def _cancel(operation, assert_authority):
     # ``actor`` is nullable, so joining it under FOR UPDATE creates a nullable
-    # outer-join lock that PostgreSQL rejects.  _assert_current only needs the
-    # actor id and the concrete group.
+    # outer-join lock that PostgreSQL rejects.  The authority assertion only
+    # needs the actor id and the concrete group.
     locked = WebAppOnboardingOperation.objects.select_for_update().select_related(
         "group").get(pk=operation.pk)
-    _assert_current(locked, request, mutate=True)
+    assert_authority(locked)
     if locked.status in TERMINAL_STATUSES:
         return locked
     locked.status = STATUS_CANCELLED
@@ -910,9 +1005,19 @@ def _advance_app(operation):
     existing = WebApp.objects.filter(group=operation.group,
                                      slug=profile["slug"]).first()
     if existing is not None:
-        compatible = all(getattr(existing, field) == profile[field] for field in (
+        existing_profile = {
+            field: getattr(existing, field) for field in (
             "display_name", "environment", "bucket", "github_repository",
-            "deployment_ref", "build_output"))
+            "deployment_ref", "build_output")}
+        # Before display names were required by onboarding, valid WebApps
+        # commonly stored a blank one and rendered their slug as the fallback.
+        # _profile applies that same fallback to new receipts. Treat those two
+        # persisted representations as equivalent without weakening any other
+        # profile field or accepting a genuinely different nonblank name.
+        existing_profile["display_name"] = (
+            existing_profile["display_name"] or existing.slug)
+        compatible = all(existing_profile[field] == profile[field]
+                         for field in existing_profile)
         if not compatible:
             raise me.ValueException(
                 "A WebApp with this slug exists with a different profile")
@@ -938,6 +1043,50 @@ def _record_values(record):
     return sorted(str(value).rstrip(".") for value in (
         getattr(record, "record_values", None) or
         (record.get("record_values") if isinstance(record, dict) else []) or []))
+
+
+def _matching_legacy_address_records(records, target):
+    """Return legacy A/AAAA rows only when they exactly reach ``target``.
+
+    Older MojoLand installs wrote the node address directly. Current installs
+    use the platform hostname as a CNAME so fleet changes do not strand apps.
+    A managed restore may migrate that old shape, but only when every address
+    in each legacy row exactly matches the current destination's live answers.
+    Foreign records and mixed record types remain a hard refusal.
+    """
+    from mojo.apps.edge.services import public_probe
+
+    try:
+        answers = public_probe.public_addresses(target)
+    except public_probe.UnsafePublicProbe:
+        return []
+    expected = {4: set(), 6: set()}
+    for answer in answers:
+        try:
+            address = ipaddress.ip_address(answer)
+        except (TypeError, ValueError):
+            continue
+        expected[address.version].add(str(address))
+    if not expected[4] and not expected[6]:
+        return []
+
+    matched = []
+    for record in records:
+        kind = str(getattr(
+            record, "type", record.get("type", "") if isinstance(record, dict)
+            else "")).upper()
+        if kind not in ("A", "AAAA"):
+            return []
+        version = 4 if kind == "A" else 6
+        try:
+            actual = {str(ipaddress.ip_address(value))
+                      for value in _record_values(record)}
+        except ValueError:
+            return []
+        if not actual or actual != expected[version]:
+            return []
+        matched.append(record)
+    return matched
 
 
 def _advance_address(operation, *, resolve_cname=None):
@@ -999,6 +1148,15 @@ def _advance_address(operation, *, resolve_cname=None):
     operation.domain = domain
     operation.dns_provider = domain.provider
 
+    # Capture pre-migration live routes before a change-address operation
+    # retires their vhost, and fail before any DNS write if the durable route
+    # contract cannot be served safely on the selected domain.
+    web_app = WebApp.objects.get(pk=operation.web_app_id)
+    from mojo.apps.edge.services import webapp_serving
+    if web_app.vhost_id is not None:
+        webapp_serving.capture_desired_routes(web_app)
+    webapp_serving.validate_desired_routes(web_app, domain)
+
     hostname = f"{label}.{domain.name}"
     # One resolver decides the serving destination for every provider: it
     # validates the value, rejects a self-referential hostname, and raises
@@ -1043,9 +1201,23 @@ def _advance_address(operation, *, resolve_cname=None):
         cnames = [row for row in same_name
                   if str(getattr(row, "type", row.get("type", ""))).upper() == "CNAME"]
         conflicts = [row for row in same_name if row not in cnames]
-        if conflicts or len(cnames) > 1:
+        if len(cnames) > 1:
             raise me.ValueException(
                 "The selected hostname has ambiguous or non-CNAME DNS records")
+        if conflicts:
+            legacy = [] if cnames else _matching_legacy_address_records(
+                conflicts, target)
+            if len(legacy) != len(conflicts):
+                raise me.ValueException(
+                    "The selected hostname has ambiguous or non-CNAME DNS records")
+            # A provider write may succeed and then time out. That is safe:
+            # the next attempt either sees the same exact legacy row and
+            # retries its delete, or sees no row and writes the desired CNAME.
+            for row in legacy:
+                kind = str(getattr(
+                    row, "type", row.get("type", "") if isinstance(row, dict)
+                    else "")).upper()
+                dns.delete_record(domain, kind, hostname, _record_values(row))
         if cnames and _record_values(cnames[0]) != [target]:
             raise me.ValueException(
                 "The selected hostname has a foreign CNAME value")
@@ -1183,21 +1355,35 @@ def _advance_address(operation, *, resolve_cname=None):
     from mojo.apps.edge.services import webapp_auth_routes
     vhost, _, _ = webapp_auth_routes.reconcile(vhost)
     operation.vhost = vhost
-    web_app = WebApp.objects.get(pk=operation.web_app_id)
-    old_site_vhost = None
-    if web_app.vhost_id not in (None, vhost.pk):
-        previous = Vhost.objects.filter(pk=web_app.vhost_id).first()
-        if previous is None or previous.kind not in ("site", "site_api"):
-            raise me.ValueException(
-                "The WebApp is already linked to an incompatible address")
-        # Change-address: the old address kept serving until the new vhost and
-        # certificate were ready (they are, here). Retire it now — its delete
-        # publishes convergence so nodes drop the old server block.
-        old_site_vhost = previous
-    web_app.vhost = vhost
-    web_app.save(update_fields=["vhost", "modified"])
-    if old_site_vhost is not None:
-        old_site_vhost.delete()
+    with transaction.atomic():
+        web_app = WebApp.objects.select_for_update().get(pk=web_app.pk)
+        old_site_vhost = None
+        if web_app.vhost_id not in (None, vhost.pk):
+            previous = Vhost.objects.select_for_update().filter(
+                pk=web_app.vhost_id).first()
+            if previous is None or previous.kind not in ("site", "site_api"):
+                raise me.ValueException(
+                    "The WebApp is already linked to an incompatible address")
+            # Re-capture under the final app lock. Provider work can take long
+            # enough for a concurrent serving edit; the address swap must use
+            # that latest committed route contract, not the early preflight.
+            webapp_serving.capture_desired_routes(web_app, previous)
+            webapp_serving.validate_desired_routes(web_app, domain)
+            # Change-address: the old address kept serving until the new vhost
+            # and certificate were ready (they are, here). Retire it only after
+            # the new materialized routes exist in this same transaction.
+            old_site_vhost = previous
+        web_app.vhost = vhost
+        web_app.save(update_fields=["vhost", "modified"])
+        webapp_serving.reconcile_desired_routes(web_app)
+        if old_site_vhost is not None:
+            old_site_vhost.delete()
+        if web_app.current_release_id is not None:
+            # A release previously promoted while this app had no address has
+            # no fleet proof for the new vhost. Reapply the durable desired
+            # release; retries reuse an already-active attempt.
+            from mojo.apps.edge.services import releases
+            releases.reconcile_current_release(web_app)
     operation.evidence = dict(
         operation.evidence or {}, address=address_evidence(
             status="verified", dns="verified",
@@ -1353,7 +1539,7 @@ jobs:
           api-url: \"__API_URL__\"
           webapp-id: \"__WEBAPP_ID__\"
           artifact-dir: \"__OUTPUT__\"
-          version: ${{ github.sha }}
+          version: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
         env:
           MOJO_DEPLOY_KEY: ${{ secrets.MOJO_DEPLOY_KEY }}
 """

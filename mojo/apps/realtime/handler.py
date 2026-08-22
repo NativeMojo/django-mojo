@@ -107,6 +107,9 @@ class WebSocketHandler:
         self.authenticated = False
         self.user = None
         self.user_type = None
+        # The credential prefix this socket actually authenticated with, stamped
+        # onto every message the user hook receives. See handle_custom_message.
+        self.bearer_prefix = None
         self.subscribed_topics = set()
 
         # Capture remote IP and User-Agent from helpers (KISS)
@@ -482,6 +485,7 @@ class WebSocketHandler:
 
         self.user = user
         self.user_type = key_name
+        self.bearer_prefix = str(prefix or "").strip().lower()
         self.authenticated = True
 
         # Update Redis state
@@ -657,6 +661,17 @@ class WebSocketHandler:
         await self.check_waiters(data)
 
         if hasattr(self.user, 'on_realtime_message'):
+            # Stamp the credential this socket really authenticated with,
+            # ALWAYS overwriting whatever the client sent. A hook that gates on
+            # "an interactive bearer session is driving this" (the assistant's
+            # approval resolution does) cannot ask request.user what kind of
+            # credential it is: an ApiKey with override_user hands back a
+            # literal User (mojo/apps/account/models/api_key.py:754-758), and WS
+            # api-key auth is dead today only by the request=None accident at
+            # api_key.py:748 — a future fix there must not silently open this.
+            if isinstance(data, dict):
+                data["_bearer"] = self.bearer_prefix
+
             def call_hook():
                 return self.user.on_realtime_message(data)
 

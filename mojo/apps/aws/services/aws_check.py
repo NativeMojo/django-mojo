@@ -687,9 +687,11 @@ class AWSCheckRunner:
                               {"bucket": bucket, "allowed_origin": origin}, changed=True)
                 else:
                     self._add("s3", "warn", "release_bucket.cors",
-                              "Release bucket blocks browser uploads from this portal",
+                              "Release bucket has no dedicated browser-upload CORS rule for this portal",
                               {"bucket": bucket, "allowed_origin": origin, "rule_count": len(cors)},
-                              remediation="Rerun with --apply --section s3 to allow uploads from the portal.")
+                              remediation=(
+                                  "Rerun with --apply --section s3 to add the portal-specific "
+                                  "upload rule without replacing existing CORS rules."))
             except ProviderCallError as exc:
                 self._add("s3", "fail", "release_bucket.cors", exc, {
                     "bucket": bucket, "aws_code": exc.provider_code,

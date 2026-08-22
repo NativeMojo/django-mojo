@@ -10,6 +10,7 @@ from django.http import HttpResponse, HttpResponseRedirect
 import mojo
 from mojo import decorators as md
 from mojo.apps.account.services import admin_assets, admin_features
+from mojo.apps.account.services import assistant_setup
 from mojo.apps.account.services import admin_portal as admin_portal_service
 from mojo.apps.account.services import system_settings, webapp_authority
 from mojo.helpers import infrastructure
@@ -201,6 +202,18 @@ def on_admin_bootstrap(request):
         # live literal superuser, so that predicate is the only honest source.
         "settings_owner_edit": system_settings.can_system_admin(request.user),
         "infrastructure_managed": mode == infrastructure.MANAGED,
+        # view_admin ALONE. The assistant WebSocket handler admits nothing else
+        # (mojo/apps/assistant/handler.py), and offering a chat panel whose
+        # every message is refused is worse than not offering one.
+        "assistant": has(["view_admin"]),
+        # Installation state, not authority: is the feature on and does a
+        # credential resolve. The panel renders a not-configured body when this
+        # is false rather than a composer that cannot send.
+        "assistant_ready": assistant_setup.is_ready(),
+        # The setup writer demands a live literal superuser, so that predicate
+        # is the only honest source — the panel hides the editor instead of
+        # offering a control that 403s.
+        "assistant_setup": bool(request.user.is_superuser),
     }
     edge = {
         "available": False,

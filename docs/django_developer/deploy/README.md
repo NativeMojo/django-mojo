@@ -19,7 +19,7 @@ run on the node itself, outside Django:
 | `python3 -m mojo.deploy render --dest …` | Materializes the packaged cron/systemd templates into `${PROJ_PATH}/var/deploy`. **Not the same thing as `mojo.deploy.provision.render`**, which builds and publishes an environment's `django.conf` to S3 — same verb, opposite direction: this one writes files on a node, that one writes an object a node reads |
 | `mojo/deploy/scripts/update.sh` | The fleet update entry (deploy / manual modes) — packaged bash, run through a project shim |
 | `mojo/deploy/scripts/post_deploy.sh` | Post-checkout convergence: deps → framework → migrate → render → nginx/systemd/cron → restart + probe (each timed into `var/deploy/phase_timings`) |
-| `mojo/deploy/provision/scripts/stage1.sh` | What a freshly launched EC2 node runs: untar the tree → `ec2_bootstrap.sh` → pin `django-mojo==<version>` → `ec2_deploy.sh` → `var/profile` → CloudWatch agent → `config_sync`. Published to the config bucket by `provision apply`, downloaded and exec'd by stage-0 user data. **Not** resolvable through `locate` — see below |
+| `mojo/deploy/provision/scripts/stage1.sh` | What a freshly launched EC2 node runs: untar the tree → `ec2_bootstrap.sh` → pin `django-mojo==<version>` → render the installed cron/systemd contract into `var/deploy` → `ec2_deploy.sh` → `var/profile` → CloudWatch agent → `config_sync`. Published to the config bucket by `provision apply`, downloaded and exec'd by stage-0 user data. **Not** resolvable through `locate` — see below |
 | `mojo/deploy/provision/scripts/cloudwatch-agent.json` | The agent configuration template stage 1 installs, with this environment's three log-group names substituted in by the CLI |
 
 Everything is invoked with `python3 -m` (the bash scripts through their shims):
@@ -1194,6 +1194,29 @@ same isolated binding, transaction, database/header, and installed-file index
 preflight before deployment readiness is green. The check never installs a
 binding or opens the API-key credential. Default `auto` keeps legacy disabled
 nodes informational.
+
+## Pre-registering deployment identities (optional trust gate)
+
+When an installation's MojoSec enrollment sets
+`require_registered_deployments`, the central correlator only treats
+annotated FIM churn as a quiet deployment if the journal's `deployment_id`
+was pre-registered **by the party driving the deploy** — the node itself has
+no channel for this on purpose, because a node-originated registration would
+still be the same root assertion the gate exists to bound. Before the deploy,
+the driver (CI or operator, with `manage_security`) calls:
+
+```bash
+curl -X POST https://<central>/api/incident/mojosec/deployment \
+  -H "Authorization: Bearer <jwt>" -H "Content-Type: application/json" \
+  -d '{"installation_key_id": 42, "deployment_id": "wmwx-release-2026-08-21.1", "ttl_seconds": 86400}'
+```
+
+then passes the same identity to the node via `--deployment-id` /
+`MOJO_DEPLOY_ID`. Re-registering the same id extends its expiry. An
+unregistered or expired id does not break the deploy — its file changes
+simply land as ordinary unannotated high-severity evidence instead of one
+quiet deployment case. Default off; nothing changes until the enrollment row
+opts in.
 
 ## Canary and cleanup
 

@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from .gallery import bootstrap, reset
-from .features import activity, advanced, capacity, email, maintenance, platform, settings, sms, webapps
+from .features import activity, advanced, assistant, capacity, email, maintenance, platform, settings, sms, webapps
 from .features import dashboard
 
 
@@ -614,7 +614,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if activity_response is not None:
             status, payload = activity_response
             return self._send(payload, status=status)
-        for provider in (dashboard, webapps, platform, advanced, settings, sms, email, maintenance, capacity):
+        for provider in (dashboard, webapps, platform, advanced, settings, sms, email, maintenance, capacity, assistant):
             response = provider.get(self, parsed)
             if response is not None:
                 status, payload = response
@@ -740,7 +740,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         payload = self._read_body()
         self._record_event(path, payload)
-        for provider in (webapps, platform, advanced, settings, sms, email, maintenance, capacity):
+        for provider in (webapps, platform, advanced, settings, sms, email, maintenance, capacity, assistant):
             response = provider.post(self, path, payload)
             if response is not None:
                 status, body = response
@@ -947,6 +947,7 @@ def main():
     parser.add_argument("--maintenance-state", choices=("findings", "denied", "in_flight", "stalled", "unavailable", "framework_pinned", "framework_none", "clear"), default="findings")
     parser.add_argument("--deployments-state", choices=("mixed", "converged", "failed", "empty"), default="mixed")
     parser.add_argument("--capacity-state", choices=("healthy", "single_node", "adding", "denied", "no_reader", "node_id_pinned", "external_mode"), default="healthy")
+    parser.add_argument("--assistant-state", choices=("configured", "unset", "fallback", "verify_failed", "disabled"), default="configured")
     parser.add_argument("--infrastructure-mode", choices=("managed", "external"), default="managed")
     parser.add_argument("--upstream", help="Public HTTPS django-mojo origin for live QA")
     args = parser.parse_args()
@@ -974,6 +975,7 @@ def main():
        maintenance_state=args.maintenance_state,
        deployments_state=args.deployments_state,
        capacity_state=args.capacity_state,
+       assistant_state=args.assistant_state,
        infrastructure_mode=args.infrastructure_mode)
     PreviewHandler.upstream = upstream
     PreviewHandler.setup_behavior = args.setup_state
