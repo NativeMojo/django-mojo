@@ -540,21 +540,36 @@ def test_admin_graph_evidence_gated_at_boundary(opts):
             f"graph={graph} must fall back to the evidence-free default"
 
 
-@th.django_unit_test("same_sha_retry returns the deployment row, not create()'s tuple")
-def test_same_sha_retry_returns_a_row(opts):
+@th.django_unit_test("same_sha_retry publishes the retry through deploy coordination")
+def test_same_sha_retry_dispatches_the_attempt(opts):
     from mojo.apps.edge.models import PlatformDeployment
-    from mojo.apps.edge.services import platform_deploy
+    from mojo.apps.edge.services import deploy, platform_deploy
     original, _ = platform_deploy.create(
         SHA, source="test", idempotency_key="retry-origin")
-    retried = platform_deploy.same_sha_retry(
-        original, actor="framework-update:test", idempotency_key="retry-again")
+    made = PlatformDeployment(
+        sha=SHA, source="admin_retry", request_key="retry-again")
+    with mock.patch.object(
+            deploy, "request_deploy", return_value=(True, made)) as request:
+        retried = platform_deploy.same_sha_retry(
+            original, actor="framework-update:test",
+            idempotency_key="retry-again")
+
+    assert request.call_count == 1, \
+        "the retry row was created but no orchestrator job was requested"
+    assert request.call_args.args[0] == original.sha, \
+        "the retry did not dispatch the last converged commit"
+    assert request.call_args.kwargs["source"] == "admin_retry", \
+        "the retry lost its durable source identity"
+    assert request.call_args.kwargs["retry_of"] is original, \
+        "the dispatched attempt does not reference the row it retried"
+    assert request.call_args.kwargs["return_deployment"] is True, \
+        "the retry cannot return the exact row deploy coordination created"
     assert isinstance(retried, PlatformDeployment), \
         (f"same_sha_retry returned {type(retried).__name__}, not a "
          "PlatformDeployment — the framework-update endpoint reads .pk off "
          "this and 500s on a tuple")
-    assert retried.pk != original.pk, "the retry did not create a new attempt"
-    assert retried.retry_of_id == original.pk, \
-        "the retry does not reference the row it retried"
+    assert retried is made, \
+        "same_sha_retry did not return the attempt deploy coordination created"
 
 
 def _diagnosis_row(**extra):
@@ -1201,4 +1216,3 @@ def test_record_engine_restart(opts):
     th.assert_true(not platform_deploy.record_engine_restart(other.pk),
                    "a row that never reached `verified` has nothing to measure")
     _clean_deploy_state()
-

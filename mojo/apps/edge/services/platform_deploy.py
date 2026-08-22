@@ -650,9 +650,19 @@ def last_converged_deployment():
 
 
 def same_sha_retry(row, actor, created_by=None, idempotency_key=None):
-    deployment, _replayed = create(
+    """Retry one proven SHA through the same coordination path as a deploy.
+
+    Creating the durable row alone leaves it in ``requested`` forever: no
+    target lease is armed and no orchestrator job is published.  Re-enter the
+    uniform receiver so an active deploy chains the target and an idle fleet
+    starts the retry immediately.
+    """
+    from mojo.apps.edge.services import deploy
+
+    _started, deployment = deploy.request_deploy(
         row.sha, actor=actor, source="admin_retry", created_by=created_by,
-        idempotency_key=idempotency_key, retry_of=row)
+        idempotency_key=idempotency_key, retry_of=row,
+        return_deployment=True)
     return deployment
 
 
