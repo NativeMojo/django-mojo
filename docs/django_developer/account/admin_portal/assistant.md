@@ -260,13 +260,24 @@ If the server already has `location ^~ /.well-known/ { root …; }` — some ACM
 layouts do — that prefix wins over a plain one, and these two must be declared
 `^~` as well.
 
-### Scoped to this resource, by path
+### Scoped to these two resources, by path
 
-The connected-agents list and the disconnect-all sweep both pass
-`resource_path=mcp_path()` to `oauth_server.list_grants` / `count_grants` /
-`revoke_all_grants`. This surface owns remote agent access, not every OAuth
-resource the installation may protect, so a grant issued for some other
-registered resource is neither shown here nor swept by "Disconnect all".
+Remote agent access is one switch with two doors — the Assistant's MCP endpoint
+and the REST API root — so the connected-agents list, its count and the
+disconnect-all sweep all pass `resource_path=grant_paths()`
+(`[mcp_path(), api_root()]`) to `oauth_server.list_grants` / `count_grants` /
+`revoke_all_grants`. A list becomes ONE `OR` predicate, so the page still costs
+one query, one honest `COUNT(*)` and one bulk `UPDATE`. This surface owns remote
+agent access, not every OAuth resource the installation may protect, so a grant
+issued for some other registered resource is neither shown here nor swept by
+"Disconnect all".
+
+Each row carries an **`access`** field derived from the grant's scopes —
+`tools` (`mcp`), `api`, or `both` — computed by `assistant_setup._access_kind`
+rather than by `list_grants`. "Tools" / "Full API" is this page's vocabulary;
+the generic Admin API keeps returning raw `scopes`. The table renders it as an
+**Access** column, with a note under the section: a Full API row can call every
+API as that person, and the approval step does not apply to those calls.
 
 Scoping is by **path**, never by the full resource URL: the URL embeds
 `BASE_URL`, so matching on it would make a public-address change silently hide

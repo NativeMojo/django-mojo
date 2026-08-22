@@ -7,6 +7,9 @@ Sibling apps talk to this package, never to its modules:
 
     # protect one of your endpoints with it, from AppConfig.ready()
     oauth_server.register_resource("/api/assistant/mcp", ["mcp"], is_enabled)
+    # …or a whole subtree, which must offer the `api` scope
+    oauth_server.register_resource("/api", ["mcp", "api"], is_enabled,
+                                   prefix=True)
 
     # answer a bad or missing credential the way the spec expects
     response["WWW-Authenticate"] = oauth_server.www_authenticate(path)
@@ -22,17 +25,19 @@ rotation — is reached through the REST handlers in
 """
 from .discovery import www_authenticate
 from .resources import (
-    SERVER_PATH, canonical_url, public_origin, register_resource, resolve,
-    unregister_resource,
+    API_SCOPE, SERVER_PATH, canonical_url, covers, public_origin,
+    register_resource, resolve, unregister_resource,
 )
 from .tokens import (
     count_grants, list_grants, revoke_all_grants, revoke_grant_by_id,
 )
 
 __all__ = [
+    "API_SCOPE",
     "SERVER_PATH",
     "canonical_url",
     "count_grants",
+    "covers",
     "list_grants",
     "public_origin",
     "register_resource",

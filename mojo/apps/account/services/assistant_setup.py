@@ -241,6 +241,44 @@ def mcp_path():
         MCP_PATH_KEY, MCP_DEFAULT_PATH)).strip("/")
 
 
+def api_root():
+    """The REST API root — the PREFIX resource an `api` grant is bound to.
+
+    Read from ``mojo.helpers.request`` rather than re-derived, so this surface
+    and the registration in the assistant app's ``ready()`` cannot disagree.
+    """
+    from mojo.helpers.request import API_ROOT
+
+    return API_ROOT
+
+
+def grant_paths():
+    """Both resource paths remote agent access owns, for the Admin surface.
+
+    The switch turns on one feature with two doors; the Connected-agents list,
+    its count and Disconnect-all all span exactly these two, and still nothing
+    else the installation may protect with the same authorization server.
+    """
+    return [mcp_path(), api_root()]
+
+
+def _access_kind(scopes):
+    """What a grant's scopes mean in this surface's vocabulary.
+
+    Deliberately computed here rather than in ``oauth_server.list_grants``:
+    "Tools" / "Full API" is the Assistant setup page's language, and the
+    generic Admin API keeps returning the raw ``scopes``.
+    """
+    scopes = scopes if isinstance(scopes, list) else []
+    tools = "mcp" in scopes
+    full = "api" in scopes
+    if tools and full:
+        return "both"
+    if full:
+        return "api"
+    return "tools"
+
+
 def mcp_enabled():
     """Live read, never ``get_static``: the switch takes effect immediately."""
     return bool(settings.get(MCP_ENABLED_KEY, False, kind="bool"))
@@ -420,20 +458,25 @@ def mcp_state(check=False):
         discovery = discovery_cached(expected)
     else:
         discovery = dict(UNCHECKED)
-    # Scoped to the MCP resource by PATH, and bounded in SQL: this surface owns
-    # remote agent access, not every OAuth resource the installation may protect,
-    # and a page load must not load a grant table it is going to slice. The count
-    # is a separate COUNT(*), so it stays honest past the slice.
-    # Names and dates only — list_grants carries no token, jti or hash.
+    # Scoped BY PATH to the two resources remote agent access owns — the MCP
+    # door and the API root — and bounded in SQL: this surface owns remote agent
+    # access, not every OAuth resource the installation may protect, and a page
+    # load must not load a grant table it is going to slice. The count is a
+    # separate COUNT(*) on the same predicate, so it stays honest past the slice.
+    # Names and dates only — list_grants carries no token, jti or hash; `access`
+    # is derived from the scopes it does carry.
+    paths = grant_paths()
+    grants = oauth_server.list_grants(resource_path=paths, limit=MAX_GRANT_ROWS)
+    for row in grants:
+        row["access"] = _access_kind(row.get("scopes"))
     return {
         "enabled": enabled,
         "path": path,
         "url": expected,
         "discovery_url": resources.prm_url(origin, path) if origin else "",
         "discovery": discovery,
-        "grants": oauth_server.list_grants(
-            resource_path=path, limit=MAX_GRANT_ROWS),
-        "grant_count": oauth_server.count_grants(resource_path=path),
+        "grants": grants,
+        "grant_count": oauth_server.count_grants(resource_path=paths),
     }
 
 
@@ -756,15 +799,18 @@ def revoke_grant(actor, grant_id):
 
 
 def revoke_all_grants(actor):
-    """Disconnect every remote agent at the MCP door, for every user.
+    """Disconnect every remote agent, for every user, at BOTH doors.
 
-    Scoped to this resource path: an installation may protect other resources
-    with the same authorization server, and the Assistant's setup view is not
-    where those get swept.
+    Scoped to this feature's two resource paths — the MCP door and the API
+    root — so a tool-door grant and a full-API grant are both swept by the one
+    control the switch implies. An installation may protect other resources
+    with the same authorization server, and the Assistant's setup view is still
+    not where those get swept.
     """
     from mojo.apps.account.services import oauth_server
 
     system_settings.require_system_admin(actor)
-    count = oauth_server.revoke_all_grants(actor=actor, resource_path=mcp_path())
+    count = oauth_server.revoke_all_grants(
+        actor=actor, resource_path=grant_paths())
     _audit(actor, ["revoke_all_grants"], f"revoked:{count}", budget=50)
     return count

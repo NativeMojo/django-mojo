@@ -66,6 +66,45 @@ code, then send `Authorization: Bearer <access token>`.
 
 ---
 
+## Requesting full API access
+
+The sign-in above grants the **tool door** and nothing else: the token works at
+`/api/assistant/mcp` and returns `401` everywhere else. The same authorization
+server can also grant **full API access as that person** — every endpoint their
+account can already reach through the REST API — under a second scope, `api`.
+
+A client asks for it by naming the **API root** as the resource:
+
+```
+GET /api/account/oauth/authorize
+      ?…
+      &resource=https://<host>/api
+      &scope=api            # or `mcp api` for one credential that does both
+```
+
+The consent screen states it in plain words, including that the Assistant's
+approval step does **not** apply to direct API calls. Everything else — PKCE,
+the code exchange, refresh rotation, the 30-day ceiling, Admin revocation — is
+identical.
+
+Three things to know:
+
+- **An MCP client's built-in sign-in cannot obtain `api`.** It names the MCP
+  endpoint as its resource, and the server echoes the requested resource rather
+  than upgrading it. Asking for `api` there answers `invalid_scope`. Drive the
+  flow yourself if you want full API access.
+- **`api` alone does not open the tool door.** It authenticates at
+  `/api/assistant/mcp` but the door answers `403 insufficient_scope`. Ask for
+  `scope=mcp api`.
+- **`scopes_supported` in the authorization-server metadata is the truth.** An
+  installation that has not registered the API root never lists `api`, and
+  asking for it is `invalid_scope`.
+
+Full details, including exactly what an `api` token cannot do, are in
+[account/oauth_server.md](../account/oauth_server.md).
+
+---
+
 ## The wire
 
 Every request is `POST`, `Content-Type: application/json`, with the bearer token.
@@ -227,7 +266,7 @@ and is not something you can satisfy.
 | `405` + `Allow: POST` | You used `GET`, `DELETE` or `HEAD`. | Use `POST`. |
 | `401` + `WWW-Authenticate: Bearer error="invalid_token", resource_metadata="…"` | No credential, an expired/revoked/invalid token, or a credential that is not an MCP token for this resource (a browser session, an API key, a group token). | Follow `resource_metadata` and run the OAuth flow, or refresh. |
 | `401` with **no** `WWW-Authenticate` | The resource is currently switched off, so it is not advertising itself. | Wait for the operator. Your grant is dormant, not destroyed — it works again when the feature comes back. |
-| `403` + `WWW-Authenticate: … error="insufficient_scope", scope="mcp"` | The grant does not carry the `mcp` scope. | Re-run consent requesting `mcp`. |
+| `403` + `WWW-Authenticate: … error="insufficient_scope", scope="mcp"` | The grant does not carry the `mcp` scope — including an `api`-only grant, which reaches this path but may not use the tools. | Re-run consent requesting `mcp` (or `mcp api`). |
 | `403` `{"error":"permission_denied"}`, no challenge | The signed-in operator does not have Assistant access. | Nothing a client can fix; the operator needs the permission. |
 | `400` `{"error":"unsupported_protocol_version", …}` | `MCP-Protocol-Version` named a revision this server does not implement. | Send a listed one, or omit the header. |
 | `400` + JSON-RPC `-32700` / `-32600` | The body was not a JSON-RPC message: unparsable, a scalar, an empty array, an array over 20 elements, or a malformed envelope. A `null` request id is refused. | Fix the envelope. |

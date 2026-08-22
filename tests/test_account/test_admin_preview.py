@@ -937,8 +937,12 @@ def test_assistant_mcp_preview_states(opts):
 
     feature.reset(Connected, {}, assistant_mcp_state="connected")
     _code, report = feature.get(Connected, urlparse("/api/account/admin/assistant"))
-    assert report["mcp"]["grant_count"] == 2, \
-        f"the connected scenario does not list two agents: {report['mcp']!r}"
+    assert report["mcp"]["grant_count"] == 3, \
+        f"the connected scenario does not list all three agents: {report['mcp']!r}"
+    accesses = {row["id"]: row["access"] for row in report["mcp"]["grants"]}
+    assert set(accesses.values()) == {"tools", "both"}, \
+        f"the fixture must show a tool-door row and a full-API row, or the " \
+        f"Access column ships untested: {accesses!r}"
     first = report["mcp"]["grants"][0]["id"]
 
     status, answer = feature.post(
@@ -946,7 +950,7 @@ def test_assistant_mcp_preview_states(opts):
         {"action": "revoke_grant", "grant_id": first})
     assert status == 200 and answer["revoked"] == 1, \
         f"disconnecting one agent was not honoured: {status} {answer!r}"
-    assert answer["state"]["mcp"]["grant_count"] == 1, \
+    assert answer["state"]["mcp"]["grant_count"] == 2, \
         f"the disconnected agent is still listed: {answer['state']['mcp']!r}"
     status, answer = feature.post(
         Connected, "/api/account/admin/assistant",
@@ -957,7 +961,7 @@ def test_assistant_mcp_preview_states(opts):
     feature.reset(Connected, {}, assistant_mcp_state="connected")
     status, answer = feature.post(
         Connected, "/api/account/admin/assistant", {"action": "revoke_all_grants"})
-    assert status == 200 and answer["revoked"] == 2, \
+    assert status == 200 and answer["revoked"] == 3, \
         f"disconnecting all agents did not answer the count: {status} {answer!r}"
     assert answer["state"]["mcp"]["grants"] == [], \
         f"disconnecting all left rows behind: {answer['state']['mcp']!r}"

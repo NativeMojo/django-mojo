@@ -22,6 +22,10 @@ TEST_PASSWORD = "TestPass1!"
 CLIENT_ID = "testit-mcp-gate-client"
 CLIENT_NAME = "Testit MCP Gate Client"
 RESOURCE = "https://oauth.testit.example/api/assistant/mcp"
+# The API-root resource an `api` grant is bound to. The door sits beneath it,
+# so a root-bound token reaches this path — and the door's own scope check is
+# what decides whether it may act here.
+API_RESOURCE = "https://oauth.testit.example/api"
 
 MCP_PATH = "/api/assistant/mcp"
 API_KEY_NAME = "testit mcp gate key"
@@ -29,10 +33,10 @@ API_KEY_GROUP = "testit mcp gate group"
 RATE_BUCKET = "assistant_mcp"
 
 
-def _grant(user, client, scopes):
+def _grant(user, client, scopes, resource=RESOURCE):
     from mojo.apps.account.services.oauth_server import tokens
 
-    return tokens.create_grant(user, client, scopes, RESOURCE, 1700000000)
+    return tokens.create_grant(user, client, scopes, resource, 1700000000)
 
 
 def _rate_keys():
@@ -80,6 +84,12 @@ def setup_mcp_gate(opts):
     opts.grant = _grant(opts.admin, opts.client_row, ["mcp"])
     opts.grant_noscope = _grant(opts.admin, opts.client_row, [])
     opts.grant_noperm = _grant(opts.noperm, opts.client_row, ["mcp"])
+    # Root-bound grants: full API access alone does not open the tool door,
+    # and asking for both does.
+    opts.grant_api_only = _grant(
+        opts.admin, opts.client_row, ["api"], API_RESOURCE)
+    opts.grant_api_and_tools = _grant(
+        opts.admin, opts.client_row, ["mcp", "api"], API_RESOURCE)
 
     group = Group.objects.create(name=API_KEY_GROUP, kind="organization")
     opts.api_key, _raw = ApiKey.create_for_group(
@@ -154,11 +164,32 @@ def test_refusal_token_kinds(opts):
                 "a permission miss must carry NO challenge — re-authenticating "
                 "cannot fix it")
 
+    # Full API access is not tool-door access. The chokepoint lets a root-bound
+    # token through to this path (the door is beneath the root), so this 403 is
+    # the only thing keeping an `api`-only grant out of the tools.
+    response = mcp_auth.refusal(
+        _request(opts, bearer="bearer", oauth_grant=opts.grant_api_only))
+    assert_true(response is not None,
+                "an api-only grant must not open the Assistant's tool door")
+    assert_eq(response.status_code, 403,
+              f"an api-only grant is a scope miss, not a bad token, got "
+              f"{response.status_code}")
+    challenge = response.get("WWW-Authenticate", "")
+    assert_true('error="insufficient_scope"' in challenge and 'scope="mcp"' in challenge,
+                f"the refusal must tell the client to re-authorize with the mcp "
+                f"scope, got {challenge!r}")
+
     accepted = mcp_auth.refusal(
         _request(opts, bearer="bearer", oauth_grant=opts.grant))
     assert_true(accepted is None,
                 f"an mcp grant held by a permitted operator must pass, got "
                 f"{accepted}")
+
+    accepted = mcp_auth.refusal(
+        _request(opts, bearer="bearer", oauth_grant=opts.grant_api_and_tools))
+    assert_true(accepted is None,
+                f"a grant consented to for BOTH tools and full API must open the "
+                f"door, got {accepted}")
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +338,25 @@ def test_descriptors_protection_and_registration(opts):
                 "the MCP path must be registered as an OAuth resource")
     assert_eq(list(entry.scopes), ["mcp"],
               f"the resource must require the mcp scope, got {entry.scopes}")
+    assert_true(entry.prefix is False,
+                "the MCP door is ONE endpoint — registering it as a prefix "
+                "would hand every tool-door token the whole API")
+
+    # The second registration, behind the same switch: the REST API root.
+    from mojo.helpers.request import API_ROOT
+
+    root = oauth_server.resolve(API_ROOT)
+    assert_true(root is not None,
+                f"the REST API root {API_ROOT} must be registered as an OAuth "
+                f"resource so an `api` grant has something to bind to")
+    assert_true(root.prefix is True,
+                "the API root must be a PREFIX resource, or an api token would "
+                "authenticate at the root path alone")
+    assert_eq(list(root.scopes), ["mcp", "api"],
+              f"the API root must offer both scopes, got {root.scopes}")
+    assert_true(oauth_server.covers(root, MCP_PATH),
+                f"the shipped layout puts the MCP door beneath {API_ROOT}, so "
+                f"one `mcp api` grant serves both")
 
     match = resolve(MCP_PATH)
     assert_eq(match.kwargs.get("__mojo_rest_root_key__"),

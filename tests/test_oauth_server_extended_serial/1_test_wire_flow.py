@@ -26,6 +26,10 @@ RESOURCE = BASE + MCP_PATH
 ROOT = "/api/account/oauth"
 AS_METADATA = "/.well-known/oauth-authorization-server/api/account/oauth"
 PRM = "/.well-known/oauth-protected-resource/api/assistant/mcp"
+# The second registered resource: the REST API root, reached with `api`.
+API_ROOT_PATH = "/api"
+API_ROOT_RESOURCE = BASE + API_ROOT_PATH
+API_PRM = "/.well-known/oauth-protected-resource/api"
 
 TEST_USER = "oauth_wire_user"
 TEST_PWORD = "wire##mojo99"
@@ -462,5 +466,186 @@ def test_disabled_resource(opts):
             assert_eq(resp.status_code, 200,
                       f"a dormant grant must refresh again once the resource is "
                       f"re-enabled, got {resp.status_code} {resp.response}")
+    finally:
+        _clear_shadowing_rows()
+
+
+@th.django_unit_test("the api scope, end to end: consent, a root-bound token, and its limits")
+def test_api_scope_wire(opts):
+    from mojo.decorators.limits import clear_rate_limits
+    from mojo.apps.account.models import OAuthClient, OAuthGrant, User
+    from mojo.apps.account.utils.jwtoken import JWToken
+    from mojo.apps.account.services.oauth_server import tokens
+
+    _clear_shadowing_rows()
+    for bucket in RATE_BUCKETS:
+        clear_rate_limits(ip="127.0.0.1", key=bucket)
+    clear_rate_limits(ip="127.0.0.1", key="login")
+    user = User.objects.get(username=TEST_USER)
+    try:
+        with th.server_settings(BASE_URL=BASE, ASSISTANT_MCP_ENABLED=True):
+            # --- discovery advertises the second resource ------------------
+            resp = opts.client.get(AS_METADATA)
+            assert_eq(resp.status_code, 200,
+                      f"the AS metadata must be served, got {resp.status_code}")
+            scopes = resp.response.get("scopes_supported")
+            assert_eq(scopes, ["mcp", "api"],
+                      f"the server must advertise both scopes once the API root "
+                      f"is registered, got {scopes!r}")
+
+            resp = opts.client.get(API_PRM)
+            assert_eq(resp.status_code, 200,
+                      f"the API root must publish protected-resource metadata, "
+                      f"got {resp.status_code}")
+            assert_eq(resp.response.get("resource"), API_ROOT_RESOURCE,
+                      f"the root PRM must name the canonical root URL, "
+                      f"got {resp.response.get('resource')!r}")
+            assert_eq(resp.response.get("scopes_supported"), ["mcp", "api"],
+                      f"the root must publish both scopes, "
+                      f"got {resp.response.get('scopes_supported')!r}")
+
+            # --- consent names full API access in plain words ---------------
+            verifier = _verifier()
+            params = {
+                "client_id": opts.wire_client_id,
+                "redirect_uri": REDIRECT,
+                "response_type": "code",
+                "state": "api-state",
+                "code_challenge": _challenge(verifier),
+                "code_challenge_method": "S256",
+                "resource": API_ROOT_RESOURCE,
+                "scope": "mcp api",
+            }
+            resp = opts.client.get(f"{ROOT}/authorize", params=params,
+                                   allow_redirects=False)
+            assert_eq(resp.status_code, 200,
+                      f"an `mcp api` request at the root must render the consent "
+                      f"page, got {resp.status_code}")
+            html = resp.text
+            assert_true("Full API access as" in html,
+                        "the page must state that this grants full API access")
+            assert_true("approval step does not apply" in html,
+                        "the page must warn that the Assistant's approval step "
+                        "does not cover direct API calls")
+            assert_true("the same permissions as your account" in html,
+                        "the tool-door sentence must still be shown when `mcp` "
+                        "is granted too")
+            assert_true(f"Access to: {API_ROOT_RESOURCE}" in html,
+                        "the page must name the API root as the resource")
+
+            # --- approve and exchange ---------------------------------------
+            assert_true(opts.client.login(TEST_USER, TEST_PWORD),
+                        "the wire user must be able to sign in")
+            resp = opts.client.post(f"{ROOT}/approve", params)
+            assert_eq(resp.status_code, 200,
+                      f"an interactive session must be able to approve full API "
+                      f"access, got {resp.status_code} {resp.response}")
+            code = parse_qs(
+                urlsplit(resp.response.data.redirect_url).query)["code"][0]
+            opts.client.logout()
+
+            resp = opts.client.post(f"{ROOT}/token", data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "code_verifier": verifier,
+                "client_id": opts.wire_client_id,
+                "redirect_uri": REDIRECT,
+                "resource": API_ROOT_RESOURCE,
+            })
+            assert_eq(resp.status_code, 200,
+                      f"the exchange must succeed, got {resp.status_code} "
+                      f"{resp.response}")
+            assert_eq(resp.response.get("scope"), "mcp api",
+                      f"the token response must echo both scopes, "
+                      f"got {resp.response.get('scope')!r}")
+            access = resp.response.get("access_token")
+            claims = JWToken().decode(access, validate=False)
+            assert_eq(claims.get("aud"), API_ROOT_RESOURCE,
+                      f"the audience must be the API root, "
+                      f"got {claims.get('aud')!r}")
+
+            # --- it IS the person's session, everywhere beneath the root -----
+            resp = opts.client.get("/api/account/user/me",
+                                   headers={"Authorization": f"Bearer {access}"})
+            assert_eq(resp.status_code, 200,
+                      f"an api token must authenticate at an ordinary REST "
+                      f"endpoint, got {resp.status_code} {resp.response}")
+            assert_eq(resp.response.data.id, user.pk,
+                      f"the api token must act as the approving user, "
+                      f"got {resp.response.data!r}")
+
+            user.add_permission("assistant")
+            try:
+                resp = opts.client.post(
+                    MCP_PATH, {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                    headers={"Authorization": f"Bearer {access}"})
+                assert_eq(resp.status_code, 200,
+                          f"an `mcp api` grant must still open the tool door "
+                          f"that sits beneath its root, got {resp.status_code} "
+                          f"{resp.body}")
+
+                # api WITHOUT mcp is full REST reach and no tools.
+                client = OAuthClient.objects.get(client_id=opts.wire_client_id)
+                api_only = tokens.create_grant(
+                    user, client, ["api"], API_ROOT_RESOURCE, 1700000000)
+                api_only_token = tokens.mint_access_token(api_only)
+                resp = opts.client.post(
+                    MCP_PATH, {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                    headers={"Authorization": f"Bearer {api_only_token}"})
+                assert_eq(resp.status_code, 403,
+                          f"an api-only grant must be refused at the tool door, "
+                          f"got {resp.status_code} {resp.body}")
+                challenge = _headers(opts).get("www-authenticate", "")
+                assert_true('error="insufficient_scope"' in challenge,
+                            f"the door's refusal must name insufficient_scope, "
+                            f"got {challenge!r}")
+                resp = opts.client.get(
+                    "/api/account/user/me",
+                    headers={"Authorization": f"Bearer {api_only_token}"})
+                assert_eq(resp.status_code, 200,
+                          f"an api-only grant must still be the person's session "
+                          f"on the REST API, got {resp.status_code}")
+                tokens.revoke_grant(api_only, reason="test")
+            finally:
+                user.remove_all_permissions()
+
+            # --- what it may never do ---------------------------------------
+            headers = {"Authorization": f"Bearer {access}"}
+            resp = opts.client.post(f"{ROOT}/approve", params, headers=headers)
+            assert_true(resp.status_code in (401, 403),
+                        f"an api token must never approve a NEW grant — one "
+                        f"credential must not mint another without a person, "
+                        f"got {resp.status_code}")
+
+            resp = opts.client.post("/api/account/jwt/refresh",
+                                    {"refresh_token": access})
+            assert_eq(resp.status_code, 401,
+                      f"an api token must never be exchanged for a session pair, "
+                      f"got {resp.status_code}")
+
+            resp = opts.client.get(AS_METADATA, headers=headers)
+            assert_eq(resp.status_code, 401,
+                      f"an api token is worth nothing OUTSIDE the root, "
+                      f"got {resp.status_code}")
+            assert_true(_headers(opts).get("www-authenticate") is None,
+                        "a path outside every live resource must not advertise "
+                        "one")
+
+            # --- revocation is immediate, and the 401 says where to go -------
+            grant = OAuthGrant.objects.filter(
+                user=user, resource=API_ROOT_RESOURCE,
+                is_active=True).order_by("-created").first()
+            assert_true(grant is not None, "the exchange must have created a grant")
+            tokens.revoke_grant(grant, reason="admin")
+            resp = opts.client.get("/api/account/user/me", headers=headers)
+            assert_eq(resp.status_code, 401,
+                      f"a revoked api grant must stop working immediately, "
+                      f"got {resp.status_code}")
+            assert_eq(
+                _headers(opts).get("www-authenticate"),
+                'Bearer error="invalid_token", '
+                f'resource_metadata="{BASE}{API_PRM}"',
+                f"a refusal beneath a live root must point the client at the "
+                f"ROOT's metadata, got {_headers(opts).get('www-authenticate')!r}")
     finally:
         _clear_shadowing_rows()

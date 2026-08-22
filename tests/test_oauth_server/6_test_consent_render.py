@@ -29,6 +29,9 @@ REDIRECT = "http://127.0.0.1:8400/cb"
 RESOURCE_PATH = "/api/testit/oauth-consent-probe"
 ORIGIN = "https://oauth.testit.example"
 RESOURCE = ORIGIN + RESOURCE_PATH
+# The API-root shape: a PREFIX resource offering both scopes.
+ROOT_PATH = "/api/testit/oauth-consent-root"
+ROOT_RESOURCE = ORIGIN + ROOT_PATH
 
 SCRIPT_TAG_RE = re.compile(r"<script([^>]*)>", re.IGNORECASE)
 
@@ -42,13 +45,16 @@ def _challenge(verifier):
     return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
 
-def _registry(enabled=True, extra=None):
+def _registry(enabled=True, extra=None, prefix=False):
     from mojo.apps.account.services.oauth_server import resources
 
     registry = resources.ResourceRegistry()
     registry.register(RESOURCE_PATH, ["mcp"], lambda: enabled)
     if extra:
         registry.register(extra, ["mcp"], lambda: enabled)
+    if prefix:
+        registry.register(ROOT_PATH, ["mcp", "api"], lambda: enabled,
+                          prefix=True)
     return registry
 
 
@@ -449,6 +455,106 @@ def test_hostile_redirect_uri_is_refused(opts):
                   f"the database — got {response.status_code}")
         assert_true(response.get("Location") is None,
                     f"a redirect_uri carrying {why} must not be redirected to")
+
+
+@th.django_unit_test("the api scope says what it means, and binds only to the root")
+def test_api_scope_consent(opts):
+    from mojo.apps.account.models import OAuthClient
+    from mojo.apps.account.services.oauth_server import codes, consent
+
+    def _html(**overrides):
+        request, _v = _authorize_request(**overrides)
+        response = consent.handle_authorize(
+            request, ORIGIN, registry=_registry(prefix=True))
+        return response, response.content.decode("utf-8")
+
+    # Substrings free of apostrophes: the template autoescapes, so "Assistant's"
+    # reaches the HTML as "Assistant&#x27;s" and a literal match would silently
+    # never fire.
+    tools_line = "the same permissions as your account"
+    api_line = "Full API access as"
+    disclaimer = "approval step does not apply"
+
+    # `api` alone, with no `resource`: the root is the only eligible entry, so
+    # the omitted parameter still defaults unambiguously.
+    response, html = _html(scope="api", resource=None)
+    assert_eq(response.status_code, 200,
+              f"an api request must render the consent page, "
+              f"got {response.status_code}")
+    assert_true(api_line in html,
+                "the page must say in plain words that this is full API access")
+    assert_true(disclaimer in html,
+                "the page must warn that the Assistant's approval step does not "
+                "apply to direct API calls — that is the whole difference")
+    assert_true(tools_line not in html,
+                "an api-only request must not claim the tool door was granted")
+    assert_true(f"Access to: {ROOT_RESOURCE}" in html,
+                "the page must name the API root as the resource it will open")
+
+    # Both scopes: two sentences, tools first.
+    response, html = _html(scope="mcp api", resource=ROOT_RESOURCE)
+    assert_eq(response.status_code, 200,
+              f"asking for both scopes must render the page, "
+              f"got {response.status_code}")
+    assert_true(tools_line in html and api_line in html,
+                "both granted scopes must be stated, not summarised into one")
+    assert_true(html.index(tools_line) < html.index(api_line),
+                "the smaller ask reads first — tools, then full API")
+
+    # The binding rule, from both sides.
+    for overrides, expected, why in (
+            ({"scope": "mcp", "resource": ROOT_RESOURCE}, "invalid_scope",
+             "an mcp-only request must not bind the API root — full reach "
+             "without full-reach consent is the thing this prevents"),
+            ({"scope": "api", "resource": RESOURCE}, "invalid_scope",
+             "an api request must not bind an exact resource, which cannot "
+             "honour that scope"),
+            ({"scope": "api", "resource": "https://elsewhere.example/api/x"},
+             "invalid_target", "an unregistered resource is still unknown")):
+        request, _v = _authorize_request(**overrides)
+        response = consent.handle_authorize(
+            request, ORIGIN, registry=_registry(prefix=True))
+        assert_eq(response.status_code, 302,
+                  f"{why}: expected a redirected error, got {response.status_code}")
+        query = parse_qs(urlsplit(response["Location"]).query)
+        assert_eq(query.get("error"), [expected],
+                  f"{why}: expected {expected}, got {query.get('error')}")
+
+    # With no prefix resource registered at all, `api` is simply not offered.
+    request, _v = _authorize_request(scope="api", resource=None)
+    response = consent.handle_authorize(request, ORIGIN, registry=_registry())
+    assert_eq(response.status_code, 302,
+              f"an unoffered scope must redirect an error, got {response.status_code}")
+    query = parse_qs(urlsplit(response["Location"]).query)
+    assert_eq(query.get("error"), ["invalid_scope"],
+              f"an installation with no prefix resource must refuse `api` as "
+              f"unoffered, got {query.get('error')}")
+
+    # An mcp-only client that omits `resource` must still be served: adding the
+    # API root beside the door did not make every pre-2025-06-18 client
+    # ambiguous, because eligibility is scope-driven.
+    request, _v = _authorize_request(resource=None)
+    response = consent.handle_authorize(
+        request, ORIGIN, registry=_registry(prefix=True))
+    assert_eq(response.status_code, 200,
+              f"an mcp-only client omitting `resource` must still default to "
+              f"the sole exact resource, got {response.status_code}")
+    assert_true(f"Access to: {RESOURCE}" in response.content.decode("utf-8"),
+                "the mcp default must be the exact door, never the API root")
+
+    # Approve stores exactly what was granted.
+    request, verifier = _approve_request(
+        token=_session_token(), scope="mcp api", resource=ROOT_RESOURCE)
+    result = consent.handle_approve(
+        request, ORIGIN, registry=_registry(prefix=True))
+    raw_code = parse_qs(urlsplit(result["redirect_url"]).query)["code"][0]
+    client = OAuthClient.objects.get(client_id=CLIENT_ID)
+    row = codes.consume_code(raw_code, client, REDIRECT, verifier)
+    assert_eq(row.scope, "mcp api",
+              f"the code must carry both scopes in the requested order — the "
+              f"refresh endpoint compares that string, got {row.scope!r}")
+    assert_eq(row.resource, ROOT_RESOURCE,
+              f"an api grant must be bound to the API root, got {row.resource!r}")
 
 
 @th.django_unit_test("a repeated scope token grants the scope once")

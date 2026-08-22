@@ -7,7 +7,9 @@ resource. ``validate_access`` below is the body of the ``mcp`` branch of
 ``User.validate_jwt``: it is the single chokepoint every ``Bearer`` request
 passes through, so a token minted for the MCP door authenticates there and
 nowhere else — no endpoint can forget the check because no endpoint performs
-it.
+it. A token minted for the API-root PREFIX resource (the consented ``api``
+scope) reaches every path beneath that root and still nothing outside it, by
+the same one check.
 
 The refresh token is an opaque secret, stored as a hash and rotated atomically
 on every use, with an absolute 30-day ceiling that is never slid. A short grace
@@ -19,7 +21,7 @@ import hashlib
 import secrets
 from urllib.parse import urlsplit
 
-from django.db.models import F
+from django.db.models import F, Q
 
 from mojo.helpers import dates, logit
 from mojo.apps.account.utils.jwtoken import JWToken
@@ -315,8 +317,17 @@ def _iso(value):
     return value.isoformat() if value is not None else None
 
 
-def _scope_to_path(query, resource_path):
-    """Narrow a grant queryset to one registered resource, by PATH.
+def _paths(resource_path):
+    """Normalise the `resource_path` argument to None or a list of paths."""
+    if resource_path is None:
+        return None
+    if isinstance(resource_path, str):
+        return [resource_path]
+    return list(resource_path)
+
+
+def _scope_to_path(query, paths):
+    """Narrow a grant queryset to one or several registered resources, by PATH.
 
     By path and never by full URL: the resource URL embeds ``BASE_URL``, so
     matching on it would make a public-address change silently hide grants that
@@ -324,17 +335,28 @@ def _scope_to_path(query, resource_path):
     SUPERSET — ``https://x/nested/api/assistant/mcp`` also ends with
     ``/api/assistant/mcp`` — so every caller that lists or acts on the rows
     re-confirms the parsed path through ``_has_path``.
+
+    Several paths become ONE ``OR`` predicate rather than several queries, so a
+    caller that spans two resources still gets one honest ``COUNT(*)`` and one
+    bulk ``UPDATE``. An empty list selects nothing, which is what asking for no
+    resources means.
     """
-    if resource_path is None:
+    if paths is None:
         return query
-    return query.filter(resource__endswith=resource_path)
+    predicate = None
+    for path in paths:
+        clause = Q(resource__endswith=path)
+        predicate = clause if predicate is None else (predicate | clause)
+    if predicate is None:
+        return query.none()
+    return query.filter(predicate)
 
 
-def _has_path(resource, resource_path):
-    if resource_path is None:
+def _has_path(resource, paths):
+    if paths is None:
         return True
     try:
-        return urlsplit(resource or "").path == resource_path
+        return urlsplit(resource or "").path in paths
     except ValueError:
         return False
 
@@ -342,25 +364,27 @@ def _has_path(resource, resource_path):
 def list_grants(user=None, include_inactive=False, resource_path=None, limit=None):
     """Grants, newest first, as plain dicts for the Admin surface.
 
-    ``resource_path`` scopes the answer to one registered resource; ``limit``
-    bounds it in SQL rather than in Python, so an installation with a large
-    grant table never loads rows the caller is going to drop. Both default to
-    the previous behaviour: every grant, unbounded.
+    ``resource_path`` scopes the answer to one registered resource — one path
+    or several, as a list — and ``limit`` bounds it in SQL rather than in
+    Python, so an installation with a large grant table never loads rows the
+    caller is going to drop. Both default to the previous behaviour: every
+    grant, unbounded.
     """
     from mojo.apps.account.models.oauth_grant import OAuthGrant
 
     now = dates.utcnow()
+    paths = _paths(resource_path)
     query = OAuthGrant.objects.all().select_related("user", "client")
     if user is not None:
         query = query.filter(user=user)
     if not include_inactive:
         query = query.filter(is_active=True, refresh_expires__gt=now)
-    query = _scope_to_path(query, resource_path).order_by("-created")
+    query = _scope_to_path(query, paths).order_by("-created")
     if limit is not None:
         query = query[:int(limit)]
     rows = []
     for grant in query:
-        if not _has_path(grant.resource, resource_path):
+        if not _has_path(grant.resource, paths):
             continue
         rows.append({
             "id": grant.pk,
@@ -401,6 +425,7 @@ def count_grants(user=None, include_inactive=False, resource_path=None):
 
     Counted on the same SQL predicate ``list_grants`` selects on, so a caller
     that slices with ``limit`` can still report an honest total.
+    ``resource_path`` takes one path or several, exactly as there.
     """
     from mojo.apps.account.models.oauth_grant import OAuthGrant
 
@@ -409,7 +434,7 @@ def count_grants(user=None, include_inactive=False, resource_path=None):
         query = query.filter(user=user)
     if not include_inactive:
         query = query.filter(is_active=True, refresh_expires__gt=dates.utcnow())
-    return _scope_to_path(query, resource_path).count()
+    return _scope_to_path(query, _paths(resource_path)).count()
 
 
 def _log_bulk_revocation(owners, actor):
@@ -432,7 +457,7 @@ def _log_bulk_revocation(owners, actor):
 
 
 def revoke_all_grants(actor=None, user=None, resource_path=None):
-    """Revoke every live grant (optionally one user's, or one resource path).
+    """Revoke every live grant (optionally one user's, or given resource paths).
 
     ONE bulk UPDATE rather than a per-row ``revoke_grant`` loop: deactivating
     the row is what every credential check actually reads — ``validate_access``
@@ -444,14 +469,15 @@ def revoke_all_grants(actor=None, user=None, resource_path=None):
     """
     from mojo.apps.account.models.oauth_grant import OAuthGrant
 
+    paths = _paths(resource_path)
     query = OAuthGrant.objects.filter(is_active=True)
     if user is not None:
         query = query.filter(user=user)
-    query = _scope_to_path(query, resource_path)
+    query = _scope_to_path(query, paths)
     targets = []
     owners = {}
     for pk, user_id, resource in query.values_list("pk", "user_id", "resource"):
-        if not _has_path(resource, resource_path):
+        if not _has_path(resource, paths):
             continue
         targets.append(pk)
         owners[user_id] = owners.get(user_id, 0) + 1
@@ -474,23 +500,34 @@ def validate_access(token, jwt_data, request, registry=None):
       1. no request at all -> refuse. The refresh endpoint and the realtime
          consumer both call validate_jwt without one, so this is what stops an
          mcp token becoming a session pair or opening a WebSocket.
-      2. `aud` must be a single string, and its PATH must equal the request
-         path exactly. A list `aud` is refused: PyJWT would otherwise match by
-         membership, which is not confinement.
-      3. that path must be a registered resource whose switch is on. From here
-         on a refusal also stamps the RFC 9728 challenge, because the caller is
-         at a live resource door and is entitled to be told where to
+      2. `aud` must be a single string with a path. A list `aud` is refused:
+         PyJWT would otherwise match by membership, which is not confinement.
+      3. that path must resolve EXACTLY to a registered resource whose switch
+         is on. The lookup is keyed by the AUDIENCE's own path, never by the
+         request's, so a token names the one entry it was minted for.
+      4. that entry must COVER the request path — equal for an exact resource,
+         equal or strictly beneath for a prefix one. Steps 3 and 4 together are
+         what the single "the aud path must equal request.path" comparison used
+         to be, generalised by exactly one resource kind.
+      5. from here on a refusal also stamps the RFC 9728 challenge, because the
+         caller is at a live resource door and is entitled to be told where to
          authenticate.
-      4. the grant must exist, be active, name the same resource, and belong to
+      6. the grant must exist, be active, name the same resource, and belong to
          an active user and an active client.
-      5. signature, expiry and audience are verified together with the USER's
+      7. a grant bound to a PREFIX resource must carry the `api` scope. Defence
+         in depth: consent already refuses to create such a row, and no
+         resource server sits at the API root to answer 403, so this is the
+         last place a full-reach grant without full-reach consent can be
+         stopped.
+      8. signature, expiry and audience are verified together with the USER's
          auth_key — so a disable, a closure or a `revoke_sessions` kills every
-         live mcp token on the next request.
-      6. stamp `request.oauth_grant` for the resource server to read.
+         live mcp token on the next request — then `request.oauth_grant` is
+         stamped for the resource server to read.
 
-    Scope is deliberately NOT checked here: the resource server reads
-    `request.oauth_grant.scopes` so it can answer 403 `insufficient_scope`
-    rather than a blanket 401.
+    Scope is otherwise deliberately NOT checked here: an exact resource server
+    reads `request.oauth_grant.scopes` itself so it can answer 403
+    `insufficient_scope` rather than a blanket 401. Step 7 is the exception
+    precisely because a prefix resource has no such server.
     """
     from mojo.apps.account.models.oauth_grant import OAuthGrant
 
@@ -504,15 +541,19 @@ def validate_access(token, jwt_data, request, registry=None):
         path = urlsplit(aud).path
     except ValueError:
         return None, INVALID_TOKEN
-    if not path or getattr(request, "path", None) != path:
+    if not path:
         return None, INVALID_TOKEN
 
     entry = resources.resolve(path, registry)
     if entry is None or not resources.is_enabled(entry, registry):
         return None, INVALID_TOKEN
+    if not resources.covers(entry, getattr(request, "path", None)):
+        return None, INVALID_TOKEN
 
     # Past this point the caller IS at a live resource door, so every refusal
-    # carries the challenge that tells a spec client where to go.
+    # carries the challenge that tells a spec client where to go. `path` is the
+    # RESOURCE's own path, so a refusal beneath a prefix resource points at the
+    # resource's metadata rather than at the request's path, which has none.
     def _refuse(error=INVALID_TOKEN):
         try:
             request.www_authenticate = www_authenticate(path, error="invalid_token")
@@ -528,6 +569,12 @@ def validate_access(token, jwt_data, request, registry=None):
     if grant is None or grant.resource != aud:
         return _refuse()
     if not grant.user.is_active or not grant.client.is_active:
+        return _refuse()
+
+    # `scopes` is a JSONField: insisting on a list is what stops a row that
+    # somehow held the string "api…" satisfying a substring membership test.
+    scopes = grant.scopes if isinstance(grant.scopes, list) else []
+    if entry.prefix and resources.API_SCOPE not in scopes:
         return _refuse()
 
     manager = JWToken(grant.user.auth_key)

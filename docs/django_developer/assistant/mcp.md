@@ -87,8 +87,8 @@ Two orderings are load-bearing and must not be rearranged:
 
 All three consumers of the path — the `@md.URL` route, the OAuth resource
 registration in `apps.py`, and the challenge's `resource_metadata` — call
-`mcp_auth.configured_path()`, because `validate_access` compares the token
-audience's path to `request.path` **exactly**: a registration that disagreed
+`mcp_auth.configured_path()`, because `validate_access` resolves the token
+audience's own path **exactly**: a registration that disagreed
 with the route by one trailing slash would refuse every token this server had
 just minted. The helper appends the slash itself when `MOJO_APPEND_SLASH` is
 set (which also sidesteps `_register_route`'s own append step, since the pattern
@@ -141,6 +141,7 @@ existing connection back.
 | No credential at all | `mcp/auth.refusal` | 401 `invalid_token` | yes |
 | A session JWT, a `user_api_key`, an `ApiKey`, a group token | `mcp/auth.refusal` | 401 `invalid_token` | yes |
 | An MCP grant without the `mcp` scope | `mcp/auth.refusal` | 403 `insufficient_scope` | yes, with `scope="mcp"` |
+| An `api`-only grant at the API root — it *reaches* this path, but consented to REST access, not tools | `mcp/auth.refusal` | 403 `insufficient_scope` | yes, with `scope="mcp"` |
 | A grant user holding neither `view_admin` nor `assistant` | `mcp/auth.refusal` | 403 `permission_denied` | **no** |
 
 The split is deliberate. A bad bearer never reaches a view, so only the
@@ -151,6 +152,17 @@ re-authenticating cannot fix a permission.
 `is_key_backed_session()` and `is_request_user()` are checked even though an MCP
 grant can never be key-backed: a custom `AUTH_BEARER_HANDLERS` identity that
 happened to carry an `oauth_grant` attribute must not open this door.
+
+**The door sits beneath the API root.** `apps.py` registers two resources behind
+the one `ASSISTANT_MCP_ENABLED` switch: this exact path, offering `mcp`, and
+`mojo.helpers.request.API_ROOT` as a **prefix** resource offering `mcp` and
+`api`. A grant at the root with `mcp api` therefore authenticates here as well —
+the chokepoint lets it through because the root covers this path — and the scope
+check above is what decides whether it may use the tools. That "one grant serves
+both" property holds only while `ASSISTANT_MCP_PATH` stays beneath `API_ROOT`,
+which the shipped default does; move it outside and a root grant answers 401
+here (fail-closed), while both resources keep working separately. See
+[account/oauth_server.md](../account/oauth_server.md) for the scope rules.
 
 The permission predicate is exactly the chat endpoint's —
 `has_permission(["view_admin", "assistant"])`, ANY-of, the same rule
@@ -381,7 +393,7 @@ slot with a null id, and a batch of only notifications is a 202. `MAX_BATCH` is
 | `mojo/apps/assistant/mcp/server.py` | Methods, projection, per-grant conversation, dispatch. |
 | `mojo/apps/assistant/mcp/auth.py` | The door's acceptance checks and the raw JSON response builder. |
 | `mojo/apps/assistant/rest/mcp.py` | The route, the enabled gate, the rate bucket. |
-| `mojo/apps/assistant/apps.py` | The two descriptors and the OAuth resource registration. |
+| `mojo/apps/assistant/apps.py` | The two descriptors and **two** OAuth resource registrations — the exact MCP door and the prefix API root — behind one `enabled` callable. |
 | `mojo/apps/account/services/oauth_server/` | Token issuance, the resource registry, `validate_access`, `www_authenticate`. |
 
 ## Tests

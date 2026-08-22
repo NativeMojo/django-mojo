@@ -9,8 +9,16 @@ installation's own sign-in and consent pages, exchange a PKCE-bound code for
 tokens, refresh, revoke.
 
 **The credentials you receive are confined.** An access token issued here works
-at the one resource URL it names and nowhere else on the API. Presenting it to
-any other endpoint returns `401`. That is by design, not a bug to route around.
+only within the one resource URL it names. There are two kinds, and you choose
+which by the scope you ask for:
+
+| Scope | Resource | Reach |
+|---|---|---|
+| `mcp` | the Assistant's MCP endpoint | That one path. Every other endpoint answers `401`. |
+| `api` | the **API root** (`https://example.com/api`) | Every path beneath the root, as the user — exactly what their own session token can do, and nothing more. |
+
+Either way, presenting the token outside its resource returns `401`. That is by
+design, not a bug to route around.
 
 > This is different from [OAuth / Social Login](oauth.md), which is about
 > signing users in *with* Google or Apple. This page is about a third-party
@@ -50,13 +58,17 @@ If you were sent here by a `401` carrying a `WWW-Authenticate` header, its
   "code_challenge_methods_supported": ["S256"],
   "token_endpoint_auth_methods_supported": ["none"],
   "revocation_endpoint_auth_methods_supported": ["none"],
-  "scopes_supported": ["mcp"],
+  "scopes_supported": ["mcp", "api"],
   "authorization_response_iss_parameter_supported": true,
   "client_id_metadata_document_supported": true
 }
 ```
 
-**Protected-resource metadata:**
+`scopes_supported` is the union of what the installation's **enabled** resources
+offer. If `api` is absent, this installation is not offering full API access —
+asking for it answers `invalid_scope`.
+
+**Protected-resource metadata**, for the MCP endpoint:
 
 ```json
 {
@@ -66,6 +78,21 @@ If you were sent here by a `401` carrying a `WWW-Authenticate` header, its
   "bearer_methods_supported": ["header"]
 }
 ```
+
+…and for the API root, at `/.well-known/oauth-protected-resource/api`:
+
+```json
+{
+  "resource": "https://example.com/api",
+  "authorization_servers": ["https://example.com/api/account/oauth"],
+  "scopes_supported": ["mcp", "api"],
+  "bearer_methods_supported": ["header"]
+}
+```
+
+The root's document exists at that one path only — there is no
+protected-resource metadata beneath it, so do not probe
+`/.well-known/oauth-protected-resource/api/account/user/me`.
 
 A **404 from either document** means this installation is not offering remote
 application access — either no public address is configured or the feature is
@@ -164,16 +191,30 @@ GET /api/account/oauth/authorize
 - **PKCE is mandatory and S256-only.** `plain` and a missing challenge are
   refused. The verifier is 43–128 characters from `[A-Za-z0-9._~-]`.
 - **`resource`** (RFC 8707) must be the canonical resource URL exactly as the
-  protected-resource metadata reports it. If you omit it and the installation
-  has exactly one resource enabled, that one is used; if several are enabled,
-  you get `invalid_target`.
-- **`scope`** may be omitted (defaults to `mcp`). Any other value is
+  protected-resource metadata reports it, and it is **echoed, never upgraded**.
+  If you omit it, the server defaults to the single resource that is eligible
+  for the scopes you asked for; if several are eligible, you get
+  `invalid_target`.
+- **`scope`** may be omitted (defaults to `mcp`), and may name `mcp`, `api`, or
+  both (`scope=mcp api`). A scope this installation does not offer is
   `invalid_scope`.
+- **`scope` and `resource` must agree.** `api` binds the API root and nothing
+  else; `mcp` alone binds an exact endpoint and never the root. Naming the MCP
+  endpoint while asking for `api` — or the root while asking for `mcp` alone —
+  answers `invalid_scope`. To ask for full API access:
+
+  ```
+  &resource=https://example.com/api&scope=api
+  ```
+
+  or, for one credential that does both, `&scope=mcp api`.
 - **`state`** is echoed verbatim on every response, and is capped at 512
   characters.
 
 The user signs in on the installation's own pages if needed, then sees a consent
-screen naming your client and what the access means. The screen also shows the
+screen naming your client and what the access means — one sentence per scope, and
+for `api` an explicit statement that the Assistant's approval step does not apply
+to direct API calls. The screen also shows the
 host your `redirect_uri` points at, the resource being granted, and — for a DCR
 client — that your name is self-declared. Publishing a **Client ID Metadata
 Document** is what replaces that caveat with "Verified from <your URL>", so
@@ -222,7 +263,7 @@ JSON bodies are accepted too. `200`:
   "token_type": "Bearer",
   "expires_in": 3600,
   "refresh_token": "hR3f…",
-  "scope": "mcp"
+  "scope": "mcp api"
 }
 ```
 
@@ -296,9 +337,42 @@ POST /api/assistant/mcp
 Authorization: Bearer <access token>
 ```
 
-**At any other path this token is worth nothing** — a `401` with the generic
-`Invalid token`. Do not try to use it against `/api/account/user/me`, the API-key
-endpoints, or anything else; those are not oversights.
+**An `mcp`-only token is worth nothing at any other path** — a `401` with the
+generic `Invalid token`. Do not try to use it against `/api/account/user/me`, the
+API-key endpoints, or anything else; those are not oversights.
+
+## Full API access (`api`)
+
+A token bound to the API root with the `api` scope authenticates on **every**
+endpoint beneath the root, exactly as the user's own session token would:
+
+```http
+GET /api/account/user/me
+Authorization: Bearer <access token>
+```
+
+**What it equals.** The same permissions that account already has through the
+API, the same group scoping, the same `440` when an endpoint wants a recent
+sign-in (the token carries the `auth_time` of the session that approved it —
+when it goes stale, the only way forward is re-consent). It widens nothing.
+
+**What it cannot do:**
+
+| Attempt | Result |
+|---|---|
+| `POST /api/account/oauth/approve` — approving another grant | `401`/`403`. Only a real interactive session may approve; one credential cannot mint another. |
+| `POST /api/account/jwt/refresh` — trading up for a session pair | `401`. |
+| Opening a WebSocket | Refused. |
+| Any path **outside** the root — `/.well-known/…`, a differently-mounted app | `401`, with **no** `WWW-Authenticate` header. |
+| Calling the Assistant's MCP endpoint **without** the `mcp` scope | `403 insufficient_scope`. Ask for `scope=mcp api` if you want both. |
+
+**The approval step does not apply.** Changes an Assistant *tool* makes still
+wait for an operator's approval in the Admin; a direct API call under `api` does
+not. The consent screen says so.
+
+Everything else is unchanged: the token expires in an hour, the refresh token
+rotates, the grant expires 30 days after consent, and an operator can disconnect
+it from the Admin at any time.
 
 ### The challenge header
 
@@ -306,6 +380,13 @@ A `401` from a protected resource carries:
 
 ```
 WWW-Authenticate: Bearer error="invalid_token", resource_metadata="https://example.com/.well-known/oauth-protected-resource/api/assistant/mcp"
+```
+
+For a token bound to the API root the `resource_metadata` names the **root's**
+document, whatever path you were refused at:
+
+```
+WWW-Authenticate: Bearer error="invalid_token", resource_metadata="https://example.com/.well-known/oauth-protected-resource/api"
 ```
 
 and a `403` for a token whose scopes are insufficient carries:

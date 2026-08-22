@@ -22,6 +22,13 @@ OTHER_CLIENT_ID = "testit-oauth-tokens-other"
 RESOURCE_PATH = "/api/testit/oauth-tokens-probe"
 ORIGIN = "https://oauth.testit.example"
 RESOURCE = ORIGIN + RESOURCE_PATH
+# The second, PREFIX resource: the API-root shape an `api` grant is bound to.
+ROOT_PATH = "/api/testit/oauth-tokens-root"
+ROOT_RESOURCE = ORIGIN + ROOT_PATH
+# A third path this module must never sweep, to prove the scoping is a
+# whitelist rather than "everything the installation protects".
+UNRELATED_PATH = "/api/testit/oauth-tokens-elsewhere"
+UNRELATED_RESOURCE = ORIGIN + UNRELATED_PATH
 
 
 def _registry(enabled=True):
@@ -29,6 +36,7 @@ def _registry(enabled=True):
 
     registry = resources.ResourceRegistry()
     registry.register(RESOURCE_PATH, ["mcp"], lambda: enabled)
+    registry.register(ROOT_PATH, ["mcp", "api"], lambda: enabled, prefix=True)
     return registry
 
 
@@ -58,11 +66,12 @@ def _fixtures(username=TEST_USER):
             OAuthClient.objects.get(client_id=OTHER_CLIENT_ID))
 
 
-def _grant(username=TEST_USER):
+def _grant(username=TEST_USER, scopes=None, resource=RESOURCE):
     from mojo.apps.account.services.oauth_server import tokens
 
     user, client, _other = _fixtures(username)
-    return tokens.create_grant(user, client, ["mcp"], RESOURCE, 1700000000)
+    return tokens.create_grant(
+        user, client, scopes or ["mcp"], resource, 1700000000)
 
 
 @th.django_unit_test("an access token carries exactly the claims the resource server reads")
@@ -104,6 +113,78 @@ def test_access_token_claims(opts):
     reread = OAuthGrant.objects.get(pk=grant.pk)
     assert_true(reread.access_jti != payload.get("jti"),
                 "minting a new access token must retire the previous jti")
+
+
+@th.django_unit_test("an api grant mints a root-audience token carrying both scopes")
+def test_api_grant_claims_and_refresh(opts):
+    from mojo.apps.account.utils.jwtoken import JWToken
+    from mojo.apps.account.services.oauth_server import tokens
+
+    grant = _grant(scopes=["mcp", "api"], resource=ROOT_RESOURCE)
+    _user, client, _other = _fixtures()
+    payload = JWToken().decode(
+        tokens.mint_access_token(grant), validate=False)
+
+    assert_eq(payload.get("aud"), ROOT_RESOURCE,
+              f"an api grant's audience must be the API root, not the door it "
+              f"happens to sit above, got {payload.get('aud')!r}")
+    assert_eq(payload.get("scope"), "mcp api",
+              f"both granted scopes must ride space-joined, in the order they "
+              f"were requested, got {payload.get('scope')!r}")
+    assert_eq(payload.get("token_type"), "mcp",
+              f"the api scope introduces no new token type — the chokepoint is "
+              f"the same branch, got {payload.get('token_type')!r}")
+
+    pair = tokens.issue_tokens(grant)
+    assert_eq(pair["scope"], "mcp api",
+              f"the token response must echo the granted scope string, "
+              f"got {pair['scope']!r}")
+
+    # The refresh endpoint compares the client's echoed `scope` to the stored
+    # string, so a client cannot quietly widen or narrow what it holds.
+    error = None
+    try:
+        tokens.refresh_grant(pair["refresh_token"], client, scope="api mcp",
+                             registry=_registry())
+    except tokens.TokenError as err:
+        error = err.code
+    assert_eq(error, "invalid_grant",
+              f"a refresh naming a DIFFERENT scope string must be refused, "
+              f"got {error!r}")
+
+
+@th.django_unit_test("the Admin grant API can span both resources in one query")
+def test_admin_api_spans_resources(opts):
+    from mojo.apps.account.models import OAuthGrant, User
+    from mojo.apps.account.services.oauth_server import tokens
+
+    user = User.objects.get(username=TEST_USER)
+    OAuthGrant.objects.filter(user=user).delete()
+
+    door = _grant()
+    root = _grant(scopes=["mcp", "api"], resource=ROOT_RESOURCE)
+    _grant(resource=UNRELATED_RESOURCE)
+    both = [RESOURCE_PATH, ROOT_PATH]
+
+    rows = tokens.list_grants(user=user, resource_path=both)
+    assert_eq(sorted(row["id"] for row in rows), sorted([door.pk, root.pk]),
+              f"a two-path scope must list both resources' grants and nothing "
+              f"else, got {[row['id'] for row in rows]}")
+    assert_eq(tokens.count_grants(user=user, resource_path=both), 2,
+              "the count must be taken on the same two-path predicate")
+    assert_eq(tokens.count_grants(user=user, resource_path=[]), 0,
+              "asking for no resources at all must select nothing, not "
+              "everything")
+    assert_eq(tokens.count_grants(user=user, resource_path=RESOURCE_PATH), 1,
+              "a bare string must still mean exactly that one path")
+
+    assert_eq(tokens.revoke_all_grants(user=user, resource_path=both), 2,
+              "the sweep must move both resources' rows in one UPDATE")
+    survivors = tokens.list_grants(user=user)
+    assert_eq([row["resource"] for row in survivors], [UNRELATED_RESOURCE],
+              f"the sweep must leave a grant at an unlisted resource alone, "
+              f"got {[row['resource'] for row in survivors]}")
+    OAuthGrant.objects.filter(user=user).delete()
 
 
 @th.django_unit_test("issue_tokens returns the RFC 6749 shape")

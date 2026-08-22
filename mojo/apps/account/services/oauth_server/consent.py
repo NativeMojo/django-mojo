@@ -26,12 +26,16 @@ from mojo import errors as merrors
 from mojo.apps.account.utils.jwtoken import JWToken
 
 from . import clients, codes, resources
+from .resources import API_SCOPE, DEFAULT_SCOPE
 
 MAX_STATE_LENGTH = 512
-DEFAULT_SCOPE = "mcp"
-ACCESS_COPY = (
+TOOLS_COPY = (
     "Use the Assistant's tools as {email} — the same permissions as your "
     "account; changes still need your approval in the Admin")
+API_COPY = (
+    "Full API access as {email} — everything your account can do through the "
+    "API, and nothing more. The Assistant's approval step does not apply to "
+    "direct API calls.")
 
 
 class RedirectableError(Exception):
@@ -136,22 +140,63 @@ def _resolve_client_and_redirect(data):
         "it has not registered, so we can't continue.")
 
 
-def _resolve_resource(origin, data, registry=None):
-    """The RFC 8707 `resource`: echoed exactly, or defaulted when unambiguous."""
+def _access_lines(granted):
+    """The consent sentences for the scopes actually being granted.
+
+    Tools first, because that is the smaller ask and the one an MCP client's
+    built-in sign-in makes on its own.
+    """
+    lines = []
+    if DEFAULT_SCOPE in granted:
+        lines.append(TOOLS_COPY)
+    if API_SCOPE in granted:
+        lines.append(API_COPY)
+    return lines
+
+
+def _resolve_resource(origin, data, granted, registry=None):
+    """The RFC 8707 `resource`: echoed exactly, or defaulted when unambiguous.
+
+    Eligibility is SCOPE-DRIVEN, and that is the binding rule the whole feature
+    rests on: a grant names a prefix resource if and only if its scopes include
+    `api`. So an `api` request considers prefix entries only, an `mcp`-only
+    request considers exact entries only, and an entry must offer every scope
+    being granted. Two consequences worth stating:
+
+      * an `mcp`-only client that omits `resource` still defaults to the sole
+        exact resource even though a prefix resource is also enabled — adding
+        the API root did not break every pre-2025-06-18 MCP client;
+      * an explicit `resource` is ECHOED, never upgraded (RFC 8707). A client
+        that names the MCP door and asks for `api` is refused rather than
+        quietly handed the whole API — and `_exchange_code` would refuse the
+        mismatch at the token endpoint anyway.
+    """
     enabled = resources.enabled_resources(registry)
+    wants_api = API_SCOPE in granted
+    eligible = [entry for entry in enabled
+                if bool(entry.prefix) == wants_api
+                and set(granted) <= set(entry.scopes or [])]
     raw = data.get("resource")
     if isinstance(raw, (list, tuple)):
         raise RedirectableError("invalid_request", "resource must be a single value")
     if raw:
         wanted = str(raw)
-        for entry in enabled:
+        for entry in eligible:
             if resources.canonical_url(origin, entry.path) == wanted:
                 return entry, wanted
+        for entry in enabled:
+            if resources.canonical_url(origin, entry.path) == wanted:
+                raise RedirectableError(
+                    "invalid_scope",
+                    "the requested scope is not offered at that resource")
         raise RedirectableError("invalid_target", "unknown resource")
-    if len(enabled) == 1:
-        entry = enabled[0]
+    if len(eligible) == 1:
+        entry = eligible[0]
         return entry, resources.canonical_url(origin, entry.path)
-    raise RedirectableError("invalid_target", "resource is required")
+    if eligible:
+        raise RedirectableError("invalid_target", "resource is required")
+    raise RedirectableError(
+        "invalid_target", "no resource offers the requested scope")
 
 
 def _validate_parameters(data, origin, registry=None):
@@ -177,22 +222,29 @@ def _validate_parameters(data, origin, registry=None):
     if isinstance(raw_scope, (list, tuple)):
         raise RedirectableError("invalid_request", "scope must be a single value")
     requested = str(raw_scope).split() if raw_scope else [DEFAULT_SCOPE]
+    # What the ENABLED resources actually offer, so the answer matches
+    # discovery's `scopes_supported` rather than a hard-coded list.
+    offered = resources.offered_scopes(registry)
     granted = []
     for token in requested:
-        if token != DEFAULT_SCOPE:
-            raise RedirectableError("invalid_scope", "only the mcp scope is offered")
+        if token not in offered:
+            raise RedirectableError(
+                "invalid_scope", f"scope {token} is not offered")
         if token not in granted:
             granted.append(token)
     # De-duplicated: "mcp mcp mcp…" is the same grant as "mcp", and the joined
-    # string is stored on the code and the grant and rides in every token.
+    # string is stored on the code and the grant and rides in every token. The
+    # REQUEST's order is preserved, because the refresh endpoint compares the
+    # client's echoed `scope` string to the stored one.
     scope = " ".join(granted) or DEFAULT_SCOPE
 
-    entry, resource = _resolve_resource(origin, data, registry)
+    entry, resource = _resolve_resource(origin, data, granted, registry)
     return {
         "state": state or "",
         "code_challenge": challenge,
         "code_challenge_method": "S256",
         "scope": scope,
+        "granted": granted,
         "resource": resource,
         "entry": entry,
     }
@@ -288,7 +340,7 @@ def handle_authorize(request, origin, registry=None):
     return _render(request, _page_context(request, {
         "client_name": client.client_name or client.client_id,
         "client_id": client.client_id,
-        "access_copy": ACCESS_COPY,
+        "access_lines": _access_lines(params["granted"]),
         "requested_resource": params["resource"],
         # Anti-phishing. A name is whatever the client typed, so show the two
         # facts it cannot forge — where the credential is being sent, and

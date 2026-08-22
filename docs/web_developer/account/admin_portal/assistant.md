@@ -61,13 +61,22 @@ of any kind.
                     "name": "Claude"},
          "user": {"id": 1, "email": "ian@example.com", "display_name": "Ian Smith"},
          "resource": "https://admin.example.com/api/assistant/mcp",
-         "scopes": ["mcp"],
+         "scopes": ["mcp"], "access": "tools",
          "created": "2026-08-18T14:05:00+00:00",
          "last_used": "2026-08-21T17:40:00+00:00",
          "expires": "2026-09-17T14:05:00+00:00",
+         "is_active": true, "revoked_reason": ""},
+        {"id": 43,
+         "client": {"id": 9, "client_id": "dcr-8b31e04f", "name": "Ops script"},
+         "user": {"id": 2, "email": "avery@example.com", "display_name": "Avery Cole"},
+         "resource": "https://admin.example.com/api",
+         "scopes": ["mcp", "api"], "access": "both",
+         "created": "2026-08-21T11:48:00+00:00",
+         "last_used": "2026-08-22T08:05:00+00:00",
+         "expires": "2026-09-20T11:48:00+00:00",
          "is_active": true, "revoked_reason": ""}
       ],
-      "grant_count": 1
+      "grant_count": 2
     }
   }
 }
@@ -101,8 +110,16 @@ provider response body, exception text, or key fragment ever appears there.
 | `url` | The **connect address** to paste into an AI client, or `""` when no public address is configured |
 | `discovery_url` | The protected-resource metadata URL clients look for |
 | `discovery` | The last self-check verdict — `{ok, code, detail, checked_at}` |
-| `grants` | Active connections **to this MCP endpoint**, newest first, for **every** user. At most 200 rows |
-| `grant_count` | The true number of active connections to this endpoint, even when `grants` is sliced |
+| `grants` | Active connections **to either remote-agent resource** — the MCP endpoint and the REST API root — newest first, for **every** user. At most 200 rows |
+| `grant_count` | The true number of active connections to those two resources, even when `grants` is sliced |
+
+Each row's **`access`** says what that connection can reach:
+
+| `access` | Means |
+|---|---|
+| `tools` | The Assistant's tools only. Every change still waits for an approval in the Admin |
+| `api` | Full REST API access as that person. The approval step does **not** apply |
+| `both` | Both of the above, on one credential |
 
 `discovery.code` is one of:
 
@@ -229,8 +246,10 @@ Disconnect every remote agent, for every user.
 
 Exactly that one key. `revoked` is the number of connections killed.
 
-Both actions are scoped to the MCP endpoint: a grant this installation issued
-for some other protected resource is neither listed above nor swept here.
+Both actions are scoped to the **two** remote-agent resources — the MCP endpoint
+and the REST API root — so Disconnect all sweeps a full-API connection as well
+as a tool-door one. A grant this installation issued for some other protected
+resource is neither listed above nor swept here.
 
 ---
 
