@@ -58,8 +58,14 @@ class AppConfig(BaseAppConfig):
 
 - **`path`** is the absolute request path exactly as routed — a leading slash,
   no trailing slash. The comparison against `request.path` is exact string
-  equality with no normalisation, so a `MOJO_APPEND_SLASH=True` deployment
-  registers the slashed form.
+  equality with no normalisation.
+
+  > **Register the path as Django routes it, not as you wish it looked.**
+  > Confinement compares the literal `request.path`. A `MOJO_APPEND_SLASH=True`
+  > deployment must register the slashed form, and a deployment mounted under a
+  > WSGI `SCRIPT_NAME` prefix must register the prefixed form. Get it wrong and
+  > the failure is fail-closed and total — every token is refused at the door —
+  > rather than a hole, but nothing will work until it matches.
 - **`scopes`** is a list. Today the only scope is `["mcp"]`.
 - **`enabled`** is a zero-arg callable, **re-evaluated on every read and never
   cached**. Flipping the setting takes effect immediately in both directions.
@@ -122,8 +128,16 @@ rather than a blanket 401.
 `mojo.apps.assistant.services.agent._build_request_meta` reads the marker and
 reports `bearer="mcp"` for a grant-carrying request, so a tool that demands a
 strictly interactive session (`bearer == "bearer"`) refuses an MCP-originated
-call with no further change. `key_backed` stays `False`: an OAuth grant is not a
-confined machine credential in the `ApiKey`/group-token sense.
+call with no further change.
+
+**`key_backed` stays `False`, deliberately.** `is_key_backed_session()` and
+`restricted_identity()` are not extended to cover an OAuth-grant session, and
+that is a decision rather than an oversight: unlike an `ApiKey` or a
+group-scoped token, an mcp credential can only ever arrive at the one registered
+resource path its audience names, so it never reaches a
+`denies_key_backed_session` endpoint for that check to matter. The signal that
+means "a remote agent is driving this, not a person" is
+`request_meta.bearer == "mcp"`.
 
 ### The `WWW-Authenticate` challenge
 
@@ -213,11 +227,31 @@ not a preference.
 
 `resolve_client(client_id, fetcher=None)` takes the CIMD path when `client_id`
 starts with `https://`. The document is fetched through the shared SSRF-safe
-helper (`mojo.helpers.safe_fetch`, https only, 5 s, 64 KiB), must be a JSON
-object that names itself, and is cached in Redis for 300 s. **An existing row
-with `is_active=False` is refused before any fetch or write**, so the Admin's
-deactivation is a real kill switch that re-resolution cannot undo. Tests inject
-`fetcher=` and never touch the network.
+helper (`mojo.helpers.safe_fetch`, https only, 5 s, 64 KiB, at most one
+redirect), must be a JSON object that names itself, and is cached in Redis for
+300 s. **An existing row with `is_active=False` is refused before any fetch or
+write**, so the Admin's deactivation is a real kill switch that re-resolution
+cannot undo. Tests inject `fetcher=` and never touch the network.
+
+Two supporting rules make that kill switch hold:
+
+- **`canonical_cimd_url(url)` is the identity.** `client_id` is matched by exact
+  string, so `https://EVIL.example/c.json`, `https://evil.example:443/c.json` and
+  a percent-encoded spelling of the same path would otherwise be three separate
+  rows — and deactivating one would leave the other two live. Every variant is
+  reduced (lowercased scheme and host, default port stripped, path unquoted /
+  de-duplicated / re-quoted, userinfo / query / fragment refused) before the
+  inactive-row check, the cache key, the self-naming comparison and
+  `get_or_create` see it, and the canonical string is what is stored.
+- **Failures are cached too**, under the same key and window. Otherwise a
+  `client_id` pointing at a URL that stalls or 404s turns every authorize and
+  token attempt into an outbound fetch from this server.
+
+A client's own strings — `client_name` in a registration or a metadata document,
+and the metadata URLs — go through `clean_text()`: printable characters only,
+whitespace collapsed, truncated. A client names itself, and that name reaches a
+`logit.info` line and the consent screen; a newline in it would forge a log
+record.
 
 Redirect URIs are exact-string matched **except** that loopback `http` URIs
 (`localhost`, `127.0.0.1`, `::1`) match on any port — RFC 8252 §7.3 makes that a
@@ -237,10 +271,26 @@ working pair rather than a dead one.
 `refresh_grant` matches the presented hash against `refresh_hash` first, then
 `prev_refresh_hash`. A `prev_refresh_hash` match inside
 `OAUTH_REFRESH_GRACE_SECONDS` of the rotation is a **lost response**: a fresh
-pair is minted without moving `prev_refresh_hash` or `last_refreshed`, so the
-window keeps ticking from the original rotation and a client retrying forever
-cannot walk it forward. Outside the window it is **replay**: the grant is
-revoked (`revoked_reason="refresh_replay"`) and an incident is reported.
+pair is minted. Outside the window it is **replay**: the grant is revoked
+(`revoked_reason="refresh_replay"`) and an incident is reported.
+
+Two details of the grace re-issue are load-bearing:
+
+- **`last_refreshed` is not moved**, so the window keeps ticking from the
+  original rotation and a client that retries forever cannot walk it forward.
+- **`prev_refresh_hash` IS moved**, to the `refresh_hash` the re-issue replaces
+  — the successor that has just been orphaned. This is a detection control, not
+  bookkeeping. A grace hit is *inherently* ambiguous: it looks the same whether
+  the real client lost its response or a thief is using a captured token. If the
+  orphaned successor were simply dropped, the party still holding it would get a
+  bare `invalid_grant` with no incident, and a stolen refresh token would be a
+  **silent** takeover — the victim's client would just look broken. Parking the
+  orphan in `prev_refresh_hash` means presenting it after the window trips
+  replay, so the theft surfaces on the victim's next refresh.
+
+The cost is deliberate and bounded: a response lost **twice in a row** is not
+recoverable, because the original token is no longer in either column after the
+first grace re-issue. Re-consent is one click; an undetected takeover is not.
 
 The refresh lifetime is **absolute** — 30 days from consent, never slid. A
 credential in a third party's custody gets a hard upper bound with no human in
@@ -291,7 +341,23 @@ mints, so step-up semantics carry through to the resource server.
 Every consent response carries **`X-Frame-Options: DENY` unconditionally**.
 `AUTH_CSP_ENABLED` ships `False`, so the CSP's `frame-ancestors 'none'` is not
 guaranteed to be there, and a one-click credential-minting page must not be
-frameable on the shipped default.
+frameable on the shipped default. Every response is also `Cache-Control:
+no-store` — the page names the signed-in person and is one click from a
+credential.
+
+**The page shows what a client name cannot forge.** A display name is whatever
+the client typed, so the name alone is a phishing surface. Beside it the page
+renders three facts the client does not choose: whether anything vouched for the
+name (the `client_id` URL, labelled "Verified from", for a CIMD client;
+"unverified name — registered by the client itself" for a DCR one), the exact
+resource the token will open, and the host the credential will actually be
+delivered to. All autoescaped, none of them links.
+
+The **presented** `redirect_uri` is re-validated with `validate_redirect_uri`
+before it is matched, at `authorize`, at `approve` and again at
+`consume_code`. `redirect_uri_matches` ignores the port for loopback URIs, so
+without that a presented value could carry userinfo, a fragment, or enough bytes
+to overflow `OAuthCode.redirect_uri` past the comparison.
 
 ---
 

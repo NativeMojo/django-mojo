@@ -85,6 +85,14 @@ def is_key_backed_session(request):
     # credential-mutation blocks). Use is_request_user() only where the
     # question is genuinely "is request.user a User model instance"
     # (attribution).
+    #
+    # An OAuth-grant session (request.oauth_grant, token_type="mcp") is
+    # deliberately NOT key-backed: unlike an ApiKey or a group token it can only
+    # ever arrive at the one registered resource path its audience names, so it
+    # never reaches a denies_key_backed_session endpoint to be refused there.
+    # The signal a tool reads for "this is a remote agent, not a person" is
+    # request_meta.bearer == "mcp", stamped by the assistant's
+    # _build_request_meta. See docs/django_developer/account/oauth_server.md.
     return restricted_identity(request) is not None
 
 

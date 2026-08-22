@@ -173,7 +173,11 @@ GET /api/account/oauth/authorize
   characters.
 
 The user signs in on the installation's own pages if needed, then sees a consent
-screen naming your client and what the access means.
+screen naming your client and what the access means. The screen also shows the
+host your `redirect_uri` points at, the resource being granted, and — for a DCR
+client — that your name is self-declared. Publishing a **Client ID Metadata
+Document** is what replaces that caveat with "Verified from <your URL>", so
+prefer CIMD if your users will be looking at this screen.
 
 **Approve** → the browser lands on your `redirect_uri` with:
 
@@ -250,6 +254,14 @@ Two things to know:
   you never saw the answer, retrying with the same refresh token inside that
   window returns a fresh working pair. Outside it, reuse is treated as replay
   and the grant is revoked — you must send the user through consent again.
+
+  **Store the newest refresh token before you do anything else with the
+  response, and retry at most once.** A forgiven retry supersedes the token
+  from the request you missed, so that superseded token becomes the tripwire: if
+  it is presented later, the whole grant is revoked. That is deliberate — it is
+  how a stolen refresh token is detected rather than quietly working — but it
+  means a second lost response in a row is not recoverable, and re-consent is
+  the only way forward.
 - **The grant expires 30 days after consent, absolutely.** Refreshing does not
   extend it. Plan for re-consent.
 
@@ -314,7 +326,7 @@ re-authenticating will not help.
 | The token expired (1 hour) | Refresh. |
 | The user's account was disabled, closed, or had its sessions revoked | The user must sign in again, then re-consent. |
 | An operator revoked the grant | Re-consent. |
-| A code or refresh token was replayed | Re-consent. |
+| A code or refresh token was replayed, or a superseded refresh token was presented after the grace window | Re-consent. |
 | The resource was switched off | Nothing to do — wait for the operator. The grant is dormant, not destroyed, and refresh works again once it is back on. |
 
 ---
