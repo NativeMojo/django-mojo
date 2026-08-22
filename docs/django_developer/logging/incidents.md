@@ -709,7 +709,7 @@ Signature:
 ```python
 report_event_suppressed(details, key, title=None, category="api_error", level=1,
                         request=None, scope="global", window=3600, budget=None,
-                        fail_open=True, **kwargs) -> bool
+                        fail_open=True, *, connection=None, **kwargs) -> bool
 ```
 
 - **Returns `bool`** — `True` when an event was filed, `False` when it was
@@ -736,6 +736,9 @@ report_event_suppressed(details, key, title=None, category="api_error", level=1,
   where an outage must not become an open floodgate into the incident table.
 - **`group=None`** in `kwargs` is honored exactly as in `report_event` (suppresses
   the request-group auto-stamp); any other extra kwarg lands in event metadata.
+- **`connection`** is a keyword-only test seam — a Redis-like object exposing
+  `set`/`incr`/`expire`. `None` (the default) resolves the shared process
+  connection exactly as before; production callers never pass it.
 
 **Atomicity.** The notice key is claimed with `redis.set(key, "1", nx=True,
 ex=window)` — a single atomic round-trip, so two concurrent workers can never both

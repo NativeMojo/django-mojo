@@ -53,8 +53,10 @@ Before writing any test, read `docs/django_developer/testit/Overview.md`. This i
   closed), and patches of — or attribute assignments to — the shared
   `mojo.helpers.` namespace (all of it), `mojo.apps.incident`, `mojo.apps.jobs` and
   `testit` surfaces, plus the cross-package roster in `isolation.CROSS_PACKAGE_TARGETS`
-  (app services two or more packages patch, e.g. `system_settings`, `capacity`,
-  `aws_check`). Keys under `TESTIT_` are always writable, including one literal
+  (app services two or more packages patch, e.g. `system_settings`, `aws_check`,
+  `config_sync` — `capacity` is cross-package too but still deferred/capped, not
+  blocking; see `isolation.DEFERRED_CROSS_PACKAGE_TARGETS`). Keys under `TESTIT_`
+  are always writable, including one literal
   `TESTIT_`-keyed payload on an `/api/settings` write, which is how the
   protected-denial contracts run in the default tier. Prefer the service seams
   (`reporter=`, `publisher=`, `send_email=`, `loader=`, `report_fn=`, `resolve_cname=`,
