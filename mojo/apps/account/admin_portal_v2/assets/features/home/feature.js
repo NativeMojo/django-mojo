@@ -19,7 +19,20 @@ export default {
   routes: ['home', 'activity'],
   style: 'assets/features/home/styles.css',
   enabled: (ctx) => ctx.features?.dashboard?.enabled === true,
-  navigation: () => [{route: 'home', label: 'Home', icon: 'home', matches: ['home', 'activity']}],
+  // Home owns the installation-wide views and the setup journey. Activity gets
+  // its own entry beside the control plane; System Setup is still the current
+  // Admin's page, so its entry is an external link that says so, carrying the
+  // attention dot exactly as it did in v1.
+  navigation: (ctx) => [
+    {route: 'home', label: 'Home', icon: 'home', section: 'Control plane', order: 0},
+    activityAvailable(ctx)
+      ? {route: 'activity', label: 'Activity & logs', icon: 'activity', section: 'Control plane', order: 50}
+      : null,
+    ctx.capabilities?.setup === true
+      ? {href: `${ctx.admin_path || '/admin/'}#/setup`, external: true, label: 'System Setup', icon: 'settings',
+        section: 'System', order: 80, badge: ctx.capabilities.setup_attention === true}
+      : null,
+  ].filter(Boolean),
   title: (route, ctx) => (route === 'activity' && activityAvailable(ctx) ? 'Activity & logs' : 'Home'),
   // The signal is the page's own abort: Home polls while the platform reports a
   // running deployment, and a route change must stop that poll, not let it

@@ -18,10 +18,16 @@ export default {
   style: 'assets/features/settings/styles.css',
   enabled: (ctx) => ctx.features?.settings?.enabled === true
     || smsAvailable(ctx) || emailAvailable(ctx),
-  navigation: () => [{
-    route: 'settings', label: 'Settings', icon: 'settings',
-    matches: ['settings', 'settings-sms', 'settings-email'],
-  }],
+  // Text messages and Email are the two integration pages operators reach for
+  // most — the test tools live there — so they get their own entries under
+  // Messaging, each gated on its own bootstrap block, as in v1.
+  navigation: (ctx) => [
+    {route: 'settings', label: 'Settings', icon: 'settings', section: 'System', order: 70},
+    ctx.features?.sms?.enabled === true
+      ? {route: 'settings-sms', label: 'Text messages', icon: 'phone', section: 'Messaging', order: 60} : null,
+    ctx.features?.email?.enabled === true
+      ? {route: 'settings-email', label: 'Email', icon: 'mail', section: 'Messaging', order: 61} : null,
+  ].filter(Boolean),
   title: (route) => (route === 'settings-sms' ? 'Text messages'
     : route === 'settings-email' ? 'Email' : 'Settings'),
   render: ({ctx, route, signal}) => {

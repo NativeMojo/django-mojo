@@ -215,11 +215,36 @@ select:focus-visible,
   color: #8491a8;
 }
 
-/* Six destinations, one flat level, never scrolls: v2 has no section labels. */
+/* One level of destinations, grouped under the same section labels v1 uses
+   (Control plane / Messaging / System). Never scrolls. */
 .nav {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.nav-label {
+  padding: 9px 9px 4px;
+  color: #7b879b;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.nav-label.nav-space {
+  margin-top: 8px;
+}
+
+/* An entry that leaves v2 for the current Admin says so with a trailing arrow. */
+.nav a .nav-ext {
+  margin-left: auto;
+  color: #7b879b;
+  font-size: 11px;
+}
+
+.nav a .nav-ext + .nav-badge {
+  margin-left: 6px;
 }
 
 .nav a {

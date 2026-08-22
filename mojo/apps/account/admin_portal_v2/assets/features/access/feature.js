@@ -20,7 +20,7 @@ export default {
   style: 'assets/features/access/styles.css',
   enabled: (ctx) => ctx.features?.people?.enabled === true,
   navigation: () => [{
-    route: 'users', label: 'Access', icon: 'users',
+    route: 'users', label: 'Access', icon: 'users', section: 'Control plane', order: 40,
     matches: ['access', 'users', 'groups', 'keys', 'security'],
   }],
   title: (route, ctx) => tabFor(route, ctx)?.label || 'Access',

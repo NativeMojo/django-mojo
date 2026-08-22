@@ -18,7 +18,7 @@ export default {
   enabled: (ctx) => ctx.features?.advanced?.enabled === true,
   navigation: (ctx) => (ctx.capabilities.network || ctx.capabilities.manage_network
     ? [{
-      route: 'domains', label: 'Domains', icon: 'globe',
+      route: 'domains', label: 'Domains', icon: 'globe', section: 'Control plane', order: 30,
       matches: ['domains', 'dns', 'certificates', 'credentials'],
     }]
     : []),

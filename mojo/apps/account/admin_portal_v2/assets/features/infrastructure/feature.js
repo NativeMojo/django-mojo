@@ -12,7 +12,7 @@ export default {
   style: 'assets/features/infrastructure/styles.css',
   enabled: (ctx) => ctx.features?.platform?.enabled === true
     && visibleTabs(ctx).length > 0,
-  navigation: () => [{route: 'infrastructure', label: 'Infrastructure', icon: 'server'}],
+  navigation: () => [{route: 'infrastructure', label: 'Infrastructure', icon: 'server', section: 'Control plane', order: 20}],
   title: () => 'Infrastructure',
   // The signal is the page's own abort: Metrics and Maintenance poll, and a
   // route change must stop those polls. The Capacity batch is deliberately

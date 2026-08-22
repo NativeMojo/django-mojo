@@ -23,7 +23,7 @@ export default {
     || ctx.features?.platform?.capabilities?.view === true,
   navigation: () => [{
     route: 'apps', matches: ['apps', 'deployments', 'apps-serving'],
-    label: 'Apps', icon: 'deploy',
+    label: 'Apps', icon: 'deploy', section: 'Control plane', order: 10,
   }],
   // `?webapp=<id>` is the app's own page, and the topbar says so. The app's name
   // is not known until the summary read lands, so the title names the kind of

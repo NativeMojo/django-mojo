@@ -48,12 +48,25 @@ export function backPill(label, route) {
 // Six destinations, one flat level, no section labels: v2's sidebar never
 // scrolls and never groups. A destination's dot mirrors the worst state inside
 // it, so no dot means genuinely nothing to do there.
+// Entries are grouped under section labels (Control plane / Messaging /
+// System) exactly as v1 groups them. An `external` entry is a real link into
+// the current Admin for a page v2 does not carry yet; it never reads as active
+// and it says where it goes.
 function refreshNavigation(route) {
-  const children = [];
+  const children = []; let section = null;
   for (const item of navigationFor(context)) {
-    const active = (item.matches || [item.route]).includes(route);
-    children.push(h('a', {href: `#/${item.route}`, class: active ? 'active' : ''}, icon(item.icon), h('span', {text: item.label}),
-      item.badge ? h('span', {class: `nav-badge ${item.badgeTone || ''}`.trim(), 'aria-label': 'Needs attention'}) : null));
+    if (item.section && item.section !== section) {
+      section = item.section;
+      children.push(h('div', {class: `nav-label${children.length ? ' nav-space' : ''}`, text: section}));
+    }
+    const active = !item.external && (item.matches || [item.route]).includes(route);
+    children.push(h('a', {
+      href: item.external ? item.href : `#/${item.route}`,
+      class: `${active ? 'active' : ''}${item.external ? ' external' : ''}`.trim(),
+      title: item.external ? 'Opens the current Admin' : null,
+    }, icon(item.icon), h('span', {text: item.label}),
+    item.external ? h('span', {class: 'nav-ext', 'aria-hidden': 'true', text: '↗'}) : null,
+    item.badge ? h('span', {class: `nav-badge ${item.badgeTone || ''}`.trim(), 'aria-label': 'Needs attention'}) : null));
   }
   navigation.replaceChildren(...children);
 }

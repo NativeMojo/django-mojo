@@ -31,9 +31,14 @@ export function featureForRoute(route, ctx) {
 // DESCRIPTORS order exactly. A feature whose block is missing from the
 // bootstrap payload contributes no entry — the destination is hidden, not
 // shown-and-refused.
+// Entries sort by their declared `order` so a feature can place an entry in
+// another feature's section (Activity sits with the control plane, Text
+// messages and Email under Messaging). Array sort is stable, so entries with
+// equal order keep descriptor order.
 export function navigationFor(ctx) {
   return DESCRIPTORS.filter((feature) => feature.enabled(ctx))
-    .flatMap((feature) => feature.navigation(ctx));
+    .flatMap((feature) => feature.navigation(ctx))
+    .sort((left, right) => (left.order || 0) - (right.order || 0));
 }
 
 export function installFeatureStyles(ctx) {
