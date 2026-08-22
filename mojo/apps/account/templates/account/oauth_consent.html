@@ -1,0 +1,141 @@
+{% extends "account/auth_base.html" %}
+
+{% block page_title %}{{ page_title|default:"Authorize access" }}{% endblock %}
+
+{% block subtitle_block %}{% endblock %}
+
+{% block content %}
+{% if error %}
+<!-- VIEW: this request cannot be answered — rendered, never redirected -->
+<div id="view-oauth-error" class="mat-view is-active">
+    <p class="mat-view-title">{{ error_title }}</p>
+    <p class="mat-view-sub">{{ error_message }}</p>
+</div>
+{% else %}
+<!-- VIEW: consent -->
+<div id="view-oauth-consent" class="mat-view is-active">
+    <p class="mat-view-title">{{ client_name }} wants access</p>
+    <p class="mat-view-sub" id="oauth-access-copy">{{ access_copy }}</p>
+    <p class="mat-view-sub" id="oauth-identity-row" style="display:none">
+        Signed in as <strong id="oauth-identity"></strong>
+    </p>
+    <button class="mat-btn mat-btn-primary" type="button" id="btn-oauth-approve">
+        <span class="mat-btn-text">Approve</span>
+        <span class="mat-spinner"></span>
+    </button>
+    <div class="mat-footer-links">
+        <span class="mat-footer-link"><button type="button" id="btn-oauth-deny">Deny</button></span>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block switcher %}{% endblock %}
+
+{% block page_script %}
+{% if not error %}
+{{ approve_payload|json_script:"oauth-approve-payload" }}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    {% comment %}
+       Every value interpolated into a JS string literal carries |escapejs —
+       see the note in account/auth_base.html. The approve payload travels as a
+       json_script data block instead, so no server value is ever concatenated
+       into executable text.
+
+       No cookie is read anywhere on this page: the approve POST authenticates
+       with the Authorization header alone, which is what makes it CSRF-proof
+       by construction rather than by a token.
+    {% endcomment %}
+    var m = window._mat;
+    var cfg = window._matConfig;
+    var CONSENT_RETURN = "{{ consent_return|escapejs }}";
+    var AUTH_URL = "{{ auth_url|default:'/auth'|escapejs }}";
+    var APPROVE_URL = "{{ approve_url|escapejs }}";
+    var DENY_URL = "{{ deny_url|escapejs }}";
+    var ACCESS_COPY = "{{ access_copy|escapejs }}";
+
+    var payload = {};
+    try {
+        payload = JSON.parse(
+            document.getElementById("oauth-approve-payload").textContent || "{}");
+    } catch (e) { payload = {}; }
+
+    function toLogin() {
+        var sep = AUTH_URL.indexOf("?") === -1 ? "?" : "&";
+        window.location.assign(
+            AUTH_URL + sep + "redirect=" + encodeURIComponent(CONSENT_RETURN));
+    }
+
+    // Only an interactive session may approve. A group token or an API key
+    // reaching this page is sent to sign in properly; the server refuses them
+    // again at /approve, so this is convenience, not the boundary.
+    if (!MojoAuth.isAuthenticated() || MojoAuth.getTokenType() !== "bearer") {
+        toLogin();
+        return;
+    }
+
+    fetch(cfg.apiBase + "/api/account/user/me", {
+        headers: { "Authorization": "Bearer " + MojoAuth.getToken() }
+    }).then(function (resp) {
+        if (!resp.ok) { toLogin(); return null; }
+        return resp.json();
+    }).then(function (data) {
+        if (!data) return;
+        var who = (data.data && (data.data.email || data.data.username)) || "";
+        if (!who) return;
+        var row = document.getElementById("oauth-identity-row");
+        document.getElementById("oauth-identity").textContent = who;
+        row.style.display = "";
+        document.getElementById("oauth-access-copy").textContent =
+            ACCESS_COPY.replace("{email}", who);
+    }).catch(function () { toLogin(); });
+
+    var approveBtn = document.getElementById("btn-oauth-approve");
+    var denyBtn = document.getElementById("btn-oauth-deny");
+
+    if (approveBtn) {
+        approveBtn.addEventListener("click", function () {
+            m.setLoading(approveBtn, true);
+            m.hideMessage();
+            fetch(cfg.apiBase + APPROVE_URL, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": "Bearer " + MojoAuth.getToken()
+                },
+                body: JSON.stringify(payload)
+            }).then(function (resp) {
+                return resp.json().then(function (body) {
+                    return { ok: resp.ok, body: body };
+                });
+            }).then(function (result) {
+                var url = result.body && result.body.data
+                    && result.body.data.redirect_url;
+                if (!result.ok || !url) {
+                    m.setLoading(approveBtn, false);
+                    m.showMessage(
+                        (result.body && result.body.error)
+                        || "We couldn't complete that request. Please try again.",
+                        "error");
+                    return;
+                }
+                m.showOverlay("Approved", "Returning you to the application…");
+                window.location.assign(url);
+            }).catch(function () {
+                m.setLoading(approveBtn, false);
+                m.showMessage(
+                    "We couldn't complete that request. Please try again.", "error");
+            });
+        });
+    }
+
+    if (denyBtn) {
+        denyBtn.addEventListener("click", function () {
+            window.location.assign(DENY_URL);
+        });
+    }
+})();
+</script>
+{% endif %}
+{% endblock %}
