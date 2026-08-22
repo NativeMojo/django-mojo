@@ -259,6 +259,12 @@ the temporary public edge. One preserved allocation keeps that legacy fixed IP
 but does **not** create two customer-known ingress addresses. Fixed-IP clients
 remain effectively single-ingress/single-AZ until a later edge expansion.
 
+Canary definitions stay in the validated in-memory fleet topology. Preview and
+write-ahead journal documents bind their canonical SHA-256 digest and retain
+only result summaries; they never serialize a raw canary request. Raw requests
+containing authorization, cookies, bearer/token, password, or secret material
+are rejected. Use a public probe or an out-of-band secret resolver instead.
+
 With those fields, `fleet-apply` creates the shadow NLB in the normal two
 subnets using AWS temporary public addresses. It does not allocate, tag,
 attach, or adopt the preserved EIP. Ordinary managed and brownfield clients

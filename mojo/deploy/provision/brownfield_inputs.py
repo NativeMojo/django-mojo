@@ -535,6 +535,23 @@ def _handoff(raw, path, account_id, region):
                 canary["timeout"], bool) or not 0 < canary["timeout"] <= 30:
             raise inputs.EnvFileError(f"{label}.timeout must be > 0 and <= 30")
         _safe_text(canary["host"], f"{label}.host")
+        request = canary.get("request")
+        if request is not None:
+            if not isinstance(request, str) or not request or len(request) > 8192:
+                raise inputs.EnvFileError(
+                    f"{label}.request must be a non-empty string no longer "
+                    f"than 8192 characters")
+            lowered = request.casefold()
+            credential_markers = (
+                "authorization", "proxy-authorization", "cookie",
+                "bearer ", "basic ", "token", "secret", "password",
+                "api-key", "api_key", "x-api-key",
+            )
+            if any(marker in lowered for marker in credential_markers):
+                raise inputs.EnvFileError(
+                    f"{label}.request cannot contain credential-bearing "
+                    f"material; use a public canary or out-of-band secret "
+                    f"resolution")
         if protocol == "https" and not canary.get("tls_sni"):
             raise inputs.EnvFileError(
                 f"{label}.tls_sni is required for an HTTPS canary")

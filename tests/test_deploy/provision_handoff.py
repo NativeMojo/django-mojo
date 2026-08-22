@@ -64,8 +64,8 @@ def _plan(topology, mapping=None):
         "targets": {},
         "ownership_tags": {lb_arn: owned, "arn:tg:api": owned,
                             "arn:tg:certbot": owned},
-        "canary_definitions": json.loads(json.dumps(
-            topology.eip_handoff_canaries)),
+        "canary_definitions_digest": handoff.digest(
+            topology.eip_handoff_canaries),
         "canaries": [{"name": "api", "address": "198.51.100.10",
                       "ok": True, "status": 200, "certificate": True,
                       "marker": True}],
@@ -726,6 +726,45 @@ def test_resume_and_rollback_bind_current_manifest_and_coordinates(opts):
             refused = err
         th.assert_true(refused is not None,
                        f"recovery must refuse current {label} drift")
+
+
+@th.django_unit_test()
+def test_plan_and_journal_digest_canaries_without_request_material(opts):
+    from mojo.deploy.provision import handoff
+
+    topology = handoff_topology()
+    sentinel = "never-persist-canary-request-value-762489"
+    topology.eip_handoff_canaries[0]["request"] = (
+        "GET /api/version HTTP/1.1\r\n"
+        f"X-Debug-Probe: {sentinel}\r\n\r\n")
+    plan = handoff.build_plan(
+        _preflight_clients(topology), topology,
+        canary_runner=lambda definition, address: {
+            "ok": True, "status": 200, "certificate": True,
+            "marker": True})
+    journal = handoff._new_journal("op-redaction", plan, "rehearsal")
+    plan_body = handoff.canonical(plan)
+    journal_body = handoff.canonical(journal)
+    th.assert_true(
+        sentinel not in plan_body and sentinel not in journal_body,
+        "canary request values must never enter plan or journal")
+    th.assert_true(
+        '"request"' not in plan_body and '"request"' not in journal_body,
+        "raw canary request fields must remain in memory only")
+    th.assert_eq(
+        plan["canary_definitions_digest"],
+        handoff.digest(topology.eip_handoff_canaries),
+        "the immutable plan must bind the full in-memory canary by digest")
+    handoff._validate_topology_binding(topology, plan)
+    topology.eip_handoff_canaries[0]["request"] += "changed"
+    refused = None
+    try:
+        handoff._validate_topology_binding(topology, plan)
+    except handoff.HandoffConflict as err:
+        refused = err
+    th.assert_true(
+        refused is not None,
+        "recovery must refuse changed request material despite redaction")
 
 
 @th.django_unit_test()

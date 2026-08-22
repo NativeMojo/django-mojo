@@ -584,8 +584,8 @@ def observe(clients, topology, canary_runner=None):
         "listeners": _listener_summary(listeners),
         "targets": target_health,
         "ownership_tags": ownership_tags,
-        "canary_definitions": json.loads(canonical(
-            topology.eip_handoff_canaries)),
+        "canary_definitions_digest": digest(
+            topology.eip_handoff_canaries),
         "canaries": sorted(canaries, key=lambda row: (
             row["name"], row["address"])),
         "manage_dns": False,
@@ -612,7 +612,8 @@ def build_plan(clients, topology, canary_runner=None):
         "sources": evidence["sources"],
         "listeners": evidence["listeners"], "targets": evidence["targets"],
         "ownership_tags": evidence["ownership_tags"],
-        "canary_definitions": evidence["canary_definitions"],
+        "canary_definitions_digest": evidence[
+            "canary_definitions_digest"],
         "canaries": evidence["canaries"], "manage_dns": False,
         "local_journal": topology.eip_handoff_local_journal,
         "remote_prefix": (
@@ -1657,8 +1658,8 @@ def _new_journal(operation_id, plan, kind):
         "pending_intent": None,
         "sources": json.loads(canonical(plan["sources"])),
         "canaries": json.loads(canonical(plan["canaries"])),
-        "canary_definitions": json.loads(canonical(
-            plan["canary_definitions"])),
+        "canary_definitions_digest": plan[
+            "canary_definitions_digest"],
         "inverse": json.loads(canonical(plan["inverse"])),
         "transitions": [], "errors": [],
         "created_at": _now(), "updated_at": _now(),
@@ -1744,10 +1745,10 @@ def _bind_plan(plan, supplied_digest):
     if load_balancer.get("map_digest") != digest(
             load_balancer.get("map") or {}):
         raise HandoffRefused("the immutable plan mapping digest is invalid")
-    if not isinstance(plan.get("canary_definitions"), list) or not plan[
-            "canary_definitions"]:
+    if not re.fullmatch(
+            r"[0-9a-f]{64}", plan.get("canary_definitions_digest") or ""):
         raise HandoffRefused(
-            "the immutable plan lacks exact canary definitions")
+            "the immutable plan lacks an exact canary definitions digest")
     inverse_keys = (
         "allocation_id", "network_interface_id", "private_ip",
         "source_subnet_id", "source_availability_zone", "source_vpc_id",
@@ -1795,8 +1796,8 @@ def _validate_topology_binding(topology, plan):
                    for az, source in (plan.get("sources") or {}).items()}
     if allocations != dict(topology.nlb_eip_allocations):
         drift.append("preserved allocation map")
-    if canonical(topology.eip_handoff_canaries) != canonical(
-            plan.get("canary_definitions")):
+    if digest(topology.eip_handoff_canaries) != plan.get(
+            "canary_definitions_digest"):
         drift.append("handoff canary definitions")
     if drift:
         raise HandoffConflict(
@@ -1818,8 +1819,8 @@ def _journal_matches(journal, plan):
                     else plan[key])
         if journal.get(key) != expected:
             raise HandoffRefused(f"journal {key} does not match the plan")
-    for key in ("sources", "inverse", "canaries", "canary_definitions",
-                "remote_prefix"):
+    for key in ("sources", "inverse", "canaries",
+                "canary_definitions_digest", "remote_prefix"):
         if journal.get(key) != plan.get(key):
             raise HandoffRefused(f"journal immutable {key} does not match plan")
     if journal.get("local_journal_base") != plan.get("local_journal"):
@@ -1837,7 +1838,7 @@ def _validate_journal(journal):
                 "load_balancer_arn", "expected_map", "sources", "transitions",
                 "errors", "initial_map_digest", "expected_map_digest",
                 "prior_map_digest", "remote_prefix", "local_journal_base",
-                "canary_definitions")
+                "canary_definitions_digest")
     missing = [key for key in required if key not in journal]
     if missing:
         raise HandoffRefused(
@@ -1845,6 +1846,11 @@ def _validate_journal(journal):
     if journal.get("schema") != SCHEMA or not isinstance(
             journal.get("sources"), dict) or not journal["sources"]:
         raise HandoffRefused("handoff journal shape is invalid")
+    if not re.fullmatch(
+            r"[0-9a-f]{64}", journal.get(
+                "canary_definitions_digest") or ""):
+        raise HandoffRefused(
+            "handoff journal canary definitions digest is invalid")
     validate_operation_id(journal.get("operation_id"))
     if journal.get("direction") not in ("handoff", "rollback", "rehearsal"):
         raise HandoffRefused("handoff journal direction is invalid")

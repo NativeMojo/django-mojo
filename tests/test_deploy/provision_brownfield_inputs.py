@@ -145,6 +145,23 @@ def test_preserved_eip_contract_is_complete_exact_and_nlb_canaried(opts):
 
 
 @th.django_unit_test()
+def test_handoff_canary_request_rejects_credential_material(opts):
+    requests = (
+        "GET / HTTP/1.1\r\nAuthorization: Bearer do-not-store\r\n\r\n",
+        "GET / HTTP/1.1\r\nCookie: session=do-not-store\r\n\r\n",
+        "GET /?token=do-not-store HTTP/1.1\r\n\r\n",
+        "GET / HTTP/1.1\r\nX-Debug: secret=do-not-store\r\n\r\n",
+    )
+    for request in requests:
+        raw = handoff_raw()
+        raw["eip_handoff_canaries"][0]["request"] = request
+        message = _error(raw)
+        th.assert_in(
+            "credential-bearing", message,
+            f"raw canary credentials must never enter a manifest: {message}")
+
+
+@th.django_unit_test()
 def test_handoff_spec_derives_bounded_journal_coordinates(opts):
     from mojo.deploy.provision import brownfield_inputs
 
