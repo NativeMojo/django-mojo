@@ -5,10 +5,11 @@ apps register with it. A spec client (an AI agent, a CLI, an MCP host) discovers
 it, sends the user through the hosted sign-in pages to a consent screen, and
 receives a short-lived JWT access token plus a rotating opaque refresh token.
 
-The point of the design is **confinement**: an issued token authenticates at the
-one registered resource path its audience names, and nowhere else on the
-platform. A token sitting in a third party's config file cannot act as that
-person against the rest of the API.
+The point of the design is **confinement**: an issued token authenticates within
+the one registered resource its audience names, and nowhere else on the
+platform. A resource is either one exact path (the Assistant's MCP door) or a
+prefix — the REST API root — and the scope the person consented to decides which
+kind a grant may bind to.
 
 > This is not the same thing as [OAuth / Social Login](oauth.md), which is the
 > *client* side — signing users in with Google. That lives at
@@ -48,13 +49,16 @@ class AppConfig(BaseAppConfig):
         from mojo.apps.account.services import oauth_server
         from mojo.helpers.settings import settings
 
+        def enabled():
+            return settings.get("ASSISTANT_MCP_ENABLED", False, kind="bool")
+
+        oauth_server.register_resource("/api/assistant/mcp", ["mcp"], enabled)
+        # …and, behind the same switch, the whole REST API:
         oauth_server.register_resource(
-            "/api/assistant/mcp",
-            ["mcp"],
-            lambda: settings.get("ASSISTANT_MCP_ENABLED", False, kind="bool"))
+            API_ROOT, ["mcp", "api"], enabled, prefix=True)
 ```
 
-`register_resource(path, scopes, enabled)`:
+`register_resource(path, scopes, enabled, prefix=False)`:
 
 - **`path`** is the absolute request path exactly as routed — a leading slash,
   no trailing slash. The comparison against `request.path` is exact string
@@ -66,10 +70,38 @@ class AppConfig(BaseAppConfig):
   > WSGI `SCRIPT_NAME` prefix must register the prefixed form. Get it wrong and
   > the failure is fail-closed and total — every token is refused at the door —
   > rather than a hole, but nothing will work until it matches.
-- **`scopes`** is a list. Today the only scope is `["mcp"]`.
+- **`scopes`** is a list. Two scopes exist: `mcp` (the Assistant's tool door) and
+  `api` (full REST reach as the consenting person).
 - **`enabled`** is a zero-arg callable, **re-evaluated on every read and never
   cached**. Flipping the setting takes effect immediately in both directions.
   A callable that raises counts as disabled — the registry fails closed.
+- **`prefix`** declares a **subtree** instead of an endpoint. A token bound to a
+  prefix resource may be presented at the path itself or anywhere strictly
+  beneath it; an exact resource covers its own path and nothing else.
+
+### The invariant: prefix ⇔ `api`
+
+`register` raises `ValueError` for either half of the mismatch:
+
+| Registration | Result |
+|---|---|
+| `prefix=True` without `api` in `scopes` | Refused — that is full reach nobody had to consent to. |
+| `prefix=False` with `api` in `scopes` | Refused — an exact resource cannot honour a scope its confinement does not grant. |
+
+The same invariant is enforced twice more, at consent (a grant may name a prefix
+resource **iff** its scopes include `api`) and at the chokepoint (step 7 below).
+Three enforcements for one rule is deliberate: a prefix resource is the whole
+API, and unlike the MCP door there is no resource server sitting at the root to
+read scopes and answer 403.
+
+`offered_scopes(registry=None)` is the ordered, de-duplicated union of the
+**enabled** entries' scopes. Discovery publishes exactly that, so an installation
+that registers only an exact resource never advertises `api`.
+
+`covers(entry, request_path)` answers "may this entry's token be presented
+here": `True` for the entry's own path; for a prefix entry also `True` for
+anything starting with `entry.path.rstrip("/") + "/"`. The separator is attached
+before the comparison, so `/api` covers `/api/x` and never `/apix`.
 
 Re-registering the same path replaces the entry, so a repeated `ready()` is
 idempotent. `unregister_resource(path)` removes one.
@@ -95,27 +127,43 @@ build a private `ResourceRegistry()` instead of mutating the shared one.
 runs, in order:
 
 1. **`request is None` → refuse.** The refresh endpoint and the realtime
-   consumer both call `validate_jwt` with no request. This is what stops an mcp
-   token being exchanged for a session pair or opening a WebSocket.
-2. **`aud` must be a single string**, and `urlsplit(aud).path` must equal
-   `request.path` exactly. A list-valued `aud` is refused outright — PyJWT would
-   otherwise match by membership, which is not confinement.
-3. **That path must be a registered resource whose switch is on.** From here on,
-   every refusal also stamps `request.www_authenticate`.
-4. **The grant must resolve** from the token's `jti` (`OAuthGrant.access_jti`),
+   consumer both call `validate_jwt` with no request. This is what stops an
+   OAuth token being exchanged for a session pair or opening a WebSocket.
+2. **`aud` must be a single string** with a path. A list-valued `aud` is refused
+   outright — PyJWT would otherwise match by membership, which is not
+   confinement.
+3. **`urlsplit(aud).path` must resolve EXACTLY** to a registered resource whose
+   switch is on. The lookup is keyed by the **audience's** own path, never by the
+   request's, so a token always names the one entry it was minted for.
+4. **That entry must cover `request.path`** — equal for an exact resource, equal
+   or strictly beneath for a prefix one. Steps 3 and 4 together are what the old
+   single `aud path == request.path` comparison was, generalised by exactly one
+   resource kind.
+5. From here on, every refusal also stamps `request.www_authenticate`, built from
+   the **resource's** path — so a bad `api` token at `/api/account/user/me`
+   points the client at `/.well-known/oauth-protected-resource/api`.
+6. **The grant must resolve** from the token's `jti` (`OAuthGrant.access_jti`),
    be active, name the same resource, and belong to an active user and an active
    client.
-5. **Signature, expiry and audience** are verified together against the
-   **user's** `auth_key`. A disable, a closure or a `revoke_sessions` rotates
-   that key and therefore kills every live mcp token on the next request.
-6. **`request.oauth_grant` is stamped** and the grant's `last_used` updated.
+7. **A grant bound to a prefix resource must carry the `api` scope.** Defence in
+   depth: consent refuses to create such a row in the first place, and this is
+   the last place a full-reach grant without full-reach consent can be stopped.
+   `scopes` must be a list — `"api" in "apix"` is true for a string.
+8. **Signature, expiry and audience** are verified together against the
+   **user's** `auth_key` — a disable, a closure or a `revoke_sessions` rotates
+   that key and therefore kills every live token on the next request — then
+   **`request.oauth_grant` is stamped** and the grant's `last_used` updated.
 
 Every refusal returns the generic `"Invalid token"`. Only expiry says
-`"Token expired"` — the same oracle policy the existing branches follow.
+`"Token expired"` — the same oracle policy the existing branches follow. A
+refusal that lands before step 5 (unknown resource, switched off, not covered)
+carries **no** challenge: the caller is not at a live door, and saying so would
+be an existence oracle.
 
-**Scope is deliberately not checked here.** The resource server reads
-`request.oauth_grant.scopes` itself, so it can answer `403 insufficient_scope`
-rather than a blanket 401.
+**Scope is otherwise deliberately not checked here.** An exact resource server
+reads `request.oauth_grant.scopes` itself, so it can answer
+`403 insufficient_scope` rather than a blanket 401. Step 7 is the one exception,
+precisely because a prefix resource has no such server.
 
 ### What the resource server reads
 
@@ -131,13 +179,27 @@ strictly interactive session (`bearer == "bearer"`) refuses an MCP-originated
 call with no further change.
 
 **`key_backed` stays `False`, deliberately.** `is_key_backed_session()` and
-`restricted_identity()` are not extended to cover an OAuth-grant session, and
-that is a decision rather than an oversight: unlike an `ApiKey` or a
-group-scoped token, an mcp credential can only ever arrive at the one registered
-resource path its audience names, so it never reaches a
-`denies_key_backed_session` endpoint for that check to matter. The signal that
-means "a remote agent is driving this, not a person" is
-`request_meta.bearer == "mcp"`.
+`restricted_identity()` are not extended to cover an OAuth-grant session, and the
+reason is what the grant **is** rather than where it can arrive: it is the
+person's own session, consented to on this installation's sign-in page, carrying
+their `auth_time` and dying with their `auth_key`. A grant holding `api`
+therefore reaches every endpoint their session JWT reaches — including
+`denies_key_backed_session` ones such as `generate_api_key`, and including
+resolving Assistant approval cards at `POST /api/assistant/action` when the
+person holds the permission for it. That is the equality the consent screen
+states, and in both cases the grant gains no reach: it could make the same
+mutation directly, under the same permission, superuser and fresh-auth gates.
+An `mcp`-only grant never leaves its tool door, and the approval step still
+protects it.
+
+An `ApiKey` or a group-scoped token is the opposite — a secret in a config file
+acting for somebody — which is what `denies_key_backed_session` exists to keep
+away from credential mutation. The signal that means "a remote agent is driving
+this, not a person" is `request_meta.bearer == "mcp"`.
+
+An API key an `api` grant mints is a **separate** credential with its own
+lifetime: revoking the grant does not revoke it, exactly as revoking a browser
+session does not revoke a key minted from it. Both are revocable on their own.
 
 ### The `WWW-Authenticate` challenge
 
@@ -163,6 +225,42 @@ Who emits it:
 `Access-Control-Expose-Headers` so a browser-hosted client can read it.
 
 `resource_metadata` is omitted when `BASE_URL` is unset.
+
+---
+
+## The two scopes
+
+| Scope | Binds to | What it opens |
+|---|---|---|
+| `mcp` | an **exact** resource | That one endpoint. The Assistant's MCP door reads `grant.scopes` itself and answers `403 insufficient_scope` without it. |
+| `api` | a **prefix** resource | Every path beneath the API root, as the consenting person — the same permissions, the same `auth_time`, the same `requires_fresh_auth` behaviour their session JWT has. |
+
+**What `api` is.** Exactly what that account can already do through the API with
+its own session token: the same permission checks, the same group scoping, the
+same 440 when a step-up endpoint wants a recent login. Nothing about it widens a
+permission.
+
+**What `api` is not.**
+
+- It is **not** a session. It cannot approve a new grant
+  (`consent._session_auth_time` requires `token_type == "access"`), cannot be
+  exchanged at `/api/account/jwt/refresh`, and cannot open a WebSocket
+  (`realtime` validates with no request, and step 1 refuses that).
+- It is **not** reach outside the root. `/.well-known/…` and anything else above
+  or beside `API_ROOT` refuses it, with no challenge.
+- It does **not** carry the Assistant's approval step. The consent screen says
+  so in those words: a direct API call is a direct API call.
+
+Both scopes ride the one `ASSISTANT_MCP_ENABLED` switch — "remote agents may
+sign in" — and both kinds of grant are listed and revoked from the same Admin
+section.
+
+**One grant can serve both doors** only while the MCP path sits beneath
+`API_ROOT`, which the shipped default (`/api/assistant/mcp` under `/api`) does.
+Move `ASSISTANT_MCP_PATH` outside the root and both resources still work
+separately; what is lost is an `mcp api` root grant reaching the door, which then
+answers 401 because the root does not cover it. Fail-closed, and the same caveat
+a `SCRIPT_NAME`-mounted deployment already carries.
 
 ---
 
@@ -197,7 +295,7 @@ grant matches no live token and no two rows collide.
 
 | Module | Owns |
 |---|---|
-| `resources.py` | `ResourceRegistry`, `register_resource`, `public_origin`, the issuer/canonical/PRM URL algebra, `is_ready`, and the four TTL readers. |
+| `resources.py` | `ResourceRegistry`, `register_resource`, `covers`, `offered_scopes`, `public_origin`, the issuer/canonical/PRM URL algebra, `is_ready`, and the four TTL readers. |
 | `discovery.py` | `authorization_server_metadata`, `protected_resource_metadata`, `www_authenticate`. |
 | `clients.py` | `validate_redirect_uri`, `redirect_uri_matches`, `register_client` (RFC 7591), `resolve_client` (DB or CIMD). |
 | `codes.py` | `validate_pkce_challenge`, `verify_pkce`, `mint_code`, `consume_code`. |
@@ -220,15 +318,21 @@ oauth_server.list_grants(resource_path="/api/assistant/mcp", limit=200)
 oauth_server.count_grants(resource_path="/api/assistant/mcp")
 oauth_server.revoke_all_grants(actor=request.user,
                                resource_path="/api/assistant/mcp")
+
+# …or SEVERAL, as one predicate — the Assistant setup page owns both doors:
+oauth_server.list_grants(resource_path=["/api/assistant/mcp", "/api"])
 ```
 
 `resource_path` scopes by the resource's **path**, never its full URL: the URL
 embeds `BASE_URL`, so matching on it would hide still-valid grants after a
-public-address change. The SQL suffix filter is a superset and every caller
-re-confirms the parsed path in Python before listing or revoking a row. `limit`
-bounds the answer in SQL; `count_grants` is the matching `COUNT(*)`, so a sliced
-listing can still report an honest total. All three default to the previous
-behaviour — every grant, every resource, unbounded.
+public-address change. It takes **one path or several** — a list becomes one
+`OR` predicate, so a caller spanning two resources still gets one honest
+`COUNT(*)` and one bulk `UPDATE` rather than two of each. The SQL suffix filter
+is a superset and every caller re-confirms the parsed path in Python before
+listing or revoking a row. `limit` bounds the answer in SQL; `count_grants` is
+the matching `COUNT(*)`, so a sliced listing can still report an honest total.
+All three default to the previous behaviour — every grant, every resource,
+unbounded; an empty list selects nothing.
 
 `revoke_all_grants` is one bulk `UPDATE` on the scoped active set. Deactivating
 the row is what kills the credential (`validate_access` filters `is_active=True`
@@ -339,6 +443,26 @@ its script sends the visitor to the bouncer login with `?redirect=` back to
 itself (same origin, so the login page navigates straight back). With a session
 it shows the identity, the client name, the access in plain words, and
 Approve / Deny.
+
+**One sentence per granted scope**, tools first: `mcp` renders "Use the
+Assistant's tools as {email} — the same permissions as your account; changes
+still need your approval in the Admin", and `api` adds "Full API access as
+{email} — everything your account can do through the API, and nothing more. The
+Assistant's approval step does not apply to direct API calls." The `{email}`
+placeholder is filled in client-side once `/me` answers; the sentences
+themselves are rendered and autoescaped by the template, so no server value is
+concatenated into executable text.
+
+**The `resource` is scope-driven and never upgraded.** Eligibility is
+`entry.prefix == ("api" in granted)` plus "the entry offers every granted scope",
+so an `api` request binds the API root and an `mcp`-only request binds an exact
+resource. An explicit `resource` is echoed exactly (RFC 8707) — naming the MCP
+door while asking for `api` answers `invalid_scope`, not a silent upgrade to the
+root, and `_exchange_code` would refuse the mismatch at the token endpoint
+anyway. Omitting `resource` defaults when exactly one **eligible** entry is
+enabled, which is why adding the API root beside the door did not make every
+pre-2025-06-18 MCP client ambiguous. The practical consequence: an MCP client's
+built-in sign-in cannot obtain `api` — a client that wants it must name the root.
 
 Two rules shape the validation order:
 

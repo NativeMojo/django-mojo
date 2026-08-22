@@ -746,6 +746,8 @@ See [Incident API: Request LLM Analysis](../logging/incidents.md#request-llm-ana
 
 `ASSISTANT_MCP_ENABLED` is the only one of these an operator flips from a UI: it lives in the built-in Admin's Assistant setup view, alongside the connect address, a discovery self-check and the list of connected agents — see [the Assistant setup API](../account/admin_portal/assistant.md). Remote clients authenticate with OAuth grants rather than API keys, and any of them can be disconnected from that same view; [Connecting an AI client over MCP](../assistant/mcp.md) is the operator's runbook.
 
+A connection is one of two kinds, shown in the **Access** column: tool-door access (`mcp`), where every change still waits for an approval in the Admin, or **full API access** (`api`), which equals that person's own session token in reach — the same permissions, nothing more — with no approval step on direct API calls. Both are revoked from the same place; a credential a full-API connection mints in turn (an API key, for instance) has its own lifetime and is revoked separately, exactly as one minted from a browser session would be.
+
 ## IPSet Bulk Blocking
 
 IPSets are the primary mechanism for blocking entire countries, datacenters, or large abuse lists at the kernel level. Each IPSet record maps to a Linux `ipset` hash:net — lookups are O(1) regardless of set size, making it practical to block tens of thousands of CIDRs without performance impact.
