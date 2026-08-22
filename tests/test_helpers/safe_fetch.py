@@ -40,6 +40,54 @@ def _response(status, headers=None, body=b""):
     return resp
 
 
+class _ChunkedResponse:
+    """A streaming response that records how much of the body was pulled."""
+
+    def __init__(self, status, headers, chunks):
+        import requests
+        from requests.structures import CaseInsensitiveDict
+
+        self._resp = requests.Response()
+        self._resp.status_code = status
+        self._resp.headers = CaseInsensitiveDict(headers or {})
+        self._resp._content = b""
+        self._resp._content_consumed = True
+        self._resp.encoding = "utf-8"
+        self.chunks = chunks
+        self.consumed = 0
+        self.closed_after = None
+
+    # the surface safe_fetch touches
+    @property
+    def is_redirect(self):
+        return self._resp.is_redirect
+
+    @property
+    def headers(self):
+        return self._resp.headers
+
+    @property
+    def status_code(self):
+        return self._resp.status_code
+
+    @property
+    def text(self):
+        return self._resp.text
+
+    def _set_content(self, value):
+        self._resp._content = value
+
+    _content = property(lambda self: self._resp._content, _set_content)
+
+    def iter_content(self, chunk_size=1):
+        for chunk in self.chunks:
+            self.consumed += len(chunk)
+            yield chunk
+
+    def close(self):
+        self.closed_after = self.consumed
+
+
 class _Transport:
     """Maps URL -> response or exception, and records every get() call."""
 
@@ -372,15 +420,27 @@ def test_safe_fetch_byte_cap(opts):
     public = _resolver({"host.test": ["93.184.216.34"]})
     cap = 1024
 
-    oversized = _Transport(routes={
-        "https://host.test/": _response(200, {"Content-Type": "text/plain"}, b"A" * (cap * 2)),
-    })
+    # Streamed in many chunks: the helper must stop pulling once the cap is
+    # passed, and close the response — otherwise "capped" only means "sliced
+    # after the whole body was already in memory".
+    chunk = 256
+    streamed = _ChunkedResponse(
+        200, {"Content-Type": "text/plain"}, [b"A" * chunk] * 20)
+    oversized = _Transport(routes={"https://host.test/": streamed})
     result, err = sf.safe_fetch(
         "https://host.test/", max_bytes=cap, resolver=public, transport=oversized)
     assert err is None, f"an oversized body must be truncated, not refused: {err}"
     assert_eq(len(result.content), cap, "content must be cut to exactly max_bytes")
     assert result.truncated is True, "truncated must be True when more bytes were available"
     assert_eq(len(result.text), cap, "text must decode only the capped bytes")
+    assert streamed.consumed <= cap + chunk, (
+        "the helper must stop reading within one chunk of the cap — it read "
+        f"{streamed.consumed} bytes for a {cap}-byte cap"
+    )
+    assert_eq(
+        streamed.closed_after, streamed.consumed,
+        "the response must be closed as soon as the cap is reached, releasing the connection",
+    )
 
     exact = _Transport(routes={
         "https://host.test/": _response(200, {"Content-Type": "text/plain"}, b"B" * cap),
@@ -438,7 +498,7 @@ def test_safe_fetch_maps_transport_exceptions(opts):
         assert_eq(err, expected, f"wrong mapping for {type(exc).__name__}")
 
 
-@th.django_unit_test("safe_fetch: allow_hosts exempts a host at the initial URL and every hop")
+@th.django_unit_test("safe_fetch: allow_hosts exempts the initial URL only")
 def test_safe_fetch_allow_hosts_per_hop(opts):
     from mojo.helpers import safe_fetch as sf
 
@@ -461,15 +521,34 @@ def test_safe_fetch_allow_hosts_per_hop(opts):
     assert result is None, "the exemption must not extend to a host the redirect escapes to"
     assert_eq(err, "Redirect target is a private or internal address", "wrong refusal string")
 
+    # The exemption covers the URL the CALLER chose, not one the response chose.
+    # Honouring it per-hop would let a redirect turn a self-probe into a port
+    # scan of the allowed host (http://self.test:6379/ and friends).
     staying = _Transport(routes={
-        "http://self.test/": _response(302, {"Location": "/x"}),
-        "http://self.test/x": _response(200, {"Content-Type": "text/html"}, b"hop"),
+        "http://self.test/": _response(302, {"Location": "http://self.test:6379/x"}),
     })
     result, err = sf.safe_fetch(
-        "http://self.test/", allow_hosts=["self.test"],
-        resolver=_exploding_resolver, transport=staying)
-    assert err is None, f"a redirect that stays on the allowed host must be followed: {err}"
-    assert_eq(result.url, "http://self.test/x", "the allowed hop must be the final URL")
+        "http://self.test/", allow_hosts=["self.test"], resolver=private, transport=staying)
+    assert result is None, "a redirect back to the allowed host must still be checked"
+    assert_eq(
+        err, "Redirect target is a private or internal address",
+        "allow_hosts must not survive a redirect, even one that stays on the same host",
+    )
+    assert_eq(staying.urls, ["http://self.test/"], "the unchecked hop must never be requested")
+
+
+@th.django_unit_test("safe_fetch: allow_hosts does not bypass the scheme check")
+def test_safe_fetch_allow_hosts_does_not_bypass_schemes(opts):
+    from mojo.helpers import safe_fetch as sf
+
+    result, err = sf.safe_fetch(
+        "ftp://self.test/", allow_hosts=["self.test"],
+        resolver=_exploding_resolver, transport=_ExplodingTransport())
+    assert result is None, "an allowed host must still obey the scheme allow-list"
+    assert_eq(
+        err, "Unsupported scheme 'ftp'. Only http and https are allowed.",
+        "allow_hosts exempts the address check only, never the scheme check",
+    )
 
 
 @th.django_unit_test("safe_fetch: headers merge and every transport call is guarded")
@@ -508,3 +587,227 @@ def test_safe_fetch_headers_and_transport_kwargs(opts):
             f"allow_redirects must stay False on {url} — the helper follows hops itself",
         )
         assert_eq(kwargs["stream"], True, f"stream must stay True on {url} so the byte cap can bite")
+
+
+# ---------------------------------------------------------------------------
+# Parser differential — the guard must judge the host the transport dials
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("safe_fetch: a backslash authority cannot smuggle a host past the guard")
+def test_safe_fetch_refuses_parser_differential_authority(opts):
+    from urllib.parse import urlparse
+    from urllib3.util import parse_url
+    from mojo.helpers import safe_fetch as sf
+
+    hostile = r"http://127.0.0.1\@evil.test/"
+
+    # The premise of the attack: the two parsers read a different host out of
+    # this URL. If this ever stops being true the test still has to pass, but
+    # the reason it matters would have changed.
+    assert_eq(
+        urlparse(hostile).hostname, "evil.test",
+        "urlparse must be the parser that sees the decoy host — the differential is the bug",
+    )
+    assert_eq(
+        parse_url(hostile).host, "127.0.0.1",
+        "urllib3 (what requests dials) must be the parser that sees the real host",
+    )
+
+    transport = _Transport()
+    result, err = sf.safe_fetch(
+        hostile,
+        resolver=_resolver({"evil.test": ["93.184.216.34"]}),
+        transport=transport,
+    )
+    assert result is None, (
+        "a URL whose authority holds a backslash must be refused — the guard would "
+        "clear evil.test while requests connects to 127.0.0.1"
+    )
+    assert_eq(err, "Invalid URL — no hostname found", "wrong refusal string for the initial URL")
+    assert_eq(transport.urls, [], "the transport must never be reached for a smuggled host")
+
+
+@th.django_unit_test("safe_fetch: a backslash authority is refused on a redirect hop too")
+def test_safe_fetch_refuses_parser_differential_hop(opts):
+    from mojo.helpers import safe_fetch as sf
+
+    transport = _Transport(routes={
+        "https://host.test/a": _response(302, {"Location": r"//127.0.0.1:1234\@evil.test/"}),
+    })
+    result, err = sf.safe_fetch(
+        "https://host.test/a",
+        resolver=_resolver({"host.test": ["93.184.216.34"], "evil.test": ["93.184.216.35"]}),
+        transport=transport,
+    )
+    assert result is None, "the smuggling trick must not work through a redirect either"
+    assert_eq(err, "Redirect target is not a valid URL", "wrong refusal string for the hop")
+    assert_eq(
+        transport.urls, ["https://host.test/a"],
+        "the smuggled hop must never be requested",
+    )
+
+
+@th.django_unit_test("safe_fetch: the checked host is the one urllib3 resolves to")
+def test_safe_fetch_checks_the_transport_host(opts):
+    from mojo.helpers import safe_fetch as sf
+
+    # urlparse leaves an IDN hostname as unicode; urllib3 punycodes it, and
+    # punycode is what gets dialed — so that is what must be judged.
+    resolver_calls = []
+
+    def resolver(hostname):
+        resolver_calls.append(hostname)
+        return ["93.184.216.34"]
+
+    transport = _Transport(routes={
+        "http://bücher.test/": _response(200, {"Content-Type": "text/html"}, b"ok"),
+    })
+    result, err = sf.safe_fetch(
+        "http://bücher.test/", resolver=resolver, transport=transport)
+    assert err is None, f"an international domain must still be fetchable: {err}"
+    assert_eq(
+        resolver_calls, ["xn--bcher-kva.test"],
+        "the guard must judge the punycode host the transport dials, not the unicode spelling",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed inputs
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("safe_fetch: is_blocked_ip fails closed on input it cannot parse")
+def test_is_blocked_ip_unparsable_fails_closed(opts):
+    from mojo.helpers import safe_fetch as sf
+
+    for value in ["not-an-ip", "", "127.0.0.1.5", "example.com"]:
+        assert_true(
+            sf.is_blocked_ip(value),
+            f"is_blocked_ip({value!r}) must return True, not raise — a guard that "
+            "throws on bad input is a guard the caller skips",
+        )
+
+
+@th.django_unit_test("safe_fetch: a resolver that raises refuses the fetch, it does not escape")
+def test_safe_fetch_resolver_exception_is_contained(opts):
+    from mojo.helpers import safe_fetch as sf
+
+    def boom(hostname):
+        raise OSError("resolver exploded")
+
+    transport = _Transport()
+    result, err = sf.safe_fetch("https://host.test/", resolver=boom, transport=transport)
+    assert result is None, "a resolver failure must not produce a result"
+    assert_eq(err, "Could not connect to host.test", "a resolver failure must fail closed")
+    assert_eq(transport.urls, [], "the transport must not be contacted when the guard cannot judge")
+
+    hop = _Transport(routes={
+        "https://ok.test/": _response(302, {"Location": "https://host.test/x"}),
+    })
+
+    def boom_on_second(hostname):
+        if hostname == "ok.test":
+            return ["93.184.216.34"]
+        raise RuntimeError("resolver exploded")
+
+    result, err = sf.safe_fetch(
+        "https://ok.test/", resolver=boom_on_second, transport=hop)
+    assert result is None, "a resolver failure on a hop must not produce a result"
+    assert_eq(err, "Could not connect to host.test", "a hop resolver failure must fail closed")
+    assert_eq(hop.urls, ["https://ok.test/"], "the unjudged hop must never be requested")
+
+
+@th.django_unit_test("safe_fetch: schemes given as a bare string is not a substring test")
+def test_safe_fetch_schemes_as_string(opts):
+    from mojo.helpers import safe_fetch as sf
+
+    result, err = sf.safe_fetch(
+        "http://host.test/", schemes="https",
+        resolver=_exploding_resolver, transport=_ExplodingTransport())
+    assert result is None, (
+        'schemes="https" must refuse http — a bare string makes `scheme in schemes` '
+        "a substring test, and 'http' is a substring of 'https'"
+    )
+    assert_eq(err, "Unsupported scheme 'http'. Only https are allowed.", "wrong refusal string")
+
+    transport = _Transport(routes={
+        "https://host.test/": _response(302, {"Location": "http://public.test/"}),
+    })
+    result, err = sf.safe_fetch(
+        "https://host.test/", schemes="https",
+        resolver=_resolver({"host.test": ["93.184.216.34"], "public.test": ["93.184.216.35"]}),
+        transport=transport)
+    assert result is None, 'schemes="https" must refuse an http hop too'
+    assert_eq(err, "Redirect to unsupported scheme 'http'", "wrong refusal string for the hop")
+
+
+# ---------------------------------------------------------------------------
+# Credential headers must not cross an origin
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("safe_fetch: credential headers are dropped on a cross-origin hop")
+def test_safe_fetch_drops_credentials_cross_origin(opts):
+    from mojo.helpers import safe_fetch as sf
+
+    public = _resolver({"host.test": ["93.184.216.34"], "other.test": ["93.184.216.35"]})
+    creds = {
+        "Authorization": "Bearer secret",
+        "Cookie": "session=secret",
+        "Proxy-Authorization": "Basic secret",
+        "Accept": "text/html",
+    }
+
+    crossing = _Transport(routes={
+        "https://host.test/": _response(302, {"Location": "https://other.test/x"}),
+        "https://other.test/x": _response(200, {"Content-Type": "text/html"}, b"ok"),
+    })
+    result, err = sf.safe_fetch(
+        "https://host.test/", headers=creds, resolver=public, transport=crossing)
+    assert err is None, f"a cross-origin redirect must still be followed: {err}"
+    first, second = crossing.calls
+    for name in ("Authorization", "Cookie", "Proxy-Authorization"):
+        assert name in first[1]["headers"], f"{name} must be sent to the origin the caller chose"
+        assert name not in second[1]["headers"], (
+            f"{name} must not be replayed to other.test — a redirect the caller never "
+            "chose would otherwise harvest the credential"
+        )
+    assert_eq(
+        second[1]["headers"]["Accept"], "text/html",
+        "non-credential headers must survive the hop",
+    )
+
+    staying = _Transport(routes={
+        "https://host.test/a": _response(302, {"Location": "/b"}),
+        "https://host.test/b": _response(200, {"Content-Type": "text/html"}, b"ok"),
+    })
+    result, err = sf.safe_fetch(
+        "https://host.test/a", headers=creds, resolver=public, transport=staying)
+    assert err is None, f"a same-origin redirect must still be followed: {err}"
+    assert_eq(
+        staying.calls[1][1]["headers"]["Authorization"], "Bearer secret",
+        "a same-origin hop must keep the caller's credentials — nothing left the origin",
+    )
+
+
+# ---------------------------------------------------------------------------
+# IPv4-mapped IPv6 unwrapping
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("safe_fetch: IPv4-mapped IPv6 is unwrapped before the network check")
+def test_is_blocked_ip_unwraps_ipv4_mapped(opts):
+    import ipaddress
+    from mojo.helpers import safe_fetch as sf
+
+    # 100.64.0.0/10 is an IPv4Network, so `mapped_v6 in network` is False
+    # without the unwrap, and none of the is_private/is_reserved flags catch
+    # it either — these cases fail the moment the unwrap is removed.
+    for value in ["::ffff:100.64.0.1", "::ffff:240.0.0.1"]:
+        naked = ipaddress.ip_address(value)
+        assert_true(
+            sf.is_blocked_ip(naked),
+            f"{value} must be blocked — it is a blocked IPv4 address wearing an IPv6 spelling",
+        )
+    assert_true(
+        not sf.is_blocked_ip(ipaddress.ip_address("::ffff:8.8.8.8")),
+        "::ffff:8.8.8.8 maps to a public address and must stay fetchable — "
+        "the unwrap must not blanket-block every mapped address",
+    )

@@ -2,10 +2,8 @@
 import re
 from urllib.parse import urlparse
 
-import requests
-
 from mojo.apps.assistant import tool
-from mojo.helpers.safe_fetch import is_private_hostname
+from mojo.helpers.safe_fetch import is_private_hostname, safe_fetch
 from mojo.helpers.settings import settings
 
 DEFAULT_BASE_URL = "https://raw.githubusercontent.com/NativeMojo/django-mojo/refs/heads/main/docs/"
@@ -28,24 +26,36 @@ def _validate_base_url(base_url):
 
 
 def _fetch_doc(url):
-    """Fetch a raw doc URL. Returns (content, error_dict)."""
-    try:
-        resp = requests.get(url, timeout=DEFAULT_TIMEOUT, headers={"User-Agent": USER_AGENT})
-    except requests.exceptions.Timeout:
-        return None, {"error": f"Request timed out after {DEFAULT_TIMEOUT}s"}
-    except requests.exceptions.ConnectionError:
-        return None, {"error": "Could not connect to documentation server"}
-    except requests.exceptions.RequestException:
+    """
+    Fetch a raw doc URL. Returns (content, error_dict).
+
+    Goes through safe_fetch so a redirect off the validated docs host cannot
+    reach a private address, and https cannot be downgraded mid-chain. The
+    helper's error strings name the host, so they are mapped onto this tool's
+    own wording rather than surfaced — the base URL is not the caller's
+    business.
+    """
+    result, err = safe_fetch(
+        url,
+        timeout=DEFAULT_TIMEOUT,
+        schemes=("https",),
+        headers={"User-Agent": USER_AGENT},
+    )
+    if err:
+        if err.startswith("Request timed out"):
+            return None, {"error": f"Request timed out after {DEFAULT_TIMEOUT}s"}
+        if err.startswith("Could not connect"):
+            return None, {"error": "Could not connect to documentation server"}
         return None, {"error": "Request failed"}
 
-    if resp.status_code == 404:
+    if result.status_code == 404:
         return None, {"error": "Document not found"}
-    if resp.status_code == 403:
+    if result.status_code == 403:
         return None, {"error": "GitHub rate limit reached. Try again in a few minutes."}
-    if resp.status_code != 200:
-        return None, {"error": f"HTTP {resp.status_code} fetching documentation"}
+    if result.status_code != 200:
+        return None, {"error": f"HTTP {result.status_code} fetching documentation"}
 
-    return resp.text, None
+    return result.text, None
 
 
 def _is_safe_link_path(link_path):

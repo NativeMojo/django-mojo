@@ -24,6 +24,8 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from objict import objict
+from urllib3.exceptions import LocationParseError
+from urllib3.util import parse_url
 
 DEFAULT_TIMEOUT = 10
 MAX_REDIRECTS = 3
@@ -34,6 +36,9 @@ DEFAULT_SCHEMES = ("http", "https")
 
 # How much is pulled off the socket at a time while honouring the byte cap
 CHUNK_SIZE = 65536
+
+# Never replayed to an origin other than the one the caller addressed
+CREDENTIAL_HEADERS = ("authorization", "cookie", "proxy-authorization")
 
 # Private/reserved IP ranges that should never be fetched (SSRF protection)
 BLOCKED_NETWORKS = [
@@ -56,10 +61,15 @@ def is_blocked_ip(ip):
     """
     Check if an IP address is private/reserved. Handles IPv4-mapped IPv6.
 
-    Accepts an ``ipaddress`` address object or an address string.
+    Accepts an ``ipaddress`` address object or an address string; a string
+    that is not an address is treated as blocked.
     """
     if isinstance(ip, str):
-        ip = ipaddress.ip_address(ip)
+        try:
+            ip = ipaddress.ip_address(ip)
+        except ValueError:
+            # Fail closed — an address the guard cannot read is one it cannot clear
+            return True
     # Unwrap IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1 -> 127.0.0.1)
     check = ip.ipv4_mapped if hasattr(ip, "ipv4_mapped") and ip.ipv4_mapped else ip
     if check.is_private or check.is_loopback or check.is_link_local or check.is_reserved or check.is_multicast:
@@ -99,13 +109,68 @@ def _host_verdict(hostname, resolver=None):
     if not addresses:
         return "unresolvable"
     for address in addresses:
-        try:
-            ip = ipaddress.ip_address(address)
-        except ValueError:
-            return "private"
-        if is_blocked_ip(ip):
+        if is_blocked_ip(address):
             return "private"
     return None
+
+
+def _safe_verdict(hostname, resolver):
+    """
+    ``_host_verdict`` that cannot throw.
+
+    A resolver is I/O — the default one raises OSError families the guard has
+    no business enumerating, and an injected one can raise anything. Any
+    failure counts as unresolvable, which refuses the fetch before the
+    transport is contacted.
+    """
+    try:
+        return _host_verdict(hostname, resolver)
+    except Exception:
+        return "unresolvable"
+
+
+def _authority(url):
+    """The raw authority substring, read as permissively as any parser might."""
+    rest = url.split("://", 1)[1] if "://" in url else url
+    for separator in ("/", "?", "#"):
+        cut = rest.find(separator)
+        if cut != -1:
+            rest = rest[:cut]
+    return rest
+
+
+def _transport_host(url):
+    """
+    The host the transport will actually dial, read with the transport's parser.
+
+    urlparse and urllib3 disagree about where an authority ends: urllib3 stops
+    at a backslash, so urlparse reads ``http://127.0.0.1\\@evil.com/`` as
+    ``evil.com`` while requests connects to ``127.0.0.1``. Guarding urlparse's
+    answer would clear a host nobody ever contacts, so the check is done on
+    urllib3's. A backslash anywhere in the authority is refused outright —
+    nothing legitimate needs one — and an unparsable or host-less URL returns
+    None so the caller fails closed.
+    """
+    if "\\" in _authority(url):
+        return None
+    try:
+        host = parse_url(url).host
+    except LocationParseError:
+        return None
+    if not host:
+        return None
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    return host.lower()
+
+
+def _origin(url):
+    """(scheme, host, port) as the transport sees it — for cross-origin checks."""
+    try:
+        parts = parse_url(url)
+    except LocationParseError:
+        return None
+    return (parts.scheme, (parts.host or "").lower(), parts.port)
 
 
 def is_private_hostname(hostname, resolver=None):
@@ -125,30 +190,37 @@ def safe_fetch(url, timeout=DEFAULT_TIMEOUT, max_bytes=MAX_RAW_BYTES,
     ``text`` and ``truncated``.
 
     ``allow_hosts`` names hostnames exempt from the private/unresolvable
-    refusal at the initial URL and at every hop; entries are unbracketed
-    ``urlparse().hostname`` values and the exemption covers every port.
-    ``schemes`` is applied at the initial URL and at every hop.
-    ``resolver(hostname)`` returns an iterable of address strings; ``transport``
-    is anything exposing ``requests.Session.get``.
+    refusal **at the initial URL only** — a redirect an attacker chose never
+    inherits the exemption. Entries are unbracketed host values and the
+    exemption covers every port on that host; never build the list from
+    user-controlled input. ``schemes`` is applied at the initial URL and at
+    every hop, and accepts a bare string. ``resolver(hostname)`` returns an
+    iterable of address strings; ``transport`` is anything exposing
+    ``requests.Session.get``. Credential headers are dropped on a hop that
+    crosses to a different origin.
     """
+    # A bare string would make the scheme test a substring test ("http" in "https")
+    schemes = (schemes,) if isinstance(schemes, str) else tuple(schemes)
+
     allowed_hosts = set()
     if allow_hosts:
         allowed_hosts = set(str(entry).lower() for entry in allow_hosts)
 
     try:
-        parsed = urlparse(url)
-        hostname = parsed.hostname
+        scheme = urlparse(url).scheme
     except ValueError:
         return None, "Invalid URL — no hostname found"
 
-    if parsed.scheme not in schemes:
+    if scheme not in schemes:
         return None, "Unsupported scheme '{}'. Only {} are allowed.".format(
-            parsed.scheme, " and ".join(schemes))
+            scheme, " and ".join(schemes))
+
+    hostname = _transport_host(url)
     if not hostname:
         return None, "Invalid URL — no hostname found"
 
     if hostname not in allowed_hosts:
-        verdict = _host_verdict(hostname, resolver)
+        verdict = _safe_verdict(hostname, resolver)
         if verdict == "private":
             return None, "Cannot fetch private or internal addresses"
         if verdict == "unresolvable":
@@ -178,21 +250,30 @@ def safe_fetch(url, timeout=DEFAULT_TIMEOUT, max_bytes=MAX_RAW_BYTES,
                 resp.close()
                 try:
                     target = urljoin(current_url, location)
-                    hop = urlparse(target)
-                    hop_hostname = hop.hostname
+                    hop_scheme = urlparse(target).scheme
                 except ValueError:
                     # urljoin itself rejects e.g. an unbalanced IPv6 bracket
                     return None, "Redirect target is not a valid URL"
+                hop_hostname = _transport_host(target)
                 if not hop_hostname:
                     return None, "Redirect target is not a valid URL"
-                if hop.scheme not in schemes:
-                    return None, f"Redirect to unsupported scheme '{hop.scheme}'"
-                if hop_hostname not in allowed_hosts:
-                    verdict = _host_verdict(hop_hostname, resolver)
-                    if verdict == "private":
-                        return None, "Redirect target is a private or internal address"
-                    if verdict == "unresolvable":
-                        return None, f"Could not connect to {hop_hostname}"
+                if hop_scheme not in schemes:
+                    return None, f"Redirect to unsupported scheme '{hop_scheme}'"
+                # allow_hosts deliberately does NOT apply here: the hop is
+                # chosen by the response, so exempting it would hand an
+                # attacker a port scan of the allowed host.
+                verdict = _safe_verdict(hop_hostname, resolver)
+                if verdict == "private":
+                    return None, "Redirect target is a private or internal address"
+                if verdict == "unresolvable":
+                    return None, f"Could not connect to {hop_hostname}"
+                if _origin(target) != _origin(current_url):
+                    # Credentials the caller set for their origin must not be
+                    # replayed to whatever host the redirect names.
+                    send_headers = dict(
+                        (name, value) for name, value in send_headers.items()
+                        if name.lower() not in CREDENTIAL_HEADERS
+                    )
                 current_url = target
                 continue
 
