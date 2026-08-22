@@ -203,17 +203,18 @@ surface, because reporting on a setup is not continuing it.
 
 ## Limitations
 
-### `take_webapp_offline` does not stop an API-backed address
+### `take_webapp_offline` refuses rather than guesses
 
-`webapp_lifecycle.take_offline` deletes the primary vhost only when its kind is
-`site`. A `site_api` primary is unlinked from the app, but its enabled `Vhost`
-row survives — and desired state selects every enabled vhost in the pool, so
-nodes keep rendering it and the address goes on answering from its upstream
-routes. Only the extra (alias) addresses stop.
+`webapp_lifecycle.take_offline` — the one owner of the teardown, shared with
+the REST detach handler — deletes the primary vhost for both serving kinds
+(`site` and `site_api`) and every alias, all row-locked in one transaction, so
+the address stops answering either way. It refuses, touching nothing, when an
+alias is also another app's primary address, when an alias has a non-serving
+kind, or when the primary is not a serving address: each is a state no correct
+attach flow produces, and deleting through it would take a *different* app
+offline. The tool surfaces that refusal as `offline_refused`.
 
-That is the REST detach handler's long-standing behaviour, lifted verbatim into
-the shared service; changing it belongs in its own item. What this domain does
-is refuse to overclaim about it: `_preview_offline` branches on the kind, binds
+`_preview_offline` still binds the primary's kind into the approval and
 `kind:<kind>` into the approval revision, sets
 `details.address_stops_serving`, and the card says the address "KEEPS serving
 its upstream routes until they are removed". The tool description and the

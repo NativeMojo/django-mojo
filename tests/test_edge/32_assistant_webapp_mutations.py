@@ -222,50 +222,48 @@ def test_offline_preview_binds_addresses(opts):
         Vhost.objects.filter(pk=alias.pk).delete()
 
 
-@th.django_unit_test("the offline card does not overclaim for an API-backed address")
+@th.django_unit_test("the offline card matches what teardown really does, for both serving kinds")
 def test_offline_card_matches_what_teardown_really_does(opts):
-    # `webapp_lifecycle.take_offline` deletes the primary vhost only for kind
-    # `site`. A `site_api` primary is unlinked but its enabled row survives and
-    # nodes keep serving it, so a card promising the address stops serving
-    # would be false. (The behaviour is deliberately unchanged; only the claim
-    # is corrected.)
+    # `webapp_lifecycle.take_offline` deletes the primary vhost for BOTH
+    # serving kinds — `site` and `site_api` — and every alias, in one locked
+    # transaction, so the card may promise that the address stops serving for
+    # either kind. The kind is still bound so the card describes the address
+    # that was there.
     from mojo.apps.edge.models import Vhost
 
     static_vhost = make_vhost(opts.domain, opts.certificate,
                               label=f"st{uuid.uuid4().hex[:6]}", kind="site")
     static_app = make_webapp(opts.group, slug=f"st{uuid.uuid4().hex[:5]}",
                              vhost=static_vhost)
+    api_vhost = make_vhost(opts.domain, opts.certificate,
+                           label=f"ap{uuid.uuid4().hex[:6]}", kind="site_api")
+    api_app = make_webapp(opts.group, slug=f"ap{uuid.uuid4().hex[:5]}",
+                          vhost=api_vhost)
     params = {"reason": "seasonal shutdown"}
 
     served_from_build = _preview(
         "take_webapp_offline", dict(params, webapp=static_app.pk), opts.manager)
     api_backed = _preview(
-        "take_webapp_offline", dict(params, webapp=opts.webapp.pk), opts.manager)
+        "take_webapp_offline", dict(params, webapp=api_app.pk), opts.manager)
 
-    assert served_from_build["details"]["address_stops_serving"] is True, \
-        f"a build-served address was not reported as stopping: {served_from_build}"
-    assert "stop serving" in served_from_build["summary"], \
-        f"the build-served card lost its plain wording: {served_from_build['summary']}"
-    assert f"kind:{static_vhost.kind}" in served_from_build["revision"], \
-        f"the address kind was not bound: {served_from_build['revision']}"
+    for label, preview, vhost in (("build-served", served_from_build, static_vhost),
+                                  ("API-backed", api_backed, api_vhost)):
+        assert preview["details"]["address_stops_serving"] is True, \
+            f"a {label} address was not reported as stopping: {preview}"
+        assert "stop serving" in preview["summary"] and "KEEPS" not in preview["summary"], \
+            f"the {label} card does not say the address stops serving: {preview['summary']}"
+        assert f"kind:{vhost.kind}" in preview["revision"], \
+            f"the address kind was not bound for the {label} app: {preview['revision']}"
 
-    assert api_backed["details"]["address_stops_serving"] is False, (
-        "an API-backed primary survives take_offline, so the card must not "
-        f"claim it stops serving: {api_backed}")
-    assert "KEEPS serving" in api_backed["summary"], \
-        f"the API-backed card still overclaims: {api_backed['summary']}"
-    assert "KEEPS serving" in _summarize(
-        "take_webapp_offline", dict(params, webapp=opts.webapp.pk), opts.manager), \
-        "the one-line card description still overclaims for an API-backed app"
-
-    # ...and the execution result says the same thing.
-    outcome = _execute("take_webapp_offline",
-                       dict(params, webapp=static_app.pk), opts.manager,
-                       _stub_approval())
-    assert outcome["address_stopped_serving"] is True and outcome["note"] is None, \
-        f"a build-served teardown reported a caveat it does not have: {outcome}"
-    assert not Vhost.objects.filter(pk=static_vhost.pk).exists(), \
-        "a `site` primary was not actually deleted"
+    # ...and execution does exactly that for both kinds.
+    for app, vhost in ((static_app, static_vhost), (api_app, api_vhost)):
+        outcome = _execute("take_webapp_offline",
+                           dict(params, webapp=app.pk), opts.manager,
+                           _stub_approval())
+        assert outcome["address_stopped_serving"] is True and outcome["note"] is None, \
+            f"a {vhost.kind} teardown reported a caveat it does not have: {outcome}"
+        assert not Vhost.objects.filter(pk=vhost.pk).exists(), \
+            f"a `{vhost.kind}` primary was not actually deleted"
 
 
 @th.django_unit_test("a malformed operation id is refused exactly like an unknown one")

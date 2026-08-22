@@ -498,6 +498,41 @@ def test_route_writes_apply_to_every_address(opts):
     assert error is not None, "removing a path that is not set up reported success"
 
 
+@th.django_unit_test("canonical and legacy trailing-slash routes are one identity")
+def test_route_writes_heal_legacy_identity_and_refuse_ambiguity(opts):
+    from mojo.apps.edge.models import VhostRoute
+    from mojo.apps.edge.services import webapp_serving
+
+    web_app, _, _, primary, alias = _app(opts)
+    legacy = make_route(primary, "/reports/", opts.upstream)
+
+    webapp_serving.add_route(web_app, "/reports", opts.upstream.pk)
+    legacy.refresh_from_db()
+    assert legacy.path_prefix == "/reports", \
+        "adding the canonical path did not heal the single legacy row"
+    for vhost, role in ((primary, "primary"), (alias, "alias")):
+        rows = VhostRoute.objects.filter(
+            vhost=vhost, path_prefix__in=("/reports", "/reports/"))
+        assert rows.count() == 1 and rows.get().path_prefix == "/reports", \
+            f"{role} did not converge to one canonical route identity"
+
+    remove_primary = make_route(primary, "/remove-me/", opts.upstream)
+    remove_alias = make_route(alias, "/remove-me/", opts.upstream)
+    webapp_serving.remove_route(web_app, "/remove-me")
+    assert not VhostRoute.objects.filter(
+        pk__in=(remove_primary.pk, remove_alias.pk)).exists(), \
+        "removing a canonical path left its legacy-spelled routes serving"
+
+    canonical = make_route(primary, "/ambiguous", opts.upstream)
+    trailing = make_route(primary, "/ambiguous/", opts.upstream)
+    error = raises(webapp_serving.remove_route, web_app, "/ambiguous")
+    assert error is not None and "more than one" in str(error), \
+        f"ambiguous route identity was not refused plainly: {error}"
+    assert VhostRoute.objects.filter(
+        pk__in=(canonical.pk, trailing.pk)).count() == 2, \
+        "the refused ambiguous removal still deleted a route"
+
+
 @th.django_unit_test("the platform's own sign-in paths cannot be added, moved or removed")
 def test_managed_prefixes_are_refused(opts):
     from mojo.apps.edge.models import VhostRoute

@@ -438,6 +438,52 @@ def _clean_prefix(path_prefix):
     return prefix
 
 
+def _route_identity_rows(vhost, prefix, lock=False):
+    """Rows that represent one canonical route identity.
+
+    Early releases accepted both ``/api`` and ``/api/``. The service writes
+    only the canonical spelling now, but it must still see either legacy form
+    and must never guess when both survived.
+    """
+    from mojo.apps.edge.models import VhostRoute
+
+    queryset = VhostRoute.objects.filter(
+        vhost=vhost, path_prefix__in=(prefix, f"{prefix}/"),
+    ).select_related("upstream").order_by("pk")
+    if lock:
+        queryset = queryset.select_for_update()
+    rows = list(queryset)
+    if len(rows) > 1:
+        raise me.ValueException(
+            f"{prefix} has more than one stored route. Resolve the duplicate "
+            f"before changing this path.")
+    return rows
+
+
+def _canonical_route_contract(vhost, lock=False):
+    """Return one canonical-prefix -> row mapping, healing safe legacy rows."""
+    routes = vhost.routes.select_related("upstream").order_by("pk")
+    if lock:
+        routes = routes.select_for_update()
+    grouped = {}
+    for route in routes:
+        prefix = route.path_prefix.rstrip("/") or "/"
+        grouped.setdefault(prefix, []).append(route)
+
+    contract = {}
+    for prefix, rows in grouped.items():
+        if len(rows) > 1:
+            raise me.ValueException(
+                f"{prefix} has more than one stored route. Resolve the duplicate "
+                f"before reconciling this address.")
+        route = rows[0]
+        if route.path_prefix != prefix:
+            route.path_prefix = prefix
+            route.save(update_fields=["path_prefix", "modified"])
+        contract[prefix] = route
+    return contract
+
+
 def add_route(web_app, path_prefix, upstream):
     """Send one path to a declared destination, on every address this app has."""
     from mojo.apps.edge.models import Vhost, VhostRoute
@@ -450,17 +496,23 @@ def add_route(web_app, path_prefix, upstream):
         locked = Vhost.objects.select_for_update().get(pk=primary.pk)
         targets = [locked] + list(Vhost.objects.select_for_update().filter(
             alias_of=web_app).order_by("pk"))
+        planned = []
         for vhost in targets:
-            existing = VhostRoute.objects.filter(
-                vhost=vhost, path_prefix=prefix).first()
+            rows = _route_identity_rows(vhost, prefix, lock=True)
+            existing = rows[0] if rows else None
             if existing is not None:
                 if existing.upstream_id != destination.pk:
                     raise me.ValueException(
                         f"{prefix} already goes somewhere else. Remove it "
                         f"first, then add it again.")
-                continue
-            VhostRoute.objects.create(
-                vhost=vhost, path_prefix=prefix, upstream=destination)
+            planned.append((vhost, existing))
+        for vhost, existing in planned:
+            if existing is None:
+                VhostRoute.objects.create(
+                    vhost=vhost, path_prefix=prefix, upstream=destination)
+            elif existing.path_prefix != prefix:
+                existing.path_prefix = prefix
+                existing.save(update_fields=["path_prefix", "modified"])
     return serving_for(web_app, include_editables=True)
 
 
@@ -475,14 +527,15 @@ def remove_route(web_app, path_prefix):
         locked = Vhost.objects.select_for_update().get(pk=primary.pk)
         targets = [locked] + list(Vhost.objects.select_for_update().filter(
             alias_of=web_app).order_by("pk"))
-        removed = 0
+        planned = []
         for vhost in targets:
-            # One at a time, never a queryset delete: VhostRoute.delete()
-            # publishes fleet convergence for the pool it belonged to.
-            for route in VhostRoute.objects.filter(
-                    vhost=vhost, path_prefix=prefix):
-                route.delete()
-                removed += 1
-        if not removed:
+            rows = _route_identity_rows(vhost, prefix, lock=True)
+            if rows:
+                planned.append(rows[0])
+        if not planned:
             raise me.ValueException(f"{prefix} isn’t set up on this app.")
+        # One at a time, never a queryset delete: VhostRoute.delete()
+        # publishes fleet convergence for the pool it belonged to.
+        for route in planned:
+            route.delete()
     return serving_for(web_app, include_editables=True)
