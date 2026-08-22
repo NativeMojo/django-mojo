@@ -2,6 +2,15 @@
 from mojo.apps.assistant import tool
 
 
+def _user_tier(params, user):
+    """Owner-state predicate: the call targets the caller's own user tier.
+
+    Global and group entries are shared state and keep proposing an approval
+    card; anything that is not literally the string "user" returns False.
+    """
+    return params.get("tier") == "user"
+
+
 @tool(
     name="read_memory",
     domain="memory",
@@ -40,6 +49,7 @@ def _tool_read_memory(params, user):
     permission="assistant",
     core=True,
     mutates=True,
+    owner_state=_user_tier,
     description=(
         "Store or update a memory entry. Memories persist across conversations.\n\n"
         "Tiers:\n"
@@ -52,7 +62,9 @@ def _tool_read_memory(params, user):
         "- Don't memorize what you can look up with a tool.\n"
         "- Check existing memories before writing — update rather than duplicate.\n"
         "- Never store passwords, API keys, tokens, or credentials.\n"
-        "- For user/group tiers, confirm with the user before storing observations."
+        "- For user/group tiers, confirm with the user before storing observations.\n\n"
+        "Entries in your user tier are saved immediately; global and group "
+        "entries require operator approval."
     ),
     input_schema={
         "type": "object",
@@ -93,9 +105,12 @@ def _tool_write_memory(params, user):
     permission="assistant",
     core=True,
     mutates=True,
+    owner_state=_user_tier,
     description=(
         "Delete a memory entry. Use this to remove outdated, incorrect, or "
-        "duplicate memories. Check existing entries with read_memory first."
+        "duplicate memories. Check existing entries with read_memory first.\n\n"
+        "Entries in your user tier are deleted immediately; global and group "
+        "entries require operator approval."
     ),
     input_schema={
         "type": "object",

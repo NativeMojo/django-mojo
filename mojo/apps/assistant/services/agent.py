@@ -841,6 +841,24 @@ def _extract_context_refs(tool_blocks, tool_results):
     return refs
 
 
+def _owner_state_exempt(tool_entry, tool_input, user):
+    """True only when the entry's owner_state predicate returns exactly True.
+
+    Fail closed: no predicate, a falsy result, a truthy NON-bool result, or a
+    raising predicate all mean "propose an approval card". The exemption has to
+    be earned per call — it is never a flag on the tool.
+    """
+    predicate = tool_entry.get("owner_state")
+    if predicate is None:
+        return False
+    try:
+        return predicate(tool_input, user) is True
+    except Exception:
+        logger.exception("owner_state raised for tool '%s' — proposing instead",
+                         tool_entry["definition"]["name"])
+        return False
+
+
 def _execute_tool(
         block, registry, user, conversation, tools, on_event, tool_calls_made,
         request_meta=None, _reporter=None, pending_actions=None):
@@ -851,9 +869,10 @@ def _execute_tool(
     This is the ONLY place a tool handler is dispatched from an agent turn, and
     both ``run_assistant`` and ``run_assistant_ws`` funnel through it — which is
     why the approval gate lives here and nowhere else. A ``mutates=True`` tool
-    never reaches ``_call_handler``: it produces a ``PendingAction`` the operator
-    must resolve (see ``services/approvals.py``). No prompt wording can route
-    around this.
+    never reaches ``_call_handler`` from here unless its ``owner_state``
+    predicate returns exactly True for this call; otherwise it produces a
+    ``PendingAction`` the operator must resolve (see ``services/approvals.py``).
+    No prompt wording can route around this.
 
     Returns a dict with 'tool_use_id' and 'result' for building tool_results.
     """
@@ -890,8 +909,9 @@ def _execute_tool(
             f"(requires '{perm}'). conv={conversation.pk}",
             user=user, _reporter=_reporter,
         )
-    elif tool_entry.get("mutates"):
-        # THE GATE. A mutating tool call is a PROPOSAL, never an execution.
+    elif tool_entry.get("mutates") and not _owner_state_exempt(tool_entry, tool_input, user):
+        # THE GATE. A mutating tool call is a PROPOSAL, never an execution
+        # (owner-state calls branch to the direct path below).
         try:
             tool_result, approval_block = approvals.propose(
                 user, conversation, tool_name, tool_entry, tool_input,
@@ -943,8 +963,18 @@ def _execute_tool(
             _handle_plan_tool(
                 conversation, tool_name, tool_input, tool_result, on_event,
             )
-            # The `assistant:tool:<name>` success event now fires from
-            # approvals.resolve(), the only place a mutating tool can run.
+            if tool_entry.get("mutates") and not (
+                    isinstance(tool_result, dict) and "error" in tool_result):
+                # Owner-state direct execution. Same category, level and shape
+                # as the event approvals.resolve() files for an approved
+                # execution, so RuleSets keyed on it keep firing. Every other
+                # mutating tool still reports from approvals.resolve().
+                _report_event(
+                    f"assistant:tool:{tool_name}", 5, f"Assistant tool: {tool_name}",
+                    f"User {user.email} (id={user.pk}) executed owner-state mutating "
+                    f"tool '{tool_name}' directly. conv={conversation.pk}",
+                    user=user, model_name="account.User", model_id=user.pk,
+                    _reporter=_reporter)
         except Exception as exc:
             logger.exception("Tool %s failed", tool_name)
             tool_result = {"error": f"Tool '{tool_name}' encountered an internal error."}
