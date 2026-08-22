@@ -19,6 +19,8 @@ that asked for the certificate, and spreading :80 across the fleet means it land
 somewhere else four times out of five.
 """
 
+import json
+
 from mojo.deploy.provision import discover, report
 from mojo.deploy.provision import spec as spec_module
 
@@ -248,8 +250,10 @@ def _ensure_target_groups(elbv2, spec, observed, wanted, findings, actions,
                 STEP, f"target_group.{role}.health_check",
                 f"{request['Name']} differs on {', '.join(sorted(changes))}",
                 "apply modifies it in place"))
-            actions.append(report.Action(STEP, "modify", request["Name"],
-                                         ", ".join(sorted(changes))))
+            detail = json.dumps(changes, sort_keys=True, separators=(",", ":"),
+                                ensure_ascii=True)
+            actions.append(report.Action(
+                STEP, "modify", request["Name"], detail))
             if apply:
                 report.safe(
                     findings, STEP, "elbv2.modify_target_group",

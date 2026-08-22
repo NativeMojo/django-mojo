@@ -1412,6 +1412,15 @@ def test_balancer_modifies_owned_brownfield_health_path_drift(opts):
         "both owned groups must report their health-path drift")
     th.assert_eq([action.verb for action in actions], ["modify", "modify"],
                  "mutable path drift must plan modifications, never replacements")
+    details = {action.target: action.detail for action in actions}
+    th.assert_eq(
+        details[wanted["api"]["Name"]],
+        '{"HealthCheckPath":"/api/maestro/node/ready"}',
+        "the API modify preview must bind the exact desired path as JSON")
+    th.assert_eq(
+        details[wanted["certbot"]["Name"]],
+        '{"HealthCheckPath":"/certbot/ready"}',
+        "the certbot modify preview must bind the exact desired path as JSON")
 
 
 @th.django_unit_test("a target group that AWS made immutable is reported, never modified")
