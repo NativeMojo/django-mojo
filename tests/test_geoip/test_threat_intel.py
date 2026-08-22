@@ -38,7 +38,6 @@ BREADTH_IP = "203.0.113.102"
 EGRESS_IP = "203.0.113.103"
 FEEDBACK_IP = "203.0.113.104"
 DRYRUN_IP = "203.0.113.105"
-DBTUNE_IP = "203.0.113.106"
 PROPS_IP = "203.0.113.107"
 NOT_ABUSER_IP = "203.0.113.108"
 SUSPECT_IP = "203.0.113.109"
@@ -579,42 +578,11 @@ def test_internal_threats_no_events_is_clean(opts):
 # mock.patches a threat_intel module attribute.
 
 
-@th.django_unit_test("threat intel: a DB-backed Setting retunes detection")
-def test_thresholds_are_db_tunable(opts):
-    """The point of the rewrite: each deployment tunes its own rules.
-
-    get_static() reads file-based settings only, so before this nothing was
-    tunable without a code edit and a restart.
-    """
-    from mojo.apps.account.models.setting import Setting
-    from mojo.helpers.geoip import threat_intel
-
-    key = "GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_THRESHOLD"
-    _clear_devices(DBTUNE_IP)
-    _seed_events(DBTUNE_IP, 3, level=9, category=CONFIRMED_CATEGORY)
-
-    baseline = threat_intel.check_internal_threats(DBTUNE_IP)
-    assert baseline['is_known_attacker'] is True, (
-        f"3 confirmed events flag an attacker at the shipped default; got {baseline!r}"
-    )
-
-    Setting.objects.filter(key=key, group=None).delete()
-    row = Setting.objects.create(key=key, value="25", group=None)
-    try:
-        row.push_to_cache()
-        tuned = threat_intel.check_internal_threats(DBTUNE_IP)
-        assert tuned['is_known_attacker'] is False, (
-            "a DB-backed Setting of 25 must raise the bar without a restart; "
-            f"got {tuned!r}"
-        )
-    finally:
-        row.remove_from_cache()
-        row.delete()
-
-    restored = threat_intel.check_internal_threats(DBTUNE_IP)
-    assert restored['is_known_attacker'] is True, (
-        f"deleting the Setting must restore the shipped default; got {restored!r}"
-    )
+# test_thresholds_are_db_tunable moved to
+# tests/test_geoip_extended_serial/test_threat_intel.py (item #2558) — it
+# writes the global GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_THRESHOLD Setting
+# row and pushes it to cache, which retunes detection for every parallel
+# module that calls check_internal_threats() while the window is open.
 
 
 # test_deprecated_excluded_categories_still_honored moved to

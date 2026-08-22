@@ -7,6 +7,11 @@ config/PROVIDERS/detection bundle the geolocate_ip() end-to-end paths need —
 so they run only in this opt-in serial tier. Assertions are verbatim from the
 source file.
 
+`test_thresholds_are_db_tunable` joined them for a different reason: it writes
+the GLOBAL `GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_THRESHOLD` Setting row and
+pushes it to cache, retuning detection for any parallel module that calls
+`check_internal_threats()` inside that window.
+
 Addresses are TEST-NET-3 and unique to this file — except the two
 geolocate_ip() addresses, which must be globally routable (Python's ipaddress
 module reports the documentation ranges as private, and geolocate_ip()
@@ -20,6 +25,9 @@ DRYRUN_IP = "203.0.113.105"
 SUSPECT_IP = "203.0.113.109"
 PATCHABLE_IP = "203.0.113.110"
 MEMO_IP = "203.0.113.111"
+# Unique to this file: the db-tunable test writes a GLOBAL threshold row
+# while it holds this address, so no other module may share it.
+DBTUNE_IP = "203.0.113.112"
 
 GEOLOCATE_IP = "102.99.113.94"
 GEOLOCATE_CLEAN_IP = "102.99.113.95"
@@ -312,4 +320,46 @@ def test_geolocate_ip_check_threats_false_unchanged(opts):
     assert result.get('is_blocklisted') is False, (
         "is_blocklisted must be present and False on every branch; got "
         f"{result.get('is_blocklisted', '<missing>')!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tunability — a DB-backed Setting row, visible to every parallel module
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("threat intel: a DB-backed Setting retunes detection")
+def test_thresholds_are_db_tunable(opts):
+    """The point of the rewrite: each deployment tunes its own rules.
+
+    get_static() reads file-based settings only, so before this nothing was
+    tunable without a code edit and a restart.
+    """
+    from mojo.apps.account.models.setting import Setting
+    from mojo.helpers.geoip import threat_intel
+
+    key = "GEOLOCATION_INTERNAL_ATTACKER_CONFIRMED_THRESHOLD"
+    _clear_devices(DBTUNE_IP)
+    _seed_events(DBTUNE_IP, 3, level=9, category=CONFIRMED_CATEGORY)
+
+    baseline = threat_intel.check_internal_threats(DBTUNE_IP)
+    assert baseline['is_known_attacker'] is True, (
+        f"3 confirmed events flag an attacker at the shipped default; got {baseline!r}"
+    )
+
+    Setting.objects.filter(key=key, group=None).delete()
+    row = Setting.objects.create(key=key, value="25", group=None)
+    try:
+        row.push_to_cache()
+        tuned = threat_intel.check_internal_threats(DBTUNE_IP)
+        assert tuned['is_known_attacker'] is False, (
+            "a DB-backed Setting of 25 must raise the bar without a restart; "
+            f"got {tuned!r}"
+        )
+    finally:
+        row.remove_from_cache()
+        row.delete()
+
+    restored = threat_intel.check_internal_threats(DBTUNE_IP)
+    assert restored['is_known_attacker'] is True, (
+        f"deleting the Setting must restore the shipped default; got {restored!r}"
     )

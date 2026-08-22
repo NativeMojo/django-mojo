@@ -56,9 +56,17 @@ def _app_with_primary(opts, group=None, domain=None, pool="default",
 
 
 def _attach(opts, web_app, hostname, actor=None, zone=None, cname_targets=None,
-            retry_certificate=False, delegation_row=None):
-    """Run attach with every provider seam mocked; return (result, mocks)."""
+            retry_certificate=False, delegation_row=None, resolve_cname=None):
+    """Run attach with every provider seam mocked; return (result, mocks).
+
+    `resolve_cname` overrides the injected CNAME probe. Passing a recorder here
+    is how a test proves a path did — or did NOT — probe the live DNS, without
+    patching the shared `mojo.helpers.dns.probe` module (item #2558).
+    """
     from mojo.apps.edge.services import webapp_alias
+
+    probe = resolve_cname or (lambda *a, **kw: mock.Mock(
+        targets=list(cname_targets or [])))
 
     def run():
         with mock.patch("mojo.apps.dnsman.services.dns.list_records",
@@ -73,8 +81,7 @@ def _attach(opts, web_app, hostname, actor=None, zone=None, cname_targets=None,
                 result = webapp_alias.attach(
                     web_app, hostname, actor or opts.actor,
                     retry_certificate=retry_certificate,
-                    resolve_cname=lambda *a, **kw: mock.Mock(
-                        targets=list(cname_targets or [])))
+                    resolve_cname=probe)
                 error = None
             except Exception as exc:
                 result, error = None, exc
@@ -498,6 +505,92 @@ def test_preview_is_free_and_says_who_runs_the_dns(opts):
     request.assert_not_called()
     assert not Vhost.objects.filter(alias_of=web_app).exists(), \
         "previewing an address created a serving vhost for it"
+
+
+@th.django_unit_test("a platform-managed alias never probes the customer's live DNS")
+def test_managed_attach_never_probes(opts):
+    """The seam-driven half of the no-probe contract (item #2558).
+
+    The platform writes this record itself, so there is nothing to confirm
+    authoritatively — a probe here is a DNS round trip nobody asked for. The
+    injected recorder FAILS the attach if it is ever called, which is what the
+    dropped `probed.assert_not_called()` used to say through a patch of the
+    shared `mojo.helpers.dns.probe` module.
+    """
+    web_app, domain, _, _ = _app_with_primary(opts)
+    probed = []
+
+    def never_probe(*args, **kwargs):
+        probed.append(args)
+        raise AssertionError(
+            "attach probed live DNS for a platform-managed domain")
+
+    result, error, _, upsert, _, _ = _attach(
+        opts, web_app, f"cart.{domain.name}", resolve_cname=never_probe)
+
+    assert error is None, \
+        f"a managed alias raised instead of attaching: {error}"
+    assert result.status == "attached", \
+        f"a managed alias did not attach: {result}"
+    assert probed == [], \
+        f"a managed attach probed live DNS {len(probed)} time(s): {probed}"
+    upsert.assert_called_once_with(domain, "CNAME", f"cart.{domain.name}",
+                                   [TARGET], ttl=300)
+
+
+@th.django_unit_test("nothing reachable from preview can probe live DNS at all")
+def test_preview_call_graph_carries_no_dns_probe(opts):
+    """The other half: preview has no probe seam because it never probes.
+
+    `attach` can be handed a recorder; `preview` cannot, because it takes no
+    probe at all — and "took none" is exactly the contract the dialog depends
+    on, since it calls this per keystroke. Watching the live probe module
+    instead would mean patching `mojo.helpers.dns.probe`, a process-global
+    mutation of a shared helper (item #2558). So prove it structurally: walk
+    the module's own call graph out of `preview` and require that no function
+    it can reach so much as names the probe.
+    """
+    import ast
+    import inspect
+
+    from mojo.apps.edge.services import webapp_alias
+
+    probes = {"probe", "query_cname", "_verify_external_cname",
+              "_wildcard_synthesized"}
+    tree = ast.parse(inspect.getsource(webapp_alias))
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, ast.FunctionDef)}
+    assert "preview" in functions, \
+        "webapp_alias.preview is no longer a module-level function"
+
+    reached, pending, found = set(), ["preview"], []
+    while pending:
+        name = pending.pop()
+        if name in reached:
+            continue
+        reached.add(name)
+        for node in ast.walk(functions[name]):
+            if isinstance(node, ast.Name):
+                if node.id in functions:
+                    pending.append(node.id)
+                if node.id in probes:
+                    found.append(f"{name}() names {node.id}")
+            elif isinstance(node, ast.Attribute) and node.attr in probes:
+                found.append(f"{name}() names .{node.attr}")
+            elif isinstance(node, ast.ImportFrom):
+                for imported in node.names:
+                    if imported.name in probes:
+                        found.append(
+                            f"{name}() imports {imported.name} from "
+                            f"{node.module}")
+
+    assert "_resolve_target" in reached and "_dns_mode" in reached, \
+        (f"the call-graph walk did not reach preview's own helpers "
+         f"({sorted(reached)}) — it would pass even if a probe were added")
+    assert found == [], \
+        (f"preview can now reach a live DNS probe: {found}. The add-address "
+         f"dialog calls preview on every keystroke; a probe there is a DNS "
+         f"round trip per character typed.")
 
 
 @th.django_unit_test("preview names the customer's own DNS host as external")

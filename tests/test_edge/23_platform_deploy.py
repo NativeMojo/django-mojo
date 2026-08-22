@@ -99,6 +99,47 @@ def test_bounded_runner_discovery(opts):
         "overflowing runner index should fail before heartbeat reads"
 
 
+@th.django_unit_test("fleet roster discovery opens a bounded, primary-only connection")
+def test_bounded_runner_discovery_requires_the_primary(opts):
+    """The default-tier half of the replica contract (item #2558).
+
+    A roster read served by a lagging replica is quietly incomplete, and this
+    roster is what fleet safety counts. The `connect=` seam records how the
+    connection is ASKED for, so the demand can be asserted without patching
+    `mojo.helpers.redis` — a shared helper every parallel module reads.
+    """
+    import json
+    from django.utils import timezone
+    from mojo.apps.jobs.manager import JobManager
+
+    client = mock.MagicMock()
+    client.__enter__.return_value = client
+    client.zcount.return_value = 0
+    client.zrangebyscore.return_value = [b"mv1-engine"]
+    client.pipeline.return_value.execute.return_value = [json.dumps({
+        "runner_id": "mv1-engine", "channels": ["edge"],
+        "last_heartbeat": timezone.now().isoformat(),
+    })]
+    asked = []
+
+    def connect(**kwargs):
+        asked.append(kwargs)
+        return client
+
+    rows = JobManager().get_runners_bounded("edge", limit=2, connect=connect)
+
+    assert [row["runner_id"] for row in rows] == ["mv1-engine"], \
+        f"the roster read did not return the live edge runner: {rows}"
+    assert len(asked) == 1, \
+        f"one roster read opened {len(asked)} connections: {asked}"
+    assert asked[0].get("read_from_replicas") is False, \
+        (f"fleet safety discovery allowed a replica-lagged roster read: "
+         f"{asked[0]}")
+    assert asked[0].get("max_connections") == 2, \
+        (f"the roster read did not bound its pool, so a slow read can hold a "
+         f"shared connection: {asked[0]}")
+
+
 @th.django_unit_test("released fleets are reconciled into terminal UUID proof")
 def test_reconcile_released_fleet(opts):
     from datetime import timedelta

@@ -1418,14 +1418,22 @@ def expected_runner_id(node_id):
 
 # ── apply ───────────────────────────────────────────────────────────────────
 
-def _refuse_external(action_label):
+def _refuse_external(action_label, mode=None):
     """Backstop for NON-REST callers (a shell, a job, a future importer).
 
     The REST gate already answered HTTP for every ordinary caller, so reaching
     this line means something bypassed it — which is exactly when a deliberate,
     logged refusal is worth the duplication.
+
+    ``mode`` is an injection seam for tests (None means the live installation
+    read, ``infrastructure.is_external()``). It is never reachable from a
+    request: the REST layer builds ``apply()``'s params from a fixed allowlist,
+    and so does the batch planner.
     """
-    if not infrastructure.is_external():
+    if mode is None:
+        if not infrastructure.is_external():
+            return
+    elif mode != infrastructure.EXTERNAL:
         return
     logger.error("capacity apply refused: %s is %s on this installation",
                  infrastructure.SETTING, infrastructure.EXTERNAL)
@@ -1568,8 +1576,12 @@ def apply(actor, action, resource="", **params):
     single-flight, recorded, and handed to a job — the long legs (an AMI, a
     boot, a convergence, a proof) are minutes of polling and belong nowhere
     near a request thread.
+
+    ``infrastructure_mode`` in ``params`` is the test seam described on
+    ``_refuse_external`` — consumed here, never forwarded to a runner.
     """
-    _refuse_external("Changing capacity")
+    _refuse_external("Changing capacity",
+                     params.pop("infrastructure_mode", None))
     if action not in ACTIONS:
         raise CapacityError(f"Unknown capacity action '{action}'", "invalid_request")
     resource = str(resource or "").strip()
