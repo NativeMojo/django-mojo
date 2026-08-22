@@ -101,8 +101,8 @@ provider response body, exception text, or key fragment ever appears there.
 | `url` | The **connect address** to paste into an AI client, or `""` when no public address is configured |
 | `discovery_url` | The protected-resource metadata URL clients look for |
 | `discovery` | The last self-check verdict — `{ok, code, detail, checked_at}` |
-| `grants` | Active connections, newest first, for **every** user. At most 200 rows |
-| `grant_count` | The true number of active connections, even when `grants` is sliced |
+| `grants` | Active connections **to this MCP endpoint**, newest first, for **every** user. At most 200 rows |
+| `grant_count` | The true number of active connections to this endpoint, even when `grants` is sliced |
 
 `discovery.code` is one of:
 
@@ -228,6 +228,9 @@ Disconnect every remote agent, for every user.
 ```
 
 Exactly that one key. `revoked` is the number of connections killed.
+
+Both actions are scoped to the MCP endpoint: a grant this installation issued
+for some other protected resource is neither listed above nor swept here.
 
 ---
 

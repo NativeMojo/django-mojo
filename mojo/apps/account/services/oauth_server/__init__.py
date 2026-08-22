@@ -11,8 +11,9 @@ Sibling apps talk to this package, never to its modules:
     # answer a bad or missing credential the way the spec expects
     response["WWW-Authenticate"] = oauth_server.www_authenticate(path)
 
-    # the Admin surface
-    oauth_server.list_grants()
+    # the Admin surface (resource_path/limit optional; defaults are unscoped)
+    oauth_server.list_grants(resource_path="/api/assistant/mcp", limit=200)
+    oauth_server.count_grants(resource_path="/api/assistant/mcp")
     oauth_server.revoke_grant_by_id(grant_id, actor=request.user)
 
 Everything else — discovery documents, the consent page, code exchange, refresh
@@ -24,11 +25,14 @@ from .resources import (
     SERVER_PATH, canonical_url, public_origin, register_resource, resolve,
     unregister_resource,
 )
-from .tokens import list_grants, revoke_all_grants, revoke_grant_by_id
+from .tokens import (
+    count_grants, list_grants, revoke_all_grants, revoke_grant_by_id,
+)
 
 __all__ = [
     "SERVER_PATH",
     "canonical_url",
+    "count_grants",
     "list_grants",
     "public_origin",
     "register_resource",
