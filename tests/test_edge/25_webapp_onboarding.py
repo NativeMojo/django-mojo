@@ -500,6 +500,40 @@ def test_existing_profile_different_uuid_compatibility(opts):
         "a different UUID broke concrete-group profile reconciliation"
 
 
+@th.django_unit_test("legacy blank display names remain adoptable during address restore")
+def test_advance_app_adopts_legacy_blank_display_name(opts):
+    from mojo import errors as me
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_onboarding
+
+    web_app = make_webapp(opts.group, slug="legacy-blank-name")
+    web_app.display_name = ""
+    web_app.save(update_fields=["display_name", "modified"])
+    profile = {
+        "slug": web_app.slug, "display_name": web_app.slug,
+        "environment": web_app.environment, "bucket": web_app.bucket,
+        "github_repository": web_app.github_repository,
+        "deployment_ref": web_app.deployment_ref,
+        "build_output": web_app.build_output,
+    }
+    operation = WebAppOnboardingOperation.objects.create(
+        group=opts.group, actor=opts.actor, origin="https://example.com",
+        replay_fingerprint=uuid.uuid4().hex, state={"profile": profile})
+
+    assert webapp_onboarding._advance_app(operation) is True, \
+        "the legacy WebApp was not adopted"
+    assert operation.web_app_id == web_app.pk and operation.cursor == "address", \
+        "adoption did not continue the existing WebApp's address restore"
+
+    web_app.display_name = "A genuinely different name"
+    web_app.save(update_fields=["display_name", "modified"])
+    refused = WebAppOnboardingOperation.objects.create(
+        group=opts.group, actor=opts.actor, origin="https://example.com",
+        replay_fingerprint=uuid.uuid4().hex, state={"profile": profile})
+    with th.assert_raises(me.ValueException):
+        webapp_onboarding._advance_app(refused)
+
+
 @th.django_unit_test("API-key and group-token requests cannot enter onboarding")
 def test_noninteractive_credentials_denied(opts):
     from types import SimpleNamespace
@@ -1137,6 +1171,69 @@ def test_advance_address_wildcard_covers_no_write(opts):
     op.web_app.refresh_from_db()
     assert op.web_app.vhost_id is not None, \
         "the wildcard-covered address produced no serving vhost"
+
+
+@th.django_unit_test("a matching legacy A record is migrated to the managed CNAME")
+def test_advance_address_migrates_matching_legacy_a(opts):
+    from objict import objict
+
+    from mojo.apps.edge.services import webapp_onboarding
+
+    declare_pools()
+    domain = make_domain(group=opts.group, provider="route53")
+    make_certificate(domain)
+    op = _address_operation(opts, domain, label="legacy-a", slug="legacy-a")
+    hostname = f"legacy-a.{domain.name}"
+    address = "93.184.216.34"
+    zone = [objict(type="A", name=hostname,
+                   record_values=[address], ttl=60)]
+    answers = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "",
+                (address, 443))]
+
+    def run():
+        with mock.patch("socket.getaddrinfo", return_value=answers), \
+                mock.patch("mojo.apps.dnsman.services.dns.list_records",
+                           return_value=zone), \
+                mock.patch("mojo.apps.dnsman.services.dns.delete_record") as delete, \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert:
+            outcome = webapp_onboarding._advance_address(op)
+            return outcome, delete, upsert
+
+    outcome, delete, upsert = with_setting(
+        "EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert outcome is True, f"the matching legacy A record did not migrate: {outcome}"
+    delete.assert_called_once_with(domain, "A", hostname, [address])
+    upsert.assert_called_once_with(domain, "CNAME", hostname, [TARGET], ttl=300)
+
+
+@th.django_unit_test("a foreign A record is refused and never overwritten")
+def test_advance_address_refuses_foreign_a(opts):
+    from objict import objict
+
+    from mojo import errors as me
+    from mojo.apps.edge.services import webapp_onboarding
+
+    domain = make_domain(group=opts.group, provider="route53")
+    op = _address_operation(opts, domain, label="foreign-a", slug="foreign-a")
+    hostname = f"foreign-a.{domain.name}"
+    zone = [objict(type="A", name=hostname,
+                   record_values=["198.51.100.40"], ttl=60)]
+    answers = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "",
+                ("93.184.216.34", 443))]
+
+    def run():
+        with mock.patch("socket.getaddrinfo", return_value=answers), \
+                mock.patch("mojo.apps.dnsman.services.dns.list_records",
+                           return_value=zone), \
+                mock.patch("mojo.apps.dnsman.services.dns.delete_record") as delete, \
+                mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert:
+            with th.assert_raises(me.ValueException):
+                webapp_onboarding._advance_address(op)
+            return delete, upsert
+
+    delete, upsert = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    delete.assert_not_called()
+    upsert.assert_not_called()
 
 
 @th.django_unit_test("a managed domain issues the apex+wildcard certificate profile")

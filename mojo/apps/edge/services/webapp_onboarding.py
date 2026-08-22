@@ -1,6 +1,7 @@
 """Crash-safe App -> Address -> GitHub -> Verify onboarding orchestration."""
 
 import hashlib
+import ipaddress
 import json
 import uuid
 from datetime import timedelta
@@ -992,9 +993,19 @@ def _advance_app(operation):
     existing = WebApp.objects.filter(group=operation.group,
                                      slug=profile["slug"]).first()
     if existing is not None:
-        compatible = all(getattr(existing, field) == profile[field] for field in (
+        existing_profile = {
+            field: getattr(existing, field) for field in (
             "display_name", "environment", "bucket", "github_repository",
-            "deployment_ref", "build_output"))
+            "deployment_ref", "build_output")}
+        # Before display names were required by onboarding, valid WebApps
+        # commonly stored a blank one and rendered their slug as the fallback.
+        # _profile applies that same fallback to new receipts. Treat those two
+        # persisted representations as equivalent without weakening any other
+        # profile field or accepting a genuinely different nonblank name.
+        existing_profile["display_name"] = (
+            existing_profile["display_name"] or existing.slug)
+        compatible = all(existing_profile[field] == profile[field]
+                         for field in existing_profile)
         if not compatible:
             raise me.ValueException(
                 "A WebApp with this slug exists with a different profile")
@@ -1020,6 +1031,50 @@ def _record_values(record):
     return sorted(str(value).rstrip(".") for value in (
         getattr(record, "record_values", None) or
         (record.get("record_values") if isinstance(record, dict) else []) or []))
+
+
+def _matching_legacy_address_records(records, target):
+    """Return legacy A/AAAA rows only when they exactly reach ``target``.
+
+    Older MojoLand installs wrote the node address directly. Current installs
+    use the platform hostname as a CNAME so fleet changes do not strand apps.
+    A managed restore may migrate that old shape, but only when every address
+    in each legacy row exactly matches the current destination's live answers.
+    Foreign records and mixed record types remain a hard refusal.
+    """
+    from mojo.apps.edge.services import public_probe
+
+    try:
+        answers = public_probe.public_addresses(target)
+    except public_probe.UnsafePublicProbe:
+        return []
+    expected = {4: set(), 6: set()}
+    for answer in answers:
+        try:
+            address = ipaddress.ip_address(answer)
+        except (TypeError, ValueError):
+            continue
+        expected[address.version].add(str(address))
+    if not expected[4] and not expected[6]:
+        return []
+
+    matched = []
+    for record in records:
+        kind = str(getattr(
+            record, "type", record.get("type", "") if isinstance(record, dict)
+            else "")).upper()
+        if kind not in ("A", "AAAA"):
+            return []
+        version = 4 if kind == "A" else 6
+        try:
+            actual = {str(ipaddress.ip_address(value))
+                      for value in _record_values(record)}
+        except ValueError:
+            return []
+        if not actual or actual != expected[version]:
+            return []
+        matched.append(record)
+    return matched
 
 
 def _advance_address(operation):
@@ -1124,9 +1179,23 @@ def _advance_address(operation):
         cnames = [row for row in same_name
                   if str(getattr(row, "type", row.get("type", ""))).upper() == "CNAME"]
         conflicts = [row for row in same_name if row not in cnames]
-        if conflicts or len(cnames) > 1:
+        if len(cnames) > 1:
             raise me.ValueException(
                 "The selected hostname has ambiguous or non-CNAME DNS records")
+        if conflicts:
+            legacy = [] if cnames else _matching_legacy_address_records(
+                conflicts, target)
+            if len(legacy) != len(conflicts):
+                raise me.ValueException(
+                    "The selected hostname has ambiguous or non-CNAME DNS records")
+            # A provider write may succeed and then time out. That is safe:
+            # the next attempt either sees the same exact legacy row and
+            # retries its delete, or sees no row and writes the desired CNAME.
+            for row in legacy:
+                kind = str(getattr(
+                    row, "type", row.get("type", "") if isinstance(row, dict)
+                    else "")).upper()
+                dns.delete_record(domain, kind, hostname, _record_values(row))
         if cnames and _record_values(cnames[0]) != [target]:
             raise me.ValueException(
                 "The selected hostname has a foreign CNAME value")

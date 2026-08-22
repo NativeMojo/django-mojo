@@ -736,6 +736,14 @@ def test_webapp_serving_tab_contract(opts):
         "Change address is still filed under Danger beside Delete app"
     assert "Take offline" in danger and "Delete this app" in danger, \
         "the Danger tab lost one of its destructive actions"
+    assert "].filter(Boolean))" in danger, \
+        "an offline app still passes a null child to replaceChildren and renders it as text"
+
+    detail = page[page.index("async function webappDetailPage"):page.index("function resumeBanner")]
+    assert "const standing = !address.hostname" in detail, \
+        "the detail header still claims a release is serving before checking for an address"
+    assert "not reachable — no address is configured" in detail, \
+        "the offline detail header does not explain that the app has no address"
 
 
 @th.django_unit_test("WebApp list rows state their health plainly and the copy carries no plumbing words")
