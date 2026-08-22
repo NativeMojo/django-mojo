@@ -35,22 +35,22 @@ FLEET_PROVIDER_KEYS = frozenset({
     "GEOIP_MOJO_SYNC_ENABLED", "GEOIP_API_KEY_MOJO",
     "ADMIN_PROVIDER_SETUP_REVISION", "ADMIN_PROVIDER_VERIFY_STATE",
 })
-# The LLM keys.  All six are owned by ``services/assistant_setup`` and reached
-# only through the owner-tier endpoint: the Assistant's own credential, model
-# and flag, and the PLATFORM credential ``LLM_HANDLER_API_KEY`` (every LLM
-# feature, and the Assistant's fallback).  A global database row outranks the
-# deployment file (``helpers/settings/helper.py``), which is exactly why the
-# generic settings surface must refuse them and only the owner editor may write.
+# The Assistant keys.  All seven are owned by ``services/assistant_setup`` and
+# reached only through the owner-tier endpoint: the Assistant's own credential,
+# model and flag, the PLATFORM credential ``LLM_HANDLER_API_KEY`` (every LLM
+# feature, and the Assistant's fallback), and ``ASSISTANT_MCP_ENABLED``, the
+# remote agent access (MCP) switch whose descriptor is registered by the
+# assistant app.  A global database row outranks the deployment file
+# (``helpers/settings/helper.py``), which is exactly why the generic settings
+# surface must refuse them and only the owner editor may write.
 ASSISTANT_WRITABLE_KEYS = frozenset({
     "LLM_ADMIN_ENABLED", "LLM_ADMIN_API_KEY", "LLM_ADMIN_MODEL",
     "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY", "LLM_HANDLER_VERIFY_STATE",
+    "ASSISTANT_MCP_ENABLED",
 })
-# Every Assistant key the generic global writers must refuse.  This is a
-# SUPERSET of the writable set: ``ASSISTANT_MCP_ENABLED`` opens the remote-agent
-# MCP door, and a global database row for it would outrank the deployment file
-# on every node, so it is protected here from the moment the door exists — even
-# though its owner editor does not exist yet.  Protection and writability are
-# separate questions and this is the one that fails closed.
+# Every Assistant key the generic global writers must refuse.  Protection and
+# writability are separate questions: this set is what fails closed, and it may
+# hold a key whose owner editor does not exist yet.
 ASSISTANT_KEYS = ASSISTANT_WRITABLE_KEYS | frozenset({"ASSISTANT_MCP_ENABLED"})
 # Keys whose one dedicated writer may pass ``_protected_writer=<key>`` through
 # ``Setting.save``.  Naming the key twice is the point: a writer proves it owns

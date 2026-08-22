@@ -1,7 +1,8 @@
 """Owner-only Assistant enablement, credential storage, and verification.
 
-The six keys this service owns are the ones ``mojo.helpers.llm`` and the
-incident LLM handlers already read, so nothing here re-implements resolution:
+The seven keys this service owns are the ones ``mojo.helpers.llm``, the
+incident LLM handlers and the MCP door already read, so nothing here
+re-implements resolution:
 
     LLM_ADMIN_ENABLED          feature flag
     LLM_ADMIN_API_KEY          the Assistant's own credential (optional)
@@ -11,28 +12,39 @@ incident LLM handlers already read, so nothing here re-implements resolution:
                                (incident triage and agent) and the Assistant's
                                fallback
     LLM_HANDLER_VERIFY_STATE   how the STORED platform credential last verified
+    ASSISTANT_MCP_ENABLED      remote agent access (MCP) switch — descriptor
+                               owned by the assistant app, written only here
 
 Both credentials are encrypted secret ``Setting`` rows. ``SettingsHelper.get``
 resolves database rows ahead of ``django.conf``, so an Admin-stored credential
 is live the moment it commits and outranks the deployment file. Resolution
 order is unchanged: the Assistant prefers its own key and falls back to the
-platform key. All six are
+platform key. All seven are
 catalog-protected (``admin_settings.is_catalog_protected``), so the generic
 ``/api/settings`` surface and every other ``Setting`` writer refuse them; this
 service is the only writer, and it goes through the ``_protected_writer`` save
 path so ``push_to_cache`` runs on every write. A queryset ``.update()`` would
 pass an ORM read and leave the Redis value ``Setting.resolve`` consults first
 stale — a disable that silently did not take effect.
+
+Remote agent access adds three read-only surfaces on top of that switch: the
+connect address, an explicit discovery self-check, and the list of grants a
+client signed in with. Everything from ``services.oauth_server`` is imported
+INSIDE the function that uses it — ``rest/admin_portal.py`` imports this module
+at URL-load time, and ``oauth_server`` pulls in models.
 """
 
 import json
 import re
+from urllib.parse import urlsplit
 
 from django.db import transaction
 from django.utils import timezone
 
 from mojo import errors as merrors
 from mojo.helpers import llm
+from mojo.helpers.redis import get_connection
+from mojo.helpers.safe_fetch import safe_fetch
 from mojo.helpers.settings import settings
 from mojo.apps.account.services import system_settings
 from mojo.apps.account.services.provider_setup import key_hint
@@ -47,6 +59,37 @@ VERIFY_STATE_KEY = "LLM_ADMIN_VERIFY_STATE"
 HANDLER_KEY = "LLM_HANDLER_API_KEY"
 HANDLER_VERIFY_STATE_KEY = "LLM_HANDLER_VERIFY_STATE"
 FALLBACK_KEY = HANDLER_KEY
+
+# --- remote agent access (MCP) ---------------------------------------------
+MCP_ENABLED_KEY = "ASSISTANT_MCP_ENABLED"
+MCP_PATH_KEY = "ASSISTANT_MCP_PATH"
+MCP_DEFAULT_PATH = "api/assistant/mcp"
+DISCOVERY_CACHE_KEY = "assistant:mcp:discovery"
+DISCOVERY_TTL = 60          # seconds a network verdict is served before re-probing
+DISCOVERY_TIMEOUT = 5
+DISCOVERY_MAX_BYTES = 65536
+MAX_GRANT_ROWS = 200
+UNCHECKED = {"ok": None, "code": "", "detail": "", "checked_at": ""}
+
+# Fixed vocabulary, exactly like VERIFY_MESSAGES: no response body and no
+# exception repr ever reaches an operator. ``{error}`` is one of safe_fetch's
+# own fixed strings, which may name BASE_URL's hostname — operator-configured,
+# not secret.
+DISCOVERY_MESSAGES = {
+    "ok": "The discovery document is reachable at the public address.",
+    "switched_off": "Remote agent access is switched off, so nothing is published.",
+    "no_address": "No public address is configured. Set the Public API address "
+                  "in System Setup first.",
+    "redirected": "The public address redirected the discovery request; nginx "
+                  "must serve /.well-known/ from the application directly.",
+    "status": "The public address answered HTTP {status} instead of the "
+              "discovery document — nginx is not forwarding /.well-known/ to "
+              "the application.",
+    "wrong_document": "The public address answered something other than the "
+                      "discovery document — nginx is not forwarding "
+                      "/.well-known/ to the application.",
+    "fetch": "The public address could not be fetched: {error}",
+}
 
 # The two credentials an owner can store, check and clear. Each has its own
 # verification record so the page can say how each STORED key last checked.
@@ -180,7 +223,213 @@ def is_ready():
         return False
 
 
-def state(refresh=False):
+# ---------------------------------------------------------------------------
+# Remote agent access (MCP)
+# ---------------------------------------------------------------------------
+
+def mcp_path():
+    """The absolute request path the MCP door is routed and registered at.
+
+    ``get_static`` (deployment file only), the same expression the assistant
+    app's ``register_oauth_resource`` uses — so the address this page shows,
+    the document it probes and the registered resource can never disagree.
+    """
+    return "/" + str(settings.get_static(
+        MCP_PATH_KEY, MCP_DEFAULT_PATH)).strip("/")
+
+
+def mcp_enabled():
+    """Live read, never ``get_static``: the switch takes effect immediately."""
+    return bool(settings.get(MCP_ENABLED_KEY, False, kind="bool"))
+
+
+def mcp_ready():
+    """The capability bit: could a remote client actually connect right now?
+
+    A switch that is on with no public address advertises a door nobody can
+    find, so the chip says "on" only when all three hold.
+    """
+    from django.apps import apps
+    from mojo.apps.account.services import oauth_server
+
+    return bool(apps.is_installed("mojo.apps.assistant")
+                and mcp_enabled()
+                and oauth_server.public_origin())
+
+
+def _discovery_record(ok, code, detail, resource=""):
+    """One verdict, bounded, with the resource URL it was actually about."""
+    return {
+        "ok": ok,
+        "code": str(code or "")[:32],
+        "detail": str(detail or "")[:300],
+        "checked_at": timezone.now().isoformat()[:40],
+        "resource": str(resource or "")[:600],
+    }
+
+
+def _public(record):
+    """The wire shape — ``resource`` is bookkeeping, not something to render."""
+    return {
+        "ok": record.get("ok"),
+        "code": record.get("code", ""),
+        "detail": record.get("detail", ""),
+        "checked_at": record.get("checked_at", ""),
+    }
+
+
+def discovery_cached(expected=None):
+    """The cached NETWORK verdict, or UNCHECKED. Never reaches the network.
+
+    ``expected`` is the resource URL the caller is about to show beside it. A
+    record probed for a different one — a BASE_URL changed in System Setup, a
+    different MCP path — is discarded rather than shown against the new
+    address. Redis being down is simply "not checked yet".
+    """
+    try:
+        raw = get_connection().get(DISCOVERY_CACHE_KEY)
+    except Exception:
+        return dict(UNCHECKED)
+    if not raw:
+        return dict(UNCHECKED)
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", "ignore")
+    try:
+        record = json.loads(raw)
+    except (TypeError, ValueError):
+        return dict(UNCHECKED)
+    if not isinstance(record, dict):
+        return dict(UNCHECKED)
+    if expected is not None and str(record.get("resource") or "")[:600] != expected:
+        return dict(UNCHECKED)
+    ok = record.get("ok")
+    return {
+        "ok": ok if isinstance(ok, bool) else None,
+        "code": str(record.get("code") or "")[:32],
+        "detail": str(record.get("detail") or "")[:300],
+        "checked_at": str(record.get("checked_at") or "")[:40],
+    }
+
+
+def _discovery_cache_delete():
+    try:
+        get_connection().delete(DISCOVERY_CACHE_KEY)
+    except Exception:
+        pass
+
+
+def _judge_discovery(result, error, expected):
+    """Reduce one ``safe_fetch`` answer to a verdict in the fixed vocabulary."""
+    if error is not None:
+        # At max_redirects=0 the helper still parses and host-checks the one
+        # hop, so a 3xx surfaces as "Redirect target is …", "Redirect to
+        # unsupported scheme …" or "Too many redirects (max 0)" depending on
+        # where the hop fails. All of them mean "redirected, never served".
+        if error.startswith(("Too many redirects", "Redirect ")):
+            return _discovery_record(
+                False, "unreachable", DISCOVERY_MESSAGES["redirected"], expected)
+        return _discovery_record(
+            False, "unreachable",
+            DISCOVERY_MESSAGES["fetch"].format(error=error), expected)
+    if result.status_code != 200:
+        return _discovery_record(
+            False, "unreachable",
+            DISCOVERY_MESSAGES["status"].format(status=result.status_code),
+            expected)
+    # A 200 is not enough: a front door serving the SPA's index.html for
+    # unknown paths answers 200 with HTML. Only the real document passes.
+    try:
+        document = json.loads(result.content)
+    except (TypeError, ValueError):
+        document = None
+    if not isinstance(document, dict) or document.get("resource") != expected:
+        return _discovery_record(
+            False, "unreachable", DISCOVERY_MESSAGES["wrong_document"], expected)
+    return _discovery_record(True, "ok", DISCOVERY_MESSAGES["ok"], expected)
+
+
+def check_discovery(*, origin=None, transport=None, resolver=None):
+    """Probe this installation's OWN public address for the PRM document.
+
+    ``origin``, ``transport`` and ``resolver`` are test seams; the REST layer
+    passes none of them, so the probe can only ever target ``public_origin()``.
+    Local verdicts (switched off, no address) are returned immediately and are
+    never cached — only a network answer is, and that cache IS the rate limit
+    on the outbound request.
+    """
+    from mojo.apps.account.services import oauth_server
+    from mojo.apps.account.services.oauth_server import resources
+
+    if not mcp_enabled():
+        return _public(_discovery_record(
+            False, "disabled", DISCOVERY_MESSAGES["switched_off"]))
+    origin = oauth_server.public_origin() if origin is None else origin
+    if not origin:
+        return _public(_discovery_record(
+            False, "disabled", DISCOVERY_MESSAGES["no_address"]))
+
+    path = mcp_path()
+    expected = oauth_server.canonical_url(origin, path)
+    cached = discovery_cached(expected)
+    if cached["ok"] is not None:
+        return cached
+
+    # allow_hosts covers the INITIAL url only (never a redirect hop), and
+    # validate_base_url already refuses private literals and localhost — so the
+    # exemption only ever matters for a public name that resolves privately
+    # from inside the deployment, which is exactly this self-probe.
+    result, error = safe_fetch(
+        resources.prm_url(origin, path),
+        timeout=DISCOVERY_TIMEOUT, max_bytes=DISCOVERY_MAX_BYTES,
+        max_redirects=0, headers={"Accept": "application/json"},
+        allow_hosts=[urlsplit(origin).hostname], schemes=("https",),
+        resolver=resolver, transport=transport)
+    verdict = _judge_discovery(result, error, expected)
+    try:
+        get_connection().setex(
+            DISCOVERY_CACHE_KEY, DISCOVERY_TTL, json.dumps(verdict))
+    except Exception:
+        # The throttle is lost only while Redis is, behind an owner-only
+        # control. The verdict itself is still the truth.
+        pass
+    return _public(verdict)
+
+
+def mcp_state(check=False):
+    """Everything the Remote agent access section renders.
+
+    Drawing the page costs no outbound request: ``check`` is the owner's
+    explicit control, and a plain read serves the cached network verdict (or
+    nothing at all while the switch is off, so a flip made from the file plane
+    or another node never shows a stale answer).
+    """
+    from mojo.apps.account.services import oauth_server
+    from mojo.apps.account.services.oauth_server import resources
+
+    origin = oauth_server.public_origin()
+    path = mcp_path()
+    expected = oauth_server.canonical_url(origin, path) if origin else ""
+    enabled = mcp_enabled()
+    if check:
+        discovery = check_discovery()
+    elif enabled:
+        discovery = discovery_cached(expected)
+    else:
+        discovery = dict(UNCHECKED)
+    # Names and dates only — list_grants carries no token, jti or hash.
+    grants = oauth_server.list_grants()
+    return {
+        "enabled": enabled,
+        "path": path,
+        "url": expected,
+        "discovery_url": resources.prm_url(origin, path) if origin else "",
+        "discovery": discovery,
+        "grants": grants[:MAX_GRANT_ROWS],
+        "grant_count": len(grants),
+    }
+
+
+def state(refresh=False, check=False):
     """Everything the owner setup view renders. Never carries a credential."""
     from django.apps import apps
     return {
@@ -193,6 +442,7 @@ def state(refresh=False):
         "handler_verify": read_verify_state(HANDLER_VERIFY_STATE_KEY),
         "assistant_installed": apps.is_installed("mojo.apps.assistant"),
         "realtime_installed": apps.is_installed("mojo.apps.realtime"),
+        "mcp": mcp_state(check=check),
     }
 
 
@@ -376,7 +626,7 @@ def _credential_edit(label, candidate, clear):
 
 
 def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
-         handler_api_key=None, clear_handler_api_key=False):
+         handler_api_key=None, clear_handler_api_key=False, mcp_enabled=None):
     """Apply one owner edit atomically, or refuse the whole thing.
 
     ``api_key`` is the Assistant's own credential; ``handler_api_key`` is the
@@ -384,10 +634,18 @@ def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
     verified BEFORE the transaction opens: a provider round trip must not be
     made while the installation lock is held, and refusing early means a
     rejected key never reaches the database at all.
+
+    ``mcp_enabled`` is the remote agent access switch and follows the API
+    keys' "omit to keep" rule: ``None`` (absent, or a JSON ``null``) leaves the
+    stored value alone, so a browser tab that outlived a deploy and does not
+    send the field cannot switch remote access off on its next ordinary save.
+    Any other non-boolean is refused rather than coerced.
     """
     system_settings.require_system_admin(actor)
     if not isinstance(enabled, bool):
         raise merrors.ValueException("enabled must be true or false")
+    if mcp_enabled is not None and not isinstance(mcp_enabled, bool):
+        raise merrors.ValueException("mcp_enabled must be true or false")
     model = normalize_model(model)
     candidate, verified = _credential_edit("api_key", api_key, clear_api_key)
     handler_candidate, handler_verified = _credential_edit(
@@ -416,6 +674,11 @@ def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
             _write_secret(HANDLER_KEY, handler_candidate)
             changed.append("handler_api_key")
         _write_value(ENABLED_KEY, bool(enabled))
+        if mcp_enabled is not None:
+            _write_value(MCP_ENABLED_KEY, mcp_enabled)
+            changed.append("mcp_enabled")
+            # "Flip on, check now" must never show yesterday's answer.
+            transaction.on_commit(_discovery_cache_delete)
         if model:
             _write_value(MODEL_KEY, model)
         else:
@@ -429,3 +692,34 @@ def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
     if handler_verified is not None:
         _write_verify_state(handler_verified, HANDLER_VERIFY_STATE_KEY)
     return state()
+
+
+def revoke_grant(actor, grant_id):
+    """Disconnect ONE remote agent. Returns 1 when a live grant was killed.
+
+    An unknown or already-inactive id is a quiet ``0`` rather than a 404: this
+    is owner-only, so there is no enumeration concern, and the page repaints
+    from the fresh state either way.
+    """
+    from mojo.apps.account.services import oauth_server
+
+    system_settings.require_system_admin(actor)
+    # `True` is an int in Python, and a bool grant id is a caller bug, not a
+    # row selector.
+    if isinstance(grant_id, bool) or not isinstance(grant_id, int) or grant_id <= 0:
+        raise merrors.ValueException("grant_id must be a positive integer")
+    revoked = oauth_server.revoke_grant_by_id(grant_id, actor=actor)
+    # Keyed per grant id so report_event_suppressed's hourly (category, key)
+    # dedupe never swallows a second grant's revocation.
+    _audit(actor, [f"revoke_grant:{grant_id}"], "revoked" if revoked else "not_found")
+    return 1 if revoked else 0
+
+
+def revoke_all_grants(actor):
+    """Disconnect every remote agent, for every user. Returns the count."""
+    from mojo.apps.account.services import oauth_server
+
+    system_settings.require_system_admin(actor)
+    count = oauth_server.revoke_all_grants(actor=actor)
+    _audit(actor, ["revoke_all_grants"], f"revoked:{count}")
+    return count
