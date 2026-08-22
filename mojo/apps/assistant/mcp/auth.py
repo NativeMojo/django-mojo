@@ -74,7 +74,11 @@ def refusal(request):
             {"error": "invalid_token"}, 401,
             oauth_server.www_authenticate(path))
 
-    if "mcp" not in (grant.scopes or []):
+    # `scopes` is a JSONField. Insisting on a list is not pedantry: `"mcp" in
+    # "mcpx"` is True for a string, so a row that ever held one would pass a
+    # membership test it should fail.
+    scopes = grant.scopes if isinstance(grant.scopes, list) else []
+    if "mcp" not in scopes:
         return raw_response(
             {"error": "insufficient_scope"}, 403,
             oauth_server.www_authenticate(

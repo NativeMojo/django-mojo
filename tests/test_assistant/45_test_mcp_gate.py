@@ -131,6 +131,18 @@ def test_refusal_token_kinds(opts):
     assert_true('scope="mcp"' in challenge,
                 f"the scope refusal must name the scope needed, got {challenge!r}")
 
+    # `scopes` is a JSONField: a string value must not satisfy the membership
+    # test by substring. Mutated on the in-memory object only — nothing saved.
+    opts.grant_noscope.scopes = "mcpx"
+    try:
+        response = mcp_auth.refusal(
+            _request(opts, bearer="bearer", oauth_grant=opts.grant_noscope))
+        assert_true(response is not None and response.status_code == 403,
+                    f"a non-list scopes value must never grant the mcp scope, "
+                    f"got {response}")
+    finally:
+        opts.grant_noscope.scopes = []
+
     response = mcp_auth.refusal(
         _request(opts, user=opts.noperm, bearer="bearer",
                  oauth_grant=opts.grant_noperm))
