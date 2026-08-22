@@ -677,13 +677,18 @@ class _FileScanner(ast.NodeVisitor):
         if any(key_node is None for key_node in payload.keys):
             # A **splat anywhere can smuggle any key — not provable.
             return False
+        # EVERY "key" entry must be reserved, not just the first. A dict
+        # literal may repeat a key — Python keeps the LAST — so returning on
+        # the first match would let {"key": "TESTIT_X", "key": "SECRET_KEY"}
+        # scan as reserved and execute against a real protected key.
+        setting_keys = []
         for key_node, value_node in zip(payload.keys, payload.values):
-            key_name = self._resolve_string(key_node)
-            if key_name == "key":
-                setting_key = self._resolve_string(value_node)
-                return (isinstance(setting_key, str)
-                        and setting_key.startswith(ALLOWED_KEY_PREFIX))
-        return False
+            if self._resolve_string(key_node) == "key":
+                setting_keys.append(self._resolve_string(value_node))
+        if not setting_keys:
+            return False
+        return all(isinstance(name, str) and name.startswith(ALLOWED_KEY_PREFIX)
+                   for name in setting_keys)
 
     def _check_setattr_call(self, node):
         """setattr()/delattr() with a provable shared target is a mutation of

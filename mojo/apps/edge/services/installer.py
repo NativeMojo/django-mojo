@@ -792,7 +792,7 @@ def prune_generations(keep=None):
 # the install
 # ----------------------------------------------------------------------
 
-def install(pool="default", force=False, pools=None, private_key=None):
+def install(pool="default", force=False, pools=None, *, private_key=None):
     """Converge this node onto the current desired state for `pool`.
 
     Returns an objict-ish dict describing what happened. Raises InstallError on

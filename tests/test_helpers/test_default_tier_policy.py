@@ -455,6 +455,19 @@ def test_rest_write_reserved_key(opts):
         f"stay flagged, got {codes}"
     )
 
+    # A dict literal may repeat a key and Python keeps the LAST one, so a
+    # scanner that stops at the first match would clear this write while it
+    # actually targets SECRET_KEY.
+    codes = _codes("""
+        def test_thing(opts):
+            opts.client.post(
+                "/api/settings", {"key": "TESTIT_OK", "key": "SECRET_KEY"})
+    """)
+    assert "protected_rest_write" in codes, (
+        f"a duplicated 'key' entry must be judged by EVERY value, not the "
+        f"first — the last one is what executes, got {codes}"
+    )
+
 
 @th.unit_test("policy: REST settings reads are allowed")
 def test_rest_settings_read_allowed(opts):

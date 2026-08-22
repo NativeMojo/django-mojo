@@ -1098,7 +1098,7 @@ def _attention_message(sources, down):
     return f"{count} {noun} review — nothing is down."
 
 
-def dashboard_overview(request, refresh=False, collectors=None):
+def dashboard_overview(request, refresh=False, *, collectors=None):
     """Return the small, independently permissioned Admin landing matrix.
 
     This intentionally never calls System Setup readiness. Setup is a

@@ -106,7 +106,7 @@ def render_context_for_kind(kind):
     }
 
 
-def validate_submission(kind, data, check_text=None):
+def validate_submission(kind, data, *, check_text=None):
     """
     Validate the submitted form against the kind schema.
 

@@ -136,7 +136,7 @@ def _rdata_host(rdata):
     return normalize_name(rdata)
 
 
-def query_cname(fqdn, nameservers=None, timeout=QUERY_TIMEOUT, dns=None):
+def query_cname(fqdn, nameservers=None, timeout=QUERY_TIMEOUT, *, dns=None):
     """Query the directly attached CNAME RRset at authoritative servers.
 
     A recursive answer is not ownership proof: it may be stale, synthesized,
@@ -224,7 +224,7 @@ def _rdata_address(rdata):
     return str(rdata).strip()
 
 
-def find_zone_nameservers(fqdn, timeout=QUERY_TIMEOUT, dns=None):
+def find_zone_nameservers(fqdn, timeout=QUERY_TIMEOUT, *, dns=None):
     """
     Walk up the labels of `fqdn` and return the closest zone that has NS records.
 
@@ -270,7 +270,7 @@ def find_zone_nameservers(fqdn, timeout=QUERY_TIMEOUT, dns=None):
     return objict(zone=None, nameservers=[], error=last_error)
 
 
-def resolve_nameserver_addresses(hosts, timeout=QUERY_TIMEOUT, dns=None):
+def resolve_nameserver_addresses(hosts, timeout=QUERY_TIMEOUT, *, dns=None):
     """Resolve NS hostnames to addresses (A first, AAAA only when there is no A)."""
     if not DNS_AVAILABLE:
         return []
@@ -295,7 +295,7 @@ def resolve_nameserver_addresses(hosts, timeout=QUERY_TIMEOUT, dns=None):
     return addresses
 
 
-def query_txt(fqdn, nameservers=None, timeout=QUERY_TIMEOUT, dns=None):
+def query_txt(fqdn, nameservers=None, timeout=QUERY_TIMEOUT, *, dns=None):
     """
     Query TXT for `fqdn` against the zone's authoritative nameservers.
 

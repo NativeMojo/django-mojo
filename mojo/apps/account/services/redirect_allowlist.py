@@ -300,15 +300,21 @@ def _get_resolver(resolver_path=_CONFIG_FROM_SETTINGS):
     is_configured distinguishes "no resolver set, use the static list" from
     "a resolver is set but broken, refuse everything".
     """
-    if resolver_path is _CONFIG_FROM_SETTINGS:
-        path = settings.get("AUTH_HANDOFF_RESOLVER", "")
-    else:
+    injected = resolver_path is not _CONFIG_FROM_SETTINGS
+    if injected:
         path = resolver_path or ""
+    else:
+        path = settings.get("AUTH_HANDOFF_RESOLVER", "")
     if not path:
         return False, None
-    cached = _CACHE.get(path, Ellipsis)
-    if cached is not Ellipsis:
-        return True, cached
+    # The cache is keyed by path and read by the settings-driven lookup, so an
+    # INJECTED path must neither read nor write it: a test path would
+    # otherwise resolve for production callers naming the same dotted path,
+    # and its load failure would be memoized process-wide.
+    if not injected:
+        cached = _CACHE.get(path, Ellipsis)
+        if cached is not Ellipsis:
+            return True, cached
     try:
         fn = modules.load_function(path)
     except Exception as exc:
@@ -316,7 +322,8 @@ def _get_resolver(resolver_path=_CONFIG_FROM_SETTINGS):
             "account.redirect_allowlist",
             f"failed to load AUTH_HANDOFF_RESOLVER {path!r}: {exc} — refusing all handoffs")
         fn = None
-    _CACHE[path] = fn
+    if not injected:
+        _CACHE[path] = fn
     return True, fn
 
 
