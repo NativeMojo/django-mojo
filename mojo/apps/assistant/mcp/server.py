@@ -26,9 +26,11 @@ What IS specific to this transport:
 Nothing here is stateful across requests: no session id, no cache, no
 process-local registry. Every node behind a load balancer answers identically.
 """
+import re
 import uuid
 
 import ujson
+from django.db import transaction
 from objict import objict
 
 import mojo
@@ -41,17 +43,59 @@ from . import protocol
 logger = logit.get_logger(__name__, "assistant.log")
 
 
-# Conversation meta-tools plus the writers that shape the CHAT assistant's own
-# state. `load_tools`, `create_plan` and `update_plan` steer an agent loop that
-# does not exist here; the memory and skill writers would put approval cards for
-# the operator's own assistant memory in front of an external client for no
-# benefit. The readers (`read_memory`, `find_skill`, `list_skills`,
-# `list_tools`, `add_context`) stay. Derived from `agent.META_TOOLS` so a new
-# meta-tool is hidden the day it is added.
-HIDDEN_TOOLS = frozenset(agent.META_TOOLS) | frozenset({
+# A tool NAME is chosen by the client, and it reaches a log line, an incident
+# title and an incident body. Bound and charset-restrict it at the door so a
+# 200 KB name, a newline-forged log line or a control character can never get
+# that far. Anything outside this is `-32602`, answered before dispatch, and
+# files nothing.
+TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,128}$")
+
+# Incident volume one machine client may generate: at most one event per
+# category per user per window. See `suppressed_reporter`.
+SUPPRESSION_WINDOW = 3600
+SUPPRESSION_BUDGET = 50
+
+
+# --- what this transport does not offer ------------------------------------
+#
+# Every name here is dropped from `projected_registry`, so `tools/list` never
+# shows it and `tools/call` answers "Unknown tool" — indistinguishable from a
+# name that was never registered. Each entry has a reason, and the reason is
+# the contract: a tool is hidden because of what it IS, not because of who is
+# calling.
+
+# 1. Conversation meta-tools. They steer an agent loop that does not exist on
+#    this transport (the client runs its own model). Derived from
+#    `agent.META_TOOLS` so a new meta-tool is hidden the day it is added.
+#    `list_tools` joins them: MCP has `tools/list`, and a discovery tool that
+#    reads the RAW registry would hand back exactly the names the projection
+#    exists to withhold. `add_context` joins them too — it is a chat-context
+#    builder whose per-pk validation makes it a model-row existence oracle, and
+#    the context it builds has nowhere to go here.
+_META_TOOLS = frozenset(agent.META_TOOLS) | frozenset({
+    "list_tools", "add_context",
+})
+
+# 2. Writers of the CHAT assistant's own state. Exposing them would put
+#    approval cards for the operator's own assistant memory and skills in front
+#    of an external client for no benefit. The READERS — `read_memory`,
+#    `find_skill`, `list_skills` — stay.
+_CHAT_STATE_WRITERS = frozenset({
     "write_memory", "delete_memory",
     "save_skill", "update_skill", "delete_skill",
 })
+
+# 3. Reads that SPEND the platform LLM credential. `analyze_image` sends an
+#    image plus a client-chosen prompt to `helpers.llm` on
+#    `LLM_HANDLER_API_KEY`, and read-only tools carry no approval gate — so
+#    over MCP it is an unmetered spend of the installation's own credential,
+#    driven by a remote client, with a free-text prompt. The rule is general:
+#    a read tool whose handler calls the platform LLM is not exposed over MCP.
+_LLM_SPENDING_READS = frozenset({
+    "analyze_image",
+})
+
+HIDDEN_TOOLS = _META_TOOLS | _CHAT_STATE_WRITERS | _LLM_SPENDING_READS
 
 INSTRUCTIONS = (
     "Tools run with the connected operator's own permissions. A tool that "
@@ -168,27 +212,47 @@ def list_tools(user, hide_infrastructure=None):
     return tools
 
 
+def _find_conversation(user, grant):
+    """The read path: the lowest-pk conversation flagged for this grant."""
+    from mojo.apps.assistant.models import Conversation
+
+    return Conversation.objects.filter(
+        user=user, metadata__transport="mcp", metadata__grant=grant.pk,
+    ).order_by("pk").first()
+
+
 def conversation_for_grant(user, grant, create=True):
     """This grant's own conversation — the scope of everything it can see.
 
-    Two concurrent first calls can each create a row. Both are flagged with the
-    same metadata and the lower pk wins every later lookup, so the loser is an
-    orphan with no messages rather than a correctness problem — not worth a lock
-    on the hot path.
+    CREATION IS SERIALIZED on the grant row. Two concurrent first calls used to
+    be able to create two rows: harmless for reads (the lower pk wins every
+    later lookup) but NOT harmless for approvals, because the loser's card is
+    proposed into a conversation nothing ever looks at again — the operator sees
+    it in the Admin, the client can never poll it, and it silently expires. One
+    `select_for_update` on the grant the caller already authenticated with costs
+    a single locked read on the first call of a connection and nothing
+    afterwards, since the fast path returns before the transaction opens.
     """
+    from mojo.apps.account.models.oauth_grant import OAuthGrant
     from mojo.apps.assistant.models import Conversation
 
-    conversation = Conversation.objects.filter(
-        user=user, metadata__transport="mcp", metadata__grant=grant.pk,
-    ).order_by("pk").first()
+    conversation = _find_conversation(user, grant)
     if conversation is not None or not create:
         return conversation
+
     client = grant.client
     label = client.client_name or client.client_id
-    return Conversation.objects.create(
-        user=user,
-        title=f"MCP: {label}"[:255],
-        metadata={"transport": "mcp", "grant": grant.pk})
+    with transaction.atomic():
+        # Lock the grant, then look again: whoever held the lock first has
+        # already committed its row by the time we read.
+        OAuthGrant.objects.select_for_update().filter(pk=grant.pk).first()
+        conversation = _find_conversation(user, grant)
+        if conversation is not None:
+            return conversation
+        return Conversation.objects.create(
+            user=user,
+            title=f"MCP: {label}"[:255],
+            metadata={"transport": "mcp", "grant": grant.pk})
 
 
 def _call_result(text):
@@ -239,9 +303,48 @@ def _pending_action_result(name, arguments, user, grant, _reporter=None):
         _reporter=_reporter)
 
 
+def suppression_key(user):
+    """The unit an MCP client's incidents are suppressed on: the operator."""
+    return f"mcp:{getattr(user, 'pk', None) or 0}"
+
+
+def suppressed_reporter(user, _reporter=None):
+    """The incident reporter every MCP dispatch files through.
+
+    The chat path reports unsuppressed because a PERSON chose the tool name. On
+    this transport the CLIENT chooses it, and `_execute_tool` files a level-6
+    ``assistant:permission_denied`` for every unregistered name — so an
+    unsuppressed reporter here is one incident row per request, for free, from a
+    machine, forever. Everything an MCP dispatch reports is therefore keyed on
+    the calling operator and filed at most once per category per window, and
+    fail-CLOSED: a Redis outage must drop these, not open the floodgate.
+
+    ``_reporter`` replaces ``report_event_suppressed`` itself (same signature),
+    which is the seam the tests inject; production passes ``None``.
+    """
+    key = suppression_key(user)
+
+    def report(details, **kwargs):
+        reporter = _reporter
+        if reporter is None:
+            from mojo.apps.incident.reporter import report_event_suppressed
+
+            reporter = report_event_suppressed
+        kwargs.setdefault("window", SUPPRESSION_WINDOW)
+        kwargs.setdefault("budget", SUPPRESSION_BUDGET)
+        kwargs.setdefault("fail_open", False)
+        return reporter(details, key=key, **kwargs)
+
+    return report
+
+
 def call_tool(name, arguments, user, grant, request_meta,
               hide_infrastructure=None, _reporter=None):
     """Run one ``tools/call`` and return its ``CallToolResult``.
+
+    ``name`` is assumed VALIDATED (``TOOL_NAME_RE``) — ``_dispatch`` refuses
+    anything else with ``-32602`` before reaching here, so nothing unbounded or
+    newline-bearing ever reaches a log line or an incident title.
 
     Never the arguments and never the result in the log line: this endpoint is
     labelled ``assistant_mcp`` precisely so neither reaches the request log.
@@ -249,9 +352,11 @@ def call_tool(name, arguments, user, grant, request_meta,
     logger.info("MCP tools/call tool=%s user=%s grant=%s",
                 name, getattr(user, "pk", None), getattr(grant, "pk", None))
 
+    reporter = suppressed_reporter(user, _reporter)
+
     if name in MCP_ONLY_NAMES:
         return _call_result(
-            _pending_action_result(name, arguments, user, grant, _reporter=_reporter))
+            _pending_action_result(name, arguments, user, grant, _reporter=reporter))
 
     block = {
         "type": "tool_use",
@@ -262,7 +367,7 @@ def call_tool(name, arguments, user, grant, request_meta,
     outcome = agent._execute_tool(
         block, projected_registry(hide_infrastructure), user,
         conversation_for_grant(user, grant), [], None, [],
-        request_meta=request_meta, _reporter=_reporter, pending_actions=[])
+        request_meta=request_meta, _reporter=reporter, pending_actions=[])
     return _call_result(outcome["content"])
 
 
@@ -287,7 +392,10 @@ def _dispatch(msg, ctx):
         return {"tools": list_tools(ctx.user, ctx.hide_infrastructure)}
     if method == "tools/call":
         name = params.get("name")
-        if not isinstance(name, str) or not name:
+        # Refused BEFORE dispatch, so an unbounded or newline-bearing name never
+        # reaches a log line, an incident title or an incident body. A real tool
+        # name always matches; nothing legitimate is lost.
+        if not isinstance(name, str) or not TOOL_NAME_RE.match(name):
             raise protocol.JsonRpcError(
                 protocol.INVALID_PARAMS, protocol.INVALID_PARAMS_MESSAGE)
         arguments = params.get("arguments")

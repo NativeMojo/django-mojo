@@ -634,3 +634,177 @@ def test_call_refusals(opts):
                   f"{why} is a protocol error, not a transport failure, got {status}")
         assert_eq(payload["error"]["code"], protocol.INVALID_PARAMS,
                   f"{why} must answer -32602, got {payload}")
+
+
+# ---------------------------------------------------------------------------
+# What a machine client cannot do
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test("a client-chosen tool name is bounded and charset-restricted")
+def test_tool_name_is_bounded(opts):
+    from mojo.apps.assistant.mcp import protocol
+
+    events, reporter = _recorder()
+    for name, why in (
+            ("x" * 200, "a 200-character name"),
+            ("nope\ninjected log line", "a name carrying a newline"),
+            ("nope\x00", "a name carrying a control character"),
+            ("../../etc/passwd", "a name carrying path separators"),
+            ("", "an empty name")):
+        status, payload = _handle(
+            opts,
+            {"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+             "params": {"name": name, "arguments": {}}},
+            reporter=reporter)
+        assert_eq(status, 200,
+                  f"{why} is a protocol error, not a transport failure, got "
+                  f"{status}")
+        assert_eq(payload["error"]["code"], protocol.INVALID_PARAMS,
+                  f"{why} must answer -32602, got {payload}")
+
+    assert_eq(events, [],
+              f"a refused name must never reach a log line or an incident — a "
+              f"client that mints unbounded names would otherwise forge both, "
+              f"got {events}")
+
+    # The bound is on the shape, not on being registered: a well-formed but
+    # unknown name still gets the ordinary Unknown tool result.
+    assert_eq(protocol.INVALID_PARAMS, -32602, "the -32602 code is the contract")
+    ok = _call(opts, "a.b-c_D9", reporter=reporter)
+    assert_eq(ok["isError"], True,
+              f"a well-formed unknown name must still dispatch and refuse, got "
+              f"{ok}")
+
+
+@th.django_unit_test("one machine client cannot flood the incident table")
+@th.requires_app("mojo.apps.incident")
+def test_incident_volume_is_bounded(opts):
+    from mojo.apps.incident.models import Event
+    from mojo.apps.incident.reporter import notice_key
+    from mojo.apps.assistant.mcp import server
+    from mojo.helpers.redis import get_connection
+
+    category = "assistant:permission_denied"
+    key = server.suppression_key(opts.admin)
+    assert_eq(key, f"mcp:{opts.admin.pk}",
+              f"incidents must be suppressed per operator, got {key!r}")
+
+    Event.objects.filter(uid=opts.admin.pk, category=category).delete()
+    get_connection().delete(notice_key(category, key))
+
+    # No `reporter=` — this is the PRODUCTION path, wrapping
+    # report_event_suppressed. Two unknown names is two level-6 reports.
+    _call(opts, "definitely_not_a_tool_one")
+    _call(opts, "definitely_not_a_tool_two")
+
+    filed = Event.objects.filter(uid=opts.admin.pk, category=category).count()
+    assert_eq(filed, 1,
+              f"a machine client picks the tool names, so its incidents must be "
+              f"suppressed to one per category per window — got {filed} rows")
+
+    Event.objects.filter(uid=opts.admin.pk, category=category).delete()
+    get_connection().delete(notice_key(category, key))
+
+
+@th.django_unit_test("discovery, chat-state and LLM-spending tools are all projected out")
+def test_hidden_tool_families(opts):
+    from mojo.apps.assistant import get_registry
+    from mojo.apps.assistant.mcp import server
+
+    registry = get_registry()
+    for name in ("list_tools", "add_context", "analyze_image"):
+        assert_true(name in registry,
+                    f"{name} must still be registered for the chat path — this "
+                    f"test would silently pass if it were simply gone")
+        assert_true(name in server.HIDDEN_TOOLS,
+                    f"{name} must be hidden from the MCP transport")
+        assert_true(name not in server.projected_registry(False),
+                    f"{name} must be absent from the projection")
+
+    listed = [tool["name"] for tool in
+              server.list_tools(opts.admin, hide_infrastructure=False)]
+    for name, why in (
+            ("list_tools", "a discovery tool reading the RAW registry would "
+                           "hand back exactly the names the projection withholds"),
+            ("add_context", "a chat-context builder is a model-row existence "
+                            "oracle here and has nowhere to put its context"),
+            ("analyze_image", "a read tool that spends the platform LLM "
+                              "credential must not be driven by a remote client")):
+        assert_true(name not in listed, f"{name} must not be listed: {why}")
+        refused = _call(opts, name, {"file_id": 1}, hide_infrastructure=False)
+        assert_eq(refused["isError"], True, f"{name} must be refused: {why}")
+        assert_eq(_text(refused), {"error": f"Unknown tool: {name}"},
+                  f"{name} must be indistinguishable from an unregistered name, "
+                  f"got {_text(refused)}")
+
+    for kept in ("read_memory", "find_skill", "list_skills"):
+        assert_true(kept in listed,
+                    f"{kept} is a READ of the assistant's own state and must "
+                    f"stay available, got {sorted(listed)[:20]}")
+
+
+@th.django_unit_test("the per-grant conversation is created exactly once")
+def test_conversation_creation_is_serialized(opts):
+    from django.db import transaction
+    from mojo.apps.assistant.mcp import server
+    from mojo.apps.assistant.models import Conversation
+
+    Conversation.objects.filter(
+        user=opts.noperm, metadata__transport="mcp").delete()
+    grant = _grant(opts.noperm, opts.client_row, ["mcp"])
+
+    # Both calls run with the grant row locked, which is exactly the window two
+    # concurrent first calls would race in.
+    with transaction.atomic():
+        first = server.conversation_for_grant(opts.noperm, grant)
+        second = server.conversation_for_grant(opts.noperm, grant)
+
+    assert_eq(first.pk, second.pk,
+              f"a second first-call must find the row the first one created, "
+              f"got {first.pk} and {second.pk}")
+    rows = Conversation.objects.filter(
+        user=opts.noperm, metadata__transport="mcp", metadata__grant=grant.pk)
+    assert_eq(rows.count(), 1,
+              f"exactly one conversation may exist per grant — a stranded "
+              f"second one holds cards the client can never poll, got "
+              f"{rows.count()}")
+
+
+@th.django_unit_test("a second grant for the same operator gets its own card scope")
+def test_second_grant_is_isolated(opts):
+    from mojo.apps.assistant.mcp import server
+    from mojo.apps.assistant.services import approvals
+
+    second = _grant(opts.admin, opts.client_row, ["mcp"])
+
+    first_conv = server.conversation_for_grant(opts.admin, opts.grant)
+    second_conv = server.conversation_for_grant(opts.admin, second)
+    assert_true(first_conv.pk != second_conv.pk,
+                f"two grants for one operator must not share a conversation, "
+                f"both got {first_conv.pk}")
+    assert_eq((second_conv.metadata or {}).get("grant"), second.pk,
+              f"the second conversation must be flagged for the second grant, "
+              f"got {second_conv.metadata}")
+
+    card = _call(opts, "testit_mcp_write", {"target": "grant-isolation"},
+                 hide_infrastructure=False)
+    action_id = card["structuredContent"]["action_id"]
+    assert_eq(_text(_call(opts, "get_pending_action", {"action_id": action_id}))
+              .get("action_id"), action_id,
+              "the proposing connection must be able to read its own card")
+
+    listed = _text(_call(opts, "list_pending_actions",
+                         grant=second))["actions"]
+    assert_true(action_id not in [block["action_id"] for block in listed],
+                f"a second connection must not see the first connection's "
+                f"cards, got {listed}")
+
+    events, reporter = _recorder()
+    fetched = _call(opts, "get_pending_action", {"action_id": action_id},
+                    grant=second, reporter=reporter)
+    assert_eq(fetched["isError"], True,
+              f"a second connection must not be able to read the first's card "
+              f"by id, got {fetched}")
+    assert_eq(_text(fetched), {"error": approvals.GENERIC_UNAVAILABLE},
+              f"the refusal must be the same non-oracular one, got "
+              f"{_text(fetched)}")
