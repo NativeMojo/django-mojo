@@ -21,6 +21,216 @@ Everything is `python3 -m`, with no `[project.scripts]` console entry point and
 no Django settings anywhere on the path — this runs from a laptop against an
 account that has no django-mojo installed in it yet.
 
+## Exact-resource brownfield fleets
+
+The normal commands above own a greenfield topology. They are intentionally
+unchanged. An existing application with a live database, cache, buckets,
+network, DNS, certificates and public addresses uses a second input language
+and two separate commands:
+
+```bash
+python3 -m mojo.deploy.provision fleet-status --fleet shadow
+python3 -m mojo.deploy.provision fleet-status --fleet shadow --json
+python3 -m mojo.deploy.provision fleet-apply --fleet shadow --dry-run
+python3 -m mojo.deploy.provision fleet-apply --fleet shadow
+```
+
+The declaration is `aws/fleets/<fleet>.json`. It is strict, secret-free and
+exact-reference only: unknown keys, unversioned boot objects, cross-account
+ARNs, ambiguous node roles and malformed AWS identifiers fail before an AWS
+client is built. It is not an environment file with extra switches and
+`brownfield` is not a managed size preset.
+
+Abridged only by replacing account-specific values with examples, the schema
+is:
+
+```json
+{
+  "schema_version": 1,
+  "account_id": "123456789012",
+  "region": "us-west-2",
+  "project": "maestro",
+  "environment": "prod",
+  "fleet": "shadow",
+  "network": {
+    "vpc_id": "vpc-0123456789abcdef0",
+    "node_security_group_id": "sg-0123456789abcdef0",
+    "public_subnets": [
+      {"id": "subnet-0123456789abcdef0", "availability_zone": "us-west-2a", "network_border_group": "us-west-2"},
+      {"id": "subnet-1123456789abcdef0", "availability_zone": "us-west-2b", "network_border_group": "us-west-2"}
+    ]
+  },
+  "database": {
+    "cluster_arn": "arn:aws:rds:us-west-2:123456789012:cluster:orchestra",
+    "identifier": "orchestra",
+    "writer_endpoint": "orchestra.cluster.example.rds.amazonaws.com",
+    "reader_endpoint": "orchestra.cluster-ro.example.rds.amazonaws.com",
+    "port": 5432,
+    "database_name": "orchestra",
+    "master_user": "postgres",
+    "application_user": "maestro_app_next",
+    "subnet_group_name": "orchestra-db",
+    "security_group_ids": ["sg-1123456789abcdef0"],
+    "credential": {
+      "provider": "s3",
+      "metadata_key": "database",
+      "object": {"bucket": "maestro-prod-config", "key": "secrets/db.json", "version_id": "db-version", "sha256": "<64 lowercase hex>"}
+    }
+  },
+  "cache": {
+    "replication_group_arn": "arn:aws:elasticache:us-west-2:123456789012:replicationgroup:orchestra-cache",
+    "identifier": "orchestra-cache",
+    "endpoint": "orchestra-cache.example.cache.amazonaws.com",
+    "port": 6379,
+    "transit_encryption": true,
+    "auth_enabled": false,
+    "subnet_group_name": "orchestra-cache",
+    "security_group_ids": ["sg-2123456789abcdef0"]
+  },
+  "storage": {
+    "config": {"bucket": "maestro-prod-config", "prefix": "config/live"},
+    "releases": {"bucket": "maestro-prod-releases", "prefix": "releases"},
+    "sites": {"bucket": "maestro-prod-sites", "prefix": "sites"},
+    "revisions": {"bucket": "maestro-prod-sites", "prefix": "revisions"},
+    "fleet_config": {"bucket": "maestro-prod-config", "prefix": "fleets/shadow"}
+  },
+  "bootstrap": {
+    "stage1": {"bucket": "maestro-prod-config", "key": "bootstrap/stage1.sh", "version_id": "stage1-version", "sha256": "<64 lowercase hex>"},
+    "live_config": {"bucket": "maestro-prod-config", "key": "config/live/django.conf", "version_id": "config-version", "sha256": "<64 lowercase hex>"},
+    "role_document": {"bucket": "maestro-prod-config", "key": "bootstrap/node-role.json", "version_id": "role-version", "sha256": "<64 lowercase hex>"}
+  },
+  "nodes": {
+    "instance_type": "t3.medium",
+    "volume_gb": 40,
+    "ami_id": "ami-0123456789abcdef0",
+    "key_pair_name": "maestro-prod",
+    "session_manager": true,
+    "items": [
+      {"name": "maestro-api-1", "role": "api", "serving_target": true, "subnet_id": "subnet-0123456789abcdef0", "availability_zone": "us-west-2a", "instance_profile_arn": "arn:aws:iam::123456789012:instance-profile/maestro-api-fleet"},
+      {"name": "maestro-worker-1", "role": "worker", "serving_target": false, "subnet_id": "subnet-1123456789abcdef0", "availability_zone": "us-west-2b", "instance_profile_arn": "arn:aws:iam::123456789012:instance-profile/maestro-worker-fleet"}
+    ],
+    "profiles": {
+      "api": {"profile_arn": "arn:aws:iam::123456789012:instance-profile/maestro-api-fleet", "role_arn": "arn:aws:iam::123456789012:role/maestro-api-fleet"},
+      "worker": {"managed": {"profile_name": "maestro-shadow-worker", "role_name": "maestro-shadow-worker"}}
+    }
+  },
+  "load_balancer": {
+    "name": "maestro-shadow-nlb",
+    "api_target_group": "maestro-shadow-api",
+    "certbot_target_group": "maestro-shadow-http",
+    "subnet_ids": ["subnet-0123456789abcdef0", "subnet-1123456789abcdef0"]
+  },
+  "kms_key_arn": "arn:aws:kms:us-west-2:123456789012:key/01234567-89ab-cdef-0123-456789abcdef",
+  "alarm_topic_arn": "arn:aws:sns:us-west-2:123456789012:maestro-alarms",
+  "compatibility_instance_ids": ["i-0123456789abcdef0"]
+}
+```
+
+`credential` is also required for cache when `auth_enabled` is true. A role
+profile is either two exact existing ARNs or one migration-owned `managed`
+name pair, never both. `compatibility_instance_ids` are explicit existing
+servers that may temporarily join the shadow target groups; they are not
+adopted as managed nodes.
+
+### The brownfield safety boundary
+
+`fleet-status` reads and validates the exact account, region, VPC, subnets and
+routes, security groups, Aurora/Valkey shape and endpoints, S3 prefixes and
+versioned object metadata, KMS key, SNS topic, IAM references, AMI, key pair,
+existing declared nodes and migration telemetry. It hashes the redacted result
+as the dependency digest and separately hashes the canonical complete action
+set `(step, verb, target, detail)`. `fleet-apply` performs that preview, asks
+for a typed confirmation, re-observes everything, and refuses before mutation
+if either digest changed. A newly needed but otherwise allowed mutation is
+therefore not smuggled in after confirmation.
+
+The mutation boundary is a positive allowlist:
+
+| Step | May create or converge | Never does |
+|---|---|---|
+| identity | only declared migration-owned roles/profiles and their exact runtime policy | modify an exact reused profile or adopt a colliding name |
+| nodes | only the exact declared fleet node names, with fleet and application-role tags | stop, replace or modify a live/compatibility instance |
+| balancer | the named shadow NLB, its two target groups/listeners, new NLB addresses, and target registration | deregister a target, attach a preserved address, or modify the live edge |
+| telemetry | exact fleet log groups, retention and two target-health alarms | adopt or overwrite an untagged same-name group/alarm |
+
+Every mutable resource must either be created in this run or re-observed with
+the exact `managed-by`, project, environment, fleet and resource-role tags.
+Same-name collisions fail closed. The SDK client independently rejects every
+mutation method outside the allowlist, and the reviewed preview independently
+checks an exact step/verb/resource-name matrix.
+
+Two preview rows deliberately cover subordinate calls as one logical resource
+convergence: creating an instance profile includes attaching its newly created
+owned role, and creating a log group includes setting its 90-day retention.
+Those subordinate SDK methods have their own positive client allowlist entries
+and run only after the parent create succeeded. They are not hidden mutations
+on a second resource. Tests instrument apply and prove the complete logical
+preview, including NLB attributes, listeners, address mappings and target
+registration, covers every action apply can reach.
+
+The following are forced false: DNS publication and Route53 changes; ACM or
+certificate work; EIP transfer/association of preserved addresses; secrets
+rotation; S3 data-plane publication/copy; database, cache, VPC or security
+group creation/modification; and all teardown. The normal managed DAG and
+commands are not called by fleet mode.
+
+### Node boot and role behavior
+
+Stage 0 downloads `stage1`, the existing live `django.conf`, and the opaque
+node-role document by exact S3 version and verifies each declared SHA-256
+before execution or installation. The live config is installed locally at
+`/opt/api/var/django.conf`; it is never copied or republished in S3. Future
+config-sync writes use the separate migration-owned `storage.fleet_config`
+prefix. The role document is root-owned `0600`, and `MOJO_NODE_ROLE` plus
+`mojo:application-role` carry the opaque application role through boot and
+inventory. Only `serving_target` nodes, plus explicit compatibility instance
+ids, enter the API target group; workers do not.
+
+The managed runtime policy grants unversioned `GetObject` only below declared
+storage prefixes and `GetObjectVersion` only on the exact bootstrap and
+database/cache credential object keys. It has no credential values and no
+permission to republish the existing data plane.
+
+### DNS, TLS and preserved public IP continuity
+
+Fleet preparation is deliberately a shadow operation. It does not change a
+single Route53 record, bring-your-own-DNS record, ACM certificate, dnsman
+object or existing public IP association. Existing sites continue resolving
+to the existing servers throughout preparation. The shadow NLB gets new
+addresses; transferring an existing EIP to it is a later, explicit cutover
+procedure after backup, rehearsal, node readiness and canary evidence.
+
+An existing single preserved EIP can maintain one public-IP continuity path;
+it cannot by itself provide multi-AZ ingress redundancy. Do not represent one
+preserved address as a redundant edge. DNS providers that can point at the NLB
+name may move independently later; providers pinned to an IP need a rehearsed
+EIP handoff. Neither operation belongs to these commands.
+
+### Failure and recovery
+
+- A manifest, dependency, ownership, preview-action or digest failure mutates
+  nothing. Correct the declaration or restore the exact dependency and rerun
+  `fleet-status`.
+- A partial preparation run is resumable. Re-observation recognizes only
+  exactly tagged resources, and the converge is idempotent.
+- A node that boots without its pinned config/artifact digest matching never
+  reaches stage 1. Inspect `/var/log/mojo-stage0.log` and replace the bad pin;
+  do not bless different bytes under the old declaration.
+- An unhealthy target is `MANUAL` and blocks cutover evidence; the command
+  never deregisters or replaces it.
+- There is no rollback-by-delete. Before public cutover, recovery is simply to
+  leave production DNS/EIPs on the existing servers. After a separately run
+  handoff, its runbook must be able to reattach the address or restore DNS to
+  the recorded baseline.
+
+Before any external cutover, retain the JSON `fleet-status`, manifest and
+dependency digests, instance/AZ/profile inventory, cloud-init/stage logs,
+redacted database `SELECT 1` and cache `PING` results from every role, target
+health over the full canary window, DNS answers and TTLs, certificate/SAN
+evidence, current EIP allocation/association and network-border-group details,
+and a tested reverse procedure. Fleet preparation alone is not cutover
+authorization.
+
 ## It takes about three `apply` runs, and that is the design
 
 Aurora and ElastiCache take five to fifteen minutes to become usable, and this
