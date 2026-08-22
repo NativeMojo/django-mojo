@@ -399,6 +399,12 @@ enforced in code. It sets the hostname, makes swap, writes
 on the box and echoed back by `describe-instance-attribute` to anyone with EC2
 read access. The node reads S3 with its instance role.
 
+That role also carries one separate AMI-observation statement:
+`ssm:GetParameter` on the architecture-specific public AL2023 parameter ARN.
+The Admin node runs provisioning convergence with its instance role, so it
+needs that read to resolve the current base image; no other SSM action or
+parameter is granted.
+
 **Stage 1** is `mojo/deploy/provision/scripts/stage1.sh`, packaged in the wheel,
 published to the config bucket with the version pin substituted, and logged to
 `/var/log/mojo-stage1.log`. Its order is the whole point:
@@ -408,10 +414,11 @@ published to the config bucket with the version pin substituted, and logged to
 | 1 | untar the app tarball into `/opt/api` | `ec2_bootstrap.sh` and `ec2_deploy.sh` are files **inside** it |
 | 2 | `aws/ec2_bootstrap.sh` | the OS: users, packages, nginx, certbot, and an **unpinned** `pip install django-mojo` |
 | 3 | `pip install --upgrade "django-mojo==<version>"`, converged with bounded retries (`--no-cache-dir` after the first attempt) | **after** step 2, precisely so it overwrites that unpinned install; a freshly published version can lag pip's Simple-index caches, and a fresh node has nothing to fall back on, so exhaustion stays fatal here |
-| 4 | `aws/ec2_deploy.sh` | the project: nginx vhosts, systemd units, `var/` ownership |
-| 5 | `echo prod > var/profile`, chown `ec2-user:www`, chmod 640 | after step 4's ownership sweep, before step 7's restart |
-| 6 | CloudWatch agent | installed if absent, configured, enabled — before the restart, so the app's first minutes are logged |
-| 7 | `python3 -m mojo.deploy.config_sync` | last: it installs `django.conf` and restarts `mojo-asgi` |
+| 4 | `python3 -m mojo.deploy render --dest /opt/api/var/deploy …` | materializes the JUST-PINNED package's cron/systemd templates before the project tries to converge them; a fresh node has no earlier post-deploy render to inherit |
+| 5 | `aws/ec2_deploy.sh` | the project: nginx vhosts, systemd units, `var/` ownership |
+| 6 | `echo prod > var/profile`, chown `ec2-user:www`, chmod 640 | after step 5's ownership sweep, before step 8's restart |
+| 7 | CloudWatch agent | installed if absent, configured, enabled — before the restart, so the app's first minutes are logged |
+| 8 | `python3 -m mojo.deploy.config_sync` | last: it installs `django.conf` and restarts `mojo-asgi` |
 
 The whole script is `set -euo pipefail` and idempotent — a resumed bootstrap
 is a plain re-execution of it. `tests/test_deploy/harness/test_stage1_sh.sh`
