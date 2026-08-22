@@ -1,9 +1,47 @@
+import json
 from unittest import mock
 
 from objict import objict
 from testit import helpers as th
 
 from .brownfield_fixture import topology
+
+
+def _health_path_modify_action(path):
+    from mojo.deploy.provision import balancer
+
+    spec = topology()
+    spec.api_health_path = path
+    vpc_id = spec.brownfield_manifest["network"]["vpc_id"]
+    wanted = balancer.target_group_specs(spec, vpc_id)
+    existing = {
+        role: dict(request, TargetGroupArn=f"arn:tg:{role}")
+        for role, request in wanted.items()}
+    existing["api"]["HealthCheckPath"] = balancer.HEALTH_PATH
+    findings, actions = [], []
+    balancer._ensure_target_groups(
+        None, spec, {"target_groups": existing}, wanted,
+        findings, actions, apply=False)
+    return actions[0]
+
+
+@th.django_unit_test()
+def test_health_path_value_is_bound_into_the_preview_action_digest(opts):
+    from mojo.deploy.provision import brownfield_plan
+
+    first_path = "/api/maestro/node/ready"
+    second_path = "/api/maestro/node/ready-v2"
+    first = _health_path_modify_action(first_path)
+    second = _health_path_modify_action(second_path)
+
+    th.assert_eq(json.loads(first.detail), {"HealthCheckPath": first_path},
+                 "modify detail must carry the exact desired health path")
+    th.assert_eq(json.loads(second.detail), {"HealthCheckPath": second_path},
+                 "JSON detail must preserve a second valid path exactly")
+    th.assert_true(
+        brownfield_plan._action_digest([first])
+        != brownfield_plan._action_digest([second]),
+        "changing only the desired health path must change the action digest")
 
 
 @th.django_unit_test()
