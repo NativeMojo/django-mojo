@@ -56,14 +56,30 @@ def test_positive_client_policy_blocks_every_unlisted_mutation_via_getattr(opts)
             raised = err
         th.assert_true(raised is not None,
                        f"dynamic getattr must not bypass the block on {method}")
+    # FORBIDDEN_METHODS keys on (service, method) and holds
+    # ("elbv2", "set_subnets"), so the cutover seam only fires on an elbv2
+    # client. On the ec2 client above the same name is simply an unlisted
+    # mutation, which the positive policy blocks one layer later — both are
+    # refusals, but only the elbv2 one exercises the stronger seam this
+    # assertion is about.
+    elbv2 = discover.GuardedClient(
+        _Raw(), "elbv2", brownfield_policy.MutationPolicy())
     raised = None
     try:
-        discover.GuardedClient(
-            _Raw(), "elbv2", brownfield_policy.MutationPolicy()).set_subnets
+        elbv2.set_subnets
     except discover.DestructiveCallBlocked as err:
         raised = err
     th.assert_true(raised is not None,
                    "SetSubnets must stop at the stronger global cutover seam")
+
+    raised = None
+    try:
+        client.set_subnets
+    except brownfield_policy.BrownfieldCallBlocked as err:
+        raised = err
+    th.assert_true(raised is not None,
+                   "an elbv2-only verb is still refused on an ec2 client, as "
+                   "an unlisted preparation mutation")
 
 
 @th.django_unit_test()
