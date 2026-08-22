@@ -686,6 +686,167 @@ def test_builtin_writers_owner_state(opts):
             pass
 
 
+@th.django_unit_test("the direct path validates arguments the way the card path does")
+def test_owner_state_direct_path_normalizes_arguments(opts):
+    from mojo.apps.assistant.models import PendingAction, Skill
+
+    _reset(opts)
+    conv = _conversation(opts, "approval-owner-normalize")
+    Skill.objects.filter(name__startswith=OWNER_PREFIX).delete()
+
+    def cards():
+        return PendingAction.objects.filter(conversation=conv).count()
+
+    try:
+        saved = _dispatch(opts, conv, "save_skill", {
+            "tier": "user", "name": OWNER_PREFIX + "normalize",
+            "description": "Owner-state normalization fixture",
+            "steps": [{"tool": "read_memory", "description": "read"}],
+        })
+        own_id = saved["skill"]["id"]
+
+        # An UNDECLARED key is DROPPED before dispatch, exactly as
+        # `approvals.propose` drops it. Forwarding it would collide with the
+        # handler's own `group=` keyword and crash inside the tool.
+        events, reporter = _recorder()
+        payload = _dispatch(opts, conv, "update_skill",
+                            {"skill_id": own_id, "group": 1}, reporter=reporter)
+        assert_true("error" in payload,
+                    f"an update carrying nothing but an undeclared key has no "
+                    f"field left to change, got {payload}")
+        assert_true("internal error" not in payload["error"],
+                    f"the undeclared key must be dropped before dispatch, not "
+                    f"reach the handler and crash it, got {payload}")
+        assert_eq([e.get("category") for e in events], [],
+                  f"a handler that refused cleanly must file nothing, got "
+                  f"{[e.get('category') for e in events]}")
+        assert_eq(cards(), 0, "a dropped argument must not produce a card")
+
+        # A DECLARED key of the wrong type is refused by the schema, before the
+        # predicate runs — an ordinary tool error with no card and no incident,
+        # the same outcome `propose()` gives a rejected argument set.
+        events, reporter = _recorder()
+        payload = _dispatch(opts, conv, "write_memory",
+                            {"tier": "user", "key": ["a"], "value": "x"},
+                            reporter=reporter)
+        assert_true("error" in payload and "key" in payload["error"],
+                    f"a wrongly typed argument must be refused by the schema, "
+                    f"got {payload}")
+        assert_true("internal error" not in payload["error"],
+                    f"the refusal must name the argument, not degrade into the "
+                    f"generic internal error, got {payload}")
+        assert_eq([e.get("category") for e in events], [],
+                  f"a refused argument set files no incident at all, got "
+                  f"{[e.get('category') for e in events]}")
+        assert_eq(cards(), 0, "a refused argument set must not produce a card")
+        assert_eq(len(CALLS), 0,
+                  "neither refused call may reach a fixture handler")
+
+        payload = _dispatch(opts, conv, "update_skill",
+                            {"skill_id": own_id, "description": "Still direct"})
+        assert_true("skill" in payload,
+                    f"a valid owner-state call must still execute directly, "
+                    f"got {payload}")
+        assert_eq(cards(), 0, "a valid owner-state call must not produce a card")
+    finally:
+        Skill.objects.filter(name__startswith=OWNER_PREFIX).delete()
+        PendingAction.objects.filter(conversation=conv).delete()
+
+
+@th.django_unit_test("update_skill cannot move a skill between scopes")
+def test_update_skill_cannot_change_scope(opts):
+    """The invariant `_owns_skill` rests on.
+
+    The predicate authorizes a direct execution on the row's CURRENT `tier` and
+    `user_id`. If `update_skill` could write either, a caller would edit their
+    own user-tier skill into a global one with no approval card — the exact
+    write the gate exists to catch.
+    """
+    from mojo.apps.account.models import Group
+    from mojo.apps.assistant.models import Skill
+    from mojo.apps.assistant.services.skills import update_skill
+
+    _reset(opts)
+    Skill.objects.filter(name__startswith=OWNER_PREFIX).delete()
+    Group.objects.filter(name=OWNER_PREFIX + "group").delete()
+    try:
+        group = Group.objects.create(name=OWNER_PREFIX + "group",
+                                     kind="organization")
+        skill = Skill.objects.create(
+            user=opts.admin, tier="user", name=OWNER_PREFIX + "scope",
+            description="Scope invariant fixture",
+            steps=[{"tool": "read_memory", "description": "read"}])
+
+        # `tier` and `user_id` are the two scope keys that can reach `**fields`.
+        # UPDATABLE must drop both.
+        result = update_skill(
+            opts.admin, skill.pk, group=group, description="Still mine",
+            tier="global", user_id=opts.other.pk)
+        assert_true("error" not in result,
+                    f"the one declared field must still update, got {result}")
+
+        # `user` and `group` cannot even be EXPRESSED as updatable fields: both
+        # are the function's own parameters. `user` collides outright, and
+        # `group` binds to the CALLER's ambient group — which the group_id
+        # assertion below proves is never written onto a user-tier row. The tool
+        # path never gets that far either: `normalize_args` drops both as
+        # undeclared keys before dispatch.
+        raised = None
+        try:
+            update_skill(opts.admin, skill.pk, description="x", user=opts.other)
+        except TypeError as exc:
+            raised = exc
+        assert_true(raised is not None,
+                    "'user' must not be expressible as an updatable field — it "
+                    "binds to update_skill's own first parameter")
+
+        skill.refresh_from_db()
+        assert_eq(skill.tier, "user",
+                  f"update_skill must never move a skill between tiers — "
+                  f"_owns_skill authorizes on the CURRENT tier, got {skill.tier}")
+        assert_eq(skill.user_id, opts.admin.pk,
+                  f"update_skill must never reassign ownership — _owns_skill "
+                  f"authorizes on the CURRENT user_id, got {skill.user_id}")
+        assert_true(skill.group_id is None,
+                    f"update_skill must never attach the caller's ambient group "
+                    f"to a user-tier skill, got group_id={skill.group_id}")
+        assert_eq(skill.description, "Still mine",
+                  f"the declared field must have been applied, got "
+                  f"{skill.description!r}")
+    finally:
+        Skill.objects.filter(name__startswith=OWNER_PREFIX).delete()
+        Group.objects.filter(name=OWNER_PREFIX + "group").delete()
+
+
+@th.django_unit_test("a read-only tool files no assistant:tool:<name> event")
+def test_read_only_tool_files_no_success_event(opts):
+    """`assistant:tool:*` means a MUTATING tool ran.
+
+    It is filed by `approvals.resolve()` for an approved execution and by the
+    owner-state direct path. A read dispatched through the same function must
+    stay out of that category, or the audit trail stops meaning anything.
+    """
+    _reset(opts)
+    conv = _conversation(opts, "approval-readonly-events")
+
+    events, reporter = _recorder()
+    payload = _dispatch(opts, conv, "testit_approval_read", {}, reporter=reporter)
+    assert_eq(payload.get("read"), True,
+              f"the fixture read tool must still execute inline, got {payload}")
+    assert_eq([e.get("category") for e in events], [],
+              f"a read-only tool must file no incident at all, got "
+              f"{[e.get('category') for e in events]}")
+
+    events, reporter = _recorder()
+    payload = _dispatch(opts, conv, "read_memory", {}, reporter=reporter)
+    assert_true("error" not in payload,
+                f"read_memory must execute inline, got {payload}")
+    assert_eq([e.get("category") for e in events
+               if str(e.get("category")).startswith("assistant:tool:")], [],
+              f"a built-in read must never file the mutating-tool success "
+              f"event, got {[e.get('category') for e in events]}")
+
+
 # ---------------------------------------------------------------------------
 # authorize()
 # ---------------------------------------------------------------------------

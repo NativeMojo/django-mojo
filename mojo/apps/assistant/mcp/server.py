@@ -56,6 +56,12 @@ TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,128}$")
 SUPPRESSION_WINDOW = 3600
 SUPPRESSION_BUDGET = 50
 
+# Category prefixes that are NEVER suppressed on this transport. Matched with
+# `str.startswith`, so a tuple. `assistant:tool:<name>` is filed only when a
+# mutating tool actually ran — the record that an owner-state write happened —
+# and one row per hour is not an audit trail. See `suppressed_reporter`.
+UNSUPPRESSED_CATEGORIES = ("assistant:tool:",)
+
 
 # --- what this transport does not offer ------------------------------------
 #
@@ -313,12 +319,32 @@ def suppressed_reporter(user, _reporter=None):
     the calling operator and filed at most once per category per window, and
     fail-CLOSED: a Redis outage must drop these, not open the floodgate.
 
-    ``_reporter`` replaces ``report_event_suppressed`` itself (same signature),
-    which is the seam the tests inject; production passes ``None``.
+    ``UNSUPPRESSED_CATEGORIES`` is the one exception, and it is an AUDIT
+    decision. An ``assistant:tool:<name>`` event is filed only when a mutating
+    tool actually RAN, which over this transport means an owner-state write to
+    the operator's own memory or skills. Suppressing it would record the first
+    such write of the hour and silently drop every one after it — the audit trail
+    for exactly the calls that changed something. The flood argument does not
+    apply: the category is a bounded set the client cannot invent (a name outside
+    the registry never reaches a handler), and the handlers carry their own entry
+    and size caps.
+
+    ``_reporter`` replaces whichever reporter a given call would otherwise use —
+    ``report_event_suppressed`` for the suppressed majority, ``report_event`` for
+    the pass-through categories — and is the seam the tests inject; production
+    passes ``None``. A suppressed call is told apart by its ``key`` kwarg.
     """
     key = suppression_key(user)
 
     def report(details, **kwargs):
+        category = kwargs.get("category") or ""
+        if category.startswith(UNSUPPRESSED_CATEGORIES):
+            reporter = _reporter
+            if reporter is None:
+                from mojo.apps.incident import report_event
+
+                reporter = report_event
+            return reporter(details, **kwargs)
         reporter = _reporter
         if reporter is None:
             from mojo.apps.incident.reporter import report_event_suppressed

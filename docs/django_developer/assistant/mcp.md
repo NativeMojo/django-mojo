@@ -330,6 +330,15 @@ client picks them, and `_execute_tool` files a level-6
 machine could mint one incident row per request indefinitely. Fail-closed is
 deliberate: a Redis outage must drop these, not remove the ceiling.
 
+**`UNSUPPRESSED_CATEGORIES` is the exception, and it is an audit decision.** A
+category matching `assistant:tool:` is filed **unsuppressed**, because that event
+means a mutating tool actually RAN — over this transport, an owner-state write to
+the operator's own memory or skills. One row per hour would record the first such
+write and silently drop every one after it. The flood argument does not apply
+here: the category is a bounded set the client cannot invent (a name outside the
+registry never reaches a handler), and the handlers carry their own entry and
+size caps.
+
 ---
 
 ## Rate limiting and CORS
