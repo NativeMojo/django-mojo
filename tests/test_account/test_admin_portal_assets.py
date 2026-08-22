@@ -774,3 +774,25 @@ def test_infrastructure_mode_asset_contract(opts):
     for source in (maintenance, api, setup):
         assert "innerHTML" not in source, \
             "an infrastructure-mode surface writes markup instead of building nodes"
+
+
+@th.django_unit_test(
+    "capacity surfaces render provider member truth and server capabilities")
+def test_capacity_provider_truth_asset_contract(opts):
+    capacity = (ASSETS / "features/platform/capacity.js").read_text()
+    fleet = (ASSETS / "features/platform/fleet.js").read_text()
+
+    assert "row.registered ? row.state : row.instance_state" in capacity, \
+        "the capacity drill-in hides balancer-less EC2 provider state"
+    assert "row.can_drain" in capacity and "row.can_drain" in fleet, \
+        "a capacity surface re-derives node drain capability client-side"
+    assert "member.lifecycle_state" in capacity \
+        and "member.lifecycle_state" in fleet, \
+        "RDS or ElastiCache members still inherit their parent's status"
+    assert "member.can_remove" in capacity and "member.can_remove" in fleet, \
+        "reader removal ignores the server-authored member capability"
+    assert "resource_transitioning:" in capacity, \
+        "the Admin cannot explain why a transitioning resource is read-only"
+    for source in (capacity, fleet):
+        assert "innerHTML" not in source, \
+            "a provider-truth capacity surface writes markup directly"

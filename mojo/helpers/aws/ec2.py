@@ -931,6 +931,29 @@ def instance_map(instance_ids, client=None, region=None):
     return {row["instance_id"]: row for row in rows if row.get("instance_id")}
 
 
+def fleet_instance_map(project, environment, client=None, region=None):
+    """Every live EC2 node owned by one django-mojo project/environment.
+
+    Discovery is tag-scoped at the provider boundary.  A similarly named or
+    generally django-mojo-tagged instance from another environment must never
+    appear in this fleet's capacity controls.
+    """
+    project = str(project or "").strip()
+    environment = str(environment or "").strip()
+    if not project or not environment:
+        return {}
+    ec2 = _ec2(client, region)
+    rows = _describe(ec2, [
+        {"Name": "tag:mojo:project", "Values": [project]},
+        {"Name": "tag:mojo:env", "Values": [environment]},
+        {"Name": "tag:mojo:role", "Values": ["node"]},
+        {"Name": "instance-state-name", "Values": [
+            "pending", "running", "stopping", "stopped", "shutting-down",
+        ]},
+    ])
+    return {row["instance_id"]: row for row in rows if row.get("instance_id")}
+
+
 def running_instance(instance_ids, client=None, region=None):
     """Facts for the first id IN THE CALLER'S ORDER that AWS reports running.
 

@@ -221,6 +221,27 @@ AWS-assigned DNS label, and absent evidence is not proof of safety. The
 confirmation copy says so out loud and asks the operator to check the instance
 id.
 
+### Inventory and lifecycle truth
+
+The report is not limited to load-balancer targets. When the running project
+has a provision environment declaration, `fleet_instance_map()` discovers EC2
+nodes at the provider boundary with the exact `mojo:project`, `mojo:env`, and
+`mojo:role=node` tags. Pending, running, stopping, stopped, and shutting-down
+members therefore remain visible before registration and after drain. Each row
+keeps both the raw `instance_state` and a normalized `lifecycle_state`
+(`available`, `creating`, `deleting`, or `error`), plus `registered` and
+server-authored `can_drain`. A target is healthy only when ELB reports it
+healthy **and** EC2 reports it running.
+
+The same declared identity narrows the serving map, RDS inventory, cache
+inventory, and balancer-less Elastic-IP fallback. Ownership is always tag
+proof (`spec.owns()`), never a matching name or merely being the only resource
+in the account. A report without a project declaration retains the legacy
+serving-only view for compatibility. A selected, malformed, or ambiguous
+declaration fails closed instead: `identity_available: false`, a named
+`identity` warning, no account-wide AWS inventory reads, and every action
+blocked `identity_unavailable`.
+
 
 ## Stable outbound IPs
 
@@ -333,27 +354,27 @@ grant for a number AWS enforces anyway; `AddressLimitExceeded` maps to
 - A dispatch failure on these two actions says the truth: the policy IS
   recorded, only the convergence did not start.
 
-### Balancer-less installs: read-only fallback
+### Balancer-less installs: visible inventory, read-only address fallback
 
-Fleet discovery is the serving map, so an install with no load balancer has no
-fleet here and the toggle is deliberately absent (`no_fleet_nodes`). But the
-report still answers the question the operator came with: when the serving
-read succeeds and finds nothing registered, `egress.fallback_attached` lists
-every Elastic IP attached to an EC2 instance in the region (instance
-association is the filter — balancer- and NAT-held addresses are inbound
-plumbing and excluded), with the instance name resolved through the same
-describe. `_fallback_attached` fills a separate key on purpose: the offers and
-both runners read only the fleet-scoped facts, so a fallback row can never
-make a mutation look available. Single-node provisioned or tofu-era estates
-therefore show their vendor-allowlist address with no control attached.
+A declared install with no load balancer still has an EC2 fleet in the report:
+owned nodes come from the tag-scoped provider inventory and render as
+`registered: false`. They cannot be drained because there is no serving target
+to drain, and add-node still needs a healthy registered source. When the
+serving read succeeds and finds nothing registered,
+`egress.fallback_attached` lists Elastic IPs attached to those **owned** EC2
+instances (instance association is the filter — balancer- and NAT-held
+addresses are inbound plumbing and excluded), with the instance name resolved
+through the same describe. `_fallback_attached` fills a separate key on
+purpose: the offers and both runners read only serving-tier facts, so a
+fallback row can never make a mutation look available.
 
 ### Boundaries
 
-- The fleet is what `serving_map()` shows: **registered** instances. A fleet
-  with no balancer is invisible here — provision already gives those nodes
-  their addresses (the node is the DNS target). A node whose drain completed
-  is deregistered and will not be converged by a later enable; drain itself
-  never detaches an address, so enable-then-drain keeps the node allowlisted.
+- Serving membership is what `serving_map()` shows; fleet inventory is the
+  tag-scoped EC2 describe. A node whose drain completed remains visible as
+  owned inventory but will not be converged by a later stable-IP enable;
+  drain itself never detaches an address, so enable-then-drain keeps the node
+  allowlisted.
 - Provision-side, `spec.stable_node_ips` (env-file key, `--stable-node-ips`)
   keeps `_ensure_addresses` running even behind an NLB — the birth-time form
   of the same policy. The two do not fight: DNS's balancer branch never reads
@@ -375,6 +396,15 @@ target **provably** is a reader — `IsClusterWriter=False` for an Aurora member
 a non-empty `ReadReplicaSourceDBInstanceIdentifier` for a standalone. Skipping
 the final snapshot is only correct because of that proof: a reader is a copy of
 data that lives on the primary.
+
+Cluster and instance ownership is checked independently from their provider
+tags. Every writer and reader carries its own raw `status`, normalized
+`lifecycle_state`, class, `can_resize`, and (readers only) `can_remove`.
+Creating or deleting one member leaves that member visible and blocks the
+affected controls until fresh provider state reports `available`; the parent
+cluster's status is never substituted for a member's status. Readers created
+by capacity carry the complete database ownership tag set in the create call,
+so there is no successful-but-untagged interval.
 
 **django-mojo does not consume a reader endpoint today.** `DATABASES` points at
 one host and every query goes there. Adding a reader adds standby read capacity
@@ -403,6 +433,13 @@ Two refusals, both before the API call:
 
 **A replica in a replication group is failover capacity, not read throughput.**
 django-mojo talks to the primary endpoint only.
+
+Each member's status comes from `DescribeCacheClusters`, not from the parent
+replication-group status. The report preserves raw `status`, adds normalized
+`lifecycle_state`, and blocks replica-count/resize controls while the group or
+any member is transitioning. Replication groups are admitted only when
+`ListTagsForResource` proves the declared project, environment, and cache
+role.
 
 ## Resizing (curated sizes)
 
@@ -479,13 +516,13 @@ changes.
 
 ### Report enrichment
 
-`_cache_rows` gains `node_type` (group-wide) and `resize_impact`;
-`_database_rows` gains `writer_instance_class` and `reader_instance_classes`
-for Aurora (from the one `instance_statuses` describe — `rds._instance_facts`
-now carries `instance_class`, so no extra API call) and folds each standalone
-replica's class into its source's `reader_instance_classes`. These are the
-exact field names the Fleet page already consumes, so its type tags and size
-selects light up with no negotiation.
+Schema version 2 keeps the original class maps and adds explicit per-member
+truth. `_cache_rows` carries `node_type`, `resize_impact`, and member
+`status`/`lifecycle_state`; `_database_rows` carries
+`writer_instance_class`, `reader_instance_classes`, `reader_statuses`, and a
+`members` array with status and capabilities. The Fleet page consumes the
+server-authored capability flags and never infers a safe control from a parent
+resource's status.
 
 ## Cross-cutting mechanics
 
@@ -502,6 +539,13 @@ losing the observation loses nothing `report()` cannot re-derive from the
 provider; every mutation is AWS-side before its record is written. `GET
 /api/aws/capacity/status` is a pure read — a status endpoint that ADVANCED the
 work would let a `manage_aws`-only caller drive a registration.
+
+**Unknown mutation outcomes are reconcile-only.** A provider failure after a
+mutation was attempted records `mutation_state_unknown`, retains its
+single-flight claim, returns only the bounded `ProviderCallError.detail()`
+shape, and directs the operator to refresh and inspect provider truth. It never
+offers replay as recovery: the first call may have succeeded even though its
+response was lost.
 
 **Cache invalidation.** Every mutation drops the capacity report key and
 `admin_platform.LOAD_BALANCER_CACHE_KEY`, so the Dashboard's serving-tier rows
@@ -672,6 +716,8 @@ rds:DescribeDBInstances     rds:DescribeDBClusters
 rds:CreateDBInstance        rds:CreateDBInstanceReadReplica
 rds:DeleteDBInstance        rds:ModifyDBInstance        (resize_database)
 elasticache:DescribeReplicationGroups
+elasticache:DescribeCacheClusters
+elasticache:ListTagsForResource
 elasticache:IncreaseReplicaCount
 elasticache:DecreaseReplicaCount
 elasticache:ModifyReplicationGroup                      (resize_cache)

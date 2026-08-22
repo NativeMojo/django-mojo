@@ -416,7 +416,8 @@ export async function fleetPage(ctx, signal = null) {
     const type = rows[0]?.instance_type || '';
 
     const removable = (row) => managed() && drain.offered && !row.self
-      && !want.removeNodes.has(row.id) && (!row.healthy || healthyLeft > 1);
+      && row.can_drain && !want.removeNodes.has(row.id)
+      && (!row.healthy || healthyLeft > 1);
 
     const bumpDown = () => {
       if (want.addNodes > 0) { want.addNodes -= 1; render(); return; }
@@ -436,14 +437,15 @@ export async function fleetPage(ctx, signal = null) {
 
     const nodeRow = (row) => {
       const leaving = want.removeNodes.has(row.id);
+      const shownState = row.registered ? row.state : row.instance_state;
       const labels = [
         row.self ? 'this node' : '', row.primary ? 'certbot primary' : '',
-        row.state || '',
+        row.registered ? row.state : 'not registered',
       ].filter(Boolean).join(' · ');
       return h('div', {class: `fleet-row ${leaving ? 'leaving' : ''}`},
         h('span', {class: `fleet-pill ${leaving ? 'warn' : row.healthy ? 'ok' : 'warn'}`},
           h('span', {class: 'fleet-pill-dot'}),
-          leaving ? 'Will drain' : row.healthy ? 'Healthy' : (row.state || 'unknown')),
+          leaving ? 'Will drain' : row.healthy ? 'Healthy' : (shownState || 'unknown')),
         h('span', {class: 'fleet-name mono', text: row.name || row.id}),
         typeTag(row.instance_type),
         labels ? h('span', {class: 'fleet-tag', text: labels}) : null,
@@ -566,9 +568,9 @@ export async function fleetPage(ctx, signal = null) {
               + 'do not serve any traffic until then.'})),
         h('div', {class: 'fleet-rows'},
           ...(row.members || []).map((member) => h('div', {class: 'fleet-row'},
-            h('span', {class: `fleet-pill ${row.status === 'available' ? 'ok' : 'warn'}`},
+            h('span', {class: `fleet-pill ${member.lifecycle_state === 'available' ? 'ok' : 'warn'}`},
               h('span', {class: 'fleet-pill-dot'}),
-              row.status === 'available' ? 'Healthy' : row.status),
+              member.lifecycle_state === 'available' ? 'Healthy' : (member.status || 'unknown')),
             h('span', {class: 'fleet-name mono', text: member.id || member}),
             typeTag(member.node_type || row.node_type),
             h('span', {class: 'fleet-tag', text: member.role || ''}))),
@@ -603,10 +605,13 @@ export async function fleetPage(ctx, signal = null) {
     function writerSizeControl(row) {
       const currentType = row.writer_instance_class || row.instance_class;
       const target = row.kind === 'aurora' ? row.writer : row.identifier;
-      if (!resize.offered) {
+      const writer = (row.members || []).find((member) => member.role === 'writer');
+      if (!resize.offered || row.blocked_reason || (writer && !writer.can_resize)) {
         return sizePlaceholder('Writer size',
           currentType || (row.kind === 'aurora' ? 'Aurora' : ''),
-          blockedText(resize) || 'Resizing is not available.');
+          row.blocked_reason
+            ? blockedText({offered: false, blocked_reason: row.blocked_reason})
+            : blockedText(resize) || 'Resizing is not available.');
       }
       if (!target) {
         return sizePlaceholder('Writer size', currentType || 'Aurora',
@@ -626,13 +631,18 @@ export async function fleetPage(ctx, signal = null) {
 
     function readerSizeControl(row) {
       const readers = row.readers || [];
+      const readerMembers = (row.members || []).filter(
+        (member) => member.role === 'reader');
       const classes = readers.map(
         (reader) => (row.reader_instance_classes || {})[reader]).filter(Boolean);
       const shared = classes.length && classes.every((cls) => cls === classes[0])
         ? classes[0] : null;
-      if (!resize.offered) {
+      if (!resize.offered || row.blocked_reason
+          || readerMembers.some((member) => !member.can_resize)) {
         return sizePlaceholder('Reader size', shared || '',
-          blockedText(resize) || 'Resizing is not available.');
+          row.blocked_reason
+            ? blockedText({offered: false, blocked_reason: row.blocked_reason})
+            : blockedText(resize) || 'Resizing is not available.');
       }
       if (!readers.length) {
         return sizePlaceholder('Reader size', '', 'No readers to size.');
@@ -662,6 +672,10 @@ export async function fleetPage(ctx, signal = null) {
         routingChip('database')),
       ...rows.map((row) => {
         const readers = row.readers || [];
+        const memberFor = (identifier) => (row.members || []).find(
+          (member) => member.id === identifier) || {};
+        const removableReaders = readers.filter(
+          (reader) => memberFor(reader).can_remove);
         const adding = want.dbAdd.get(row.identifier) || 0;
         const removingHere = readers.filter((reader) => want.dbRemove.has(reader));
         const count = readers.length - removingHere.length + adding;
@@ -671,14 +685,14 @@ export async function fleetPage(ctx, signal = null) {
               h('span', {class: 'fleet-label', text: `Read replicas · ${row.identifier}`}),
               stepper({
                 value: count,
-                canDown: adding > 0 || (remove.offered && readers.some(
+                canDown: adding > 0 || (remove.offered && removableReaders.some(
                   (reader) => !want.dbRemove.has(reader))),
-                canUp: add.offered || removingHere.length > 0,
+                canUp: (add.offered && !row.blocked_reason) || removingHere.length > 0,
                 downTitle: 'one fewer reader', upTitle: 'one more reader',
                 onDown: () => {
                   if (adding > 0) { want.dbAdd.set(row.identifier, adding - 1); }
                   else {
-                    const pick = [...readers].reverse().find(
+                    const pick = [...removableReaders].reverse().find(
                       (reader) => !want.dbRemove.has(reader));
                     if (pick) want.dbRemove.add(pick);
                   }
@@ -708,18 +722,22 @@ export async function fleetPage(ctx, signal = null) {
                 + 'If saving is slow, the answer is a bigger writer, not more readers.'})),
           h('div', {class: 'fleet-rows'},
             h('div', {class: 'fleet-row'},
-              h('span', {class: `fleet-pill ${row.status === 'available' ? 'ok' : 'warn'}`},
+              h('span', {class: `fleet-pill ${memberFor(row.writer || row.identifier).lifecycle_state === 'available' ? 'ok' : 'warn'}`},
                 h('span', {class: 'fleet-pill-dot'}),
-                row.status === 'available' ? 'Healthy' : row.status),
+                memberFor(row.writer || row.identifier).lifecycle_state === 'available'
+                  ? 'Healthy'
+                  : (memberFor(row.writer || row.identifier).status || row.status || 'unknown')),
               h('span', {class: 'fleet-name mono', text: row.writer || row.identifier}),
               typeTag(row.writer_instance_class || row.instance_class),
               h('span', {class: 'fleet-tag', text: 'writer'})),
             ...readers.map((reader) => {
               const leaving = want.dbRemove.has(reader);
+              const member = memberFor(reader);
               return h('div', {class: `fleet-row ${leaving ? 'leaving' : ''}`},
-                h('span', {class: `fleet-pill ${leaving ? 'warn' : 'ok'}`},
+                h('span', {class: `fleet-pill ${leaving || member.lifecycle_state !== 'available' ? 'warn' : 'ok'}`},
                   h('span', {class: 'fleet-pill-dot'}),
-                  leaving ? 'Will remove' : 'Healthy'),
+                  leaving ? 'Will remove' : member.lifecycle_state === 'available'
+                    ? 'Healthy' : (member.status || 'unknown')),
                 h('span', {class: 'fleet-name mono', text: reader}),
                 typeTag((row.reader_instance_classes || {})[reader]),
                 h('span', {class: 'fleet-tag', text: 'reader'}),
@@ -727,7 +745,7 @@ export async function fleetPage(ctx, signal = null) {
                   leaving
                     ? h('button', {class: 'fleet-link undo', type: 'button',
                       onclick: () => { want.dbRemove.delete(reader); render(); }}, 'Keep it')
-                    : remove.offered
+                    : remove.offered && member.can_remove
                       ? h('button', {class: 'fleet-link', type: 'button',
                         onclick: () => { want.dbRemove.add(reader); render(); }}, 'Remove')
                       : null));
