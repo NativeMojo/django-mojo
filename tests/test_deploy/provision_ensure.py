@@ -1339,6 +1339,125 @@ def _custom_health_topology():
     return brownfield_inputs.to_spec(brownfield_inputs.validate(raw))
 
 
+def _custom_client_ip_topology():
+    from mojo.deploy.provision import brownfield_inputs
+    from .brownfield_fixture import raw_manifest
+
+    raw = raw_manifest()
+    raw["load_balancer"]["api_preserve_client_ip"] = False
+    raw["load_balancer"]["certbot_preserve_client_ip"] = True
+    return brownfield_inputs.to_spec(brownfield_inputs.validate(raw))
+
+
+@th.django_unit_test("brownfield target-group creates apply declared client-IP attributes")
+def test_balancer_creates_groups_with_declared_client_ip_attributes(opts):
+    from mojo.deploy.provision import balancer
+    from mojo.deploy.provision import spec as spec_module
+
+    spec = _custom_client_ip_topology()
+    wanted = balancer.target_group_specs(spec, VPC_ID)
+    client, stubber = _stub("elbv2")
+    expected = {"api": "false", "certbot": "true"}
+    for role in ("api", "certbot"):
+        request = wanted[role]
+        arn = f"arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/{role}/1234567890123456"
+        stubber.add_response(
+            "create_target_group",
+            {"TargetGroups": [{"TargetGroupArn": arn}]},
+            dict(request, Tags=spec_module.tag_list(
+                spec, "balancer", name=request["Name"])))
+        stubber.add_response("modify_target_group_attributes", {}, {
+            "TargetGroupArn": arn,
+            "Attributes": [{"Key": "preserve_client_ip.enabled",
+                            "Value": expected[role]}],
+        })
+    findings, actions = [], []
+    with stubber:
+        arns = balancer._ensure_target_groups(
+            client, spec, {}, wanted, findings, actions, apply=True)
+
+    _assert_no_blind(findings,
+                     "declared attributes must use valid ELBv2 requests")
+    stubber.assert_no_pending_responses()
+    th.assert_eq(set(arns), {"api", "certbot"},
+                 "both created group ARNs must remain available")
+    modify = [action for action in actions if action.verb == "modify"]
+    th.assert_eq(len(modify), 2,
+                 "each declared group attribute needs reviewed evidence")
+
+
+@th.django_unit_test("a new group is withheld when its declared attribute fails")
+def test_balancer_withholds_new_group_after_client_ip_attribute_failure(opts):
+    from mojo.deploy.provision import balancer, report
+    from mojo.deploy.provision import spec as spec_module
+
+    spec = _custom_client_ip_topology()
+    wanted = balancer.target_group_specs(spec, VPC_ID)
+    request = wanted["api"]
+    arn = ("arn:aws:elasticloadbalancing:us-west-2:123456789012:"
+           "targetgroup/api/1234567890123456")
+    client, stubber = _stub("elbv2")
+    stubber.add_response(
+        "create_target_group", {"TargetGroups": [{"TargetGroupArn": arn}]},
+        dict(request, Tags=spec_module.tag_list(
+            spec, "balancer", name=request["Name"])))
+    stubber.add_client_error(
+        "modify_target_group_attributes", "AccessDenied",
+        expected_params={
+            "TargetGroupArn": arn,
+            "Attributes": [{"Key": "preserve_client_ip.enabled",
+                            "Value": "false"}],
+        })
+    findings, actions = [], []
+    with stubber:
+        arns = balancer._ensure_target_groups(
+            client, spec, {}, {"api": request},
+            findings, actions, apply=True)
+
+    stubber.assert_no_pending_responses()
+    th.assert_eq(arns, {},
+                 "a partially configured group must not reach listeners/targets")
+    th.assert_true(any(row.status == report.BLIND for row in findings),
+                   f"the failed exact mutation must block the apply: {findings}")
+
+
+@th.django_unit_test("owned brownfield target groups converge client-IP drift")
+def test_balancer_modifies_owned_client_ip_attribute_drift(opts):
+    from mojo.deploy.provision import balancer, report
+
+    spec = _custom_client_ip_topology()
+    wanted = balancer.target_group_specs(spec, VPC_ID)
+    existing = {}
+    client, stubber = _stub("elbv2")
+    expected = {"api": "false", "certbot": "true"}
+    for role in ("api", "certbot"):
+        arn = f"arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/{role}/1234567890123456"
+        existing[role] = dict(
+            wanted[role], TargetGroupArn=arn,
+            TargetGroupAttributes={
+                "preserve_client_ip.enabled": (
+                    "true" if expected[role] == "false" else "false")})
+        stubber.add_response("modify_target_group_attributes", {}, {
+            "TargetGroupArn": arn,
+            "Attributes": [{"Key": "preserve_client_ip.enabled",
+                            "Value": expected[role]}],
+        })
+
+    findings, actions = [], []
+    with stubber:
+        balancer._ensure_target_groups(
+            client, spec, {"target_groups": existing}, wanted,
+            findings, actions, apply=True)
+
+    _assert_no_blind(findings,
+                     "owned attribute drift must use valid ELBv2 requests")
+    stubber.assert_no_pending_responses()
+    th.assert_eq(
+        sorted(_codes(findings, report.DRIFT)),
+        ["target_group.api.attributes", "target_group.certbot.attributes"],
+        "both exact owned groups must report attribute drift")
+
+
 @th.django_unit_test("brownfield target-group creates carry the declared health paths")
 def test_balancer_creates_brownfield_groups_with_declared_health_paths(opts):
     from mojo.deploy.provision import balancer

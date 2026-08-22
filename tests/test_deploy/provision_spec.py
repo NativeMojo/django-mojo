@@ -371,3 +371,21 @@ def test_cost_table_stable_node_ips(opts):
         inputs.to_spec({"project": "mojo", "env": "prod",
                         "region": "us-east-1", "preset": "small"}).stable_node_ips,
         False, "stable_node_ips must default off")
+
+
+@th.django_unit_test("client-IP target attributes are brownfield-only")
+def test_managed_spec_rejects_client_ip_target_attributes(opts):
+    from mojo.deploy.provision import balancer
+    from mojo.deploy.provision import spec as spec_module
+
+    managed = spec_module.build(
+        PROJECT, ENV, REGION, api_preserve_client_ip=False)
+    problems = spec_module.validate_names(managed)
+    th.assert_true(any("brownfield-only" in problem for problem in problems),
+                   f"managed topology must reject the migration seam: {problems}")
+    th.assert_eq(balancer.target_group_attributes(managed), {},
+                 "managed ensure must never plan an attribute mutation")
+    managed.nlb_security_group_id = "sg-3123456789abcdef0"
+    problems = spec_module.validate_names(managed)
+    th.assert_true(any("brownfield-only" in problem for problem in problems),
+                   f"managed topology must reject the NLB SG seam: {problems}")

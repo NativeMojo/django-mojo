@@ -121,6 +121,9 @@ is:
     "certbot_target_group": "maestro-shadow-http",
     "api_health_path": "/api/maestro/node/ready",
     "certbot_health_path": "/api/version",
+    "security_group_id": "sg-3123456789abcdef0",
+    "api_preserve_client_ip": true,
+    "certbot_preserve_client_ip": true,
     "subnet_ids": ["subnet-0123456789abcdef0", "subnet-1123456789abcdef0"]
   },
   "kms_key_arn": "arn:aws:kms:us-west-2:123456789012:key/01234567-89ab-cdef-0123-456789abcdef",
@@ -147,6 +150,28 @@ path. Deploy the readiness route and any required compatibility role to legacy
 targets before changing the manifest path; the next `fleet-apply` otherwise
 makes those targets unhealthy while it safely converges the owned group in
 place.
+
+`load_balancer.security_group_id` is an optional exact, pre-existing NLB
+security group. When declared, the provisioner validates the group's VPC,
+public 80/443 ingress, and 80/443 egress to the exact node security group; the
+node group must admit those ports from the NLB group and must not admit them
+from any other security group, CIDR, IPv6 range, or prefix list. The group is
+attached in the original `CreateLoadBalancer`
+request and is digest-bound. AWS cannot add the first security group to an NLB
+created without one, so a missing or wrong group on an existing NLB is blocking
+drift, never silently repaired. This is the preferred public-edge boundary: it
+prevents direct node access while retaining original client addresses.
+
+`api_preserve_client_ip` and `certbot_preserve_client_ip` are independent,
+optional brownfield-only booleans. When declared, preview and apply observe and
+converge the exact owned target group's
+`preserve_client_ip.enabled=true|false` attribute. Omission leaves AWS and the
+managed topology behavior unchanged. When no NLB security group is declared,
+setting a value to `false` is a fallback that requires exact VPC-CIDR target
+ingress and rejects world ingress. It means the application sees the NLB node
+address at the TCP layer instead of the original client address. Trusted
+proxy/header configuration and application-visible address attribution belong
+to the application deployment; this provisioner does not infer or widen them.
 
 For the database credential, `metadata_key` names the S3 user-metadata field
 whose non-secret value must equal `database.application_user`; discovery

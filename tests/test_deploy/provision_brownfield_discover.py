@@ -395,6 +395,18 @@ def test_security_group_and_kms_reachability_helpers_are_exact(opts):
     th.assert_eq(brownfield_discover._allows_group_port(
         group, 6379, "sg-node"), False,
         "a different port must not be inferred reachable")
+    private_group = {"IpPermissions": [{
+        "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
+        "IpRanges": [{"CidrIp": "172.31.0.0/16"}]}]}
+    th.assert_true(brownfield_discover._allows_cidr_port(
+        private_group, 443, "172.31.0.0/16"),
+        "disabled client-IP preservation must accept the exact VPC source path")
+    th.assert_eq(brownfield_discover._allows_cidr_port(
+        private_group, 443, "10.0.0.0/8"), False,
+        "a broader or unrelated source CIDR must not be inferred safe")
+    th.assert_eq(brownfield_discover._allows_world_port(
+        private_group, 443), False,
+        "the private NLB path must not accidentally prove world ingress")
     policy = {"Statement": [{
         "Effect": "Allow", "Principal": {"AWS":
             "arn:aws:iam::123456789012:root"}, "Action": "kms:*"}]}
@@ -404,3 +416,197 @@ def test_security_group_and_kms_reachability_helpers_are_exact(opts):
     th.assert_eq(brownfield_discover._policy_allows(
         policy, "arn:aws:iam::999999999999:root"), False,
         "a different account principal must not prove decrypt reachability")
+
+
+@th.django_unit_test()
+def test_node_ingress_tracks_declared_client_ip_posture(opts):
+    from mojo.deploy.provision import brownfield_discover, report
+
+    world = {"IpPermissions": [{
+        "IpProtocol": "tcp", "FromPort": port, "ToPort": port,
+        "IpRanges": [{"CidrIp": "0.0.0.0/0"}]}
+        for port in (80, 443)]}
+    private = {"IpPermissions": [{
+        "IpProtocol": "tcp", "FromPort": 80, "ToPort": 80,
+        "IpRanges": [{"CidrIp": "0.0.0.0/0"}]}, {
+        "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
+        "IpRanges": [{"CidrIp": "172.31.0.0/16"}]}]}
+
+    findings = []
+    brownfield_discover._validate_node_ingress(
+        findings, world, "172.31.0.0/16", {})
+    th.assert_eq(findings, [],
+                 "omission must preserve the existing world-ingress contract")
+
+    findings = []
+    brownfield_discover._validate_node_ingress(
+        findings, private, "172.31.0.0/16",
+        {"api_preserve_client_ip": False})
+    th.assert_eq(findings, [],
+                 "disabled preservation must accept exact VPC-only API ingress")
+
+    findings = []
+    brownfield_discover._validate_node_ingress(
+        findings, world, "172.31.0.0/16",
+        {"api_preserve_client_ip": False})
+    th.assert_true(any(row.status == report.BLIND for row in findings),
+                   f"world ingress must block a private-source declaration: {findings}")
+
+    findings = []
+    brownfield_discover._validate_node_ingress(
+        findings, {"IpPermissions": []}, "172.31.0.0/16",
+        {"api_preserve_client_ip": False})
+    th.assert_true(any(row.status == report.BLIND for row in findings),
+                   f"missing VPC ingress must block NLB target launch: {findings}")
+
+    nlb_group_id = "sg-nlb"
+    node_group_id = "sg-node"
+    locked_node = {"GroupId": node_group_id, "IpPermissions": [{
+        "IpProtocol": "tcp", "FromPort": port, "ToPort": port,
+        "UserIdGroupPairs": [{"GroupId": nlb_group_id}]}
+        for port in (80, 443)]}
+    public_nlb = {"GroupId": nlb_group_id, "IpPermissions": [{
+        "IpProtocol": "tcp", "FromPort": port, "ToPort": port,
+        "IpRanges": [{"CidrIp": "0.0.0.0/0"}]}
+        for port in (80, 443)], "IpPermissionsEgress": [{
+            "IpProtocol": "tcp", "FromPort": port, "ToPort": port,
+            "UserIdGroupPairs": [{"GroupId": node_group_id}]}
+            for port in (80, 443)]}
+    findings = []
+    brownfield_discover._validate_node_ingress(
+        findings, locked_node, "172.31.0.0/16",
+        {"security_group_id": nlb_group_id,
+         "api_preserve_client_ip": True,
+         "certbot_preserve_client_ip": True},
+        {nlb_group_id: public_nlb})
+    th.assert_eq(findings, [],
+                 "an exact NLB-SG boundary must preserve client IPs safely")
+
+    ipv6_only = dict(public_nlb, IpPermissions=[{
+        "IpProtocol": "tcp", "FromPort": port, "ToPort": port,
+        "Ipv6Ranges": [{"CidrIpv6": "::/0"}]}
+        for port in (80, 443)])
+    findings = []
+    brownfield_discover._validate_node_ingress(
+        findings, locked_node, "172.31.0.0/16",
+        {"security_group_id": nlb_group_id},
+        {nlb_group_id: ipv6_only})
+    th.assert_true(any(row.status == report.BLIND for row in findings),
+                   f"IPv6-only ingress cannot prove an IPv4 NLB public: {findings}")
+
+    findings = []
+    brownfield_discover._validate_node_ingress(
+        findings, world, "172.31.0.0/16",
+        {"security_group_id": nlb_group_id},
+        {nlb_group_id: public_nlb})
+    th.assert_true(any(row.status == report.BLIND for row in findings),
+                   f"the NLB SG must never coexist with direct world target ingress: {findings}")
+
+    narrowed_direct = dict(locked_node, IpPermissions=(
+        list(locked_node["IpPermissions"]) + [{
+            "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
+            "IpRanges": [{"CidrIp": "198.51.100.0/24"}]}]))
+    findings = []
+    brownfield_discover._validate_node_ingress(
+        findings, narrowed_direct, "172.31.0.0/16",
+        {"security_group_id": nlb_group_id},
+        {nlb_group_id: public_nlb})
+    th.assert_true(any(row.status == report.BLIND for row in findings),
+                   f"any non-NLB source on a target port must block: {findings}")
+
+
+@th.django_unit_test()
+def test_existing_nlb_must_carry_the_declared_create_time_security_group(opts):
+    from mojo.deploy.provision import brownfield_discover, report
+
+    spec = topology()
+    manifest = spec.brownfield_manifest
+    manifest["load_balancer"]["security_group_id"] = (
+        "sg-3123456789abcdef0")
+    balancer = {
+        "Type": "network", "Scheme": "internet-facing",
+        "AvailabilityZones": [{"SubnetId": subnet_id}
+                              for subnet_id in spec.nlb_subnet_ids],
+        "SecurityGroups": ["sg-4123456789abcdef0"],
+    }
+    findings = []
+    accepted = brownfield_discover._validate_balancer_shape(
+        findings, balancer, manifest)
+    th.assert_eq(accepted, False,
+                 "an NLB with a wrong/missing first SG must never be adopted")
+    th.assert_true(any(row.status == report.BLIND for row in findings),
+                   f"the irreversible SG mismatch must block apply: {findings}")
+
+    balancer["SecurityGroups"] = ["sg-3123456789abcdef0"]
+    findings = []
+    accepted = brownfield_discover._validate_balancer_shape(
+        findings, balancer, manifest)
+    th.assert_true(accepted,
+                   f"the exact declared NLB SG must be reusable: {findings}")
+
+
+@th.django_unit_test()
+def test_omitted_client_ip_fields_add_no_attribute_provider_call(opts):
+    from mojo.deploy.provision import brownfield_discover
+
+    class _EC2:
+        def describe_addresses(self, **kwargs):
+            return {"Addresses": []}
+
+    class _ELB:
+        def __init__(self):
+            self.attribute_arns = []
+
+        def describe_load_balancers(self, **kwargs):
+            return {"LoadBalancers": []}
+
+        def describe_target_groups(self, Names):
+            return {"TargetGroups": [{
+                "TargetGroupName": Names[0],
+                "TargetGroupArn": f"arn:tg:{Names[0]}",
+                "VpcId": topology().brownfield_manifest["network"]["vpc_id"],
+            }]}
+
+        def describe_tags(self, ResourceArns):
+            spec = topology()
+            return {"TagDescriptions": [{
+                "ResourceArn": ResourceArns[0], "Tags": [
+                    {"Key": key, "Value": value} for key, value in {
+                        "managed-by": "django-mojo",
+                        "mojo:project": spec.project,
+                        "mojo:env": spec.env,
+                        "mojo:fleet": spec.fleet,
+                        "mojo:role": "balancer",
+                    }.items()]}]}
+
+        def describe_target_group_attributes(self, TargetGroupArn):
+            self.attribute_arns.append(TargetGroupArn)
+            return {"Attributes": [{
+                "Key": "preserve_client_ip.enabled", "Value": "true"}]}
+
+        def describe_target_health(self, **kwargs):
+            return {"TargetHealthDescriptions": []}
+
+    spec = topology()
+    elb = _ELB()
+    observed, inventory, findings = objict(), {}, []
+    brownfield_discover._owned_edge(
+        _Clients(ec2=_EC2(), elbv2=elb), spec,
+        spec.brownfield_manifest, findings, observed, inventory)
+    th.assert_eq(elb.attribute_arns, [],
+                 "omission must not require a new IAM read/provider call")
+    th.assert_eq("target_group_attributes" in inventory["owned_edge"], False,
+                 "omission must not change the dependency digest shape")
+
+    spec.brownfield_manifest["load_balancer"][
+        "api_preserve_client_ip"] = True
+    elb = _ELB()
+    observed, inventory, findings = objict(), {}, []
+    brownfield_discover._owned_edge(
+        _Clients(ec2=_EC2(), elbv2=elb), spec,
+        spec.brownfield_manifest, findings, observed, inventory)
+    th.assert_eq(len(elb.attribute_arns), 1,
+                 "only the explicitly declared target group may be read")
+    th.assert_eq(inventory["owned_edge"]["target_group_attributes"]["api"],
+                 {"preserve_client_ip.enabled": "true"},
+                 "the exact observed value must enter the dependency digest")

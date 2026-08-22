@@ -105,6 +105,8 @@ def observe(clients, topology):
 
     tier_group_ids = list(dict.fromkeys(
         [network["node_security_group_id"]]
+        + ([manifest["load_balancer"]["security_group_id"]]
+           if manifest["load_balancer"].get("security_group_id") else [])
         + manifest["database"]["security_group_ids"]
         + manifest["cache"]["security_group_ids"]))
     groups = _read(findings, "ec2.describe_security_groups",
@@ -125,10 +127,69 @@ def observe(clients, topology):
             continue
         _same(findings, f"security group {group_id} VPC", row.get("VpcId"),
               network["vpc_id"])
-    for port in (80, 443):
-        if node_group and not _allows_world_port(node_group, port):
+    _validate_node_ingress(
+        findings, node_group, (vpc or {}).get("CidrBlock"),
+        manifest["load_balancer"], group_by_id)
+    return _finish_dependencies(
+        manifest, group_by_id, node_group, findings, observed, network,
+        clients, inventory, zones, subnets, topology)
+
+
+def _validate_node_ingress(findings, node_group, vpc_cidr, balancer,
+                           groups=None):
+    nlb_group_id = balancer.get("security_group_id")
+    nlb_group = (groups or {}).get(nlb_group_id)
+    for port, field in ((80, "certbot_preserve_client_ip"),
+                        (443, "api_preserve_client_ip")):
+        preserve = balancer.get(field)
+        world_open = node_group and _allows_world_port(node_group, port)
+        if nlb_group_id:
+            if node_group and not _allows_group_port(
+                    node_group, port, nlb_group_id):
+                _mismatch(
+                    findings,
+                    f"node security group NLB ingress TCP:{port}",
+                    False, True)
+            if node_group and not _only_group_port_sources(
+                    node_group, port, nlb_group_id):
+                _mismatch(
+                    findings,
+                    f"node security group exclusive NLB ingress TCP:{port}",
+                    False, True)
+            if nlb_group and not _allows_ipv4_world_port(nlb_group, port):
+                _mismatch(
+                    findings,
+                    f"NLB security group public ingress TCP:{port}",
+                    False, True)
+            if nlb_group and not _allows_group_egress_port(
+                    nlb_group, port, (node_group or {}).get("GroupId")):
+                _mismatch(
+                    findings,
+                    f"NLB security group target egress TCP:{port}",
+                    False, True)
+        elif preserve is False:
+            if world_open:
+                _mismatch(
+                    findings,
+                    f"node security group world ingress TCP:{port}",
+                    True, False)
+            if node_group and not _allows_cidr_port(
+                    node_group, port, vpc_cidr):
+                _mismatch(
+                    findings,
+                    f"node security group VPC ingress TCP:{port}",
+                    False, True)
+        elif node_group and not world_open:
             _mismatch(findings, f"node security group ingress TCP:{port}",
                       False, True)
+    return findings
+
+
+def _finish_dependencies(manifest, group_by_id, node_group, findings,
+                         observed, network, clients, inventory, zones,
+                         subnets, topology):
+    """Continue dependency observation after ingress posture validation."""
+    ec2 = clients.get("ec2")
     node_group_id = network["node_security_group_id"]
     for plane, port in (("database", manifest["database"]["port"]),
                         ("cache", manifest["cache"]["port"])):
@@ -160,7 +221,7 @@ def observe(clients, topology):
     if not image:
         _missing(findings, "AMI", manifest["nodes"]["ami_id"])
     observed.ami_id = (image or {}).get("ImageId")
-    inventory["network"] = {
+    network_inventory = {
         "vpc_id": observed.vpc_id,
         "subnets": [{"id": row.get("SubnetId"),
                      "az": row.get("AvailabilityZone"),
@@ -177,6 +238,13 @@ def observe(clients, topology):
         "key_pair_name": observed.key_pair_name,
         "ami_id": observed.ami_id,
     }
+    nlb_group_id = manifest["load_balancer"].get("security_group_id")
+    if nlb_group_id:
+        network_inventory["security_group_egress"] = {
+            nlb_group_id: _permission_inventory(
+                (group_by_id.get(nlb_group_id) or {}).get(
+                    "IpPermissionsEgress"))}
+    inventory["network"] = network_inventory
 
     _database(clients, manifest, network, findings, observed, inventory)
     _cache(clients, manifest, network, findings, observed, inventory)
@@ -805,19 +873,7 @@ def _owned_edge(clients, topology, manifest, findings, observed, inventory):
             "load balancer"):
         balancer = None
     if balancer:
-        expected_subnets = sorted(manifest["load_balancer"]["subnet_ids"])
-        actual_subnets = sorted(
-            row.get("SubnetId") for row in balancer.get("AvailabilityZones") or [])
-        shape_ok = True
-        for label, current, expected in (
-                ("load balancer type", balancer.get("Type"), "network"),
-                ("load balancer scheme", balancer.get("Scheme"),
-                 "internet-facing"),
-                ("load balancer subnets", actual_subnets, expected_subnets)):
-            if current != expected:
-                _mismatch(findings, label, current, expected)
-                shape_ok = False
-        if not shape_ok:
+        if not _validate_balancer_shape(findings, balancer, manifest):
             balancer = None
     for role, group in list(target_groups.items()):
         if not _owned_elbv2(
@@ -845,6 +901,18 @@ def _owned_edge(clients, topology, manifest, findings, observed, inventory):
         attributes = {row.get("Key"): row.get("Value")
                       for row in attr_answer.get("Attributes") or []}
     for role, group in target_groups.items():
+        attribute_field = (
+            "api_preserve_client_ip" if role == "api"
+            else "certbot_preserve_client_ip")
+        if attribute_field in manifest["load_balancer"]:
+            attribute_answer = _read(
+                findings, "elbv2.describe_target_group_attributes",
+                lambda arn=group.get("TargetGroupArn"):
+                elbv2.describe_target_group_attributes(TargetGroupArn=arn), {})
+            group["TargetGroupAttributes"] = {
+                row.get("Key"): row.get("Value")
+                for row in attribute_answer.get("Attributes") or []
+                if row.get("Key") == "preserve_client_ip.enabled"}
         answer = _read(findings, "elbv2.describe_target_health",
                        lambda arn=group.get("TargetGroupArn"):
                        elbv2.describe_target_health(TargetGroupArn=arn), {})
@@ -854,13 +922,45 @@ def _owned_edge(clients, topology, manifest, findings, observed, inventory):
     observed.listeners = discover.wrap(listeners)
     observed.targets = discover.wrap(targets)
     observed.balancer_attributes = objict(attributes)
-    inventory["owned_edge"] = {
+    edge_inventory = {
         "balancer_arn": (balancer or {}).get("LoadBalancerArn"),
         "target_group_arns": {key: row.get("TargetGroupArn")
                               for key, row in target_groups.items()},
         "address_allocations": sorted(row.get("AllocationId")
                                       for row in observed.addresses),
     }
+    declared_attributes = {
+        role: dict(row.get("TargetGroupAttributes") or {})
+        for role, row in target_groups.items()
+        if (("api_preserve_client_ip" if role == "api"
+             else "certbot_preserve_client_ip")
+            in manifest["load_balancer"])}
+    if declared_attributes:
+        edge_inventory["target_group_attributes"] = declared_attributes
+    inventory["owned_edge"] = edge_inventory
+
+
+def _validate_balancer_shape(findings, balancer, manifest):
+    expected_subnets = sorted(manifest["load_balancer"]["subnet_ids"])
+    actual_subnets = sorted(
+        row.get("SubnetId")
+        for row in balancer.get("AvailabilityZones") or [])
+    checks = [
+        ("load balancer type", balancer.get("Type"), "network"),
+        ("load balancer scheme", balancer.get("Scheme"), "internet-facing"),
+        ("load balancer subnets", actual_subnets, expected_subnets),
+    ]
+    if "security_group_id" in manifest["load_balancer"]:
+        checks.append((
+            "load balancer security groups",
+            sorted(balancer.get("SecurityGroups") or []),
+            [manifest["load_balancer"]["security_group_id"]]))
+    valid = True
+    for label, current, expected in checks:
+        if current != expected:
+            _mismatch(findings, label, current, expected)
+            valid = False
+    return valid
 
 
 def _owned_addresses(topology, manifest, rows, balancer, findings):
@@ -1051,10 +1151,55 @@ def _allows_world_port(group, port):
     return False
 
 
+def _allows_ipv4_world_port(group, port):
+    for permission in (group or {}).get("IpPermissions") or []:
+        if _permission_port(permission, port) and any(
+                row.get("CidrIp") == "0.0.0.0/0"
+                for row in permission.get("IpRanges") or []):
+            return True
+    return False
+
+
+def _allows_cidr_port(group, port, cidr):
+    if not cidr:
+        return False
+    for permission in (group or {}).get("IpPermissions") or []:
+        if _permission_port(permission, port) and any(
+                row.get("CidrIp") == cidr
+                for row in permission.get("IpRanges") or []):
+            return True
+    return False
+
+
 def _allows_group_port(group, port, source_group_id):
     for permission in (group or {}).get("IpPermissions") or []:
         if _permission_port(permission, port) and any(
                 row.get("GroupId") == source_group_id
+                for row in permission.get("UserIdGroupPairs") or []):
+            return True
+    return False
+
+
+def _only_group_port_sources(group, port, source_group_id):
+    matched = False
+    for permission in (group or {}).get("IpPermissions") or []:
+        if not _permission_port(permission, port):
+            continue
+        matched = True
+        if permission.get("IpRanges") or permission.get("Ipv6Ranges") \
+                or permission.get("PrefixListIds"):
+            return False
+        pairs = permission.get("UserIdGroupPairs") or []
+        if not pairs or any(
+                row.get("GroupId") != source_group_id for row in pairs):
+            return False
+    return matched
+
+
+def _allows_group_egress_port(group, port, target_group_id):
+    for permission in (group or {}).get("IpPermissionsEgress") or []:
+        if _permission_port(permission, port) and any(
+                row.get("GroupId") == target_group_id
                 for row in permission.get("UserIdGroupPairs") or []):
             return True
     return False

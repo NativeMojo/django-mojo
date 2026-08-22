@@ -307,6 +307,9 @@ class Spec:
         self.certbot_target_group_name = None
         self.api_health_path = None
         self.certbot_health_path = None
+        self.api_preserve_client_ip = None
+        self.certbot_preserve_client_ip = None
+        self.nlb_security_group_id = None
 
         for key, value in overrides.items():
             if not hasattr(self, key):
@@ -463,6 +466,16 @@ def validate_names(spec):
             problems.append(
                 f"{label} {slug!r} is {len(slug)} characters — the cap is "
                 f"{SLUG_MAX}, because every derived name is built from it")
+
+    client_ip_fields = (
+        "api_preserve_client_ip", "certbot_preserve_client_ip",
+        "nlb_security_group_id")
+    if not spec.fleet and any(
+            getattr(spec, field, None) is not None
+            for field in client_ip_fields):
+        problems.append(
+            "NLB security and client-IP controls are brownfield-only "
+            "declarations")
 
     if spec.fleet:
         return _validate_brownfield_names(spec, problems)

@@ -110,6 +110,30 @@ def test_closed_policy_excludes_data_dns_certificates_handoff_and_teardown(opts)
 
 
 @th.django_unit_test()
+def test_target_group_attribute_boundary_is_narrow_and_explicit(opts):
+    from mojo.deploy.provision import brownfield_policy
+
+    policy = brownfield_policy.MutationPolicy()
+    for method in ("describe_target_group_attributes",
+                   "modify_target_group_attributes"):
+        raised = None
+        try:
+            policy.authorize("elbv2", method)
+        except Exception as err:
+            raised = err
+        th.assert_eq(raised, None,
+                     f"the exact ELBv2 attribute operation must be allowed: {raised}")
+    for method in ("delete_target_group", "modify_listener_attributes"):
+        raised = None
+        try:
+            policy.authorize("elbv2", method)
+        except brownfield_policy.BrownfieldCallBlocked as err:
+            raised = err
+        th.assert_true(raised is not None,
+                       f"adjacent ELBv2 mutation {method} must remain blocked")
+
+
+@th.django_unit_test()
 def test_metadata_boundary_blocks_object_and_secret_bodies_via_getattr(opts):
     from mojo.deploy.provision import brownfield_policy, discover
 
