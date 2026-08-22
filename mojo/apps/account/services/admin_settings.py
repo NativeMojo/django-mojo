@@ -45,7 +45,13 @@ ASSISTANT_WRITABLE_KEYS = frozenset({
     "LLM_ADMIN_ENABLED", "LLM_ADMIN_API_KEY", "LLM_ADMIN_MODEL",
     "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY", "LLM_HANDLER_VERIFY_STATE",
 })
-ASSISTANT_KEYS = ASSISTANT_WRITABLE_KEYS
+# Every Assistant key the generic global writers must refuse.  This is a
+# SUPERSET of the writable set: ``ASSISTANT_MCP_ENABLED`` opens the remote-agent
+# MCP door, and a global database row for it would outrank the deployment file
+# on every node, so it is protected here from the moment the door exists — even
+# though its owner editor does not exist yet.  Protection and writability are
+# separate questions and this is the one that fails closed.
+ASSISTANT_KEYS = ASSISTANT_WRITABLE_KEYS | frozenset({"ASSISTANT_MCP_ENABLED"})
 # Keys whose one dedicated writer may pass ``_protected_writer=<key>`` through
 # ``Setting.save``.  Naming the key twice is the point: a writer proves it owns
 # exactly the row it is saving, so a shared helper cannot smuggle a different

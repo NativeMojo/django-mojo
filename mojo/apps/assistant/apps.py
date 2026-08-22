@@ -85,3 +85,22 @@ class AppConfig(BaseAppConfig):
             writable="assistant_setup", owner="Assistant setup",
             change_behavior="immediate", storage="database",
             unset_meaning="LLM features are off and the Assistant has no fallback"))
+        # The MCP door. Off by default and read on every request, so the switch
+        # is immediate in both directions. Catalog-protected
+        # (admin_settings.ASSISTANT_KEYS) from the moment it exists: a global
+        # database row outranks the deployment file, so without protection any
+        # manage_settings holder could open a remote-agent door on every node.
+        register_descriptor(Descriptor(
+            "ASSISTANT_MCP_ENABLED", "Remote agent access (MCP)",
+            "Security & operations",
+            "Whether the Assistant's MCP endpoint accepts remote AI clients "
+            "that signed in through the OAuth flow.",
+            "boolean", False, resolver="dynamic", writable="assistant_setup",
+            owner="Assistant setup", change_behavior="immediate",
+            storage="database"))
+        register_descriptor(Descriptor(
+            "ASSISTANT_MCP_PATH", "MCP endpoint path", "Security & operations",
+            "Request path of the Assistant's MCP endpoint; also the registered "
+            "OAuth resource path.",
+            "string", "api/assistant/mcp", resolver="static", writable="none",
+            owner="Deployment settings", change_behavior="restart"))

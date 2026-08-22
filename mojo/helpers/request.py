@@ -13,6 +13,9 @@ API_ROOT = "/" + settings.get_static("MOJO_PREFIX", "api/").strip("/")
 # The OAuth server's path root is read here separately, from the same setting
 # the service reads: mojo/helpers must not import mojo.apps at import time.
 OAUTH_ROOT = "/" + settings.get_static("OAUTH_SERVER_PATH", "api/account/oauth").strip("/")
+# Same rule for the Assistant's MCP door: read from the same setting the app
+# reads, here rather than by importing it.
+ASSISTANT_MCP_ROOT = "/" + settings.get_static("ASSISTANT_MCP_PATH", "api/assistant/mcp").strip("/")
 
 def parse_request_data(request):
     """
@@ -130,6 +133,11 @@ def sensitive_body_label(request):
     # allowed to set the key) and into requests.log.
     if path == f"{API_ROOT}/account/admin/assistant":
         return "assistant_setup"
+    # The MCP door carries tool ARGUMENTS in the request and tool RESULTS in the
+    # response — data the chat path never puts on the wire. Without this entry
+    # LOGIT_REQUEST_BODY / LOGIT_DB_ALL would write both verbatim.
+    if method == "POST" and path == ASSISTANT_MCP_ROOT:
+        return "assistant_mcp"
     # OAuth 2.1 credential carriers: `token` bodies hold a code_verifier or a
     # refresh token, `revoke` a live token, and `approve` the session bearer
     # plus the PKCE material. `register` and the discovery documents carry no

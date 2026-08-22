@@ -166,11 +166,15 @@ class CORSMiddleware:
         # Allow all methods to minimize preflight requests
         response['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS'
 
-        # Allow common headers to minimize preflight requests
+        # Allow common headers to minimize preflight requests.
+        # MCP-Protocol-Version is sent by every browser-hosted MCP client on the
+        # 2025-06-18 revision; without it here their preflight fails and the
+        # Assistant's MCP door is unreachable from a browser.
         response['Access-Control-Allow-Headers'] = (
             'Accept, Accept-Encoding, Authorization, Content-Type, '
             'Origin, User-Agent, X-Requested-With, X-CSRFToken, '
-            f'X-API-Key, {DUID_HEADER}, Cache-Control, Pragma'
+            f'X-API-Key, {DUID_HEADER}, Cache-Control, Pragma, '
+            'MCP-Protocol-Version'
         )
 
         # Long preflight cache (24 hours)
