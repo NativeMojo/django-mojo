@@ -1247,12 +1247,17 @@ def test_eip_interrupt_and_failure_repeat_recovery_coordinates(opts):
                                  (handoff.HandoffRefused("stopped"),
                                   cli.EXIT_FINDINGS)):
         script = _Script()
-        with mock.patch.object(cli, "_handoff_context",
-                               return_value=(topology, object(), "plan.json")), \
-                mock.patch.object(handoff, "load_plan", return_value=plan), \
-                mock.patch.object(handoff, "handoff", side_effect=error), \
-                mock.patch("uuid.uuid4", return_value="op-recovery"):
-            result = cli.main(argv, console=script.console())
+
+        def fail_handoff(*args, **kwargs):
+            raise error
+
+        result = cli.main(
+            argv, console=script.console(),
+            handoff_context=lambda args: (
+                topology, object(), "plan.json"),
+            handoff_plan_loader=lambda path: plan,
+            handoff_executor=fail_handoff,
+            operation_id_factory=lambda: "op-recovery")
         th.assert_eq(result, expected_exit,
                      f"{error.__class__.__name__} must return a bounded exit")
         for marker in ("operation id:", "local journal:", "remote journal:",

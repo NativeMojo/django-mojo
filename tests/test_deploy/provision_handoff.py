@@ -579,13 +579,17 @@ class _PreflightELB:
             for instance, port in targets]}
 
 
-def _preflight_clients(topology, drift=None):
+def _preflight_clients(topology, drift=None, s3=None):
     from mojo.deploy.provision import handoff
 
-    connection = handoff.HandoffClients(
-        topology=topology, sts=_PreflightSTS(drift),
-        ec2=_PreflightEC2(topology, drift),
-        elbv2=_PreflightELB(topology, drift))
+    overrides = {
+        "sts": _PreflightSTS(drift),
+        "ec2": _PreflightEC2(topology, drift),
+        "elbv2": _PreflightELB(topology, drift),
+    }
+    if s3 is not None:
+        overrides["s3"] = s3
+    connection = handoff.HandoffClients(topology=topology, **overrides)
     if drift == "region":
         connection.region_name = "us-east-1"
     return connection
@@ -1166,9 +1170,6 @@ def test_rehearsal_write_failures_terminalize_and_future_handoff_recovers(opts):
     from mojo.deploy.provision import handoff
 
     root = tempfile.mkdtemp(prefix="testit_handoff_rehearsal_failure.")
-    topology = handoff_topology(project_root=root)
-    plan = _plan(topology)
-
     class _FailJournalPut(_S3):
         def put_object(self, **kwargs):
             if "/operations/" in kwargs["Key"]:
@@ -1177,30 +1178,32 @@ def test_rehearsal_write_failures_terminalize_and_future_handoff_recovers(opts):
                                   "PutObject")
             return super().put_object(**kwargs)
 
+    def passing_canary(definition, address):
+        return {"ok": True, "status": 200, "certificate": True,
+                "marker": True}
+
     for label, s3, local_failure in (
             ("local", _S3(), True),
             ("remote", _FailJournalPut(), False)):
-        operation = f"op-rehearsal-{label}"
-        connection = _clients(topology, s3=s3)
-        call = handoff.rehearse
-        patches = [mock.patch.object(handoff, "build_plan", return_value=plan)]
+        case_root = os.path.join(root, label)
+        topology = handoff_topology(project_root=case_root)
+        plan = handoff.build_plan(
+            _preflight_clients(topology), topology,
+            canary_runner=passing_canary)
         if local_failure:
-            patches.append(mock.patch.object(
-                handoff.JournalStore, "_write_local",
-                side_effect=OSError("disk full")))
-        for patcher in patches:
-            patcher.start()
+            os.makedirs(case_root, exist_ok=True)
+            with open(os.path.join(case_root, "var"), "w") as handle:
+                handle.write("blocks the journal directory")
+        operation = f"op-rehearsal-{label}"
+        connection = _preflight_clients(topology, s3=s3)
+        call = handoff.rehearse
+        raised = None
         try:
-            raised = None
-            try:
-                call(connection, topology, plan, plan["plan_digest"],
-                     handoff.expected_confirmation(plan, "REHEARSE"),
-                     operation_id=operation)
-            except Exception as err:
-                raised = err
-        finally:
-            for patcher in reversed(patches):
-                patcher.stop()
+            call(connection, topology, plan, plan["plan_digest"],
+                 handoff.expected_confirmation(plan, "REHEARSE"),
+                 canary_runner=passing_canary, operation_id=operation)
+        except Exception as err:
+            raised = err
         th.assert_true(raised is not None,
                        f"{label} rehearsal write must report its failure")
         store = handoff.JournalStore(connection, topology, operation)

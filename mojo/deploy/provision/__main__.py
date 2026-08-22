@@ -92,6 +92,8 @@ PREVIEW_LABELS = (
     ("could not see", report.BLIND),
 )
 
+_HANDOFF_FROM_RUNTIME = object()
+
 
 # ── argument parsing ────────────────────────────────────────────────────────
 
@@ -236,14 +238,20 @@ def build_parser():
     return parser
 
 
-def main(argv, console=None):
+def main(argv, console=None, *,
+         handoff_context=_HANDOFF_FROM_RUNTIME,
+         handoff_plan_loader=_HANDOFF_FROM_RUNTIME,
+         handoff_executor=_HANDOFF_FROM_RUNTIME,
+         operation_id_factory=_HANDOFF_FROM_RUNTIME):
     """The whole program. Returns an exit code; never calls `sys.exit`.
 
     `console` is the reader/writer seam. Left alone it is the real terminal; a
     test hands in a scripted one and drives the entire command in-process,
     which is how the prompt flow, the confirmation and the refusals are covered
     without patching `builtins.input` — a process-global that leaks into
-    whatever else the runner is doing in the same interpreter.
+    whatever else the runner is doing in the same interpreter. The handoff
+    callables are similarly local seams for recovery-path tests; their sentinel
+    defaults resolve to the exact production functions below.
     """
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -263,7 +271,11 @@ def main(argv, console=None):
         if args.command == "fleet-apply":
             return run_fleet_apply(args, console)
         if args.command == "eip-handoff":
-            return run_eip_handoff(args, console)
+            return run_eip_handoff(
+                args, console, handoff_context=handoff_context,
+                handoff_plan_loader=handoff_plan_loader,
+                handoff_executor=handoff_executor,
+                operation_id_factory=operation_id_factory)
         if args.command == "eip-rollback":
             return run_eip_rollback(args, console)
         return run_status(args, console)
@@ -482,8 +494,18 @@ def _require_handoff_args(args, *names):
             f"{', '.join(missing)}")
 
 
-def run_eip_handoff(args, console):
-    topology, connection, plan_path = _handoff_context(args)
+def run_eip_handoff(args, console, *,
+                    handoff_context=_HANDOFF_FROM_RUNTIME,
+                    handoff_plan_loader=_HANDOFF_FROM_RUNTIME,
+                    handoff_executor=_HANDOFF_FROM_RUNTIME,
+                    operation_id_factory=_HANDOFF_FROM_RUNTIME):
+    if handoff_context is _HANDOFF_FROM_RUNTIME:
+        handoff_context = _handoff_context
+    if handoff_plan_loader is _HANDOFF_FROM_RUNTIME:
+        handoff_plan_loader = handoff_module.load_plan
+    if handoff_executor is _HANDOFF_FROM_RUNTIME:
+        handoff_executor = handoff_module.handoff
+    topology, connection, plan_path = handoff_context(args)
     mode = "preview" if args.dry_run else args.mode
     if args.dry_run and args.mode not in ("preview", "rehearse"):
         console.say("--dry-run forced preview mode; no provider mutation is reachable.")
@@ -497,12 +519,14 @@ def run_eip_handoff(args, console):
         return EXIT_OK
 
     _require_handoff_args(args, "plan_digest", "confirm")
-    plan = handoff_module.load_plan(plan_path)
+    plan = handoff_plan_loader(plan_path)
     if mode == "resume":
         _require_handoff_args(args, "operation_id")
     elif not args.operation_id:
-        import uuid
-        args.operation_id = str(uuid.uuid4())
+        if operation_id_factory is _HANDOFF_FROM_RUNTIME:
+            import uuid
+            operation_id_factory = uuid.uuid4
+        args.operation_id = str(operation_id_factory())
     handoff_module.validate_operation_id(args.operation_id)
     args._handoff_recovery = (topology, args.operation_id)
     console.say("recovery coordinates (record these before continuing):")
@@ -520,7 +544,7 @@ def run_eip_handoff(args, console):
             connection, topology, plan, args.plan_digest, args.confirm,
             args.operation_id)
     else:
-        journal = handoff_module.handoff(
+        journal = handoff_executor(
             connection, topology, plan, args.plan_digest, args.confirm,
             operation_id=args.operation_id)
     console.say(f"handoff {journal['operation_id']} reached {journal['state']}")
