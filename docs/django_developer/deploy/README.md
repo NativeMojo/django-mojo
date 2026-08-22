@@ -14,7 +14,7 @@ run on the node itself, outside Django:
 | `mojo.deploy.mojosec` | Safely installs and operates the privileged, observe-only MojoSec sensor |
 | `mojo.deploy.audit` | Converges selective Linux Audit execution provenance and publishes constrained health |
 | `mojo.deploy.firewall_broker` | Root semantic firewall executor; accepts no argv and constructs closed operations |
-| `mojo.deploy.provision` | Takes an **empty AWS account** to a running environment — eight prompts, a committed `aws/environments/<env>.json`, a priced preview, then an idempotent converge. Creates and modifies; never deletes. See [provision.md](provision.md) |
+| `mojo.deploy.provision` | Takes an **empty AWS account** to a running managed environment, or prepares exact declared nodes and a shadow NLB beside an existing brownfield data plane. The two modes use separate manifests, commands and DAGs. Creates and modifies only their owned resources; never deletes. See [provision.md](provision.md) |
 | `python3 -m mojo.deploy locate <name>` | Prints the absolute packaged path of `update.sh` / `post_deploy.sh` for the project shims |
 | `python3 -m mojo.deploy render --dest …` | Materializes the packaged cron/systemd templates into `${PROJ_PATH}/var/deploy`. **Not the same thing as `mojo.deploy.provision.render`**, which builds and publishes an environment's `django.conf` to S3 — same verb, opposite direction: this one writes files on a node, that one writes an object a node reads |
 | `mojo/deploy/scripts/update.sh` | The fleet update entry (deploy / manual modes) — packaged bash, run through a project shim |
@@ -34,6 +34,7 @@ python3 -m mojo.deploy.node_setup --dry-run
 (cd / && sudo /usr/bin/python3 -E -P -m mojo.deploy.mojosec converge --mode observe)
 python3 -m mojo.deploy locate update.sh
 python3 -m mojo.deploy.provision apply --env prod --dry-run
+python3 -m mojo.deploy.provision fleet-status --fleet shadow --json
 ```
 
 MojoSec convergence snapshots every Audit rules source, generated and active
@@ -88,6 +89,8 @@ whose Django project is not installed locally.
 `provision` is the strongest case of all: it runs against an account that has no
 django-mojo in it *anywhere* yet — no node, no config bucket, no `django.conf` to
 read — so there is nothing a management command could bootstrap itself from.
+Its brownfield fleet commands also run before Django, but name every dependency
+exactly and are forbidden from publishing config, DNS, certificates or data.
 
 There are deliberately **no `[project.scripts]` console entry points**. Those
 reintroduce a dependency on wherever pip put the script directory — the exact
@@ -436,6 +439,21 @@ sudo-runs: project deps first, framework last, `migrate_locked` only under
 processing, `nginx -t` gate + reload, systemd + cron install from
 `var/deploy/`, the structural stale-cron sweep, `var/logs` ownership, restart,
 and a `PROBE_URL` health gate.
+
+Repository vhosts remain authoritative across that convergence, with one
+narrow exception for a certificate already issued on the node. When the
+repository and installed vhost each contain exactly one TLS server with the
+same normalized `server_name` set, `post_deploy.sh` may carry forward only
+the installed `ssl_certificate` and `ssl_certificate_key` values. The pair
+must be the canonical same-revision Certbot `live/<lineage>` symlinks, resolve
+to root-owned files in that lineage's `archive/` directory, and traverse
+root-owned lineage directories; none may be group- or world-writable. The
+installed vhost itself must be a safe regular file. Every other directive
+comes from the repository. Ambiguous TLS servers or certificate directives,
+mixed paths, renamed hosts, unsafe metadata, destination symlinks, and files
+that change while inspected fail the deploy without logging certificate
+paths. A fresh node, or an unambiguous absolute non-Certbot placeholder pair,
+uses the repository bytes unchanged.
 
 The framework install is a **convergence, never a one-shot veto**. The target
 (the `--framework` pin, or on bare runs the newest version per PyPI's JSON

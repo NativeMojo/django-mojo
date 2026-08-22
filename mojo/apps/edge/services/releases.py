@@ -127,12 +127,15 @@ def register(web_app, version, manifest, user=None, source=SOURCE_UNKNOWN):
     return release, uploads
 
 
-def complete(release):
+def complete(release, *, s3_client=None):
     """Verify every declared file actually landed, then mark it `uploaded`.
 
     Returns the release. Raises with the failing paths named — a CI job that
     half-failed should learn which objects are missing, not just that
     something is.
+
+    ``s3_client`` is an injection seam for tests, forwarded to
+    ``s3.head_object`` (None means the shared S3 client).
     """
     if release.status in (STATUS_UPLOADED, STATUS_LIVE, STATUS_SUPERSEDED):
         return release
@@ -147,7 +150,7 @@ def complete(release):
     for entry in release.manifest or []:
         key = f"{prefix}/{entry['path']}"
         try:
-            head = s3.head_object(web_app.bucket, key)
+            head = s3.head_object(web_app.bucket, key, client=s3_client)
         except Exception as err:
             problems.append(f"{entry['path']}: {err}")
             continue

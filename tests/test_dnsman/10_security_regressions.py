@@ -177,9 +177,11 @@ def test_godaddy_record_calls_use_the_url_builder(opts):
     """
     The adapter used to build its own percent-encoded paths. Now that it does
     not, prove the traversal defence is still on the live write path: a hostile
-    relative label must reach `requests` already encoded.
+    relative label must reach the HTTP transport already encoded. The
+    transport is injected through DNSManager's ``http=`` seam (item #2558) —
+    never a process-global patch of the shared godaddy module.
     """
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     from mojo.helpers.dns.godaddy import DNSManager
 
@@ -188,15 +190,16 @@ def test_godaddy_record_calls_use_the_url_builder(opts):
     resp.content = b""
     resp.status_code = 200
 
-    manager = DNSManager("key", "secret", raise_on_error=True)
-    with patch("mojo.helpers.dns.godaddy.requests") as requests_mock:
-        requests_mock.get.return_value = resp
-        requests_mock.put.return_value = resp
-        manager.get_record("example.com", "TXT", hostile)
-        manager.edit_record("example.com", "TXT", hostile, "value", 600)
+    recorded = MagicMock()
+    recorded.get.return_value = resp
+    recorded.put.return_value = resp
 
-    for label, call in (("GET", requests_mock.get.call_args),
-                        ("PUT", requests_mock.put.call_args)):
+    manager = DNSManager("key", "secret", raise_on_error=True, http=recorded)
+    manager.get_record("example.com", "TXT", hostile)
+    manager.edit_record("example.com", "TXT", hostile, "value", 600)
+
+    for label, call in (("GET", recorded.get.call_args),
+                        ("PUT", recorded.put.call_args)):
         url = call.args[0]
         assert "victim.com/records" not in url, \
             f"the {label} reached a different domain in the account: {url}"

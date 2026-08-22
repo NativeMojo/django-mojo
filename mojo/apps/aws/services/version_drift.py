@@ -112,15 +112,17 @@ class VersionDriftScanner:
     """
 
     def __init__(self, region=None, profile=None, timeout=5, clients=None,
-                 session=None, now=None, deadline_days=None):
-        self.region = region or _setting("AWS_REGION", "us-east-1")
+                 session=None, now=None, deadline_days=None, *, settings_get=None):
+        # Injection seam (tests): None keeps the module's own `_setting`.
+        self.settings_get = settings_get
+        self.region = region or self._setting("AWS_REGION", "us-east-1")
         self.profile = profile
         self.timeout = max(1, min(int(timeout or 5), 30))
         self.clients = clients or {}
         self.session = session
         self.now = now or timezone.now
         if deadline_days is None:
-            deadline_days = _setting("AWS_VERSION_DRIFT_DEADLINE_DAYS", 180) or 180
+            deadline_days = self._setting("AWS_VERSION_DRIFT_DEADLINE_DAYS", 180) or 180
         try:
             self.deadline_days = max(1, int(deadline_days))
         except (TypeError, ValueError):
@@ -129,13 +131,17 @@ class VersionDriftScanner:
 
     # ── AWS plumbing (mirrors AWSCheckRunner's injection contract) ──
 
+    def _setting(self, name, default=None, kind=None):
+        getter = self.settings_get or _setting
+        return getter(name, default, kind=kind)
+
     def _session(self, region=None):
         if self.session is not None:
             return self.session
         access_key = secret_key = None
         if not self.profile:
-            access_key = _setting("AWS_KEY")
-            secret_key = _setting("AWS_SECRET")
+            access_key = self._setting("AWS_KEY")
+            secret_key = self._setting("AWS_SECRET")
         return get_session(
             access_key=access_key, secret_key=secret_key, region=region or self.region,
             profile=self.profile if not access_key and not secret_key else None,

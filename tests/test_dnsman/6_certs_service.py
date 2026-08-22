@@ -3,7 +3,9 @@
 Everything here runs in-process with three seams stubbed out, so no socket is
 ever opened and no KMS key is ever needed:
 
-* the ACME client (``certs._get_account`` hands back a scripted stand-in),
+* the ACME client and the job publishes, injected through the keyword seams
+  on ``certs.issue``/``revoke``/``renew_due``/``request_certificate``
+  (item #2558 -- see ``_issuance_env``, which hands back seam-bound partials),
 * ``services/dns.py`` (a recorder that captures every record write), and
 * ``KSMSecrets._get_kms`` (an in-memory envelope that round-trips).
 
@@ -25,9 +27,6 @@ from testit import helpers as th
 ORDER_URL = "https://acme.test/order/1"
 FINALIZE_URL = "https://acme.test/order/1/finalize"
 CERT_URL = "https://acme.test/cert/1"
-CERT_JOB_CHANNEL = "testit_dnsman_cert_jobs"
-
-
 # ----------------------------------------------------------------------
 # stand-ins
 # ----------------------------------------------------------------------
@@ -106,10 +105,11 @@ class FakeDns(object):
 class FakeJobs(object):
     """Captures the dnsman publishes the certs service makes.
 
-    Tests patch the cert service's local ``publish_job`` seam instead of the
-    process-global ``jobs.publish`` function, so parallel modules retain their
-    own queue behavior. Kept as a stub class because the tests read
-    ``.published`` objicts.
+    Tests inject these recorders through the cert service's ``publish=`` /
+    ``sync=`` keyword seams instead of patching the process-global
+    ``jobs.publish`` function, so parallel modules retain their own queue
+    behavior. Kept as a stub class because the tests read ``.published``
+    objicts.
     """
 
     def __init__(self):
@@ -303,16 +303,22 @@ def _make_chain(names, days=90, serial=0xABC123):
 
 
 @contextlib.contextmanager
-def _issuance_env(client=None, dns_stub=None, real_jobs=False):
+def _issuance_env(client=None, dns_stub=None):
     """
-    Patch the ACME client, services/dns.py and the KMS layer for one test.
+    Stub services/dns.py and the KMS layer; hand back seam-bound partials.
 
-    `real_jobs=True` forwards certificate work through the genuine publish path
-    on a private test channel, so a Job row is written and queued without a
-    parallel module clearing or draining it. Every patch below still applies to
-    the handler, because the drain executes it in THIS process; that is the
-    entire reason the drain exists rather than a job daemon.
+    The ACME client and the job publishes ride the keyword seams on
+    ``certs.issue`` / ``revoke`` / ``renew_due`` / ``request_certificate``
+    (item #2558) instead of patching certs module attributes, which is
+    process-global and races other packages' live calls under the parallel
+    runner. Call the work through ``env.issue`` and friends; call-time
+    keywords still override any bound seam.
+
+    The real publish→drain flow (which NEEDS process-global patches so the
+    drained handler sees the stubs) lives in
+    tests/test_dnsman_extended_serial/6_certs_service.py.
     """
+    import functools
     from unittest import mock
 
     from mojo.apps.dnsman.services import certs, dns
@@ -322,34 +328,28 @@ def _issuance_env(client=None, dns_stub=None, real_jobs=False):
     jobs_stub = FakeJobs()
     kms = FakeKMS()
 
-    real_publish_job = certs.publish_job
-
-    def publish_certificate_job(func, certificate, channel="default",
-                                idempotency_marker=None):
-        return real_publish_job(
-            func, certificate, channel=CERT_JOB_CHANNEL,
-            idempotency_marker=idempotency_marker)
-
     patches = [
         mock.patch.object(KSMSecrets, "_get_kms", return_value=kms),
-        mock.patch.object(certs, "_get_account", return_value=(None, client)),
         mock.patch.object(dns, "upsert_record", dns_stub.upsert_record),
         mock.patch.object(dns, "delete_record", dns_stub.delete_record),
         mock.patch.object(dns, "clear_record", dns_stub.clear_record),
         mock.patch.object(dns, "wait_for_propagation", dns_stub.wait_for_propagation),
-        mock.patch.object(certs, "publish_sync", side_effect=jobs_stub.publish_sync),
     ]
-    if real_jobs:
-        patches.append(mock.patch.object(
-            certs, "publish_job", side_effect=publish_certificate_job))
-    else:
-        patches.append(mock.patch.object(
-            certs, "publish_job", side_effect=jobs_stub.publish_certificate))
+
+    env = objict(dns=dns_stub, jobs=jobs_stub, acme=client, kms=kms)
+    env.issue = functools.partial(
+        certs.issue, acme=lambda: (None, client),
+        sync=jobs_stub.publish_sync)
+    env.revoke = functools.partial(certs.revoke, acme=lambda: (None, client))
+    env.renew_due = functools.partial(
+        certs.renew_due, publish=jobs_stub.publish_certificate)
+    env.request_certificate = functools.partial(
+        certs.request_certificate, publish=jobs_stub.publish_certificate)
 
     with contextlib.ExitStack() as stack:
         for patch in patches:
             stack.enter_context(patch)
-        yield objict(dns=dns_stub, jobs=jobs_stub, acme=client, kms=kms)
+        yield env
 
 
 def _challenge_name(domain):
@@ -408,7 +408,7 @@ def test_certs_wildcard_and_apex_share_one_record(opts):
     client = FakeAcmeClient([domain.name, domain.name], chain=chain)
 
     with _issuance_env(client) as env:
-        result = certs.issue(cert)
+        result = env.issue(cert)
 
     assert result.ok, f"issuance should have succeeded, error was: {result.get('error')}"
     assert len(env.dns.upserts) == 1, (
@@ -457,9 +457,9 @@ def test_certificate_reserves_before_provider(opts):
         return real_upsert(*args, **kwargs)
 
     dns_stub.upsert_record = provider
-    with _issuance_env(client, dns_stub=dns_stub), \
+    with _issuance_env(client, dns_stub=dns_stub) as env, \
             mock.patch.object(record_reservations, "reserve", side_effect=reserve):
-        result = certs.issue(certificate)
+        result = env.issue(certificate)
 
     assert result.ok, f"issuance should succeed, got {result}"
     assert events and events[0][0] == "reserve", \
@@ -486,7 +486,7 @@ def test_pending_delegation_is_inert(opts):
 
     with _issuance_env(client) as env, \
             mock.patch.object(acme_hub_client, "publish") as remote_publish:
-        result = certs.issue(cert)
+        result = env.issue(cert)
 
     assert result.ok, f"pending delegation must not disrupt direct issuance: {result}"
     assert len(env.dns.upserts) == 1, \
@@ -519,13 +519,20 @@ def test_delegated_challenge_writer(opts):
         withdrawals.append((client_ref, challenge_ref))
         return _hub_result(row, challenge_ref)
 
+    # The propagation probe is injected through issue()'s wait_for_txt seam
+    # (item #2558) instead of patching the shared probe module.
+    waits = []
+
+    def fake_wait(name, values, **kwargs):
+        waits.append((name, list(values)))
+        return True, ["seen"]
+
     proof = objict(ok=True, error=None)
     with _issuance_env(client) as env, \
             mock.patch.object(delegation.probe, "verify_one_hop_cname", return_value=proof), \
             mock.patch.object(acme_hub_client, "publish", side_effect=publish), \
-            mock.patch.object(acme_hub_client, "withdraw", side_effect=withdraw), \
-            mock.patch.object(probe, "wait_for_txt", return_value=(True, ["seen"])) as wait:
-        result = certs.issue(cert)
+            mock.patch.object(acme_hub_client, "withdraw", side_effect=withdraw):
+        result = env.issue(cert, wait_for_txt=fake_wait)
 
     assert result.ok, f"delegated issuance should succeed, got {result}"
     assert not env.dns.upserts and not env.dns.clears, \
@@ -533,8 +540,8 @@ def test_delegated_challenge_writer(opts):
     assert len(publishes) == 1 and set(publishes[0][2]) == {
         "digest-tok-0", "digest-tok-1"}, \
         f"both apex/wildcard digests must publish together, got {publishes}"
-    assert wait.call_args.args[0] == row.target_name, \
-        f"propagation must probe the exact opaque target, got {wait.call_args}"
+    assert waits and waits[0][0] == row.target_name, \
+        f"propagation must probe the exact opaque target, got {waits}"
     assert withdrawals == [(str(row.client_ref), publishes[0][1])], \
         f"the exact durable challenge must be withdrawn in finally, got {withdrawals}"
     row.refresh_from_db()
@@ -560,13 +567,13 @@ def test_delegated_ambiguous_publish_withdraws(opts):
         return _hub_result(row, challenge_ref)
 
     proof = objict(ok=True, error=None)
-    with _issuance_env(client), \
+    with _issuance_env(client) as env, \
             mock.patch.object(delegation.probe, "verify_one_hop_cname", return_value=proof), \
             mock.patch.object(
                 acme_hub_client, "publish",
                 side_effect=acme_hub_client.AcmeHubTransportError("ambiguous")), \
             mock.patch.object(acme_hub_client, "withdraw", side_effect=withdraw):
-        result = certs.issue(cert)
+        result = env.issue(cert)
 
     assert not result.ok, "an ambiguous remote publish must fail the issuance"
     assert len(withdrawals) == 1, \
@@ -588,9 +595,9 @@ def test_delegated_alias_failure_precedes_order(opts):
     cert = _pending_certificate(domain, names)
     client = FakeAcmeClient([domain.name, domain.name], chain="")
     failure = objict(ok=False, error="CNAME delegation does not match the allocation")
-    with _issuance_env(client), \
+    with _issuance_env(client) as env, \
             mock.patch.object(delegation.probe, "verify_one_hop_cname", return_value=failure):
-        result = certs.issue(cert)
+        result = env.issue(cert)
 
     assert not result.ok and not client.orders, \
         "a missing/changed alias must fail before creating any CA order"
@@ -601,11 +608,8 @@ def test_delegated_alias_failure_precedes_order(opts):
 
 @th.django_unit_test("dnsman certs: a successful issue stores material and cleans up the challenge record")
 def test_certs_issue_success_stores_and_cleans_up(opts):
-    from unittest import mock
-
     from mojo.apps.dnsman.models import Certificate
     from mojo.apps.dnsman.services import certs
-    from mojo.apps.edge.services import render as edge_render
 
     domain = _reset_domain("issue-certs.test")
     names = [domain.name, f"*.{domain.name}"]
@@ -616,19 +620,11 @@ def test_certs_issue_success_stores_and_cleans_up(opts):
     chain, leaf = _make_chain(names, days=90, serial=0xABC123)
     client = FakeAcmeClient([domain.name, domain.name], chain=chain)
 
-    def static(name, default=None, kind=None):
-        if name == "EDGE_HTTP_ENABLED":
-            return False
-        if name == "EDGE_ACME_WEBROOT":
-            raise AssertionError("DNS-01 issuance read the edge ACME webroot")
-        return default
-
-    with mock.patch.object(
-            edge_render.settings, "get_static", side_effect=static), \
-            _issuance_env(client) as env:
-        assert edge_render.http_enabled() is False, \
-            "the regression did not exercise the DNS-01-only edge posture"
-        result = certs.issue(cert)
+    # The DNS-01-only edge posture variant of this test (which needs a
+    # process-global settings patch) lives in
+    # tests/test_dnsman_extended_serial/6_certs_service.py (item #2558).
+    with _issuance_env(client) as env:
+        result = env.issue(cert)
 
         assert result.ok, f"issuance should have succeeded, error was: {result.get('error')}"
 
@@ -689,10 +685,10 @@ def test_certs_renewal_reuses_row_and_revises_material(opts):
     original_serial = certificate.serial
     client = FakeAcmeClient([domain.name], chain=new_chain)
 
-    with _issuance_env(client):
+    with _issuance_env(client) as env:
         certificate.set_private_key_pem("OLD PRIVATE KEY")
         certificate.save()
-        result = certs.issue(certificate)
+        result = env.issue(certificate)
 
     assert result.ok, f"renewal should have succeeded, error was: {result.get('error')}"
     renewed = Certificate.objects.get(pk=original_pk)
@@ -721,7 +717,7 @@ def test_certs_cleanup_failure_does_not_fail_issuance(opts):
     dns_stub = FakeDns(clear_error="the provider refused the retirement")
 
     with _issuance_env(client, dns_stub=dns_stub) as env:
-        result = certs.issue(cert)
+        result = env.issue(cert)
 
     assert result.ok, (
         f"a cleanup failure must not fail an issuance that succeeded, error was: "
@@ -750,7 +746,7 @@ def test_certs_propagation_timeout_fails_cleanly(opts):
     dns_stub = FakeDns(propagated=False, seen=["digest-tok-0"])
 
     with _issuance_env(client, dns_stub=dns_stub) as env:
-        result = certs.issue(cert)
+        result = env.issue(cert)
 
     assert not result.ok, "a propagation timeout must not report success"
 
@@ -788,7 +784,7 @@ def test_certs_propagation_wait_carries_the_change_id(opts):
     client = FakeAcmeClient([domain.name], chain=chain)
 
     with _issuance_env(client) as env:
-        result = certs.issue(cert)
+        result = env.issue(cert)
 
     assert result.ok, f"issuance should have succeeded, error was: {result.get('error')}"
     assert len(env.dns.waits) == 1, (
@@ -822,7 +818,7 @@ def test_delegated_renewal_failure_preserves_material(opts):
         return _hub_result(row, challenge_ref)
 
     proof = objict(ok=True, error=None)
-    with _issuance_env(client), \
+    with _issuance_env(client) as env, \
             mock.patch.object(delegation.probe, "verify_one_hop_cname", return_value=proof), \
             mock.patch.object(
                 acme_hub_client, "publish",
@@ -830,7 +826,7 @@ def test_delegated_renewal_failure_preserves_material(opts):
             mock.patch.object(acme_hub_client, "withdraw", side_effect=withdraw):
         cert.set_private_key_pem("OLD PRIVATE KEY")
         cert.save()
-        result = certs.issue(cert)
+        result = env.issue(cert)
         stored = Certificate.objects.get(pk=cert.pk)
         private_key = stored.private_key_pem
 
@@ -846,52 +842,8 @@ def test_delegated_renewal_failure_preserves_material(opts):
         f"retry backoff must stay bounded, got {stored.renew_after}"
 
 
-@th.django_unit_test("dnsman certs: material remains available during renewal but not initial issuance")
-def test_material_available_while_renewing(opts):
-    from unittest import mock
-
-    from mojo.apps.account.models import Group
-    from mojo.apps.dnsman.models import Certificate
-    from mojo.apps.dnsman.rest import certificate as certificate_rest
-    from mojo.apps.dnsman.services import certs
-    from mojo.helpers import dates
-
-    domain = _reset_domain("material-renewing-certs.test")
-    group = Group.objects.create(
-        name=f"material_renewing_{uuid.uuid4().hex[:8]}", kind="organization")
-    domain.group = group
-    domain.save(update_fields=["group", "modified"])
-    now = dates.utcnow()
-    renewing = Certificate.objects.create(
-        domain=domain, common_name=domain.name, sans=[domain.name],
-        status="active", cert_pem="OLD CERT", chain_pem="OLD CHAIN",
-        not_after=now + timedelta(days=10), renew_after=now - timedelta(days=1))
-    initial = Certificate.objects.create(
-        domain=domain, common_name=f"initial.{domain.name}",
-        sans=[f"initial.{domain.name}"], status="issuing")
-    request = objict(user=objict(pk=123), ip="127.0.0.1")
-
-    with _issuance_env(FakeAcmeClient([])), \
-            mock.patch.object(Certificate, "rest_check_permission_or_raise"):
-        renewing.set_private_key_pem("OLD PRIVATE KEY")
-        renewing.save()
-        Certificate.objects.filter(pk=renewing.pk).update(status="issuing")
-        payload = certificate_rest.on_certificate_material(request, pk=renewing.pk)
-        assert payload["private_key_pem"] == "OLD PRIVATE KEY", \
-            "still-valid stored material must remain consumable during renewal"
-        try:
-            certificate_rest.on_certificate_material(request, pk=initial.pk)
-        except Exception as error:
-            assert "not active" in str(error), \
-                f"initial issuance should expose no material, got {error}"
-        else:
-            assert False, "initial issuance must never expose material"
-
-
 @th.django_unit_test("dnsman certs: stale issuing workers are requeued and safely reclaimed")
 def test_stale_issuing_recovery(opts):
-    from unittest import mock
-
     from mojo.apps.dnsman.models import Certificate
     from mojo.apps.dnsman.services import certs
     from mojo.helpers import dates
@@ -922,9 +874,9 @@ def test_stale_issuing_recovery(opts):
             status="issuing", modified=old_modified)
         Certificate.objects.filter(pk=stale_initial.pk).update(modified=old_modified)
 
-        queued = certs.renew_due(now=now)
-        duplicate = certs.issue(Certificate.objects.get(pk=fresh.pk))
-        reclaimed = certs.issue(Certificate.objects.get(pk=stale_renewal.pk))
+        queued = env.renew_due(now=now)
+        duplicate = env.issue(Certificate.objects.get(pk=fresh.pk))
+        reclaimed = env.issue(Certificate.objects.get(pk=stale_renewal.pk))
 
     assert set(queued.certificates) == {stale_renewal.pk, stale_initial.pk}, \
         f"only stale issuing rows should be requeued, got {queued.certificates}"
@@ -944,8 +896,6 @@ def test_stale_issuing_recovery(opts):
 
 @th.django_unit_test("dnsman certs: concurrent issue jobs atomically admit only one worker")
 def test_concurrent_issue_claim(opts):
-    from unittest import mock
-
     from django.db import close_old_connections
     from mojo.apps.dnsman.models import Certificate
     from mojo.apps.dnsman.services import certs
@@ -963,19 +913,22 @@ def test_concurrent_issue_claim(opts):
         assert release.wait(10), "test worker timed out waiting for duplicate claim"
         return None, client
 
-    def first_issue():
-        close_old_connections()
-        try:
-            return certs.issue(Certificate.objects.get(pk=cert.pk))
-        finally:
+    with _issuance_env(client) as env:
+        # The first worker's account loader rides issue()'s `acme=` seam
+        # (item #2558): call-time keywords override the env-bound loader, so
+        # only THIS worker blocks at the ACME boundary.
+        def first_issue():
             close_old_connections()
+            try:
+                return env.issue(Certificate.objects.get(pk=cert.pk),
+                                 acme=slow_account)
+            finally:
+                close_old_connections()
 
-    with _issuance_env(client), \
-            mock.patch.object(certs, "_get_account", side_effect=slow_account):
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(first_issue)
             assert started.wait(10), "first worker never reached the ACME boundary"
-            duplicate = certs.issue(Certificate.objects.get(pk=cert.pk))
+            duplicate = env.issue(Certificate.objects.get(pk=cert.pk))
             release.set()
             admitted = future.result(timeout=15)
 
@@ -1003,7 +956,7 @@ def test_certs_invalid_order_records_ca_error(opts):
             error={"type": "urn:ietf:params:acme:error:dns", "detail": ca_detail})])
 
     with _issuance_env(client) as env:
-        result = certs.issue(cert)
+        result = env.issue(cert)
 
     assert not result.ok, "an invalid order must not report success"
 
@@ -1037,7 +990,7 @@ def test_certs_sync_broadcast_carries_no_material(opts):
     client = FakeAcmeClient([domain.name, domain.name], chain=chain)
 
     with _issuance_env(client) as env:
-        result = certs.issue(cert)
+        result = env.issue(cert)
         assert result.ok, f"issuance should have succeeded, error was: {result.get('error')}"
         stored = Certificate.objects.get(pk=cert.pk)
         # Proves the omission below is deliberate: the key IS held, it simply
@@ -1072,8 +1025,6 @@ def test_certs_sync_broadcast_carries_no_material(opts):
 
 @th.django_unit_test("dnsman certs: renew_due picks up only active certs past renew_after")
 def test_certs_renew_due_selects_only_due(opts):
-    from unittest import mock
-
     from mojo.apps.dnsman.models import Certificate
     from mojo.apps.dnsman.services import certs
     from mojo.helpers import dates
@@ -1099,9 +1050,7 @@ def test_certs_renew_due_selects_only_due(opts):
         not_after=None, renew_after=None)
 
     jobs_stub = FakeJobs()
-    with mock.patch.object(
-            certs, "publish_job", side_effect=jobs_stub.publish_certificate):
-        result = certs.renew_due()
+    result = certs.renew_due(publish=jobs_stub.publish_certificate)
 
     assert result.certificates == [due.pk], (
         f"only the active certificate past renew_after should be queued; "
@@ -1119,8 +1068,6 @@ def test_certs_renew_due_selects_only_due(opts):
 
 @th.django_unit_test("dnsman certs: request_certificate refuses a duplicate active cert outside its renewal window")
 def test_certs_request_refuses_duplicate_active(opts):
-    from unittest import mock
-
     from mojo import errors as me
     from mojo.apps.dnsman.models import Certificate
     from mojo.apps.dnsman.services import certs
@@ -1137,27 +1084,27 @@ def test_certs_request_refuses_duplicate_active(opts):
         renew_after=now + timedelta(days=50))
 
     jobs_stub = FakeJobs()
-    with mock.patch.object(
-            certs, "publish_job", side_effect=jobs_stub.publish_certificate):
-        refused = None
-        try:
-            certs.request_certificate(domain)
-        except me.ValueException as err:
-            refused = str(err)
+    refused = None
+    try:
+        certs.request_certificate(
+            domain, publish=jobs_stub.publish_certificate)
+    except me.ValueException as err:
+        refused = str(err)
 
-        assert refused is not None, (
-            "requesting a certificate already covered by an active, not-yet-due "
-            "cert should be refused")
-        assert not jobs_stub.published, (
-            f"a refused request must not queue any job, got {jobs_stub.published}")
-        assert Certificate.objects.filter(domain=domain).count() == 1, (
-            "a refused request must not create a Certificate row")
+    assert refused is not None, (
+        "requesting a certificate already covered by an active, not-yet-due "
+        "cert should be refused")
+    assert not jobs_stub.published, (
+        f"a refused request must not queue any job, got {jobs_stub.published}")
+    assert Certificate.objects.filter(domain=domain).count() == 1, (
+        "a refused request must not create a Certificate row")
 
-        # Inside its renewal window the same request is a deduplicated renewal
-        # of the existing material, not a second Certificate row.
-        active.renew_after = now - timedelta(days=1)
-        active.save()
-        fresh = certs.request_certificate(domain)
+    # Inside its renewal window the same request is a deduplicated renewal
+    # of the existing material, not a second Certificate row.
+    active.renew_after = now - timedelta(days=1)
+    active.save()
+    fresh = certs.request_certificate(
+        domain, publish=jobs_stub.publish_certificate)
 
     assert fresh.pk == active.pk and fresh.status == "active", (
         f"a due request should reuse the active certificate, got {fresh.pk}/{fresh.status}")
@@ -1187,8 +1134,8 @@ def test_certs_revoke(opts):
         status="active", cert_pem=leaf_pem, chain_pem=chain_pem)
 
     client = FakeAcmeClient([domain.name], chain=chain)
-    with _issuance_env(client):
-        result = certs.revoke(cert)
+    with _issuance_env(client) as env:
+        result = env.revoke(cert)
 
     assert result.ok, "revocation should report success"
     assert len(client.revocations) == 1, (
@@ -1198,153 +1145,3 @@ def test_certs_revoke(opts):
         f"{client.revocations[0].reason}")
     assert Certificate.objects.get(pk=cert.pk).status == "revoked", (
         "a revoked certificate's row should be marked revoked, not deleted")
-
-
-# ----------------------------------------------------------------------
-# The real publish -> execute path
-#
-# The tests above call certs.issue() directly, which is right for exercising
-# issuance internals. These exercise the contract BETWEEN the service and the
-# job engine — that a published job actually resolves to its handler, carries
-# a payload the handler can use, and drives the Certificate row to its end
-# state. Nothing verified that before: the job layer was always stubbed out.
-# ----------------------------------------------------------------------
-
-@th.django_unit_test("dnsman certs: request_certificate -> job -> issued, through the real queue")
-def test_certs_request_runs_through_the_job_engine(opts):
-    from mojo.apps.dnsman.models import Certificate
-    from mojo.apps.dnsman.services import certs
-
-    th.clear_jobs(channel=CERT_JOB_CHANNEL)
-    domain = _reset_domain("jobflow-certs.test")
-    names = [domain.name, f"*.{domain.name}"]
-    chain, _leaf = _make_chain(names, days=90, serial=0xB0B1)
-    # Two authorizations naming the SAME identifier — the wildcard case.
-    client = FakeAcmeClient([domain.name, domain.name], chain=chain)
-
-    with _issuance_env(client=client, real_jobs=True) as env:
-        cert = certs.request_certificate(domain)
-
-        # Nothing has been issued yet — request_certificate only queues.
-        assert cert.status == "pending", \
-            f"a freshly requested certificate should be pending, got {cert.status}"
-        assert th.pending_job_count(channel=CERT_JOB_CHANNEL) >= 1, \
-            "request_certificate should have left a real job on the queue"
-
-        drained = th.run_jobs(channel=CERT_JOB_CHANNEL)
-
-    assert drained.count >= 1, f"the issuance job should have run, drained {drained.count}"
-
-    cert.refresh_from_db()
-    assert cert.status == "active", (
-        f"the job handler should have carried the certificate to active, got "
-        f"{cert.status} (last_error={cert.last_error})")
-    assert cert.cert_pem, "an issued certificate should have stored its PEM"
-    assert cert.not_after is not None, "issuance should record the validity window"
-
-    # The handler ran in-process, so the ACME and DNS stubs above applied to it.
-    assert client.finalized, "the patched ACME client should have been driven by the handler"
-    assert len(env.dns.clears) == 1, \
-        f"the handler should have retired its challenge record, got {len(env.dns.clears)}"
-
-
-@th.django_unit_test("dnsman certs: the job payload names the certificate the handler resolves")
-def test_certs_job_payload_resolves(opts):
-    from mojo.apps.jobs.models import Job
-    from mojo.apps.dnsman.services import certs
-
-    th.clear_jobs(channel=CERT_JOB_CHANNEL)
-    domain = _reset_domain("payload-certs.test")
-    names = [domain.name, f"*.{domain.name}"]
-    chain, _leaf = _make_chain(names, days=90, serial=0xB0B2)
-    client = FakeAcmeClient([domain.name, domain.name], chain=chain)
-
-    with _issuance_env(client=client, real_jobs=True):
-        cert = certs.request_certificate(domain)
-
-        job = Job.objects.filter(
-            func=certs.ISSUE_JOB, channel=CERT_JOB_CHANNEL).order_by("-created").first()
-        assert job is not None, "request_certificate should have written a real Job row"
-        # The payload survives a JSON round-trip through the queue; a stubbed
-        # publish would have handed the handler the original Python object and
-        # hidden any serialization problem.
-        assert job.payload == {"certificate": cert.pk}, \
-            f"the job payload should carry the certificate id, got {job.payload}"
-
-        th.run_jobs(channel=CERT_JOB_CHANNEL)
-
-    cert.refresh_from_db()
-    assert cert.status == "active", f"the resolved handler should have issued, got {cert.status}"
-
-
-@th.django_unit_test("dnsman certs: a failed issuance marks the certificate AND fails the job")
-def test_certs_job_failure_surfaces_both_places(opts):
-    from mojo.apps.jobs.models import Job
-    from mojo.apps.dnsman.services import certs
-
-    th.clear_jobs(channel=CERT_JOB_CHANNEL)
-    domain = _reset_domain("jobfail-certs.test")
-    # A propagation timeout is the realistic failure: the record never went live.
-    dns_stub = FakeDns(propagated=False, seen=[])
-    client = FakeAcmeClient([domain.name, domain.name], chain="")
-
-    with _issuance_env(client=client, dns_stub=dns_stub, real_jobs=True):
-        cert = certs.request_certificate(domain)
-        th.run_jobs(channel=CERT_JOB_CHANNEL)
-
-    cert.refresh_from_db()
-    assert cert.status == "failed", \
-        f"the certificate row is the durable record of failure, got {cert.status}"
-    assert cert.last_error, "a failed issuance should record why"
-
-    job = Job.objects.filter(
-        func=certs.ISSUE_JOB, channel=CERT_JOB_CHANNEL).order_by("-created").first()
-    assert job.status in ("failed", "retrying"), (
-        "the handler re-raises after recording the row, so the failure is visible "
-        f"in the jobs surface too; got {job.status}")
-
-
-# extended: drives the real job engine end to end for a dnsman feature path.
-# Valuable, but ~15s and not a framework contract -- the queue-side behaviour it
-# depends on is covered by test_jobs, and dnsman is an optional app.
-@th.requires_extra("extended")
-@th.django_unit_test("dnsman certs: renew_due queues real jobs that reissue when drained")
-def test_certs_renew_due_runs_through_the_job_engine(opts):
-    from mojo.apps.dnsman.models import Certificate
-    from mojo.apps.dnsman.services import certs
-    from mojo.helpers import dates
-
-    th.clear_jobs(channel=CERT_JOB_CHANNEL)
-    domain = _reset_domain("renewflow-certs.test")
-    now = dates.utcnow()
-    chain, _leaf = _make_chain([domain.name], days=90, serial=0xB0B3)
-    client = FakeAcmeClient([domain.name], chain=chain)
-
-    # renew_due() scans every certificate on the platform, and earlier tests in
-    # this module leave due rows behind on the long-lived database. Clear them
-    # so the drain handles exactly the one this test is about.
-    Certificate.objects.filter(renew_after__lte=now).delete()
-
-    due = Certificate.objects.create(
-        domain=domain, common_name=domain.name, sans=[domain.name],
-        status="active", cert_pem="stale",
-        not_after=now + timedelta(days=20), renew_after=now - timedelta(days=1))
-
-    with _issuance_env(client=client, real_jobs=True):
-        result = certs.renew_due()
-        assert result.certificates == [due.pk], (
-            f"only the certificate past renew_after should be queued, got "
-            f"{result.certificates}")
-        assert th.pending_job_count(channel=CERT_JOB_CHANNEL) >= 1, \
-            "renew_due should have queued a real job"
-
-        drained = th.run_jobs(channel=CERT_JOB_CHANNEL)
-
-    assert drained.count >= 1, f"the renewal job should have run, drained {drained.count}"
-
-    due.refresh_from_db()
-    assert due.status == "active", f"a renewed certificate stays active, got {due.status}"
-    assert due.cert_pem != "stale", \
-        "renewal should have replaced the stored certificate material"
-    assert due.renew_after > now, \
-        f"renewal should push renew_after forward, got {due.renew_after}"

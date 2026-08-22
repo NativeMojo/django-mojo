@@ -21,6 +21,442 @@ Everything is `python3 -m`, with no `[project.scripts]` console entry point and
 no Django settings anywhere on the path — this runs from a laptop against an
 account that has no django-mojo installed in it yet.
 
+## Exact-resource brownfield fleets
+
+The normal commands above own a greenfield topology. They are intentionally
+unchanged. An existing application with a live database, cache, buckets,
+network, DNS, certificates and public addresses uses a second input language
+and two separate commands:
+
+```bash
+python3 -m mojo.deploy.provision fleet-status --fleet shadow
+python3 -m mojo.deploy.provision fleet-status --fleet shadow --json
+python3 -m mojo.deploy.provision fleet-apply --fleet shadow --dry-run
+python3 -m mojo.deploy.provision fleet-apply --fleet shadow
+```
+
+The declaration is `aws/fleets/<fleet>.json`. It is strict, secret-free and
+exact-reference only: unknown keys, unversioned boot objects, cross-account
+ARNs, ambiguous node roles and malformed AWS identifiers fail before an AWS
+client is built. It is not an environment file with extra switches and
+`brownfield` is not a managed size preset.
+
+Abridged only by replacing account-specific values with examples, the schema
+is:
+
+```json
+{
+  "schema_version": 1,
+  "manage_dns": false,
+  "account_id": "123456789012",
+  "region": "us-west-2",
+  "project": "maestro",
+  "environment": "prod",
+  "fleet": "shadow",
+  "network": {
+    "vpc_id": "vpc-0123456789abcdef0",
+    "node_security_group_id": "sg-0123456789abcdef0",
+    "public_subnets": [
+      {"id": "subnet-0123456789abcdef0", "availability_zone": "us-west-2a", "network_border_group": "us-west-2"},
+      {"id": "subnet-1123456789abcdef0", "availability_zone": "us-west-2b", "network_border_group": "us-west-2"}
+    ]
+  },
+  "database": {
+    "cluster_arn": "arn:aws:rds:us-west-2:123456789012:cluster:orchestra",
+    "identifier": "orchestra",
+    "writer_endpoint": "orchestra.cluster.example.rds.amazonaws.com",
+    "reader_endpoint": "orchestra.cluster-ro.example.rds.amazonaws.com",
+    "port": 5432,
+    "database_name": "orchestra",
+    "master_user": "postgres",
+    "application_user": "maestro_app_next",
+    "subnet_group_name": "orchestra-db",
+    "security_group_ids": ["sg-1123456789abcdef0"],
+    "credential": {
+      "provider": "s3",
+      "metadata_key": "application-user",
+      "object": {"bucket": "maestro-prod-config", "key": "secrets/db.json", "version_id": "db-version", "sha256": "<64 lowercase hex>"}
+    }
+  },
+  "cache": {
+    "replication_group_arn": "arn:aws:elasticache:us-west-2:123456789012:replicationgroup:orchestra-cache",
+    "identifier": "orchestra-cache",
+    "endpoint": "orchestra-cache.example.cache.amazonaws.com",
+    "port": 6379,
+    "transit_encryption": true,
+    "auth_enabled": false,
+    "subnet_group_name": "orchestra-cache",
+    "security_group_ids": ["sg-2123456789abcdef0"]
+  },
+  "storage": {
+    "config": {"bucket": "maestro-prod-config", "prefix": "config/live"},
+    "releases": {"bucket": "maestro-prod-releases", "prefix": "releases"},
+    "sites": {"bucket": "maestro-prod-sites", "prefix": "sites"},
+    "revisions": {"bucket": "maestro-prod-sites", "prefix": "revisions"},
+    "fleet_config": {"bucket": "maestro-prod-config", "prefix": "fleets/shadow"}
+  },
+  "bootstrap": {
+    "stage1": {"bucket": "maestro-prod-config", "key": "bootstrap/stage1.sh", "version_id": "stage1-version", "sha256": "<64 lowercase hex>"},
+    "live_config": {"bucket": "maestro-prod-config", "key": "config/live/django.conf", "version_id": "config-version", "sha256": "<64 lowercase hex>"},
+    "role_document": {"bucket": "maestro-prod-config", "key": "bootstrap/node-role.json", "version_id": "role-version", "sha256": "<64 lowercase hex>"}
+  },
+  "nodes": {
+    "instance_type": "t3.medium",
+    "volume_gb": 40,
+    "ami_id": "ami-0123456789abcdef0",
+    "key_pair_name": "maestro-prod",
+    "session_manager": true,
+    "items": [
+      {"name": "maestro-api-1", "role": "api", "serving_target": true, "subnet_id": "subnet-0123456789abcdef0", "availability_zone": "us-west-2a", "instance_profile_arn": "arn:aws:iam::123456789012:instance-profile/maestro-api-fleet"},
+      {"name": "maestro-worker-1", "role": "worker", "serving_target": false, "subnet_id": "subnet-1123456789abcdef0", "availability_zone": "us-west-2b", "instance_profile_arn": "arn:aws:iam::123456789012:instance-profile/maestro-worker-fleet"}
+    ],
+    "profiles": {
+      "api": {"profile_arn": "arn:aws:iam::123456789012:instance-profile/maestro-api-fleet", "role_arn": "arn:aws:iam::123456789012:role/maestro-api-fleet"},
+      "worker": {"managed": {"profile_name": "maestro-shadow-worker", "role_name": "maestro-shadow-worker"}}
+    }
+  },
+  "load_balancer": {
+    "name": "maestro-shadow-nlb",
+    "api_target_group": "maestro-shadow-api",
+    "certbot_target_group": "maestro-shadow-http",
+    "api_health_path": "/api/maestro/node/ready",
+    "certbot_health_path": "/api/version",
+    "subnet_ids": ["subnet-0123456789abcdef0", "subnet-1123456789abcdef0"]
+  },
+  "kms_key_arn": "arn:aws:kms:us-west-2:123456789012:key/01234567-89ab-cdef-0123-456789abcdef",
+  "alarm_topic_arn": "arn:aws:sns:us-west-2:123456789012:maestro-alarms",
+  "compatibility_instance_ids": ["i-0123456789abcdef0"]
+}
+```
+
+`credential` is also required for cache when `auth_enabled` is true. A role
+profile is either two exact existing ARNs or one migration-owned `managed`
+name pair, never both. `compatibility_instance_ids` are explicit existing
+servers that may temporarily join the shadow target groups; they are not
+adopted as managed nodes.
+
+`load_balancer.api_health_path` and `certbot_health_path` are optional strict
+absolute HTTP paths, 1 through 1024 characters, with no whitespace, control
+characters, scheme, host, query string or fragment. Omitting either preserves
+the managed default, `/api/version`. A brownfield application can instead bind
+target admission to its real readiness contract — for example Maestro uses
+`/api/maestro/node/ready` so the node role, database and cache are checked with
+ASGI/MCP readiness. Every target registered in one target group, including a
+`compatibility_instance_ids` legacy server, must answer that group's selected
+path. Deploy the readiness route and any required compatibility role to legacy
+targets before changing the manifest path; the next `fleet-apply` otherwise
+makes those targets unhealthy while it safely converges the owned group in
+place.
+
+For the database credential, `metadata_key` names the S3 user-metadata field
+whose non-secret value must equal `database.application_user`; discovery
+refuses a missing or different value without reading the object body. For an
+authenticated cache credential the declared metadata key must likewise exist
+with a non-empty proof value. This proves the declared credential identity,
+not connectivity: the node-side `SELECT 1` and `PING` evidence remains a hard
+pre-cutover gate.
+
+### The brownfield safety boundary
+
+`fleet-status` reads and validates the exact account, region, VPC, subnets and
+routes, security groups, Aurora/Valkey shape and endpoints, S3 prefixes and
+versioned object metadata, KMS key, SNS topic, IAM references, AMI, key pair,
+existing declared nodes and migration telemetry. It hashes the redacted result
+as the dependency digest and separately hashes the canonical complete action
+set `(step, verb, target, detail)`. `fleet-apply` performs that preview, asks
+for a typed confirmation, re-observes everything, and refuses before mutation
+if either digest changed. A newly needed but otherwise allowed mutation is
+therefore not smuggled in after confirmation.
+
+ElastiCache exposes the replication-group endpoint and encryption posture on
+the replication group, but exposes its subnet group and VPC security groups on
+the member cache clusters. Brownfield discovery follows every declared member
+cluster and requires each one to match the manifest before the dependency
+digest can pass.
+
+The mutation boundary is a positive allowlist:
+
+| Step | May create or converge | Never does |
+|---|---|---|
+| identity | only declared migration-owned roles/profiles and their exact runtime policy | modify an exact reused profile or adopt a colliding name |
+| nodes | only the exact declared fleet node names, with fleet and application-role tags | stop, replace or modify a live/compatibility instance |
+| balancer | the named shadow NLB, its two target groups/listeners, new NLB addresses, and target registration | deregister a target, attach a preserved address, or modify the live edge |
+| telemetry | exact fleet log groups, retention and two target-health alarms | adopt or overwrite an untagged same-name group/alarm |
+
+Every mutable resource must either be created in this run or re-observed with
+the exact `managed-by`, project, environment, fleet and resource-role tags.
+Same-name collisions fail closed. The SDK client independently rejects every
+mutation method outside the allowlist, and the reviewed preview independently
+checks an exact step/verb/resource-name matrix.
+
+An existing owned node is eligible for target registration only when its
+declared instance type, exact AMI, VPC, subnet, AZ, instance profile, sole
+security group, running state, root-volume size and root-volume encryption all
+match. Hardware or storage drift is blocking; a matching Name tag never makes
+the node usable by itself.
+
+Two preview rows deliberately cover subordinate calls as one logical resource
+convergence: creating an instance profile includes attaching its newly created
+owned role, and creating a log group includes setting its 90-day retention.
+Those subordinate SDK methods have their own positive client allowlist entries
+and run only after the parent create succeeded. They are not hidden mutations
+on a second resource. Tests instrument apply and prove the complete logical
+preview, including NLB attributes, listeners, address mappings and target
+registration, covers every action apply can reach.
+
+The following are forced false: DNS publication and Route53 changes; ACM or
+certificate work; EIP transfer/association of preserved addresses; secrets
+rotation; S3 data-plane publication/copy; database, cache, VPC or security
+group creation/modification; and all teardown. The normal managed DAG and
+commands are not called by fleet mode.
+
+### Node boot and role behavior
+
+Stage 0 downloads `stage1`, the existing live `django.conf`, and the opaque
+node-role document by exact S3 version and verifies each declared SHA-256
+before execution or installation. The live config is installed locally at
+`/opt/api/var/django.conf`; it is never copied or republished in S3. Future
+config-sync writes use the separate migration-owned `storage.fleet_config`
+prefix. The role document is root-owned `0600`, and `MOJO_NODE_ROLE` plus
+`mojo:application-role` carry the opaque application role through boot and
+inventory. Only `serving_target` nodes, plus explicit compatibility instance
+ids, enter the API target group; workers do not.
+
+The managed runtime policy grants unversioned `GetObject` only below declared
+storage prefixes and `GetObjectVersion` only on the exact bootstrap and
+database/cache credential object keys. It has no credential values and no
+permission to republish the existing data plane.
+
+### DNS, TLS and preserved public IP continuity
+
+Fleet preparation is deliberately a shadow operation. It does not change a
+single Route53 record, bring-your-own-DNS record, ACM certificate, dnsman
+object or existing public IP association. Existing sites continue resolving
+to the existing servers throughout preparation. The shadow NLB gets new
+addresses; transferring an existing EIP to it is a later, explicit cutover
+procedure after backup, rehearsal, node readiness and canary evidence.
+
+An existing single preserved EIP can maintain one public-IP continuity path;
+it cannot by itself provide multi-AZ ingress redundancy. Do not represent one
+preserved address as a redundant edge. DNS providers that can point at the NLB
+name may move independently later; providers pinned to an IP need a rehearsed
+EIP handoff. The handoff is a separate command and credential boundary; it
+never changes DNS. `manage_dns` is required in every brownfield manifest and
+must be the literal `false`. Missing is not treated as false.
+
+### Preserved-EIP handoff and exact rollback
+
+Add these fields only after the ordinary shadow fleet is two-AZ, deployed,
+healthy, and serving every Host/SNI canary through its temporary addresses:
+
+```json
+{
+  "manage_dns": false,
+  "nlb_eip_allocations": {
+    "us-west-2a": "eipalloc-0123456789abcdef0"
+  },
+  "eip_handoff_role_arn": "arn:aws:iam::123456789012:role/mojo-eip-handoff",
+  "eip_handoff_canaries": [
+    {
+      "name": "maestro-api-version",
+      "target": "nlb",
+      "protocol": "https",
+      "port": 443,
+      "tls_sni": "maestromojo.com",
+      "host": "maestromojo.com",
+      "path": "/api/version",
+      "expected_status": 200,
+      "expected_marker": "version",
+      "timeout": 5
+    }
+  ]
+}
+```
+
+One or both selected AZs may be mapped. Allocation IDs are unique and every AZ
+must be one of the exact two NLB subnets. At least one `target: nlb` canary is
+mandatory; node-local canaries may be added but cannot replace proof through
+the temporary public edge. One preserved allocation keeps that legacy fixed IP
+but does **not** create two customer-known ingress addresses. Fixed-IP clients
+remain effectively single-ingress/single-AZ until a later edge expansion.
+
+Canary definitions stay in the validated in-memory fleet topology. Preview and
+write-ahead journal documents bind their canonical SHA-256 digest and retain
+only result summaries; they never serialize a raw canary request. Raw requests
+containing authorization, cookies, bearer/token, password, or secret material
+are rejected. Use a public probe or an out-of-band secret resolver instead.
+
+With those fields, `fleet-apply` creates the shadow NLB in the normal two
+subnets using AWS temporary public addresses. It does not allocate, tag,
+attach, or adopt the preserved EIP. Ordinary managed and brownfield clients
+reject `DisassociateAddress`, `ReleaseAddress`, and `SetSubnets`. Brownfield's
+ordinary positive allowlist also rejects `AssociateAddress`; managed
+greenfield stable-node EIPs keep their existing association behavior.
+
+#### IAM uses two principals
+
+Keep this explicit deny on the ordinary provisioning role (scope resources
+more tightly where AWS supports it):
+
+```json
+{
+  "Effect": "Deny",
+  "Action": [
+    "ec2:AssociateAddress",
+    "ec2:DisassociateAddress",
+    "ec2:ReleaseAddress",
+    "elasticloadbalancing:SetSubnets"
+  ],
+  "Resource": "*"
+}
+```
+
+The dedicated role trust policy admits only the operator/release role used for
+cutover. Its policy allows provider reads, `SetSubnets` on the exact shadow
+NLB and declared subnets, `DisassociateAddress`/`AssociateAddress` on the exact
+elastic-IP and original network-interface ARNs, and `s3:GetObject`/
+`s3:PutObject` plus bucket-versioning/encryption reads for the exact
+`storage.fleet_config` handoff prefix. The EC2 statements also bind the
+`ec2:AllocationId`, `ec2:NetworkInterfaceID`, and `ec2:Region` condition keys.
+The command independently binds the association ID, private IP, and complete
+request shape because those values are not all expressible as IAM conditions.
+The Python guard is defense in depth; it is not a substitute for this IAM
+boundary. Do **not** grant
+`ec2:ReleaseAddress`, Route 53, ACM, ELB deletion, EC2 termination, tagging,
+address allocation, S3 delete, or general provisioning permissions.
+
+Representative dedicated-role policy shape (replace the placeholders with the
+manifest's exact values):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Sid": "ReadExactHandoffEvidence", "Effect": "Allow", "Action": ["sts:GetCallerIdentity", "ec2:DescribeAddresses", "ec2:DescribeInstances", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSubnets", "elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeLoadBalancerAttributes", "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeTags", "elasticloadbalancing:DescribeTargetGroups", "elasticloadbalancing:DescribeTargetHealth"], "Resource": "*"},
+    {"Sid": "ReadJournalBucketControls", "Effect": "Allow", "Action": ["s3:GetBucketVersioning", "s3:GetEncryptionConfiguration"], "Resource": "arn:aws:s3:::<fleet-config-bucket>"},
+    {"Sid": "CASExactHandoffJournalPrefix", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"], "Resource": "arn:aws:s3:::<fleet-config-bucket>/<exact-handoff-prefix>/*"},
+    {"Sid": "SetExactShadowNLBSubnets", "Effect": "Allow", "Action": "elasticloadbalancing:SetSubnets", "Resource": "<exact-nlb-arn>", "Condition": {"ForAllValues:StringEqualsIgnoreCase": {"elasticloadbalancing:Subnet": ["<exact-subnet-a>", "<exact-subnet-b>"]}}},
+    {"Sid": "DisassociateExactSourceA", "Effect": "Allow", "Action": "ec2:DisassociateAddress", "Resource": ["arn:aws:ec2:<region>:<account>:elastic-ip/<exact-allocation-a>", "arn:aws:ec2:<region>:<account>:network-interface/<exact-source-eni-a>"], "Condition": {"StringEquals": {"ec2:AllocationId": "<exact-allocation-a>", "ec2:NetworkInterfaceID": "<exact-source-eni-a>", "ec2:Region": "<region>"}}},
+    {"Sid": "RestoreExactSourceA", "Effect": "Allow", "Action": "ec2:AssociateAddress", "Resource": ["arn:aws:ec2:<region>:<account>:elastic-ip/<exact-allocation-a>", "arn:aws:ec2:<region>:<account>:network-interface/<exact-source-eni-a>"], "Condition": {"StringEquals": {"ec2:AllocationId": "<exact-allocation-a>", "ec2:NetworkInterfaceID": "<exact-source-eni-a>", "ec2:Region": "<region>"}}}
+  ]
+}
+```
+
+Repeat the two EC2 statements for each declared source EIP/ENI pair. Current
+AWS IAM supports both resource types and those condition keys for both address
+actions, but has no condition for `AssociationId` or `PrivateIpAddress`;
+therefore the runtime exact-request guard remains mandatory. The
+`ForAllValues` subnet condition rejects any subnet outside the declared pair
+while still allowing the intentional one-subnet removal transition. Generate
+the concrete policy from the immutable preview plan with
+`handoff.cutover_role_policy(topology, plan)` and review it before creating the
+role; this command does not create or modify IAM.
+
+The command assumes that exact role a second time even when `--profile` or
+`--role-arn` selects an ordinary source credential. Its refreshable session is
+checked with STS for account, region and role before every live/recovery path.
+The cutover client cannot construct a Route 53 client.
+
+#### Preview, rehearsal, handoff, resume and rollback
+
+```bash
+python3 -m mojo.deploy.provision eip-handoff --fleet shadow --mode preview
+
+python3 -m mojo.deploy.provision eip-handoff --fleet shadow --mode rehearse \
+  --plan-digest <digest> --confirm '<printed REHEARSE phrase>'
+
+python3 -m mojo.deploy.provision eip-handoff --fleet shadow --mode apply \
+  --plan-digest <digest> --confirm '<printed HANDOFF phrase>'
+
+python3 -m mojo.deploy.provision eip-handoff --fleet shadow --mode resume \
+  --operation-id <uuid> --plan-digest <digest> \
+  --confirm 'RESUME <uuid> <digest>'
+
+python3 -m mojo.deploy.provision eip-rollback --fleet shadow --mode preview \
+  --operation-id <uuid> --plan-digest <digest>
+
+python3 -m mojo.deploy.provision eip-rollback --fleet shadow --mode apply \
+  --operation-id <uuid> --plan-digest <digest> \
+  --confirm 'ROLLBACK <uuid> <digest>'
+```
+
+`--dry-run` forces preview. Handoff/rollback have no `--yes`, `--nlb`, or
+ordinary apply override. The 0600 plan binds account, region, role, manifest,
+allocation/public IP/tags, original instance/ENI/private IP/subnet/AZ/VPC,
+target NLB ARN, complete map and explicit map digests, listeners, target health, canary summaries,
+exact NLB/target-group ownership-tag summaries, journal coordinates,
+disruption and exact inverse. Every non-preview command
+requires its exact digest and a distinct exact phrase.
+
+A live handoff is authorized only by a terminal `rehearsed` lock for the exact
+same plan digest. A failed rehearsal never authorizes handoff. Rehearsal may be
+retried under a new operation ID and a freshly generated plan; only after that
+retry reaches `rehearsed` may the same digest enter live handoff. This also
+terminalizes caught local/S3 rehearsal failures as `rehearsal_failed`, so a
+fixed rehearsal can retry without leaving the fleet locked.
+
+The remote fleet-wide lock is acquired before any local write, so a losing
+operator cannot overwrite active write-ahead intent. Each operation has its
+own mode-`0600` local journal under `var/provision/eip-handoffs/`. Before a
+provider mutation, every transition is flushed/fsynced locally and then
+conditionally written under the versioned/encrypted fleet S3 prefix. The one
+stable project/environment/fleet lock uses `If-None-Match: *`; it deliberately
+does not depend on the allocation set, so overlapping `{A}` and `{A,B}` runs
+cannot race. A terminal lock is reassigned only with `If-Match`, a new operation
+ID, and proof that the new journal key is absent. The active lock contains the
+full recovery seed, so a crash after lock creation but before local/remote
+journal creation on a live handoff remains resumable. Active locks are never
+silently stolen, including an active rehearsal after a hard process death; that
+case requires explicit audited operator recovery. No lock or journal object is deleted;
+terminal state is another conditional version.
+
+Every `SetSubnets` call re-reads and compares the complete mapping. It retains
+the untouched AZ, removes only the selected AZ, waits for removal, re-checks
+the source association, disassociates it, waits until free, and adds the same
+subnet with the preserved allocation. The transferred-IP canary must pass
+before another allocation begins. Resume accepts only the two journaled sides
+of a write-ahead transition and the handoff-direction lock. Unknown association
+or map drift stops without guessing.
+
+Rollback works from the same active partial operation or its completed lock.
+It CAS-switches the lock direction, removes the preserved target mapping,
+waits for the allocation to become free, associates the journaled ENI/private
+IP with `AllowReassociation=False`, then adds the same NLB subnet without an
+allocation ID so AWS supplies a temporary address. A failed replacement target
+or canary never vetoes rollback; its gates are identity, lock/journal direction,
+exact map classification and original-source restorability.
+
+Removing an NLB subnet terminates that AZ's active connections and AWS says it
+can take up to three minutes. Clients using the transferred IP can briefly fail
+between source disassociation and NLB association. Every partial failure prints
+both journal coordinates. Never manually remap or release the EIP while an
+operation is active.
+
+### Failure and recovery
+
+- A manifest, dependency, ownership, preview-action or digest failure mutates
+  nothing. Correct the declaration or restore the exact dependency and rerun
+  `fleet-status`.
+- A partial preparation run is resumable. Re-observation recognizes only
+  exactly tagged resources, and the converge is idempotent.
+- A node that boots without its pinned config/artifact digest matching never
+  reaches stage 1. Inspect `/var/log/mojo-stage0.log` and replace the bad pin;
+  do not bless different bytes under the old declaration.
+- An unhealthy target is `MANUAL` and blocks cutover evidence; the command
+  never deregisters or replaces it.
+- There is no rollback-by-delete. Before public cutover, recovery is simply to
+  leave production DNS/EIPs on the existing servers. After a separately run
+  handoff, its runbook must be able to reattach the address or restore DNS to
+  the recorded baseline.
+
+Before any external cutover, retain the JSON `fleet-status`, manifest and
+dependency digests, instance/AZ/profile inventory, cloud-init/stage logs,
+redacted database `SELECT 1` and cache `PING` results from every role, target
+health over the full canary window, DNS answers and TTLs, certificate/SAN
+evidence, current EIP allocation/association and network-border-group details,
+and a tested reverse procedure. Fleet preparation alone is not cutover
+authorization.
+
 ## It takes about three `apply` runs, and that is the design
 
 Aurora and ElastiCache take five to fifteen minutes to become usable, and this
@@ -492,20 +928,25 @@ step 7. That skip — not the staging dry run — is what makes a re-run safe.
 
 ### Two things that look like over-engineering and are not
 
-Both come from the same fact: **`ec2_deploy.sh` does an unconditional `cp -f`
-of the shipped nginx configs on every run.**
+The repository still owns the vhost on every run. Released framework
+convergence preserves only a rigorously validated existing Certbot certificate
+pair; it does not retain certbot-added includes, redirects, comments, routes,
+or other installed-node edits.
 
 **Step 1 is unconditional.** Guarding it behind "only rewrite if it still says
-`yourdomain.com`" looks like caution — it is not. Any operator edit to
-`app.conf` was already destroyed by that `cp -f` one step earlier, so the
-guard protects nothing; and on a resumed node the placeholder is always back,
-so the guard would fire exactly when it should not.
+`yourdomain.com`" looks like caution — it is not. Repository convergence owns
+every non-certificate directive, so an installed-node edit to `server_name`
+is not durable. The only retained installed values are a proven certificate
+pair whose normalized names already match the repository. Step 1 therefore
+remains the idempotent authority for the configured apex.
 
-**The skip branch still rewrites the certificate paths.** That same `cp -f`
-reset `ssl_certificate` and `ssl_certificate_key` to the snakeoil placeholder.
-Skipping certbot without re-pointing them leaves a resumed node serving a
-**self-signed certificate with a perfectly good Let's Encrypt one sitting
-unused on disk** — which reads as a certificate failure and is not one.
+**The skip branch still rewrites the certificate paths.** It is the final
+certificate convergence step and remains necessary for nodes created by an
+older framework, manually repaired nodes, and interrupted runs. With current
+frameworks an ordinary repository deploy keeps a proven matching lineage, so
+the project can safely ship a snakeoil first-boot placeholder without later
+replacing the issued certificate. Anything ambiguous or unsafe is refused
+instead of silently downgrading to that placeholder.
 
 And the skip check is expiry **and** a SAN match, not expiry alone: an
 operator who changed `apex_domain` between runs holds a completely unexpired

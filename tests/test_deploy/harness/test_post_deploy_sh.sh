@@ -5,8 +5,8 @@
 #
 # Runs the REAL packaged script against a throwaway PROJ_PATH with the
 # NGINX_ETC / SYSTEMD_ETC / CRON_ETC seams pointed into the temp dir and every
-# external command stubbed on PATH — EXCEPT `python3 -m mojo.deploy*`, which
-# the python3 stub passes through to the real interpreter with
+# external command stubbed on PATH — EXCEPT `python3 -m mojo.deploy*` and the
+# embedded TLS-vhost validator, which the python3 stub passes through with
 # PYTHONPATH=$REPO so the render step runs for real (a control file forces it
 # to fail instead). Packaged deltas under test: templates render into
 # var/deploy/ and install from there fully substituted, the
@@ -150,7 +150,8 @@ PYEOF
 }
 
 setup_env() {
-    rm -rf "$PROJ" "$STUB" "$CTL" "$TMP/nginx_etc" "$TMP/systemd_etc" "$TMP/cron_etc" \
+    rm -rf "$PROJ" "$STUB" "$CTL" "$TMP/nginx_etc" "$TMP/letsencrypt" \
+           "$TMP/systemd_etc" "$TMP/cron_etc" \
            "$TMP/logrotate_etc" "$TMP/mojosec_etc" "$TMP/mojosec_lib" "$TMP/journal"
     mkdir -p "$PROJ/var/logs" "$PROJ/bin" "$PROJ/aws/nginx/systemd" "$PROJ/aws/nginx/sec.d" \
              "$PROJ/aws/nginx/conf.d" "$PROJ/aws/cron.d" \
@@ -265,6 +266,9 @@ EOF
 #!/bin/bash
 echo "CMD python3 \$*" >> "\$CALLLOG"
 case "\$*" in
+    *"- __mojo_tls_vhost__ "*)
+        exec env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$REPO" "$REAL_PYTHON3" "\$@"
+        ;;
     *"sys.version_info >= (3,11)"*)
         [ -f "\$STUBCTL/mojosec.version.exit" ] && exit "\$(cat "\$STUBCTL/mojosec.version.exit")"
         exit 0
@@ -344,10 +348,228 @@ run_post_deploy_env() { # VAR=val ... -- args...
 
 # ── tests ────────────────────────────────────────────────────────────────────
 
+setup_tls_case() {
+    setup_env
+    echo 9.9.9 > "$CTL/mojo.version"
+    TLS_LIVE="$TMP/letsencrypt/live/app.example.test"
+    TLS_ARCHIVE="$TMP/letsencrypt/archive/app.example.test"
+    mkdir -p "$TLS_LIVE" "$TLS_ARCHIVE"
+    printf 'certificate\n' > "$TLS_ARCHIVE/fullchain7.pem"
+    printf 'private-key\n' > "$TLS_ARCHIVE/privkey7.pem"
+    chmod 0644 "$TLS_ARCHIVE/fullchain7.pem"
+    chmod 0600 "$TLS_ARCHIVE/privkey7.pem"
+    ln -s ../../archive/app.example.test/fullchain7.pem "$TLS_LIVE/fullchain.pem"
+    ln -s ../../archive/app.example.test/privkey7.pem "$TLS_LIVE/privkey.pem"
+    cat > "$PROJ/aws/nginx/conf.d/app.conf" <<EOF
+server {
+    listen 443 ssl;
+    server_name app.example.test;
+    ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
+    ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
+    add_header X-Repository yes;
+}
+EOF
+}
+
+write_installed_tls() { # server_name cert-directive key-directive [extra]
+    local host="$1" cert="$2" key="$3" extra="${4:-}"
+    cat > "$TMP/nginx_etc/conf.d/app.conf" <<EOF
+server {
+    listen 443 ssl;
+    server_name $host;
+$cert
+$key
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    location /old-operator-route { return 418; }
+    # installed-only comment
+}
+$extra
+EOF
+}
+
+assert_repo_tls() {
+    assert_has "$TMP/nginx_etc/conf.d/app.conf" "ssl-cert-snakeoil.pem" "$1 uses the repository certificate"
+    assert_has "$TMP/nginx_etc/conf.d/app.conf" "ssl-cert-snakeoil.key" "$1 uses the repository key"
+}
+
+assert_tls_refused() {
+    local label="$1" rc
+    run_post_deploy > "$OUT" 2>&1
+    rc=$?
+    if [ "$rc" -ne 0 ]; then ok "$label is refused"; else fail "$label deployed"; fi
+    assert_lacks "$TMP/nginx_etc/conf.d/app.conf" "ssl-cert-snakeoil" \
+        "$label leaves the installed vhost untouched"
+    assert_has "$OUT" "TLS vhost convergence refused unsafe or changed state" \
+        "$label reports one bounded refusal"
+    assert_lacks "$OUT" "$TLS_LIVE" "$label does not log certificate paths"
+}
+
+test_tls_lineage_preservation() {
+    echo "post_deploy.sh: repository vhost keeps only a proven TLS lineage"
+
+    setup_tls_case
+    run_post_deploy > "$OUT" 2>&1
+    assert_eq "$?" 0 "a fresh placeholder vhost deploys"
+    assert_repo_tls "a fresh vhost"
+
+    setup_tls_case
+    write_installed_tls app.example.test \
+        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
+        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
+
+    run_post_deploy > "$OUT" 2>&1
+    local rc=$?
+    [ "$rc" -eq 0 ] || sed -n '1,20p' "$OUT"
+    assert_eq "$rc" 0 "a valid installed lineage deploys"
+    assert_has "$TMP/nginx_etc/conf.d/app.conf" "$TLS_LIVE/fullchain.pem" \
+        "the proven fullchain lineage survives repository convergence"
+    assert_has "$TMP/nginx_etc/conf.d/app.conf" "$TLS_LIVE/privkey.pem" \
+        "the proven private-key lineage survives repository convergence"
+    assert_has "$TMP/nginx_etc/conf.d/app.conf" "X-Repository yes" \
+        "the repository remains authoritative for non-certificate directives"
+    assert_lacks "$TMP/nginx_etc/conf.d/app.conf" "old-operator-route" \
+        "an installed route is not carried into repository bytes"
+    assert_lacks "$TMP/nginx_etc/conf.d/app.conf" "options-ssl-nginx.conf" \
+        "an installed Certbot option include is not carried forward"
+    assert_lacks "$TMP/nginx_etc/conf.d/app.conf" "installed-only comment" \
+        "an installed comment is not carried forward"
+
+    cp "$TMP/nginx_etc/conf.d/app.conf" "$TMP/first-app.conf"
+    run_post_deploy > "$OUT" 2>&1
+    rc=$?
+    [ "$rc" -eq 0 ] || sed -n '1,20p' "$OUT"
+    assert_eq "$rc" 0 "a repeated valid-lineage deploy succeeds"
+    if cmp -s "$TMP/first-app.conf" "$TMP/nginx_etc/conf.d/app.conf"; then
+        ok "the TLS-lineage overlay is byte-idempotent"
+    else
+        fail "the TLS-lineage overlay changed bytes on its second run"
+    fi
+
+    setup_tls_case
+    write_installed_tls app.example.test \
+        "    ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;" \
+        "    ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;"
+    run_post_deploy > "$OUT" 2>&1
+    assert_eq "$?" 0 "an unambiguous non-Certbot pair takes repository bytes"
+    assert_repo_tls "an unambiguous non-Certbot pair"
+    assert_lacks "$TMP/nginx_etc/conf.d/app.conf" "old-operator-route" \
+        "a non-Certbot vhost retains no installed routing"
+
+    setup_tls_case
+    write_installed_tls renamed.example.test \
+        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
+        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
+    assert_tls_refused "a renamed host"
+
+    setup_tls_case
+    local duplicate_cert
+    duplicate_cert="$(printf '    ssl_certificate %s/fullchain.pem;\n    ssl_certificate %s/fullchain.pem;' \
+        "$TLS_LIVE" "$TLS_LIVE")"
+    write_installed_tls app.example.test \
+        "$duplicate_cert" \
+        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
+    assert_tls_refused "duplicate certificate directives"
+
+    setup_tls_case
+    write_installed_tls app.example.test \
+        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
+        "    # missing private key"
+    assert_tls_refused "an incomplete certificate pair"
+
+    setup_tls_case
+    write_installed_tls app.example.test \
+        "    ssl_certificate $TLS_LIVE/../other/fullchain.pem;" \
+        "    ssl_certificate_key $TLS_LIVE/../other/privkey.pem;"
+    assert_tls_refused "a traversal-shaped live path"
+
+    setup_tls_case
+    write_installed_tls app.example.test \
+        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
+        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
+    rm -f "$TLS_ARCHIVE/privkey7.pem"
+    assert_tls_refused "a missing archive target"
+
+    setup_tls_case
+    write_installed_tls app.example.test \
+        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
+        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
+    chmod 0640 "$TLS_ARCHIVE/privkey7.pem"
+    assert_tls_refused "a group-readable private key"
+
+    setup_tls_case
+    write_installed_tls app.example.test \
+        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
+        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
+    chmod 0664 "$TMP/nginx_etc/conf.d/app.conf"
+    assert_tls_refused "unsafe installed-vhost mode"
+
+    setup_tls_case
+    write_installed_tls app.example.test \
+        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
+        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
+    chmod 0775 "$TMP/nginx_etc/conf.d"
+    assert_tls_refused "a group-writable destination directory"
+
+    setup_tls_case
+    write_installed_tls app.example.test \
+        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
+        "    ssl_certificate_key $TLS_LIVE/privkey.pem;" \
+        'server { listen 443 ssl; server_name second.example.test; ssl_certificate /tmp/a; ssl_certificate_key /tmp/b; }'
+    assert_tls_refused "multiple TLS servers"
+
+    setup_tls_case
+    printf 'do-not-overwrite\n' > "$TMP/vhost-symlink-target"
+    ln -s "$TMP/vhost-symlink-target" "$TMP/nginx_etc/conf.d/app.conf"
+    run_post_deploy > "$OUT" 2>&1
+    rc=$?
+    if [ "$rc" -ne 0 ]; then ok "an installed-vhost symlink is refused"; else fail "an installed-vhost symlink deployed"; fi
+    assert_has "$TMP/vhost-symlink-target" "do-not-overwrite" \
+        "the symlink target is never followed or overwritten"
+    if [ -L "$TMP/nginx_etc/conf.d/app.conf" ]; then ok "the refused destination remains a symlink"; else fail "the refused destination symlink was replaced"; fi
+
+    setup_tls_case
+    write_installed_tls app.example.test \
+        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
+        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
+    "$REAL_PYTHON3" - "$TMP/nginx_etc/conf.d/app.conf" \
+        "$CTL/tls-race-ready" "$CTL/tls-race-stop" <<'PY' &
+import os
+import sys
+
+path, ready, stop = sys.argv[1:]
+os.utime(path, None)
+open(ready, "wb").close()
+while not os.path.exists(stop):
+    os.utime(path, None)
+PY
+    local race_pid=$!
+    while [ ! -e "$CTL/tls-race-ready" ]; do :; done
+    run_post_deploy > "$OUT" 2>&1
+    rc=$?
+    touch "$CTL/tls-race-stop"
+    wait "$race_pid"
+    if [ "$rc" -ne 0 ]; then ok "a changed installed snapshot is refused"; else fail "a racing installed snapshot deployed"; fi
+    assert_has "$OUT" "TLS vhost convergence refused unsafe or changed state" \
+        "snapshot refusal is bounded and does not disclose TLS paths"
+    assert_lacks "$OUT" "$TLS_LIVE" "snapshot refusal does not log certificate paths"
+}
+
+if [ "${POST_DEPLOY_TLS_ONLY:-0}" = "1" ]; then
+    test_tls_lineage_preservation
+    echo
+    echo "test_post_deploy_sh: $PASS passed, $FAIL failed"
+    [ "$FAIL" -eq 0 ]
+    exit $?
+fi
+
+test_tls_lineage_preservation
+
 echo "post_deploy.sh: --framework converges the pin; bare resolves latest; deps come FIRST"
 setup_env
-run_post_deploy --framework 9.9.9 >/dev/null 2>&1
-assert_eq "$?" 0 "--framework run exits 0"
+run_post_deploy --framework 9.9.9 > "$OUT" 2>&1
+rc=$?
+[ "$rc" -eq 0 ] || sed -n '1,20p' "$OUT"
+assert_eq "$rc" 0 "--framework run exits 0"
 assert_in_log "CMD pip install -r $PROJ/requirements.txt" \
     "requirements install uses an absolute path that survives the trusted helper cwd"
 assert_in_log "CMD curl .*https://pypi.org/pypi/django-mojo/9.9.9/json" \

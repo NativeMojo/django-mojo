@@ -1177,9 +1177,12 @@ def capture_publishes(match, side_effect=None, result=None):
     test modules run as parallel threads: a foreign module's REAL publish that
     lands inside the patched window is swallowed, its job ids come back fake,
     and its tests fail with nothing on the queue (the 15_deploy_orchestrate /
-    test_run_jobs_helper flake). This wrapper keeps the recording semantics
+    test_run_jobs_helper flake). This capture keeps the recording semantics
     but only for calls the predicate claims; everything else goes through to
-    the real publish untouched.
+    the real publish untouched. It registers through jobs' _capture_router
+    hook (item #2558) rather than rebinding the module attribute, so
+    import-time binders are covered and any number of concurrent captures
+    compose without a wrap/restore race.
 
         with th.capture_publishes(lambda c: c["func"] == MY_JOB) as calls:
             service.do_thing()
@@ -1197,28 +1200,46 @@ def capture_publishes(match, side_effect=None, result=None):
 
     Yields the list of captured call dicts. Captured calls are NOT queued.
     """
-    from unittest import mock
-
     import mojo.apps.jobs as jobs_module
 
-    real_publish = jobs_module.publish
     captured = []
-
-    def capturing_publish(*args, **kwargs):
-        call = dict(kwargs)
-        if args:
-            call.setdefault("func", args[0])
-            if len(args) > 1:
-                call.setdefault("payload", args[1])
-        if not match(call):
-            return real_publish(*args, **kwargs)
-        captured.append(call)
-        if side_effect is not None:
-            raise side_effect
-        return result if result is not None else f"fake-job-{len(captured)}"
-
-    with mock.patch.object(jobs_module, "publish", capturing_publish):
+    entry = {"match": match, "side_effect": side_effect,
+             "result": result, "captured": captured}
+    with _PUBLISH_CAPTURE_LOCK:
+        _PUBLISH_CAPTURES.append(entry)
+        jobs_module._capture_router = _publish_capture_router
+    try:
         yield captured
+    finally:
+        with _PUBLISH_CAPTURE_LOCK:
+            _PUBLISH_CAPTURES.remove(entry)
+            if not _PUBLISH_CAPTURES:
+                jobs_module._capture_router = None
+
+
+_PUBLISH_CAPTURES = []
+_PUBLISH_CAPTURE_LOCK = threading.Lock()
+
+
+def _publish_capture_router(call):
+    """jobs.publish consults this via its _capture_router hook (item #2558).
+
+    Registry-based instead of wrap-based: rebinding jobs.publish missed
+    import-time binders and two overlapping wrap/restore pairs could strand a
+    stale wrapper. First matching capture wins; an unmatched call returns
+    (False, None) and publish proceeds for real.
+    """
+    with _PUBLISH_CAPTURE_LOCK:
+        entries = list(_PUBLISH_CAPTURES)
+    for entry in entries:
+        if entry["match"](call):
+            entry["captured"].append(call)
+            if entry["side_effect"] is not None:
+                raise entry["side_effect"]
+            if entry["result"] is not None:
+                return True, entry["result"]
+            return True, f"fake-job-{len(entry['captured'])}"
+    return False, None
 
 
 def run_jobs(channel=None, max_jobs=100, include_scheduled=True):

@@ -56,9 +56,9 @@ def _run(argv, session, config_body="AWS_REGION=us-east-1\n"):
     try:
         path = _config_file(root, config_body)
         buffer = io.StringIO()
-        with mock.patch.object(cs, "build_session", return_value=session):
-            with redirect_stdout(buffer):
-                code = cs.main(["--config", path, "--json"] + argv)
+        with redirect_stdout(buffer):
+            code = cs.main(["--config", path, "--json"] + argv,
+                           session_factory=lambda config, profile: session)
         return code, json.loads(buffer.getvalue())
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -601,12 +601,13 @@ def test_an_unknown_section_is_rejected_before_any_aws_call(opts):
     root = _tempdir()
     try:
         path = _config_file(root)
-        with mock.patch.object(cs, "build_session") as build:
-            with mock.patch("boto3.Session") as session_cls:
-                with th.assert_raises(SystemExit):
-                    with redirect_stdout(io.StringIO()):
-                        cs.main(["--config", path, "--section", "nope"])
-        th.assert_eq(build.call_count, 0,
+        factory = mock.Mock()
+        with mock.patch("boto3.Session") as session_cls:
+            with th.assert_raises(SystemExit):
+                with redirect_stdout(io.StringIO()):
+                    cs.main(["--config", path, "--section", "nope"],
+                            session_factory=factory)
+        th.assert_eq(factory.call_count, 0,
                      "a typo in --section must cost a usage message, not a "
                      "round of AWS API calls")
         th.assert_eq(session_cls.call_count, 0,

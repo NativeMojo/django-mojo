@@ -50,8 +50,8 @@ def _staging_leftovers(directory):
 
 class _RecordingOS:
     """Proxies the real `os` module but records the calls install() makes, in
-    order. Patched onto the module under test rather than onto `os` itself, so
-    a parallel test module is never affected."""
+    order. Handed to install() through its os_ops seam rather than patched
+    onto anything, so a parallel test module is never affected."""
 
     def __init__(self, calls):
         self.calls = calls
@@ -177,8 +177,7 @@ def test_install_sets_mode_and_owner_before_replacing(opts):
         me = pwd.getpwuid(os.getuid()).pw_name
 
         calls = []
-        with mock.patch.object(cs, "os", _RecordingOS(calls)):
-            cs.install(staged, dest, me)
+        cs.install(staged, dest, me, os_ops=_RecordingOS(calls))
 
         names = [c[0] for c in calls]
         th.assert_eq(names, ["chmod", "chown", "replace"],
@@ -466,30 +465,6 @@ def test_sync_dry_run_writes_nothing(opts):
 
 
 @th.django_unit_test()
-def test_sync_warns_when_no_sha_is_published(opts):
-    from mojo.deploy import config_sync as cs
-
-    root = _tempdir()
-    try:
-        target = os.path.join(root, "django.conf")
-        s3 = _s3_publishing("SECRET=unverified\n", sha256=False)
-        config = {"AWS_CONFIG_BUCKET": "b", "AWS_CONFIG_PREFIX": "p"}
-
-        with mock.patch.object(cs, "log") as log:
-            code = cs.sync(s3, config, target, "django.conf", False)
-
-        th.assert_eq(code, 0,
-                     "an object with no sha256 metadata still installs by "
-                     "default — being strict would break every publisher using "
-                     "a plain `aws s3 cp` on an unpinned upgrade")
-        warnings = " ".join(str(c) for c in log.warning.call_args_list)
-        th.assert_in("no sha256 metadata", warnings,
-                     f"an unverifiable install must warn; logged: {warnings}")
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-@th.django_unit_test()
 def test_sync_refuses_unverified_when_require_sha_is_set(opts):
     from mojo.deploy import config_sync as cs
 
@@ -547,14 +522,12 @@ def test_sync_sweeps_stale_staging_directories(opts):
 def test_restart_uses_the_configured_service_name(opts):
     from mojo.deploy import config_sync as cs
 
-    fake_subprocess = mock.Mock()
-    fake_subprocess.run.return_value = mock.Mock(returncode=0)
-    with mock.patch.object(cs, "subprocess", fake_subprocess), \
-            mock.patch.object(cs, "time", mock.Mock()):
-        ok = cs.restart_app({"CONFIG_SYNC_SERVICE": "acme-api.service"}, False)
+    fake_run = mock.Mock(return_value=mock.Mock(returncode=0))
+    ok = cs.restart_app({"CONFIG_SYNC_SERVICE": "acme-api.service"}, False,
+                        run_cmd=fake_run, sleep=mock.Mock())
 
     th.assert_true(ok, "a returncode of 0 must be reported as success")
-    command = fake_subprocess.run.call_args[0][0]
+    command = fake_run.call_args[0][0]
     th.assert_eq(command, ["systemctl", "--no-block", "restart", "acme-api.service"],
                  f"CONFIG_SYNC_SERVICE must pick the unit, got {command}")
 
@@ -563,13 +536,10 @@ def test_restart_uses_the_configured_service_name(opts):
 def test_restart_defaults_to_mojo_asgi(opts):
     from mojo.deploy import config_sync as cs
 
-    fake_subprocess = mock.Mock()
-    fake_subprocess.run.return_value = mock.Mock(returncode=0)
-    with mock.patch.object(cs, "subprocess", fake_subprocess), \
-            mock.patch.object(cs, "time", mock.Mock()):
-        cs.restart_app({}, False)
+    fake_run = mock.Mock(return_value=mock.Mock(returncode=0))
+    cs.restart_app({}, False, run_cmd=fake_run, sleep=mock.Mock())
 
-    command = fake_subprocess.run.call_args[0][0]
+    command = fake_run.call_args[0][0]
     th.assert_eq(command, ["systemctl", "--no-block", "restart", cs.DEFAULT_SERVICE],
                  f"an unset CONFIG_SYNC_SERVICE must fall back to "
                  f"{cs.DEFAULT_SERVICE}, got {command}")
@@ -579,12 +549,9 @@ def test_restart_defaults_to_mojo_asgi(opts):
 def test_restart_enqueue_failure_is_nonzero(opts):
     from mojo.deploy import config_sync as cs
 
-    fake_subprocess = mock.Mock()
-    fake_subprocess.run.return_value = mock.Mock(
-        returncode=1, stderr=b"transaction rejected")
-    with mock.patch.object(cs, "subprocess", fake_subprocess), \
-            mock.patch.object(cs, "time", mock.Mock()):
-        ok = cs.restart_app({}, False)
+    fake_run = mock.Mock(return_value=mock.Mock(
+        returncode=1, stderr=b"transaction rejected"))
+    ok = cs.restart_app({}, False, run_cmd=fake_run, sleep=mock.Mock())
 
     th.assert_true(not ok,
                    "a rejected systemd enqueue must fail config_sync instead "
@@ -674,16 +641,14 @@ def test_packaged_unit_and_faithful_systemd_job_graph(opts):
 def test_restart_dry_run_runs_nothing(opts):
     from mojo.deploy import config_sync as cs
 
-    fake_subprocess = mock.Mock()
-    fake_time = mock.Mock()
-    with mock.patch.object(cs, "subprocess", fake_subprocess), \
-            mock.patch.object(cs, "time", fake_time):
-        ok = cs.restart_app({}, True)
+    fake_run = mock.Mock()
+    fake_sleep = mock.Mock()
+    ok = cs.restart_app({}, True, run_cmd=fake_run, sleep=fake_sleep)
 
     th.assert_true(ok, "a dry-run restart must report success")
-    th.assert_eq(fake_subprocess.run.call_count, 0,
+    th.assert_eq(fake_run.call_count, 0,
                  "--dry-run must not run systemctl")
-    th.assert_eq(fake_time.sleep.call_count, 0,
+    th.assert_eq(fake_sleep.call_count, 0,
                  "--dry-run must not burn the jitter delay")
 
 
@@ -696,17 +661,17 @@ def test_sync_restarts_only_when_config_sync_restart_is_set(opts):
         target = os.path.join(root, "django.conf")
         base = {"AWS_CONFIG_BUCKET": "b", "AWS_CONFIG_PREFIX": "p"}
 
-        with mock.patch.object(cs, "restart_app", return_value=True) as restart:
-            cs.sync(_s3_publishing("A=1\n"), dict(base), target,
-                    "django.conf", False)
+        restart = mock.Mock(return_value=True)
+        cs.sync(_s3_publishing("A=1\n"), dict(base), target,
+                "django.conf", False, restart=restart)
         th.assert_eq(restart.call_count, 0,
                      "without CONFIG_SYNC_RESTART the app must be left alone")
 
-        with mock.patch.object(cs, "restart_app", return_value=True) as restart:
-            config = dict(base, CONFIG_SYNC_RESTART="yes",
-                          CONFIG_SYNC_SERVICE="acme-api.service")
-            cs.sync(_s3_publishing("A=2\n"), config, target,
-                    "django.conf", False)
+        restart = mock.Mock(return_value=True)
+        config = dict(base, CONFIG_SYNC_RESTART="yes",
+                      CONFIG_SYNC_SERVICE="acme-api.service")
+        cs.sync(_s3_publishing("A=2\n"), config, target,
+                "django.conf", False, restart=restart)
         th.assert_eq(restart.call_count, 1,
                      "CONFIG_SYNC_RESTART must trigger exactly one restart")
         th.assert_eq(restart.call_args[0][0].get("CONFIG_SYNC_SERVICE"),

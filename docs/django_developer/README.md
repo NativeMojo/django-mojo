@@ -12,7 +12,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | [core/db_reader.md](core/db_reader.md) | Optional database-reader routing, request pinning, and explicit primary/reader scopes |
 | [helpers/](helpers/README.md) | logit, dates, settings, settings reference keys, crypto, request, response, redis, and other utilities |
 | [deploy/](deploy/README.md) | Node deployment tooling that runs before Django settings exist — S3 config sync, the read-only AWS account audit, foreground job engine control (`jobman`), and node convergence (`node_setup`) |
-| [deploy/provision.md](deploy/provision.md) | Account provisioning — eight prompts take an empty AWS account to a running environment, with a committed environment declaration, a priced preview and an idempotent converge that never deletes |
+| [deploy/provision.md](deploy/provision.md) | AWS provisioning — managed greenfield environments plus a separate exact-reference brownfield fleet mode that prepares only tagged nodes, a shadow NLB and telemetry without touching the existing data plane, DNS, certificates or preserved IPs |
 
 ## Built-in Apps
 

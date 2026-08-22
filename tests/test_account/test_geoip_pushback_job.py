@@ -2,6 +2,10 @@
 
 Verifies HTTP POST body shape, retry vs no-retry semantics, and graceful
 handling of missing config.
+
+Parallel-safe (item #2558): upstream URL and api key are injected through the
+keyword-only base_url= / api_key= seams on push_abuse_signals instead of
+mock.patch on the shared mojo.helpers.geoip.config module.
 """
 from unittest import mock
 from testit import helpers as th
@@ -92,11 +96,9 @@ def test_push_unconfigured_files_one_suppressed_incident(opts):
     _clear_push_incident(category, ["geoip:abuse_push_alerted:unconfigured"])
 
     job = _FakeJob({"ip": "203.0.113.60", "threat_level": "high"})
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", None), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="topsecretkey"), \
-         mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
-        asyncjobs.push_abuse_signals(job)
-        asyncjobs.push_abuse_signals(job)
+    with mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
+        asyncjobs.push_abuse_signals(job, base_url=None, api_key="topsecretkey")
+        asyncjobs.push_abuse_signals(job, base_url=None, api_key="topsecretkey")
         assert not m_post.called, "unconfigured must short-circuit before any HTTP call"
 
     events = list(Event.objects.filter(category=category))
@@ -129,14 +131,16 @@ def test_push_rejected_files_per_status_with_literal_body(opts):
         "geoip:abuse_push_alerted:rejected:400",
     ])
 
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="topsecretkey"):
-        with mock.patch("mojo.apps.account.asyncjobs.requests.post",
-                        return_value=_mock_response(403, "forbidden-body-403")):
-            asyncjobs.push_abuse_signals(_FakeJob({"ip": "203.0.113.61", "threat_level": "high"}))
-        with mock.patch("mojo.apps.account.asyncjobs.requests.post",
-                        return_value=_mock_response(400, "bad-request-body-400")):
-            asyncjobs.push_abuse_signals(_FakeJob({"ip": "203.0.113.62", "threat_level": "high"}))
+    with mock.patch("mojo.apps.account.asyncjobs.requests.post",
+                    return_value=_mock_response(403, "forbidden-body-403")):
+        asyncjobs.push_abuse_signals(
+            _FakeJob({"ip": "203.0.113.61", "threat_level": "high"}),
+            base_url="https://hub.example.com", api_key="topsecretkey")
+    with mock.patch("mojo.apps.account.asyncjobs.requests.post",
+                    return_value=_mock_response(400, "bad-request-body-400")):
+        asyncjobs.push_abuse_signals(
+            _FakeJob({"ip": "203.0.113.62", "threat_level": "high"}),
+            base_url="https://hub.example.com", api_key="topsecretkey")
 
     events = list(Event.objects.filter(category=category))
     assert len(events) == 2, (
@@ -174,11 +178,11 @@ def test_push_missing_ip_files_one_incident_key_names_only(opts):
     _clear_push_incident(category, ["geoip:abuse_push_alerted:missing_ip"])
 
     job = _FakeJob({"threat_level": "high"})  # no ip; the value must not leak
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="topsecretkey"), \
-         mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
-        asyncjobs.push_abuse_signals(job)
-        asyncjobs.push_abuse_signals(job)
+    with mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
+        asyncjobs.push_abuse_signals(
+            job, base_url="https://hub.example.com", api_key="topsecretkey")
+        asyncjobs.push_abuse_signals(
+            job, base_url="https://hub.example.com", api_key="topsecretkey")
         assert not m_post.called, "missing ip must short-circuit before any HTTP call"
 
     events = list(Event.objects.filter(category=category))
@@ -205,11 +209,11 @@ def test_push_no_signals_files_one_incident_key_names_only(opts):
     _clear_push_incident(category, ["geoip:abuse_push_alerted:no_signals"])
 
     job = _FakeJob({"ip": "203.0.113.63", "random_extra": "SENSITIVE_VALUE"})
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="topsecretkey"), \
-         mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
-        asyncjobs.push_abuse_signals(job)
-        asyncjobs.push_abuse_signals(job)
+    with mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
+        asyncjobs.push_abuse_signals(
+            job, base_url="https://hub.example.com", api_key="topsecretkey")
+        asyncjobs.push_abuse_signals(
+            job, base_url="https://hub.example.com", api_key="topsecretkey")
         assert not m_post.called, "no signal fields must short-circuit before any HTTP call"
 
     events = list(Event.objects.filter(category=category))
@@ -239,10 +243,9 @@ def test_push_job_posts_correct_body_and_headers(opts):
         captured["timeout"] = timeout
         return _mock_response(status_code=200)
 
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="secret"), \
-         mock.patch("mojo.apps.account.asyncjobs.requests.post", side_effect=fake_post):
-        asyncjobs.push_abuse_signals(job)
+    with mock.patch("mojo.apps.account.asyncjobs.requests.post", side_effect=fake_post):
+        asyncjobs.push_abuse_signals(
+            job, base_url="https://hub.example.com", api_key="secret")
 
     assert captured["url"] == "https://hub.example.com/api/system/geoip/sync", (
         f"wrong URL: {captured['url']!r}"
@@ -274,10 +277,9 @@ def test_push_job_strips_extra_payload_fields(opts):
         captured["json"] = json
         return _mock_response(status_code=200)
 
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="secret"), \
-         mock.patch("mojo.apps.account.asyncjobs.requests.post", side_effect=fake_post):
-        asyncjobs.push_abuse_signals(job)
+    with mock.patch("mojo.apps.account.asyncjobs.requests.post", side_effect=fake_post):
+        asyncjobs.push_abuse_signals(
+            job, base_url="https://hub.example.com", api_key="secret")
 
     body = captured["json"]
     assert body == {"ip": "203.0.113.51", "threat_level": "high"}, (
@@ -291,12 +293,11 @@ def test_push_job_4xx_returns_without_retry(opts):
 
     job = _FakeJob({"ip": "203.0.113.52", "threat_level": "high"})
 
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="secret"), \
-         mock.patch("mojo.apps.account.asyncjobs.requests.post",
+    with mock.patch("mojo.apps.account.asyncjobs.requests.post",
                     return_value=_mock_response(status_code=403, text="forbidden")):
         # Must NOT raise — 4xx is permanent, retrying won't help.
-        asyncjobs.push_abuse_signals(job)
+        asyncjobs.push_abuse_signals(
+            job, base_url="https://hub.example.com", api_key="secret")
 
 
 @th.unit_test("push_job_5xx_raises_for_retry")
@@ -305,13 +306,12 @@ def test_push_job_5xx_raises_for_retry(opts):
 
     job = _FakeJob({"ip": "203.0.113.53", "threat_level": "high"})
 
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="secret"), \
-         mock.patch("mojo.apps.account.asyncjobs.requests.post",
+    with mock.patch("mojo.apps.account.asyncjobs.requests.post",
                     return_value=_mock_response(status_code=502, text="bad gateway")):
         raised = False
         try:
-            asyncjobs.push_abuse_signals(job)
+            asyncjobs.push_abuse_signals(
+                job, base_url="https://hub.example.com", api_key="secret")
         except RuntimeError:
             raised = True
         assert raised, (
@@ -326,13 +326,12 @@ def test_push_job_network_error_raises_for_retry(opts):
 
     job = _FakeJob({"ip": "203.0.113.54", "threat_level": "high"})
 
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="secret"), \
-         mock.patch("mojo.apps.account.asyncjobs.requests.post",
+    with mock.patch("mojo.apps.account.asyncjobs.requests.post",
                     side_effect=_req.ConnectionError("connection refused")):
         raised = False
         try:
-            asyncjobs.push_abuse_signals(job)
+            asyncjobs.push_abuse_signals(
+                job, base_url="https://hub.example.com", api_key="secret")
         except RuntimeError:
             raised = True
         assert raised, "network errors must raise so the engine retries"
@@ -344,11 +343,9 @@ def test_push_job_missing_config_returns(opts):
 
     job = _FakeJob({"ip": "203.0.113.55", "threat_level": "high"})
 
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", None), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value=None), \
-         mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
+    with mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
         # Must not raise, must not attempt HTTP.
-        asyncjobs.push_abuse_signals(job)
+        asyncjobs.push_abuse_signals(job, base_url=None, api_key=None)
         assert not m_post.called, (
             "missing config must short-circuit before any HTTP call"
         )
@@ -360,10 +357,9 @@ def test_push_job_missing_ip_returns(opts):
 
     job = _FakeJob({"threat_level": "high"})  # no ip
 
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="secret"), \
-         mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
-        asyncjobs.push_abuse_signals(job)
+    with mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
+        asyncjobs.push_abuse_signals(
+            job, base_url="https://hub.example.com", api_key="secret")
         assert not m_post.called, "missing ip must short-circuit"
 
 
@@ -374,8 +370,7 @@ def test_push_job_missing_signals_returns(opts):
 
     job = _FakeJob({"ip": "203.0.113.56"})  # no signals
 
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.get_api_key", return_value="secret"), \
-         mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
-        asyncjobs.push_abuse_signals(job)
+    with mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
+        asyncjobs.push_abuse_signals(
+            job, base_url="https://hub.example.com", api_key="secret")
         assert not m_post.called, "payload with no signal fields must short-circuit"

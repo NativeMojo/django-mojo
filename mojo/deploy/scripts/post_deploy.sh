@@ -174,6 +174,415 @@ install_file() {
     trusted_change rendered-host-config "$dest" -- cp -f "$src" "$dest"
 }
 
+# Converge a repository vhost without throwing away a node's valid Certbot
+# lineage. The repository remains authoritative for every byte except the two
+# certificate path values. Preservation is deliberately fail-closed: it needs
+# one TLS server on both sides, the same normalized server_name set, one
+# canonical same-lineage Certbot pair, and root-safe installed material. The
+# child owns validation, the final snapshot check, and os.replace(), keeping
+# the no-follow decision and mutation inside one trusted-change operation.
+install_vhost() {
+    local src="$1" dest="$2"
+    [[ -f "$src" ]] || die "expected vhost source is missing"
+    if ! trusted_change rendered-host-config "$dest" -- \
+            "$MOJOSEC_PYTHON" "${MOJOSEC_PY_FLAGS[@]}" - \
+            __mojo_tls_vhost__ "$src" "$dest" "$NGINX_ETC" <<'PY'; then
+import hashlib
+import os
+import re
+import secrets
+import stat
+import sys
+
+
+class Refused(Exception):
+    pass
+
+
+def snapshot(path, required=True):
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        if required:
+            raise Refused("missing-file")
+        return None
+    except OSError:
+        raise Refused("unsafe-file")
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise Refused("non-regular-file")
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(fd)
+        identity = (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns,
+            after.st_ctime_ns, after.st_mode, after.st_uid, after.st_gid,
+        )
+        if identity != (
+            before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns,
+            before.st_ctime_ns, before.st_mode, before.st_uid, before.st_gid,
+        ):
+            raise Refused("changed-snapshot")
+        data = b"".join(chunks)
+        return identity, hashlib.sha256(data).digest(), data
+    finally:
+        os.close(fd)
+
+
+def unchanged(path, prior):
+    try:
+        current = snapshot(path, required=prior is not None)
+    except Refused:
+        return False
+    if prior is None:
+        return current is None
+    return current[:2] == prior[:2]
+
+
+def tokens(data):
+    try:
+        text = data.decode("ascii")
+    except UnicodeDecodeError:
+        raise Refused("non-ascii-config")
+    result = []
+    index = 0
+    size = len(text)
+    while index < size:
+        char = text[index]
+        if char.isspace():
+            index += 1
+            continue
+        if char == "#":
+            newline = text.find("\n", index)
+            index = size if newline < 0 else newline + 1
+            continue
+        if char in "{};":
+            result.append((char, index, index + 1, False))
+            index += 1
+            continue
+        start = index
+        quoted = char in "\"'"
+        quote = char if quoted else ""
+        if quoted:
+            index += 1
+        value = []
+        while index < size:
+            char = text[index]
+            if quoted:
+                if char == quote:
+                    index += 1
+                    break
+                if char == "\\":
+                    index += 1
+                    if index >= size:
+                        raise Refused("invalid-escape")
+                    value.append(text[index])
+                    index += 1
+                    continue
+                value.append(char)
+                index += 1
+                continue
+            if char.isspace() or char in "{};#":
+                break
+            if char == "\\":
+                index += 1
+                if index >= size:
+                    raise Refused("invalid-escape")
+                value.append(text[index])
+                index += 1
+                continue
+            value.append(char)
+            index += 1
+        else:
+            if quoted:
+                raise Refused("unterminated-quote")
+        if quoted and (index == 0 or text[index - 1] != quote):
+            raise Refused("unterminated-quote")
+        result.append(("".join(value), start, index, quoted))
+    return result
+
+
+def server_directives(data):
+    stream = tokens(data)
+    blocks = []
+    index = 0
+    while index + 1 < len(stream):
+        if stream[index][0] != "server" or stream[index + 1][0] != "{":
+            index += 1
+            continue
+        depth = 1
+        end = index + 2
+        while end < len(stream) and depth:
+            if stream[end][0] == "{":
+                depth += 1
+            elif stream[end][0] == "}":
+                depth -= 1
+            end += 1
+        if depth:
+            raise Refused("unbalanced-server")
+        directives = []
+        cursor = index + 2
+        nested = 0
+        pending = []
+        while cursor < end - 1:
+            value = stream[cursor][0]
+            if value == "{":
+                nested += 1
+                pending = []
+            elif value == "}":
+                nested -= 1
+                if nested < 0:
+                    raise Refused("unbalanced-nested")
+            elif nested == 0 and value == ";":
+                if pending:
+                    directives.append(pending)
+                pending = []
+            elif nested == 0:
+                pending.append(stream[cursor])
+            cursor += 1
+        if pending or nested:
+            raise Refused("incomplete-directive")
+        blocks.append(directives)
+        index = end
+    return blocks
+
+
+def tls_block(data, allow_none=False):
+    candidates = []
+    for block in server_directives(data):
+        by_name = {}
+        for directive in block:
+            by_name.setdefault(directive[0][0], []).append(directive)
+        listens = by_name.get("listen", [])
+        tls = any(any(token[0] == "ssl" for token in directive[1:])
+                  for directive in listens)
+        tls = tls or "ssl_certificate" in by_name or \
+            "ssl_certificate_key" in by_name
+        if tls:
+            candidates.append(by_name)
+    if not candidates and allow_none:
+        return None
+    if len(candidates) != 1:
+        raise Refused("ambiguous-tls-server")
+    return candidates[0]
+
+
+SERVER_NAME = re.compile(r"^(?:\*\.)?[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$", re.I)
+LINEAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$")
+
+
+def names(block):
+    values = []
+    for directive in block.get("server_name", []):
+        for token in directive[1:]:
+            value = token[0].lower().rstrip(".")
+            if token[3] or not SERVER_NAME.fullmatch(value):
+                raise Refused("unsafe-server-name")
+            values.append(value)
+    if not values:
+        raise Refused("missing-server-name")
+    return tuple(sorted(set(values)))
+
+
+def sole_value(block, directive):
+    matches = block.get(directive, [])
+    if len(matches) != 1 or len(matches[0]) != 2 or matches[0][1][3]:
+        raise Refused("ambiguous-certificate-directive")
+    return matches[0][1]
+
+
+def safe_metadata(path, owner, kind):
+    try:
+        info = os.lstat(path)
+    except OSError:
+        raise Refused("missing-lineage-material")
+    expected = stat.S_ISDIR if kind == "directory" else stat.S_ISREG
+    if stat.S_ISLNK(info.st_mode) or not expected(info.st_mode):
+        raise Refused("unsafe-lineage-material")
+    if info.st_uid != owner or info.st_mode & 0o022:
+        raise Refused("unsafe-lineage-metadata")
+    return info
+
+
+def validated_pair(block, nginx_etc, owner):
+    le_root = "/etc/letsencrypt" if nginx_etc == "/etc/nginx" else \
+        os.path.join(os.path.dirname(nginx_etc), "letsencrypt")
+    live_root = os.path.join(le_root, "live")
+    archive_root = os.path.join(le_root, "archive")
+    cert = sole_value(block, "ssl_certificate")[0]
+    key = sole_value(block, "ssl_certificate_key")[0]
+    cert_parent, cert_name = os.path.split(cert)
+    key_parent, key_name = os.path.split(key)
+    lineage = os.path.basename(cert_parent)
+    if not LINEAGE.fullmatch(lineage) or lineage in (".", ".."):
+        raise Refused("unsafe-lineage")
+    expected_parent = os.path.join(live_root, lineage)
+    if cert_parent != expected_parent or key_parent != expected_parent or \
+            cert_name != "fullchain.pem" or key_name != "privkey.pem":
+        raise Refused("noncanonical-live-path")
+
+    for directory in (le_root, live_root, expected_parent, archive_root,
+                      os.path.join(archive_root, lineage)):
+        safe_metadata(directory, owner, "directory")
+
+    revisions = []
+    for path, stem in ((cert, "fullchain"), (key, "privkey")):
+        link = os.lstat(path)
+        if not stat.S_ISLNK(link.st_mode) or link.st_uid != owner:
+            raise Refused("nonstandard-live-link")
+        target = os.readlink(path)
+        match = re.fullmatch(
+            r"\.\./\.\./archive/" + re.escape(lineage) + "/" +
+            stem + r"([1-9][0-9]*)\.pem", target)
+        if not match:
+            raise Refused("nonstandard-live-link")
+        archive_path = os.path.join(archive_root, lineage,
+                                    stem + match.group(1) + ".pem")
+        if os.path.realpath(path) != os.path.realpath(archive_path):
+            raise Refused("out-of-tree-live-link")
+        material = safe_metadata(archive_path, owner, "file")
+        if stem == "privkey" and stat.S_IMODE(material.st_mode) & 0o077:
+            raise Refused("unsafe-private-key-mode")
+        revisions.append(match.group(1))
+    if revisions[0] != revisions[1]:
+        raise Refused("mixed-lineage-revision")
+    return cert, key
+
+
+def certbot_candidate(block, nginx_etc, owner):
+    cert = sole_value(block, "ssl_certificate")[0]
+    key = sole_value(block, "ssl_certificate_key")[0]
+    le_root = "/etc/letsencrypt" if nginx_etc == "/etc/nginx" else \
+        os.path.join(os.path.dirname(nginx_etc), "letsencrypt")
+    live_root = os.path.join(le_root, "live")
+    live_prefix = live_root + os.sep
+    values = (cert, key)
+    if not all(os.path.isabs(value) for value in values):
+        raise Refused("relative-certificate-path")
+    canonical = all(os.path.normpath(value) == value for value in values)
+    under_live = tuple(value.startswith(live_prefix) for value in values)
+    if not any(under_live):
+        if not canonical:
+            raise Refused("noncanonical-certificate-path")
+        # A complete, absolute pair wholly outside the derived Certbot live
+        # root is explicitly non-Certbot. It contributes no bytes.
+        return None
+    if not all(under_live) or not canonical:
+        raise Refused("mixed-or-noncanonical-live-path")
+    return validated_pair(block, nginx_etc, owner)
+
+
+def overlay(repo_data, repo_block, cert, key):
+    replacements = [
+        (sole_value(repo_block, "ssl_certificate")[1:3], cert),
+        (sole_value(repo_block, "ssl_certificate_key")[1:3], key),
+    ]
+    output = repo_data
+    for (start, end), value in sorted(replacements, reverse=True):
+        output = output[:start] + value.encode("ascii") + output[end:]
+    return output
+
+
+def main():
+    if len(sys.argv) != 5 or sys.argv[1] != "__mojo_tls_vhost__":
+        raise Refused("invalid-invocation")
+    source, destination, nginx_etc = map(os.path.abspath, sys.argv[2:])
+    source_prior = snapshot(source)
+    try:
+        installed_prior = snapshot(destination, required=False)
+    except Refused:
+        # Existing symlinks and non-regular destinations are never replaced.
+        raise
+
+    output = source_prior[2]
+    owner = 0 if nginx_etc == "/etc/nginx" else os.geteuid()
+    if installed_prior is not None:
+        info = installed_prior[0]
+        installed_safe = info[6] == owner and not (info[5] & 0o022)
+        if not installed_safe:
+            raise Refused("unsafe-installed-metadata")
+        repo_block = tls_block(source_prior[2], allow_none=True)
+        installed_block = tls_block(installed_prior[2], allow_none=True)
+        if repo_block is None and installed_block is not None:
+            raise Refused("repository-dropped-tls-server")
+        if repo_block is not None and installed_block is not None:
+            if names(repo_block) != names(installed_block):
+                raise Refused("server-name-mismatch")
+            candidate = certbot_candidate(installed_block, nginx_etc, owner)
+            if candidate is not None:
+                cert, key = candidate
+                output = overlay(source_prior[2], repo_block, cert, key)
+
+    directory = os.path.dirname(destination)
+    destination_name = os.path.basename(destination)
+    directory_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        directory_flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+    directory_fd = os.open(directory, directory_flags)
+    directory_info = os.fstat(directory_fd)
+    if not stat.S_ISDIR(directory_info.st_mode) or \
+            directory_info.st_uid != owner or directory_info.st_mode & 0o022:
+        os.close(directory_fd)
+        raise Refused("unsafe-destination-directory")
+
+    staged = ".mojo-vhost-" + secrets.token_hex(16) + ".tmp"
+    staged_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        staged_flags |= os.O_NOFOLLOW
+    descriptor = os.open(staged, staged_flags, 0o600, dir_fd=directory_fd)
+    try:
+        os.fchmod(descriptor, 0o644)
+        remaining = memoryview(output)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise Refused("short-stage-write")
+            remaining = remaining[written:]
+        os.fsync(descriptor)
+        if not unchanged(source, source_prior) or \
+                not unchanged(destination, installed_prior):
+            raise Refused("changed-snapshot")
+        staged_info = os.stat(staged, dir_fd=directory_fd,
+                              follow_symlinks=False)
+        descriptor_info = os.fstat(descriptor)
+        if not stat.S_ISREG(staged_info.st_mode) or \
+                (staged_info.st_dev, staged_info.st_ino) != \
+                (descriptor_info.st_dev, descriptor_info.st_ino):
+            raise Refused("changed-stage")
+        os.replace(staged, destination_name, src_dir_fd=directory_fd,
+                   dst_dir_fd=directory_fd)
+        staged = ""
+        os.fsync(directory_fd)
+    finally:
+        os.close(descriptor)
+        if staged:
+            try:
+                os.unlink(staged, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+        os.close(directory_fd)
+
+
+try:
+    main()
+except (OSError, Refused, ValueError):
+    print("TLS vhost convergence refused unsafe or changed state", file=sys.stderr)
+    raise SystemExit(1)
+PY
+        die "TLS vhost convergence refused unsafe or changed state"
+    fi
+}
+
 install_aux_file() {
     local phase="$1" src="$2" dest="$3"
     if [[ ! -f "$src" ]]; then
@@ -499,7 +908,7 @@ if compgen -G "${PROJ_PATH}/aws/nginx/conf.d/*.conf" > /dev/null; then
     for vhost in "${PROJ_PATH}/aws/nginx/conf.d/"*.conf; do
         name="$(basename "$vhost")"
         case "$name" in *.example*) continue ;; esac
-        install_file "$vhost" "${NGINX_ETC}/conf.d/${name}"
+        install_vhost "$vhost" "${NGINX_ETC}/conf.d/${name}"
         VHOSTS=$((VHOSTS+1))
     done
 fi

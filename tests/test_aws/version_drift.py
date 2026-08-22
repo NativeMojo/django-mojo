@@ -102,11 +102,10 @@ def _aurora_fixture(now, standard_days=60, extended_days=1155):
 
 def _scan(rds, elasticache, now, **kwargs):
     from mojo.apps.aws.services import version_drift
-    with mock.patch.object(version_drift, "_setting", side_effect=_setting_values()):
-        scanner = version_drift.VersionDriftScanner(
-            clients={"rds": rds, "elasticache": elasticache},
-            now=lambda: now, **kwargs)
-        return scanner.scan()
+    scanner = version_drift.VersionDriftScanner(
+        clients={"rds": rds, "elasticache": elasticache},
+        now=lambda: now, settings_get=_setting_values(), **kwargs)
+    return scanner.scan()
 
 
 @th.django_unit_setup()
@@ -450,9 +449,11 @@ def test_aws_check_versions_section_is_opt_in_and_never_fails(opts):
                            lifecycles=lifecycles),
         "elasticache": _elasticache_client(),
     }
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()), \
-            mock.patch.object(version_drift, "_setting", side_effect=_setting_values()):
-        report = aws_check.AWSCheckRunner(clients=clients).run(["versions"])
+    # settings_get injection instead of patching aws_check._setting /
+    # version_drift._setting, which is process-global under the parallel
+    # runner (#2558); the runner threads it into VersionDriftScanner.
+    report = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=_setting_values()).run(["versions"])
     sections = [item["section"] for item in report["items"]]
     assert sections and set(sections) == {"versions"}, (
         "run(['versions']) must actually EXECUTE the section — iterating only "
@@ -460,8 +461,8 @@ def test_aws_check_versions_section_is_opt_in_and_never_fails(opts):
     assert report["overall"] == "pass", \
         f"The versions section must never fail the overall run, got {report}"
 
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()):
-        default = aws_check.AWSCheckRunner(clients=clients).run(["prerequisites"])
+    default = aws_check.AWSCheckRunner(
+        clients=clients, settings_get=_setting_values()).run(["prerequisites"])
     assert not [item for item in default["items"] if item["section"] == "versions"], (
         "A run that did not select `versions` must contain no versions item; "
         f"got {default['items']}")
@@ -470,9 +471,8 @@ def test_aws_check_versions_section_is_opt_in_and_never_fails(opts):
         "rds": _rds_client(denied=("describe_db_clusters", "describe_db_instances")),
         "elasticache": _elasticache_client(denied=("describe_cache_clusters",)),
     }
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()), \
-            mock.patch.object(version_drift, "_setting", side_effect=_setting_values()):
-        denied = aws_check.AWSCheckRunner(clients=denied_clients).run(["versions"])
+    denied = aws_check.AWSCheckRunner(
+        clients=denied_clients, settings_get=_setting_values()).run(["versions"])
     statuses = {item["status"] for item in denied["items"]}
     assert statuses == {"warn"}, (
         "AccessDenied is the expected first-run outcome and must be a warn, "

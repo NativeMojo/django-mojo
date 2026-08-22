@@ -19,6 +19,8 @@ that asked for the certificate, and spreading :80 across the fleet means it land
 somewhere else four times out of five.
 """
 
+import json
+
 from mojo.deploy.provision import discover, report
 from mojo.deploy.provision import spec as spec_module
 
@@ -34,11 +36,14 @@ MUTABLE_TARGET_GROUP_FIELDS = ("HealthCheckProtocol", "HealthCheckPort",
                                "HealthyThresholdCount",
                                "UnhealthyThresholdCount", "Matcher")
 
-HEALTH_PATH = "/api/version"
+HEALTH_PATH = spec_module.HEALTH_PATH_DEFAULT
 
 
 def target_group_specs(spec, vpc_id):
     """The two groups, as the exact shape `CreateTargetGroup` takes."""
+    api_health_path = getattr(spec, "api_health_path", None) or HEALTH_PATH
+    certbot_health_path = (
+        getattr(spec, "certbot_health_path", None) or HEALTH_PATH)
     return {
         "api": {
             "Name": spec_module.names(spec)["api_target_group"],
@@ -48,7 +53,7 @@ def target_group_specs(spec, vpc_id):
             "TargetType": "instance",
             "HealthCheckProtocol": "HTTPS",
             "HealthCheckPort": "traffic-port",
-            "HealthCheckPath": HEALTH_PATH,
+            "HealthCheckPath": api_health_path,
             "HealthCheckIntervalSeconds": 30,
             "HealthyThresholdCount": 3,
             "UnhealthyThresholdCount": 3,
@@ -61,7 +66,7 @@ def target_group_specs(spec, vpc_id):
             "TargetType": "instance",
             "HealthCheckProtocol": "HTTP",
             "HealthCheckPort": "traffic-port",
-            "HealthCheckPath": HEALTH_PATH,
+            "HealthCheckPath": certbot_health_path,
             "HealthCheckIntervalSeconds": 30,
             "HealthyThresholdCount": 3,
             "UnhealthyThresholdCount": 3,
@@ -87,8 +92,19 @@ def ensure_balancer(clients, spec, observed, apply=False):
     elbv2 = clients.get("elbv2")
     ec2 = clients.get("ec2")
     vpc_id = observed.get("vpc_id") or (observed.get("vpc") or {}).get("VpcId")
-    subnet_ids = list(observed.get("public_subnet_ids") or [])
-    instance_ids = [i for i in (observed.get("instance_ids") or []) if i]
+    subnet_ids = (list(spec.nlb_subnet_ids) if spec.fleet else
+                  list(observed.get("public_subnet_ids") or []))
+    if spec.fleet:
+        instance_ids = [
+            row.get("instance_id") for row in observed.get("node_records") or []
+            if row.get("instance_id") and row.get("serving_target")]
+        compatibility_ids = list(spec.compatibility_instance_ids or ())
+        instance_ids.extend(value for value in compatibility_ids
+                            if value not in instance_ids)
+        result.set("compatibility_target_ids", compatibility_ids)
+        result.set("serving_instance_ids", list(instance_ids))
+    else:
+        instance_ids = [i for i in (observed.get("instance_ids") or []) if i]
 
     wanted = target_group_specs(spec, vpc_id)
     group_arns = _ensure_target_groups(
@@ -106,13 +122,21 @@ def ensure_balancer(clients, spec, observed, apply=False):
                 STEP, "balancer.provisioning",
                 f"{names['balancer']} is still provisioning"))
     else:
+        preserved_mode = bool(getattr(spec, "nlb_eip_allocations", None))
         findings.append(report.missing(
             STEP, "balancer.missing",
             f"network load balancer {names['balancer']} does not exist",
             f"apply creates it across {len(subnet_ids) or spec_module.AZ_COUNT} "
-            f"public subnet(s) with a fixed address in each"))
+            f"public subnet(s) with "
+            f"{'temporary AWS addresses' if preserved_mode else 'a fixed address in each'}"))
         actions.append(report.Action(STEP, "create", names["balancer"]))
         if not apply:
+            if spec.fleet:
+                if not preserved_mode:
+                    _subnet_mappings(ec2, spec, observed, subnet_ids,
+                                     findings, actions, apply=False)
+                _preview_new_balancer(spec, observed, instance_ids,
+                                      findings, actions)
             return findings, actions, result
         if not subnet_ids:
             findings.append(report.missing(
@@ -120,13 +144,25 @@ def ensure_balancer(clients, spec, observed, apply=False):
                 "the public subnets are not resolved yet",
                 "let the network step run first"))
             return findings, actions, result
-        mappings = _subnet_mappings(ec2, spec, observed, subnet_ids,
-                                    findings, actions)
+        mappings = []
+        if not preserved_mode:
+            mappings = _subnet_mappings(ec2, spec, observed, subnet_ids,
+                                        findings, actions)
+            if len(mappings) != len(subnet_ids):
+                findings.append(report.Finding(
+                    STEP, report.BLIND, "balancer.address_mappings",
+                    f"resolved {len(mappings)} of {len(subnet_ids)} exact NLB "
+                    f"address mappings",
+                    "fix the failed allocation and re-run; the successfully "
+                    "tagged address is retained, but no one-AZ NLB was created"))
+                return findings, actions, result
+        placement = ({"Subnets": list(subnet_ids)} if preserved_mode else
+                     {"SubnetMappings": mappings})
         created = report.safe(
             findings, STEP, "elbv2.create_load_balancer",
             lambda: elbv2.create_load_balancer(
                 Name=names["balancer"], Type="network",
-                Scheme="internet-facing", SubnetMappings=mappings,
+                Scheme="internet-facing", **placement,
                 Tags=spec_module.tag_list(spec, "balancer",
                                           name=names["balancer"])))
         if not created:
@@ -180,22 +216,31 @@ def _ensure_target_groups(elbv2, spec, observed, wanted, findings, actions,
                                   or [{}])[0].get("TargetGroupArn")
             continue
 
-        arns[role] = found.get("TargetGroupArn")
+        if not spec.fleet:
+            arns[role] = found.get("TargetGroupArn")
         frozen = [field for field in IMMUTABLE_TARGET_GROUP_FIELDS
                   if field in request
                   and found.get(field) is not None
                   and str(found.get(field)) != str(request[field])]
         if frozen:
-            findings.append(report.manual(
-                STEP, f"target_group.{role}.immutable",
+            message = (
                 f"{request['Name']} differs on {', '.join(frozen)}, which AWS "
                 f"fixes at creation — "
                 + "; ".join(f"{field} is {found.get(field)!r}, this topology "
-                            f"declares {request[field]!r}" for field in frozen),
+                            f"declares {request[field]!r}" for field in frozen))
+            remedy = (
                 "create a replacement target group under a different name and "
-                "move the listener to it; this tool will not delete the old "
-                "one"))
+                "move the listener to it; this tool will not delete the old one")
+            if spec.fleet:
+                findings.append(report.Finding(
+                    STEP, report.BLIND, f"target_group.{role}.immutable",
+                    message, remedy))
+            else:
+                findings.append(report.manual(
+                    STEP, f"target_group.{role}.immutable", message, remedy))
             continue
+
+        arns[role] = found.get("TargetGroupArn")
 
         changes = {field: request[field]
                    for field in MUTABLE_TARGET_GROUP_FIELDS
@@ -205,8 +250,10 @@ def _ensure_target_groups(elbv2, spec, observed, wanted, findings, actions,
                 STEP, f"target_group.{role}.health_check",
                 f"{request['Name']} differs on {', '.join(sorted(changes))}",
                 "apply modifies it in place"))
-            actions.append(report.Action(STEP, "modify", request["Name"],
-                                         ", ".join(sorted(changes))))
+            detail = json.dumps(changes, sort_keys=True, separators=(",", ":"),
+                                ensure_ascii=True)
+            actions.append(report.Action(
+                STEP, "modify", request["Name"], detail))
             if apply:
                 report.safe(
                     findings, STEP, "elbv2.modify_target_group",
@@ -219,7 +266,8 @@ def _ensure_target_groups(elbv2, spec, observed, wanted, findings, actions,
     return arns
 
 
-def _subnet_mappings(ec2, spec, observed, subnet_ids, findings, actions):
+def _subnet_mappings(ec2, spec, observed, subnet_ids, findings, actions,
+                     apply=True):
     """One fixed address per subnet.
 
     An NLB without elastic IPs gets an address AWS may change; DNS pointed at
@@ -228,31 +276,66 @@ def _subnet_mappings(ec2, spec, observed, subnet_ids, findings, actions):
     environment.
     """
     mappings = []
-    available = []
+    available = {}
+    balancer_name = spec_module.names(spec)["balancer"]
     for address in observed.get("addresses") or []:
         tags = discover.tags_of(address)
         if spec_module.owns(tags, spec, role="balancer") and not address.get(
                 "AssociationId"):
-            available.append(address)
+            available[tags.get("Name")] = address
 
-    for index, subnet_id in enumerate(subnet_ids):
-        if index < len(available):
+    subnet_rows = {row["id"]: row for row in spec.brownfield_manifest[
+        "network"]["public_subnets"]} if spec.fleet else {}
+    for subnet_id in subnet_ids:
+        address_name = f"{balancer_name}:{subnet_id}"
+        if address_name in available:
             mappings.append({"SubnetId": subnet_id,
-                             "AllocationId": available[index].get("AllocationId")})
+                             "AllocationId": available[address_name].get(
+                                 "AllocationId")})
             continue
         actions.append(report.Action(STEP, "create",
                                      f"{subnet_id} elastic IP"))
+        if not apply:
+            continue
         allocated = report.safe(
             findings, STEP, "ec2.allocate_address",
             lambda: ec2.allocate_address(
                 Domain="vpc",
+                **({"NetworkBorderGroup": subnet_rows[subnet_id][
+                    "network_border_group"]} if spec.fleet else {}),
                 TagSpecifications=spec_module.tag_specifications(
                     spec, "balancer", "elastic-ip",
-                    name=spec_module.names(spec)["balancer"])))
+                    name=address_name)))
         if allocated:
             mappings.append({"SubnetId": subnet_id,
                              "AllocationId": allocated.get("AllocationId")})
     return mappings
+
+
+def _preview_new_balancer(spec, observed, instance_ids, findings, actions):
+    """Describe mutations hidden behind an NLB that does not exist yet.
+
+    The normal managed planner historically stops after previewing NLB
+    creation.  Brownfield apply must be stricter: its reviewed preview is the
+    mutation boundary, so listeners and target registration must be visible
+    before the first call is authorized even when their AWS parents will only
+    exist later in the same apply.
+    """
+    for port, role in ((443, "api"), (80, "certbot")):
+        actions.append(report.Action(STEP, "create", f"TCP:{port}", role))
+    actions.append(report.Action(
+        STEP, "modify", spec_module.names(spec)["balancer"],
+        "cross-zone load balancing and deletion protection"))
+
+    declarations = [row for row in spec.node_declarations
+                    if row.get("serving_target")]
+    api_targets = list(instance_ids) or [row["name"] for row in declarations]
+    certbot_targets = api_targets[:1]
+    for role, targets in (("api", api_targets),
+                          ("certbot", certbot_targets)):
+        if targets:
+            actions.append(report.Action(
+                STEP, "register", role, ", ".join(targets)))
 
 
 def _ensure_attributes(elbv2, spec, observed, balancer_arn, findings, actions,
@@ -292,13 +375,29 @@ def _ensure_attributes(elbv2, spec, observed, balancer_arn, findings, actions,
 
 def _ensure_listeners(elbv2, spec, observed, balancer_arn, group_arns,
                       findings, actions, apply):
-    present = {listener.get("Port")
+    present = {listener.get("Port"): listener
                for listener in (observed.get("listeners") or [])}
     for port, role in ((443, "api"), (80, "certbot")):
-        if port in present:
-            findings.append(report.existing(
-                STEP, f"listener.{port}.ok",
-                f"TCP:{port} forwards to the {role} target group"))
+        listener = present.get(port)
+        if listener:
+            default_actions = listener.get("DefaultActions") or []
+            target_arn = group_arns.get(role)
+            exact = (
+                listener.get("Protocol") == "TCP"
+                and len(default_actions) == 1
+                and default_actions[0].get("Type") == "forward"
+                and default_actions[0].get("TargetGroupArn") == target_arn)
+            if exact:
+                findings.append(report.existing(
+                    STEP, f"listener.{port}.ok",
+                    f"TCP:{port} forwards to the {role} target group"))
+            else:
+                findings.append(report.manual(
+                    STEP, f"listener.{port}.mismatch",
+                    f"listener {port} does not exactly forward TCP to the "
+                    f"owned {role} target group",
+                    "repair or replace the listener explicitly; brownfield "
+                    "mode does not adopt or rewrite a mismatched listener"))
             continue
         arn = group_arns.get(role)
         findings.append(report.missing(
@@ -329,9 +428,33 @@ def _ensure_targets(elbv2, spec, observed, group_arns, instance_ids,
     for role, wanted_ids, port in plan:
         arn = group_arns.get(role)
         if not arn:
+            if spec.fleet and not apply:
+                declarations = [
+                    row["name"] for row in spec.node_declarations
+                    if row.get("serving_target")]
+                preview_targets = declarations if role == "api" else declarations[:1]
+                preview_targets.extend(
+                    value for value in wanted_ids
+                    if value not in preview_targets)
+                if preview_targets:
+                    actions.append(report.Action(
+                        STEP, "register", role,
+                        ", ".join(preview_targets)))
             continue
         current = {(row.get("Target") or {}).get("Id")
                    for row in (registered.get(role) or [])}
+        if spec.fleet:
+            for row in registered.get(role) or []:
+                target_id = (row.get("Target") or {}).get("Id")
+                state = (row.get("TargetHealth") or {}).get("State")
+                if target_id in wanted_ids and state not in (
+                        None, "initial", "healthy"):
+                    findings.append(report.manual(
+                        STEP, f"targets.{role}.unhealthy",
+                        f"declared target {target_id} is {state} in the "
+                        f"{role} target group",
+                        "fix node readiness before cutover; brownfield apply "
+                        "does not replace or deregister targets"))
         adding = [value for value in wanted_ids if value not in current]
         if adding:
             findings.append(report.drift(

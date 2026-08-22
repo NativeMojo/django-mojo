@@ -321,9 +321,10 @@ def test_staged_variant_fail_closed(opts):
 def test_staged_ports_refused(opts):
     """A privileged, equal, or non-numeric staged port is an operator error
     the render refuses outright — ≤1023 silently reintroduces the EACCES
-    bind failure the staged tree exists to avoid."""
-    from unittest import mock
+    bind failure the staged tree exists to avoid.
 
+    The bad values are injected through the get_static seam (item #2558)
+    rather than a process-global patch of the shared settings singleton."""
     from mojo import errors as me
     from mojo.apps.edge.services import render
 
@@ -337,9 +338,7 @@ def test_staged_ports_refused(opts):
         def fake_static(name, default=None, kind=None, _o=overrides):
             return _o.get(name, default)
 
-        with mock.patch.object(render.settings, "get_static",
-                               side_effect=fake_static):
-            err = raises(render.staged_http_port)
+        err = raises(render.staged_http_port, get_static=fake_static)
         assert err is not None, f"a {label} staged port was accepted"
         assert isinstance(err, me.ValueException), (
             f"a {label} staged port raised {type(err).__name__}, not the "
@@ -350,9 +349,9 @@ def test_staged_ports_refused(opts):
             return 80
         return default
 
-    with mock.patch.object(render.settings, "get_static", side_effect=bad_https):
-        err = raises(render.render_staged_variant,
-                     "server {\n    listen 443 ssl;\n}\n")
+    err = raises(render.render_staged_variant,
+                 "server {\n    listen 443 ssl;\n}\n",
+                 get_static=bad_https)
     assert isinstance(err, me.ValueException), (
         "the real staged-render path bypassed the active HTTPS port bounds")
 

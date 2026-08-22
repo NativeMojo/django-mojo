@@ -477,11 +477,29 @@ def test_unregistered_machine_identity_denied(opts):
 def test_allow_api_key_global_guard_on_group_scoped_model(opts):
     """Secondary hardening: a group-scoped model must never grant an api_key
     global (groupless) access even if it sets RestMeta.ALLOW_API_KEY_GLOBAL=True.
-    Tested in-process (opts.client hits a separate server that cannot see a
-    monkeypatched RestMeta) via _evaluate_permission directly."""
+    Tested in-process (opts.client hits a separate server) via
+    _evaluate_permission directly.
+
+    The misconfigured flag lives on a LOCAL, test-owned model class instead of
+    a monkeypatched Setting.RestMeta (item #2558): mutating a shared model's
+    RestMeta is process-global and races every parallel module using Setting.
+    The guard raises before any database access, so the probe needs no table —
+    is_group_scoped is derived from `hasattr(cls, "group")` plus
+    RestMeta.GROUP_FIELD, both satisfied by class attributes."""
     from objict import objict
     from mojo.apps.account.models import ApiKey, Group
     from mojo.apps.account.models.setting import Setting
+    from mojo.models import MojoModel
+
+    class GroupScopedGlobalProbe(MojoModel):
+        """Group-scoped (has a `group` attribute) AND misconfigured with
+        ALLOW_API_KEY_GLOBAL=True. Nothing else in the suite reads this
+        class, so no shared state is touched."""
+        group = None
+
+        class RestMeta:
+            VIEW_PERMS = ["view_settings", "manage_settings", "settings"]
+            ALLOW_API_KEY_GLOBAL = True
 
     group = Group.objects.create(name=f"ak_ia_{_uuid.uuid4().hex[:8]}", kind="organization")
     key, _token = ApiKey.create_for_group(
@@ -491,7 +509,6 @@ def test_allow_api_key_global_guard_on_group_scoped_model(opts):
     # api_key identity with NO active group context (the groupless branch).
     req = objict(user=key, api_key=key, group=None, DATA=objict())
 
-    had_attr = "ALLOW_API_KEY_GLOBAL" in Setting.RestMeta.__dict__
     try:
         # Baseline: without the flag, a group-scoped model already denies here.
         allowed, denial = Setting._evaluate_permission(req, "VIEW_PERMS")
@@ -499,15 +516,13 @@ def test_allow_api_key_global_guard_on_group_scoped_model(opts):
             "baseline: a group-scoped model must deny a groupless api_key"
 
         # Dangerous misconfiguration: the flag must be REFUSED (fail closed),
-        # not honored, because Setting has a group FK.
-        Setting.RestMeta.ALLOW_API_KEY_GLOBAL = True
-        allowed2, denial2 = Setting._evaluate_permission(req, "VIEW_PERMS")
+        # not honored, because the model is group-scoped.
+        allowed2, denial2 = GroupScopedGlobalProbe._evaluate_permission(
+            req, "VIEW_PERMS")
         assert allowed2 is False, \
             "guard must refuse ALLOW_API_KEY_GLOBAL on a group-scoped model (fail closed)"
         assert denial2 is not None and denial2.branch == "api_key.groupless_denied", \
             f"denial must come from the groupless-deny branch, got {denial2!r}"
     finally:
-        if not had_attr and "ALLOW_API_KEY_GLOBAL" in Setting.RestMeta.__dict__:
-            delattr(Setting.RestMeta, "ALLOW_API_KEY_GLOBAL")
         ApiKey.objects.filter(pk=key.pk).delete()
         group.delete()

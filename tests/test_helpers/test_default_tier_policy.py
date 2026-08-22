@@ -419,6 +419,56 @@ def test_protected_rest_write(opts):
     )
 
 
+@th.unit_test("policy: a reserved-key REST settings write is allowed; anything less provable is not")
+def test_rest_write_reserved_key(opts):
+    codes = _codes("""
+        def test_thing(opts):
+            opts.client.post("/api/settings", {"key": "TESTIT_PROTECTED_SENTINEL", "value": "x"})
+    """)
+    assert codes == [], (
+        f"a literal TESTIT_-prefixed key can never touch real configuration — "
+        f"the denial-contract tests need this write allowed, got {codes}"
+    )
+
+    codes = _codes("""
+        def test_thing(opts):
+            opts.client.post("/api/settings", {"key": "AUTH_CONFIG", "value": "x"})
+    """)
+    assert "protected_rest_write" in codes, (
+        f"a real key stays a violation, got {codes}"
+    )
+
+    codes = _codes("""
+        def test_thing(opts):
+            opts.client.post("/api/settings", {"key": opts.key, "value": "x"})
+    """)
+    assert "protected_rest_write" in codes, (
+        f"a dynamic key cannot be proven reserved and must stay flagged, got {codes}"
+    )
+
+    codes = _codes("""
+        def test_thing(opts):
+            opts.client.post("/api/settings", {"key": "TESTIT_OK", **opts.extra})
+    """)
+    assert "protected_rest_write" in codes, (
+        f"a **splat can smuggle any key past a literal 'key' entry and must "
+        f"stay flagged, got {codes}"
+    )
+
+    # A dict literal may repeat a key and Python keeps the LAST one, so a
+    # scanner that stops at the first match would clear this write while it
+    # actually targets SECRET_KEY.
+    codes = _codes("""
+        def test_thing(opts):
+            opts.client.post(
+                "/api/settings", {"key": "TESTIT_OK", "key": "SECRET_KEY"})
+    """)
+    assert "protected_rest_write" in codes, (
+        f"a duplicated 'key' entry must be judged by EVERY value, not the "
+        f"first — the last one is what executes, got {codes}"
+    )
+
+
 @th.unit_test("policy: REST settings reads are allowed")
 def test_rest_settings_read_allowed(opts):
     codes = _codes("""
@@ -650,4 +700,137 @@ def test_ring_patch_targets(opts):
         [shared, singleton, app_internal, unresolved])
     assert len(hot) == 2 and len(cold) == 2, (
         f"partition must split 2 hot / 2 cold, got {len(hot)}/{len(cold)}"
+    )
+
+
+@th.unit_test("policy: the cold_budget ratchet is two-sided")
+def test_cold_budget_two_sided(opts):
+    from testit import isolation
+
+    cold = [isolation.violation("patch_production", "x.py", 10, "patch('mojo.apps.aws.services.x')")]
+
+    over = isolation.evaluate_cold_budget(
+        {"default_core": True}, cold, origin="django_mojo", has_config=True)
+    assert over and "exceed" in over[0], (
+        f"cold sites with no budget (implicit 0) must fail as growth, got {over}"
+    )
+
+    exact = isolation.evaluate_cold_budget(
+        {"default_core": True, "cold_budget": 1}, cold,
+        origin="django_mojo", has_config=True)
+    assert exact == [], f"an exact budget must pass, got {exact}"
+
+    stale = isolation.evaluate_cold_budget(
+        {"default_core": True, "cold_budget": 5}, cold,
+        origin="django_mojo", has_config=True)
+    assert stale and "stale" in stale[0], (
+        f"remediation below budget must fail as stale headroom — one-sided "
+        f"budgets silently absorb new sites, got {stale}"
+    )
+
+    optin = isolation.evaluate_cold_budget(
+        {"requires_extra": ["extended"], "serial": True}, cold,
+        origin="django_mojo", has_config=True)
+    assert optin == [], f"opt-in packages are exempt from budgets, got {optin}"
+
+    consumer = isolation.evaluate_cold_budget(
+        {"default_core": True}, cold, origin="consumer", has_config=True)
+    assert consumer == [], f"consumer roots are exempt, got {consumer}"
+
+    bad = isolation.evaluate_cold_budget(
+        {"default_core": True, "cold_budget": True}, cold,
+        origin="django_mojo", has_config=True)
+    assert bad and "non-negative integer" in bad[0], (
+        f"a boolean/None budget must be rejected loudly, got {bad}"
+    )
+
+
+@th.unit_test("policy: the whole mojo.helpers namespace is blocking")
+def test_helpers_namespace_is_hot(opts):
+    for target in ("mojo.helpers.dns.probe.query_cname",
+                   "mojo.helpers.aws.ec2",
+                   "mojo.helpers.geoip.config"):
+        codes = _codes(f"""
+            from unittest import mock
+
+            def test_thing(opts):
+                with mock.patch("{target}"):
+                    pass
+        """)
+        assert "patch_shared" in codes, (
+            f"a helper is shared by definition — patching {target} must block, "
+            f"got {codes}"
+        )
+        violations = _scan(f"""
+            from unittest import mock
+
+            def test_thing(opts):
+                with mock.patch("{target}"):
+                    pass
+        """)
+        from testit import isolation
+        assert any(isolation.is_hot_violation(v) for v in violations), (
+            f"{target} must be HOT, not advisory"
+        )
+
+
+@th.unit_test("policy: cross-package roster targets are blocking, and stay listed after remediation")
+def test_cross_package_roster_is_hot(opts):
+    from testit import isolation
+
+    for target in ("mojo.apps.aws.services.aws_check",
+                   "mojo.apps.aws.services.aws_check.AWSCheckRunner",
+                   "mojo.apps.account.services.system_settings",
+                   "mojo.deploy.mojosec.os"):
+        violations = _scan(f"""
+            from unittest import mock
+
+            def test_thing(opts):
+                with mock.patch("{target}"):
+                    pass
+        """)
+        assert any(isolation.is_hot_violation(v) for v in violations), (
+            f"{target} is on the cross-package roster and must block — a patch "
+            f"window here swallows another package's real call"
+        )
+
+    # An app-local boundary mock that is NOT on the roster stays advisory
+    # (capped by cold_budget), not blocking.
+    violations = _scan("""
+        from unittest import mock
+
+        def test_thing(opts):
+            with mock.patch("mojo.apps.shortlink.services.render.build"):
+                pass
+    """)
+    assert violations, "an app-internal production patch must still be recorded"
+    assert not any(isolation.is_hot_violation(v) for v in violations), (
+        "an app-local boundary mock outside the roster must remain advisory — "
+        "the cold_budget ratchet is what caps it, not the blocking ring"
+    )
+
+
+@th.unit_test("policy: deferred cross-package targets stay advisory, and the two lists are disjoint")
+def test_deferred_roster_is_advisory(opts):
+    from testit import isolation
+
+    overlap = set(isolation.CROSS_PACKAGE_TARGETS) & set(
+        isolation.DEFERRED_CROSS_PACKAGE_TARGETS)
+    assert not overlap, (
+        f"a target cannot be both pinned and deferred: {sorted(overlap)}"
+    )
+
+    # Deferred targets still carry default-tier patches; they are capped by
+    # cold_budget, not blocked, until their conversions land.
+    violations = _scan("""
+        from unittest import mock
+
+        def test_thing(opts):
+            with mock.patch("mojo.apps.dnsman.services.delegation.initiate"):
+                pass
+    """)
+    assert violations, "a deferred target's patch must still be recorded as a site"
+    assert not any(isolation.is_hot_violation(v) for v in violations), (
+        "a DEFERRED target must not block the run yet — promoting it without "
+        "converting its call sites would make the suite unrunnable"
     )

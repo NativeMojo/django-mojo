@@ -121,7 +121,9 @@ def _tool_get_file(params, user):
         "required": ["file_id"],
     },
 )
-def _tool_analyze_image(params, user):
+def _tool_analyze_image(params, user, llm_call=None):
+    # llm_call is a keyword test seam (item #2558) defaulting to
+    # mojo.helpers.llm.call; the tool dispatcher passes (params, user) only.
     from mojo.apps.fileman.models import File
     from mojo.helpers import llm
 
@@ -175,7 +177,7 @@ def _tool_analyze_image(params, user):
     ]
 
     try:
-        response = llm.call(messages, max_tokens=2048)
+        response = (llm_call or llm.call)(messages, max_tokens=2048)
         parts = []
         for block in response.get("content", []):
             if block.get("type") == "text":

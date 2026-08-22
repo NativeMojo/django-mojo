@@ -1479,6 +1479,8 @@ def _enforce_repository_policy(parent_test_root):
             cold_packages += 1
         package_problems = isolation.evaluate_package_state(
             config, hot, origin=ORIGIN_REPO, has_config=(state == "ok"))
+        package_problems += isolation.evaluate_cold_budget(
+            config, cold, origin=ORIGIN_REPO, has_config=(state == "ok"))
         for problem in package_problems:
             problems.append(f"{name}: {problem}")
         if hot and not (config.requires_extra and config.serial):

@@ -6,6 +6,8 @@
     python3 -m mojo.deploy.provision configure       # config, nodes, HTTPS
     python3 -m mojo.deploy.provision admin           # first superuser + link
     python3 -m mojo.deploy.provision status          # what is there now
+    python3 -m mojo.deploy.provision fleet-status --fleet shadow
+    python3 -m mojo.deploy.provision fleet-apply --fleet shadow --dry-run
 
 THIS FILE CREATES NO AWS RESOURCE. Every AWS mutation belongs to `plan.apply()`;
 this is prompting, a preview, a confirmation and rendering. That separation is
@@ -51,6 +53,9 @@ prompted at import time would fire during that check.
 import sys
 
 from mojo.deploy.provision import certificate as certificate_module
+from mojo.deploy.provision import brownfield_inputs, brownfield_plan
+from mojo.deploy.provision import brownfield_policy
+from mojo.deploy.provision import handoff as handoff_module
 from mojo.deploy.provision import clients as clients_module
 from mojo.deploy.provision import (checkout, discover, github, inputs, plan,
                                    remote, render, report, storage)
@@ -86,6 +91,8 @@ PREVIEW_LABELS = (
     ("needs a human", report.MANUAL),
     ("could not see", report.BLIND),
 )
+
+_HANDOFF_FROM_RUNTIME = object()
 
 
 # ── argument parsing ────────────────────────────────────────────────────────
@@ -141,7 +148,8 @@ def build_parser():
                     "idempotently. Creates and modifies; never deletes.")
     commands = parser.add_subparsers(
         dest="command", required=True,
-        metavar="{init,apply,configure,admin,status}")
+        metavar=("{init,apply,configure,admin,status,fleet-status,fleet-apply,"
+                 "eip-handoff,eip-rollback}"))
     commands.add_parser(
         "init", parents=[shared],
         help="ask the eight questions and write the environment file")
@@ -187,17 +195,63 @@ def build_parser():
     status.add_argument(
         "--json", action="store_true",
         help="emit findings, steps and inventory as JSON")
+    fleet_shared = argparse.ArgumentParser(add_help=False)
+    fleet_shared.add_argument("--fleet", required=True,
+                              help="aws/fleets/<fleet>.json to use")
+    fleet_shared.add_argument("--project-root", default=".")
+    fleet_shared.add_argument("--profile")
+    fleet_shared.add_argument("--role-arn")
+    fleet_shared.add_argument("--dry-run", action="store_true")
+    fleet_shared.add_argument("--yes", action="store_true")
+    fleet_status = commands.add_parser(
+        "fleet-status", parents=[fleet_shared],
+        help="validate exact brownfield dependencies and preview the shadow fleet")
+    fleet_status.add_argument("--json", action="store_true")
+    commands.add_parser(
+        "fleet-apply", parents=[fleet_shared],
+        help="revalidate and create only the declared shadow nodes/NLB")
+    handoff_shared = argparse.ArgumentParser(add_help=False)
+    handoff_shared.add_argument("--fleet", required=True)
+    handoff_shared.add_argument("--project-root", default=".")
+    handoff_shared.add_argument("--profile")
+    handoff_shared.add_argument(
+        "--role-arn",
+        help="source role used only to assume the manifest's dedicated role")
+    handoff_shared.add_argument("--plan-file")
+    handoff_shared.add_argument("--plan-digest")
+    handoff_shared.add_argument("--confirm")
+    handoff_shared.add_argument("--operation-id")
+    handoff_shared.add_argument(
+        "--dry-run", action="store_true",
+        help="force preview mode; never invokes a provider mutation")
+    eip_handoff = commands.add_parser(
+        "eip-handoff", parents=[handoff_shared],
+        help="preview, rehearse, execute, or resume an exact EIP handoff")
+    eip_handoff.add_argument(
+        "--mode", choices=("preview", "rehearse", "apply", "resume"),
+        default="preview")
+    eip_rollback = commands.add_parser(
+        "eip-rollback", parents=[handoff_shared],
+        help="preview or execute exact source restoration from a journal")
+    eip_rollback.add_argument(
+        "--mode", choices=("preview", "apply"), default="preview")
     return parser
 
 
-def main(argv, console=None):
+def main(argv, console=None, *,
+         handoff_context=_HANDOFF_FROM_RUNTIME,
+         handoff_plan_loader=_HANDOFF_FROM_RUNTIME,
+         handoff_executor=_HANDOFF_FROM_RUNTIME,
+         operation_id_factory=_HANDOFF_FROM_RUNTIME):
     """The whole program. Returns an exit code; never calls `sys.exit`.
 
     `console` is the reader/writer seam. Left alone it is the real terminal; a
     test hands in a scripted one and drives the entire command in-process,
     which is how the prompt flow, the confirmation and the refusals are covered
     without patching `builtins.input` — a process-global that leaks into
-    whatever else the runner is doing in the same interpreter.
+    whatever else the runner is doing in the same interpreter. The handoff
+    callables are similarly local seams for recovery-path tests; their sentinel
+    defaults resolve to the exact production functions below.
     """
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -212,10 +266,28 @@ def main(argv, console=None):
             return run_configure(args, console)
         if args.command == "admin":
             return run_admin(args, console)
+        if args.command == "fleet-status":
+            return run_fleet_status(args, console)
+        if args.command == "fleet-apply":
+            return run_fleet_apply(args, console)
+        if args.command == "eip-handoff":
+            return run_eip_handoff(
+                args, console, handoff_context=handoff_context,
+                handoff_plan_loader=handoff_plan_loader,
+                handoff_executor=handoff_executor,
+                operation_id_factory=operation_id_factory)
+        if args.command == "eip-rollback":
+            return run_eip_rollback(args, console)
         return run_status(args, console)
     except KeyboardInterrupt:
-        print("\ninterrupted — re-run `apply` to pick up where this stopped; "
-              "there is no state file to clean up", file=sys.stderr)
+        if args.command in ("eip-handoff", "eip-rollback"):
+            print("\ninterrupted — do not guess or run ordinary apply; use "
+                  "the recorded operation and journal to resume or rollback.",
+                  file=sys.stderr)
+            _repeat_recovery(args, console)
+        else:
+            print("\ninterrupted — re-run `apply` to pick up where this stopped; "
+                  "there is no state file to clean up", file=sys.stderr)
         return EXIT_INTERRUPTED
     except inputs.EnvFileError as err:
         print(f"error: {err}", file=sys.stderr)
@@ -223,6 +295,26 @@ def main(argv, console=None):
     except clients_module.CredentialError as err:
         print(f"error: {err}", file=sys.stderr)
         return EXIT_USAGE
+    except brownfield_policy.BrownfieldCallBlocked as err:
+        print(f"error: brownfield safety boundary refused the run: {err}",
+              file=sys.stderr)
+        return EXIT_FINDINGS
+    except brownfield_plan.DependencyDriftError as err:
+        print(f"error: {err}", file=sys.stderr)
+        return EXIT_FINDINGS
+    except handoff_module.HandoffError as err:
+        print(f"error: EIP handoff refused: {err}", file=sys.stderr)
+        _repeat_recovery(args, console)
+        return EXIT_FINDINGS
+    except Exception as err:
+        if (args.command in ("eip-handoff", "eip-rollback")
+                and (err.__class__.__module__.startswith("botocore")
+                     or isinstance(err, OSError))):
+            print(f"error: EIP operation failed: "
+                  f"{handoff_module.bounded_error(err)}", file=sys.stderr)
+            _repeat_recovery(args, console)
+            return EXIT_FINDINGS
+        raise
 
 
 # ── init ────────────────────────────────────────────────────────────────────
@@ -292,6 +384,279 @@ def run_init(args, console):
                     "builds one environment. When you want it:")
         console.say("  python3 -m mojo.deploy.provision init --env staging")
     return EXIT_OK
+
+
+# ── exact-resource brownfield fleets ───────────────────────────────────────
+
+def _fleet(args, console, announce=True):
+    path = brownfield_inputs.fleet_path(args.project_root, args.fleet)
+    manifest = brownfield_inputs.load(path)
+    if manifest["fleet"] != args.fleet:
+        raise inputs.EnvFileError(
+            f"{path} declares fleet {manifest['fleet']!r}, not "
+            f"{args.fleet!r}")
+    topology = brownfield_inputs.to_spec(manifest,
+                                         project_root=args.project_root)
+    connection = clients_module.build_clients(
+        profile=args.profile, role_arn=args.role_arn,
+        region=topology.region,
+        mutation_policy=brownfield_policy.MutationPolicy())
+    identity = clients_module.identify(connection)
+    if announce:
+        console.say(f"account {identity['account_id']} · {topology.region} · "
+                    f"fleet {topology.fleet} · exact-resource brownfield")
+        console.say(f"  as {identity.get('arn')}")
+    return manifest, topology, connection
+
+
+def run_fleet_status(args, console):
+    manifest, topology, connection = _fleet(
+        args, console, announce=not args.json)
+    findings, actions, run = brownfield_plan.observe(connection, topology)
+    if args.json:
+        import json
+        console.say(json.dumps({
+            "account_id": run.observed.get("account_id"),
+            "region": topology.region, "fleet": topology.fleet,
+            "manifest_digest": manifest["manifest_digest"],
+            "dependency_digest": run.observed.get("dependency_digest"),
+            "action_digest": run.observed.get("action_digest"),
+            "inventory": run.observed.get("dependency_inventory"),
+            "steps": {name: dict(step) for name, step in run.steps.items()},
+            **report.Report(findings, actions).as_dict(),
+        }, indent=2, default=str))
+    else:
+        render_findings(findings, console.say)
+        _render_fleet_preview(topology, findings, actions, run, console)
+        console.say("")
+        console.say("fleet-status is read-only: nothing was created or changed.")
+    return EXIT_FINDINGS if run.blocking else EXIT_OK
+
+
+def run_fleet_apply(args, console):
+    manifest, topology, connection = _fleet(args, console)
+    findings, actions, preview = brownfield_plan.observe(connection, topology)
+    render_findings(findings, console.say)
+    _render_fleet_preview(topology, findings, actions, preview, console)
+    if preview.blocking:
+        console.say("")
+        console.say("The exact dependency boundary is not clean, so apply is "
+                    "refused before its first mutation.")
+        return EXIT_FINDINGS
+    if args.dry_run:
+        console.say("")
+        console.say("--dry-run: nothing was created. Re-run without it to "
+                    "prepare the shadow fleet.")
+        return EXIT_OK
+    if not args.yes:
+        if not console.is_interactive():
+            print("error: stdin is not a terminal and --yes was not given; "
+                  "there is nobody to confirm the exact fleet preview.",
+                  file=sys.stderr)
+            return EXIT_USAGE
+        if not console.confirm(
+                f"\nCreate only the shadow fleet resources in account "
+                f"{preview.observed.get('account_id')} / {topology.region}?"):
+            console.say("nothing was created.")
+            return EXIT_OK
+    expected_digest = preview.observed.get("dependency_digest")
+    expected_action_digest = preview.observed.get("action_digest")
+    console.say("")
+    findings, actions, run = brownfield_plan.apply(
+        connection, topology, expected_digest=expected_digest,
+        expected_action_digest=expected_action_digest)
+    render_findings(findings, console.say)
+    render_summary(findings, run, console.say)
+    return _exit_for(run)
+
+
+def _handoff_context(args):
+    path = brownfield_inputs.fleet_path(args.project_root, args.fleet)
+    manifest = brownfield_inputs.load(path)
+    if manifest["fleet"] != args.fleet:
+        raise inputs.EnvFileError(
+            f"{path} declares fleet {manifest['fleet']!r}, not "
+            f"{args.fleet!r}")
+    topology = brownfield_inputs.to_spec(
+        manifest, project_root=args.project_root)
+    connection = clients_module.build_handoff_clients(
+        topology, profile=args.profile, role_arn=args.role_arn)
+    plan_path = args.plan_file or handoff_module.default_plan_path(topology)
+    return topology, connection, plan_path
+
+
+def _require_handoff_args(args, *names):
+    missing = [f"--{name.replace('_', '-')}" for name in names
+               if not getattr(args, name, None)]
+    if missing:
+        raise handoff_module.HandoffRefused(
+            f"{args.command} --mode {args.mode} requires "
+            f"{', '.join(missing)}")
+
+
+def run_eip_handoff(args, console, *,
+                    handoff_context=_HANDOFF_FROM_RUNTIME,
+                    handoff_plan_loader=_HANDOFF_FROM_RUNTIME,
+                    handoff_executor=_HANDOFF_FROM_RUNTIME,
+                    operation_id_factory=_HANDOFF_FROM_RUNTIME):
+    if handoff_context is _HANDOFF_FROM_RUNTIME:
+        handoff_context = _handoff_context
+    if handoff_plan_loader is _HANDOFF_FROM_RUNTIME:
+        handoff_plan_loader = handoff_module.load_plan
+    if handoff_executor is _HANDOFF_FROM_RUNTIME:
+        handoff_executor = handoff_module.handoff
+    topology, connection, plan_path = handoff_context(args)
+    mode = "preview" if args.dry_run else args.mode
+    if args.dry_run and args.mode not in ("preview", "rehearse"):
+        console.say("--dry-run forced preview mode; no provider mutation is reachable.")
+    if mode == "preview":
+        plan = handoff_module.build_plan(connection, topology)
+        handoff_module.save_plan(plan_path, plan)
+        _render_handoff_plan(plan, plan_path, console)
+        console.say("")
+        console.say("preview is read-only: no address, NLB mapping, DNS record, "
+                    "certificate, or data-plane resource was changed.")
+        return EXIT_OK
+
+    _require_handoff_args(args, "plan_digest", "confirm")
+    plan = handoff_plan_loader(plan_path)
+    if mode == "resume":
+        _require_handoff_args(args, "operation_id")
+    elif not args.operation_id:
+        if operation_id_factory is _HANDOFF_FROM_RUNTIME:
+            import uuid
+            operation_id_factory = uuid.uuid4
+        args.operation_id = str(operation_id_factory())
+    handoff_module.validate_operation_id(args.operation_id)
+    args._handoff_recovery = (topology, args.operation_id)
+    console.say("recovery coordinates (record these before continuing):")
+    _render_handoff_coordinates(topology, args.operation_id, console)
+    if mode == "rehearse":
+        journal = handoff_module.rehearse(
+            connection, topology, plan, args.plan_digest, args.confirm,
+            operation_id=args.operation_id)
+        console.say(f"rehearsal {journal['operation_id']} completed without "
+                    f"a provider mutation")
+        _render_handoff_coordinates(topology, journal["operation_id"], console)
+        return EXIT_OK
+    if mode == "resume":
+        journal = handoff_module.resume(
+            connection, topology, plan, args.plan_digest, args.confirm,
+            args.operation_id)
+    else:
+        journal = handoff_executor(
+            connection, topology, plan, args.plan_digest, args.confirm,
+            operation_id=args.operation_id)
+    console.say(f"handoff {journal['operation_id']} reached {journal['state']}")
+    _render_handoff_coordinates(topology, journal["operation_id"], console)
+    return EXIT_OK
+
+
+def run_eip_rollback(args, console):
+    topology, connection, plan_path = _handoff_context(args)
+    _require_handoff_args(args, "plan_digest", "operation_id")
+    handoff_module.validate_operation_id(args.operation_id)
+    plan = handoff_module.load_plan(plan_path)
+    args._handoff_recovery = (topology, args.operation_id)
+    handoff_module._bind_plan(plan, args.plan_digest)
+    handoff_module._bind_boundary_from_plan(connection, plan)
+    if args.dry_run or args.mode == "preview":
+        store = handoff_module.JournalStore(
+            connection, topology, args.operation_id)
+        store.verify_bucket()
+        store.inspect_lock(plan["plan_digest"])
+        journal = store.load(recover=False)
+        handoff_module._journal_matches(journal, plan)
+        state = handoff_module.revalidate_runtime(
+            connection, topology, plan, journal, direction="rollback")
+        console.say("rollback preview — no provider mutation is reachable")
+        console.say(json_dump({
+            "operation_id": args.operation_id,
+            "plan_digest": plan["plan_digest"],
+            "journal_state": journal["state"],
+            "current_nlb_map": state["map"],
+            "exact_inverse": plan["inverse"],
+            "confirmation": handoff_module.expected_confirmation(
+                plan, "ROLLBACK", args.operation_id),
+        }))
+        _render_handoff_coordinates(topology, journal["operation_id"], console)
+        return EXIT_OK
+    _require_handoff_args(args, "confirm")
+    console.say("recovery coordinates (record these before continuing):")
+    _render_handoff_coordinates(topology, args.operation_id, console)
+    journal = handoff_module.rollback(
+        connection, topology, plan, args.plan_digest, args.confirm,
+        args.operation_id)
+    console.say(f"rollback {journal['operation_id']} reached "
+                f"{journal['state']}")
+    _render_handoff_coordinates(topology, journal["operation_id"], console)
+    return EXIT_OK
+
+
+def _render_handoff_plan(plan, path, console):
+    console.say(json_dump(plan))
+    console.say("")
+    console.say(f"immutable plan: {path} (0600)")
+    console.say(f"plan digest: {plan['plan_digest']}")
+    console.say("rehearsal confirmation:")
+    console.say(f"  {handoff_module.expected_confirmation(plan, 'REHEARSE')}")
+    console.say("live handoff confirmation:")
+    console.say(f"  {handoff_module.expected_confirmation(plan, 'HANDOFF')}")
+
+
+def _render_handoff_coordinates(topology, operation_id, console):
+    coordinates = handoff_module.journal_coordinates(topology, operation_id)
+    console.say(f"operation id: {coordinates['operation_id']}")
+    console.say(f"local journal: {coordinates['local_journal']}")
+    console.say(f"remote journal: {coordinates['remote_journal']}")
+    console.say(f"remote lock: {coordinates['remote_lock']}")
+
+
+def _repeat_recovery(args, console):
+    recovery = getattr(args, "_handoff_recovery", None)
+    if recovery:
+        topology, operation_id = recovery
+        console.say("recovery coordinates:")
+        _render_handoff_coordinates(topology, operation_id, console)
+
+
+def json_dump(value):
+    import json
+    return json.dumps(value, indent=2, sort_keys=True, default=str)
+
+
+def _render_fleet_preview(topology, findings, actions, run, console):
+    creates = sum(1 for action in actions if action.verb == "create")
+    modifies = sum(1 for action in actions if action.verb != "create")
+    inventory = run.observed.get("dependency_inventory") or {}
+    dependency_fields = len(_fleet_leaves(inventory))
+    console.say("")
+    console.say("─" * 72)
+    console.say(f"  account: {run.observed.get('account_id')}  "
+                f"region: {topology.region}  fleet: {topology.fleet}")
+    console.say(f"  dependency digest: "
+                f"{run.observed.get('dependency_digest')}")
+    console.say(f"  action digest: {run.observed.get('action_digest')}")
+    console.say(f"  allowed actions: {creates} create · {modifies} modify  "
+                f"read-only dependency fields: {dependency_fields}")
+    console.say("  forced false: manage/publish DNS · certificates/ACM · "
+                "preserved-EIP handoff · database/cache/storage writes")
+    console.say("  no teardown exists; only fleet-tagged preparation "
+                "resources are eligible for convergence")
+
+
+def _fleet_leaves(value):
+    if isinstance(value, dict):
+        rows = []
+        for item in value.values():
+            rows.extend(_fleet_leaves(item))
+        return rows
+    if isinstance(value, list):
+        rows = []
+        for item in value:
+            rows.extend(_fleet_leaves(item))
+        return rows
+    return [value]
 
 
 # ── status ──────────────────────────────────────────────────────────────────

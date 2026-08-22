@@ -103,8 +103,9 @@ def test_inventory_is_paginated_and_preserves_provider_order(opts):
     ])
     client = ScriptedClient()
     client.paginators["list_buckets"] = paginator
-    with mock.patch.object(s3.S3, "_client", client):
-        rows = s3.S3.list_all_buckets()
+    # Injected via list_all_buckets' client seam: assigning s3.S3._client
+    # mutates the shared module-level S3Config under the parallel runner (#2558).
+    rows = s3.S3.list_all_buckets(client=client)
     assert [row["name"] for row in rows] == ["second", "first"], \
         f"inventory must preserve provider order, got {rows}"
     assert paginator.calls == [{"MaxBuckets": 1000}], \
@@ -125,15 +126,14 @@ def test_inventory_failure_is_not_an_empty_account(opts):
     client.paginators["list_buckets"].paginate = mock.Mock(
         side_effect=_client_error("AccessDenied", 403, "ListBuckets")
     )
-    with mock.patch.object(s3.S3, "_client", client):
-        try:
-            s3.S3.list_all_buckets()
-        except s3.S3OperationError as error:
-            assert error.status == 403, f"IAM denial must remain 403, got {error.status}"
-            assert error.provider_code == "AccessDenied", \
-                f"safe provider code should survive, got {error.provider_code}"
-        else:
-            assert False, "inventory IAM denial must raise instead of returning []"
+    try:
+        s3.S3.list_all_buckets(client=client)
+    except s3.S3OperationError as error:
+        assert error.status == 403, f"IAM denial must remain 403, got {error.status}"
+        assert error.provider_code == "AccessDenied", \
+            f"safe provider code should survive, got {error.provider_code}"
+    else:
+        assert False, "inventory IAM denial must raise instead of returning []"
 
 
 @th.django_unit_test()

@@ -1,10 +1,15 @@
-"""Split out of tests/test_aws/aws_check.py (maestro #1839).
+"""Split out of tests/test_aws/aws_check.py (maestro #1839, then #2558).
 
-Every test here goes through `_setup_admin_identity`, which resets the
+Most tests here go through `_setup_admin_identity`, which resets the
 protected installation Setting rows (identity, BASE_URL, MONITORING_TOPICS,
-...) and their Redis cache — global state every parallel module reads — so
-this coverage runs in the opt-in serial tier.
+...) and their Redis cache — global state every parallel module reads. The
+#2558 additions instead patch process-global module/class attributes that
+have no injection seam. Either way the coverage runs in the opt-in serial
+tier.
 """
+import importlib
+import io
+from types import SimpleNamespace
 from unittest import mock
 
 from testit import helpers as th
@@ -1085,3 +1090,87 @@ def test_setup_rejects_public_bucket_without_mutation(opts):
             f"Discovery IAM denial must expose the exact safe action: {exc.detail()}"
     else:
         raise AssertionError("S3 discovery must not misclassify IAM denial as no candidate")
+
+
+def _verified_sts():
+    sts = mock.Mock()
+    sts.get_caller_identity.return_value = {
+        "Account": "123456789012",
+        "Arn": "arn:aws:sts::123456789012:assumed-role/app/runner",
+    }
+    return sts
+
+
+# Moved from tests/test_aws/aws_check.py for the #2558 parallel-safety
+# promotion: it patches the aws_check module's `uuid` attribute, which is
+# process-global state with no injection seam.
+@th.django_unit_test()
+def test_s3_probe_reports_exact_cleanup_failure(opts):
+    from botocore.exceptions import ReadTimeoutError
+    from mojo.apps.fileman.models import FileManager
+    from mojo.apps.aws.services import aws_check
+
+    FileManager.objects.filter(
+        user__isnull=True, group__isnull=True, backend_type=FileManager.AWS_S3,
+    ).delete()
+    manager = FileManager.objects.create(
+        name="aws-check-test", backend_type=FileManager.AWS_S3,
+        backend_url="s3://aws-check-test", is_active=True, is_default=True,
+        is_public=False,
+    )
+    s3 = mock.Mock()
+    s3.head_bucket.return_value = {}
+    s3.get_public_access_block.return_value = {"PublicAccessBlockConfiguration": {
+        "BlockPublicAcls": True, "IgnorePublicAcls": True,
+        "BlockPublicPolicy": True, "RestrictPublicBuckets": True,
+    }}
+    s3.get_bucket_cors.return_value = {"CORSRules": [{"AllowedOrigins": ["https://example.com"]}]}
+    s3.get_object.return_value = {"Body": io.BytesIO(b"probe")}
+    secret = "https://s3.example/?X-Amz-Credential=CLEANUP-SECRET"
+    s3.delete_object.side_effect = ReadTimeoutError(endpoint_url=secret)
+    with mock.patch.object(aws_check.uuid, "uuid4", side_effect=[SimpleNamespace(hex="sentinel"), SimpleNamespace(hex="probe")]):
+        report = aws_check.AWSCheckRunner(
+            clients={"sts": _verified_sts(), "s3": s3},
+            apply=True, yes=True, probe_s3=True,
+        ).run(["s3"])
+    cleanup = next(item for item in report["items"] if item["code"] == "bucket.probe_cleanup_failed")
+    assert cleanup["details"]["key"] == "__django_mojo_aws_check__/sentinel", \
+        f"Cleanup failure must name the exact sentinel, got {cleanup}"
+    assert cleanup["details"]["operation"] == "s3.delete_object", \
+        f"Cleanup ambiguity must retain its bounded operation: {cleanup}"
+    assert "iam_action" not in cleanup["details"], \
+        "Non-authorization failures must not claim a missing IAM action"
+    assert cleanup["details"]["mutation_state"] == "unknown", \
+        f"A timed-out cleanup mutation must remain explicitly ambiguous: {cleanup}"
+    assert secret not in str(cleanup), "Cleanup evidence must not expose the provider endpoint"
+    manager.delete()
+
+
+# Moved from tests/test_aws/aws_check.py for the #2558 parallel-safety
+# promotion: it patches `run` on the management command module's AWSCheckRunner
+# reference, which is the shared class, not a locally-constructed instance.
+@th.django_unit_test()
+def test_aws_check_command_json_and_failure_exit(opts):
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+
+    module = importlib.import_module("mojo.apps.aws.management.commands.aws-check")
+    passed = {
+        "schema_version": 1, "generated_at": "2026-01-01T00:00:00+00:00",
+        "region": "us-east-1", "overall": "pass",
+        "counts": {"pass": 1, "warn": 0, "fail": 0, "pending": 0, "skip": 0},
+        "items": [],
+    }
+    with mock.patch.object(module.AWSCheckRunner, "run", return_value=passed):
+        output = io.StringIO()
+        call_command("aws-check", "--json", stdout=output)
+    assert '"schema_version": 1' in output.getvalue(), "JSON mode must emit the versioned schema"
+
+    failed = dict(passed, overall="fail", counts={"pass": 0, "warn": 0, "fail": 1, "pending": 0, "skip": 0})
+    with mock.patch.object(module.AWSCheckRunner, "run", return_value=failed):
+        try:
+            call_command("aws-check", "--check", stdout=io.StringIO())
+        except CommandError as exc:
+            assert exc.returncode == 1, f"Required failures must exit 1, got {exc.returncode}"
+        else:
+            assert False, "A required readiness failure must raise CommandError"

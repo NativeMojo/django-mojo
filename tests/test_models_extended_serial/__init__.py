@@ -1,6 +1,7 @@
 TESTIT = {
-    # Tests that mutate django.conf.settings process-wide — unsafe under the
-    # parallel default tier (maestro item #1839).
+    # Tests that mutate process-wide state — django.conf.settings (maestro
+    # item #1839) or a shared model's RestMeta attributes (item #2558) —
+    # unsafe under the parallel default tier.
     "requires_extra": ["extended"],
     "serial": True,
 }

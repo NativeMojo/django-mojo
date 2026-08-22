@@ -45,7 +45,14 @@ def inactive_sweep(job):
     return results
 
 
-def push_abuse_signals(job):
+# Sentinel default for push_abuse_signals' keyword-only test seams —
+# distinguishes "not provided, read the geoip config" from an explicit None
+# (item #2558).
+_CONFIG_FROM_SETTINGS = object()
+
+
+def push_abuse_signals(job, *, base_url=_CONFIG_FROM_SETTINGS,
+                       api_key=_CONFIG_FROM_SETTINGS):
     """
     Push observed abuse-signal updates to an upstream mojo GeoIP provider.
 
@@ -59,6 +66,10 @@ def push_abuse_signals(job):
       - Missing config (URL or API key): log and return without retry.
 
     Called via jobs.publish() from GeoLocatedIP._maybe_push_abuse_signals().
+
+    `base_url` / `api_key` are keyword-only test seams (item #2558): the
+    sentinel defaults preserve the geoip config reads exactly, so production
+    behavior is byte-identical. The jobs engine calls this with `job` only.
     """
     from mojo.helpers.geoip import config as geoip_config
     # Lazy import, as the incident plane depends on models that are not needed
@@ -101,8 +112,10 @@ def push_abuse_signals(job):
             level=4, request=None)
         return
 
-    base_url = geoip_config.MOJO_PROVIDER_URL
-    api_key = geoip_config.get_api_key("mojo")
+    if base_url is _CONFIG_FROM_SETTINGS:
+        base_url = geoip_config.MOJO_PROVIDER_URL
+    if api_key is _CONFIG_FROM_SETTINGS:
+        api_key = geoip_config.get_api_key("mojo")
     if not base_url or not api_key:
         # Name the SETTINGS, never their values — the URL and api key are secret.
         report_event_suppressed(

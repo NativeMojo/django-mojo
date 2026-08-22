@@ -579,7 +579,8 @@ def check_all_blocklists(ip_address):
     }
 
 
-def perform_threat_check(ip_address, skip_external=False):
+def perform_threat_check(ip_address, skip_external=False, *,
+                         check_internal=None, check_external=None):
     """
     Perform comprehensive threat check on an IP address.
     This is the main entry point for threat intelligence.
@@ -589,6 +590,10 @@ def perform_threat_check(ip_address, skip_external=False):
         skip_external: When True, skip third-party blocklist HTTP calls and rely
             solely on local internal-event analysis. Used by the `mojo` GeoIP
             provider — the upstream already ran external checks on its side.
+
+    `check_internal` / `check_external` are keyword-only test seams
+    (item #2558) defaulting to this module's check_internal_threats and
+    check_all_blocklists; production behavior is byte-identical.
 
     Returns dict with:
     - is_known_attacker: Based on internal high-severity events
@@ -600,14 +605,14 @@ def perform_threat_check(ip_address, skip_external=False):
       GeoLocatedIP.data and is what recalculate_threat_level() reads)
     """
     # Check internal incident database
-    internal_threats = check_internal_threats(ip_address)
+    internal_threats = (check_internal or check_internal_threats)(ip_address)
 
     # Check external blocklists (unless caller is skipping — e.g. mojo provider
     # where the upstream already aggregated external intel).
     if skip_external:
         blocklist_results = {'blocklist_hits': [], 'is_blocklisted': False}
     else:
-        blocklist_results = check_all_blocklists(ip_address)
+        blocklist_results = (check_external or check_all_blocklists)(ip_address)
 
     # Aggregate results
     result = {

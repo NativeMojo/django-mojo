@@ -107,17 +107,21 @@ def zone_candidates(fqdn):
     return [".".join(labels[i:]) for i in range(0, max(len(labels) - 1, 1))]
 
 
-def _default_resolver(timeout=QUERY_TIMEOUT):
+def _default_resolver(timeout=QUERY_TIMEOUT, dns=None):
     """A system-configured resolver, used only to LOOK UP the authority."""
-    resolver = dns_resolver.Resolver()
+    if dns is None:
+        dns = dns_resolver
+    resolver = dns.Resolver()
     resolver.timeout = timeout
     resolver.lifetime = timeout
     return resolver
 
 
-def _pinned_resolver(addresses, timeout=QUERY_TIMEOUT):
+def _pinned_resolver(addresses, timeout=QUERY_TIMEOUT, dns=None):
     """A resolver that talks ONLY to the given nameserver addresses."""
-    resolver = dns_resolver.Resolver(configure=False)
+    if dns is None:
+        dns = dns_resolver
+    resolver = dns.Resolver(configure=False)
     resolver.nameservers = list(addresses)
     resolver.timeout = timeout
     resolver.lifetime = timeout
@@ -132,7 +136,7 @@ def _rdata_host(rdata):
     return normalize_name(rdata)
 
 
-def query_cname(fqdn, nameservers=None, timeout=QUERY_TIMEOUT):
+def query_cname(fqdn, nameservers=None, timeout=QUERY_TIMEOUT, *, dns=None):
     """Query the directly attached CNAME RRset at authoritative servers.
 
     A recursive answer is not ownership proof: it may be stale, synthesized,
@@ -140,9 +144,14 @@ def query_cname(fqdn, nameservers=None, timeout=QUERY_TIMEOUT):
     closest public DNS cut, pin a resolver to those server addresses, and ask
     for CNAME specifically.  Missing names/RRsets are clean empty answers;
     authority discovery and transport failures remain distinguishable.
+
+    ``dns`` is an injection seam for tests: a stand-in for the
+    ``dns.resolver`` module (None means the real dnspython resolver).
     """
     if not DNS_AVAILABLE:
         return objict(targets=[], error="dnspython not installed")
+    if dns is None:
+        dns = dns_resolver
 
     name = normalize_name(fqdn)
     if not name:
@@ -150,20 +159,21 @@ def query_cname(fqdn, nameservers=None, timeout=QUERY_TIMEOUT):
     zone = None
     addresses = list(nameservers) if nameservers else []
     if not addresses:
-        found = find_zone_nameservers(name, timeout=timeout)
+        found = find_zone_nameservers(name, timeout=timeout, dns=dns)
         if found.error:
             return objict(targets=[], zone=None, nameservers=[], error=found.error)
         zone = found.zone
         addresses = resolve_nameserver_addresses(
-            found.nameservers, timeout=timeout)
+            found.nameservers, timeout=timeout, dns=dns)
         if not addresses:
             return objict(
                 targets=[], zone=zone, nameservers=[],
                 error=f"could not resolve any nameserver address for zone {zone}")
 
     try:
-        answers = _pinned_resolver(addresses, timeout).resolve(name, "CNAME")
-    except (dns_resolver.NXDOMAIN, dns_resolver.NoAnswer):
+        answers = _pinned_resolver(addresses, timeout, dns=dns).resolve(
+            name, "CNAME")
+    except (dns.NXDOMAIN, dns.NoAnswer):
         return objict(
             targets=[], zone=zone, nameservers=addresses, error=None)
     except Exception as err:
@@ -179,7 +189,8 @@ def query_cname(fqdn, nameservers=None, timeout=QUERY_TIMEOUT):
         targets=targets, zone=zone, nameservers=addresses, error=None)
 
 
-def verify_one_hop_cname(source, expected_target, timeout=QUERY_TIMEOUT):
+def verify_one_hop_cname(source, expected_target, timeout=QUERY_TIMEOUT,
+                         dns=None):
     """Prove ``source`` is exactly one public CNAME hop to ``expected_target``.
 
     Returns ``objict(ok, error)`` without leaking unrelated DNS answers.  A
@@ -191,13 +202,13 @@ def verify_one_hop_cname(source, expected_target, timeout=QUERY_TIMEOUT):
     if not source or not expected_target or source == expected_target:
         return objict(ok=False, error="invalid CNAME delegation")
 
-    first = query_cname(source, timeout=timeout)
+    first = query_cname(source, timeout=timeout, dns=dns)
     if first.error:
         return objict(ok=False, error="CNAME lookup failed")
     if first.targets != [expected_target]:
         return objict(ok=False, error="CNAME delegation does not match the allocation")
 
-    second = query_cname(expected_target, timeout=timeout)
+    second = query_cname(expected_target, timeout=timeout, dns=dns)
     if second.error:
         return objict(ok=False, error="CNAME target lookup failed")
     if second.targets:
@@ -213,28 +224,33 @@ def _rdata_address(rdata):
     return str(rdata).strip()
 
 
-def find_zone_nameservers(fqdn, timeout=QUERY_TIMEOUT):
+def find_zone_nameservers(fqdn, timeout=QUERY_TIMEOUT, *, dns=None):
     """
     Walk up the labels of `fqdn` and return the closest zone that has NS records.
 
     Returns objict(zone, nameservers, error). `nameservers` are hostnames.
+
+    ``dns`` is an injection seam for tests: a stand-in for the
+    ``dns.resolver`` module (None means the real dnspython resolver).
     """
     if not DNS_AVAILABLE:
         return objict(zone=None, nameservers=[], error="dnspython not installed")
+    if dns is None:
+        dns = dns_resolver
 
     candidates = zone_candidates(fqdn)
     if not candidates:
         return objict(zone=None, nameservers=[], error="invalid name")
 
-    resolver = _default_resolver(timeout)
+    resolver = _default_resolver(timeout, dns=dns)
     last_error = None
     for candidate in candidates:
         try:
             answers = resolver.resolve(candidate, "NS")
-        except dns_resolver.NXDOMAIN:
+        except dns.NXDOMAIN:
             # The name itself does not exist — its parent still might.
             continue
-        except dns_resolver.NoAnswer:
+        except dns.NoAnswer:
             # Exists, but is not a zone cut — keep walking up.
             continue
         except Exception as err:
@@ -254,12 +270,12 @@ def find_zone_nameservers(fqdn, timeout=QUERY_TIMEOUT):
     return objict(zone=None, nameservers=[], error=last_error)
 
 
-def resolve_nameserver_addresses(hosts, timeout=QUERY_TIMEOUT):
+def resolve_nameserver_addresses(hosts, timeout=QUERY_TIMEOUT, *, dns=None):
     """Resolve NS hostnames to addresses (A first, AAAA only when there is no A)."""
     if not DNS_AVAILABLE:
         return []
 
-    resolver = _default_resolver(timeout)
+    resolver = _default_resolver(timeout, dns=dns)
     addresses = []
     for host in hosts:
         for rtype in ("A", "AAAA"):
@@ -279,7 +295,7 @@ def resolve_nameserver_addresses(hosts, timeout=QUERY_TIMEOUT):
     return addresses
 
 
-def query_txt(fqdn, nameservers=None, timeout=QUERY_TIMEOUT):
+def query_txt(fqdn, nameservers=None, timeout=QUERY_TIMEOUT, *, dns=None):
     """
     Query TXT for `fqdn` against the zone's authoritative nameservers.
 
@@ -288,31 +304,37 @@ def query_txt(fqdn, nameservers=None, timeout=QUERY_TIMEOUT):
     `txt_values` and not `values` because objict is a dict subclass and `.values`
     would resolve to the dict method instead of our data. A name that simply has
     no TXT record yet is NOT an error — it returns an empty `txt_values` list.
+
+    ``dns`` is an injection seam for tests: a stand-in for the
+    ``dns.resolver`` module (None means the real dnspython resolver).
     """
     if not DNS_AVAILABLE:
         return objict(txt_values=[], zone=None, nameservers=[], error="dnspython not installed")
+    if dns is None:
+        dns = dns_resolver
 
     name = normalize_name(fqdn)
     zone = None
     addresses = list(nameservers) if nameservers else []
 
     if not addresses:
-        found = find_zone_nameservers(name, timeout=timeout)
+        found = find_zone_nameservers(name, timeout=timeout, dns=dns)
         if found.error:
             return objict(txt_values=[], zone=None, nameservers=[], error=found.error)
         zone = found.zone
-        addresses = resolve_nameserver_addresses(found.nameservers, timeout=timeout)
+        addresses = resolve_nameserver_addresses(
+            found.nameservers, timeout=timeout, dns=dns)
         if not addresses:
             return objict(
                 txt_values=[], zone=zone, nameservers=[],
                 error=f"could not resolve any nameserver address for zone {zone}")
 
-    resolver = _pinned_resolver(addresses, timeout=timeout)
+    resolver = _pinned_resolver(addresses, timeout=timeout, dns=dns)
     try:
         answers = resolver.resolve(name, "TXT")
-    except dns_resolver.NXDOMAIN:
+    except dns.NXDOMAIN:
         return objict(txt_values=[], zone=zone, nameservers=addresses, error=None)
-    except dns_resolver.NoAnswer:
+    except dns.NoAnswer:
         return objict(txt_values=[], zone=zone, nameservers=addresses, error=None)
     except Exception as err:
         return objict(txt_values=[], zone=zone, nameservers=addresses, error=str(err))
@@ -325,11 +347,18 @@ def query_txt(fqdn, nameservers=None, timeout=QUERY_TIMEOUT):
     return objict(txt_values=values, zone=zone, nameservers=addresses, error=None)
 
 
-def wait_for_txt(fqdn, expected_values, timeout=DEFAULT_TIMEOUT, interval=DEFAULT_INTERVAL):
+def wait_for_txt(fqdn, expected_values, timeout=DEFAULT_TIMEOUT,
+                 interval=DEFAULT_INTERVAL, *, dns=None, query=None,
+                 sleep=None):
     """
     Poll the authoritative nameservers until every expected TXT value is visible.
 
     Returns (ok, seen_values).
+
+    ``dns``, ``query`` and ``sleep`` are injection seams for tests: ``query``
+    replaces the per-poll TXT lookup (default ``query_txt``, threaded with
+    ``dns``), and ``sleep`` replaces the between-poll wait (default
+    ``time.sleep``).
 
     `ok` is True only when EVERY value in `expected_values` is present — a
     subset check, not equality, because a wildcard and its base domain
@@ -352,14 +381,19 @@ def wait_for_txt(fqdn, expected_values, timeout=DEFAULT_TIMEOUT, interval=DEFAUL
     if not expected:
         return False, []
 
+    if sleep is None:
+        sleep = time.sleep
     deadline = time.monotonic() + max(timeout or 0, 0)
     seen = []
     while True:
-        result = query_txt(fqdn)
+        if query is not None:
+            result = query(fqdn)
+        else:
+            result = query_txt(fqdn, dns=dns)
         seen = result.txt_values
         if expected.issubset(set(seen)):
             return True, seen
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return False, seen
-        time.sleep(max(min(interval, remaining), 0))
+        sleep(max(min(interval, remaining), 0))

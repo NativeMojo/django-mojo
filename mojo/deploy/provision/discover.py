@@ -46,6 +46,17 @@ STEP = "discover"
 DESTRUCTIVE_PREFIXES = ("delete_", "terminate_", "destroy_", "deregister_",
                         "revoke_", "remove_")
 
+# These provider verbs do not carry an obviously destructive prefix, but they
+# cross the live-ingress cutover boundary just as surely as a delete.  The
+# ordinary managed and brownfield clients can never reach them.  The preserved
+# address workflow builds a different, positive-allowlist client after assuming
+# its dedicated role; it does not weaken this seam.
+FORBIDDEN_METHODS = frozenset((
+    ("ec2", "disassociate_address"),
+    ("ec2", "release_address"),
+    ("elbv2", "set_subnets"),
+))
+
 # "Not there" is an answer, not a failure. Every one of these is a normal
 # response to asking about a resource on an empty account.
 NOT_FOUND_CODES = (
@@ -90,11 +101,19 @@ class GuardedClient:
     and worth having anyway.
     """
 
-    def __init__(self, client, service):
+    def __init__(self, client, service, mutation_policy=None):
         self._client = client
         self._service = service
+        self._mutation_policy = mutation_policy
 
     def __getattr__(self, name):
+        if (self._service, name) in FORBIDDEN_METHODS:
+            raise DestructiveCallBlocked(
+                f"{self._service}.{name} crosses the preserved-address "
+                f"cutover boundary and is unavailable to ordinary "
+                f"provisioning clients")
+        if self._mutation_policy is not None:
+            self._mutation_policy.authorize(self._service, name)
         if name.startswith(DESTRUCTIVE_PREFIXES):
             raise DestructiveCallBlocked(
                 f"{self._service}.{name} is a destructive call — "
@@ -119,8 +138,10 @@ class Clients:
     2. The destructive-call guard above, which needs one place to wrap.
     """
 
-    def __init__(self, session=None, **overrides):
+    def __init__(self, session=None, mutation_policy=None, **overrides):
         self._session = session
+        self.region_name = getattr(session, "region_name", None)
+        self._mutation_policy = mutation_policy
         self._overrides = dict(overrides)
         self._cache = {}
 
@@ -130,7 +151,7 @@ class Clients:
         client = self._overrides.get(service)
         if client is None:
             client = self._build(service)
-        guarded = GuardedClient(client, service)
+        guarded = GuardedClient(client, service, self._mutation_policy)
         self._cache[service] = guarded
         return guarded
 

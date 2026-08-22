@@ -31,6 +31,12 @@ THE CONTRACT FOR THIS PACKAGE — on top of `mojo/deploy/`'s own (see
       a source scan in `tests/test_deploy/provision_ensure.py` refuses them at
       review time. Converging an account is additive; tearing one down is a
       deliberate human act performed elsewhere.
+      One separately credentialed exception exists: ``handoff`` can remove and
+      restore one declared NLB subnet mapping and disassociate/reassociate one
+      exact preserved allocation. It assumes the manifest's dedicated role,
+      uses complete-map CAS plus a local/versioned-S3 write-ahead journal, and
+      has no address-release, DNS, certificate, delete or general-provisioning
+      method. Ordinary clients also block those cutover verbs explicitly.
     - No boto3 waiters. RDS, ElastiCache and NLBs take five to fifteen minutes
       to become usable, and a waiter would either hang the CLI or need every
       poll stubbed in tests. A resource that is still coming up is a PENDING
@@ -65,6 +71,8 @@ THE MODULES
     data            Aurora PostgreSQL cluster, Valkey replication group.
     nodes           AMI resolution, EC2 instances, per-node EIPs.
     balancer        NLB, target groups, listeners, target registration.
+    handoff         dedicated-role preserved-EIP preview/rehearse/transfer/
+                    resume/rollback with full-map CAS and dual journal.
     observability   CloudTrail, GuardDuty, the CloudWatch log groups.
     dns             optional hosted zone and A records.
     plan            the DAG that orders all of the above, and the two entry

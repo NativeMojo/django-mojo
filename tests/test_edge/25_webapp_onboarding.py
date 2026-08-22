@@ -779,12 +779,12 @@ def test_precheck_managed_ready_uses_probe_only(opts):
     from mojo.apps.edge.services import webapp_onboarding
 
     domain = make_domain(group=opts.group, provider="route53")
-    with mock.patch("mojo.apps.dnsman.services.dns.list_records") as listed, \
-            mock.patch("mojo.helpers.dns.probe.query_cname",
-                       return_value=mock.Mock(targets=[])):
+    with mock.patch("mojo.apps.dnsman.services.dns.list_records") as listed:
         r = with_setting(
             "EDGE_WEBAPP_CNAME_TARGET", TARGET,
-            lambda: webapp_onboarding.precheck(opts.group, f"https://app.{domain.name}"))
+            lambda: webapp_onboarding.precheck(
+                opts.group, f"https://app.{domain.name}",
+                resolve_cname=lambda *a, **kw: mock.Mock(targets=[])))
     assert r["verdict"] == "ready", f"a clear managed address was not ready: {r}"
     listed.assert_not_called()  # a per-click zone enumeration is the whole thing to avoid
 
@@ -796,11 +796,11 @@ def test_precheck_external_records_needed(opts):
     from mojo.apps.edge.services import webapp_onboarding
 
     domain = make_domain(group=opts.group, provider="mojo")
-    with mock.patch("mojo.helpers.dns.probe.query_cname",
-                    return_value=mock.Mock(targets=[])):
-        r = with_setting(
-            "EDGE_WEBAPP_CNAME_TARGET", TARGET,
-            lambda: webapp_onboarding.precheck(opts.group, f"https://app.{domain.name}"))
+    r = with_setting(
+        "EDGE_WEBAPP_CNAME_TARGET", TARGET,
+        lambda: webapp_onboarding.precheck(
+            opts.group, f"https://app.{domain.name}",
+            resolve_cname=lambda *a, **kw: mock.Mock(targets=[])))
     assert r["verdict"] == "records_needed", \
         f"an external domain with no published CNAME was not records_needed: {r}"
     # Exactly one record — the app CNAME. The _acme-challenge was already
@@ -826,11 +826,10 @@ def test_external_address_waits_for_user(opts):
     op = _address_operation(opts, domain)
 
     def run():
-        with mock.patch("mojo.helpers.dns.probe.query_cname",
-                        return_value=mock.Mock(targets=[])), \
-                mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
+        with mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
                 mock.patch("mojo.apps.dnsman.services.dns.list_records") as listed:
-            outcome = webapp_onboarding._advance_address(op)
+            outcome = webapp_onboarding._advance_address(
+                op, resolve_cname=lambda *a, **kw: mock.Mock(targets=[]))
             return outcome, upsert, listed
 
     outcome, upsert, listed = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
@@ -860,12 +859,11 @@ def test_external_address_requests_wildcard_cert(opts):
             sans=[domain_arg.name, f"*.{domain_arg.name}"], status="pending")
 
     def run():
-        with mock.patch("mojo.helpers.dns.probe.query_cname",
-                        return_value=mock.Mock(targets=[TARGET])), \
-                mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
+        with mock.patch("mojo.apps.dnsman.services.dns.upsert_record") as upsert, \
                 mock.patch("mojo.apps.dnsman.services.certs.request_certificate",
                            side_effect=issue) as request:
-            outcome = webapp_onboarding._advance_address(op)
+            outcome = webapp_onboarding._advance_address(
+                op, resolve_cname=lambda *a, **kw: mock.Mock(targets=[TARGET]))
             return outcome, upsert, request
 
     outcome, upsert, request = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
@@ -889,10 +887,9 @@ def test_external_failed_cert_waits(opts):
     op.save(update_fields=["attempts"])
 
     def run():
-        with mock.patch("mojo.helpers.dns.probe.query_cname",
-                        return_value=mock.Mock(targets=[TARGET])), \
-                mock.patch("mojo.apps.dnsman.services.certs.request_certificate") as request:
-            outcome = webapp_onboarding._advance_address(op)
+        with mock.patch("mojo.apps.dnsman.services.certs.request_certificate") as request:
+            outcome = webapp_onboarding._advance_address(
+                op, resolve_cname=lambda *a, **kw: mock.Mock(targets=[TARGET]))
             return outcome, request
 
     outcome, request = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
@@ -915,10 +912,9 @@ def test_external_reuses_wildcard_cert(opts):
     op = _address_operation(opts, domain, label="app", slug="extreuse")
 
     def run():
-        with mock.patch("mojo.helpers.dns.probe.query_cname",
-                        return_value=mock.Mock(targets=[TARGET])), \
-                mock.patch("mojo.apps.dnsman.services.certs.request_certificate") as request:
-            outcome = webapp_onboarding._advance_address(op)
+        with mock.patch("mojo.apps.dnsman.services.certs.request_certificate") as request:
+            outcome = webapp_onboarding._advance_address(
+                op, resolve_cname=lambda *a, **kw: mock.Mock(targets=[TARGET]))
             return outcome, request
 
     outcome, request = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
@@ -1094,12 +1090,11 @@ def test_precheck_managed_missing_destination_is_not_blank_ready(opts):
     # a DNS record with a blank destination — the WMWX-stage regression. The
     # _base_url patch makes "unresolvable" deterministic under the shared DB.
     def run():
-        with mock.patch("mojo.helpers.dns.probe.query_cname",
-                        return_value=mock.Mock(targets=[])), \
-                mock.patch("mojo.apps.edge.services.webapp_destination._base_url",
-                           return_value=""):
+        with mock.patch("mojo.apps.edge.services.webapp_destination._base_url",
+                        return_value=""):
             return webapp_onboarding.precheck(
-                opts.group, f"https://app.{domain.name}")
+                opts.group, f"https://app.{domain.name}",
+                resolve_cname=lambda *a, **kw: mock.Mock(targets=[]))
 
     r = with_setting("EDGE_WEBAPP_CNAME_TARGET", "", run)
     for record in r.get("records") or []:
@@ -1124,14 +1119,13 @@ def test_precheck_managed_derives_destination_from_base_url(opts):
         domain = make_domain(group=opts.group, provider=provider)
 
         def run():
-            with mock.patch("mojo.helpers.dns.probe.query_cname",
-                            return_value=mock.Mock(targets=[])), \
-                    mock.patch("mojo.apps.dnsman.services.dns.list_records") as listed, \
+            with mock.patch("mojo.apps.dnsman.services.dns.list_records") as listed, \
                     mock.patch(
                         "mojo.apps.edge.services.webapp_destination._base_url",
                         return_value="https://api.stage.example"):
                 return webapp_onboarding.precheck(
-                    opts.group, f"https://app.{domain.name}"), listed
+                    opts.group, f"https://app.{domain.name}",
+                    resolve_cname=lambda *a, **kw: mock.Mock(targets=[])), listed
 
         # No EDGE_WEBAPP_CNAME_TARGET — the destination comes from BASE_URL.
         r, listed = with_setting("EDGE_WEBAPP_CNAME_TARGET", "", run)
@@ -1193,11 +1187,11 @@ def test_precheck_wildcard_synthesis_is_not_conflict(opts):
     # specific record the platform writes takes precedence over the wildcard,
     # so this must not block onboarding.
     def run():
-        with mock.patch("mojo.helpers.dns.probe.query_cname",
-                        return_value=mock.Mock(targets=["legacy.example.net"])), \
-                mock.patch("mojo.apps.dnsman.services.dns.list_records") as listed:
+        with mock.patch("mojo.apps.dnsman.services.dns.list_records") as listed:
             return webapp_onboarding.precheck(
-                opts.group, f"https://app.{domain.name}"), listed
+                opts.group, f"https://app.{domain.name}",
+                resolve_cname=lambda *a, **kw: mock.Mock(
+                    targets=["legacy.example.net"])), listed
 
     r, listed = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
     assert r["verdict"] == "ready", \
@@ -1212,10 +1206,9 @@ def test_precheck_wildcard_synthesis_is_not_conflict(opts):
         return mock.Mock(targets=[])
 
     def run_conflict():
-        with mock.patch("mojo.helpers.dns.probe.query_cname",
-                        side_effect=host_specific):
-            return webapp_onboarding.precheck(
-                opts.group, f"https://app.{domain.name}")
+        return webapp_onboarding.precheck(
+            opts.group, f"https://app.{domain.name}",
+            resolve_cname=host_specific)
 
     r = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run_conflict)
     assert r["verdict"] == "conflict", \
@@ -1489,12 +1482,11 @@ def test_precheck_external_missing_destination(opts):
     domain = make_domain(group=opts.group, provider="mojo")
 
     def run():
-        with mock.patch("mojo.helpers.dns.probe.query_cname",
-                        return_value=mock.Mock(targets=[])), \
-                mock.patch("mojo.apps.edge.services.webapp_destination._base_url",
-                           return_value=""):
+        with mock.patch("mojo.apps.edge.services.webapp_destination._base_url",
+                        return_value=""):
             return webapp_onboarding.precheck(
-                opts.group, f"https://app.{domain.name}")
+                opts.group, f"https://app.{domain.name}",
+                resolve_cname=lambda *a, **kw: mock.Mock(targets=[]))
 
     r = with_setting("EDGE_WEBAPP_CNAME_TARGET", "", run)
     assert r["verdict"] == "configuration_required", \
@@ -1730,12 +1722,12 @@ def test_ancestor_domain_onboards_end_to_end(opts):
 
     # Precheck: the child group sees its ancestor's domain...
     def run_precheck(group):
-        with mock.patch("mojo.helpers.dns.probe.query_cname",
-                        return_value=mock.Mock(targets=[])), \
-                mock.patch(
-                    "mojo.apps.edge.services.webapp_apps_domain._base_url",
-                    return_value=""):
-            return webapp_onboarding.precheck(group, f"https://app.{domain.name}")
+        with mock.patch(
+                "mojo.apps.edge.services.webapp_apps_domain._base_url",
+                return_value=""):
+            return webapp_onboarding.precheck(
+                group, f"https://app.{domain.name}",
+                resolve_cname=lambda *a, **kw: mock.Mock(targets=[]))
 
     ready = with_setting(
         "EDGE_WEBAPP_CNAME_TARGET", TARGET, lambda: run_precheck(child))

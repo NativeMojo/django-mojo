@@ -1455,7 +1455,6 @@ def test_concurrent_first_init_is_safe(opts):
     """
     from mojo.helpers.redis.pool import RedisModelPool
     from mojo.apps.account.models import Group
-    from unittest.mock import patch
     import threading
 
     pool_key = 'test_concurrent_first_init'
@@ -1465,28 +1464,29 @@ def test_concurrent_first_init_is_safe(opts):
     barrier = threading.Barrier(5)
     errors = []
 
-    original_destroy = RedisModelPool.destroy_pool
-
-    def slow_destroy(self):
-        time.sleep(0.05)
-        return original_destroy(self)
+    # Test-owned subclass widens the destroy window without patching the
+    # shared RedisModelPool class (item #2558) — init_pool dispatches through
+    # self.destroy_pool, so only these workers see the slow version.
+    class SlowDestroyPool(RedisModelPool):
+        def destroy_pool(self):
+            time.sleep(0.05)
+            return RedisModelPool.destroy_pool(self)
 
     def worker():
         try:
             barrier.wait()
-            local_pool = RedisModelPool(
+            local_pool = SlowDestroyPool(
                 Group, {'is_active': True, 'pk__in': [1, 2, 3]}, pool_key)
             instance = Group.objects.get(pk=1)
             local_pool.add_to_pool(instance)
         except Exception as e:
             errors.append(e)
 
-    with patch.object(RedisModelPool, 'destroy_pool', slow_destroy):
-        threads = [threading.Thread(target=worker) for _ in range(5)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+    threads = [threading.Thread(target=worker) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
     assert errors == [], f"workers raised errors: {errors}"
 

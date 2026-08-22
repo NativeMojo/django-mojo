@@ -212,12 +212,15 @@ def find_covering_certificate(domain, names, now=None):
     return None
 
 
-def request_certificate(domain, names=None):
+def request_certificate(domain, names=None, *, publish=None):
     """
     Create a pending Certificate for a domain and queue its issuance.
 
     Returns the Certificate row. Issuance itself happens on the job runner —
     see ``asyncjobs.issue_certificate``.
+
+    ``publish`` is an injection seam for tests, replacing ``publish_job``
+    (None means the real queue).
     """
     from mojo.apps.dnsman.models import Certificate
     from mojo.apps.dnsman.models.certificate import (
@@ -252,7 +255,7 @@ def request_certificate(domain, names=None):
                 status=STATUS_PENDING)
 
     if cert.status != STATUS_ISSUING:
-        publish_job(job_func, cert)
+        (publish if publish is not None else publish_job)(job_func, cert)
     return cert
 
 
@@ -325,7 +328,7 @@ def has_still_valid_material(certificate, now=None):
         and certificate.cert_pem
         and certificate.mojo_secrets)
 
-def issue(certificate):
+def issue(certificate, *, acme=None, sync=None, wait_for_txt=None):
     """
     Run the full DNS-01 issuance for a Certificate row.
 
@@ -333,16 +336,23 @@ def issue(certificate):
     row (``status``, ``last_error``, ``attempts``) and the return value says
     which way it went. Callers that want a loud failure — the job handler,
     for one — inspect ``result.ok``.
+
+    ``acme``, ``sync`` and ``wait_for_txt`` are injection seams for tests:
+    ``acme`` is a zero-argument loader returning ``(account, client)`` in
+    place of ``_get_account``, ``sync`` replaces ``publish_sync``, and
+    ``wait_for_txt`` replaces the delegated propagation probe. None means
+    the real collaborators.
     """
     from mojo.apps.dnsman.models import Certificate
     with _issue_lock(certificate.pk) as acquired:
         if not acquired:
             current = Certificate.objects.get(pk=certificate.pk)
             return objict(ok=True, certificate=current, skipped=True)
-        return _issue_locked(certificate)
+        return _issue_locked(certificate, acme=acme, sync=sync,
+                             wait_for_txt=wait_for_txt)
 
 
-def _issue_locked(certificate):
+def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
     """Issue while the caller holds the certificate advisory lock."""
     from mojo.apps.dnsman.models import Certificate
     from mojo.apps.dnsman.models.certificate import (
@@ -351,7 +361,9 @@ def _issue_locked(certificate):
     from mojo.apps.dnsman.services import delegation
     from mojo.apps.dnsman.services import dns
     from mojo.apps.dnsman.services import record_reservations
-    from mojo.helpers import acme
+    # Aliased: the module must not shadow this function's `acme`
+    # loader seam (maestro item #2558).
+    from mojo.helpers import acme as acme_helpers
 
     with transaction.atomic():
         claimed = Certificate.objects.select_for_update().select_related(
@@ -410,7 +422,7 @@ def _issue_locked(certificate):
     challenge_changes = {}
     delegated_challenge_ref = None
     try:
-        account, client = _get_account()
+        account, client = acme() if acme is not None else _get_account()
         if delegated is not None:
             delegated = delegation.require_current_owner(delegated)
         order = client.new_order(names)
@@ -425,7 +437,7 @@ def _issue_locked(certificate):
         # exactly one of the two authorizations would fail.
         if delegated is not None:
             delegated_challenge_ref = _publish_delegated_challenges(
-                delegated, challenges)
+                delegated, challenges, wait_for_txt=wait_for_txt)
         else:
             for record_name, digests in challenges.items():
                 reservation = record_reservations.reserve(
@@ -457,13 +469,13 @@ def _issue_locked(certificate):
 
         # finalize needs `ready`, not `valid` — polling to `valid` here would
         # wait forever for a certificate no one has asked for yet.
-        order = client.poll_order(order.get("url"), until=acme.ORDER_READY)
+        order = client.poll_order(order.get("url"), until=acme_helpers.ORDER_READY)
         if order.get("status") == "invalid":
             raise me.ValueException(
                 f"The CA could not validate the order: {_order_error(order)}")
 
-        key = acme.generate_key()
-        client.finalize(order, acme.make_csr(key, names))
+        key = acme_helpers.generate_key()
+        client.finalize(order, acme_helpers.make_csr(key, names))
 
         order = client.poll_order(order.get("url"))
         if order.get("status") != "valid":
@@ -480,7 +492,7 @@ def _issue_locked(certificate):
 
         certificate.cert_pem = cert_pem
         certificate.chain_pem = chain_pem
-        certificate.set_private_key_pem(acme.dump_key(key))
+        certificate.set_private_key_pem(acme_helpers.dump_key(key))
         certificate.issuer = (details.issuer or "")[:255] or None
         certificate.serial = details.serial
         certificate.not_before = details.not_before
@@ -506,7 +518,7 @@ def _issue_locked(certificate):
             cleanup_challenges(domain, planted)
 
     remove_superseded_failures(certificate)
-    publish_sync(certificate)
+    (sync if sync is not None else publish_sync)(certificate)
     logit.info(
         f"dnsman: issued {certificate.common_name} "
         f"(expires {certificate.not_after}, renew after {certificate.renew_after})")
@@ -571,10 +583,13 @@ def remove_superseded_failures(certificate):
             f"certificate {certificate.pk}: {err}")
 
 
-def _publish_delegated_challenges(row, challenges):
+def _publish_delegated_challenges(row, challenges, wait_for_txt=None):
     from mojo.apps.dnsman.models import AcmeDelegation
     from mojo.apps.dnsman.services import acme_hub_client, delegation
     from mojo.helpers.dns import probe
+
+    if wait_for_txt is None:
+        wait_for_txt = probe.wait_for_txt
 
     if set(challenges) != {row.source_name}:
         raise me.ValueException(
@@ -594,7 +609,7 @@ def _publish_delegated_challenges(row, challenges):
     result = acme_hub_client.publish(
         str(row.client_ref), challenge_ref, digests)
     delegation.compare_challenge_result(row, result, challenge_ref)
-    ok, seen = probe.wait_for_txt(row.target_name, digests)
+    ok, seen = wait_for_txt(row.target_name, digests)
     if not ok:
         raise me.ValueException(
             f"Timed out waiting for the delegated ACME target to publish "
@@ -763,17 +778,22 @@ def read_certificate(cert_pem):
 # renewal
 # ----------------------------------------------------------------------
 
-def renew_due(now=None):
+def renew_due(now=None, *, publish=None):
     """
     Queue a renewal job for every active certificate past its renew_after.
 
     Returns ``objict(count, certificates, jobs)``. Jobs carry an idempotency
     key derived from the certificate and current renewal deadline, so
     overlapping scans converge on one queued job.
+
+    ``publish`` is an injection seam for tests, replacing ``publish_job``
+    (None means the real queue).
     """
     from mojo.apps.dnsman.models import Certificate
     from mojo.apps.dnsman.models.certificate import STATUS_ACTIVE, STATUS_ISSUING
 
+    if publish is None:
+        publish = publish_job
     now = now or dates.utcnow()
     certificates = []
     job_ids = []
@@ -781,7 +801,7 @@ def renew_due(now=None):
         status=STATUS_ACTIVE, renew_after__lte=now).select_related("domain")
     for cert in qset:
         try:
-            job_ids.append(publish_job(RENEW_JOB, cert))
+            job_ids.append(publish(RENEW_JOB, cert))
             certificates.append(cert.pk)
         except Exception as err:
             logit.error(
@@ -804,7 +824,7 @@ def renew_due(now=None):
             marker = int(current.modified.timestamp())
             job_func = RENEW_JOB if has_still_valid_material(current, now) else ISSUE_JOB
         try:
-            job_ids.append(publish_job(
+            job_ids.append(publish(
                 job_func, current, idempotency_marker=marker))
             certificates.append(current.pk)
         except Exception as err:
@@ -818,12 +838,15 @@ def renew_due(now=None):
 # revocation
 # ----------------------------------------------------------------------
 
-def revoke(certificate, reason=0):
+def revoke(certificate, reason=0, *, acme=None):
     """
     Ask the CA to revoke a certificate and mark the row revoked.
 
     Signed with the account key (kid) — never with the certificate's own key,
     which would need the JWS to carry a jwk instead.
+
+    ``acme`` is an injection seam for tests: a zero-argument loader returning
+    ``(account, client)`` in place of ``_get_account``.
     """
     from cryptography import x509
     from cryptography.hazmat.primitives import serialization
@@ -832,7 +855,7 @@ def revoke(certificate, reason=0):
     if not certificate.cert_pem:
         raise me.ValueException("This certificate has no material to revoke")
 
-    account, client = _get_account()
+    account, client = acme() if acme is not None else _get_account()
     leaf = x509.load_pem_x509_certificate(certificate.cert_pem.encode("utf-8"))
     client.revoke_certificate(
         leaf.public_bytes(serialization.Encoding.DER), reason=reason)

@@ -296,13 +296,53 @@ callables (many services expose `reporter=`/`publisher=`/`loader=`/`send_email=`
 for exactly this), and keys under the reserved **`TESTIT_`** namespace, which production
 code never reads.
 
-**Blocking vs advisory:** the classes above with cross-module blast radius — singleton /
+**Blocking vs advisory.** Two rings, and both are now enforced.
+
+The **blocking ring** is everything with cross-module blast radius: singleton /
 Django-settings / environ / `sys.modules` mutation, protected setting and REST writes,
-and patches of the shared `mojo.helpers.settings`, `mojo.apps.incident`,
-`mojo.apps.jobs` and `testit` surfaces — **block the run**. Patches of app-internal
-provider seams (AWS clients, DNS providers and similar) are currently advisory: the
-runner prints one summary line per run until the cold-ring migration lands
-(#1839 follow-up). There are no comment or path suppressions — fix the test or move it.
+and patches of — or attribute assignments to — the shared `mojo.helpers.` namespace
+(all of it), `mojo.apps.incident`, `mojo.apps.jobs`, `testit`, and the cross-package
+roster in `isolation.CROSS_PACKAGE_TARGETS` (app services that two or more test
+packages patch, so one package's patch window can swallow another's real call). These
+stop the run before any worker starts. There are no comment or path suppressions —
+fix the test or move it.
+
+The **capped ring** is the app-local remainder: a package mocking its own app's
+external-world boundary (a boto3 client, an SSH/OS call, a DNS provider). That is the
+correct way to test a boundary, and no recorded release failure has come from it, so
+it is accepted — but it may not grow. Every `default_core` package declares
+`"cold_budget": N`, the exact count of such sites it holds, and the check is
+**two-sided**:
+
+```python
+TESTIT = {
+    "default_core": True,
+    "cold_budget": 69,      # exact — not a ceiling
+}
+```
+
+Over budget fails and names the new sites. *Under* budget also fails — "budget stale
+— lower to N" — because a one-sided budget quietly accrues headroom as remediation
+lands, and the next new site hides in it. An absent key means 0, so a new package
+starts clean.
+
+**Lowering a budget** is the normal way this number moves: give the entry point a
+keyword-only seam with a sentinel default (production behavior byte-identical when the
+seam is unused — see `redirect_allowlist._CONFIG_FROM_SETTINGS` or
+`oauth._DEPLOYMENT_FROM_SETTINGS` for the shape), or move the test to the package's
+`*_extended_serial` sibling; then lower the number in the same commit.
+
+> Watch for parameter shadowing when adding a seam: a local
+> `from mojo.helpers import acme` inside a function whose parameter is also `acme`
+> silently rebinds the parameter to the module, and the seam calls the module instead.
+> Either name the parameter distinctly, or use the guarded form
+> `if acme is None: from ... import ... as acme`.
+
+**Capturing published jobs.** Do not patch `mojo.apps.jobs.publish` — it is in the
+blocking ring, and rebinding the module attribute misses import-time binders anyway.
+Use `th.capture_publishes(match)`, which registers a thread-scoped capture through
+the `jobs._capture_router` hook; concurrent captures compose, and any call your
+predicate does not claim publishes for real.
 
 ### JSON Config
 CLI flags always win, but you can seed defaults through a JSON file:
