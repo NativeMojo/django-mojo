@@ -1,8 +1,8 @@
-// Access ▸ People — v1's users list and user inspector, ported whole.
+// Access ▸ People — v1's users list, and one user as a page of its own.
 //
 // Same reads (`/api/user`, `/api/account/admin/people/permission-bundles`,
-// `/api/account/logins`), same five inspector sections, same lifecycle and
-// record actions, same one-time secret dialog for a temporary password.
+// `/api/account/logins`), same five sections, same lifecycle and record
+// actions, same one-time secret dialog for a temporary password.
 //
 // What changed:
 //   * the page header and tab bar belong to features/access/page.js, so this
@@ -10,17 +10,20 @@
 //     in the actions slot it is handed;
 //   * a search no longer repaints the whole page — the panel and its search box
 //     survive, so the caret stays where the operator left it;
-//   * a deep link opens the record: `?user=<id>` is the address v2 writes,
-//     `?inspector=<id>` is v1's and still works.
+//   * a user is a PAGE, not a right-side drawer: `#/users?user=<id>` renders
+//     the record with a back pill, its section in `?tab=`, and the browser Back
+//     button walking list → record the way an operator expects. `?inspector=`
+//     is v1's address and is rewritten to `?user=` in place, so old links land.
 
 import {api, apiEnvelope, badge, FormView, formatDate, h, icon, TableView} from '../../core.js';
 import {loadInto, runAction, toast} from '../../components/actions.js';
-import {modelHeader} from '../../components/model.js';
-import {confirmAction, openInspector, openModal} from '../../components/overlays.js';
-import {decodeRouteState} from '../../components/routes.js';
-import {sectionTabs, timelineView} from '../../components/views.js';
+import {actionMenu, lifecycleControl} from '../../components/model.js';
+import {confirmAction, openModal} from '../../components/overlays.js';
+import {decodeRouteState, routeHref} from '../../components/routes.js';
+import {errorState, sectionTabs, timelineView} from '../../components/views.js';
 import {activityLinks, activityTabVisible, capabilities, detailGrid, initials,
-  inviteWarning, oneTimeSecret, post} from './shared.js';
+  inviteWarning, oneTimeSecret, post, recordBackPill, recordHeader,
+  returnAction} from './shared.js';
 
 const USER_SECTIONS = [
   ['overview', 'Overview'], ['identity', 'Identity'], ['access', 'Access'],
@@ -139,73 +142,109 @@ async function userSection(ctx, user, section, body, reload) {
   body.replaceChildren(activityLinks(ctx, {type: 'user', id: user.id}));
 }
 
-export async function openUser(ctx, summary, reloadList) {
-  let user = await api(`/api/user/${summary.id}`); let active = 'overview';
+/**
+ * One user, as a page of its own — `#/users?user=<id>`, section in `?tab=`.
+ *
+ * Every action the drawer carried is still here: the lifecycle switch and the
+ * six record actions ride the page-actions slot, so they survive their own
+ * section reloads rather than living inside the body they repaint. A record
+ * action that changes the record re-reads it and repaints the whole page,
+ * exactly as the app detail page does.
+ */
+export async function userRecordPage(ctx, userId, signal = null) {
+  const root = h('div', {class: 'page access-record'});
   const caps = capabilities(ctx);
-  const sections = USER_SECTIONS
-    .filter(([id]) => id !== 'signins' || caps.view_logins)
-    .filter(([id]) => id !== 'activity'
-      || ['logs', 'events', 'incidents', 'tickets'].some((tab) => activityTabVisible(ctx, tab)));
-  const body = h('div', {class: 'inspector-section'});
-  const tabs = sectionTabs({items: sections.map(([id, label]) => ({id, label})), active,
-    onChange: async (id) => {
-      active = id;
-      [...tabs.querySelectorAll('button')].forEach((button, index) =>
-        button.classList.toggle('active', sections[index][0] === id));
-      await userSection(ctx, user, id, body, reload);
-    }});
-  const reload = async () => {
-    user = await api(`/api/user/${user.id}`);
-    await userSection(ctx, user, active, body, reload);
-    await reloadList();
-  };
   const manage = caps.manage_users;
-  const header = modelHeader({iconName: 'users', avatar: initials(user),
-    primary: user.display_name || user.username,
-    secondary: `${user.email || user.username} · ${user.is_email_verified ? 'Email verified' : 'Email unverified'} · ${user.is_phone_verified ? 'Phone verified' : 'Phone unverified'}`,
-    warning: user.requires_password_change
-      ? 'Temporary password must be changed at next authentication.' : '',
-    lifecycle: manage ? {active: user.is_active, label: user.username,
-      onDisable: async ({reason}) => {
-        await post(`/api/user/${user.id}`, {disable: {reason: 'admin', note: reason}});
-        await reload();
-      },
-      onReactivate: async ({reason}) => {
-        await post(`/api/user/${user.id}`, {reactivate: {note: reason}});
-        await reload();
-      }} : null,
-    actions: [
-      {label: 'Edit identity', capability: manage, run: () => editUser(user, reload)},
-      {label: 'Resend invite', capability: manage, done: 'Invite sent.',
-        run: async () => { await post(`/api/user/${user.id}`, {send_invite: {}}); }},
-      {label: 'Send password-reset link', capability: manage, done: 'Password reset link sent.',
-        run: async () => { await post('/api/account/admin/user/password/reset', {user: user.id}); }},
-      {label: 'Set temporary password', capability: manage, danger: true, run: async () => {
-        const result = await post('/api/account/admin/user/password/temporary', {user: user.id});
-        oneTimeSecret('Temporary password', 'Temporary password', result.temporary_password);
-      }},
-      {label: 'Revoke sessions', capability: manage, danger: true, run: async () => {
-        const answer = await confirmAction({title: 'Revoke all sessions?',
-          copy: 'Every active token and websocket session for this user will be invalidated.',
-          confirmLabel: 'Revoke sessions', danger: true});
-        if (!answer.confirmed) return;
-        await post(`/api/user/${user.id}`, {revoke_sessions: {}});
-        await reload();
-        toast('All sessions revoked.');
-      }},
-      {label: 'Copy safe identifiers', done: 'Identifiers copied.',
-        run: () => navigator.clipboard.writeText(`user:${user.id}\nusername:${user.username}`)},
-    ], context: {user},
-  });
-  const content = h('div', {class: 'access-inspector'}, header, tabs, body);
-  openInspector({title: `User · ${user.display_name || user.username}`, content, wide: true});
-  await userSection(ctx, user, active, body, reload);
+  // Read once: switching sections rewrites the hash, and the way back must
+  // survive that rather than being dropped by the first click.
+  const returnState = decodeRouteState().state.return || '';
+  let user = null;
+  const fetchUser = async () => { user = await api(`/api/user/${userId}`, {signal}); };
+
+  async function paint() {
+    const sections = USER_SECTIONS
+      .filter(([id]) => id !== 'signins' || caps.view_logins)
+      .filter(([id]) => id !== 'activity'
+        || ['logs', 'events', 'incidents', 'tickets'].some((tab) => activityTabVisible(ctx, tab)));
+    let active = decodeRouteState().state.tab;
+    if (!sections.some(([id]) => id === active)) active = 'overview';
+    const body = h('div', {class: 'access-record-body'});
+    const reload = async () => { await fetchUser(); await paint(); };
+    const tabs = sectionTabs({items: sections.map(([id, label]) => ({id, label})), active,
+      label: 'User sections',
+      onChange: async (id) => {
+        active = id;
+        [...tabs.querySelectorAll('button')].forEach((button, index) =>
+          button.classList.toggle('active', sections[index][0] === id));
+        history.replaceState({}, '', routeHref('users', {
+          user: userId, tab: id === 'overview' ? '' : id, return: returnState}));
+        await userSection(ctx, user, id, body, reload);
+      }});
+    const header = recordHeader({
+      eyebrow: 'Access · User', avatar: initials(user),
+      name: user.display_name || user.username,
+      secondary: `${user.email || user.username} · ${user.is_email_verified ? 'Email verified' : 'Email unverified'} · ${user.is_phone_verified ? 'Phone verified' : 'Phone unverified'}`,
+      warning: user.requires_password_change
+        ? 'Temporary password must be changed at next authentication.' : '',
+      badges: [
+        badge(user.is_active ? 'Active' : 'Inactive', user.is_active ? 'success' : 'danger'),
+        user.requires_password_change ? badge('Password change', 'warning') : null,
+        user.is_superuser ? badge('Superuser', 'warning') : null,
+      ],
+      actions: [
+        returnAction(returnState),
+        manage ? lifecycleControl({active: user.is_active, label: user.username,
+          onDisable: async ({reason}) => {
+            await post(`/api/user/${user.id}`, {disable: {reason: 'admin', note: reason}});
+            await reload();
+          },
+          onReactivate: async ({reason}) => {
+            await post(`/api/user/${user.id}`, {reactivate: {note: reason}});
+            await reload();
+          }}) : null,
+        actionMenu({context: {user}, actions: [
+          {label: 'Edit identity', capability: manage, run: () => editUser(user, reload)},
+          {label: 'Resend invite', capability: manage, done: 'Invite sent.',
+            run: async () => { await post(`/api/user/${user.id}`, {send_invite: {}}); }},
+          {label: 'Send password-reset link', capability: manage, done: 'Password reset link sent.',
+            run: async () => { await post('/api/account/admin/user/password/reset', {user: user.id}); }},
+          {label: 'Set temporary password', capability: manage, danger: true, run: async () => {
+            const result = await post('/api/account/admin/user/password/temporary', {user: user.id});
+            oneTimeSecret('Temporary password', 'Temporary password', result.temporary_password);
+          }},
+          {label: 'Revoke sessions', capability: manage, danger: true, run: async () => {
+            const answer = await confirmAction({title: 'Revoke all sessions?',
+              copy: 'Every active token and websocket session for this user will be invalidated.',
+              confirmLabel: 'Revoke sessions', danger: true});
+            if (!answer.confirmed) return;
+            await post(`/api/user/${user.id}`, {revoke_sessions: {}});
+            await reload();
+            toast('All sessions revoked.');
+          }},
+          {label: 'Copy safe identifiers', done: 'Identifiers copied.',
+            run: () => navigator.clipboard.writeText(`user:${user.id}\nusername:${user.username}`)},
+        ]}),
+      ],
+    });
+    root.replaceChildren(recordBackPill('user'), header, tabs, body);
+    await userSection(ctx, user, active, body, reload);
+  }
+
+  async function load() {
+    try { await fetchUser(); await paint(); }
+    catch (error) {
+      if (error?.name === 'AbortError') return;
+      root.replaceChildren(recordBackPill('user'), errorState(error, load));
+    }
+  }
+  await load();
+  return root;
 }
 
 export function usersTab(ctx, actions) {
   const caps = capabilities(ctx);
   const listBody = h('div', {});
-  let generation = 0; let linkedInspectorOpened = false;
+  let generation = 0;
 
   const load = async (term = '') => {
     const mine = ++generation;
@@ -214,7 +253,9 @@ export function usersTab(ctx, actions) {
       if (term) query.set('search', term);
       const rows = (await apiEnvelope(`/api/user?${query}`)).items;
       if (!current() || mine !== generation) return;
-      const open = (row) => openUser(ctx, row, () => load(term));
+      // A row is a link to a page, so this is a plain navigation: the address
+      // bar names the record, reload reopens it, and Back returns to the list.
+      const open = (row) => { location.hash = routeHref('users', {user: row.id}); };
       listBody.replaceChildren(new TableView({
         columns: [
           {label: 'User', render: (row) => h('div', {class: 'identity'},
@@ -227,12 +268,8 @@ export function usersTab(ctx, actions) {
           {label: 'Last activity', render: (row) => formatDate(row.last_activity)},
           {label: '', render: () => icon('chevron')},
         ], rows, empty: 'No matching users.', onSelect: open}).render());
-      // v2 writes `?user=<id>`; v1 wrote `?inspector=<id>`. Both open the
-      // record, so a link either portal produced still lands.
-      const state = decodeRouteState().state;
-      const wanted = state.user || state.inspector;
-      const linked = wanted && rows.find((row) => String(row.id) === String(wanted));
-      if (linked && !linkedInspectorOpened) { linkedInspectorOpened = true; await open(linked); }
+      // A deep link (`?user=`, or v1's `?inspector=`) never reaches this list:
+      // features/access/page.js dispatches it straight to the record page.
     }, {message: 'Loading users…', retry: () => load(term)});
   };
 
@@ -252,7 +289,7 @@ export function usersTab(ctx, actions) {
   const panel = h('section', {class: 'panel'},
     h('div', {class: 'panel-head'},
       h('div', {}, h('h2', {text: 'Users'}),
-        h('p', {text: 'Select a row to open the standard inspector.'})),
+        h('p', {text: 'Select a row to open that person’s record.'})),
       h('label', {class: 'search'}, icon('search'), input)),
     listBody);
 

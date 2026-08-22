@@ -15,7 +15,7 @@ import {emptyState, errorState} from '../../components/views.js';
 import {runAction} from '../../components/actions.js';
 import {
   apiDeployFailure, apiServiceRow, applyFrameworkUpdate, FRAMEWORK_PATH, frameworkRow,
-  openApiInspector, openFrameworkInspector, PLATFORM_SECTIONS_PATH, retryApiDeploy,
+  openDeployHistory, openFrameworkDetail, PLATFORM_SECTIONS_PATH, retryApiDeploy,
 } from './api.js';
 import {webappDetailPage} from './detail.js';
 import {syncAppOperations} from './operations.js';
@@ -129,7 +129,7 @@ export async function appsPage(ctx, route = 'apps', navigate = null, signal = nu
     apps: null, appsError: null,
     observedAt: null,
   };
-  let linkedInspectorOpened = false;
+  let linkedRecordOpened = false;
   // Bounded auto-refresh while a deploy is in flight: 10s ticks, capped,
   // hash-guarded, abort-cleared.
   let pollTicks = 0;
@@ -169,7 +169,7 @@ export async function appsPage(ctx, route = 'apps', navigate = null, signal = nu
   }
 
   // Every callback that finishes work re-renders THROUGH a refetch — the
-  // wizard, inspector and row callbacks all rely on it.
+  // wizard, drill-in and row callbacks all rely on it.
   const render = () => load();
 
   function deploymentsSection() {
@@ -193,10 +193,10 @@ export async function appsPage(ctx, route = 'apps', navigate = null, signal = nu
     if (!wantPlatform || state.reportError) return [];
     return [
       apiServiceRow(ctx, deploymentsSection(), {
-        onOpen: () => openApiInspector(ctx, deploymentsSection(), render, apiSection()),
+        onOpen: () => openDeployHistory(ctx, deploymentsSection(), render, {apiSection: apiSection()}),
       }),
       frameworkRow(ctx, state.framework, {
-        onOpen: () => openFrameworkInspector(ctx, state.framework, render),
+        onOpen: () => openFrameworkDetail(ctx, state.framework, render),
         onUpdate: () => applyFrameworkUpdate(ctx, state.framework, render),
       }),
     ].filter(Boolean);
@@ -289,7 +289,7 @@ export async function appsPage(ctx, route = 'apps', navigate = null, signal = nu
       sub = servingSub(failure.serving);
       actions = [
         bannerAction('See what failed',
-          () => openApiInspector(ctx, deploymentsSection(), render, apiSection())),
+          () => openDeployHistory(ctx, deploymentsSection(), render, {apiSection: apiSection()})),
         // The retry is the platform's own deploy/retry verb, with the same
         // capability gate the drill-in applies — surfaced, not reimplemented.
         manage ? bannerAction('Retry same SHA',
@@ -377,21 +377,38 @@ export async function appsPage(ctx, route = 'apps', navigate = null, signal = nu
         : rowSection('Your apps', appRowNodes, {sub: appsSubhead()}),
     ].filter(Boolean);
     root.replaceChildren(h('div', {class: 'row-page apps-body'}, ...children));
-    openLinkedInspector();
+    openLinkedDeployHistory();
     schedulePoll();
   }
 
   // Legacy platform deep links: PlatformDeployment pks are UUIDs, so a
   // non-numeric `inspector` (or the reserved `deployment` key) opens the API
-  // drill-in. App links were dispatched to their own page above.
-  function openLinkedInspector() {
-    if (linkedInspectorOpened) return;
+  // deploy-history modal. App links were dispatched to their own page above.
+  //
+  // Closing it drops the key that opened it, so what stays in the address bar
+  // is the page the operator is actually looking at. Nothing else in the query
+  // is touched, and replaceState fires no hashchange, so nothing re-renders.
+  //
+  // Guarded on the address still naming Apps: leaving the destination closes
+  // every overlay, and a rewrite from a closing modal would otherwise stamp
+  // the route the operator just left over the one they just asked for.
+  function clearLinkedDeployKey() {
+    const current = decodeRouteState();
+    if (current.route !== 'apps') return;
+    if (!current.state.deployment && !current.state.inspector) return;
+    history.replaceState({}, '', routeHref('apps', {
+      ...current.state, deployment: '', inspector: ''}));
+  }
+
+  function openLinkedDeployHistory() {
+    if (linkedRecordOpened) return;
     const routeState = decodeRouteState().state;
     const deployKey = routeState.deployment
       || (routeState.inspector && !/^\d+$/.test(String(routeState.inspector)) ? routeState.inspector : null);
     if (deployKey && state.report) {
-      linkedInspectorOpened = true;
-      openApiInspector(ctx, deploymentsSection(), render, apiSection());
+      linkedRecordOpened = true;
+      openDeployHistory(ctx, deploymentsSection(), render,
+        {apiSection: apiSection(), onClose: clearLinkedDeployKey});
     }
   }
 

@@ -34,10 +34,14 @@
 .access-event-text { font-size: 11px; overflow-wrap: anywhere; }
 .access-event-when { color: var(--muted); font-size: 10px; white-space: nowrap; }
 
-/* the inspectors */
+/* one record, as a page: identity header, section tabs, section body */
 .identity .avatar { flex: 0 0 auto; }
-.access-inspector { display: grid; gap: 16px; }
-.access-inspector .inspector-section { display: grid; gap: 12px; }
+.access-record-identity { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+.access-record-identity .model-avatar { flex: 0 0 auto; margin-top: 2px; }
+.access-record-titles { min-width: 0; }
+.access-record-titles h1 { overflow-wrap: anywhere; }
+.access-record-badges { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .5rem; }
+.access-record-body { display: grid; gap: 12px; }
 .access-detail { display: grid; grid-template-columns: minmax(8rem, .45fr) 1fr; gap: .6rem 1rem; margin: 0; }
 .access-detail dt { color: var(--muted); font-size: .78rem; font-weight: 650; text-transform: uppercase; letter-spacing: .035em; }
 .access-detail dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
@@ -53,6 +57,8 @@
 .json-preview { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; margin: 0; max-height: 22rem; overflow: auto; padding: .85rem; }
 
 @media (max-width: 720px) {
+  .access-record-header { align-items: stretch; flex-direction: column; gap: 12px; }
+  .access-record-header .page-actions { justify-content: flex-start; }
   .access-detail { grid-template-columns: 1fr; gap: .15rem; }
   .access-detail dd { margin-bottom: .7rem; }
   .activity-links { grid-template-columns: 1fr; }

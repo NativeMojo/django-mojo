@@ -12,8 +12,8 @@
 // them instead.
 //
 // The three key actions are v1's, unchanged — same endpoint, same confirm, same
-// one-time reveal — and they are exported so the group inspector's own API Keys
-// section stays one implementation rather than two.
+// one-time reveal — and they are exported so the group record page's own API
+// Keys section stays one implementation rather than two.
 
 import {apiEnvelope, badge, FormView, formatDate, h, icon} from '../../core.js';
 import {loadInto, runAction} from '../../components/actions.js';

@@ -486,7 +486,7 @@ export async function webappDetailPage(ctx, webappId, signal = null) {
     const tabs = PAGE_TABS.filter(([id]) => id !== 'danger' || manage);
     let active = decodeRouteState().state.tab;
     if (!tabs.some(([id]) => id === active)) active = 'overview';
-    const body = h('div', {class: 'inspector-section'});
+    const body = h('div', {class: 'apps-detail-body'});
     const reload = async () => { await fetchSummary(); await paint(); };
     async function section(id) {
       // The setup panel is built synchronously — there is no await to cover,

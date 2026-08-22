@@ -35,19 +35,24 @@ function keydown(event) {
   }
 }
 
-function openOverlay({kind = 'modal', title, subtitle = '', content, danger = false, wide = false, dismissible = true, onClose = () => {}, returnFocus = null}) {
+// One overlay shape, centered: the right-side inspector drawer is retired.
+// A record is a page of its own now (Access, Apps, Domains all do it), and
+// everything that is not a record — a form, a confirm, a read-only peek at
+// evidence — is this modal. `wide` is the peek size; the header stays put and
+// the body scrolls, so a long record never pushes its own title off-screen.
+function openOverlay({title, subtitle = '', content, danger = false, wide = false, dismissible = true, onClose = () => {}, returnFocus = null}) {
   const layer = document.getElementById('portal-layer');
   if (!layer) throw new Error('Admin overlay layer is unavailable');
   const previous = returnFocus || document.activeElement;
   const headingId = `overlay-heading-${crypto.randomUUID()}`;
   const heading = element('h2', {id: headingId, tabindex: '-1', text: title});
   const panel = element('section', {
-    class: `${kind} ${danger ? 'danger-modal' : ''} ${wide ? 'wide' : ''}`,
+    class: `modal ${danger ? 'danger-modal' : ''} ${wide ? 'wide' : ''}`,
     role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': headingId, tabindex: '-1',
   }, element('header', {}, element('div', {}, heading, subtitle ? element('p', {text: subtitle}) : null),
   dismissible ? element('button', {class: 'icon-button', type: 'button', 'aria-label': 'Close'}, '×') : null),
-  element('div', {class: `${kind}-body`}, content));
-  const scrim = element('div', {class: `scrim ${kind}-scrim`}, panel);
+  element('div', {class: 'modal-body'}, content));
+  const scrim = element('div', {class: 'scrim modal-scrim'}, panel);
   const entry = {panel, heading, previous, scrim, dismissible, closed: false};
   entry.close = ({restore = true} = {}) => {
     if (entry.closed) return;
@@ -76,26 +81,27 @@ function openOverlay({kind = 'modal', title, subtitle = '', content, danger = fa
   document.body.classList.add('locked');
   if (STACK.length === 1) document.addEventListener('keydown', keydown);
   requestAnimationFrame(() => {
-    if (kind === 'inspector') { heading.focus({preventScroll: true}); return; }
     // Queried in preference order, not as one selector list: querySelector on
     // a list returns document order, and the header's × button precedes every
     // body control, so a combined query handed initial focus to Close in every
     // dismissible modal. Body controls only — a modal with nothing to fill in
     // reads its own title first.
     const body = ['input', 'select', 'textarea', 'button']
-      .map((tag) => `.${kind}-body ${tag}:not([disabled])`).join(',');
+      .map((tag) => `.modal-body ${tag}:not([disabled])`).join(',');
     (panel.querySelector('[autofocus]') || panel.querySelector(body) || heading)
       .focus({preventScroll: true});
   });
   return entry;
 }
 
+/**
+ * Open the one overlay this portal has. Returns its close function.
+ *
+ * A caller that has to close the modal from inside its own content declares
+ * the binding first and calls it from a handler — handlers run long after the
+ * assignment lands.
+ */
 export function openModal(options) { return openOverlay(options).close; }
-
-export function openInspector(options) {
-  const entry = openOverlay({...options, kind: 'inspector'});
-  return {close: entry.close, panel: entry.panel, heading: entry.heading};
-}
 
 export function closeAllOverlays() {
   [...STACK].reverse().forEach((entry) => entry.close({restore: false}));

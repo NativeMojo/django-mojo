@@ -2,12 +2,15 @@
 // inline make-default confirm, and the test-send section. The drill-in is
 // where AWS is actually contacted — the list itself never pays that cost.
 //
+// The drill-in is a centered modal: it is a read-only peek at evidence about a
+// domain the page already lists, not a record with a life of its own.
+//
 // Ported from v1 unchanged: same endpoints, same audit summary, same confirm
 // choreography, same test-send payload and the same plain-words failures.
 
 import {api, h} from '../../core.js';
 import {runAction} from '../../components/actions.js';
-import {openInspector} from '../../components/overlays.js';
+import {openModal} from '../../components/overlays.js';
 import {loadingState} from '../../components/views.js';
 
 const AUDIT_URL = (id) => `/api/aws/email/domain/${id}/audit`;
@@ -52,7 +55,7 @@ function auditSummary(data) {
     technicalDetails(data.items));
 }
 
-export function openDomainInspector(domain, reload) {
+export function openDomainAudit(domain, reload) {
   const results = h('div', {class: 'email-audit', 'aria-live': 'polite'});
   const check = h('button', {class: 'button compact', type: 'button'}, 'Check now');
   let dirty = false;
@@ -73,9 +76,9 @@ export function openDomainInspector(domain, reload) {
     });
   }
   check.addEventListener('click', () => runAudit());
-  const inspector = openInspector({
-    title: domain.name,
-    content: h('div', {class: 'email-inspector'},
+  const close = openModal({
+    title: domain.name, wide: true,
+    content: h('div', {class: 'email-domain-detail'},
       h('dl', {class: 'details'},
         h('div', {}, h('dt', {text: 'Status'}), h('dd', {text: domain.status})),
         h('div', {}, h('dt', {text: 'Region'}), h('dd', {class: 'mono', text: domain.region || ''})),
@@ -89,7 +92,7 @@ export function openDomainInspector(domain, reload) {
     onClose: () => { if (dirty && reload) reload(); },
   });
   runAudit();
-  return inspector;
+  return close;
 }
 
 // Making a mailbox the system default changes what every system email sends

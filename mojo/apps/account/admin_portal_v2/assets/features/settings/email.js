@@ -4,7 +4,7 @@
 // where "Check now" runs the real audit and refreshes the persisted fields.
 //
 // v1's Email page, ported whole: the same posture rows, the same domain and
-// mailbox lists, the same make-default confirm, the same domain inspector, and
+// mailbox lists, the same make-default confirm, the same domain audit, and
 // the same send-a-test-email section under the same `features.email.
 // capabilities.manage` gate. The v2 change is the chrome — this is a sub-page
 // of Settings now, so it wears the back pill and Settings' eyebrow.
@@ -13,7 +13,7 @@ import {api, formatDate, h} from '../../core.js';
 import {backPill} from '../../app.js';
 import {rowSection, statusRow} from '../../components/rows.js';
 import {emptyState, errorState, loadingState} from '../../components/views.js';
-import {makeDefaultControl, openDomainInspector, testSendSection} from './email_panels.js';
+import {makeDefaultControl, openDomainAudit, testSendSection} from './email_panels.js';
 
 const SUMMARY_URL = '/api/aws/email/summary';
 
@@ -65,7 +65,7 @@ function domainsSection(report, reload) {
     if (link) {
       link.addEventListener('click', (event) => {
         event.preventDefault();
-        openDomainInspector(domain, reload);
+        openDomainAudit(domain, reload);
       });
     }
     return row;

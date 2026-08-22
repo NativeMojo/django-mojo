@@ -187,7 +187,7 @@ button.tile:hover {
 /* ── Activity & logs ────────────────────────────────────────────────────────
    Home's sub-page: the four-view evidence reader. Same shapes as the rest of
    the portal — panel, tabs, table, field — with the query toolbar, the count
-   strip and the inspector's evidence blocks defined here because nothing else
+   strip and the record modal's evidence blocks defined here because nothing else
    uses them. `.activity-row` above belongs to Home's preview panel; every rule
    below is scoped to the sub-page's own classes and never touches it. */
 .activity-page {
@@ -335,8 +335,9 @@ button.tile:hover {
   gap: 7px;
 }
 
-/* The inspector: the whole record, then whatever evidence blobs it carries. */
-.activity-inspector-actions {
+/* The record modal: the whole record, then whatever evidence blobs it
+   carries. */
+.activity-record-actions {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 10px;

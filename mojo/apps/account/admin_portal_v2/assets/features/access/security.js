@@ -6,7 +6,7 @@
 //
 //   * sign-ins — v1's People lane owned this read (`/api/account/logins`,
 //     gated on `view_logins`) and had no page-level view of it: the evidence
-//     existed only inside one user's inspector. It lives here now, whole
+//     existed only inside one user's record. It lives here now, whole
 //     installation, newest first, and the per-user timeline stays where it was.
 //   * security events — `/api/incident/event`, the Activity page's Events tab,
 //     under that page's own `view_security` gate.

@@ -6,9 +6,11 @@
 // the Activity cross-links now honour v2's Activity gates rather than v1's.
 
 import {api, h, icon} from '../../core.js';
+import {backPill} from '../../app.js';
 import {copyButton} from '../../components/actions.js';
 import {openModal} from '../../components/overlays.js';
-import {activityHref, returnLocation, routeHref} from '../../components/routes.js';
+import {activityHref, decodeRouteState, restoreReturnLocation, returnLocation,
+  routeHref} from '../../components/routes.js';
 
 // The same read Settings ▸ Email and the Domains email-identity panel make.
 export const EMAIL_SUMMARY_URL = '/api/aws/email/summary';
@@ -59,6 +61,51 @@ export function activityLinks(ctx, subject) {
     lanes.map((tab) => h('a', {
       class: 'related-record', href: activityHref(tab, subject, {return: returnLocation()}),
     }, h('strong', {text: tab[0].toUpperCase() + tab.slice(1)}), icon('chevron'))));
+}
+
+/**
+ * The way back to wherever a link came from.
+ *
+ * Activity (and anything else that links a person or a group) carries its own
+ * location in `?return=`. The back pill always returns to the list — that is
+ * the one destination true whatever route the link came from — so the way back
+ * to the record sits beside it, exactly as Apps does it.
+ */
+export function returnAction(returnState) {
+  const href = restoreReturnLocation(returnState);
+  if (!href) return null;
+  const label = decodeRouteState(href).route === 'activity'
+    ? 'Return to activity' : 'Return';
+  return h('a', {class: 'button ghost', href}, label);
+}
+
+/**
+ * The identity block every Access record page opens with.
+ *
+ * A record is a page now, not a drawer, so it wears the same chrome as every
+ * other page in v2: a back pill, an eyebrow naming the KIND ("Access · User"),
+ * the record's own name as the h1, and its actions in the page-actions slot.
+ * The avatar and the lifecycle switch are v1's — the drawer's model header,
+ * unpacked into a page header rather than restated inside one.
+ */
+export function recordHeader({eyebrow, name, secondary = '', warning = '',
+  avatar = '', badges = [], actions = []}) {
+  const marks = badges.filter(Boolean);
+  return h('header', {class: 'page-header access-record-header'},
+    h('div', {class: 'access-record-identity'},
+      h('span', {class: 'model-avatar', text: String(avatar || name).slice(0, 3).toUpperCase()}),
+      h('div', {class: 'access-record-titles'},
+        h('div', {class: 'eyebrow', text: eyebrow}),
+        h('h1', {text: name, tabindex: '-1'}),
+        secondary ? h('p', {text: secondary}) : null,
+        marks.length ? h('div', {class: 'access-record-badges'}, ...marks) : null,
+        warning ? h('p', {class: 'model-warning', text: warning}) : null)),
+    h('div', {class: 'page-actions'}, ...actions.filter(Boolean)));
+}
+
+/** The one pill down from a record page to the list it belongs to. */
+export function recordBackPill(kind) {
+  return kind === 'group' ? backPill('Groups', 'groups') : backPill('People', 'users');
 }
 
 export function oneTimeSecret(title, label, value, returnFocus = null) {

@@ -1,20 +1,23 @@
-// Access ▸ Groups — v1's groups list and group inspector, ported whole.
+// Access ▸ Groups — v1's groups list, and one group as a page of its own.
 //
 // Same reads (`/api/group`, `/api/group/member`, `/api/group/apikey`), the same
-// seven inspector sections including Members, API Keys, Permissions and the
-// read-only Advanced JSON, and the same relationship-select parent picker.
+// seven sections including Members, API Keys, Permissions and the read-only
+// Advanced JSON, and the same relationship-select parent picker.
 //
 // The API Keys section keeps its place here — a key belongs to its group — and
 // shares its three controls with the Keys tab rather than restating them.
+//
+// A group is a PAGE: `#/groups?group=<id>`, section in `?tab=`, back pill to
+// the list. `?inspector=` is v1's address and is rewritten in place.
 
 import {api, apiEnvelope, badge, FormView, formatDate, h, icon, TableView} from '../../core.js';
 import {loadInto} from '../../components/actions.js';
-import {modelHeader} from '../../components/model.js';
-import {openInspector, openModal} from '../../components/overlays.js';
-import {decodeRouteState} from '../../components/routes.js';
-import {sectionTabs} from '../../components/views.js';
+import {actionMenu, lifecycleControl} from '../../components/model.js';
+import {openModal} from '../../components/overlays.js';
+import {decodeRouteState, routeHref} from '../../components/routes.js';
+import {errorState, sectionTabs} from '../../components/views.js';
 import {activityLinks, activityTabVisible, capabilities, detailGrid, initials,
-  post} from './shared.js';
+  post, recordBackPill, recordHeader, returnAction} from './shared.js';
 import {apiKeyActions, createApiKey} from './keys.js';
 
 const GROUP_SECTIONS = [
@@ -137,53 +140,85 @@ async function groupSection(ctx, group, section, body, reload) {
   h('pre', {class: 'json-preview', text: JSON.stringify(group.metadata || {}, null, 2)}));
 }
 
-export async function openGroup(ctx, summary, reloadList) {
-  let group = await api(`/api/group/${summary.id}`); let active = 'overview';
+/**
+ * One group, as a page of its own — `#/groups?group=<id>`, section in `?tab=`.
+ *
+ * The lifecycle switch and both record actions ride the page-actions slot, so
+ * they survive the section reloads below them. Add member, Create API key and
+ * the three per-key controls (rotate with its one-time reveal, deactivate,
+ * revoke) are unchanged — they live in the sections that own them.
+ */
+export async function groupRecordPage(ctx, groupId, signal = null) {
+  const root = h('div', {class: 'page access-record'});
   const caps = capabilities(ctx);
-  const sections = GROUP_SECTIONS
-    .filter(([id]) => id !== 'keys' || caps.manage_api_keys)
-    .filter(([id]) => id !== 'activity'
-      || ['logs', 'events', 'incidents', 'tickets'].some((tab) => activityTabVisible(ctx, tab)));
-  const body = h('div', {class: 'inspector-section'});
-  const tabs = sectionTabs({items: sections.map(([id, label]) => ({id, label})), active,
-    onChange: async (id) => {
-      active = id;
-      [...tabs.querySelectorAll('button')].forEach((button, index) =>
-        button.classList.toggle('active', sections[index][0] === id));
-      await groupSection(ctx, group, id, body, reload);
-    }});
-  const reload = async () => {
-    group = await api(`/api/group/${group.id}`);
-    await groupSection(ctx, group, active, body, reload);
-    await reloadList();
-  };
   const manage = caps.manage_groups;
-  const header = modelHeader({iconName: 'users', avatar: initials(group), primary: group.name,
-    secondary: `${group.kind} · ${group.uuid || 'UUID pending'}`,
-    status: group.is_active ? 'Active' : 'Inactive',
-    lifecycle: manage ? {active: group.is_active, label: group.name,
-      onDisable: async ({reason}) => {
-        await post(`/api/group/${group.id}`, {disable: {reason: 'admin', note: reason}});
-        await reload();
-      },
-      onReactivate: async ({reason}) => {
-        await post(`/api/group/${group.id}`, {reactivate: {note: reason}});
-        await reload();
-      }} : null,
-    actions: [
-      {label: 'Edit identity', capability: manage, run: () => editGroup(group, reload)},
-      {label: 'Copy safe identifiers', done: 'Identifiers copied.',
-        run: () => navigator.clipboard.writeText(`group:${group.id}\nuuid:${group.uuid || ''}`)},
-    ], context: {group}});
-  openInspector({title: `Group · ${group.name}`,
-    content: h('div', {class: 'access-inspector'}, header, tabs, body), wide: true});
-  await groupSection(ctx, group, active, body, reload);
+  const returnState = decodeRouteState().state.return || '';
+  let group = null;
+  const fetchGroup = async () => { group = await api(`/api/group/${groupId}`, {signal}); };
+
+  async function paint() {
+    const sections = GROUP_SECTIONS
+      .filter(([id]) => id !== 'keys' || caps.manage_api_keys)
+      .filter(([id]) => id !== 'activity'
+        || ['logs', 'events', 'incidents', 'tickets'].some((tab) => activityTabVisible(ctx, tab)));
+    let active = decodeRouteState().state.tab;
+    if (!sections.some(([id]) => id === active)) active = 'overview';
+    const body = h('div', {class: 'access-record-body'});
+    const reload = async () => { await fetchGroup(); await paint(); };
+    const tabs = sectionTabs({items: sections.map(([id, label]) => ({id, label})), active,
+      label: 'Group sections',
+      onChange: async (id) => {
+        active = id;
+        [...tabs.querySelectorAll('button')].forEach((button, index) =>
+          button.classList.toggle('active', sections[index][0] === id));
+        history.replaceState({}, '', routeHref('groups', {
+          group: groupId, tab: id === 'overview' ? '' : id, return: returnState}));
+        await groupSection(ctx, group, id, body, reload);
+      }});
+    const header = recordHeader({
+      eyebrow: 'Access · Group', avatar: initials(group), name: group.name,
+      secondary: `${group.kind} · ${group.uuid || 'UUID pending'}`,
+      badges: [
+        badge(group.is_active ? 'Active' : 'Inactive', group.is_active ? 'success' : 'danger'),
+        badge(group.kind || 'group'),
+      ],
+      actions: [
+        returnAction(returnState),
+        manage ? lifecycleControl({active: group.is_active, label: group.name,
+          onDisable: async ({reason}) => {
+            await post(`/api/group/${group.id}`, {disable: {reason: 'admin', note: reason}});
+            await reload();
+          },
+          onReactivate: async ({reason}) => {
+            await post(`/api/group/${group.id}`, {reactivate: {note: reason}});
+            await reload();
+          }}) : null,
+        actionMenu({context: {group}, actions: [
+          {label: 'Edit identity', capability: manage, run: () => editGroup(group, reload)},
+          {label: 'Copy safe identifiers', done: 'Identifiers copied.',
+            run: () => navigator.clipboard.writeText(`group:${group.id}\nuuid:${group.uuid || ''}`)},
+        ]}),
+      ],
+    });
+    root.replaceChildren(recordBackPill('group'), header, tabs, body);
+    await groupSection(ctx, group, active, body, reload);
+  }
+
+  async function load() {
+    try { await fetchGroup(); await paint(); }
+    catch (error) {
+      if (error?.name === 'AbortError') return;
+      root.replaceChildren(recordBackPill('group'), errorState(error, load));
+    }
+  }
+  await load();
+  return root;
 }
 
 export function groupsTab(ctx, actions) {
   const caps = capabilities(ctx);
   const listBody = h('div', {});
-  let generation = 0; let linkedInspectorOpened = false;
+  let generation = 0;
 
   const load = async (term = '') => {
     const mine = ++generation;
@@ -192,7 +227,9 @@ export function groupsTab(ctx, actions) {
       if (term) query.set('search', term);
       const rows = (await apiEnvelope(`/api/group?${query}`)).items;
       if (!current() || mine !== generation) return;
-      const open = (row) => openGroup(ctx, row, () => load(term));
+      // A row is a link to a page: plain navigation, shareable address, Back
+      // returns to the list.
+      const open = (row) => { location.hash = routeHref('groups', {group: row.id}); };
       listBody.replaceChildren(new TableView({columns: [
         {label: 'Group', render: (row) => h('strong', {text: row.name})},
         {label: 'Kind', render: (row) => badge(row.kind || 'group')},
@@ -201,10 +238,8 @@ export function groupsTab(ctx, actions) {
           row.is_active ? 'success' : 'danger')},
         {label: '', render: () => icon('chevron')},
       ], rows, empty: 'No matching groups.', onSelect: open}).render());
-      const state = decodeRouteState().state;
-      const wanted = state.group || state.inspector;
-      const linked = wanted && rows.find((row) => String(row.id) === String(wanted));
-      if (linked && !linkedInspectorOpened) { linkedInspectorOpened = true; await open(linked); }
+      // A deep link (`?group=`, or v1's `?inspector=`) never reaches this list:
+      // features/access/page.js dispatches it straight to the record page.
     }, {message: 'Loading groups…', retry: () => load(term)});
   };
 
@@ -224,7 +259,7 @@ export function groupsTab(ctx, actions) {
     h('section', {class: 'panel'},
       h('div', {class: 'panel-head'},
         h('div', {}, h('h2', {text: 'Groups'}),
-          h('p', {text: 'Select a row to open the standard inspector.'})),
+          h('p', {text: 'Select a row to open that group’s record.'})),
         h('label', {class: 'search'}, icon('search'), input)),
       listBody));
   body.dispose = () => clearTimeout(timer);

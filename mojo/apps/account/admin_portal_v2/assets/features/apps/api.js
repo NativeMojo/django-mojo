@@ -1,11 +1,13 @@
 // API-side rows and drill-ins for the merged Deployments lane: the API
 // service row (deploy history, per-attempt same-SHA recovery) and the
-// django-mojo framework row (installed vs published, update, hold). Web-app
-// rows and their management inspector stay in page.js — this file owns what
+// django-mojo framework row (installed vs published, update, hold). Both
+// drill-ins are centered modals — read-only evidence about a row the page
+// already shows, with the two or three controls that act on it. Web-app rows
+// and their own detail page stay in page.js — this file owns what
 // the platform tier serves. Admin never chooses a new sha here: new deploys
 // come from CI, and the controls are retry-same-SHA, verify, and converge.
 import {api, apiOnce, badge, formatDate, h, icon, statusTone} from '../../core.js';
-import {openInspector, openModal} from '../../components/overlays.js';
+import {openModal} from '../../components/overlays.js';
 import {activityHref, returnLocation} from '../../components/routes.js';
 import {statusRow} from '../../components/rows.js';
 import {runAction} from '../../components/actions.js';
@@ -37,7 +39,7 @@ const BLOCKED_COPY = {
   requires_superuser: 'The fleet is pinned to a version, and clearing the pin requires an active superuser.',
   no_converged_deployment: 'No deployment has ever converged on this fleet, so there is no proven commit to redeploy.',
   // INFRASTRUCTURE_MODE=external. can_update is already false in that mode, so
-  // the row and the inspector reach this copy through the paths they already
+  // the row and the drill-in reach this copy through the paths they already
   // had — the Update button is never offered, and the words say who owns it.
   infrastructure_external: 'external infrastructure mode — the update is applied by your infrastructure team\'s IaC.',
 };
@@ -82,14 +84,20 @@ function plainPhase(value) {
 // statusRow renders its action as a .row-link anchor; wire the handler onto it
 // (same pattern as the Maintenance lane).
 //
-// The runner is either a synchronous inspector open — nothing to wait for — or
+// The runner is either a synchronous modal open — nothing to wait for — or
 // applyFrameworkUpdate, whose first await is a human answering a typed-echo
 // dialog. Policy says no affordance paints while a person is reading one, so
 // what runAction contributes here is the re-entry guard alone (a null target
 // paints nothing), keyed on the link. The work that follows the dialog carries
 // its own scrim, inside applyFrameworkUpdate.
 function wireAction(row, run) {
-  const link = row.querySelector('.row-link');
+  // The LAST .row-link, not the first: statusRow renders `detailNode` ahead of
+  // its action, and on the update-available framework row that detailNode is
+  // itself a "Details" anchor with its own handler. Binding the first one made
+  // Details run both — the drill-in AND the update confirm on top of it — and
+  // left the Update link inert. rows.js warns about exactly this.
+  const links = row.querySelectorAll('.row-link');
+  const link = links[links.length - 1];
   if (link) {
     link.addEventListener('click', (event) => {
       event.preventDefault();
@@ -343,23 +351,23 @@ function attemptView(ctx, row, act, message, extras = {}) {
       })}, h('strong', {text: 'Related deployment activity'}), icon('chevron'))));
 }
 
-export function openApiInspector(ctx, deployments, reload, apiSection = null) {
+export function openDeployHistory(ctx, deployments, reload, {apiSection = null, onClose = null} = {}) {
   const data = deployments?.data || {};
   const rows = data.items || [];
   const coordination = data.coordination || {};
   const message = h('div', {class: 'form-message', role: 'alert'});
-  let closeInspector = null;
+  let closeHistory = null;
 
-  // The inspector closes only AFTER the request lands, so the button is still
+  // The modal closes only AFTER the request lands, so the button is still
   // in the document for the whole wait and can carry the pending state itself.
-  // Success takes it away with the inspector — hence restoreOnSuccess: false.
+  // Success takes it away with the modal — hence restoreOnSuccess: false.
   // A 440 never reaches onError: runAction restores and renders nothing,
   // because the shared client already prompted and already retried.
   const act = (action, row, button, alert) => runAction(button, async () => {
     alert.textContent = '';
     await api(`${DEPLOY_ACTION_PATH}${action}`, {
       method: 'POST', body: JSON.stringify({deployment: row.id})});
-    closeInspector?.close();
+    closeHistory?.();
     await reload();
   }, {
     pendingLabel: 'Working…', restoreOnSuccess: false,
@@ -377,7 +385,7 @@ export function openApiInspector(ctx, deployments, reload, apiSection = null) {
           ...older.map((row) => attemptView(ctx, row, act, message, extras)))) : null)
     : h('p', {class: 'muted', text: 'No platform deployment attempts have been recorded.'});
 
-  const content = h('div', {class: 'deploy-inspector'},
+  const content = h('div', {class: 'deploy-history'},
     h('p', {class: 'muted small',
       text: 'New deploys arrive from CI. Admin can retry a proven commit, request verification, or converge the fleet — it never chooses a new commit.'}),
     coordination.state ? h('p', {class: 'muted small',
@@ -387,8 +395,9 @@ export function openApiInspector(ctx, deployments, reload, apiSection = null) {
         + `${coordination.at ? ` · since ${formatDate(coordination.at)}` : ''}`}) : null,
     message,
     attempts);
-  closeInspector = openInspector({title: 'API service · deploy history', content, wide: true});
-  return closeInspector;
+  closeHistory = openModal({title: 'API service · deploy history', content, wide: true,
+    onClose: () => onClose?.()});
+  return closeHistory;
 }
 
 // ---------------------------------------------------------------------------
@@ -487,7 +496,7 @@ export async function applyFrameworkUpdate(ctx, framework, reload) {
   // What follows restarts every node's service and must not be interrupted.
   // There is no surviving trigger to pin an inline state to either — the row
   // and the drill-in that started it are both rebuilt by reload(), and the
-  // inspector path has already closed itself — so this is a scrim.
+  // modal path has already closed itself — so this is a scrim.
   await runAction(null, async () => {
     try {
       // One shot, no transport retry: an ambiguous outcome is reconciled by
@@ -514,8 +523,8 @@ export async function applyFrameworkUpdate(ctx, framework, reload) {
 async function writeFrameworkPin(value, reload) {
   // The existing owner-tier writer — surfaced, not reimplemented. "hold"
   // pauses updates at the proven version; "" resumes the latest policy.
-  // The control lives in an inspector its own caller has already closed, so
-  // the affordance is the scrim, never the button.
+  // The control lives in a modal its own caller has already closed, so the
+  // affordance is the scrim, never the button.
   await runAction(null, async () => {
     try {
       await apiOnce(ADVANCED_SETTINGS_PATH, {method: 'POST', body: JSON.stringify({
@@ -538,7 +547,7 @@ async function writeFrameworkPin(value, reload) {
   });
 }
 
-export function openFrameworkInspector(ctx, framework, reload) {
+export function openFrameworkDetail(ctx, framework, reload) {
   const pin = framework?.pin || {mode: 'latest', value: null};
   const ownerEdit = ctx.capabilities?.settings_owner_edit === true;
   const manage = ctx.features?.platform?.capabilities?.manage === true;
@@ -551,17 +560,17 @@ export function openFrameworkInspector(ctx, framework, reload) {
       h('dd', {text: formatDate(framework?.checked_at)})),
     h('div', {}, h('dt', {text: 'Source'}),
       h('dd', {text: framework?.source || 'unavailable'})));
-  const inspector = openInspector({
-    title: 'django-mojo framework',
-    content: h('div', {class: 'framework-inspector'}, rows,
+  const closeDetail = openModal({
+    title: 'django-mojo framework', wide: true,
+    content: h('div', {class: 'framework-detail'}, rows,
       h('p', {class: 'muted small', text: PIN_COPY[pin.mode] || PIN_COPY.latest}),
-      // Each of these three closes the inspector BEFORE it awaits, so the
+      // Each of these three closes the modal BEFORE it awaits, so the
       // button that was clicked is gone by the time any pending state would
       // paint. The affordance belongs to the scrim the runner opens, and never
       // to `event.currentTarget`.
       framework?.can_update && manage
         ? h('div', {class: 'form-actions'}, h('button', {class: 'button primary',
-          onclick: () => { inspector.close(); return applyFrameworkUpdate(ctx, framework, reload); },
+          onclick: () => { closeDetail(); return applyFrameworkUpdate(ctx, framework, reload); },
         }, `Update to ${framework.latest}`))
         : h('p', {class: 'muted small',
           text: framework?.can_update && !manage
@@ -570,11 +579,11 @@ export function openFrameworkInspector(ctx, framework, reload) {
       ownerEdit ? h('div', {class: 'form-actions'},
         pin.mode === 'latest'
           ? h('button', {class: 'button ghost', onclick: () => {
-            inspector.close(); return writeFrameworkPin('hold', reload);
+            closeDetail(); return writeFrameworkPin('hold', reload);
           }}, 'Hold updates')
           : h('button', {class: 'button ghost', onclick: () => {
-            inspector.close(); return writeFrameworkPin('', reload);
+            closeDetail(); return writeFrameworkPin('', reload);
           }}, pin.mode === 'hold' ? 'Resume updates' : 'Clear pin and follow latest')) : null),
   });
-  return inspector;
+  return closeDetail;
 }

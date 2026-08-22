@@ -3,7 +3,8 @@
 //
 // This is v1's features/activity/page.js ported whole. The query machinery is
 // unchanged on purpose: the same QUERY_KEYS, the same subject translations, the
-// same size-bounded evidence blocks, the same inspector, the same refusal to
+// same size-bounded evidence blocks, the same record view (a centered modal in
+// v2 rather than a right-side drawer), the same refusal to
 // infer a zero count from a source that did not answer. Anything an operator
 // can reach in the current Admin they can reach here, at the same address
 // shape, and a link one of them wrote still works in the other.
@@ -20,7 +21,7 @@
 import {api, apiEnvelope, badge, formatDate, h, icon, statusTone, TableView} from '../../core.js';
 import {backPill} from '../../app.js';
 import {copyButton, runAction} from '../../components/actions.js';
-import {openInspector} from '../../components/overlays.js';
+import {openModal} from '../../components/overlays.js';
 import {decodeRouteState, restoreReturnLocation, returnLocation, routeHref} from '../../components/routes.js';
 import {emptyState, errorState, loadingState, sectionTabs} from '../../components/views.js';
 
@@ -243,7 +244,7 @@ function detailFields(row) {
 }
 
 // The whole record, exactly as the source returned it. v1 offered this on the
-// evidence blocks only; the inspector-level copy is the same promise applied to
+// evidence blocks only; the record-level copy is the same promise applied to
 // the row — nothing bounded, nothing reformatted, nothing dropped.
 function copyRecordButton(row) {
   return copyButton(JSON.stringify(row, null, 2),
@@ -329,28 +330,54 @@ function knownReference(ctx, row) {
   })}, `Open ${name} ${id}`));
 }
 
-// The Save button lives in the inspector this closes on success, so the
-// pending state rides the button for the wait and is never restored onto a
-// panel that has gone.
-function saveStatus(state, row, inspector, button, status, refresh) {
+// The Save button lives in the modal this closes on success, so the pending
+// state rides the button for the wait and is never restored onto a panel that
+// has gone. The message node is handed in rather than queried out of the
+// dialog: the caller already built it.
+function saveStatus(state, row, close, button, status, refresh, message) {
   const model = MODELS[state.tab];
-  const message = inspector.panel.querySelector('.form-message');
   return runAction(button, async () => {
     message.textContent = '';
     await api(`${model.endpoint}/${row.id}`, {method: 'PUT', body: JSON.stringify({status})});
-    inspector.close(); await refresh();
+    close(); await refresh();
   }, {
     pendingLabel: 'Saving…', restoreOnSuccess: false,
     onError: (error) => { message.textContent = error.message; },
   });
 }
 
+/**
+ * One row, read-only, in the centered modal.
+ *
+ * A `?inspector=<id>` deep link opens it on load; closing drops that key from
+ * the address so the page the operator is left looking at is the one the
+ * address describes. Nothing else in the query is touched, and the rewrite
+ * loads nothing — the list underneath is already correct.
+ *
+ * Read from the address, not from this page's state object, and only while the
+ * address still names this page: leaving Activity closes every overlay, and a
+ * rewrite from a closing modal would otherwise stamp the route the operator
+ * just left over the one they just asked for.
+ */
+function clearLinkedRecord(state, row) {
+  const current = decodeRouteState();
+  if (current.route !== 'activity') return;
+  if (String(current.state.inspector || '') !== String(row.id)) return;
+  state.inspector = '';
+  writeState(state, {load: false});
+}
+
 function openRecord(state, row, ctx, refresh) {
-  const content = h('div', {class: 'activity-inspector'},
-    h('div', {class: 'activity-inspector-actions'}, copyRecordButton(row)),
+  const content = h('div', {class: 'activity-record'},
+    h('div', {class: 'activity-record-actions'}, copyRecordButton(row)),
     h('dl', {class: 'activity-fields'}, ...detailFields(row)));
   const reference = knownReference(ctx, row); if (reference) content.append(reference);
   for (const key of ['metadata', 'payload', 'log']) if (row[key] != null && row[key] !== '') content.append(evidenceBlock(key, row[key]));
+  const dialog = {
+    title: `${MODELS[state.tab].label.slice(0, -1)} ${row.id}`,
+    subtitle: row.title || row.category || row.kind || '',
+    content, wide: true, onClose: () => clearLinkedRecord(state, row),
+  };
   const canManage = ctx.features.activity.capabilities.manage_security && ['incidents', 'tickets'].includes(state.tab);
   if (canManage) {
     const statuses = ['new', 'open', 'paused', 'resolved', 'closed'];
@@ -358,11 +385,11 @@ function openRecord(state, row, ctx, refresh) {
     const message = h('div', {class: 'form-message', role: 'alert'});
     const save = h('button', {class: 'button primary compact', type: 'button'}, 'Save status');
     content.append(h('section', {class: 'activity-action'}, h('h3', {text: 'Lifecycle'}), h('p', {text: 'Uses the existing record save path so model history and audit hooks remain authoritative.'}), select, save, message));
-    const inspector = openInspector({title: `${MODELS[state.tab].label.slice(0, -1)} ${row.id}`, subtitle: row.title || row.category || row.kind || '', content, wide: true});
-    save.addEventListener('click', () => saveStatus(state, row, inspector, save, select.value, refresh));
+    const close = openModal(dialog);
+    save.addEventListener('click', () => saveStatus(state, row, close, save, select.value, refresh, message));
     return;
   }
-  openInspector({title: `${MODELS[state.tab].label.slice(0, -1)} ${row.id}`, subtitle: row.title || row.category || row.kind || '', content, wide: true});
+  openModal(dialog);
 }
 
 function filtersView(state, reload) {
@@ -463,7 +490,7 @@ async function countFor(tab, ctx, signal) {
 
 export async function activityPage(ctx, parentSignal) {
   const tabs = visibleTabs(ctx);
-  const state = normalizedState(); let controller = null; let disposed = false; let filters = null; let linkedInspectorOpened = false;
+  const state = normalizedState(); let controller = null; let disposed = false; let filters = null; let linkedRecordOpened = false;
   const abortFromParent = () => controller?.abort();
   parentSignal?.addEventListener('abort', abortFromParent, {once: true});
   // v1's default-tab rule, generalised to the tabs this caller can see: an
@@ -532,7 +559,7 @@ export async function activityPage(ctx, parentSignal) {
       body.replaceChildren(...[filters, subjectChip(state), table,
         pagination(state, envelope)].filter(Boolean));
       const linked = state.inspector && envelope.items.find((row) => String(row.id) === String(state.inspector));
-      if (linked && !linkedInspectorOpened) { linkedInspectorOpened = true; openRecord(state, linked, ctx, refresh); }
+      if (linked && !linkedRecordOpened) { linkedRecordOpened = true; openRecord(state, linked, ctx, refresh); }
     } catch (error) { if (!activeController.signal.aborted && controller === activeController) body.replaceChildren(errorState(error, refresh)); }
   };
   state.reload = refresh;

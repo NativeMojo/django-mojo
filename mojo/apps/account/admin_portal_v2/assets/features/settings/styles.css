@@ -96,7 +96,7 @@ p.settings-note{margin:0}
 .email-test{padding:14px;border:1px solid var(--line);border-radius:11px;background:var(--surface)}
 .email-test h2{margin:0 0 4px;font-size:14px}
 .email-test .email-note{margin-bottom:12px}
-.email-inspector{display:flex;flex-direction:column;gap:10px}
+.email-domain-detail{display:flex;flex-direction:column;gap:10px}
 .email-audit{min-height:20px}
 .email-check{margin:2px 0;font-size:11px}
 .email-check-ok{color:var(--success)}
@@ -107,12 +107,12 @@ p.settings-note{margin:0}
 .email-technical{margin-top:8px}
 .email-technical pre{max-height:240px;overflow:auto}
 
-/* The inspector's definition list and the raw audit block: v1 carries both in
-   its shared stylesheet, v2's foundation does not, so they live with the one
+/* The audit modal's definition list and the raw audit block: v1 carries both
+   in its shared stylesheet, v2's foundation does not, so they live with the one
    feature that uses them. */
-.email-inspector .details{display:grid;grid-template-columns:1fr 1fr;margin:0}
-.email-inspector .details dt{color:var(--muted);font-size:9px}
-.email-inspector .details dd{margin:2px 0;font-size:11px}
+.email-domain-detail .details{display:grid;grid-template-columns:1fr 1fr;margin:0}
+.email-domain-detail .details dt{color:var(--muted);font-size:9px}
+.email-domain-detail .details dd{margin:2px 0;font-size:11px}
 .evidence-json{margin:8px 0 0;padding:9px;border-radius:7px;background:var(--surface-2);color:var(--text);font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
 .email-recommendations .small{font-size:10px}
 

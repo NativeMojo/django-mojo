@@ -1,3 +1,4 @@
+import {decodeRouteState} from '../../components/routes.js';
 import {accessPage, tabFor} from './page.js';
 
 // Access — v1's People destination, with its keys and its trust evidence
@@ -23,6 +24,16 @@ export default {
     route: 'users', label: 'Access', icon: 'users', section: 'Control plane', order: 40,
     matches: ['access', 'users', 'groups', 'keys', 'security'],
   }],
-  title: (route, ctx) => tabFor(route, ctx)?.label || 'Access',
+  // A named record is a page of its own, and the topbar says which KIND of
+  // page. The record's own name is not known until its read lands, so the
+  // title never claims a name it does not have yet — same rule as Apps.
+  title: (route, ctx) => {
+    const state = decodeRouteState().state;
+    const legacy = /^\d+$/.test(String(state.inspector || '')) ? state.inspector : '';
+    const tab = tabFor(route, ctx);
+    if (tab?.id === 'users' && (state.user || legacy)) return 'User';
+    if (tab?.id === 'groups' && (state.group || legacy)) return 'Group';
+    return tab?.label || 'Access';
+  },
   render: ({ctx, route, navigate}) => accessPage(ctx, route, navigate),
 };

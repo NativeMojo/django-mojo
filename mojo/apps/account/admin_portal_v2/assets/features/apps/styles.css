@@ -3,12 +3,12 @@
    tokens only — use --line for borders; the --border token is undefined here. */
 
 /* ---- API + framework drill-ins ---- */
-.deploy-inspector { display: grid; gap: .85rem; }
+.deploy-history { display: grid; gap: .85rem; }
 .deploy-attempts { display: grid; gap: .6rem; }
 .deploy-attempt { display: grid; gap: .45rem; }
 .deploy-attempt-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
 .deploy-technical summary { color: var(--muted); cursor: pointer; font-size: .78rem; font-weight: 700; }
-.framework-inspector { display: grid; gap: .85rem; }
+.framework-detail { display: grid; gap: .85rem; }
 
 /* ---- failure story + compact attempt timeline ---- */
 .deploy-failure { display: grid; gap: .4rem; padding: .75rem .85rem; border: 1px solid var(--danger); border-radius: 9px; }
@@ -93,9 +93,8 @@
 .result-state.danger svg { color: var(--danger); }
 .result-state p { margin: .25rem 0 0; color: var(--muted); font-size: .85rem; }
 
-/* ---- management inspector ---- */
-.webapp-inspector { display: grid; gap: 1rem; }
-.inspector-section { display: grid; gap: .85rem; }
+/* ---- one app's own page ---- */
+.apps-detail-body { display: grid; gap: .85rem; }
 .detail-grid { display: grid; grid-template-columns: minmax(8rem, auto) 1fr; gap: .35rem .9rem; margin: 0; }
 .detail-grid dt { color: var(--muted); font-size: .8rem; }
 .detail-grid dd { margin: 0; }

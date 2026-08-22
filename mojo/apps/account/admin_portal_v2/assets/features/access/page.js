@@ -5,10 +5,10 @@
 // #/groups). Both route names are kept exactly — every v1 link, bookmark and
 // routeHref('users') call still lands — and two views join them:
 //
-//   * Keys (#/keys) surfaces what v1 buried three clicks deep inside a group
-//     inspector. A group API key is part of its group, so the tab lists keys
-//     UNDER the group they act as, from the same read. Deploy keys belong to an
-//     app and are pointed at Apps rather than duplicated.
+//   * Keys (#/keys) surfaces what v1 buried three clicks deep inside a group.
+//     A group API key is part of its group, so the tab lists keys UNDER the
+//     group they act as, from the same read. Deploy keys belong to an app and
+//     are pointed at Apps rather than duplicated.
 //   * Security activity (#/security) is the trust evidence beside the people it
 //     is about: sign-ins (v1's `view_logins` read, which had no page-level view
 //     at all) and security events, each linking into the full Activity viewer.
@@ -18,13 +18,16 @@
 // `matches` list. `#/access` is accepted too — it is the name the rest of v2
 // links this destination by — and resolves to the first view this caller can
 // read.
+//
+// A record is a page too, not a drawer over the list: `#/users?user=<id>` and
+// `#/groups?group=<id>` are dispatched here, before the tab shell is built.
 
 import {h} from '../../core.js';
 import {decodeRouteState, routeHref} from '../../components/routes.js';
 import {permissionDeniedState, sectionTabs} from '../../components/views.js';
 import {capabilities} from './shared.js';
-import {usersTab} from './users.js';
-import {groupsTab} from './groups.js';
+import {userRecordPage, usersTab} from './users.js';
+import {groupRecordPage, groupsTab} from './groups.js';
 import {keysTab, keysTabVisible} from './keys.js';
 import {securityTab, securityTabVisible} from './security.js';
 
@@ -78,6 +81,23 @@ export function tabFor(route, ctx) {
   return tabs.find((tab) => tab.id === route) || tabs[0] || null;
 }
 
+// The record a hash names, if any — `?user=<id>` on People, `?group=<id>` on
+// Groups. v1 wrote `?inspector=<id>` for both; that address is accepted and
+// rewritten in place to the one that says WHICH kind of record it means, so
+// old links land and the address bar tells the truth afterwards.
+// replaceState fires no hashchange, so the render in flight continues.
+function linkedRecord(tabId) {
+  const key = tabId === 'users' ? 'user' : 'group';
+  const state = decodeRouteState().state;
+  const wanted = state[key]
+    || (/^\d+$/.test(String(state.inspector || '')) ? state.inspector : '');
+  if (!wanted) return '';
+  if (!state[key]) {
+    history.replaceState({}, '', routeHref(tabId, {...state, [key]: wanted, inspector: ''}));
+  }
+  return String(wanted);
+}
+
 export async function accessPage(ctx, route, navigate) {
   const tabs = visibleTabs(ctx);
   const tab = tabFor(route, ctx);
@@ -93,6 +113,15 @@ export async function accessPage(ctx, route, navigate) {
   if (route !== tab.id) {
     const state = decodeRouteState().state;
     history.replaceState({}, '', routeHref(tab.id, state));
+  }
+
+  // A named record is its own page — no list behind it, no drawer over it.
+  if (tab.id === 'users' || tab.id === 'groups') {
+    const recordId = linkedRecord(tab.id);
+    if (recordId) {
+      return tab.id === 'users'
+        ? userRecordPage(ctx, recordId) : groupRecordPage(ctx, recordId);
+    }
   }
 
   // Filled by the view with the one control that has to survive its own body

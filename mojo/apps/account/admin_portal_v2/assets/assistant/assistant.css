@@ -6,8 +6,8 @@
  * inside the platform feature stylesheet and that sheet is not installed for
  * every operator.
  *
- * z-index 60: below the busy scrim (90), the modal scrim (100), the overlay
- * and inspector scrims (110) and the modal scrim/toasts (120). A fresh-auth
+ * z-index 60: below the busy scrim (90), the base scrim (100) and the modal
+ * scrim/toasts (120). A fresh-auth
  * prompt is a modal, and it must never be obscured by this panel. */
 
 #app.assistant-open { grid-template-columns: 232px minmax(0, 1fr) 380px; }
