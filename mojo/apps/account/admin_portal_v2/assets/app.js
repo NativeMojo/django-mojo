@@ -8,7 +8,7 @@ import {featureForRoute, installFeatureStyles, navigationFor} from './features/r
 const app = document.getElementById('app');
 let context = null; let content = null; let navigation = null; let title = null;
 let generation = 0; let controller = null; let dispose = null;
-let reauthClose = null; let opBannerDispose = null;
+let reauthClose = null; let opBannerDispose = null; let disposeAssistant = null;
 
 // v2's home route. decodeRouteState() falls back to v1's 'dashboard' for an
 // empty or malformed hash — that route does not exist here, so it lands on
@@ -147,11 +147,18 @@ async function start() {
   window.MojoAuth.init({baseURL: location.origin});
   context = await api('/api/account/admin/bootstrap');
   installFeatureStyles(context); mountShell(); await render();
+  // The Assistant rides the same right-side dock it has in the current Admin:
+  // loaded only when the bootstrap says the caller may use it, after the shell
+  // exists so its launcher has a topbar to sit in.
+  if (context.features?.assistant?.enabled === true) {
+    const {install} = await import('./assistant/panel.js');
+    disposeAssistant = install({ctx: context, app}).dispose;
+  }
 }
 
 function showFatal(error) {
   if (error?.code === 'fresh_auth_required') return;
-  controller?.abort(); dispose?.(); closeAllOverlays();
+  controller?.abort(); dispose?.(); disposeAssistant?.(); disposeAssistant = null; closeAllOverlays();
   const adminPath = `/${location.pathname.split('/').filter(Boolean)[0] || 'admin'}/`;
   setDocumentTitle('Could not load');
   app.replaceChildren(h('div', {class: 'fatal'}, icon('alert'), h('h1', {text: 'Admin could not load'}), h('p', {text: error.message}), h('a', {class: 'button primary', href: `/auth?redirect=${encodeURIComponent(adminPath)}`}, 'Sign in again')));

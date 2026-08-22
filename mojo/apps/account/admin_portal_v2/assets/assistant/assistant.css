@@ -1,0 +1,271 @@
+/* Admin Assistant panel.
+ *
+ * Every colour is one of the shell's own tokens, so the panel follows the
+ * light/dark/system theme with no palette of its own — except the chart ramp,
+ * which is scoped to .assistant-panel because the platform palette lives
+ * inside the platform feature stylesheet and that sheet is not installed for
+ * every operator.
+ *
+ * z-index 60: below the busy scrim (90), the modal scrim (100), the overlay
+ * and inspector scrims (110) and the modal scrim/toasts (120). A fresh-auth
+ * prompt is a modal, and it must never be obscured by this panel. */
+
+#app.assistant-open { grid-template-columns: 232px minmax(0, 1fr) 380px; }
+
+.assistant-panel {
+  grid-column: 3;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  --chart-1: #536be5; --chart-2: #16815d; --chart-3: #a96a16;
+  --chart-4: #c53d47; --chart-5: #7b5ad9; --chart-6: #2b8aa8;
+}
+html[data-theme="dark"] .assistant-panel {
+  --chart-1: #8999ff; --chart-2: #4dc398; --chart-3: #e9ad59;
+  --chart-4: #f07a82; --chart-5: #b39aff; --chart-6: #63c2dd;
+}
+@media (prefers-color-scheme: dark) {
+  html[data-theme="system"] .assistant-panel {
+    --chart-1: #8999ff; --chart-2: #4dc398; --chart-3: #e9ad59;
+    --chart-4: #f07a82; --chart-5: #b39aff; --chart-6: #63c2dd;
+  }
+}
+
+.assistant-panel[hidden] { display: none; }
+
+.assistant-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 54px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+.assistant-head strong { font-size: 12px; font-weight: 700; }
+.assistant-head .assistant-head-actions { margin-left: auto; display: flex; gap: 4px; }
+.assistant-status { font-size: 9px; color: var(--muted); }
+.assistant-status.is-error { color: var(--danger); }
+
+.assistant-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.assistant-thread {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 13px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.assistant-history {
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  max-height: 210px;
+  overflow: auto;
+}
+.assistant-history[hidden] { display: none; }
+.assistant-history-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.assistant-history-row:last-child { border-bottom: 0; }
+.assistant-history-row > button.assistant-history-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  padding: 2px 0;
+}
+.assistant-history-row strong { display: block; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assistant-history-row span { display: block; font-size: 9px; color: var(--muted); }
+
+.assistant-message { display: flex; flex-direction: column; gap: 5px; }
+.assistant-message > .assistant-bubble {
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.assistant-message.is-user { align-items: flex-end; }
+.assistant-message.is-user > .assistant-bubble {
+  max-width: 86%;
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
+}
+.assistant-message.is-error > .assistant-bubble {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  color: var(--danger);
+}
+.assistant-bubble > :first-child { margin-top: 0; }
+.assistant-bubble > :last-child { margin-bottom: 0; }
+.assistant-bubble h4, .assistant-bubble h5, .assistant-bubble h6 { margin: 10px 0 5px; font-size: 12px; }
+.assistant-bubble p { margin: 0 0 8px; }
+.assistant-bubble ul, .assistant-bubble ol { margin: 0 0 8px; padding-left: 18px; }
+.assistant-bubble blockquote {
+  margin: 0 0 8px;
+  padding-left: 9px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+}
+.assistant-bubble hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
+.assistant-bubble code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--surface-3);
+}
+.assistant-bubble pre {
+  margin: 0 0 8px;
+  padding: 9px;
+  overflow: auto;
+  border-radius: 7px;
+  background: #0c1220;
+  color: #d8e0ee;
+}
+.assistant-bubble pre code { background: transparent; padding: 0; color: inherit; }
+.assistant-truncated { color: var(--muted); font-size: 9px; font-style: italic; }
+
+.assistant-busy { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
+.assistant-dots { display: inline-flex; gap: 3px; }
+.assistant-dots i {
+  width: 5px; height: 5px; border-radius: 50%; background: var(--muted);
+  animation: assistant-pulse 1s ease-in-out infinite;
+}
+.assistant-dots i:nth-child(2) { animation-delay: .15s; }
+.assistant-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes assistant-pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .assistant-dots i { animation: none; } }
+
+.assistant-composer {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 7px;
+  align-items: flex-end;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.assistant-composer textarea { resize: none; max-height: 140px; font-size: 12px; }
+
+/* Blocks */
+.assistant-block {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.assistant-block > h5 { margin: 0; padding: 8px 11px; font-size: 11px; border-bottom: 1px solid var(--line); }
+.assistant-block .table-wrap { border: 0; }
+.assistant-block table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.assistant-block th, .assistant-block td { padding: 6px 9px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.assistant-block th { color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .07em; }
+.assistant-note { padding: 6px 11px; color: var(--muted); font-size: 9px; }
+.assistant-unreadable { color: var(--muted); font-size: 10px; font-style: italic; }
+
+.assistant-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--line); }
+.assistant-stats > div { padding: 9px 11px; background: var(--surface); }
+.assistant-stats span { display: block; color: var(--muted); font-size: 9px; }
+.assistant-stats strong { display: block; margin-top: 3px; font-size: 15px; letter-spacing: -.02em; }
+
+.assistant-kv { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.assistant-kv dt { padding: 5px 11px; color: var(--muted); font-size: 10px; }
+.assistant-kv dd { margin: 0; padding: 5px 11px; font-size: 11px; overflow-wrap: anywhere; }
+
+.assistant-alert { display: block; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--line); font-size: 11px; }
+.assistant-alert strong { display: block; margin-bottom: 2px; }
+.assistant-alert.is-info { border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); background: var(--accent-soft); }
+.assistant-alert.is-success { border-color: color-mix(in srgb, var(--success) 34%, var(--line)); background: color-mix(in srgb, var(--success) 8%, var(--surface)); }
+.assistant-alert.is-warning { border-color: color-mix(in srgb, var(--warning) 34%, var(--line)); background: color-mix(in srgb, var(--warning) 8%, var(--surface)); }
+.assistant-alert.is-error { border-color: color-mix(in srgb, var(--danger) 34%, var(--line)); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }
+
+.assistant-file { display: grid; gap: 3px; padding: 10px 11px; }
+.assistant-file strong { font-size: 11px; overflow-wrap: anywhere; }
+.assistant-file span, .assistant-file a { font-size: 10px; color: var(--muted); overflow-wrap: anywhere; }
+.assistant-file a { color: var(--accent); }
+
+.assistant-chips { display: flex; flex-wrap: wrap; gap: 5px; padding: 9px 11px; }
+.assistant-chip {
+  display: inline-flex; gap: 5px; align-items: baseline;
+  padding: 3px 8px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface-2); font-size: 10px;
+}
+.assistant-chip span { color: var(--muted); font-size: 9px; }
+
+.assistant-chart { display: block; width: 100%; height: auto; padding: 9px; }
+.assistant-legend { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 11px 9px; font-size: 9px; color: var(--muted); }
+.assistant-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
+
+/* Plan tracker */
+.assistant-plan { border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+.assistant-plan > header { padding: 8px 11px; border-bottom: 1px solid var(--line); }
+.assistant-plan > header strong { font-size: 11px; }
+.assistant-plan > header span { display: block; color: var(--muted); font-size: 9px; }
+.assistant-plan ol { margin: 0; padding: 7px 11px; list-style: none; display: grid; gap: 5px; }
+.assistant-plan li { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 7px; font-size: 11px; color: var(--muted); }
+.assistant-plan li.is-done { color: var(--text); }
+.assistant-plan li.is-in_progress { color: var(--text); font-weight: 600; }
+.assistant-plan li small { display: block; font-weight: 400; color: var(--muted); font-size: 9px; }
+
+/* Approval card */
+.assistant-approval { border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--line)); border-radius: 9px; background: var(--surface); }
+.assistant-approval > header { padding: 9px 11px; border-bottom: 1px solid var(--line); }
+.assistant-approval > header strong { display: block; font-size: 11px; }
+.assistant-approval > header span { display: block; color: var(--muted); font-size: 9px; }
+.assistant-approval .assistant-args { margin: 0; padding: 8px 11px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 2px 8px; font-size: 10px; }
+.assistant-approval .assistant-args dt { color: var(--muted); }
+.assistant-approval .assistant-args dd { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.assistant-approval p { margin: 0; padding: 0 11px 8px; font-size: 10px; color: var(--muted); }
+.assistant-approval footer { display: flex; gap: 6px; justify-content: flex-end; padding: 8px 11px; border-top: 1px solid var(--line); }
+.assistant-approval .assistant-state { padding: 8px 11px; font-size: 10px; }
+.assistant-approval.is-failed { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
+.assistant-approval.is-completed { border-color: color-mix(in srgb, var(--success) 45%, var(--line)); }
+
+/* Quick-reply (legacy `action` block) */
+.assistant-quickreply { display: flex; flex-wrap: wrap; gap: 6px; padding: 9px 11px; }
+
+/* Owner setup view */
+.assistant-setup { padding: 13px 12px; overflow: auto; display: grid; gap: 11px; }
+.assistant-setup h3 { margin: 0; font-size: 13px; }
+.assistant-setup .assistant-setup-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 9px;
+  padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2);
+}
+.assistant-setup .assistant-setup-row span { display: block; font-size: 9px; color: var(--muted); }
+
+/* Sheet mode: a dialog, right-anchored, full width on a phone. */
+@media (max-width: 1100px) {
+  /* The grid is corrected by CSS, not by the mode listener. A missed
+     matchMedia change event would otherwise leave a dead 380px column beside a
+     panel that is already position:fixed. */
+  #app.assistant-open { grid-template-columns: 232px minmax(0, 1fr); }
+  .assistant-panel {
+    position: fixed;
+    inset: 0 0 0 auto;
+    width: min(420px, 100vw);
+    height: 100%;
+    box-shadow: var(--shadow);
+  }
+}
+@media (max-width: 600px) {
+  .assistant-panel { width: 100vw; }
+  .assistant-stats { grid-template-columns: minmax(0, 1fr); }
+  .assistant-kv, .assistant-approval .assistant-args { grid-template-columns: minmax(0, 1fr); }
+}
