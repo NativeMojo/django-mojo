@@ -37,6 +37,64 @@ def test_manifest_is_strict_secret_free_and_digest_stable(opts):
 
 
 @th.django_unit_test()
+def test_balancer_health_paths_are_exact_digest_bound_and_defaulted(opts):
+    from mojo.deploy.provision import brownfield_inputs
+    from mojo.deploy.provision import spec as spec_module
+
+    plain = brownfield_inputs.validate(raw_manifest())
+    plain_spec = brownfield_inputs.to_spec(plain)
+    th.assert_eq(plain_spec.api_health_path, spec_module.HEALTH_PATH_DEFAULT,
+                 "an omitted API path must preserve the managed default")
+    th.assert_eq(plain_spec.certbot_health_path,
+                 spec_module.HEALTH_PATH_DEFAULT,
+                 "an omitted certbot path must preserve the managed default")
+
+    raw = raw_manifest()
+    raw["load_balancer"]["api_health_path"] = "/api/maestro/node/ready"
+    raw["load_balancer"]["certbot_health_path"] = "/certbot/ready"
+    declared = brownfield_inputs.validate(raw)
+    topology = brownfield_inputs.to_spec(declared)
+    th.assert_eq(declared["load_balancer"]["api_health_path"],
+                 "/api/maestro/node/ready",
+                 "normalization must preserve the exact declared API path")
+    th.assert_eq(declared["load_balancer"]["certbot_health_path"],
+                 "/certbot/ready",
+                 "normalization must preserve the exact declared certbot path")
+    th.assert_eq(topology.api_health_path, "/api/maestro/node/ready",
+                 "the API path must survive manifest-to-spec conversion")
+    th.assert_eq(topology.certbot_health_path, "/certbot/ready",
+                 "the certbot path must survive manifest-to-spec conversion")
+    th.assert_true(declared["manifest_digest"] != plain["manifest_digest"],
+                   "changing a health path must change the canonical manifest digest")
+
+
+@th.django_unit_test()
+def test_balancer_health_paths_reject_urls_injection_and_bad_lengths(opts):
+    from mojo.deploy.provision import spec as spec_module
+
+    invalid = (
+        "", "api/ready", "https://maestromojo.com/api/ready",
+        "//maestromojo.com/api/ready", "/api/ready?deep=1",
+        "/api/ready#fragment", "/api ready", "/api/ready\nnext",
+        "/api/ready\x00next", "/" + "a" * spec_module.HEALTH_PATH_MAX,
+    )
+    for value in invalid:
+        raw = raw_manifest()
+        raw["load_balancer"]["api_health_path"] = value
+        message = _error(raw)
+        th.assert_true(message is not None,
+                       f"invalid health path {value!r} must fail closed")
+        th.assert_in("api_health_path", message,
+                     f"the rejection must name the invalid field: {message}")
+
+    maximum = raw_manifest()
+    maximum["load_balancer"]["api_health_path"] = (
+        "/" + "a" * (spec_module.HEALTH_PATH_MAX - 1))
+    th.assert_eq(_error(maximum), None,
+                 "ELBv2's documented 1024-character maximum must be accepted")
+
+
+@th.django_unit_test()
 def test_manifest_rejects_ambiguous_roles_versions_and_accounts(opts):
     from mojo.deploy.provision import brownfield_inputs
 

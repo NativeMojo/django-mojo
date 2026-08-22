@@ -151,10 +151,17 @@ def test_stubber_validates_rds_cache_and_s3_metadata_request_shapes(opts):
             "AuthTokenEnabled": False,
             "NodeGroups": [{"PrimaryEndpoint": {
                 "Address": cache["endpoint"], "Port": cache["port"]}}],
-            "SecurityGroups": [{"SecurityGroupId":
-                cache["security_group_ids"][0]}],
-            "CacheSubnetGroupName": cache["subnet_group_name"],
+            "MemberClusters": [f"{cache['identifier']}-001"],
         }]}, {"ReplicationGroupId": cache["identifier"]})
+    cache_stub.add_response("describe_cache_clusters", {
+        "CacheClusters": [{
+            "CacheClusterId": f"{cache['identifier']}-001",
+            "ReplicationGroupId": cache["identifier"], "Engine": "valkey",
+            "CacheClusterStatus": "available",
+            "SecurityGroups": [{"SecurityGroupId":
+                cache["security_group_ids"][0], "Status": "active"}],
+            "CacheSubnetGroupName": cache["subnet_group_name"],
+        }]}, {"CacheClusterId": f"{cache['identifier']}-001"})
     cache_stub.add_response("describe_cache_subnet_groups", {
         "CacheSubnetGroups": [{
             "CacheSubnetGroupName": cache["subnet_group_name"],

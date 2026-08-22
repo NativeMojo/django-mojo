@@ -19,7 +19,8 @@ ALLOWED_READS = {
     )),
     "rds": frozenset(("describe_db_clusters", "describe_db_subnet_groups")),
     "elasticache": frozenset((
-        "describe_cache_subnet_groups", "describe_replication_groups",
+        "describe_cache_clusters", "describe_cache_subnet_groups",
+        "describe_replication_groups",
     )),
     "s3": frozenset((
         "get_bucket_location", "head_object", "list_objects_v2",

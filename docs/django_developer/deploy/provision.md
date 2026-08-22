@@ -119,6 +119,8 @@ is:
     "name": "maestro-shadow-nlb",
     "api_target_group": "maestro-shadow-api",
     "certbot_target_group": "maestro-shadow-http",
+    "api_health_path": "/api/maestro/node/ready",
+    "certbot_health_path": "/api/version",
     "subnet_ids": ["subnet-0123456789abcdef0", "subnet-1123456789abcdef0"]
   },
   "kms_key_arn": "arn:aws:kms:us-west-2:123456789012:key/01234567-89ab-cdef-0123-456789abcdef",
@@ -132,6 +134,19 @@ profile is either two exact existing ARNs or one migration-owned `managed`
 name pair, never both. `compatibility_instance_ids` are explicit existing
 servers that may temporarily join the shadow target groups; they are not
 adopted as managed nodes.
+
+`load_balancer.api_health_path` and `certbot_health_path` are optional strict
+absolute HTTP paths, 1 through 1024 characters, with no whitespace, control
+characters, scheme, host, query string or fragment. Omitting either preserves
+the managed default, `/api/version`. A brownfield application can instead bind
+target admission to its real readiness contract — for example Maestro uses
+`/api/maestro/node/ready` so the node role, database and cache are checked with
+ASGI/MCP readiness. Every target registered in one target group, including a
+`compatibility_instance_ids` legacy server, must answer that group's selected
+path. Deploy the readiness route and any required compatibility role to legacy
+targets before changing the manifest path; the next `fleet-apply` otherwise
+makes those targets unhealthy while it safely converges the owned group in
+place.
 
 For the database credential, `metadata_key` names the S3 user-metadata field
 whose non-secret value must equal `database.application_user`; discovery
@@ -152,6 +167,12 @@ set `(step, verb, target, detail)`. `fleet-apply` performs that preview, asks
 for a typed confirmation, re-observes everything, and refuses before mutation
 if either digest changed. A newly needed but otherwise allowed mutation is
 therefore not smuggled in after confirmation.
+
+ElastiCache exposes the replication-group endpoint and encryption posture on
+the replication group, but exposes its subnet group and VPC security groups on
+the member cache clusters. Brownfield discovery follows every declared member
+cluster and requires each one to match the manifest before the dependency
+digest can pass.
 
 The mutation boundary is a positive allowlist:
 

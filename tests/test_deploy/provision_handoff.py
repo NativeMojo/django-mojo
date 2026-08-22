@@ -814,8 +814,8 @@ def test_cutover_role_policy_scopes_every_mutation_resource(opts):
                 "subnet-0123456789abcdef0", "subnet-1123456789abcdef0"]}},
         "SetSubnets IAM must reject every undeclared subnet")
     th.assert_eq(by_action["s3:PutObject"][0]["Resource"],
-                 "arn:aws:s3:::maestro-prod-config/"
-                 "fleets/shadow/handoff/*",
+                 f"arn:aws:s3:::{topology.eip_handoff_bucket}/"
+                 f"{topology.eip_handoff_prefix}/*",
                  "journal writes must stay in the exact handoff prefix")
     th.assert_eq("ec2:ReleaseAddress" in by_action, False,
                  "the dedicated role must never be able to release an EIP")
