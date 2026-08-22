@@ -26,7 +26,10 @@ FINALIZE_URL = "https://acme.test/order/1/finalize"
 CERT_URL = "https://acme.test/cert/1"
 # Distinct from the default-tier module's channel: under --all both modules
 # may run in one invocation, and a shared channel would cross-drain jobs.
-CERT_JOB_CHANNEL = "testit_dnsman_cert_jobs_ext"
+# The declared channel (testproject JOBS_ALLOWED_CHANNELS). The queue tests
+# that used it all moved here, so there is no default-tier module left to
+# collide with — and an undeclared "_ext" variant fails closed at publish.
+CERT_JOB_CHANNEL = "testit_dnsman_cert_jobs"
 
 
 # ----------------------------------------------------------------------
