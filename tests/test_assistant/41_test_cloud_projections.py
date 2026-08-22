@@ -281,6 +281,59 @@ def test_capacity_projection(opts):
                 f"warnings must project to codes only: {projected['warnings']}")
 
 
+@th.django_unit_test("the tools' documented caps survive bounded(), not just "
+                     "their own projectors")
+def test_documented_caps_are_not_re_truncated(opts):
+    from mojo.apps.assistant.services.tools.cloud import reads
+    from mojo.apps.assistant.services.tools.cloud.common import bounded
+
+    # 1. fetch_cloud_metrics documents 60 buckets across up to 10 slugs. The
+    #    default 40-item / 400-node envelope would silently cut both.
+    series = reads.project_series(
+        {f"web-{index}": [float(n) for n in range(500)] for index in range(12)},
+        [f"t{n}" for n in range(500)])
+    metrics = bounded(series, depth=4, max_items=reads.MAX_METRIC_BUCKETS,
+                      max_nodes=reads.METRIC_NODE_BUDGET)
+    assert_eq(len(metrics["series"]), reads.MAX_METRIC_SLUGS,
+              f"the projector dropped series below the documented "
+              f"{reads.MAX_METRIC_SLUGS}: {len(metrics['series'])}")
+    for slug, row in metrics["series"].items():
+        assert_eq(len(row["values"]), reads.MAX_METRIC_BUCKETS,
+                  f"series {slug} came back with {len(row['values'])} buckets, "
+                  f"not the documented {reads.MAX_METRIC_BUCKETS}")
+    assert_eq(len(metrics["labels"]), reads.MAX_METRIC_BUCKETS,
+              f"labels were re-truncated to {len(metrics['labels'])}")
+
+    # 2. list_cloud_resources documents 100 rows per service.
+    rows = [{"id": f"i-{index:017d}", "slug": f"web-{index}",
+             "name": f"web-{index}", "type": "m6i.large", "state": "running"}
+            for index in range(reads.MAX_RESOURCE_ROWS)]
+    listing = bounded(
+        {"ec2": list(rows), "rds": list(rows), "redis": list(rows),
+         "degraded": {}, "available": True, "reason": None},
+        depth=4, max_items=reads.MAX_RESOURCE_ROWS,
+        max_nodes=reads.RESOURCE_NODE_BUDGET)
+    for service in ("ec2", "rds", "redis"):
+        kept = [row for row in listing[service]
+                if row.get("truncated") is not True]
+        assert_eq(len(kept), reads.MAX_RESOURCE_ROWS,
+                  f"{service} came back with {len(kept)} rows, not the "
+                  f"documented {reads.MAX_RESOURCE_ROWS}")
+
+    # 3. the named deployment projection must survive inside a platform
+    #    section — node_summary sits two levels deeper than the others.
+    section = {"status": "healthy", "data": {"items": [{
+        "id": "abc", "sha": SHA, "status": "failed",
+        "node_summary": {"expected": 3, "proven": 2, "failed": 1},
+        "current_commits": [SHA]}]}}
+    projected = bounded(section, depth=reads.DEPLOYMENTS_DEPTH)
+    item = projected["data"]["items"][0]
+    assert_eq(item["node_summary"]["expected"], 3,
+              f"node_summary collapsed inside the section walk: {item}")
+    assert_eq(item["current_commits"], [SHA],
+              f"current_commits collapsed inside the section walk: {item}")
+
+
 @th.django_unit_test("a long metric series is capped to the most recent buckets")
 def test_series_projection(opts):
     from mojo.apps.assistant.services.tools.cloud.reads import (

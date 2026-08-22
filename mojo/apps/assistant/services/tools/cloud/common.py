@@ -33,11 +33,14 @@ logger = logit.get_logger("assistant", "assistant.log")
 
 # --- Bounding budget ------------------------------------------------------
 #
-# The depth is per tool because the envelopes are not the same shape: an
-# `_aws_inventory` row sits at depth 4-5 under sections -> envelope -> data ->
-# resources -> ec2[], so a flat depth-2 cap would leave a caller holding only
-# status strings. The NODE and BYTE budgets are what actually bound the result;
-# depth only stops one deep branch from eating the whole budget.
+# Depth, width and the node budget are all PER CALL, because the envelopes are
+# not the same shape: an `_aws_inventory` row sits at depth 4-5 under
+# sections -> envelope -> data -> resources -> ec2[], so a flat depth-2 cap
+# would leave a caller holding only status strings — and a tool that documents
+# 100 rows or 60 buckets must not have them silently re-truncated to 40 here.
+# The defaults are for envelopes nobody has already capped; a tool that has
+# ALREADY applied its own documented cap raises the width and node ceilings to
+# match it, and MAX_BYTES stays the outer ceiling in every case.
 DEFAULT_DEPTH = 4
 MAX_STRING = 200
 MAX_ITEMS = 40
@@ -87,7 +90,8 @@ def _scalar(value, budget):
 
 
 def _spent(budget):
-    return budget["nodes"] >= MAX_NODES or budget["bytes"] >= MAX_BYTES
+    return (budget["nodes"] >= budget["max_nodes"]
+            or budget["bytes"] >= budget["max_bytes"])
 
 
 def _walk(value, depth, budget):
@@ -97,7 +101,7 @@ def _walk(value, depth, budget):
             return TRUNCATED_DEPTH
         out = {}
         for index, (key, item) in enumerate(value.items()):
-            if index >= MAX_ITEMS or _spent(budget):
+            if index >= budget["max_items"] or _spent(budget):
                 out["truncated"] = True
                 break
             name = str(key)[:80]
@@ -113,7 +117,7 @@ def _walk(value, depth, budget):
             return TRUNCATED_DEPTH
         out = []
         for index, item in enumerate(value):
-            if index >= MAX_ITEMS or _spent(budget):
+            if index >= budget["max_items"] or _spent(budget):
                 out.append({"truncated": True})
                 break
             out.append(_walk(item, depth - 1, budget))
@@ -121,17 +125,26 @@ def _walk(value, depth, budget):
     return _scalar(value, budget)
 
 
-def bounded(value, depth=DEFAULT_DEPTH):
+def bounded(value, depth=DEFAULT_DEPTH, max_items=MAX_ITEMS,
+            max_nodes=MAX_NODES, max_bytes=MAX_BYTES):
     """A model-safe projection of one service envelope.
 
-    Scalar leaves only, strings capped at 200 characters and run through the
-    string masker, at most 40 keys or items per container, a global budget of
-    400 nodes / 24 KB, every ``DROP_KEYS`` name removed and every sensitive key
-    name kept with its value replaced. Never raises: a projection that cannot
-    be walked is worth less than a turn that crashes.
+    Scalar leaves only, strings capped at ``MAX_STRING`` characters and run
+    through the string masker, every ``DROP_KEYS`` name removed and every
+    sensitive key name kept with its value replaced. Never raises: a projection
+    that cannot be walked is worth less than a turn that crashes.
+
+    ``max_items`` and ``max_nodes`` are per call so this can never quietly
+    undercut a cap the CALLER already documented and applied — a tool that says
+    "100 rows per service" or "the 60 most recent buckets" passes ceilings that
+    let exactly that through. ``max_bytes`` remains the outer ceiling: raising
+    the width never removes the size bound.
     """
     try:
-        return _walk(value, depth, {"nodes": 0, "bytes": 0})
+        return _walk(value, depth, {
+            "nodes": 0, "bytes": 0, "max_items": max_items,
+            "max_nodes": max_nodes, "max_bytes": max_bytes,
+        })
     except Exception:
         logger.exception("cloud tools: a result could not be bounded")
         return {"truncated": True, "note": "This result could not be projected safely."}
@@ -159,7 +172,6 @@ def actor_request(user, **data):
     request.method = "GET"
     request.bearer = None
     request.group = None
-    request.api_key = getattr(user, "api_key", None)
     return request
 
 

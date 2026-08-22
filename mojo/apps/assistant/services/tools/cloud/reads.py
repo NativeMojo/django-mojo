@@ -58,6 +58,22 @@ MAX_METRIC_BUCKETS = 60
 MAX_SETUP_LOG = 20
 MAX_HOURS = 168
 
+# Node ceilings for the two tools whose own documented caps are WIDER than
+# bounded()'s default 40-item / 400-node envelope defaults. Without these the
+# projector would silently re-truncate a result this module already capped —
+# 100 rows per service would come back as 40, and a 60-bucket series as 40.
+# Three services x 100 rows x (1 dict + 5 scalars) plus the containers.
+RESOURCE_NODE_BUDGET = 2200
+# Ten series x (1 dict + 1 list + 60 values + 4 summary leaves) plus labels.
+METRIC_NODE_BUDGET = 1200
+
+# The deployments section is the one platform section whose useful fields sit
+# two levels deeper than the rest: sections -> envelope -> data -> items[] ->
+# item -> node_summary -> counts. It is ALREADY a named allowlist projection
+# (project_deployment), so the extra depth adds no new surface.
+DEPLOYMENTS_DEPTH = 6
+SECTION_DEPTH = 4
+
 
 # --- projections ----------------------------------------------------------
 
@@ -319,9 +335,11 @@ def _tool_get_platform_overview(params, user):
     envelope = admin_platform.platform_overview(request)
     sections = {}
     for name, value in (envelope.get("sections") or {}).items():
+        depth = SECTION_DEPTH
         if name == "deployments":
             value = _project_deployments_section(value)
-        sections[name] = bounded(value, depth=4)
+            depth = DEPLOYMENTS_DEPTH
+        sections[name] = bounded(value, depth=depth)
     return {"requested": wanted, "sections": sections}
 
 
@@ -751,11 +769,13 @@ def _tool_list_cloud_resources(params, user):
                         "state": row.get("status")})
 
     available = len(degraded) < 3
+    # The row cap is this tool's own (MAX_RESOURCE_ROWS, applied above), so the
+    # projector is told to honour it rather than re-truncate to its default 40.
     return bounded({
         "ec2": ec2, "rds": rds, "redis": redis,
         "degraded": degraded, "available": available,
         "reason": None if available else _single_cause(set(degraded.values())),
-    }, depth=4)
+    }, depth=4, max_items=MAX_RESOURCE_ROWS, max_nodes=RESOURCE_NODE_BUDGET)
 
 
 @tool(
@@ -832,4 +852,8 @@ def _tool_fetch_cloud_metrics(params, user):
                       "category": category, "hours": hours,
                       "granularity": params.get("granularity") or "hours",
                       "stat": params.get("stat") or "avg"})
-    return bounded(projected, depth=4)
+    # project_series has already capped this to MAX_METRIC_SLUGS series of
+    # MAX_METRIC_BUCKETS points; the projector honours those caps instead of
+    # cutting every series back to its default 40.
+    return bounded(projected, depth=4, max_items=MAX_METRIC_BUCKETS,
+                   max_nodes=METRIC_NODE_BUDGET)

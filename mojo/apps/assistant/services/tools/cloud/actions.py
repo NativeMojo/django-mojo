@@ -620,7 +620,15 @@ def _preview_capacity_change(params, user):
         # The fleet fingerprint, not a per-resource echo: an unrelated
         # concurrent change fails this closed, which is the point. Read from
         # the 120s report cache here; the handler re-reads it live.
-        "revision": f"{action}:{resource}:{capacity_service.fleet_revision()}",
+        #
+        # FINGERPRINT FIRST, and nothing may be appended after it. The registry
+        # stores str(revision)[:128] into a max_length=128 column, so anything
+        # composed AFTER the 64-char digest is what gets clipped when the
+        # prefix is long (an RDS identifier alone can be 63 characters). A
+        # clipped digest still round-trips through _require_bound_revision —
+        # both sides truncate identically — so the row would be claimed and
+        # then fail _fleet_moved forever with a false "the fleet changed".
+        "revision": f"{capacity_service.fleet_revision()}:{action}:{resource}",
     }
 
 
@@ -629,16 +637,33 @@ def _summarize_capacity_change(params, user):
             f"{params.get('resource') or 'the fleet'}.")
 
 
+def _fingerprint_of(revision):
+    """The fleet fingerprint half of a bound capacity revision.
+
+    Read from the FRONT: the registry stores ``str(revision)[:128]`` into a
+    128-character column, so only what is composed after the 64-character
+    digest can ever be clipped. A bare fingerprint (what ``apply_capacity_plan``
+    binds) has no separator and comes back whole.
+    """
+    return str(revision or "").split(":", 1)[0]
+
+
 def _fleet_moved(approval):
     """Re-derive the fingerprint LIVE and compare it to the bound one.
 
     ``preview`` reads the 120-second report cache, which is right at proposal
     time — the operator is looking at that same picture. At execution the only
     honest answer comes from a fresh provider read, so the handler asks again.
+
+    The fingerprint is the FIRST field of every revision this module builds
+    (see ``_preview_capacity_change``), so it is read from the front and can
+    never be the part that the 128-character column clips. A bare fingerprint —
+    what ``apply_capacity_plan`` binds — has no separator and survives this
+    unchanged.
     """
     if approval is None or not approval.revision:
         return None
-    bound = str(approval.revision).rsplit(":", 1)[-1]
+    bound = _fingerprint_of(approval.revision)
     try:
         live = capacity_service.fleet_revision(refresh=True)
     except capacity_service.CapacityError as error:
