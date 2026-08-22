@@ -533,11 +533,134 @@ def test_restart_uses_the_configured_service_name(opts):
 
 
 @th.django_unit_test()
+def test_default_restart_obeys_sealed_request_service_authority(opts):
+    from mojo.deploy import config_sync as cs
+
+    fake_run = mock.Mock()
+    fake_sleep = mock.Mock()
+    ok = cs.restart_app(
+        {}, False, run_cmd=fake_run, sleep=fake_sleep,
+        request_service_loader=lambda: False)
+
+    th.assert_true(ok,
+                   "disabled request service must make config activation a "
+                   "successful no-restart rather than resurrecting ASGI")
+    th.assert_eq(fake_run.call_count, 0,
+                 "config-sync must not restart framework ASGI on a non-request node")
+    th.assert_eq(fake_sleep.call_count, 0,
+                 "a skipped framework restart must not consume its jitter delay")
+
+
+@th.django_unit_test()
+def test_default_restart_fails_closed_when_authority_cannot_be_proved(opts):
+    from mojo.deploy import config_sync as cs
+    from mojo.deploy import request_service
+
+    def refuse():
+        raise request_service.RequestServiceError("unsealed")
+
+    fake_run = mock.Mock()
+    ok = cs.restart_app(
+        {}, False, run_cmd=fake_run, sleep=mock.Mock(),
+        request_service_loader=refuse)
+
+    th.assert_true(not ok,
+                   "an unreadable or malformed sealed authority must fail config-sync")
+    th.assert_eq(fake_run.call_count, 0,
+                 "an unproved authority must never enqueue framework ASGI")
+
+
+@th.django_unit_test()
+def test_default_restart_uses_sealed_file_not_writable_bootstrap(opts):
+    from mojo.deploy import config_sync as cs
+    from mojo.deploy import request_service
+
+    root = _tempdir()
+    try:
+        authority = os.path.join(root, "request-service.conf")
+        bootstrap = os.path.join(root, "bootstrap.conf")
+        _write(authority, "MOJO_REQUEST_SERVICE=false\n")
+        os.chmod(authority, 0o600)
+        _write(bootstrap, "CONFIG_SYNC_RESTART=true\nMOJO_REQUEST_SERVICE=true\n")
+        fake_run = mock.Mock()
+
+        ok = cs.restart_app(
+            cs.read_config(bootstrap), False, run_cmd=fake_run,
+            sleep=mock.Mock(), request_service_loader=lambda:
+                request_service.read(authority, required_uid=os.getuid()))
+
+        th.assert_true(ok,
+                       "a sealed false role must safely suppress the restart")
+        th.assert_eq(fake_run.call_count, 0,
+                     "a writable bootstrap replacement must not resurrect ASGI")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_default_restart_rejects_symlink_authority_but_allows_legacy_absence(opts):
+    from mojo.deploy import config_sync as cs
+    from mojo.deploy import request_service
+
+    root = _tempdir()
+    try:
+        target = os.path.join(root, "target")
+        authority = os.path.join(root, "request-service.conf")
+        _write(target, "MOJO_REQUEST_SERVICE=true\n")
+        os.chmod(target, 0o600)
+        os.symlink(target, authority)
+        fake_run = mock.Mock()
+        refused = cs.restart_app(
+            {}, False, run_cmd=fake_run, sleep=mock.Mock(),
+            request_service_loader=lambda:
+                request_service.read(authority, required_uid=os.getuid()))
+        th.assert_true(not refused,
+                       "a symlink authority must fail closed in config-sync")
+        th.assert_eq(fake_run.call_count, 0,
+                     "a symlink authority must never enqueue framework ASGI")
+
+        missing = os.path.join(root, "legacy-absent.conf")
+        allowed_run = mock.Mock(return_value=mock.Mock(returncode=0))
+        allowed = cs.restart_app(
+            {}, False, run_cmd=allowed_run, sleep=mock.Mock(),
+            request_service_loader=lambda:
+                request_service.read(missing, required_uid=os.getuid()))
+        th.assert_true(allowed,
+                       "managed and pre-feature nodes without authority must "
+                       "preserve request serving")
+        th.assert_eq(allowed_run.call_count, 1,
+                     "legacy absence must retain the existing ASGI restart path")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_custom_restart_is_independent_of_framework_request_authority(opts):
+    from mojo.deploy import config_sync as cs
+
+    authority = mock.Mock(side_effect=AssertionError(
+        "custom services must not consult framework request authority"))
+    fake_run = mock.Mock(return_value=mock.Mock(returncode=0))
+    ok = cs.restart_app(
+        {"CONFIG_SYNC_SERVICE": "acme-worker.service"}, False,
+        run_cmd=fake_run, sleep=mock.Mock(),
+        request_service_loader=authority)
+
+    th.assert_true(ok, "an application-owned custom service must still restart")
+    th.assert_eq(authority.call_count, 0,
+                 "request_service controls only the framework ASGI unit")
+    th.assert_eq(fake_run.call_args[0][0],
+                 ["systemctl", "--no-block", "restart", "acme-worker.service"],
+                 "the application-owned custom service must remain independent")
+
+
+@th.django_unit_test()
 def test_restart_defaults_to_mojo_asgi(opts):
     from mojo.deploy import config_sync as cs
 
     fake_run = mock.Mock(return_value=mock.Mock(returncode=0))
-    cs.restart_app({}, False, run_cmd=fake_run, sleep=mock.Mock())
+    cs.restart_app({}, False, run_cmd=fake_run, sleep=mock.Mock(),
+                   request_service_loader=lambda: True)
 
     command = fake_run.call_args[0][0]
     th.assert_eq(command, ["systemctl", "--no-block", "restart", cs.DEFAULT_SERVICE],
@@ -551,7 +674,8 @@ def test_restart_enqueue_failure_is_nonzero(opts):
 
     fake_run = mock.Mock(return_value=mock.Mock(
         returncode=1, stderr=b"transaction rejected"))
-    ok = cs.restart_app({}, False, run_cmd=fake_run, sleep=mock.Mock())
+    ok = cs.restart_app({}, False, run_cmd=fake_run, sleep=mock.Mock(),
+                        request_service_loader=lambda: True)
 
     th.assert_true(not ok,
                    "a rejected systemd enqueue must fail config_sync instead "
@@ -643,7 +767,8 @@ def test_restart_dry_run_runs_nothing(opts):
 
     fake_run = mock.Mock()
     fake_sleep = mock.Mock()
-    ok = cs.restart_app({}, True, run_cmd=fake_run, sleep=fake_sleep)
+    ok = cs.restart_app({}, True, run_cmd=fake_run, sleep=fake_sleep,
+                        request_service_loader=lambda: True)
 
     th.assert_true(ok, "a dry-run restart must report success")
     th.assert_eq(fake_run.call_count, 0,

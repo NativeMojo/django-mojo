@@ -82,6 +82,34 @@ def test_client_ip_value_is_bound_into_the_preview_action_digest(opts):
 
 
 @th.django_unit_test()
+def test_explicit_request_service_is_bound_without_changing_omitted_action(opts):
+    from mojo.deploy.provision import brownfield_plan, nodes, report
+
+    spec = topology()
+    declaration = spec.node_declarations[0]
+    omitted = nodes._create_action_detail(spec, declaration)
+    th.assert_eq(omitted, spec.node_type,
+                 "omission must preserve the pre-feature node action detail")
+
+    details = []
+    actions = []
+    for selected in (True, False):
+        explicit = dict(declaration, request_service=selected)
+        detail = nodes._create_action_detail(spec, explicit)
+        details.append(json.loads(detail))
+        actions.append(report.Action(
+            "nodes", "create", declaration["name"], detail))
+    th.assert_eq(details[0]["request_service"], True,
+                 "the reviewed action must carry explicit request authority")
+    th.assert_eq(details[1]["request_service"], False,
+                 "the reviewed action must carry explicit non-request authority")
+    th.assert_true(
+        brownfield_plan._action_digest([actions[0]])
+        != brownfield_plan._action_digest([actions[1]]),
+        "changing only request_service must change the reviewed action digest")
+
+
+@th.django_unit_test()
 def test_apply_reobserves_and_refuses_dependency_digest_drift(opts):
     from mojo.deploy.provision import brownfield_plan
 

@@ -1,3 +1,5 @@
+import hashlib
+
 from objict import objict
 from testit import helpers as th
 
@@ -9,11 +11,17 @@ def test_role_user_data_is_version_pinned_digest_checked_and_root_owned(opts):
     from mojo.deploy.provision import nodes
 
     spec = topology()
-    declaration = spec.node_declarations[0]
+    declaration = dict(spec.node_declarations[0], request_service=True)
     script = nodes.stage0_user_data(spec, declaration["name"], declaration)
-    for expected in ("MOJO_NODE_ROLE=api", "--version-id=stageversion1",
+    for expected in ("MOJO_NODE_ROLE=api",
+                     "--version-id=stageversion1",
                      "--version-id=configversion1",
                      "sha256sum -c -", "/etc/mojo/node-role.json",
+                     "/etc/mojo/request-service.conf",
+                     "MOJO_REQUEST_SERVICE=true",
+                     "/etc/mojo/request-service.enabled",
+                     "ConditionPathExists=/etc/mojo/request-service.enabled",
+                     "00-request-service.conf",
                      "/opt/api/var/django.conf",
                      "chown ec2-user:www /opt/api/var/django.conf",
                      "chmod 0640 /opt/api/var/django.conf",
@@ -38,6 +46,81 @@ def test_managed_stage0_does_not_gain_fleet_role_metadata(opts):
     script = nodes.stage0_user_data(managed, "demo1")
     th.assert_eq("MOJO_NODE_ROLE" in script, False,
                  "fleet role metadata must not change managed stage-0 bytes")
+    th.assert_eq("MOJO_REQUEST_SERVICE" in script, False,
+                 "managed stage-0 must not gain the brownfield lifecycle key")
+    th.assert_eq("/etc/mojo/request-service" in script, False,
+                 "managed stage-0 must not gain fleet request-service authority")
+    th.assert_eq("00-request-service.conf" in script, False,
+                 "managed stage-0 must not gain the durable fleet refusal")
+    th.assert_eq("MOJOCONF\n\n\n# Stage 1" in script, False,
+                 "managed stage-0 layout must not gain a request-role blank line")
+
+
+@th.django_unit_test()
+def test_omitted_request_service_preserves_pre_feature_stage0_bytes(opts):
+    from mojo.deploy.provision import nodes
+
+    spec = topology()
+    declaration = spec.node_declarations[0]
+    script = nodes.stage0_user_data(spec, declaration["name"], declaration)
+    digest = hashlib.sha256(script.encode("utf-8")).hexdigest()
+
+    th.assert_eq(
+        digest,
+        "b9f50a45807990f011fc581cc28c9553b0b4e6e9e42998826cf25d852d9a089d",
+        "omission must retain the exact pre-feature RunInstances UserData bytes")
+    th.assert_eq("/etc/mojo/request-service" in script, False,
+                 "omission must not project the new authority or systemd marker")
+
+
+@th.django_unit_test()
+def test_request_service_projection_is_strict_and_brownfield_only(opts):
+    from mojo.deploy.provision import nodes, spec as spec_module
+
+    spec = topology()
+    declaration = dict(spec.node_declarations[0], request_service=False)
+    script = nodes.stage0_user_data(spec, declaration["name"], declaration)
+    th.assert_in(
+        "MOJO_REQUEST_SERVICE=false", script,
+        "stage 0 must seal the exact non-request lifecycle under /etc/mojo")
+    th.assert_in(
+        "printf '%s\\n' 'MOJO_REQUEST_SERVICE=false' > "
+        "/etc/mojo/request-service.conf", script,
+        "the sealed authority must be written as one exact key=value line")
+    th.assert_in(
+        "rm -f -- /etc/mojo/request-service.enabled", script,
+        "a non-request node must remove the systemd enable marker")
+    th.assert_in(
+        "ConditionPathExists=/etc/mojo/request-service.enabled", script,
+        "the persistent systemd drop-in must survive framework rollback")
+    th.assert_in(
+        "CONFIG_SYNC_RESTART=false", script,
+        "a later config-sync must not resurrect intentionally disabled ASGI")
+    th.assert_in(
+        "chmod 0600 /etc/mojo/node-role.json", script,
+        "the lifecycle projection must not weaken the opaque role document")
+
+    malformed = dict(spec.node_declarations[0], request_service="false")
+    try:
+        nodes.stage0_user_data(spec, malformed["name"], malformed)
+    except ValueError as err:
+        th.assert_in("JSON boolean", str(err),
+                     f"the strict projection must explain its refusal: {err}")
+    else:
+        raise AssertionError(
+            "a string request_service reached root user data as authority")
+
+    managed = spec_module.build("demo", "prod", "us-west-2", preset="small")
+    try:
+        nodes.stage0_user_data(
+            managed, "demo1", {"role": "default", "serving_target": True,
+                                "request_service": False})
+    except ValueError as err:
+        th.assert_in("brownfield-only", str(err),
+                     f"managed misuse must name the mode boundary: {err}")
+    else:
+        raise AssertionError(
+            "a managed node accepted a brownfield-only lifecycle declaration")
 
 
 @th.django_unit_test()
@@ -45,11 +128,13 @@ def test_nodes_report_roles_and_use_declared_subnets_profiles(opts):
     from mojo.deploy.provision import nodes
 
     spec = topology()
-    declaration = spec.node_declarations[0]
+    declaration = dict(spec.node_declarations[0], request_service=False)
+    spec.node_declarations[0] = declaration
     instance = objict(
         InstanceId="i-aaaaaaaaaaaaaaaaa", ImageId=spec.ami_override,
         InstanceType=spec.node_type, State={"Name": "running"},
-        Tags=[{"Key": "Name", "Value": declaration["name"]}])
+        Tags=[{"Key": "Name", "Value": declaration["name"]},
+              {"Key": "mojo:request-service", "Value": "false"}])
     observed = objict(
         instances=[instance], ami_id=spec.ami_override,
         public_subnet_ids=spec.nlb_subnet_ids,
@@ -70,11 +155,52 @@ def test_nodes_report_roles_and_use_declared_subnets_profiles(opts):
                  f"node results must retain application roles: {records}")
     th.assert_true(records[0]["serving_target"],
                    f"serving eligibility must survive into balancer input: {records}")
+    th.assert_eq(records[0]["request_service"], False,
+                 "NLB eligibility must remain independent of framework ASGI")
     th.assert_true(any(row.code == "node.data_plane_canary"
                        for row in findings),
                    f"metadata-only provisioning must require live DB/cache proof: {findings}")
     th.assert_eq(result.as_dict()["required_canary_proofs"][0]["database"],
                  "SELECT 1", "the handoff must name the required DB proof")
+    th.assert_eq(
+        result.as_dict()["required_canary_proofs"][0]["request_service"],
+        {"authority": "/etc/mojo/request-service.conf", "expected": False,
+         "systemd": "inactive and disabled; enable marker absent"},
+        "the handoff must require node-side proof of the sealed local role")
+
+
+@th.django_unit_test()
+def test_node_launch_tags_only_explicit_request_service(opts):
+    from mojo.deploy.provision import nodes
+
+    spec = topology()
+
+    class _EC2:
+        def __init__(self):
+            self.calls = []
+
+        def run_instances(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"Instances": [{"InstanceId": "i-new"}]}
+
+    def launch(declaration):
+        ec2 = _EC2()
+        nodes._launch(
+            ec2, spec, {}, declaration["name"], spec.ami_override,
+            declaration["subnet_id"],
+            spec.brownfield_manifest["network"]["node_security_group_id"],
+            declaration["instance_profile_arn"],
+            spec.brownfield_manifest["nodes"]["key_pair_name"], [],
+            declaration=declaration)
+        return {row["Key"]: row["Value"] for row in
+                ec2.calls[0]["TagSpecifications"][0]["Tags"]}
+
+    omitted = launch(spec.node_declarations[0])
+    th.assert_true("mojo:request-service" not in omitted,
+                   "omission must preserve the pre-feature RunInstances tag shape")
+    explicit = launch(dict(spec.node_declarations[0], request_service=False))
+    th.assert_eq(explicit["mojo:request-service"], "false",
+                 "an explicit role must be bound into RunInstances itself")
 
 
 @th.django_unit_test()

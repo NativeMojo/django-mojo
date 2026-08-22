@@ -15,6 +15,7 @@ size that is deliberate: the fleet is a handful of long-lived boxes that hold a
 Let's Encrypt lineage, so "replace on a whim" is not the behaviour you want.
 """
 
+import json
 import shlex
 import time
 
@@ -68,6 +69,33 @@ USER_DATA_BUDGET = 4096
 # The bootstrap credential contract `check_node.check_config_plane` audits: the
 # app user writes var/django.conf, the web user reads it.
 CONFIG_SYNC_OWNER = "ec2-user:www"
+REQUEST_SERVICE_PATH = "/etc/mojo/request-service.conf"
+REQUEST_SERVICE_MARKER = "/etc/mojo/request-service.enabled"
+REQUEST_SERVICE_DROPIN_DIR = "/etc/systemd/system/mojo-asgi.service.d"
+REQUEST_SERVICE_DROPIN = (
+    f"{REQUEST_SERVICE_DROPIN_DIR}/00-request-service.conf")
+
+
+def _request_service(declaration):
+    """The strict brownfield-only framework request-service selection."""
+    if "request_service" not in declaration:
+        return True
+    value = declaration["request_service"]
+    if not isinstance(value, bool):
+        raise ValueError(
+            "request_service must be a JSON boolean; refusing to infer "
+            "request-serving authority")
+    return value
+
+
+def _create_action_detail(spec, declaration):
+    """Bind explicit request authority without changing omitted previews."""
+    if not spec.fleet or "request_service" not in declaration:
+        return spec.node_type
+    return json.dumps({
+        "instance_type": spec.node_type,
+        "request_service": _request_service(declaration),
+    }, sort_keys=True, separators=(",", ":"))
 
 
 def stage0_user_data(spec, hostname, declaration=None):
@@ -90,13 +118,20 @@ def stage0_user_data(spec, hostname, declaration=None):
     bucket = names["config_bucket"]
     declaration = declaration or {"role": "default",
                                   "serving_target": True}
+    if not spec.fleet and "request_service" in declaration:
+        raise ValueError(
+            "request_service is a brownfield-only node declaration")
     stage1 = (spec.bootstrap_objects.get("stage1")
               if spec.fleet else None)
     live_config = (spec.bootstrap_objects.get("live_config")
                    if spec.fleet else None)
     role_document = (spec.role_document if spec.fleet else None)
     script_uri = f"s3://{bucket}/{names['stage1_script_object']}"
+    config_sync_restart = "true"
     if spec.fleet:
+        request_service = _request_service(declaration)
+        if not request_service:
+            config_sync_restart = "false"
         hostname_lines = [
             f"hostnamectl set-hostname {_shell(hostname)}",
             f"echo {_shell(hostname)} > /etc/hostname",
@@ -126,6 +161,32 @@ def stage0_user_data(spec, hostname, declaration=None):
             f"CONFIG_SYNC_OWNER={CONFIG_SYNC_OWNER}",
         ]
 
+    request_service_lines = []
+    if spec.fleet and "request_service" in declaration:
+        selection = "true" if request_service else "false"
+        request_service_lines = [
+            "# Root-sealed request-service authority and a durable systemd",
+            "# refusal that survives older framework unit replacement.",
+            "install -d -o root -g root -m 0755 /etc/mojo",
+            f"install -o root -g root -m 0600 /dev/null {REQUEST_SERVICE_PATH}",
+            f"printf '%s\\n' 'MOJO_REQUEST_SERVICE={selection}' > "
+            f"{REQUEST_SERVICE_PATH}",
+            f"install -d -o root -g root -m 0755 {REQUEST_SERVICE_DROPIN_DIR}",
+            f"cat > {REQUEST_SERVICE_DROPIN} <<'MOJOREQUEST'",
+            "[Unit]",
+            f"ConditionPathExists={REQUEST_SERVICE_MARKER}",
+            "MOJOREQUEST",
+            f"chown root:root {REQUEST_SERVICE_DROPIN}",
+            f"chmod 0644 {REQUEST_SERVICE_DROPIN}",
+        ]
+        if request_service:
+            request_service_lines.extend((
+                f"install -o root -g root -m 0400 /dev/null "
+                f"{REQUEST_SERVICE_MARKER}",))
+        else:
+            request_service_lines.extend((
+                f"rm -f -- {REQUEST_SERVICE_MARKER}",))
+
     script = "\n".join([
         "#!/bin/bash",
         "set -euo pipefail",
@@ -153,9 +214,10 @@ def stage0_user_data(spec, hostname, declaration=None):
         f"install -m 0600 /dev/null {PROJ_PATH}/var/bootstrap.conf",
         f"cat > {PROJ_PATH}/var/bootstrap.conf <<'MOJOCONF'",
     ] + config_lines + [
-        "CONFIG_SYNC_RESTART=true",
+        f"CONFIG_SYNC_RESTART={config_sync_restart}",
         "MOJOCONF",
         "",
+    ] + request_service_lines + ([""] if request_service_lines else []) + [
         "# Stage 1. Downloaded with the instance role, never with a key.",
     ] + (_pinned_download_lines(
         stage1, f"{PROJ_PATH}/var/stage1.sh", spec.region)
@@ -246,18 +308,25 @@ def ensure_nodes(clients, spec, observed, apply=False):
                 f"{hostname} is {existing.get('InstanceId')} "
                 f"({(existing.get('State') or {}).get('Name')})"))
             instance_ids.append(existing.get("InstanceId"))
-            node_records.append({"instance_id": existing.get("InstanceId"),
-                                 "hostname": hostname,
-                                 "role": declaration.get("role"),
-                                 "serving_target": bool(
-                                     declaration.get("serving_target"))})
+            record = {"instance_id": existing.get("InstanceId"),
+                      "hostname": hostname,
+                      "role": declaration.get("role"),
+                      "serving_target": bool(
+                          declaration.get("serving_target"))}
+            if spec.fleet:
+                observed_selection = discover.tags_of(existing).get(
+                    "mojo:request-service")
+                record["request_service"] = observed_selection != "false"
+            node_records.append(record)
             _report_node_drift(hostname, existing, spec, image_id, findings)
             continue
 
         findings.append(report.missing(
             STEP, "node.missing", f"{hostname} does not exist",
             f"apply launches a {spec.node_type}"))
-        actions.append(report.Action(STEP, "create", hostname, spec.node_type))
+        actions.append(report.Action(
+            STEP, "create", hostname,
+            _create_action_detail(spec, declaration)))
         if not apply:
             continue
         if not image_id or not subnet_ids or not sg_id:
@@ -290,24 +359,34 @@ def ensure_nodes(clients, spec, observed, apply=False):
                            findings, declaration=declaration)
         if launched:
             instance_ids.append(launched)
-            node_records.append({"instance_id": launched,
-                                 "hostname": hostname,
-                                 "role": declaration.get("role"),
-                                 "serving_target": bool(
-                                     declaration.get("serving_target"))})
+            record = {"instance_id": launched,
+                      "hostname": hostname,
+                      "role": declaration.get("role"),
+                      "serving_target": bool(
+                          declaration.get("serving_target"))}
+            if spec.fleet:
+                record["request_service"] = _request_service(declaration)
+            node_records.append(record)
 
     result.set("instance_ids", instance_ids)
     result.set("node_records", node_records)
     if spec.fleet:
         proofs = [
             {"role": declaration.get("role"), "node": declaration.get("name"),
-             "database": "SELECT 1", "cache": "PING"}
+             "database": "SELECT 1", "cache": "PING",
+             "request_service": {
+                 "authority": REQUEST_SERVICE_PATH,
+                 "expected": _request_service(declaration),
+                 "systemd": ("active and enabled"
+                             if _request_service(declaration)
+                             else "inactive and disabled; enable marker absent")}}
             for declaration in declarations]
         result.set("required_canary_proofs", proofs)
         findings.append(report.manual(
             STEP, "node.data_plane_canary",
             "every declared node role still requires a redacted database "
-            "SELECT 1 and cache PING from the launched node",
+            "SELECT 1, cache PING, and sealed request-service/systemd proof "
+            "from the launched node",
             "record those proofs without secret values before any DNS or EIP "
             "cutover; the provisioner intentionally has metadata-only access"))
 

@@ -1,5 +1,7 @@
 """Exact-reference, metadata-only observation for a brownfield fleet."""
 
+import base64
+import binascii
 import hashlib
 import json
 
@@ -736,6 +738,7 @@ def _instances(clients, topology, manifest, findings, observed, inventory):
     for row in candidates:
         by_name.setdefault(discover.tags_of(row).get("Name"), []).append(row)
     instances = []
+    user_data_digests = {}
     profiles = observed.get("brownfield_profiles") or {}
     for declaration in declarations:
         matches = by_name.get(declaration["name"]) or []
@@ -758,10 +761,46 @@ def _instances(clients, topology, manifest, findings, observed, inventory):
         bad_tags = {key: (tags.get(key), value)
                     for key, value in expected_tags.items()
                     if tags.get(key) != value}
+        request_service = (
+            "true" if declaration.get("request_service", True) else "false")
+        observed_request_service = tags.get("mojo:request-service")
+        if (observed_request_service is not None
+                or request_service != "true"):
+            if observed_request_service != request_service:
+                bad_tags["mojo:request-service"] = (
+                    observed_request_service, request_service)
         if bad_tags:
             _mismatch(findings, f"node {declaration['name']} ownership tags",
                       bad_tags, expected_tags)
             continue
+        if "request_service" in declaration:
+            from mojo.deploy.provision import nodes
+
+            attribute = _read(
+                findings, "ec2.describe_instance_attribute",
+                lambda instance_id=row.get("InstanceId"):
+                    ec2.describe_instance_attribute(
+                        InstanceId=instance_id, Attribute="userData"), {})
+            encoded = (attribute.get("UserData") or {}).get("Value")
+            try:
+                actual_user_data = base64.b64decode(
+                    encoded or "", validate=True).decode("utf-8")
+            except (binascii.Error, TypeError, ValueError, UnicodeDecodeError):
+                actual_user_data = None
+            expected_user_data = nodes.stage0_user_data(
+                topology, declaration["name"], declaration)
+            actual_digest = (hashlib.sha256(
+                actual_user_data.encode("utf-8")).hexdigest()
+                if actual_user_data is not None else None)
+            expected_digest = hashlib.sha256(
+                expected_user_data.encode("utf-8")).hexdigest()
+            if actual_user_data != expected_user_data:
+                _mismatch(
+                    findings,
+                    f"node {declaration['name']} request-role user data digest",
+                    actual_digest, expected_digest)
+                continue
+            user_data_digests[row.get("InstanceId")] = actual_digest
         expected_profile = declaration.get("instance_profile_arn") or (
             profiles.get(declaration["role"]) or {}).get("profile_arn")
         checks = (
@@ -830,9 +869,15 @@ def _instances(clients, topology, manifest, findings, observed, inventory):
                           "pending or running")
     observed.instances = discover.wrap(instances)
     observed.compatibility_instances = discover.wrap(compatibility)
+    owned_inventory = []
+    for row in instances:
+        item = _instance_inventory(row, volumes.get(_root_volume_id(row)))
+        if row.get("InstanceId") in user_data_digests:
+            item["request_role_user_data_sha256"] = user_data_digests[
+                row.get("InstanceId")]
+        owned_inventory.append(item)
     inventory["instances"] = {
-        "owned": [_instance_inventory(
-            row, volumes.get(_root_volume_id(row))) for row in instances],
+        "owned": owned_inventory,
         "compatibility": [_instance_inventory(row) for row in compatibility],
     }
 

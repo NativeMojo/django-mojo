@@ -27,6 +27,8 @@
 #   APP_USER      owns the tree and runs the engines    (default ec2-user)
 #   WEB_USER      runs the asgi app behind nginx        (default www)
 #   ASGI_WORKERS  uvicorn worker count (@WORKERS@)      (default 4)
+#   /etc/mojo/request-service.conf is the root-sealed brownfield-only
+#                  MOJO_REQUEST_SERVICE=true|false authority
 #   NGINX_ETC / SYSTEMD_ETC / CRON_ETC / LOGROTATE_ETC  test seams, prod defaults
 #   MOJOSEC_ETC / MOJOSEC_STABLE_HELPER                 test seams, prod defaults
 #
@@ -66,6 +68,63 @@ rm -f -- "$DEPLOY_WARNINGS"
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 die() { echo "[$(date '+%H:%M:%S')] FATAL: $*" >&2; exit 1; }
 warn() { echo "[$(date '+%H:%M:%S')] WARN: $*" >&2; }
+
+# `request_service` is deliberately independent of NLB target registration.
+# This script owns only mojo-asgi.service; application shims/hooks own MCP,
+# schedulers, executors, Sites and every other role-specific service.
+revoke_request_service() {
+    # `disable --now` returns non-zero when the unit is absent on a fresh
+    # non-request node. Intentional absence is fine, but an active or enabled
+    # unit after the attempt is not: never report a non-request deployment
+    # ready while framework ASGI can still answer.
+    systemctl disable --now mojo-asgi.service >/dev/null 2>&1 || true
+
+    local load_state="" active_state="" unit_file_state=""
+    load_state="$(systemctl show --property=LoadState --value \
+        mojo-asgi.service 2>/dev/null)" \
+        || die "cannot verify mojo-asgi LoadState after revocation"
+    [[ -n "$load_state" ]] \
+        || die "systemd returned no mojo-asgi LoadState after revocation"
+    if [[ "$load_state" = "not-found" ]]; then
+        return 0
+    fi
+    [[ "$load_state" = "loaded" || "$load_state" = "masked" ]] \
+        || die "mojo-asgi has unsafe LoadState ${load_state}"
+
+    active_state="$(systemctl show --property=ActiveState --value \
+        mojo-asgi.service 2>/dev/null)" \
+        || die "cannot verify mojo-asgi ActiveState after revocation"
+    case "$active_state" in
+        inactive|failed) ;;
+        *) die "mojo-asgi has unsafe ActiveState ${active_state:-unknown}" ;;
+    esac
+
+    unit_file_state="$(systemctl show --property=UnitFileState --value \
+        mojo-asgi.service 2>/dev/null)" \
+        || die "cannot verify mojo-asgi UnitFileState after revocation"
+    case "$unit_file_state" in
+        disabled|masked) ;;
+        *) die "mojo-asgi has unsafe UnitFileState ${unit_file_state:-unknown}" ;;
+    esac
+}
+
+REQUEST_SERVICE=""
+if ! REQUEST_SERVICE="$(python3 -m mojo.deploy.request_service)"; then
+    revoke_request_service
+    die "invalid sealed request-service authority — request authority revoked"
+fi
+case "$REQUEST_SERVICE" in
+    true) ;;
+    false)
+        # Revoke a request -> non-request transition before dependency work or
+        # application-specific role convergence can claim progress.
+        revoke_request_service
+        ;;
+    *)
+        revoke_request_service
+        die "invalid sealed request-service result — request authority revoked"
+        ;;
+esac
 
 # ── phase timing ─────────────────────────────────────────────────────────────
 #
@@ -1219,7 +1278,9 @@ systemctl reload nginx || die "nginx passed validation but could not reload"
 
 log "Updating systemd units..."
 UNIT_SRC="${DEPLOY_DIR}/systemd"
-# The ASGI unit is the application. It remains release-critical.
+# The ASGI unit remains rendered and installed identically on every node. Its
+# lifecycle is release-critical only when the sealed node selection says this
+# framework request service belongs here.
 install_file "${UNIT_SRC}/mojo-asgi.service" "${SYSTEMD_ETC}/mojo-asgi.service"
 systemctl daemon-reload || die "systemd could not load the mojo-asgi unit"
 
@@ -1295,11 +1356,6 @@ fi
 
 # ── restart ──────────────────────────────────────────────────────────────────
 
-log "Restarting mojo-asgi..."
-phase_begin restart
-systemctl restart mojo-asgi || die "mojo-asgi failed to restart"
-phase_end
-
 # Snapshot the installed copy of this script next to the rendered contract.
 # This is the shim's rollback self-heal: when a rollback reinstalls a
 # framework so old that `locate` cannot resolve post_deploy.sh, the shim
@@ -1312,6 +1368,25 @@ snapshot_self() {
             || log "WARN: could not snapshot post_deploy.sh into var/deploy"
     fi
 }
+
+if [[ "$REQUEST_SERVICE" = "false" ]]; then
+    log "Keeping framework request service disabled on this node..."
+    phase_begin restart
+    revoke_request_service
+    phase_end
+
+    # This is intentionally the same success snapshot used by request nodes:
+    # rollback still needs a canonical post-deploy body. No request probe runs
+    # because intentional ASGI absence is the contract being proven.
+    snapshot_self
+    log "Post-deploy complete — framework request service disabled."
+    exit 0
+fi
+
+log "Restarting mojo-asgi..."
+phase_begin restart
+systemctl restart mojo-asgi || die "mojo-asgi failed to restart"
+phase_end
 
 # A restart that returns 0 only means systemd accepted the unit. Confirm the
 # app is actually answering before calling the deploy done — through

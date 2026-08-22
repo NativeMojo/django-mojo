@@ -48,6 +48,12 @@ node django.conf is the thing we are fetching and does not exist yet.
                               optional  — override object name under the same
                                          prefix (default django.override.json)
 
+When the default service is mojo-asgi.service, restart permission comes from
+the separately sealed /etc/mojo/request-service.conf authority. A false or
+unprovable authority cannot be overridden by bootstrap.conf. A missing
+authority preserves managed and pre-feature request-serving behavior. Custom
+CONFIG_SYNC_SERVICE units are application-owned and remain independent.
+
 The path to bootstrap.conf is NOT itself configurable through bootstrap.conf —
 it cannot be. Use --config when it lives somewhere else.
 
@@ -73,6 +79,8 @@ import subprocess
 import sys
 import tempfile
 import time
+
+from mojo.deploy import request_service
 
 # boto3 is imported lazily, past the config gate, so an unconfigured box pays
 # nothing and a box missing boto3 fails with one clear line rather than a
@@ -255,11 +263,13 @@ def install(temp_path, dest_path, owner_spec, *, os_ops=None):
              owner_spec or "root")
 
 
-def restart_app(config, dry_run, *, run_cmd=None, sleep=None):
+def restart_app(config, dry_run, *, run_cmd=None, sleep=None,
+                request_service_loader=None):
     """Restart the app so it picks up the new config.
 
-    run_cmd and sleep are test seams (the systemctl runner and the jitter
-    delay); None means the real subprocess.run and time.sleep.
+    run_cmd, sleep, and request_service_loader are test seams (the systemctl
+    runner, jitter delay, and sealed role reader); None means the production
+    implementation.
 
     JITTERED BY HOSTNAME. Every node polls the same bucket on the same timer, so
     an un-jittered restart takes the whole fleet out simultaneously the moment a
@@ -273,6 +283,19 @@ def restart_app(config, dry_run, *, run_cmd=None, sleep=None):
     if sleep is None:
         sleep = time.sleep
     service = config.get("CONFIG_SYNC_SERVICE") or DEFAULT_SERVICE
+    if service == DEFAULT_SERVICE:
+        if request_service_loader is None:
+            request_service_loader = request_service.read
+        try:
+            selected = request_service_loader()
+        except (request_service.RequestServiceError, OSError) as err:
+            log.error("cannot prove framework request-service authority: %s",
+                      err)
+            return False
+        if not selected:
+            log.info("config changed — framework request service is disabled; "
+                     "skipping %s restart", service)
+            return True
     host = socket.gethostname().encode("utf-8", "replace")
     delay = int(hashlib.sha256(host).hexdigest()[:4], 16) % 60
 
