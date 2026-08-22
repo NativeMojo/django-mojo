@@ -162,6 +162,91 @@ def test_readiness_truncation_preserves_typed_arrays(opts):
         f"typed readiness report escaped the byte cap: {len(serialized)}"
 
 
+@th.django_unit_test("bounded readiness keeps complete totals and the worst omitted result")
+def test_readiness_bounded_coverage_is_truthful(opts):
+    from mojo.apps.account.services import system_readiness
+
+    def many_checks(context):
+        return [system_readiness.result(
+            f"test.coverage.{index}",
+            "fail" if index == 69 else "pass",
+            f"Coverage result {index}",
+            "Repair the final result.",
+            fixable=True,
+        ) for index in range(70)]
+
+    system_readiness.register_section(
+        "test_bounded_coverage", "Bounded coverage", many_checks,
+        fix=lambda context, choice: None, order=999)
+    report = system_readiness.run("test_bounded_coverage", {})
+    section = report["sections"][0]
+
+    assert report["overall"] == "fail" and section["status"] == "fail", \
+        f"the failure beyond the display budget was hidden: {report!r}"
+    assert report["summary"]["pass"] == 69 and report["summary"]["fail"] == 1, \
+        f"the complete result totals were not preserved: {report['summary']!r}"
+    assert report["coverage"]["checks"] == {
+        "total": 70,
+        "returned": len(section["checks"]),
+        "omitted": 70 - len(section["checks"]),
+    }, f"global coverage is not explicit: {report!r}"
+    assert section["coverage"] == {
+        "total": 70,
+        "returned": len(section["checks"]),
+        "omitted": 70 - len(section["checks"]),
+    }, f"section coverage is not explicit: {section!r}"
+    assert report.get("truncated") is True, \
+        f"partial coverage was presented as complete: {report!r}"
+    assert any(check["code"] == "test.coverage.69" for check in section["checks"]), \
+        f"the worst omitted result was not selected for display: {section!r}"
+    assert section["fixable"] is True, \
+        f"an actionable failing section was not fixable: {section!r}"
+
+
+@th.django_unit_test("passing readiness findings have no repair semantics")
+def test_readiness_pass_is_not_runnable(opts):
+    from mojo.apps.account.services import system_readiness
+
+    check = system_readiness.result(
+        "test.already_ready", "pass", "The resource is ready.",
+        "Repair this resource.", fixable=True,
+        required_choice={"type": "string"})
+    assert check["remediation"] == "", \
+        f"a passing result retained remediation: {check!r}"
+    assert check["fixable"] is False, \
+        f"a passing result remained runnable: {check!r}"
+    assert check["required_choice"] is None, \
+        f"a passing result retained a repair choice: {check!r}"
+
+    system_readiness.register_section(
+        "test_already_ready", "Already ready", lambda context: [check],
+        fix=lambda context, choice: None, order=999)
+    section = system_readiness.run("test_already_ready", {})["sections"][0]
+    assert section["status"] == "pass" and section["fixable"] is False, \
+        f"a passing section was advertised as fixable: {section!r}"
+
+
+@th.django_unit_test("Fix all builds steps only for selected actionable sections")
+def test_fix_all_selected_sections(opts):
+    from mojo.apps.account.services import system_setup
+
+    aws_only = system_setup._build_steps(
+        "fix", selected_sections=["aws_s3"])
+    assert [step["id"] for step in aws_only] == [
+        "section:aws_s3", "final_readiness"], \
+        f"Fix all included a passing or unselected section: {aws_only!r}"
+
+    django_only = system_setup._build_steps(
+        "fix", selected_sections=["django"])
+    assert [step["id"] for step in django_only] == [
+        "installation_identity", "base_url", "final_readiness"], \
+        f"the selected Django repair lost its built-in steps: {django_only!r}"
+
+    proof_only = system_setup._build_steps("fix", selected_sections=[])
+    assert [step["id"] for step in proof_only] == ["final_readiness"], \
+        f"an empty actionable set still scheduled mutations: {proof_only!r}"
+
+
 @th.django_unit_test("replay key returns the same durable operation")
 def test_operation_replay(opts):
     from mojo.apps.account.models import User
