@@ -38,6 +38,14 @@ LOGS = [
     {"id": 503, "created": "2026-08-10T13:30:00Z", "level": "info",
      "kind": "dns", "method": "POST", "path": "/api/dnsman/dns", "gid": 7,
      "model_name": "Domain", "model_id": 11, "log": "Record set replaced"},
+    # User- and Group-subject rows, so the log inspector's cross-links into
+    # Access (People and Groups) have something to link to.
+    {"id": 504, "created": "2026-08-10T12:10:00Z", "level": "info",
+     "kind": "account", "method": "POST", "path": "/api/user/1", "gid": 9,
+     "model_name": "User", "model_id": 1, "log": "Sessions revoked"},
+    {"id": 505, "created": "2026-08-10T11:40:00Z", "level": "info",
+     "kind": "account", "method": "POST", "path": "/api/group/9", "gid": 9,
+     "model_name": "Group", "model_id": 9, "log": "Group membership changed"},
 ]
 TICKETS = [
     {"id": 601, "created": "2026-08-10T16:22:00Z", "modified": "2026-08-10T16:30:00Z",

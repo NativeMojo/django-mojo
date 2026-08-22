@@ -254,11 +254,15 @@ function copyRecordButton(row) {
  * A record this row names, if the portal has somewhere to open it.
  *
  * Incidents, events, tickets and logs are other tabs of this very page, so
- * those links stay in v2. So do a WebApp and a Domain: Apps and Domains are
- * built, and each takes an id in route state — the link carries this view's
- * location in `?return=` so the destination can offer the way back. Users and
- * groups are screens v2 has not built yet; those open in the current Admin, and
- * the button says so rather than dropping the operator into different chrome
+ * those links stay in v2. So do a WebApp, a Domain, a User and a Group: Apps,
+ * Domains and Access are built, and each takes an id in route state — the link
+ * carries this view's location in `?return=` so the destination can offer the
+ * way back.
+ *
+ * The fallback map below is what is left: a platform deployment, which v2 has
+ * no screen for, and the callers whose capabilities do not open the v2
+ * destination that owns the record. Those open in the current Admin, and the
+ * button says so rather than dropping the operator into different chrome
  * unannounced.
  */
 // Whether v2's Apps destination is open to this caller. Same predicate as
@@ -288,9 +292,25 @@ function knownReference(ctx, row) {
         domain: rawId, return: returnLocation(),
       })}, `Open Domain ${rawId}`));
   }
+  // Access is built now. A user and a group are records of its People and
+  // Groups views, each opened by naming it in route state — `?user=` and
+  // `?group=`, the addresses those views read. The gate is the view's own
+  // capability, not just the block: a caller who cannot read People is not
+  // offered a People link.
+  const accessRecords = {user: ['users', 'users', 'User'], group: ['groups', 'groups', 'Group']};
+  if (accessRecords[name] && /^\d+$/.test(rawId)
+    && ctx.features?.people?.enabled === true
+    && ctx.features.people.capabilities?.[accessRecords[name][1]] === true) {
+    const [route, , label] = accessRecords[name];
+    return h('div', {class: 'activity-reference'},
+      h('a', {class: 'button ghost compact', href: routeHref(route, {
+        [name]: rawId, return: returnLocation(),
+      })}, `Open ${label} ${rawId}`));
+  }
   const destinations = {
-    user: ['users', 'User'], group: ['groups', 'Group'], webapp: ['deployments', 'WebApp'],
-    domain: ['domains', 'Domain'], platformdeployment: ['deployments', 'Deployment'],
+    webapp: ['deployments', 'WebApp'], domain: ['domains', 'Domain'],
+    platformdeployment: ['deployments', 'Deployment'],
+    user: ['users', 'User'], group: ['groups', 'Group'],
   };
   if (destinations[name] && /^[A-Za-z0-9._:-]{1,80}$/.test(rawId)) {
     const [route, label] = destinations[name];

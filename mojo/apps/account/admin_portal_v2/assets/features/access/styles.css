@@ -1,1 +1,62 @@
-/* Access owns no styles yet — the destination renders the shared placeholder. */
+/* Access — people, groups, group API keys and security activity.
+ *
+ * The detail-grid, bundle, secret and JSON rules below are v1's people
+ * stylesheet, ported rather than imported: a feature stylesheet is only
+ * installed when its feature is enabled, so a copy living in another feature's
+ * file cannot be relied on here. `.access-detail` is v1's `.detail-grid`
+ * renamed — features/apps/styles.css defines its own `.detail-grid` with
+ * different columns, and two feature sheets fighting over one class name is a
+ * bug waiting for whichever page loads second.
+ */
+
+.access-body { display: grid; gap: 14px; }
+.access-tab { display: grid; gap: 14px; }
+.access-page .panel-head { gap: 16px; }
+.access-page .panel-link { font-size: 11px; font-weight: 700; }
+
+/* the invite-honesty note above the People list */
+.access-callout { display: flex; align-items: flex-start; gap: 10px; padding: 11px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+.access-callout.danger { border-left: 3px solid var(--danger); }
+.access-callout .icon { flex: 0 0 auto; width: 16px; color: var(--danger); }
+.access-callout p { margin: 0; font-size: 11px; line-height: 1.55; }
+
+/* keys, under the group they act as */
+.key-list { display: grid; }
+.key-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 11px 16px; border-top: 1px solid var(--line); }
+.key-list .key-row:first-child { border-top: 0; }
+.key-identity strong { display: block; font-size: 12px; }
+.key-identity small { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+
+/* security activity rows */
+.access-event-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+.access-event-row:first-child { border-top: 0; padding-top: 0; }
+.access-event-row .icon { width: 14px; color: var(--muted); }
+.access-event-text { font-size: 11px; overflow-wrap: anywhere; }
+.access-event-when { color: var(--muted); font-size: 10px; white-space: nowrap; }
+
+/* the inspectors */
+.identity .avatar { flex: 0 0 auto; }
+.access-inspector { display: grid; gap: 16px; }
+.access-inspector .inspector-section { display: grid; gap: 12px; }
+.access-detail { display: grid; grid-template-columns: minmax(8rem, .45fr) 1fr; gap: .6rem 1rem; margin: 0; }
+.access-detail dt { color: var(--muted); font-size: .78rem; font-weight: 650; text-transform: uppercase; letter-spacing: .035em; }
+.access-detail dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.bundle-grid { display: grid; gap: .65rem; }
+.bundle-option { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: .75rem; padding: .85rem; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.bundle-option strong, .bundle-option small { display: block; }
+.bundle-option small { color: var(--muted); margin-top: .2rem; overflow-wrap: anywhere; }
+.activity-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
+.activity-links .related-record { align-items: center; display: flex; justify-content: space-between; text-decoration: none; }
+.inline-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+.secret-reveal { display: grid; gap: .75rem; }
+.secret-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; width: 100%; }
+.json-preview { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; margin: 0; max-height: 22rem; overflow: auto; padding: .85rem; }
+
+@media (max-width: 720px) {
+  .access-detail { grid-template-columns: 1fr; gap: .15rem; }
+  .access-detail dd { margin-bottom: .7rem; }
+  .activity-links { grid-template-columns: 1fr; }
+  .inline-actions { align-items: stretch; flex-direction: column; }
+  .key-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .key-row .inline-actions { grid-column: 1 / -1; flex-direction: row; }
+}

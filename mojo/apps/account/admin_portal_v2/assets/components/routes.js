@@ -3,6 +3,10 @@ const ROUTE_KEYS = new Set([
   'date_from', 'date_to', 'subject_type', 'subject_id', 'subject_model',
   'inspector', 'return', 'domain', 'vhost', 'webapp', 'deployment',
   'focus',
+  // Access names the record it opens: `#/users?user=12`, `#/groups?group=9`.
+  // v1's `inspector` still works there — these say which KIND of record the
+  // link means, so a People link and a Groups link cannot be confused.
+  'user', 'group',
 ]);
 
 function safeRoute(value) {
