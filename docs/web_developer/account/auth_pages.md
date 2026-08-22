@@ -18,6 +18,7 @@ config. See [Auth Config](auth_config.md) for details and the
 | `/auth` | Login page (default, configurable via `BOUNCER_LOGIN_PATH`) |
 | `/register` | Registration page (configurable via `BOUNCER_REGISTER_PATH`) |
 | `/passkey` | Passkey enrollment page (authenticated, not bouncer-gated) |
+| `/api/account/oauth/authorize` | OAuth 2.1 consent screen for a third-party app (configurable via `OAUTH_SERVER_PATH`) — see [oauth_server.md](oauth_server.md) |
 
 Both `/auth` and `/register` are protected by the bouncer bot detection gate.
 On first visit, users see a brief verification challenge. After passing, they

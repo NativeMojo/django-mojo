@@ -240,6 +240,12 @@ token_package = JWToken(user.get_auth_key()).create(uid=user.id)
 user, error = User.validate_jwt(token_string)
 ```
 
+`validate_jwt` branches on the token's `token_type`: ordinary session tokens,
+`user_api_key` tokens, and `mcp` tokens — the resource-confined OAuth 2.1 access
+tokens, which are accepted only on the request path their `aud` names and
+require the `request` argument (see
+[OAuth 2.1 Authorization Server](oauth_server.md)).
+
 Token expiry is configured via settings:
 
 ```python

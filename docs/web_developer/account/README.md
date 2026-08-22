@@ -28,6 +28,7 @@
 - [SMS OTP](mfa_sms.md) — 2FA and standalone login via SMS code
 - [Magic Login Links](magic_login.md) — Passwordless login via emailed link
 - [OAuth / Social Login](oauth.md) — Login with Google (and more)
+- [Connecting an app with OAuth 2.1](oauth_server.md) — Discovery, client registration (CIMD or DCR), the PKCE consent flow, token exchange, refresh rotation, revocation, and the `WWW-Authenticate` challenge
 - [Email & Phone Verification](email_verification.md) — Verification gates, send/verify flow, invite links
 - [Email Change](email_change.md) — Self-service email address change with password confirmation
 - [Phone Number Change](phone_change.md) — Self-service phone number change with OTP verification
