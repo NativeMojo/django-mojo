@@ -892,7 +892,9 @@ thing that owns them, one explicit `Vhost.delete()` each:
   `site_api` primaries; a malformed link to another vhost kind, or an invalid
   alias kind, is refused before anything is unlinked or deleted. The app's
   object permission check and exact `alias_of=web_app` query keep unrelated
-  tenants, vhosts and routes outside the transaction.
+  tenants and vhosts outside the transaction. Before the primary is deleted,
+  its non-managed routes are captured as `WebAppRoute` desired state. A later
+  address restore rematerializes them; managed auth routes remain derived.
 
 Onboarding's address step also refuses an existing vhost that is an alias —
 including **this** app's own alias. Adopting it as the primary would leave one
@@ -931,7 +933,7 @@ decorator gates the verb, never the specific row).
 | `edge/deployment`, `edge/deployment/<pk>` | GET | Fleet-convergence history. Filter a list with `?webapp=<id>`. Read-only; rows are made by promote/rollback only, and a cross-tenant id is not readable. |
 | `edge/webapp/rollback` | POST | Repoint a site at an already-verified earlier release. **Human-only**: `denies_key_backed_session` keeps CI keys out, so "deployment starts only from release completion" still holds for automation. A foreign release id 404s; a `pending` release is refused. Returns `webapp_deploy.payload(...)`. |
 | `edge/webapp/health` | GET | On-demand public HTTPS reachability of the live address: `healthy` / `unhealthy` / `not_configured` (no vhost). Never echoes a raw probe exception. |
-| `edge/webapp/detach_address` | POST | Take a site offline. Body `{webapp}`; returns `{webapp, address: null}` after unlinking and deleting its `site` or `site_api` serving vhost while keeping the app. Every alias address goes with it. Malformed non-site ownership is refused before any teardown. Human-only, fresh-auth, `manage_webapp`, plus the explicit object check. |
+| `edge/webapp/detach_address` | POST | Take a site offline. Body `{webapp}`; returns `{webapp, address: null}` after retaining its custom route intent, then unlinking and deleting its `site` or `site_api` serving vhost while keeping the app. Every alias address goes with it. Restoring an address rematerializes the retained routes. Malformed non-site ownership is refused before any teardown. Human-only, fresh-auth, `manage_webapp`, plus the explicit object check. |
 | `edge/webapp/attach_domain` | POST | Point one more address (an **[alias](#extra-addresses-aliases)**) at this site. Body `{webapp, hostname, retry_certificate?}`; returns `webapp_alias.attach()` plus `webapp` — `status` (`needs_domain` / `records_needed` / `certificate_pending` / `certificate_failed` / `attached`), a plain `reason`, `dns` (`managed` / `external`) and, when the caller has records to publish, `records`. Re-enterable: the UI's Check button is this same call, and an already-attached address makes no provider write. `retry_certificate` goes through `_flag()`, not `bool()` — a browser sends form values as strings and `bool("false")` is True, so only a real `True` or `"1"`/`"true"`/`"yes"`/`"on"` counts; everything else, junk included, is False. Human-only, fresh-auth, plus the explicit object check. |
 | `edge/webapp/attach_preview` | GET | What `attach_domain` **would** do with `{webapp, hostname}`, without doing any of it — `webapp_alias.preview()` plus `webapp`: `status` (`ready` / `needs_domain` / `unusable`), `hostname`, and for `ready` the `dns` mode and `domain` (`{id, name}`). Deliberately **not** this file's read idiom: it answers a question about a write, so it carries the write's `manage_webapp` and the same explicit object check — but **no** step-up, because it changes nothing. Its only client is the manager-gated add-an-address dialog, which calls it as you type. Reports no occupancy, and an ancestor-authority denial propagates as a denial rather than a verdict. |
 | `edge/webapp/detach_domain` | POST | Remove one alias address. Body `{webapp, vhost}`; the address is scoped to this app's **aliases**, so the app's own address and a foreign one both 404 rather than disclose. The certificate and the app are untouched. Human-only, fresh-auth, plus the explicit object check. |
@@ -939,8 +941,8 @@ decorator gates the verb, never the specific row).
 | `edge/webapp/serving` | GET | Everything about how this app is served, as one payload — see [Serving](#serving-address-certificate-shape-and-paths). A read: `VIEW_PERMS`, no step-up. `serving.pools` and `upstreams` are populated **only** when the caller also passes `SAVE_PERMS` (evaluated non-raisingly with `rest_check_permission`); a viewer gets `null` for both. |
 | `edge/webapp/serving` | POST | Change `pool`, `spa` and/or `certificate`. Everything else in the body is ignored — `kind` in particular, because the serving shape decides which fields the renderer has a branch for at all. Applies to the primary **and every alias**, primary first. Human-only, fresh-auth, plus the explicit object check. Returns the same payload as the GET, with editables. |
 | `edge/webapp/certificate` | POST | Request a certificate covering this app's address **alone**. Requesting only — switching is a separate `serving` save. Body `{webapp}`. Human-only, fresh-auth, plus the explicit object check *and* the domain-owning-group authority check below. |
-| `edge/webapp/add_route` | POST | Send one path to a declared destination, on the primary and every alias. Body `{webapp, path_prefix, upstream}`. Refuses a [managed prefix](#managed-prefixes-are-derived), a prefix already pointing elsewhere, a destination outside `webapp_auth_routes._accessible_upstreams`, and any app whose primary is not `site_api`. `/path` and a legacy `/path/` row are one identity: one legacy row heals to canonical; both spellings together are refused as ambiguous. |
-| `edge/webapp/remove_route` | POST | Stop sending one path elsewhere, on the primary and every alias. Body `{webapp, path_prefix}`. Refuses a managed prefix, a prefix that is not set up, and an ambiguous canonical-plus-trailing-slash duplicate. Either single spelling is removed. |
+| `edge/webapp/add_route` | POST | Retain one custom path as `WebAppRoute` desired state and send it to a declared destination on the primary and every alias. Body `{webapp, path_prefix, upstream}`. Refuses a [managed prefix](#managed-prefixes-are-derived), a prefix already pointing elsewhere, a destination outside `webapp_auth_routes._accessible_upstreams`, and any app whose primary is not `site_api`. `/path` and a legacy `/path/` row are one identity: one legacy row heals to canonical; both spellings together are refused as ambiguous. |
+| `edge/webapp/remove_route` | POST | Remove one retained custom path and stop sending it elsewhere on the primary and every alias. Body `{webapp, path_prefix}`. Refuses a managed prefix, a prefix that is not set up, and an ambiguous canonical-plus-trailing-slash duplicate. Either single spelling is removed. |
 | `DELETE edge/webapp/<pk>` | DELETE | **Safe delete.** `WebApp.on_rest_delete` runs the teardown — deactivate + unlink the `MOJO_DEPLOY_KEY` credential, delete the serving vhost and every [alias](#extra-addresses-aliases) vhost — in the **same** transaction as the row delete. The framework's `on_rest_pre_delete` hook runs *outside* the delete transaction, so it is the wrong hook: teardown there could commit while the row delete fails. A bare cascade orphaned the vhost and left the CI key active. Release bytes in S3 are intentionally left. |
 
 `rollback` is `releases.promote` with an earlier release — the same idempotent,
@@ -1016,6 +1018,16 @@ stored `/reports/` mean the same path. `add_route` heals one safe legacy row to
 exist, the service refuses the ambiguous identity before touching any address.
 The same canonicalization and duplicate refusal runs while copying a primary's
 route contract to a new or existing alias.
+
+Custom route intent lives in `WebAppRoute`; `VhostRoute` is its per-address
+materialization. `add_route` and `remove_route` update both layers in the same
+transaction. `take_offline` first captures the primary's current non-managed
+rows, which is the upgrade bridge for apps created before the desired-state
+table existed, then deletes the primary and aliases. Address onboarding
+validates every retained upstream against the selected domain before any DNS
+write and recreates the custom rows after hosted-auth reconciliation. A route
+that would cross tenants or use a retired destination is refused visibly; it
+is never silently omitted.
 
 Two refusals `apply` raises before it writes anything:
 

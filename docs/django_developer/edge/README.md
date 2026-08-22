@@ -51,7 +51,8 @@ mojo/apps/edge/
   models/
     upstream.py     Upstream — the allowlist of places traffic may go
     vhost.py        Vhost — one HTTPS block plus optional HTTP shell
-    route.py        VhostRoute — a site_api proxied prefix -> upstream FK
+    route.py        VhostRoute — one materialized site_api prefix -> upstream FK
+    web_app_route.py WebAppRoute — durable custom route intent across addresses
     blocklist.py    BlocklistEntry — fleet blocklist rows (log-first)
   validators.py     Every value that can reach a file passes through here
   services/

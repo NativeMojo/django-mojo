@@ -1136,6 +1136,15 @@ def _advance_address(operation):
     operation.domain = domain
     operation.dns_provider = domain.provider
 
+    # Capture pre-migration live routes before a change-address operation
+    # retires their vhost, and fail before any DNS write if the durable route
+    # contract cannot be served safely on the selected domain.
+    web_app = WebApp.objects.get(pk=operation.web_app_id)
+    from mojo.apps.edge.services import webapp_serving
+    if web_app.vhost_id is not None:
+        webapp_serving.capture_desired_routes(web_app)
+    webapp_serving.validate_desired_routes(web_app, domain)
+
     hostname = f"{label}.{domain.name}"
     # One resolver decides the serving destination for every provider: it
     # validates the value, rejects a self-referential hostname, and raises
@@ -1333,27 +1342,35 @@ def _advance_address(operation):
     from mojo.apps.edge.services import webapp_auth_routes
     vhost, _, _ = webapp_auth_routes.reconcile(vhost)
     operation.vhost = vhost
-    web_app = WebApp.objects.get(pk=operation.web_app_id)
-    old_site_vhost = None
-    if web_app.vhost_id not in (None, vhost.pk):
-        previous = Vhost.objects.filter(pk=web_app.vhost_id).first()
-        if previous is None or previous.kind not in ("site", "site_api"):
-            raise me.ValueException(
-                "The WebApp is already linked to an incompatible address")
-        # Change-address: the old address kept serving until the new vhost and
-        # certificate were ready (they are, here). Retire it now — its delete
-        # publishes convergence so nodes drop the old server block.
-        old_site_vhost = previous
-    web_app.vhost = vhost
-    web_app.save(update_fields=["vhost", "modified"])
-    if old_site_vhost is not None:
-        old_site_vhost.delete()
-    if web_app.current_release_id is not None:
-        # A release previously promoted while this app had no address has no
-        # fleet proof for the new vhost. Reapply the durable desired release;
-        # retries reuse an already-active attempt.
-        from mojo.apps.edge.services import releases
-        releases.reconcile_current_release(web_app)
+    with transaction.atomic():
+        web_app = WebApp.objects.select_for_update().get(pk=web_app.pk)
+        old_site_vhost = None
+        if web_app.vhost_id not in (None, vhost.pk):
+            previous = Vhost.objects.select_for_update().filter(
+                pk=web_app.vhost_id).first()
+            if previous is None or previous.kind not in ("site", "site_api"):
+                raise me.ValueException(
+                    "The WebApp is already linked to an incompatible address")
+            # Re-capture under the final app lock. Provider work can take long
+            # enough for a concurrent serving edit; the address swap must use
+            # that latest committed route contract, not the early preflight.
+            webapp_serving.capture_desired_routes(web_app, previous)
+            webapp_serving.validate_desired_routes(web_app, domain)
+            # Change-address: the old address kept serving until the new vhost
+            # and certificate were ready (they are, here). Retire it only after
+            # the new materialized routes exist in this same transaction.
+            old_site_vhost = previous
+        web_app.vhost = vhost
+        web_app.save(update_fields=["vhost", "modified"])
+        webapp_serving.reconcile_desired_routes(web_app)
+        if old_site_vhost is not None:
+            old_site_vhost.delete()
+        if web_app.current_release_id is not None:
+            # A release previously promoted while this app had no address has
+            # no fleet proof for the new vhost. Reapply the durable desired
+            # release; retries reuse an already-active attempt.
+            from mojo.apps.edge.services import releases
+            releases.reconcile_current_release(web_app)
     operation.evidence = dict(
         operation.evidence or {}, address=address_evidence(
             status="verified", dns="verified",

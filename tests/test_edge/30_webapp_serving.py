@@ -477,7 +477,7 @@ def test_dedicated_certificate_needs_domain_owning_group_authority(opts):
 # ---------------------------------------------------------------------------
 @th.django_unit_test("adding and removing a path applies to every address at once")
 def test_route_writes_apply_to_every_address(opts):
-    from mojo.apps.edge.models import VhostRoute
+    from mojo.apps.edge.models import VhostRoute, WebAppRoute
     from mojo.apps.edge.services import webapp_serving
 
     web_app, _, _, primary, alias = _app(opts)
@@ -487,12 +487,19 @@ def test_route_writes_apply_to_every_address(opts):
         assert VhostRoute.objects.filter(
             vhost=vhost, path_prefix="/reports").exists(), \
             f"the new path never landed on the app's {role} address"
+    assert WebAppRoute.objects.filter(
+        web_app=web_app, path_prefix="/reports",
+        upstream=opts.upstream).exists(), \
+        "the live path was not retained as durable WebApp desired state"
 
     webapp_serving.remove_route(web_app, "/reports")
     for vhost, role in ((primary, "own"), (alias, "extra")):
         assert not VhostRoute.objects.filter(
             vhost=vhost, path_prefix="/reports").exists(), \
             f"the removed path is still serving on the app's {role} address"
+    assert not WebAppRoute.objects.filter(
+        web_app=web_app, path_prefix="/reports").exists(), \
+        "removing the live path left stale desired state that could restore it"
 
     error = raises(webapp_serving.remove_route, web_app, "/reports")
     assert error is not None, "removing a path that is not set up reported success"

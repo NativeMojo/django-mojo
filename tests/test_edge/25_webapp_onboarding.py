@@ -1004,6 +1004,53 @@ def test_restore_address_reconciles_current_release(opts):
         "address restore reconciled another WebApp's release"
 
 
+@th.django_unit_test("restoring an offline address retains custom serving routes")
+def test_restore_address_reconciles_custom_routes(opts):
+    from unittest import mock
+
+    from mojo.apps.edge.models import VhostRoute, WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_lifecycle, webapp_onboarding
+    from tests.test_edge._helpers import make_route
+
+    declare_pools()
+    domain = make_domain(group=opts.group, provider="route53")
+    certificate = make_certificate(domain)
+    primary = make_vhost(
+        domain, certificate, label="restore-routes", kind="site_api")
+    web_app = make_webapp(
+        opts.group, slug="restore-routes", vhost=primary)
+    custom_upstream = make_upstream(group=opts.group)
+    # This is deliberately a materialized VhostRoute with no new desired-state
+    # row: it is the exact shape already installed before this migration lands.
+    make_route(primary, "/api", custom_upstream)
+
+    webapp_lifecycle.take_offline(web_app)
+    web_app.refresh_from_db()
+    assert web_app.vhost_id is None, \
+        "the custom route prevented the app from going offline"
+
+    operation = WebAppOnboardingOperation.objects.create(
+        group=opts.group, actor=opts.actor, web_app=web_app,
+        origin="https://example.com", replay_fingerprint=uuid.uuid4().hex,
+        cursor="address", state={"profile": {}, "choices": {
+            "address": {"label": "restore-routes", "domain": domain.pk}}})
+
+    def run():
+        with mock.patch(
+                "mojo.apps.dnsman.services.dns.list_records",
+                return_value=[]), mock.patch(
+                "mojo.apps.dnsman.services.dns.upsert_record"):
+            return webapp_onboarding._advance_address(operation)
+
+    outcome = with_setting("EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert outcome is True, f"address restore did not finish: {outcome}"
+    web_app.refresh_from_db()
+    assert VhostRoute.objects.filter(
+        vhost=web_app.vhost, path_prefix="/api",
+        upstream=custom_upstream,
+    ).exists(), "address restore silently discarded the app's custom /api route"
+
+
 @th.django_unit_test("wait exhaustion parks as waiting and never fails terminally")
 def test_wait_exhaustion_parks(opts):
     from unittest import mock
@@ -1826,6 +1873,56 @@ def test_ancestor_domain_write_requires_owning_group_authority(opts):
     web_app.refresh_from_db()
     assert web_app.vhost_id is not None, \
         "the parent-granted onboarding produced no serving vhost"
+
+
+@th.django_unit_test("address changes refuse an incompatible durable route before DNS")
+def test_address_change_preflights_desired_route_tenancy(opts):
+    from mojo import errors as me
+    from mojo.apps.edge.models import WebAppOnboardingOperation
+    from mojo.apps.edge.services import webapp_onboarding
+    from tests.test_edge._helpers import make_route
+
+    declare_pools()
+    parent, child, _ = _fresh_group_tree()
+    actor, _, _, _ = make_group_member(
+        ["manage_webapp", "manage_dns"], group=parent)
+    old_domain = make_domain(group=child, provider="route53")
+    old_vhost = make_vhost(
+        old_domain, make_certificate(old_domain), label="old", kind="site_api")
+    web_app = make_webapp(child, slug=f"routepre{uuid.uuid4().hex[:6]}",
+                          vhost=old_vhost)
+    private_upstream = make_upstream(group=child)
+    make_route(old_vhost, "/api", private_upstream)
+
+    parent_domain = make_domain(group=parent, provider="route53")
+    make_certificate(parent_domain)
+    operation = WebAppOnboardingOperation.objects.create(
+        group=child, actor=actor, web_app=web_app,
+        origin="https://example.com", replay_fingerprint=uuid.uuid4().hex,
+        cursor="address", state={"profile": {}, "choices": {
+            "address": {"label": "new", "domain": parent_domain.pk}}})
+
+    def run():
+        with mock.patch(
+                "mojo.apps.dnsman.services.dns.list_records") as listed, \
+                mock.patch(
+                    "mojo.apps.dnsman.services.dns.upsert_record") as upsert:
+            try:
+                webapp_onboarding._advance_address(operation)
+                error = None
+            except me.ValueException as exc:
+                error = exc
+            return error, listed, upsert
+
+    error, listed, upsert = with_setting(
+        "EDGE_WEBAPP_CNAME_TARGET", TARGET, run)
+    assert error is not None and "/api" in str(error), \
+        f"the incompatible stored route was not refused plainly: {error}"
+    listed.assert_not_called()
+    upsert.assert_not_called()
+    web_app.refresh_from_db()
+    assert web_app.vhost_id == old_vhost.pk, \
+        "a refused route preflight still moved the app's serving address"
 
 
 @th.django_unit_test("an address serving another app is refused before any cert work")

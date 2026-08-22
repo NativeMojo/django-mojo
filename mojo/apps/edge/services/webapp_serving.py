@@ -162,6 +162,16 @@ def _certificate_payload(certificate, hostname, domain):
     }
 
 
+def _app_upstreams_for_domain(web_app, domain):
+    """Upstreams an app may materialize on a domain without crossing tenants."""
+    from mojo.apps.edge.models import Upstream
+
+    shared = Q(group__isnull=True)
+    if domain is not None and domain.group_id == web_app.group_id:
+        shared |= Q(group_id=web_app.group_id)
+    return Upstream.objects.filter(shared, is_enabled=True)
+
+
 def _app_upstreams(web_app, primary):
     """Upstreams THIS app may send a path to, and be able to save it.
 
@@ -175,12 +185,8 @@ def _app_upstreams(web_app, primary):
     upstreams satisfy both, so only those are offered; the picklist is exactly
     what the write will accept.
     """
-    from mojo.apps.edge.models import Upstream
-
-    shared = Q(group__isnull=True)
-    if primary is not None and primary.domain.group_id == web_app.group_id:
-        shared |= Q(group_id=web_app.group_id)
-    return Upstream.objects.filter(shared, is_enabled=True)
+    return _app_upstreams_for_domain(
+        web_app, primary.domain if primary is not None else None)
 
 
 def _route_rows(vhost):
@@ -484,9 +490,136 @@ def _canonical_route_contract(vhost, lock=False):
     return contract
 
 
+def capture_desired_routes(web_app, primary=None):
+    """Capture one live primary's custom routes as durable WebApp intent.
+
+    This is the upgrade bridge for apps created before ``WebAppRoute`` existed:
+    their vhost rows remain the only source until the first offline or
+    change-address operation. Managed auth paths are derived and deliberately
+    excluded. Duplicate logical identities remain a hard refusal.
+    """
+    from mojo.apps.edge.models import Vhost, WebApp, WebAppRoute
+
+    with transaction.atomic():
+        locked_app = WebApp.objects.select_for_update().get(pk=web_app.pk)
+        primary_id = getattr(primary, "pk", None) or locked_app.vhost_id
+        if primary_id is None:
+            return []
+        if locked_app.vhost_id != primary_id:
+            raise me.ValueException(
+                "Only this WebApp's primary address can define its routes.")
+        locked_primary = Vhost.objects.select_for_update().get(pk=primary_id)
+        contract = _canonical_route_contract(locked_primary, lock=True)
+        managed = set(managed_prefixes())
+        source = {
+            prefix: route for prefix, route in contract.items()
+            if prefix not in managed
+        }
+        desired = {
+            row.path_prefix: row
+            for row in WebAppRoute.objects.select_for_update().filter(
+                web_app=locked_app).select_related("upstream")
+        }
+
+        for prefix, row in desired.items():
+            if prefix not in source:
+                row.delete()
+        for prefix, route in source.items():
+            row = desired.get(prefix)
+            if row is None:
+                WebAppRoute.objects.create(
+                    web_app=locked_app, path_prefix=prefix,
+                    upstream=route.upstream)
+            elif row.upstream_id != route.upstream_id:
+                row.upstream = route.upstream
+                row.save(update_fields=["upstream", "modified"])
+        return sorted(source)
+
+
+def validate_desired_routes(web_app, domain):
+    """Fail before DNS writes when stored custom routes cannot be restored."""
+    allowed = set(_app_upstreams_for_domain(
+        web_app, domain).values_list("pk", flat=True))
+    managed = set(managed_prefixes())
+    for row in web_app.desired_routes.select_related("upstream").order_by(
+            "path_prefix"):
+        # The derived framework contract wins if a bouncer setting changed
+        # while the app was offline. Reconciliation removes this stale desired
+        # row; it must not block the newly managed path on its old destination.
+        if row.path_prefix in managed:
+            continue
+        if row.upstream_id not in allowed:
+            raise me.ValueException(
+                f"{row.path_prefix} points to a destination this app cannot "
+                "use at the selected address. Remove or repair that route "
+                "before restoring the app.")
+
+
+def reconcile_desired_routes(web_app, primary=None):
+    """Materialize the durable custom route contract on every app address."""
+    from mojo.apps.edge.models import Vhost, VhostRoute, WebApp, WebAppRoute
+
+    with transaction.atomic():
+        locked_app = WebApp.objects.select_for_update().get(pk=web_app.pk)
+        primary_id = getattr(primary, "pk", None) or locked_app.vhost_id
+        if primary_id is None:
+            raise me.ValueException(
+                "Give this app an address before restoring its routes.")
+        if locked_app.vhost_id != primary_id:
+            raise me.ValueException(
+                "Only this WebApp's primary address can receive its routes.")
+        locked_primary = Vhost.objects.select_for_update().select_related(
+            "domain").get(pk=primary_id)
+        _require_routes(locked_primary)
+        managed = set(managed_prefixes())
+        WebAppRoute.objects.filter(
+            web_app=locked_app, path_prefix__in=managed).delete()
+        desired = {
+            row.path_prefix: row
+            for row in WebAppRoute.objects.select_for_update().filter(
+                web_app=locked_app).select_related("upstream")
+        }
+        allowed = set(_app_upstreams(
+            locked_app, locked_primary).values_list("pk", flat=True))
+        for prefix, row in desired.items():
+            if row.upstream_id not in allowed:
+                raise me.ValueException(
+                    f"{prefix} points to a destination this app cannot use at "
+                    "the selected address. Remove or repair that route before "
+                    "restoring the app.")
+
+        targets = [locked_primary] + list(
+            Vhost.objects.select_for_update().filter(
+                alias_of=locked_app).order_by("pk"))
+        planned = []
+        for vhost in targets:
+            contract = _canonical_route_contract(vhost, lock=True)
+            extras = sorted(
+                prefix for prefix in contract
+                if prefix not in managed and prefix not in desired)
+            if extras:
+                raise me.ValueException(
+                    f"{vhost.server_name} has a custom route not owned by the "
+                    f"app: {extras[0]}")
+            for prefix, row in desired.items():
+                existing = contract.get(prefix)
+                if (existing is not None and
+                        existing.upstream_id != row.upstream_id):
+                    raise me.ValueException(
+                        f"{vhost.server_name} route {prefix} already uses "
+                        "another upstream")
+                if existing is None:
+                    planned.append((vhost, row))
+        for vhost, row in planned:
+            VhostRoute.objects.create(
+                vhost=vhost, path_prefix=row.path_prefix,
+                upstream=row.upstream)
+        return sorted(desired)
+
+
 def add_route(web_app, path_prefix, upstream):
     """Send one path to a declared destination, on every address this app has."""
-    from mojo.apps.edge.models import Vhost, VhostRoute
+    from mojo.apps.edge.models import Vhost, VhostRoute, WebAppRoute
 
     primary = _require_routes(_require_primary(web_app))
     prefix = _clean_prefix(path_prefix)
@@ -496,6 +629,12 @@ def add_route(web_app, path_prefix, upstream):
         locked = Vhost.objects.select_for_update().get(pk=primary.pk)
         targets = [locked] + list(Vhost.objects.select_for_update().filter(
             alias_of=web_app).order_by("pk"))
+        desired = WebAppRoute.objects.select_for_update().filter(
+            web_app=web_app, path_prefix=prefix).first()
+        if desired is not None and desired.upstream_id != destination.pk:
+            raise me.ValueException(
+                f"{prefix} already goes somewhere else. Remove it first, "
+                "then add it again.")
         planned = []
         for vhost in targets:
             rows = _route_identity_rows(vhost, prefix, lock=True)
@@ -506,6 +645,9 @@ def add_route(web_app, path_prefix, upstream):
                         f"{prefix} already goes somewhere else. Remove it "
                         f"first, then add it again.")
             planned.append((vhost, existing))
+        if desired is None:
+            WebAppRoute.objects.create(
+                web_app=web_app, path_prefix=prefix, upstream=destination)
         for vhost, existing in planned:
             if existing is None:
                 VhostRoute.objects.create(
@@ -518,7 +660,7 @@ def add_route(web_app, path_prefix, upstream):
 
 def remove_route(web_app, path_prefix):
     """Stop sending one path elsewhere, on every address this app has."""
-    from mojo.apps.edge.models import Vhost, VhostRoute
+    from mojo.apps.edge.models import Vhost, VhostRoute, WebAppRoute
 
     primary = _require_routes(_require_primary(web_app))
     prefix = _clean_prefix(path_prefix)
@@ -534,6 +676,8 @@ def remove_route(web_app, path_prefix):
                 planned.append(rows[0])
         if not planned:
             raise me.ValueException(f"{prefix} isn’t set up on this app.")
+        WebAppRoute.objects.filter(
+            web_app=web_app, path_prefix=prefix).delete()
         # One at a time, never a queryset delete: VhostRoute.delete()
         # publishes fleet convergence for the pool it belonged to.
         for route in planned:
