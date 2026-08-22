@@ -206,6 +206,8 @@ def _offline_effect(primary):
     into the approval so the card describes exactly the address that was
     there, and the wording only degrades for a kind the service would refuse.
     """
+    from mojo.apps.edge.services import webapp_lifecycle
+
     if primary is None:
         return "", True
     return primary.kind, primary.kind in webapp_lifecycle.SERVING_KINDS
