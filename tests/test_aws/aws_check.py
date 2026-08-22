@@ -652,11 +652,10 @@ def test_release_bucket_wildcard_cors_warns_without_claiming_uploads_are_blocked
         "AllowedMethods": ["GET", "HEAD", "PUT", "POST", "DELETE"],
         "AllowedHeaders": ["*"],
     }]}
-    with mock.patch.object(aws_check, "_setting", side_effect=_setting_values()), \
-            mock.patch.object(aws_check, "_release_buckets",
-                              return_value=["release-media"]):
-        report = aws_check.AWSCheckRunner(
-            clients={"s3": s3, "sts": _verified_sts()}).run(["s3"])
+    report = aws_check.AWSCheckRunner(
+        clients={"s3": s3, "sts": _verified_sts()},
+        settings_get=_setting_values(),
+        release_buckets=["release-media"]).run(["s3"])
     item = next(row for row in report["items"] if row["code"] == "release_bucket.cors")
     assert item["status"] == "warn", \
         f"wildcard CORS must still request the tight portal rule: {item}"
@@ -1521,9 +1520,13 @@ def test_network_failure_and_fresh_cron_have_stable_classification(opts):
         "run_id": "recent", "state": "completed",
         "started_at": now.isoformat(), "completed_at": now.isoformat(),
     }]
-    with mock.patch("mojo.helpers.cron.get_cron_heartbeats", return_value=heartbeat), \
-            mock.patch("mojo.helpers.redis.get_connection", return_value=redis):
-        report = aws_check.AWSCheckRunner(now=lambda: now).run(["cron"])
+    # cron_heartbeats= / redis_connection= are the AWSCheckRunner injection
+    # seams added in item #2558 — no patching of the shared mojo.helpers.cron
+    # and mojo.helpers.redis module attributes every parallel thread reads.
+    report = aws_check.AWSCheckRunner(
+        now=lambda: now,
+        cron_heartbeats=lambda limit=10: heartbeat,
+        redis_connection=redis).run(["cron"])
     codes = [item["code"] for item in report["items"]]
     assert "cron.heartbeat_fresh" in codes, f"Fresh heartbeat should pass, got {codes}"
     assert "jobs.health" in codes, f"Jobs health should be reported, got {codes}"

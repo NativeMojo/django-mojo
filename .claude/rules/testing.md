@@ -50,11 +50,26 @@ Before writing any test, read `docs/django_developer/testit/Overview.md`. This i
   Consumer/application test roots are exempt.
 - The blocking grammar: settings-singleton / `django.conf.settings` / `os.environ` /
   `sys.modules` mutation, protected-setting ORM/service/REST writes (dynamic keys fail
-  closed), and patches of the shared `mojo.helpers.settings`, `mojo.apps.incident`,
-  `mojo.apps.jobs` and `testit` surfaces. App-internal provider mocks are advisory for
-  now (cold ring — see the #1839 follow-up). Keys under `TESTIT_` are always writable.
-  Prefer the service seams (`reporter=`, `publisher=`, `send_email=`, `loader=`) over
-  any patch. No comment/path suppressions exist.
+  closed), and patches of — or attribute assignments to — the shared
+  `mojo.helpers.` namespace (all of it), `mojo.apps.incident`, `mojo.apps.jobs` and
+  `testit` surfaces, plus the cross-package roster in `isolation.CROSS_PACKAGE_TARGETS`
+  (app services two or more packages patch, e.g. `system_settings`, `capacity`,
+  `aws_check`). Keys under `TESTIT_` are always writable, including one literal
+  `TESTIT_`-keyed payload on an `/api/settings` write, which is how the
+  protected-denial contracts run in the default tier. Prefer the service seams
+  (`reporter=`, `publisher=`, `send_email=`, `loader=`, `report_fn=`, `resolve_cname=`,
+  `client=`, …) over any patch. No comment/path suppressions exist.
+- **App-local provider mocks are accepted by design, but capped.** A mock of an
+  app's own external-world boundary (boto3, SSH/OS, a DNS provider) inside that app's
+  own test package is the right test design; the hazard is only concurrent same-app
+  traffic. Each `default_core` package therefore declares `"cold_budget": N` — the
+  exact number of such sites it holds. The check is **two-sided**: over budget fails
+  naming the new sites, and UNDER budget fails with "budget stale — lower to N", so
+  remediation can never leave headroom for new sites to hide in. An absent key means
+  0, so a new package starts clean. To lower a budget: give the entry point a
+  keyword-only seam with a sentinel default (production behavior byte-identical when
+  unused), or move the test to the package's `*_extended_serial` sibling — then lower
+  the number in the same commit.
 - A restoring `try/finally` or `th.server_settings()` does NOT make shared mutation
   parallel-safe — restoration bounds the visibility window, it does not close it.
 

@@ -2,11 +2,13 @@
 Redis-suppressed reporter introduced in #1098.
 
 The helper is exercised DIRECTLY (not via `opts.client`), so these are true
-in-process unit tests: the monkeypatch in the fail-closed test patches the same
-process the helper runs in, which is exactly why it works here where it would not
-against `opts.client` (a separate server process). A throwaway category keeps the
-assertions isolated from real incident traffic; the DB and Redis are long-lived,
-so every test clears its own events and Redis keys before it runs.
+in-process unit tests. The fail-closed test simulates the Redis outage by
+injecting a test-owned failing client through the keyword-only `connection=`
+seam on `report_event_suppressed` (item #2558) — no rebinding of
+`mojo.helpers.redis.get_connection`, which every parallel test thread in the
+process reads. A throwaway category keeps the assertions isolated from real
+incident traffic; the DB and Redis are long-lived, so every test clears its own
+events and Redis keys before it runs.
 """
 from testit import helpers as th
 
@@ -135,9 +137,27 @@ def test_suppressed_report_never_raises(opts):
     _clear([notice_key(CATEGORY, key)])
 
 
+class _DownConnection:
+    """A Redis-like client whose every round-trip fails, as during an outage.
+
+    Injected through the keyword-only ``connection=`` seam on
+    ``report_event_suppressed`` (item #2558) so the outage is simulated with a
+    test-owned object instead of rebinding ``mojo.helpers.redis.get_connection``
+    for every parallel test thread in the process.
+    """
+
+    def set(self, *args, **kwargs):
+        raise RuntimeError("redis is down")
+
+    def incr(self, *args, **kwargs):
+        raise RuntimeError("redis is down")
+
+    def expire(self, *args, **kwargs):
+        raise RuntimeError("redis is down")
+
+
 @th.django_unit_test("fail-closed drops the event when redis is unreachable")
 def test_fail_closed_skips_report_when_redis_down(opts):
-    import mojo.helpers.redis as redis_mod
     from mojo.apps import incident
     from mojo.apps.incident import notice_key
     from mojo.apps.incident.models import Event
@@ -145,32 +165,25 @@ def test_fail_closed_skips_report_when_redis_down(opts):
     key = "probe-failclosed"
     _clear([notice_key(CATEGORY, key)])
 
-    original = redis_mod.get_connection
+    down = _DownConnection()
 
-    def _boom(*args, **kwargs):
-        raise RuntimeError("redis is down")
+    closed = incident.report_event_suppressed(
+        "fail closed", key=key, category=CATEGORY, level=1, fail_open=False,
+        connection=down)
+    assert closed is False, (
+        f"with redis down and fail_open=False the event must be DROPPED and "
+        f"return False, got {closed!r}")
+    assert Event.objects.filter(category=CATEGORY).count() == 0, (
+        "fail-closed must not file when redis is unreachable — a public, "
+        "amplifiable category must not become an open floodgate on an outage")
 
-    # In-process patch: the helper does `from mojo.helpers.redis import
-    # get_connection` at call time, so patching the module attribute takes.
-    redis_mod.get_connection = _boom
-    try:
-        closed = incident.report_event_suppressed(
-            "fail closed", key=key, category=CATEGORY, level=1, fail_open=False)
-        assert closed is False, (
-            f"with redis down and fail_open=False the event must be DROPPED and "
-            f"return False, got {closed!r}")
-        assert Event.objects.filter(category=CATEGORY).count() == 0, (
-            "fail-closed must not file when redis is unreachable — a public, "
-            "amplifiable category must not become an open floodgate on an outage")
-
-        opened = incident.report_event_suppressed(
-            "fail open", key=key, category=CATEGORY, level=1, fail_open=True)
-        assert Event.objects.filter(category=CATEGORY).count() == 1, (
-            "fail-open must still file the event when redis is unreachable "
-            "(logged once, unsuppressed)")
-        assert opened is True, (
-            f"fail-open must return True when the event is filed, got {opened!r}")
-    finally:
-        redis_mod.get_connection = original
+    opened = incident.report_event_suppressed(
+        "fail open", key=key, category=CATEGORY, level=1, fail_open=True,
+        connection=down)
+    assert Event.objects.filter(category=CATEGORY).count() == 1, (
+        "fail-open must still file the event when redis is unreachable "
+        "(logged once, unsuppressed)")
+    assert opened is True, (
+        f"fail-open must return True when the event is filed, got {opened!r}")
 
     _clear([notice_key(CATEGORY, key)])

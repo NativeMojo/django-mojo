@@ -39,24 +39,24 @@ def test_kms_client_kwargs_carries_configured_credentials(opts):
 def test_kms_helper_uses_client_kwargs(opts):
     """The helper must actually build its client through client_kwargs —
     a correct helper function nothing calls would not have fixed anything."""
+    import boto3
+
     from mojo.helpers.aws import kms
 
     captured = {}
-    original = kms.boto3.client
 
     def spy(service, **kwargs):
         captured["service"] = service
         captured["kwargs"] = kwargs
-        return original(service, **kwargs)
+        return boto3.client(service, **kwargs)
 
-    kms.boto3.client = spy
-    try:
-        # ensure_key=False keeps this off the network — no AWS call is made.
-        kms.KMSHelper(kms_key_id="alias/mojo-unit-test",
-                      region_name="us-west-2",
-                      ensure_key=False)
-    finally:
-        kms.boto3.client = original
+    # The keyword-only client_factory= seam (item #2558) replaces the old
+    # rebinding of kms.boto3.client, which every parallel test thread shares.
+    # ensure_key=False keeps this off the network — no AWS call is made.
+    kms.KMSHelper(kms_key_id="alias/mojo-unit-test",
+                  region_name="us-west-2",
+                  ensure_key=False,
+                  client_factory=spy)
 
     assert captured.get("service") == "kms", \
         f"expected a kms client to be built, got {captured.get('service')!r}"

@@ -6,7 +6,6 @@ Covers:
 - llm.call() returns the usage dict from response.model_dump()
 - _accumulate_usage sums per-turn counters correctly
 - Message.usage is in the default REST graph and is nullable
-- A zero-cache-usage first call logs a one-time warning
 
 The tests that mock.patch the shared settings singleton (cache_control off,
 usage persistence, per-turn usage logging) moved to
@@ -17,7 +16,6 @@ The remaining llm.call() tests inject the fake Anthropic client through the
 keyword-only client= seam on llm.call (item #2558) — no mock.patch of the
 shared mojo.helpers.llm module or the anthropic package.
 """
-import logging
 from unittest import mock
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
@@ -212,16 +210,11 @@ def test_accumulate_usage_handles_missing_fields(opts):
 # tests/test_assistant_extended_serial/33_test_prompt_caching.py — they
 # mock.patch the shared settings singleton (maestro item #1839).
 
-
-class _ListHandler(logging.Handler):
-    """Simple log handler that captures records into a list."""
-
-    def __init__(self):
-        super().__init__()
-        self.records = []
-
-    def emit(self, record):
-        self.records.append(record)
+# test_zero_usage_warning_fires_once moved to the same file (maestro item
+# #2558): it asserts a once-PER-PROCESS warning, so it must reset the
+# module-global llm._zero_cache_warned guard and attach a handler to the
+# shared llm logger. The process-globalness IS the assertion, so there is
+# nothing to convert to a seam. `_ListHandler` moved with it.
 
 
 # ---------------------------------------------------------------------------
@@ -257,45 +250,3 @@ def test_message_usage_field_nullable(opts):
     )
     msg.refresh_from_db()
     assert_eq(msg.usage, payload, f"usage should round-trip JSON, got {msg.usage!r}")
-
-
-# ---------------------------------------------------------------------------
-# Zero-cache warning
-# ---------------------------------------------------------------------------
-
-@th.django_unit_test()
-def test_zero_usage_warning_fires_once(opts):
-    """When caching is enabled but both counters are 0, WARN once per process."""
-    from mojo.helpers import llm
-
-    # Reset the process-level guard so this test is deterministic.
-    llm._zero_cache_warned = False
-
-    fake_client, _ = _make_fake_client(_canned_response(usage={
-        "input_tokens": 5, "output_tokens": 3,
-        "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
-    }))
-
-    stdlib_logger = llm.logger.logger
-    handler = _ListHandler()
-    stdlib_logger.addHandler(handler)
-    prev_level = stdlib_logger.level
-    stdlib_logger.setLevel(logging.WARNING)
-
-    try:
-        # Two calls — both return zero cache counters
-        llm.call(messages=[{"role": "user", "content": "hi"}], model="m",
-                 client=fake_client)
-        llm.call(messages=[{"role": "user", "content": "hi2"}], model="m",
-                 client=fake_client)
-    finally:
-        stdlib_logger.removeHandler(handler)
-        stdlib_logger.setLevel(prev_level)
-        llm._zero_cache_warned = False  # restore for other tests
-
-    warnings = [r for r in handler.records if r.levelno == logging.WARNING and "caching" in r.getMessage().lower()]
-    assert_eq(
-        len(warnings), 1,
-        f"WARNING should fire exactly once across 2 zero-cache calls, got {len(warnings)}: "
-        f"{[r.getMessage() for r in warnings]}",
-    )

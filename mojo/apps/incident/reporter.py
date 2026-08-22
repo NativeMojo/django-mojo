@@ -57,7 +57,7 @@ def budget_key(category, window):
 
 def report_event_suppressed(details, key, title=None, category="api_error", level=1,
                             request=None, scope="global", window=3600, budget=None,
-                            fail_open=True, **kwargs):
+                            fail_open=True, *, connection=None, **kwargs):
     """File an incident Event at most once per ``(category, key)`` per ``window``. Returns bool.
 
     The reusable Redis-suppressed reporter. Reach for it — not bare
@@ -94,12 +94,19 @@ def report_event_suppressed(details, key, title=None, category="api_error", leve
     ``key`` is the suppression unit (a host, a source name, a group id).
     ``group=None`` in ``kwargs`` is honored by ``report_event`` to suppress the
     request-group auto-stamp. Extra ``kwargs`` land in the event metadata.
+
+    ``connection`` is a keyword-only test seam (item #2558): a Redis-like
+    object exposing ``set``/``incr``/``expire``. Default (None) resolves the
+    shared process connection exactly as before. Because it is keyword-only it
+    is consumed here and never reaches the event metadata.
     """
     from mojo.helpers import logit
 
     try:
-        from mojo.helpers.redis import get_connection
-        redis = get_connection()
+        redis = connection
+        if redis is None:
+            from mojo.helpers.redis import get_connection
+            redis = get_connection()
         nk = notice_key(category, key)
         # nx=True: atomic "claim this window" — set only if absent, so two
         # concurrent workers can never both pass. First real round-trip.

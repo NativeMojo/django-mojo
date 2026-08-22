@@ -272,13 +272,19 @@ class AWSCheckRunner:
                  adopt_bucket=False, confirm=None, clients=None, session=None, now=None,
                  dns_domain=None, dns_group=None, provider=None, *,
                  settings_get=None, session_factory=None, release_buckets=None,
-                 certs_service=None, delegation_service=None):
+                 certs_service=None, delegation_service=None,
+                 cron_heartbeats=None, redis_connection=None):
         # Injection seams (tests): every one of these defaults to None, which
         # preserves the production collaborators exactly. `settings_get` takes
         # the module `_setting` signature; `release_buckets` is a literal list
         # standing in for `_release_buckets()`; the two dnsman seams stand in
-        # for the certs/delegation service modules.
+        # for the certs/delegation service modules. `cron_heartbeats` takes the
+        # `mojo.helpers.cron.get_cron_heartbeats` signature and
+        # `redis_connection` is a Redis-like client standing in for
+        # `mojo.helpers.redis.get_connection()` (item #2558).
         self.settings_get = settings_get
+        self.cron_heartbeats = cron_heartbeats
+        self.redis_connection = redis_connection
         self.session_factory = session_factory
         self.release_buckets = release_buckets
         self.certs_service = certs_service
@@ -507,9 +513,12 @@ class AWSCheckRunner:
             self._add("identity", "fail", "sts.error", exc)
 
     def check_cron(self):
-        from mojo.helpers.cron import get_cron_heartbeats
+        heartbeats = self.cron_heartbeats
+        if heartbeats is None:
+            from mojo.helpers.cron import get_cron_heartbeats
+            heartbeats = get_cron_heartbeats
         try:
-            records = get_cron_heartbeats(limit=10)
+            records = heartbeats(limit=10)
         except Exception as exc:
             self._add("cron", "fail", "redis.unavailable", exc,
                       remediation="Restore Redis connectivity before checking cron/jobs.")
@@ -534,8 +543,10 @@ class AWSCheckRunner:
                           {"age_seconds": int(age), "state": latest.get("state")})
         try:
             from mojo.apps.jobs.keys import JobKeys
-            from mojo.helpers.redis import get_connection
-            redis = get_connection()
+            redis = self.redis_connection
+            if redis is None:
+                from mojo.helpers.redis import get_connection
+                redis = get_connection()
             redis.ping()
             keys = JobKeys()
             runners = list(redis.scan_iter(match=keys.runner_hb("*"), count=100))

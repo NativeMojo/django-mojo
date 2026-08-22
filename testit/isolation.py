@@ -89,8 +89,9 @@ _SYS_MODULES_WRITE_METHODS = frozenset({"update", "setdefault", "pop", "clear", 
 
 # The enforcement ring (maestro item #1839): the mutation classes that have
 # produced recorded cross-module release failures. These BLOCK the default
-# tier. Everything else the scanner finds (app-internal provider mocks and
-# similar) is advisory until the cold-ring migration lands.
+# tier. What the scanner finds outside this ring — an app's own mock of its
+# external-world boundary — is accepted by design but capped per package by
+# `cold_budget` (item #2558), so it can shrink but never grow.
 HOT_CODES = frozenset({
     "settings_singleton_mutation",
     "django_settings_mutation",
@@ -108,11 +109,52 @@ HOT_CODES = frozenset({
 # redirected VAR_ROOT poisons the ready-signal/conf reads of every concurrent
 # server_settings() context.
 SHARED_PATCH_PREFIXES = (
-    "mojo.helpers.settings",
-    "mojo.helpers.paths",
+    # The whole helpers namespace: a helper is shared by definition, and its
+    # patch window is visible to every module that calls through it
+    # (maestro item #2558 promoted this from the advisory ring).
+    "mojo.helpers.",
     "mojo.apps.incident",
     "mojo.apps.jobs",
     "testit.",
+)
+
+# App services that two or more test packages patch, or that one package
+# patches while another CALLS them — a patch window here swallows a foreign
+# module's real call. The live instance that proved the class: test_aws
+# patched `aws_check._setting` with finite side_effect iterators while
+# test_dnsman instantiated AWSCheckRunner inside that window.
+#
+# Membership is historical, not current: a target stays listed after being
+# remediated so the exposure cannot silently return. Opt-in serial packages
+# are exempt, which is where the exhaustive variants of these now live.
+CROSS_PACKAGE_TARGETS = (
+    # Remediated and pinned: no default-tier package may patch these again.
+    "mojo.apps.account.models.setting.Setting.RestMeta",
+    "mojo.apps.account.services.system_settings",
+    "mojo.apps.aws.services.aws_check",
+    "mojo.apps.edge.services.render.settings",
+    "mojo.deploy.audit",
+    "mojo.deploy.config_sync",
+    "mojo.deploy.mojosec",
+    "mojo.deploy.nginx_runtime",
+)
+
+# Cross-package-exposed but NOT yet pinned: still carrying default-tier
+# patches whose only remedy would be reshaping production code for test
+# convenience (an audit call inside a REST view, a PROTECTED-FK queryset, a
+# startup-path callback) or ~68 unrelated conversions. They stay capped by
+# each package's
+# `cold_budget` — which already prevents growth — and move onto this roster
+# as they are cleared. Tracked as the #2558 follow-up.
+DEFERRED_CROSS_PACKAGE_TARGETS = (
+    "mojo.apps.account.services.admin_platform",
+    "mojo.apps.account.utils.tokens",
+    "mojo.apps.aws.services.capacity",
+    "mojo.apps.dnsman.services.certs",
+    "mojo.apps.dnsman.models.Certificate",
+    "mojo.apps.dnsman.services.delegation",
+    "mojo.apps.edge.services.platform_deploy",
+    "mojo.mojosec.",
 )
 
 _TARGET_RE = re.compile(r"'([A-Za-z0-9_.]+)'")
@@ -130,9 +172,12 @@ def is_hot_violation(row):
         if "settings singleton" in row.detail:
             return True
         # A detail may quote both the attribute name and the dotted target —
-        # any quoted token in a shared namespace makes the site hot.
+        # any quoted token in a shared namespace, or on the cross-package
+        # roster, makes the site hot.
         for token in _TARGET_RE.findall(row.detail):
             if token.startswith(SHARED_PATCH_PREFIXES):
+                return True
+            if token.startswith(CROSS_PACKAGE_TARGETS):
                 return True
     return False
 
