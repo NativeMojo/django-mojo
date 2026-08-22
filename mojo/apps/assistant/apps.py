@@ -22,17 +22,23 @@ class AppConfig(BaseAppConfig):
         re-read on every check, so ASSISTANT_MCP_ENABLED takes effect
         immediately in both directions. Guarded on the account app being
         installed: the assistant can ship without it.
+
+        The path comes from `mcp_auth.configured_path()`, the same helper the
+        route and the challenge use. `validate_access` compares the token
+        audience's path to `request.path` EXACTLY, so a registration that
+        disagreed with the route by one trailing slash would refuse every token
+        this server had just minted.
         """
         from django.apps import apps
 
         if not apps.is_installed("mojo.apps.account"):
             return
         from mojo.apps.account.services import oauth_server
+        from mojo.apps.assistant.mcp import auth as mcp_auth
         from mojo.helpers.settings import settings
 
         oauth_server.register_resource(
-            "/" + settings.get_static(
-                "ASSISTANT_MCP_PATH", "api/assistant/mcp").strip("/"),
+            mcp_auth.configured_path(),
             ["mcp"],
             lambda: settings.get("ASSISTANT_MCP_ENABLED", False, kind="bool"))
 

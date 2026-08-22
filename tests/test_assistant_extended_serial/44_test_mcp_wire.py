@@ -400,6 +400,36 @@ def test_tool_flow(opts):
         _clear_shadowing_rows()
 
 
+
+@th.django_unit_test("the JSON-RPC envelope cannot rebind the tenant or leak into an incident")
+def test_envelope_cannot_hijack_the_request(opts):
+    from mojo.apps.account.models import Group
+
+    _clear_shadowing_rows()
+    try:
+        with th.server_settings(BASE_URL=BASE, ASSISTANT_MCP_ENABLED=True):
+            group = Group.objects.get(name=API_KEY_GROUP)
+            Group.objects.filter(pk=group.pk).update(last_activity=None)
+
+            # "group" sits exactly where the dispatcher looks for a tenant. On
+            # any other endpoint it would resolve and touch that Group before
+            # the view ran; here the middleware never parses the body at all.
+            envelope = dict(_rpc(1, "ping"), group=group.pk)
+            resp = opts.client.post(MCP_PATH, envelope, headers=_auth(opts.token))
+            assert_eq(resp.status_code, 200,
+                      f"the envelope must still be answered normally, got "
+                      f"{resp.status_code} {resp.response}")
+            assert_eq(resp.response.result, {},
+                      f"ping must answer an empty result, got {resp.response}")
+
+            group.refresh_from_db()
+            assert_true(group.last_activity is None,
+                        f"a top-level \"group\" in the JSON-RPC envelope must "
+                        f"never resolve or touch a Group — the MCP body is not "
+                        f"request.DATA. last_activity is {group.last_activity!r}")
+    finally:
+        _clear_shadowing_rows()
+
 # ---------------------------------------------------------------------------
 # The switch
 # ---------------------------------------------------------------------------

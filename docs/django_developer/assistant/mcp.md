@@ -84,6 +84,23 @@ Two orderings are load-bearing and must not be rearranged:
 | `ASSISTANT_MCP_ENABLED` | `False` | database or deployment file | Whether the door accepts anything at all. Read with `settings.get(..., kind="bool")` on **every** request — never cached, so the switch is immediate in both directions. |
 | `ASSISTANT_MCP_PATH` | `api/assistant/mcp` | deployment file only (`get_static`) | The request path. One value derives the route, the OAuth resource registration and the sensitive-body label, so they cannot disagree within a process. Changing it needs a restart. |
 
+All three consumers of the path — the `@md.URL` route, the OAuth resource
+registration in `apps.py`, and the challenge's `resource_metadata` — call
+`mcp_auth.configured_path()`, because `validate_access` compares the token
+audience's path to `request.path` **exactly**: a registration that disagreed
+with the route by one trailing slash would refuse every token this server had
+just minted. The helper appends the slash itself when `MOJO_APPEND_SLASH` is
+set (which also sidesteps `_register_route`'s own append step, since the pattern
+then already ends in one), and falls back to the default with a `logit.error`
+for an empty or `/`-only setting — honouring that would mount the endpoint at
+the site root. Its `raw` / `append_slash` parameters exist so tests can drive it
+without touching the shared settings singleton.
+
+> `MOJO_APPEND_SLASH` is read here with `get_static`, while
+> `mojo/decorators/http.py` reads it with `settings.get`. A deployment that sets
+> it **only** through a database row would make the two disagree; set it in the
+> deployment file, as every other consumer of it assumes.
+
 Both appear in the Admin settings catalog (`assistant/apps.py ::
 register_settings_descriptors`).
 
@@ -147,15 +164,15 @@ nobody else can.
 `tools/list` and `tools/call` both read `mcp/server.projected_registry()`, which
 is `get_registry()` minus:
 
-* **`HIDDEN_TOOLS`** — `agent.META_TOOLS` (`load_tools`, `create_plan`,
-  `update_plan`) plus the writers that shape the chat assistant's own state
-  (`write_memory`, `delete_memory`, `save_skill`, `update_skill`,
-  `delete_skill`). The meta-tools steer an agent loop that does not exist on
-  this transport; the writers would put approval cards for the operator's own
-  assistant memory in front of an external client for no benefit. Deriving the
-  set from `agent.META_TOOLS` means a new meta-tool is hidden the day it is
-  added. The **readers** — `read_memory`, `find_skill`, `list_skills`,
-  `list_tools`, `add_context` — stay.
+* **`HIDDEN_TOOLS`**, three named sets in `mcp/server.py`, each with one reason.
+  A tool is hidden for what it **is**, never for who is calling:
+
+  | Set | Names | Why |
+  |---|---|---|
+  | `_META_TOOLS` | `agent.META_TOOLS` (`load_tools`, `create_plan`, `update_plan`) + `list_tools` + `add_context` | The meta-tools steer an agent loop that does not exist here — the client runs its own model. `list_tools` is a discovery tool that reads the **raw** registry, so it would hand back exactly the names this projection exists to withhold, and MCP already has `tools/list`. `add_context` is a chat-context builder whose per-pk validation makes it a model-row existence oracle, and the context it builds has nowhere to go on a stateless transport. Deriving from `agent.META_TOOLS` means a new meta-tool is hidden the day it is added. |
+  | `_CHAT_STATE_WRITERS` | `write_memory`, `delete_memory`, `save_skill`, `update_skill`, `delete_skill` | They shape the **chat** assistant's own state; exposing them would put approval cards for the operator's own memory and skills in front of an external client for no benefit. The readers — `read_memory`, `find_skill`, `list_skills` — stay. |
+  | `_LLM_SPENDING_READS` | `analyze_image` | **A read tool that spends the platform LLM credential is not exposed over MCP.** `analyze_image` sends an image plus a client-chosen free-text prompt through `helpers.llm` on `LLM_HANDLER_API_KEY`, and read-only tools carry no approval gate — over MCP that is an unmetered spend of the installation's own credential, driven by a remote client. Re-run `grep -rn "helpers.llm\|LLM_HANDLER_API_KEY" mojo/apps/assistant/services/tools/` when adding tools and add anything it finds to this set. |
+
 * **`requires_managed_infrastructure` tools when `infrastructure.is_external()`.**
 
 `tools/list` additionally filters by `user_can_use_tool(user, entry)` and
@@ -205,9 +222,17 @@ It does three jobs:
 
 `ping`, `tools/list` and the two MCP-only tools never create one.
 
-Two concurrent first calls can each create a row. Both carry the same metadata
-and the lower pk wins every later lookup, so the loser is an orphan with no
-messages — not worth a lock on the hot path.
+**Creation is serialized on the grant row.** The fast path is an unlocked read;
+only when it misses does `conversation_for_grant` open a transaction, take
+`select_for_update` on the grant the caller already authenticated with, and
+look again. Without it two concurrent first calls could each create a row —
+harmless for reads (the lowest pk wins every later lookup) but not for
+approvals, because a card proposed into the losing conversation is visible to
+the operator in the Admin and unreachable by the client forever.
+
+**One conversation per GRANT, not per user.** A second grant for the same
+operator gets its own conversation and therefore its own card scope: neither
+connection can poll the other's approvals.
 
 **No `Message` rows are written for MCP calls.** The transport is stateless and
 carries no conversation history; the audit trail is the existing `assistant:*`
@@ -252,8 +277,38 @@ chat path ever puts on the wire. With the label, `mojo/middleware/mojo.py` skips
 `_raw_body` entirely and `mojo/middleware/logging.py` writes
 `{"sensitive_body": "assistant_mcp"}` for both directions.
 
+The label does one more job: `MojoMiddleware` also sets `request.DATA =
+objict()` for it, the same treatment the mojosec batch endpoint gets. The view
+reads `request.body` itself, so nothing is lost — and it closes two holes at
+once. A parsed envelope would put `params.arguments` into the incident that
+`dispatch_error_handler` files on an unhandled 500, and a top-level `"group":
+<id>` sitting beside `"jsonrpc"` would let the dispatcher resolve and `touch()`
+an arbitrary `Group` before the view ever ran.
+
+The view body is additionally wrapped: anything raised **outside**
+`server.handle` (reading the body, building the request meta, serializing)
+answers a generic JSON-RPC `-32603` with the detail going only to
+`assistant.log`. Otherwise it would reach `dispatch_error_handler`, which
+returns `str(err)` to an unauthenticated caller while `LOGIT_RETURN_REAL_ERROR`
+is on.
+
 `mcp/server.py` writes one `assistant.log` line per `tools/call` with the tool
-name, the user pk and the grant pk — never the arguments, never the result.
+name, the user pk and the grant pk — never the arguments, never the result. The
+name is safe to log because `_dispatch` refuses anything that is not
+`^[A-Za-z0-9_.\-]{1,128}$` with `-32602` **before** dispatch: a client-chosen
+name reaches a log line, an incident title and an incident body, so an
+unbounded or newline-bearing one is log forging.
+
+### Incident volume is bounded per operator
+
+Everything an MCP dispatch reports goes through
+`server.suppressed_reporter(user)`, which wraps `report_event_suppressed` with
+`key="mcp:<user pk>"`, a one-hour window and `fail_open=False`. The chat path is
+untouched and stays unsuppressed — a person picks the tool names there. Here the
+client picks them, and `_execute_tool` files a level-6
+`assistant:permission_denied` for every unregistered name, so without this a
+machine could mint one incident row per request indefinitely. Fail-closed is
+deliberate: a Redis outage must drop these, not remove the ceiling.
 
 ---
 

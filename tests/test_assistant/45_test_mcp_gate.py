@@ -318,3 +318,80 @@ def test_descriptors_protection_and_registration(opts):
         is on_assistant_mcp,
         "the route must be registered for EVERY method — a POST-only route "
         "would answer GET with the dispatcher's 404 instead of a 405")
+
+
+@th.django_unit_test("the MCP envelope never becomes request.DATA")
+def test_envelope_is_not_parsed_into_request_data(opts):
+    import ujson
+    from django.http import HttpResponse
+    from django.test import RequestFactory
+    from mojo.middleware.mojo import MojoMiddleware
+
+    envelope = {
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "block_ip",
+                   "arguments": {"ip": "203.0.113.9", "reason": "secret"}},
+        # A client-supplied tenant, sitting where the dispatcher looks for one.
+        "group": 999999,
+    }
+    middleware = MojoMiddleware(lambda request: HttpResponse(status=200))
+
+    request = RequestFactory().post(
+        MCP_PATH, data=ujson.dumps(envelope),
+        content_type="application/json")
+    middleware(request)
+
+    assert_eq(request._sensitive_body_label, "assistant_mcp",
+              f"the MCP path must be labelled before the body is touched, got "
+              f"{request._sensitive_body_label!r}")
+    assert_eq(dict(request.DATA), {},
+              f"the JSON-RPC envelope must NEVER become request.DATA: a parsed "
+              f"params.arguments rides into the incident an unhandled 500 files, "
+              f"and a top-level 'group' lets the dispatcher rebind the tenant. "
+              f"Got {dict(request.DATA)}")
+    assert_true(request._raw_body is None,
+                f"a labelled body must not be captured for request logging, got "
+                f"{request._raw_body!r}")
+
+    # The chat endpoint is unchanged — this is a targeted exemption, not a
+    # weakening of request parsing.
+    chat = RequestFactory().post(
+        "/api/assistant", data=ujson.dumps({"message": "hi", "group": 999999}),
+        content_type="application/json")
+    middleware(chat)
+    assert_eq(chat.DATA.get("message"), "hi",
+              f"the chat endpoint must still parse its body, got {dict(chat.DATA)}")
+
+
+@th.django_unit_test("one helper derives the MCP path for the route, the resource and the challenge")
+def test_configured_path_is_the_single_source(opts):
+    from mojo.apps.account.services import oauth_server
+    from mojo.apps.assistant.mcp import auth as mcp_auth
+
+    assert_eq(mcp_auth.configured_path("api/assistant/mcp", append_slash=False),
+              "/api/assistant/mcp",
+              "the ordinary path must be absolute and unslashed")
+    assert_eq(mcp_auth.configured_path("api/assistant/mcp", append_slash=True),
+              "/api/assistant/mcp/",
+              "a MOJO_APPEND_SLASH deployment must serve the slashed path — the "
+              "route, the OAuth resource and the challenge must agree on it")
+    assert_eq(mcp_auth.configured_path("/api/assistant/mcp/", append_slash=True),
+              "/api/assistant/mcp/",
+              "an already-slashed setting must not grow a second slash")
+
+    for raw, why in (("", "an empty"), ("/", "a '/'-only"),
+                     ("   ", "a whitespace-only"), (None, "a null")):
+        if raw is None:
+            continue
+        assert_eq(mcp_auth.configured_path(raw, append_slash=False),
+                  "/" + mcp_auth.DEFAULT_PATH,
+                  f"{why} ASSISTANT_MCP_PATH must fall back to the default — "
+                  f"honouring it would mount the MCP server at the site root")
+
+    live = mcp_auth.configured_path()
+    assert_eq(mcp_auth.resource_path(), live,
+              "the challenge's resource path must be the configured one")
+    assert_true(oauth_server.resolve(live) is not None,
+                f"the OAuth resource must be registered at exactly the "
+                f"configured path — validate_access compares it to request.path "
+                f"exactly — got no entry for {live!r}")

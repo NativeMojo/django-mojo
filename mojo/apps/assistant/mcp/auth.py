@@ -22,20 +22,53 @@ can use the chat can use the door, and nobody else can.
 import ujson
 from django.http import HttpResponse
 
+from mojo.helpers import logit
 from mojo.helpers import request as request_helpers
 from mojo.helpers.settings import settings
 from mojo.apps.account.services import oauth_server
 
+DEFAULT_PATH = "api/assistant/mcp"
+
+
+def configured_path(raw=None, append_slash=None):
+    """The ONE absolute request path this resource is routed and known by.
+
+    Three places must agree byte for byte or the door breaks in a way nothing
+    reports: the ``@md.URL`` route, the OAuth resource registration (whose entry
+    ``validate_access`` looks up by the token audience's path, compared against
+    ``request.path`` EXACTLY), and the challenge's ``resource_metadata``. So all
+    three call this.
+
+    * ``get_static`` (deployment file only), so no database row can move the
+      path underneath a running process.
+    * ``MOJO_APPEND_SLASH`` deployments serve ``/api/assistant/mcp/``, so the
+      slash is appended HERE — and, because the resulting pattern already ends
+      in one, ``_register_route``'s own append step leaves it alone.
+    * An empty or ``/``-only setting falls back to the default. Honouring it
+      would mount this endpoint at the site root, where it would shadow every
+      other route and label every root POST as MCP traffic.
+
+    ``raw`` and ``append_slash`` are test seams — a test passes values instead
+    of mutating the shared settings singleton.
+    """
+    if raw is None:
+        raw = settings.get_static("ASSISTANT_MCP_PATH", DEFAULT_PATH)
+    cleaned = str(raw or "").strip().strip("/")
+    if not cleaned:
+        logit.error(
+            "assistant.mcp",
+            f"ASSISTANT_MCP_PATH is empty or '/'-only ({raw!r}); refusing to "
+            f"mount the MCP resource server at the site root — falling back to "
+            f"{DEFAULT_PATH!r}")
+        cleaned = DEFAULT_PATH
+    if append_slash is None:
+        append_slash = settings.get_static("MOJO_APPEND_SLASH", False, kind="bool")
+    return "/" + cleaned + ("/" if append_slash else "")
+
 
 def resource_path():
-    """The absolute request path this resource is routed and registered at.
-
-    ``get_static`` (deployment file only) so the route, the OAuth resource
-    registration and the sensitive-body label all derive from one value that no
-    database row can move underneath a running process.
-    """
-    return "/" + settings.get_static(
-        "ASSISTANT_MCP_PATH", "api/assistant/mcp").strip("/")
+    """The absolute request path this resource is routed and registered at."""
+    return configured_path()
 
 
 def is_enabled():

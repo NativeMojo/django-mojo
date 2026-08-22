@@ -14,8 +14,13 @@ API_ROOT = "/" + settings.get_static("MOJO_PREFIX", "api/").strip("/")
 # the service reads: mojo/helpers must not import mojo.apps at import time.
 OAUTH_ROOT = "/" + settings.get_static("OAUTH_SERVER_PATH", "api/account/oauth").strip("/")
 # Same rule for the Assistant's MCP door: read from the same setting the app
-# reads, here rather than by importing it.
-ASSISTANT_MCP_ROOT = "/" + settings.get_static("ASSISTANT_MCP_PATH", "api/assistant/mcp").strip("/")
+# reads, here rather than by importing it. The empty/"/"-only fallback mirrors
+# mcp/auth.configured_path() — a blank setting must not turn this into "/" and
+# label every POST to the site root as MCP traffic.
+ASSISTANT_MCP_DEFAULT = "api/assistant/mcp"
+ASSISTANT_MCP_ROOT = "/" + (
+    str(settings.get_static("ASSISTANT_MCP_PATH", ASSISTANT_MCP_DEFAULT) or "").strip().strip("/")
+    or ASSISTANT_MCP_DEFAULT)
 
 def parse_request_data(request):
     """
