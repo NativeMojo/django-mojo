@@ -370,7 +370,7 @@ Bootstrap returns both the stable flat `capabilities` object and a namespaced
                                   "manage_security": false}},
     "assistant": {"id": "assistant", "enabled": true,
                   "capabilities": {"view": true, "ready": true,
-                                   "setup": true}}
+                                   "setup": true, "mcp": true}}
   }
 }
 ```
@@ -379,11 +379,14 @@ The `assistant` namespace is **not a navigation lane** — it has no route and n
 sidebar entry. `view` decides whether the Assistant panel is mounted at all
 (`view_admin` alone, because the assistant WebSocket handler admits nothing
 else); `ready` says the feature is switched on and a credential resolves, so a
-false `ready` means render the not-configured state instead of a composer; and
+false `ready` means render the not-configured state instead of a composer;
 `setup` says the caller may open the owner-only setup view
-([Assistant setup API](admin_portal/assistant.md)). `enabled` follows `view`
-alone: readiness is a fact about the installation, and folding it in would offer
-a chat panel whose every message the server refuses.
+([Assistant setup API](admin_portal/assistant.md)); and `mcp` says remote agent
+access is switched on **and** reachable — the assistant application is installed
+and a public address resolves — which is what the panel's "Remote access on"
+chip renders. `enabled` follows `view` alone: `ready` and `mcp` are facts about
+the installation, and folding either in would offer a chat panel whose every
+message the server refuses.
 
 Unknown namespaces are not loaded. Malformed server provider output disables
 that namespace. The browser registry likewise imports a fixed set of local

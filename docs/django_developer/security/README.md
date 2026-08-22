@@ -505,6 +505,18 @@ Both settings are read at invocation time (not at startup), so changes take effe
 
 **Dependency:** The LLM agent requires the `anthropic` Python package (`anthropic>=0.52.0`), which is included as a framework dependency.
 
+### Remote agent access (MCP)
+
+A separate credential surface, off by default and unrelated to the keys above. `ASSISTANT_MCP_ENABLED` opens `/api/assistant/mcp` to remote AI clients; it is switched from the built-in Admin's Assistant setup only (catalog-protected, so `/api/settings` and every other generic writer refuse it) and is re-read on every request, so closing it takes effect immediately on every node.
+
+The credentials are **OAuth grants, never API keys**: a client signs in through this installation's own sign-in page and receives an access token confined to that one resource plus a rotating refresh token. Every active grant is listed in the Assistant setup view — client, operator, connected, last used, expiry — and the owner can disconnect one or all of them. Revocation randomises every column a live credential resolves through, so the access token is refused at the door and the refresh token at the token service on their next use. Switching the door off makes grants dormant rather than revoked: they stop working and stay listed.
+
+What lands in the audit trail: `oauth:grant_created` and `oauth:grant_revoked` user-log lines per grant, and an `admin_settings` "Assistant setup changed" incident event (level 5) for the switch and for each revocation, keyed per grant id so the hourly suppression cannot swallow a second one.
+
+The setup view also carries an owner-only self-check that fetches this installation's own public address and reports the HTTP status it answered with — a status-code oracle for the operator's **own** hostname, behind a superuser-only read, throttled by a 60-second Redis cache. Redirects are never followed. When Redis is unavailable the throttle is lost, not the refusal.
+
+See [the OAuth authorization server](../../web_developer/account/oauth_server.md) for the flow and [the Admin panel docs](../account/admin_portal/assistant.md#remote-agent-access) for the switch, the nginx requirement and revocation.
+
 ### Available Tools
 
 The standard triage agent (`execute_llm_handler`) has 16 tools. The analysis agent (`execute_llm_analysis`) has all 18 — the 16 base tools plus 2 analysis-only tools.

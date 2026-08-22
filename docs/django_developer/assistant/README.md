@@ -224,7 +224,7 @@ model from the built-in Admin, without editing a settings file.
 read *and* write — see
 [the API reference](../../web_developer/account/admin_portal/assistant.md)).
 
-### The six protected keys
+### The seven protected keys
 
 | Key | Owned by | Stored as |
 |---|---|---|
@@ -234,8 +234,9 @@ read *and* write — see
 | `LLM_ADMIN_VERIFY_STATE` | `assistant_setup` | How the STORED Assistant key last checked |
 | `LLM_HANDLER_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row — the **platform** key |
 | `LLM_HANDLER_VERIFY_STATE` | `assistant_setup` | How the STORED platform key last checked |
+| `ASSISTANT_MCP_ENABLED` | descriptor: this app · writer: `assistant_setup` | Plain global row — the remote agent access (MCP) switch, off by default |
 
-All six are **catalog-protected**: `admin_settings.is_catalog_protected()`
+All seven are **catalog-protected**: `admin_settings.is_catalog_protected()`
 returns true, so `Setting.set()`, the generic `/api/settings` REST surface, a
 shell save and every other writer refuse them. Each has one dedicated escape —
 `row.save(_protected_writer=<key>)` — and the writer must name the exact key
@@ -250,6 +251,18 @@ the deployment file still applies when no row is stored, and `state()` reports
 which one is live as `handler_key.source` (`admin` / `deployment` / `none`).
 The incident readers resolve it at call time, so a key stored from the Admin
 takes effect without a restart.
+
+`ASSISTANT_MCP_ENABLED` is the **remote agent access** switch. Its descriptor is
+registered by this application (`apps.py`), because an installation without the
+assistant should not advertise a setting it does not read; its writer is
+`assistant_setup.save(..., mcp_enabled=...)`, and its consumers are the MCP
+door's own gate and the OAuth resource registration's `enabled` callable, both
+of which re-read it on every request. It is independent of `LLM_ADMIN_ENABLED`
+and of every credential — a remote client brings its own model — and it is off
+by default. `ASSISTANT_MCP_PATH` is deployment-file-only and is not writable
+from anywhere. See
+[the Admin panel docs](../account/admin_portal/assistant.md#remote-agent-access)
+for the self-check, the nginx requirement and revocation.
 
 ### Writes go through the guarded save path, never `.update()`
 
