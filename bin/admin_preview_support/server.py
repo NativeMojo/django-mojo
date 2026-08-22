@@ -948,6 +948,7 @@ def main():
     parser.add_argument("--deployments-state", choices=("mixed", "converged", "failed", "empty"), default="mixed")
     parser.add_argument("--capacity-state", choices=("healthy", "single_node", "adding", "denied", "no_reader", "node_id_pinned", "external_mode"), default="healthy")
     parser.add_argument("--assistant-state", choices=("configured", "unset", "fallback", "verify_failed", "disabled"), default="configured")
+    parser.add_argument("--assistant-mcp-state", choices=("off", "reachable", "unreachable", "connected"), default="connected")
     parser.add_argument("--infrastructure-mode", choices=("managed", "external"), default="managed")
     parser.add_argument("--upstream", help="Public HTTPS django-mojo origin for live QA")
     args = parser.parse_args()
@@ -976,6 +977,7 @@ def main():
        deployments_state=args.deployments_state,
        capacity_state=args.capacity_state,
        assistant_state=args.assistant_state,
+       assistant_mcp_state=args.assistant_mcp_state,
        infrastructure_mode=args.infrastructure_mode)
     PreviewHandler.upstream = upstream
     PreviewHandler.setup_behavior = args.setup_state

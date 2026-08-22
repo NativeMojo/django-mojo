@@ -848,13 +848,14 @@ def test_assistant_preview_states(opts):
 
     server = _server()
     bootstrap = server.bootstrap([])
-    for capability in ("assistant", "assistant_ready", "assistant_setup"):
+    for capability in ("assistant", "assistant_ready", "assistant_setup",
+                       "assistant_mcp"):
         assert bootstrap["capabilities"].get(capability) is True, \
             f"the deterministic bootstrap fixed roster omits {capability}"
     assistant = bootstrap["features"].get("assistant")
     assert assistant and assistant["enabled"] is True, \
         f"the preview bootstrap does not publish the Assistant namespace: {assistant!r}"
-    assert set(assistant["capabilities"]) == {"view", "ready", "setup"}, \
+    assert set(assistant["capabilities"]) == {"view", "ready", "setup", "mcp"}, \
         f"the Assistant preview namespace drifted: {assistant!r}"
 
     feature = server.assistant
@@ -886,3 +887,89 @@ def test_assistant_preview_states(opts):
         {"action": "save", "enabled": True, "model": "", "api_key": "sk-nope"})
     assert status == 400, \
         f"a failing verification fixture accepted a credential save: {refused!r}"
+
+
+@th.django_unit_test("preview serves every remote agent access state and never a token")
+def test_assistant_mcp_preview_states(opts):
+    from urllib.parse import urlparse
+
+    server = _server()
+    feature = server.assistant
+    hashish = ("access_jti", "refresh_hash", "prev_refresh_hash", "token",
+               "refresh_token", "access_token")
+
+    for scenario in ("off", "reachable", "unreachable", "connected"):
+        class Handler:
+            pass
+
+        feature.reset(Handler, {}, assistant_mcp_state=scenario)
+        code, report = feature.get(
+            Handler, urlparse("/api/account/admin/assistant"))
+        assert code == 200, f"{scenario}: the Assistant fixture answered {code}"
+        mcp = report["mcp"]
+        assert set(mcp) == {"enabled", "path", "url", "discovery_url", "discovery",
+                            "grants", "grant_count"}, \
+            f"{scenario}: the fixture remote-access state drifted: {sorted(mcp)}"
+        assert set(mcp["discovery"]) == {"ok", "code", "detail", "checked_at"}, \
+            f"{scenario}: the fixture discovery record drifted: {mcp['discovery']!r}"
+        assert mcp["enabled"] is (scenario != "off"), \
+            f"{scenario}: the switch does not follow the scenario: {mcp!r}"
+        assert mcp["grant_count"] == len(mcp["grants"]), \
+            f"{scenario}: the fixture grant count disagrees with its rows: {mcp!r}"
+        for grant in mcp["grants"]:
+            for banned in hashish:
+                assert banned not in grant, \
+                    f"{scenario}: the fixture grant emitted {banned} — a real " \
+                    f"leak could ship looking correct: {grant!r}"
+
+        # A plain read never re-checks; the explicit control does, visibly.
+        _code, rechecked = feature.get(
+            Handler, urlparse("/api/account/admin/assistant?check=discovery"))
+        assert rechecked["mcp"]["discovery"]["checked_at"] == \
+            feature.MCP_RECHECKED_AT, \
+            f"{scenario}: ?check=discovery did not re-stamp the verdict: " \
+            f"{rechecked['mcp']['discovery']!r}"
+        assert mcp["discovery"]["checked_at"] != feature.MCP_RECHECKED_AT, \
+            f"{scenario}: a plain read already carried the re-checked stamp"
+
+    class Connected:
+        pass
+
+    feature.reset(Connected, {}, assistant_mcp_state="connected")
+    _code, report = feature.get(Connected, urlparse("/api/account/admin/assistant"))
+    assert report["mcp"]["grant_count"] == 2, \
+        f"the connected scenario does not list two agents: {report['mcp']!r}"
+    first = report["mcp"]["grants"][0]["id"]
+
+    status, answer = feature.post(
+        Connected, "/api/account/admin/assistant",
+        {"action": "revoke_grant", "grant_id": first})
+    assert status == 200 and answer["revoked"] == 1, \
+        f"disconnecting one agent was not honoured: {status} {answer!r}"
+    assert answer["state"]["mcp"]["grant_count"] == 1, \
+        f"the disconnected agent is still listed: {answer['state']['mcp']!r}"
+    status, answer = feature.post(
+        Connected, "/api/account/admin/assistant",
+        {"action": "revoke_grant", "grant_id": first})
+    assert status == 200 and answer["revoked"] == 0, \
+        f"re-disconnecting a gone agent did not answer a quiet zero: {answer!r}"
+
+    feature.reset(Connected, {}, assistant_mcp_state="connected")
+    status, answer = feature.post(
+        Connected, "/api/account/admin/assistant", {"action": "revoke_all_grants"})
+    assert status == 200 and answer["revoked"] == 2, \
+        f"disconnecting all agents did not answer the count: {status} {answer!r}"
+    assert answer["state"]["mcp"]["grants"] == [], \
+        f"disconnecting all left rows behind: {answer['state']['mcp']!r}"
+
+    feature.reset(Connected, {}, assistant_mcp_state="connected")
+    status, answer = feature.post(
+        Connected, "/api/account/admin/assistant",
+        {"action": "save", "enabled": True, "model": "", "mcp_enabled": False})
+    assert status == 200 and answer["state"]["mcp"]["enabled"] is False, \
+        f"a save that switched remote access off was not honoured: {answer!r}"
+    status, answer = feature.post(
+        Connected, "/api/account/admin/assistant",
+        {"action": "save", "enabled": True, "model": ""})
+    assert status == 200 and answer["state"]["mcp"]["enabled"] is False, \
+        f"a save omitting mcp_enabled changed the switch: {answer['state']['mcp']!r}"

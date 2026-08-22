@@ -39,6 +39,7 @@ def bootstrap(groups, membership_groups=None, can_create_webapp_group=True,
         "messaging_sms": True, "messaging_sms_system_write": True,
         "email": True,
         "assistant": True, "assistant_ready": True, "assistant_setup": True,
+        "assistant_mcp": True,
         "infrastructure_managed": infrastructure_mode == "managed",
     }
     return {
@@ -65,7 +66,7 @@ def reset(handler, fixtures, *, key_state="active", setup_state="idle",
           metrics_state="live", maintenance_state="findings",
           deployments_state="mixed", capacity_state="healthy",
           sms_state="configured", email_state="configured",
-          assistant_state="configured",
+          assistant_state="configured", assistant_mcp_state="connected",
           infrastructure_mode="managed"):
     """Reset every stateful provider so scenarios never leak across runs."""
     # An installation-wide property rather than a provider scenario, so it is
@@ -84,4 +85,5 @@ def reset(handler, fixtures, *, key_state="active", setup_state="idle",
                        capacity_state=capacity_state,
                        sms_state=sms_state,
                        email_state=email_state,
-                       assistant_state=assistant_state)
+                       assistant_state=assistant_state,
+                       assistant_mcp_state=assistant_mcp_state)
