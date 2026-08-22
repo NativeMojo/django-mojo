@@ -411,6 +411,19 @@ def states_for_user(user, limit=50):
     return [render_block(row, now=now) for row in rows]
 
 
+def state_for_action(user, action_id, conversation_id=None, _reporter=None):
+    """One card the caller owns, by id — or ``ApprovalRefused(CODE_UNAVAILABLE)``.
+
+    ``_load`` parses the uuid, scopes to ``user`` and (when given) the
+    conversation, and runs the ``_deny`` budget, so an id-guessing caller here
+    is reported exactly like an id-guessing REST caller and learns exactly as
+    little. Pass ``conversation_id`` whenever the caller may only see one
+    conversation's cards — an MCP client may not read what the operator has
+    pending in the chat panel.
+    """
+    return render_block(_load(user, action_id, conversation_id, _reporter=_reporter))
+
+
 def proposal_result(block):
     """What the MODEL sees when it calls a mutating tool. Nothing has happened."""
     return {
