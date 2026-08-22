@@ -361,3 +361,108 @@ def test_approve_does_not_trust_the_page(opts):
         assert_true(refused,
                     f"approve must re-check every value and refuse {why}, even "
                     f"though the page it came from was well-formed")
+
+
+CIMD_CLIENT_URL = "https://consent.testit.example/oauth-client.json"
+
+
+def _seed_cimd_client():
+    """A CIMD client whose document is already in the cache, so no fetch runs."""
+    from mojo.apps.account.models import OAuthClient
+    from mojo.apps.account.services.oauth_server import clients
+
+    canonical = clients.canonical_cimd_url(CIMD_CLIENT_URL)
+    OAuthClient.objects.filter(client_id=canonical).delete()
+    clients._cache_set(canonical, {"ok": True, "document": {
+        "client_id": canonical,
+        "client_name": "Published Client",
+        "redirect_uris": [REDIRECT],
+    }})
+    return canonical
+
+
+@th.django_unit_test("the consent page shows what a client name cannot forge")
+def test_consent_page_shows_verifiable_facts(opts):
+    from mojo.apps.account.services.oauth_server import consent
+
+    request, _v = _authorize_request()
+    html = consent.handle_authorize(
+        request, ORIGIN, registry=_registry()).content.decode("utf-8")
+
+    # The DCR client picked its own name and nothing vouched for it.
+    assert_true("unverified name" in html,
+                "a self-registered client's name must be marked unverified — the "
+                "name is the whole phishing surface")
+    # Asserted as the rendered SENTENCE, not as a bare substring: the redirect
+    # URI also appears inside the deny URL and the approve payload, so a
+    # substring test would pass with the line absent.
+    assert_true("You will be sent back to 127.0.0.1:8400" in html,
+                "the page must show where the credential is actually delivered")
+    assert_true(f"Access to: {RESOURCE}" in html,
+                "the page must name the exact resource the token will open")
+
+    canonical = _seed_cimd_client()
+    request, _v = _authorize_request(client_id=canonical)
+    html = consent.handle_authorize(
+        request, ORIGIN, registry=_registry()).content.decode("utf-8")
+    assert_true(f"Verified from {canonical}" in html,
+                "a CIMD client's name is vouched for by a document at a URL — "
+                "show the URL so the reader can judge it")
+    assert_true("unverified name" not in html,
+                "a CIMD client must not be marked unverified")
+
+    from mojo.apps.account.models import OAuthClient
+    OAuthClient.objects.filter(client_id=canonical).delete()
+
+
+@th.django_unit_test("every consent response is Cache-Control: no-store")
+def test_consent_pages_are_not_cached(opts):
+    from mojo.apps.account.services.oauth_server import consent
+
+    request, _v = _authorize_request()
+    ok = consent.handle_authorize(request, ORIGIN, registry=_registry())
+    assert_eq(ok.get("Cache-Control"), "no-store",
+              f"the consent page names the signed-in person and is one click "
+              f"from a credential, got {ok.get('Cache-Control')!r}")
+
+    request, _v = _authorize_request()
+    unavailable = consent.handle_authorize(request, "", registry=_registry())
+    assert_eq(unavailable.get("Cache-Control"), "no-store",
+              "the not-available page must not be cached either")
+
+
+@th.django_unit_test("a hostile redirect_uri is refused, not 500'd")
+def test_hostile_redirect_uri_is_refused(opts):
+    from mojo.apps.account.services.oauth_server import consent
+
+    # 100 KB is well past OAuthCode.redirect_uri (varchar 2048). Before the
+    # presented value was re-validated, the loopback branch of
+    # redirect_uri_matches let it through to the database.
+    oversize = "http://127.0.0.1:8400/cb#" + "A" * 100000
+    for presented, why in ((oversize, "a 100 KB fragment"),
+                           ("http://user:pw@127.0.0.1:8400/cb", "userinfo"),
+                           ("http://127.0.0.1:8400/cb#frag", "a fragment")):
+        request, _v = _authorize_request(redirect_uri=presented)
+        response = consent.handle_authorize(request, ORIGIN, registry=_registry())
+        assert_eq(response.status_code, 400,
+                  f"a redirect_uri carrying {why} must render a 400, never reach "
+                  f"the database — got {response.status_code}")
+        assert_true(response.get("Location") is None,
+                    f"a redirect_uri carrying {why} must not be redirected to")
+
+
+@th.django_unit_test("a repeated scope token grants the scope once")
+def test_scope_is_de_duplicated(opts):
+    from mojo.apps.account.models import OAuthClient
+    from mojo.apps.account.services.oauth_server import codes, consent
+
+    request, verifier = _approve_request(
+        token=_session_token(), scope="mcp mcp mcp mcp")
+    result = consent.handle_approve(request, ORIGIN, registry=_registry())
+    raw_code = parse_qs(urlsplit(result["redirect_url"]).query)["code"][0]
+
+    client = OAuthClient.objects.get(client_id=CLIENT_ID)
+    row = codes.consume_code(raw_code, client, REDIRECT, verifier)
+    assert_eq(row.scope, "mcp",
+              f"a repeated scope token must collapse to one — the string is "
+              f"stored on the grant and rides in every token, got {row.scope!r}")

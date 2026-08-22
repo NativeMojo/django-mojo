@@ -14,6 +14,13 @@ DCR_NAME = "testit oauth client"
 DB_CLIENT_ID = "testit-oauth-db-client"
 INACTIVE_CLIENT_ID = "testit-oauth-inactive-client"
 CIMD_URL = "https://cimd.testit.example/oauth-client.json"
+# The same identity, spelled three ways an attacker would reach for.
+CIMD_URL_VARIANTS = (
+    "https://CIMD.TESTIT.example/oauth-client.json",
+    "https://cimd.testit.example:443/oauth-client.json",
+    "https://cimd.testit.example//oauth-%63lient.json",
+)
+CIMD_VARIANT_URL = "https://cimd.testit.example/variant-probe.json"
 CIMD_INACTIVE_URL = "https://cimd.testit.example/deactivated.json"
 CIMD_REDIRECT = "https://cimd.testit.example/callback"
 
@@ -28,14 +35,24 @@ def _document(client_id=CIMD_URL, **overrides):
     return document
 
 
-def _fetcher(document, status=200, content_type="application/json", body=None):
-    """A fetcher that records its calls, so a cache hit is provable."""
+def _fetcher(document, status=200, content_type="application/json", body=None,
+             echo_url=False):
+    """A fetcher that records its calls, so a cache hit is provable.
+
+    `echo_url` makes the served document name whatever URL it was asked for,
+    which is how the canonicalisation tests prove the SERVER reduced the
+    variants rather than the fixture doing it for them.
+    """
     calls = []
 
     def fetch(url):
         calls.append(url)
-        payload = body if body is not None else json.dumps(document).encode()
-        return status, content_type, payload
+        if body is not None:
+            return status, content_type, body
+        served = dict(document or {})
+        if echo_url:
+            served["client_id"] = url
+        return status, content_type, json.dumps(served).encode()
 
     fetch.calls = calls
     return fetch
@@ -48,11 +65,13 @@ def setup_clients(opts):
     from mojo.apps.account.services.oauth_server import clients
 
     OAuthClient.objects.filter(client_id__in=[
-        DB_CLIENT_ID, INACTIVE_CLIENT_ID, CIMD_URL, CIMD_INACTIVE_URL]).delete()
+        DB_CLIENT_ID, INACTIVE_CLIENT_ID, CIMD_URL, CIMD_INACTIVE_URL,
+        CIMD_VARIANT_URL]).delete()
     OAuthClient.objects.filter(client_name=DCR_NAME).delete()
-    for url in (CIMD_URL, CIMD_INACTIVE_URL):
+    for url in (CIMD_URL, CIMD_INACTIVE_URL, CIMD_VARIANT_URL):
         try:
-            get_connection().delete(clients._cimd_cache_key(url))
+            get_connection().delete(
+                clients._cimd_cache_key(clients.canonical_cimd_url(url)))
         except Exception:
             pass
 
@@ -265,8 +284,12 @@ def test_cimd_refusals(opts):
         (CIMD_URL, boom, "a fetcher refusal"),
     ]
     for url, fetch, why in cases:
+        # Clear by the CANONICAL key — that is what the cache is keyed on, and
+        # failures are now negatively cached, so a stale entry would make the
+        # next case pass without exercising anything.
         try:
-            get_connection().delete(clients._cimd_cache_key(url))
+            get_connection().delete(
+                clients._cimd_cache_key(clients.canonical_cimd_url(url)))
         except Exception:
             pass
         code = None
@@ -276,3 +299,177 @@ def test_cimd_refusals(opts):
             code = err.code
         assert_eq(code, "invalid_client",
                   f"{why} must be refused as invalid_client, got {code!r}")
+
+
+@th.django_unit_test("every spelling of a CIMD URL is one client identity")
+def test_cimd_url_canonicalisation(opts):
+    from mojo.helpers.redis import get_connection
+    from mojo.apps.account.models import OAuthClient
+    from mojo.apps.account.services.oauth_server import clients
+
+    canonical = clients.canonical_cimd_url(CIMD_URL)
+    assert_eq(canonical, CIMD_URL,
+              f"an already-canonical URL must be returned unchanged, got {canonical}")
+    for variant in CIMD_URL_VARIANTS:
+        assert_eq(clients.canonical_cimd_url(variant), canonical,
+                  f"{variant} must reduce to the same identity as {CIMD_URL} — "
+                  f"got {clients.canonical_cimd_url(variant)}")
+
+    for bad, why in (
+            ("http://cimd.testit.example/c.json", "a non-https URL"),
+            ("https://cimd.testit.example/", "a root-path URL"),
+            ("https://cimd.testit.example/c.json?x=1", "a URL carrying a query"),
+            ("https://cimd.testit.example/c.json#f", "a URL carrying a fragment"),
+            ("https://u:p@cimd.testit.example/c.json", "a URL carrying userinfo"),
+            ("", "an empty value"),
+            (None, "a non-string")):
+        refused = False
+        try:
+            clients.canonical_cimd_url(bad)
+        except clients.ClientError:
+            refused = True
+        assert_true(refused, f"{why} must not be a usable client identity: {bad!r}")
+
+    # Resolving through any variant reaches ONE row, and the document may spell
+    # its own client_id however it likes as long as it reduces to the same URL.
+    OAuthClient.objects.filter(client_id=canonical).delete()
+    for variant in (CIMD_URL,) + CIMD_URL_VARIANTS:
+        try:
+            get_connection().delete(clients._cimd_cache_key(canonical))
+        except Exception:
+            pass
+        client = clients.resolve_client(
+            variant, fetcher=_fetcher(_document(), echo_url=True))
+        assert_eq(client.client_id, canonical,
+                  f"resolving {variant} must land on the canonical row, "
+                  f"got {client.client_id}")
+    assert_eq(OAuthClient.objects.filter(client_id__contains="oauth-client.json").count(), 1,
+              "every spelling of one CIMD URL must share a single row")
+
+
+@th.django_unit_test("a deactivated CIMD client stays dead under every URL variant")
+def test_cimd_deactivation_covers_variants(opts):
+    from mojo.helpers.redis import get_connection
+    from mojo.apps.account.models import OAuthClient
+    from mojo.apps.account.services.oauth_server import clients
+
+    canonical = clients.canonical_cimd_url(CIMD_VARIANT_URL)
+    OAuthClient.objects.filter(client_id=canonical).delete()
+    OAuthClient(client_id=canonical, kind="cimd", client_name="Gone",
+                redirect_uris=[CIMD_REDIRECT], is_active=False).save()
+
+    variants = (
+        CIMD_VARIANT_URL,
+        "https://CIMD.testit.EXAMPLE/variant-probe.json",
+        "https://cimd.testit.example:443/variant-probe.json",
+        "https://cimd.testit.example//variant-%70robe.json",
+    )
+    for variant in variants:
+        try:
+            get_connection().delete(clients._cimd_cache_key(canonical))
+        except Exception:
+            pass
+        fetch = _fetcher(_document(client_id=canonical), echo_url=True)
+        refused = False
+        try:
+            clients.resolve_client(variant, fetcher=fetch)
+        except clients.ClientError:
+            refused = True
+        assert_true(refused,
+                    f"a deactivated client must stay refused when reached as "
+                    f"{variant} — the kill switch is not a spelling contest")
+        assert_eq(fetch.calls, [],
+                  f"{variant} must be refused BEFORE any outbound fetch, "
+                  f"got {fetch.calls}")
+
+    assert_eq(OAuthClient.objects.filter(
+        client_id__contains="variant-probe.json").count(), 1,
+        "a refused variant must never create a second, active row")
+    assert_true(not OAuthClient.objects.get(client_id=canonical).is_active,
+                "the deactivated row must still be deactivated afterwards")
+
+
+@th.django_unit_test("unknown and deactivated clients are indistinguishable")
+def test_client_state_is_not_an_oracle(opts):
+    from mojo.apps.account.services.oauth_server import clients
+
+    messages = set()
+    for client_id in (INACTIVE_CLIENT_ID, "testit-oauth-never-existed"):
+        try:
+            clients.resolve_client(client_id)
+        except clients.ClientError as err:
+            messages.add((err.code, err.description))
+    assert_eq(len(messages), 1,
+              f"a deactivated client and an unknown one must answer identically, "
+              f"or the endpoint enumerates which identities exist — got {messages}")
+
+
+@th.django_unit_test("a failing CIMD document is fetched once per cache window")
+def test_cimd_failures_are_negatively_cached(opts):
+    from mojo.helpers.redis import get_connection
+    from mojo.apps.account.services.oauth_server import clients
+
+    url = "https://cimd.testit.example/never-works.json"
+    canonical = clients.canonical_cimd_url(url)
+    try:
+        get_connection().delete(clients._cimd_cache_key(canonical))
+    except Exception:
+        pass
+
+    calls = []
+
+    def stalling(target):
+        calls.append(target)
+        raise ValueError("Request timed out after 5s")
+
+    for attempt in range(2):
+        refused = False
+        try:
+            clients.resolve_client(url, fetcher=stalling)
+        except clients.ClientError:
+            refused = True
+        assert_true(refused, f"attempt {attempt + 1} must be refused")
+    assert_eq(len(calls), 1,
+              f"a failing client metadata URL must cost ONE outbound fetch per "
+              f"window, not one per attempt — got {len(calls)}")
+
+    try:
+        get_connection().delete(clients._cimd_cache_key(canonical))
+    except Exception:
+        pass
+
+
+@th.django_unit_test("a client cannot forge a log line through its own name")
+def test_client_name_is_sanitised(opts):
+    from mojo.apps.account.models import OAuthClient
+    from mojo.helpers.redis import get_connection
+    from mojo.apps.account.services.oauth_server import clients
+
+    forged = "Nice App" + chr(10) + "2026-01-01 ERROR forged   entry" + chr(7)
+    result = clients.register_client({
+        "redirect_uris": ["https://sanitise.example/cb"],
+        "client_name": forged,
+    })
+    row = OAuthClient.objects.get(client_id=result["client_id"])
+    assert_true("\n" not in row.client_name and "\r" not in row.client_name,
+                f"a newline in client_name would forge a log record, "
+                f"got {row.client_name!r}")
+    assert_true(chr(7) not in row.client_name,
+                f"control characters must be stripped, got {row.client_name!r}")
+    assert_eq(row.client_name, "Nice App 2026-01-01 ERROR forged entry",
+              f"whitespace must collapse to single spaces, got {row.client_name!r}")
+    OAuthClient.objects.filter(client_id=result["client_id"]).delete()
+
+    url = "https://cimd.testit.example/noisy.json"
+    canonical = clients.canonical_cimd_url(url)
+    OAuthClient.objects.filter(client_id=canonical).delete()
+    try:
+        get_connection().delete(clients._cimd_cache_key(canonical))
+    except Exception:
+        pass
+    client = clients.resolve_client(url, fetcher=_fetcher(
+        _document(client_id=canonical, client_name=forged)))
+    assert_true("\n" not in client.client_name,
+                f"a CIMD document must not be able to forge a log line either, "
+                f"got {client.client_name!r}")
+    OAuthClient.objects.filter(client_id=canonical).delete()

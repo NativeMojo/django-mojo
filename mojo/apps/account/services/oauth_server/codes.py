@@ -20,7 +20,7 @@ import secrets
 from mojo.helpers import dates
 
 from . import resources
-from .clients import redirect_uri_matches
+from .clients import redirect_uri_matches, validate_redirect_uri
 from .tokens import TokenError
 
 # RFC 7636 §4.1 — the unreserved character set, 43..128 characters.
@@ -122,6 +122,13 @@ def consume_code(raw, client, redirect_uri, code_verifier):
         raise TokenError("invalid_grant", "invalid authorization code")
 
     if client is None or row.client_id != client.pk:
+        raise TokenError("invalid_grant", "invalid authorization code")
+    try:
+        # Same scrutiny the registered URI got. redirect_uri_matches ignores the
+        # port for loopback, so a presented value carrying userinfo, a fragment
+        # or 100 KB of anything must not reach the comparison unchecked.
+        validate_redirect_uri(redirect_uri)
+    except ValueError:
         raise TokenError("invalid_grant", "invalid authorization code")
     if not redirect_uri_matches(row.redirect_uri, redirect_uri):
         raise TokenError("invalid_grant", "invalid authorization code")

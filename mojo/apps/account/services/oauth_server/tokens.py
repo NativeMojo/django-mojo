@@ -151,18 +151,36 @@ def issue_tokens(grant, expected_refresh_hash=None):
 def _issue_grace_pair(grant):
     """Re-issue inside the lost-response window.
 
-    Deliberately does NOT move ``prev_refresh_hash`` or ``last_refreshed``: the
-    window keeps ticking from the original rotation, so a client that retries
-    forever cannot walk it forward. The pair that was never received dies
-    anyway, because both ``refresh_hash`` and ``access_jti`` are replaced.
+    Two properties, and the second is a security control rather than a
+    convenience:
+
+    * ``last_refreshed`` is NOT moved. The window keeps ticking from the
+      original rotation, so a client that retries forever cannot walk it
+      forward.
+    * ``prev_refresh_hash`` IS moved, to the ``refresh_hash`` this call is
+      replacing — the successor that is now orphaned. Leaving the original
+      there instead would drop the orphan out of both columns, and whoever
+      holds it would simply get a generic ``invalid_grant`` with no incident.
+      That is what turns a stolen refresh token into a SILENT takeover: the
+      thief refreshes inside the window, and the victim's client just looks
+      broken. Keeping the orphan in ``prev_refresh_hash`` means the victim's
+      next refresh after the window trips replay — the family is revoked and
+      ``oauth:refresh_replay`` is reported — so the theft surfaces instead of
+      succeeding quietly.
+
+    A genuine lost response still recovers: the retrying client receives this
+    new pair, and the orphan it never saw is the one that trips.
     """
     from mojo.apps.account.models.oauth_grant import OAuthGrant
 
     raw_refresh = secrets.token_urlsafe(32)
     new_hash = _sha256_hex(raw_refresh)
-    updated = OAuthGrant.objects.filter(pk=grant.pk).update(refresh_hash=new_hash)
+    updated = OAuthGrant.objects.filter(pk=grant.pk).update(
+        prev_refresh_hash=F("refresh_hash"),
+        refresh_hash=new_hash)
     if updated != 1:
         raise TokenError("invalid_grant", "invalid refresh token")
+    grant.prev_refresh_hash = grant.refresh_hash
     grant.refresh_hash = new_hash
     return _token_response(grant, raw_refresh)
 

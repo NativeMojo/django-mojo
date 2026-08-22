@@ -334,21 +334,29 @@ def test_wire_flow(opts):
                       "a retry inside the grace window must be forgiven, "
                       f"got {resp.status_code} {resp.response}")
             third = resp.response.get("refresh_token")
+            assert_true(bool(third) and third not in (first["refresh_token"], second),
+                        "the grace path must mint a genuinely new pair")
             assert_true(OAuthGrant.objects.get(pk=fresh.pk).is_active,
-                        "a grace retry must not revoke the grant")
+                        "a grace retry must not revoke the grant — it is "
+                        "indistinguishable from a lost response")
 
+            # The grace hit ORPHANED `second`. That token, not the one that was
+            # retried, is the tripwire: whoever still holds it is either the
+            # client whose response was lost or whoever stole the first token,
+            # and after the window either way it means the pair was used twice.
             stored = OAuthGrant.objects.get(pk=fresh.pk)
             import datetime
             OAuthGrant.objects.filter(pk=fresh.pk).update(
                 last_refreshed=stored.last_refreshed - datetime.timedelta(hours=1))
-            resp = _refresh(first["refresh_token"])
+            resp = _refresh(second)
             assert_eq(resp.status_code, 400,
-                      f"a reuse outside the grace window must be refused, "
-                      f"got {resp.status_code}")
+                      f"the orphaned successor must be refused outside the "
+                      f"window, got {resp.status_code}")
             assert_eq(resp.response.get("error"), "invalid_grant",
                       "a refresh replay must answer invalid_grant")
             assert_true(not OAuthGrant.objects.get(pk=fresh.pk).is_active,
-                        "a refresh replay must revoke the grant family")
+                        "a refresh replay must revoke the grant family, so a "
+                        "stolen refresh token surfaces instead of quietly working")
 
             # --- revocation --------------------------------------------------
             revocable = tokens.create_grant(user, client, ["mcp"], RESOURCE, 1700000000)

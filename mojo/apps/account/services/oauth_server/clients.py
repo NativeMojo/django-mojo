@@ -17,8 +17,9 @@ clients bind an ephemeral port per run.
 """
 import hashlib
 import json
+import re
 import uuid
-from urllib.parse import urlsplit
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from mojo.helpers import logit
 from mojo.helpers.redis import get_connection
@@ -30,6 +31,19 @@ MAX_CLIENT_NAME_LENGTH = 200
 CIMD_CACHE_SECONDS = 300
 CIMD_MAX_BYTES = 65536
 CIMD_TIMEOUT = 5
+
+# One string for "unknown" and "deactivated" alike. Telling them apart would
+# let anyone probe which client identities this installation has ever seen, and
+# which of them an operator has since switched off.
+UNKNOWN_CLIENT = "unknown client"
+CIMD_UNREADABLE = "could not read the client metadata document"
+
+# RFC 3986 path characters that must survive re-encoding unchanged. "%" is
+# deliberately absent: after unquoting, a literal percent has to come back as
+# %25, which is what makes unquote-then-quote idempotent.
+CIMD_PATH_SAFE = "/-._~!$&\'()*+,;=:@"
+_DUP_SLASH_RE = re.compile(r"/{2,}")
+_WHITESPACE_RE = re.compile(r"\s+")
 
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 SUPPORTED_GRANT_TYPES = ("authorization_code", "refresh_token")
@@ -44,6 +58,20 @@ class ClientError(Exception):
         self.code = code
         self.description = description or code
         super().__init__(self.description)
+
+
+def clean_text(value, limit=MAX_CLIENT_NAME_LENGTH):
+    """Printable, single-spaced text — safe in a log line and on a page.
+
+    A client names itself, and that name reaches `logit.info` and the consent
+    screen. A newline in it would forge a log record; other control characters
+    can rewrite a terminal. Keep printable characters, fold every run of
+    whitespace to one space, and truncate.
+    """
+    if not isinstance(value, str):
+        return ""
+    kept = "".join(ch for ch in value if ch.isprintable() or ch in "\t\n\r")
+    return _WHITESPACE_RE.sub(" ", kept).strip()[:limit]
 
 
 def _is_loopback_http(parts):
@@ -159,6 +187,9 @@ def register_client(data):
         raise ClientError("invalid_client_metadata", "client_name must be a string")
     if len(client_name) > MAX_CLIENT_NAME_LENGTH:
         raise ClientError("invalid_client_metadata", "client_name is too long")
+    # The client chose this string and it lands in a log line and on the
+    # consent screen; strip anything that could forge either.
+    client_name = clean_text(client_name)
 
     metadata = {}
     for field in HTTPS_METADATA_FIELDS:
@@ -199,11 +230,58 @@ def register_client(data):
 
 # --- Client ID Metadata Documents ----------------------------------------
 
+def _canonical_path(path):
+    """One spelling of a URL path: unquoted, de-duplicated slashes, re-quoted."""
+    if not path:
+        return ""
+    collapsed = _DUP_SLASH_RE.sub("/", unquote(path))
+    return quote(collapsed, safe=CIMD_PATH_SAFE)
+
+
+def canonical_cimd_url(url):
+    """The ONE identity a CIMD `client_id` URL reduces to.
+
+    `client_id` is matched by exact string, so without this a deactivated
+    `https://evil.example/c.json` comes straight back to life as a brand-new
+    ACTIVE row under `https://EVIL.example/c.json`, `https://evil.example:443/c.json`,
+    or a percent-encoded spelling of the same path — the kill switch would be a
+    formality. Every variant has to reduce to one string before the inactive-row
+    check, the cache key, the self-naming check or the row lookup sees it.
+
+    Raises ClientError for anything that is not a usable CIMD identity.
+    """
+    if not isinstance(url, str) or not url:
+        raise ClientError("invalid_client", "client_id must be an https URL")
+    try:
+        parts = urlsplit(url.strip())
+        port = parts.port
+    except ValueError:
+        raise ClientError("invalid_client", "client_id is not a valid URL")
+    if parts.scheme.lower() != "https":
+        raise ClientError("invalid_client", "client_id must be an https URL")
+    if parts.username or parts.password:
+        raise ClientError("invalid_client", "client_id must not carry credentials")
+    if parts.query or parts.fragment:
+        raise ClientError(
+            "invalid_client", "client_id must not carry a query or fragment")
+    host = (parts.hostname or "").lower().rstrip(".")
+    if not host:
+        raise ClientError("invalid_client", "client_id must include a host")
+    path = _canonical_path(parts.path)
+    if path in ("", "/"):
+        raise ClientError("invalid_client", "client_id must name a document path")
+    netloc = f"[{host}]" if ":" in host else host
+    if port not in (None, 443):
+        netloc = f"{netloc}:{port}"
+    return urlunsplit(("https", netloc, path, "", ""))
+
+
 def _cimd_cache_key(url):
     return f"oauth:cimd:{hashlib.sha256(url.encode()).hexdigest()}"
 
 
 def _cache_get(url):
+    """The cached verdict for a canonical URL: a dict, or None on a miss."""
     try:
         raw = get_connection().get(_cimd_cache_key(url))
     except Exception:
@@ -211,30 +289,34 @@ def _cache_get(url):
     if not raw:
         return None
     try:
-        return json.loads(raw)
+        entry = json.loads(raw)
     except Exception:
         return None
+    return entry if isinstance(entry, dict) else None
 
 
-def _cache_set(url, document):
+def _cache_set(url, entry):
     try:
         get_connection().setex(
-            _cimd_cache_key(url), CIMD_CACHE_SECONDS, json.dumps(document))
+            _cimd_cache_key(url), CIMD_CACHE_SECONDS, json.dumps(entry))
     except Exception:
-        logit.exception("oauth: could not cache a client metadata document")
+        logit.exception("oauth: could not cache a client metadata verdict")
 
 
 def default_fetcher(url):
     """Fetch one client metadata document. Returns (status, content_type, body).
 
-    Thin adapter over the shared SSRF-safe helper: https only, 5 s, 64 KiB. A
-    refusal (private address, unresolvable host, redirect to a private host,
-    timeout) raises, and every caller maps that to ``invalid_client``.
+    Thin adapter over the shared SSRF-safe helper: https only, 5 s, 64 KiB, and
+    at most one redirect — a metadata document is a static file, so a chain of
+    hops is a way to spend this server's time, not a way to publish. A refusal
+    (private address, unresolvable host, redirect to a private host, timeout)
+    raises, and every caller maps that to `invalid_client`.
     """
     result, error = safe_fetch(
-        url, timeout=CIMD_TIMEOUT, max_bytes=CIMD_MAX_BYTES, schemes=("https",))
+        url, timeout=CIMD_TIMEOUT, max_bytes=CIMD_MAX_BYTES,
+        max_redirects=1, schemes=("https",))
     if error is not None or result is None:
-        raise ValueError(error or "could not fetch the client metadata document")
+        raise ValueError(error or CIMD_UNREADABLE)
     content_type = ""
     try:
         content_type = result.headers.get("content-type", "") or ""
@@ -243,23 +325,7 @@ def default_fetcher(url):
     return result.status_code, content_type, result.content
 
 
-def _validate_cimd_url(url):
-    try:
-        parts = urlsplit(url)
-        parts.port  # noqa: B018
-    except ValueError:
-        raise ClientError("invalid_client", "client_id is not a valid URL")
-    if parts.scheme != "https" or not parts.hostname:
-        raise ClientError("invalid_client", "client_id must be an https URL")
-    if parts.query or parts.fragment:
-        raise ClientError(
-            "invalid_client", "client_id must not carry a query or fragment")
-    if parts.path in ("", "/"):
-        raise ClientError("invalid_client", "client_id must name a document path")
-    return parts
-
-
-def _validate_cimd_document(url, status, content_type, body):
+def _validate_cimd_document(canonical, status, content_type, body):
     if status != 200:
         raise ClientError("invalid_client", "client metadata document is unavailable")
     if "json" not in str(content_type or "").lower():
@@ -272,54 +338,73 @@ def _validate_cimd_document(url, status, content_type, body):
         raise ClientError("invalid_client", "client metadata document is not JSON")
     if not isinstance(document, dict):
         raise ClientError("invalid_client", "client metadata document is not an object")
-    if document.get("client_id") != url:
+    # Compared canonically, so a document may spell its own URL any way it
+    # likes — but it still cannot claim an identity that is not its own.
+    if canonical_cimd_url(document.get("client_id")) != canonical:
         raise ClientError("invalid_client", "client metadata document does not name itself")
     document["redirect_uris"] = _clean_redirect_uris(
         document.get("redirect_uris"), error_code="invalid_client")
     return document
 
 
+def _fetch_cimd_document(canonical, fetcher=None):
+    """The cached-or-fetched document. Failures are cached too.
+
+    Without the negative entry, an attacker pointing a client_id at a URL that
+    stalls or 404s turns every authorize/token attempt into an outbound fetch
+    from this server. One fetch per cache window, verdict either way.
+    """
+    cached = _cache_get(canonical)
+    if cached is not None:
+        if not cached.get("ok"):
+            raise ClientError("invalid_client", CIMD_UNREADABLE)
+        document = cached.get("document")
+        if isinstance(document, dict):
+            # Cached documents were validated before they were stored;
+            # re-checking is cheap and keeps a poisoned entry from becoming trust.
+            return _validate_cimd_document(
+                canonical, 200, "application/json", json.dumps(document).encode())
+
+    fetch = fetcher if fetcher is not None else default_fetcher
+    try:
+        status, content_type, body = fetch(canonical)
+        document = _validate_cimd_document(canonical, status, content_type, body)
+    except ClientError:
+        _cache_set(canonical, {"ok": False})
+        raise
+    except Exception:
+        _cache_set(canonical, {"ok": False})
+        raise ClientError("invalid_client", CIMD_UNREADABLE)
+    _cache_set(canonical, {"ok": True, "document": document})
+    return document
+
+
 def _resolve_cimd_client(url, fetcher=None):
     from mojo.apps.account.models.oauth_client import OAuthClient
 
-    parts = _validate_cimd_url(url)
-    existing = OAuthClient.objects.filter(client_id=url).first()
+    canonical = canonical_cimd_url(url)
+    existing = OAuthClient.objects.filter(client_id=canonical).first()
     if existing is not None and not existing.is_active:
         # The Admin's deactivation is the only kill switch a CIMD client has.
-        # Refuse BEFORE any fetch or write, so re-resolving can never
-        # resurrect the row.
-        raise ClientError("invalid_client", "client is not active")
+        # Refuse BEFORE any fetch or write, so re-resolving — under ANY spelling
+        # of the URL — can never resurrect the row.
+        raise ClientError("invalid_client", UNKNOWN_CLIENT)
 
-    document = _cache_get(url)
-    if document is None:
-        fetch = fetcher if fetcher is not None else default_fetcher
-        try:
-            status, content_type, body = fetch(url)
-        except ClientError:
-            raise
-        except Exception:
-            raise ClientError("invalid_client", "could not read the client metadata document")
-        document = _validate_cimd_document(url, status, content_type, body)
-        _cache_set(url, document)
-    else:
-        # A cached document was validated before it was stored; re-checking is
-        # cheap and keeps a poisoned cache entry from becoming trust.
-        document = _validate_cimd_document(
-            url, 200, "application/json", json.dumps(document).encode())
+    document = _fetch_cimd_document(canonical, fetcher=fetcher)
 
     metadata = {}
     for field in HTTPS_METADATA_FIELDS + ("software_id", "software_version"):
         value = document.get(field)
         if isinstance(value, str) and value:
-            metadata[field] = value[:2048]
+            metadata[field] = clean_text(value, limit=2048)
 
     client, _created = OAuthClient.objects.get_or_create(
-        client_id=url, defaults=dict(kind="cimd", is_active=True))
-    client_name = document.get("client_name")
-    if not isinstance(client_name, str) or not client_name:
-        client_name = parts.hostname
+        client_id=canonical, defaults=dict(kind="cimd", is_active=True))
+    client_name = clean_text(document.get("client_name"))
+    if not client_name:
+        client_name = urlsplit(canonical).hostname
     client.kind = "cimd"
-    client.client_name = client_name[:MAX_CLIENT_NAME_LENGTH]
+    client.client_name = client_name
     client.redirect_uris = document["redirect_uris"]
     client.metadata = metadata
     # is_active is deliberately NOT written here — only on create.
@@ -336,9 +421,10 @@ def resolve_client(client_id, fetcher=None):
         raise ClientError("invalid_client", "client_id is required")
     if len(client_id) > 512:
         raise ClientError("invalid_client", "client_id is too long")
-    if client_id.startswith("https://"):
+    if client_id.lower().startswith("https://"):
         return _resolve_cimd_client(client_id, fetcher=fetcher)
     client = OAuthClient.objects.filter(client_id=client_id).first()
+    # Unknown and deactivated answer identically — see UNKNOWN_CLIENT.
     if client is None or not client.is_active:
-        raise ClientError("invalid_client", "unknown client")
+        raise ClientError("invalid_client", UNKNOWN_CLIENT)
     return client

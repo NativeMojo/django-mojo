@@ -69,6 +69,22 @@ def _with_params(uri, params):
     return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
 
 
+def _display_host(uri):
+    """The host (and non-default port) a redirect actually goes to."""
+    try:
+        parts = urlsplit(uri)
+        port = parts.port
+    except ValueError:
+        return ""
+    host = parts.hostname or ""
+    if not host:
+        return ""
+    shown = f"[{host}]" if ":" in host else host
+    if port is not None and port not in (80, 443):
+        shown = f"{shown}:{port}"
+    return shown
+
+
 def _error_redirect(redirect_uri, origin, code, description, state):
     params = {"error": code, "error_description": description}
     if state:
@@ -100,6 +116,17 @@ def _resolve_client_and_redirect(data):
             "We couldn't verify that app",
             "The application that sent you here did not say where to send you "
             "back, so we can't continue.")
+    try:
+        # The PRESENTED value gets the same scrutiny as a registered one. The
+        # loopback branch of redirect_uri_matches ignores the port, so without
+        # this an attacker could smuggle userinfo, a fragment, or a value long
+        # enough to overflow OAuthCode.redirect_uri past the match.
+        clients.validate_redirect_uri(redirect_uri)
+    except ValueError:
+        raise RenderedError(
+            "We couldn't verify that app",
+            "The address the application asked us to return to is not one we "
+            "can use, so we can't continue.")
     for registered in client.redirect_uris or []:
         if clients.redirect_uri_matches(registered, redirect_uri):
             return client, redirect_uri
@@ -149,10 +176,16 @@ def _validate_parameters(data, origin, registry=None):
     raw_scope = data.get("scope")
     if isinstance(raw_scope, (list, tuple)):
         raise RedirectableError("invalid_request", "scope must be a single value")
-    scope = str(raw_scope).strip() if raw_scope else DEFAULT_SCOPE
-    for token in scope.split():
+    requested = str(raw_scope).split() if raw_scope else [DEFAULT_SCOPE]
+    granted = []
+    for token in requested:
         if token != DEFAULT_SCOPE:
             raise RedirectableError("invalid_scope", "only the mcp scope is offered")
+        if token not in granted:
+            granted.append(token)
+    # De-duplicated: "mcp mcp mcp…" is the same grant as "mcp", and the joined
+    # string is stored on the code and the grant and rides in every token.
+    scope = " ".join(granted) or DEFAULT_SCOPE
 
     entry, resource = _resolve_resource(origin, data, registry)
     return {
@@ -185,6 +218,10 @@ def _render(request, ctx, status=200):
 
     response = _render_with_csp(request, "account/oauth_consent.html", ctx)
     response.status_code = status
+    # The page names the signed-in person and the app asking for access, and it
+    # is one click from a credential. Nothing about it belongs in a shared cache
+    # or a back-button replay.
+    response["Cache-Control"] = "no-store"
     # Unconditional, not merely via the CSP: AUTH_CSP_ENABLED ships False, and
     # a one-click credential-minting page must not be frameable on the default
     # configuration.
@@ -253,6 +290,12 @@ def handle_authorize(request, origin, registry=None):
         "client_id": client.client_id,
         "access_copy": ACCESS_COPY,
         "requested_resource": params["resource"],
+        # Anti-phishing. A name is whatever the client typed, so show the two
+        # facts it cannot forge — where the credential is being sent, and
+        # whether anything vouched for the name — beside it.
+        "redirect_host": _display_host(redirect_uri),
+        "client_verified_url": client.client_id if client.kind == "cimd" else "",
+        "client_unverified": client.kind != "cimd",
         "deny_url": _with_params(redirect_uri, deny_params),
         "approve_url": f"{resources.SERVER_PATH}/approve",
         "approve_payload": approve_payload,

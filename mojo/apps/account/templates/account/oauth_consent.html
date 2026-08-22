@@ -15,6 +15,18 @@
 <!-- VIEW: consent -->
 <div id="view-oauth-consent" class="mat-view is-active">
     <p class="mat-view-title">{{ client_name }} wants access</p>
+    {% comment %}
+       A client picks its own display name, so the name alone is a phishing
+       surface. These three lines are the facts it cannot choose: whether
+       anything vouched for the name, where the credential will be delivered,
+       and exactly what it will open. All autoescaped, none of them links —
+       a link here would just be one more thing to imitate.
+    {% endcomment %}
+    <p class="mat-view-sub" id="oauth-client-identity">
+        {% if client_verified_url %}Verified from {{ client_verified_url }}{% else %}(unverified name &mdash; registered by the client itself){% endif %}
+    </p>
+    <p class="mat-view-sub" id="oauth-resource">Access to: {{ requested_resource }}</p>
+    <p class="mat-view-sub" id="oauth-redirect-host">You will be sent back to {{ redirect_host }}</p>
     <p class="mat-view-sub" id="oauth-access-copy">{{ access_copy }}</p>
     <p class="mat-view-sub" id="oauth-identity-row" style="display:none">
         Signed in as <strong id="oauth-identity"></strong>

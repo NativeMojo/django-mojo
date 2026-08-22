@@ -232,3 +232,30 @@ def test_stale_codes_are_purged(opts):
     _mint(user, client, _challenge(_verifier()))
     assert_true(not OAuthCode.objects.filter(pk=stale.pk).exists(),
                 "minting a code must opportunistically purge long-expired rows")
+
+
+@th.django_unit_test("the presented redirect_uri is re-validated before it is matched")
+def test_presented_redirect_is_revalidated(opts):
+    from mojo.apps.account.services.oauth_server import codes, tokens
+
+    user, client, _other = _fixtures()
+
+    # redirect_uri_matches ignores the port for loopback, so without a fresh
+    # validate_redirect_uri these would reach the comparison — and the oversize
+    # one would reach OAuthCode.redirect_uri (varchar 2048) as a 500.
+    hostile = [
+        ("http://127.0.0.1:8100/cb#" + "A" * 100000, "a 100 KB fragment"),
+        ("http://user:pw@127.0.0.1:8100/cb", "userinfo"),
+        ("http://127.0.0.1:8100/cb#frag", "a fragment"),
+    ]
+    for presented, why in hostile:
+        verifier = _verifier()
+        raw = _mint(user, client, _challenge(verifier))
+        error = None
+        try:
+            codes.consume_code(raw, client, presented, verifier)
+        except tokens.TokenError as err:
+            error = err.code
+        assert_eq(error, "invalid_grant",
+                  f"a redirect_uri carrying {why} must be refused as "
+                  f"invalid_grant, got {error!r}")

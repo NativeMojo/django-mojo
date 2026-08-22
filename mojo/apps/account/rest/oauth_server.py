@@ -132,6 +132,11 @@ def _exchange_code(request, origin):
     except tokens.TokenError as err:
         return _oauth_error(err.code, err.description, 400)
 
+    if not code.user.is_active:
+        # The account was disabled between consent and exchange. Creating the
+        # grant would only produce a credential that fails at every door.
+        return _oauth_error("invalid_grant", "invalid authorization code")
+
     wanted = request.DATA.get("resource")
     if wanted and wanted != code.resource:
         return _oauth_error("invalid_target", "resource does not match the code")

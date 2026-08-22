@@ -356,3 +356,34 @@ def test_wire_confinement(opts):
               f"an ordinary session must still reach /api/account/user/me, "
               f"got {resp.status_code}")
     opts.client.logout()
+
+
+@th.django_unit_test("a token for one resource is refused at another registered one")
+def test_two_registered_resources_stay_separate(opts):
+    from mojo.apps.account.services.oauth_server import resources, tokens
+
+    other_path = f"{LIVE_PATH}-second"
+    registry = resources.ResourceRegistry()
+    registry.register(LIVE_PATH, ["mcp"], lambda: True)
+    registry.register(other_path, ["mcp"], lambda: True)
+
+    _grant, token, payload = _grant_and_token()
+
+    request = th.get_mock_request(path=LIVE_PATH)
+    user, error = tokens.validate_access(token, payload, request, registry=registry)
+    assert_true(error is None,
+                f"the token must still work at its own resource, got {error!r}")
+
+    # Both paths are live doors here, so this isolates the path comparison
+    # itself rather than the registry lookup.
+    elsewhere = th.get_mock_request(path=other_path)
+    user, error = tokens.validate_access(token, payload, elsewhere, registry=registry)
+    assert_true(user is None,
+                "a token minted for one resource must be refused at a DIFFERENT "
+                "registered, enabled resource — confinement is per-resource, not "
+                "per-installation")
+    assert_eq(error, "Invalid token",
+              f"the cross-resource refusal must be generic, got {error!r}")
+    assert_true(getattr(elsewhere, "www_authenticate", None) is None,
+                "the refusal happens on the path comparison, before the door is "
+                "granted, so no challenge is stamped")

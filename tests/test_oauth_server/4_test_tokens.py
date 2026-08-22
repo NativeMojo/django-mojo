@@ -156,6 +156,7 @@ def test_refresh_grace(opts):
     _user, client, _other = _fixtures()
     first = tokens.issue_tokens(grant)
     second = tokens.refresh_grant(first["refresh_token"], client, registry=_registry())
+    before = OAuthGrant.objects.get(pk=grant.pk)
 
     # The client never received `second` — it retries with the old token.
     third = tokens.refresh_grant(first["refresh_token"], client, registry=_registry())
@@ -166,13 +167,83 @@ def test_refresh_grace(opts):
                 "a retry inside the grace window must NOT revoke the grant")
 
     stored = OAuthGrant.objects.get(pk=grant.pk)
-    assert_eq(stored.prev_refresh_hash, tokens._sha256_hex(first["refresh_token"]),
-              "the grace path must not move prev_refresh_hash — the window keeps "
-              "ticking from the original rotation")
+    assert_eq(stored.prev_refresh_hash, tokens._sha256_hex(second["refresh_token"]),
+              "the grace path must park the ORPHANED successor in "
+              "prev_refresh_hash, so whoever holds it trips replay later "
+              "instead of getting a silent invalid_grant")
+    assert_eq(stored.last_refreshed, before.last_refreshed,
+              "the grace path must not move last_refreshed — the window keeps "
+              "ticking from the original rotation, so retrying cannot walk it "
+              "forward forever")
 
     # The new pair works and the grace-issued one is the live one.
     fourth = tokens.refresh_grant(third["refresh_token"], client, registry=_registry())
     assert_true(fourth["access_token"], "the grace-issued pair must be usable")
+
+
+@th.django_unit_test("a grace-window takeover is detected, not silently allowed")
+def test_grace_takeover_is_detected(opts):
+    from mojo.apps.account.models import OAuthGrant
+    from mojo.apps.account.services.oauth_server import tokens
+
+    grant = _grant()
+    _user, client, _other = _fixtures()
+    first = tokens.issue_tokens(grant)                      # the client holds R1
+    second = tokens.refresh_grant(first["refresh_token"], client,
+                                  registry=_registry())     # legit rotation -> R2
+
+    # A thief who captured R1 refreshes inside the window and is served, exactly
+    # as a client whose response was lost would be. Nothing here can tell them
+    # apart — which is why the detection has to land on the OTHER party.
+    third = tokens.refresh_grant(first["refresh_token"], client, registry=_registry())
+    assert_true(third["refresh_token"] not in
+                (first["refresh_token"], second["refresh_token"]),
+                "the grace path must mint a genuinely new pair")
+    assert_true(OAuthGrant.objects.get(pk=grant.pk).is_active,
+                "a grace hit alone must not revoke — it is indistinguishable "
+                "from a lost response")
+
+    # The legitimate holder of R2 comes back after the window. R2 is the pair
+    # the thief orphaned, so this is where the theft surfaces.
+    stored = OAuthGrant.objects.get(pk=grant.pk)
+    OAuthGrant.objects.filter(pk=grant.pk).update(
+        last_refreshed=stored.last_refreshed - datetime.timedelta(hours=1))
+    error = None
+    try:
+        tokens.refresh_grant(second["refresh_token"], client, registry=_registry())
+    except tokens.TokenError as err:
+        error = err.code
+    assert_eq(error, "invalid_grant",
+              f"the orphaned successor must be refused, got {error!r}")
+    dead = OAuthGrant.objects.get(pk=grant.pk)
+    assert_true(not dead.is_active,
+                "the orphaned successor must trip REPLAY, not a generic refusal "
+                "— that is what makes a stolen refresh token visible")
+    assert_eq(dead.revoked_reason, "refresh_replay",
+              f"the takeover must be recorded as a replay, got "
+              f"{dead.revoked_reason!r}")
+
+
+@th.django_unit_test("the orphaned successor is forgiven inside the window")
+def test_grace_orphan_inside_the_window(opts):
+    from mojo.apps.account.models import OAuthGrant
+    from mojo.apps.account.services.oauth_server import tokens
+
+    grant = _grant()
+    _user, client, _other = _fixtures()
+    first = tokens.issue_tokens(grant)
+    second = tokens.refresh_grant(first["refresh_token"], client, registry=_registry())
+    third = tokens.refresh_grant(first["refresh_token"], client, registry=_registry())
+
+    # R2 was orphaned by the grace hit, but the window has not passed: this is
+    # still the lost-response shape, so it must be served, not revoked.
+    fourth = tokens.refresh_grant(second["refresh_token"], client, registry=_registry())
+    assert_true(fourth["refresh_token"] not in
+                (first["refresh_token"], second["refresh_token"],
+                 third["refresh_token"]),
+                "an orphan presented inside the window must get a fresh pair")
+    assert_true(OAuthGrant.objects.get(pk=grant.pk).is_active,
+                "an orphan inside the window must not revoke the family")
 
 
 @th.django_unit_test("a concurrent rotation loser is handed a working pair, not a dead one")
