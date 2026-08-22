@@ -19,6 +19,7 @@ import {runAction} from '../../components/actions.js';
 import {routeHref} from '../../components/routes.js';
 import {errorState, loadingState} from '../../components/views.js';
 import {activityTabVisible} from './activity.js';
+import {openApiSetup} from './setup.js';
 import {
   list as listOperations, remove as removeOperation,
   subscribe as subscribeOperations, upsert as upsertOperation,
@@ -128,6 +129,13 @@ function v1Action(ctx, label, route) {
   return {label, href: v1Href(ctx, route), external: true};
 }
 
+// An action that happens HERE — no navigation, no different chrome. The fix
+// opens over Home, and Home re-reads itself when the fix succeeds, so the
+// headline, the tile and the blocker all move on the same evidence.
+function hereAction(label, run) {
+  return {label, run, external: false};
+}
+
 // Whether v2's Apps destination is open to this caller. Same predicate as
 // features/apps/feature.js: the webapps block, OR a platform viewer, who
 // reaches the API service and framework rows through the same page.
@@ -191,7 +199,7 @@ function activityAction(ctx, label, tab) {
 // One entry per thing that is actually wrong, each derived from a single fact
 // the dashboard endpoint reported. Order does not matter here — the list is
 // sorted by severity before it is rendered.
-function blockersFrom(ctx, report) {
+function blockersFrom(ctx, report, reload) {
   const sources = report?.sources || {};
   const out = [];
   const add = (entry) => { if (entry) out.push(entry); };
@@ -205,10 +213,15 @@ function blockersFrom(ctx, report) {
           + 'even though this installation believes it is configured.',
         action: ctx.capabilities?.setup ? v1Action(ctx, 'Open System Setup', 'setup') : null});
     } else if (api_.status === 'unconfigured' || !data.configured) {
+      // One typed value fixes this, so it is fixed here: the same durable
+      // Setup operation System Setup would run, in a modal over Home. Exactly
+      // v1's rule — the in-place repair is offered for the UNSET address and
+      // for nobody without the setup capability.
       add({tone: 'warn', name: 'The public API address is not set',
         copy: 'Invites, password resets and webhooks cannot build a working '
           + 'link until this installation knows its own address.',
-        action: ctx.capabilities?.setup ? v1Action(ctx, 'Set it up', 'setup') : null});
+        action: ctx.capabilities?.setup
+          ? hereAction('Set it up', () => openApiSetup(ctx, {onDone: reload})) : null});
     }
   }
 
@@ -390,14 +403,19 @@ function blockersFrom(ctx, report) {
 
 function blockerRow(entry, primary) {
   const action = entry.action;
+  const className = `button compact ${primary ? 'primary' : ''}`.trim();
+  // An action that runs here is a button; one that goes somewhere is a link.
+  // The note under it is reserved for the links that leave v2.
+  const control = action?.run
+    ? h('button', {class: className, type: 'button',
+      onclick: (event) => { action.run(event); }}, action.label)
+    : action ? h('a', {class: className, href: action.href}, action.label) : null;
   return h('div', {class: 'blocker'},
     dot(entry.tone),
     h('div', {class: 'blocker-body'},
       h('strong', {text: entry.name}),
       h('p', {text: entry.copy})),
-    action ? h('div', {class: 'blocker-action'},
-      h('a', {class: `button compact ${primary ? 'primary' : ''}`.trim(), href: action.href},
-        action.label),
+    action ? h('div', {class: 'blocker-action'}, control,
       action.external
         ? h('span', {class: 'blocker-note', text: 'opens the current Admin'})
         : null) : null);
@@ -409,7 +427,7 @@ function blockerRow(entry, primary) {
 // actually returned. A section that is absent gets no tile; a section that
 // answered "you may not read this" gets a muted tile that says so, because
 // hiding it would read as "there is nothing there".
-function tilesFrom(ctx, report, apps) {
+function tilesFrom(ctx, report, apps, reload) {
   const sources = report?.sources || {};
   const out = [];
   const restricted = (label, source) => ({
@@ -424,7 +442,7 @@ function tilesFrom(ctx, report, apps) {
 
   if (sources.public_api) {
     const source = reported(sources.public_api);
-    out.push(source ? apiTile(ctx, source, reported(sources.sanity))
+    out.push(source ? apiTile(ctx, source, reported(sources.sanity), reload)
       : restricted('API', sources.public_api));
   }
 
@@ -487,7 +505,7 @@ function tilesFrom(ctx, report, apps) {
   return out;
 }
 
-function apiTile(ctx, source, sanity) {
+function apiTile(ctx, source, sanity, reload) {
   const data = source.data || {};
   const probed = data.probe?.version || '';
   const node = data.node_version || '';
@@ -495,7 +513,12 @@ function apiTile(ctx, source, sanity) {
   const setup = ctx.capabilities?.setup === true
     ? v1Action(ctx, 'API', 'setup') : null;
   if (source.status === 'unconfigured' || !data.configured) {
-    return {tone: 'warn', label: 'API', value: 'No public address set', action: setup};
+    // The only state the one-field repair can fix, and the only one v1 offered
+    // it for. Everything below is a configured address behaving badly: the
+    // full readiness report owns those, and the tile links at it.
+    return {tone: 'warn', label: 'API', value: 'No public address set',
+      hint: setup ? ' · set it up here' : '',
+      action: setup ? hereAction('API', () => openApiSetup(ctx, {onDone: reload})) : null};
   }
   if (source.status === 'unhealthy') {
     return {tone: 'danger', label, value: 'the public address did not answer', action: setup};
@@ -538,11 +561,23 @@ function appsTile(ctx, apps) {
 }
 
 function tileNode(entry) {
+  // Two different notes, never both: a link that leaves v2 says so, and a
+  // tile that fixes something here says that instead.
+  const note = entry.action?.external
+    ? {text: ' · opens the current Admin', class: 'leaves-v2'}
+    : entry.hint ? {text: entry.hint, class: 'tile-hint'} : null;
   const body = h('div', {},
     h('strong', {text: entry.label}),
     h('small', {}, entry.value,
-      entry.action?.external ? h('span', {class: 'leaves-v2', text: ' · opens the current Admin'}) : null));
+      note ? h('span', {class: note.class, text: note.text}) : null));
   if (!entry.action) return h('div', {class: 'tile'}, dot(entry.tone), body);
+  // A tile whose action runs here activates as a button; every other tile is
+  // still a plain link to the destination that owns the subject.
+  if (entry.action.run) {
+    return h('button', {class: 'tile', type: 'button',
+      onclick: (event) => { entry.action.run(event); }},
+    dot(entry.tone), body, icon('chevron'));
+  }
   return h('a', {class: 'tile', href: entry.action.href}, dot(entry.tone), body, icon('chevron'));
 }
 
@@ -791,7 +826,7 @@ export async function homePage(ctx, signal = null) {
     }
     await Promise.all(reads);
     if (signal?.aborted) return;
-    state.blockers = state.report ? blockersFrom(ctx, state.report) : [];
+    state.blockers = state.report ? blockersFrom(ctx, state.report, reload) : [];
     // The store is global and outlives this page, so the deployment operation
     // is written to it on every read — including the read that finds it gone.
     const running = syncDeploymentOperation(ctx, state.report);
@@ -803,6 +838,12 @@ export async function homePage(ctx, signal = null) {
   }
 
   state.retry = () => load();
+
+  // What an in-place fix calls when it has actually succeeded: the same
+  // cache-bypassing read the Refresh button runs, so the headline, the tiles
+  // and the blockers are all repainted from freshly collected evidence rather
+  // than from the modal's optimism.
+  function reload() { return load(true); }
 
   function header(headline, operations) {
     return h('header', {class: 'page-header'},
@@ -842,7 +883,7 @@ export async function homePage(ctx, signal = null) {
   }
 
   function tilesSection() {
-    const tiles = tilesFrom(ctx, state.report, state.apps);
+    const tiles = tilesFrom(ctx, state.report, state.apps, reload);
     const nodes = tiles.map(tileNode);
     if (state.appsError) {
       nodes.unshift(h('div', {class: 'tile'}, dot('muted'),

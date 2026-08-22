@@ -109,13 +109,31 @@
 }
 
 /* Said out loud on every link that leaves v2: the operator is about to land in
-   a portal with different chrome, and that should never be a surprise. */
+   a portal with different chrome, and that should never be a surprise. The
+   same whisper carries the opposite promise on a tile that fixes in place. */
 .blocker-note,
 .panel-link .leaves-v2,
+.home-setup .leaves-v2,
+.tile small .tile-hint,
 .tile small .leaves-v2 {
   color: var(--muted);
   font-size: 9px;
   font-weight: 400;
+}
+
+/* The one tile that carries a fix rather than a destination: the public API
+   with no address, which a superuser repairs in place from here. It is a
+   button so the keyboard and the accessibility tree both know it opens
+   something instead of going somewhere — and it must be indistinguishable
+   from the links beside it. */
+button.tile {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.tile:hover {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
 }
 
 .activity-row {
