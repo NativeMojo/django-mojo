@@ -7,6 +7,11 @@ Verifies that _maybe_push_abuse_signals enqueues a jobs.publish call when:
   - A signal actually rose (strict-rise / False->True flip)
   - from_sync is False
 And that the call is mandatory async (never inline HTTP).
+
+Parallel-safe (item #2558): federation config and the threat-check sub-steps
+are injected through the keyword-only seams on block() / check_threats()
+(sync_config, check_internal, check_external) instead of mock.patch on the
+shared mojo.helpers.geoip modules.
 """
 import contextlib
 import importlib
@@ -38,12 +43,9 @@ def _capture_pushback(ip_address, side_effect=None):
         yield captured
 
 
-def _enable_sync():
-    """Context-manager bundle that enables the federation config."""
-    return [
-        mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"),
-        mock.patch("mojo.helpers.geoip.config.MOJO_SYNC_ENABLED", True),
-    ]
+def _sync_enabled():
+    """A sync_config seam value with the federation config enabled."""
+    return {"sync_enabled": True, "provider_url": "https://hub.example.com"}
 
 
 @th.django_unit_test()
@@ -55,9 +57,9 @@ def test_block_on_mojo_provider_enqueues_pushback(opts):
         ip_address="203.0.113.200", provider="mojo", threat_level=None,
     )
 
-    patches = _enable_sync() + [_capture_pushback("203.0.113.200")]
-    with patches[0], patches[1], patches[2] as m_publish:
-        geo.block(reason="test_pushback_mojo", ttl=600, broadcast=False)
+    with _capture_pushback("203.0.113.200") as m_publish:
+        geo.block(reason="test_pushback_mojo", ttl=600, broadcast=False,
+                  sync_config=_sync_enabled())
 
     assert m_publish.called, (
         "block() on a mojo-provider record must enqueue push-back via jobs.publish"
@@ -85,9 +87,9 @@ def test_block_on_non_mojo_provider_does_not_enqueue(opts):
         ip_address="203.0.113.201", provider="maxmind", threat_level=None,
     )
 
-    patches = _enable_sync() + [_capture_pushback("203.0.113.201")]
-    with patches[0], patches[1], patches[2] as m_publish:
-        geo.block(reason="test_no_pushback_maxmind", ttl=600, broadcast=False)
+    with _capture_pushback("203.0.113.201") as m_publish:
+        geo.block(reason="test_no_pushback_maxmind", ttl=600, broadcast=False,
+                  sync_config=_sync_enabled())
 
     assert not m_publish.called, (
         "block() on a non-mojo-provider record must NOT enqueue push-back; "
@@ -104,9 +106,9 @@ def test_block_when_from_sync_does_not_enqueue(opts):
         ip_address="203.0.113.202", provider="mojo", threat_level=None,
     )
 
-    patches = _enable_sync() + [_capture_pushback("203.0.113.202")]
-    with patches[0], patches[1], patches[2] as m_publish:
-        geo.block(reason="test_from_sync", ttl=600, broadcast=False, from_sync=True)
+    with _capture_pushback("203.0.113.202") as m_publish:
+        geo.block(reason="test_from_sync", ttl=600, broadcast=False,
+                  from_sync=True, sync_config=_sync_enabled())
 
     assert not m_publish.called, (
         "from_sync=True must suppress push-back; "
@@ -123,10 +125,10 @@ def test_block_when_sync_disabled_does_not_enqueue(opts):
         ip_address="203.0.113.203", provider="mojo", threat_level=None,
     )
 
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", "https://hub.example.com"), \
-         mock.patch("mojo.helpers.geoip.config.MOJO_SYNC_ENABLED", False), \
-         _capture_pushback("203.0.113.203") as m_publish:
-        geo.block(reason="test_sync_disabled", ttl=600, broadcast=False)
+    with _capture_pushback("203.0.113.203") as m_publish:
+        geo.block(reason="test_sync_disabled", ttl=600, broadcast=False,
+                  sync_config={"sync_enabled": False,
+                               "provider_url": "https://hub.example.com"})
 
     assert not m_publish.called, (
         "GEOIP_MOJO_SYNC_ENABLED=False must suppress push-back"
@@ -142,10 +144,9 @@ def test_block_when_url_unset_does_not_enqueue(opts):
         ip_address="203.0.113.204", provider="mojo", threat_level=None,
     )
 
-    with mock.patch("mojo.helpers.geoip.config.MOJO_PROVIDER_URL", None), \
-         mock.patch("mojo.helpers.geoip.config.MOJO_SYNC_ENABLED", True), \
-         _capture_pushback("203.0.113.204") as m_publish:
-        geo.block(reason="test_no_url", ttl=600, broadcast=False)
+    with _capture_pushback("203.0.113.204") as m_publish:
+        geo.block(reason="test_no_url", ttl=600, broadcast=False,
+                  sync_config={"sync_enabled": True, "provider_url": None})
 
     assert not m_publish.called, (
         "GEOIP_MOJO_PROVIDER_URL unset must suppress push-back"
@@ -162,9 +163,9 @@ def test_block_no_signal_rise_no_enqueue(opts):
         ip_address="203.0.113.205", provider="mojo", threat_level="critical",
     )
 
-    patches = _enable_sync() + [_capture_pushback("203.0.113.205")]
-    with patches[0], patches[1], patches[2] as m_publish:
-        geo.block(reason="test_no_rise", ttl=600, broadcast=False)
+    with _capture_pushback("203.0.113.205") as m_publish:
+        geo.block(reason="test_no_rise", ttl=600, broadcast=False,
+                  sync_config=_sync_enabled())
 
     assert not m_publish.called, (
         "block() must not enqueue when no signal rises; "
@@ -176,7 +177,6 @@ def test_block_no_signal_rise_no_enqueue(opts):
 def test_check_threats_flip_attacker_enqueues(opts):
     """check_threats() flipping is_known_attacker False->True triggers push-back."""
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
-    from mojo.helpers.geoip import threat_intel
 
     GeoLocatedIP.objects.filter(ip_address="203.0.113.210").delete()
     geo = GeoLocatedIP.objects.create(
@@ -184,21 +184,17 @@ def test_check_threats_flip_attacker_enqueues(opts):
         is_known_attacker=False, is_known_abuser=False,
     )
 
-    fake_threat = {
+    # provider='mojo' runs the internal analysis only (skip_external=True), so
+    # the injected internal check is the whole threat verdict here.
+    fake_internal = {
         "is_known_attacker": True,
         "is_known_abuser": False,
-        "is_blocklisted": False,
-        "threat_data": {"internal": {}, "blocklists": []},
+        "internal_stats": {},
     }
 
-    patches = _enable_sync()
-    with patches[0], patches[1], \
-         mock.patch.object(threat_intel, "perform_threat_check",
-                           return_value=fake_threat), \
-         mock.patch.object(threat_intel, "recalculate_threat_level",
-                           return_value="medium"), \
-         _capture_pushback("203.0.113.210") as m_publish:
-        geo.check_threats()
+    with _capture_pushback("203.0.113.210") as m_publish:
+        geo.check_threats(check_internal=lambda ip: fake_internal,
+                          sync_config=_sync_enabled())
 
     assert m_publish.called, "check_threats() must enqueue on attacker flip"
     payload = m_publish.call_args[0][1]
@@ -211,7 +207,6 @@ def test_check_threats_flip_attacker_enqueues(opts):
 def test_check_threats_no_flip_does_not_enqueue(opts):
     """If is_known_attacker stays True->True, no push."""
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
-    from mojo.helpers.geoip import threat_intel
 
     GeoLocatedIP.objects.filter(ip_address="203.0.113.211").delete()
     geo = GeoLocatedIP.objects.create(
@@ -219,21 +214,17 @@ def test_check_threats_no_flip_does_not_enqueue(opts):
         is_known_attacker=True, is_known_abuser=False,
     )
 
-    fake_threat = {
+    # Attacker stays True and the recalculated level stays 'high' — nothing
+    # rises, so nothing may be pushed.
+    fake_internal = {
         "is_known_attacker": True,
         "is_known_abuser": False,
-        "is_blocklisted": False,
-        "threat_data": {"internal": {}, "blocklists": []},
+        "internal_stats": {},
     }
 
-    patches = _enable_sync()
-    with patches[0], patches[1], \
-         mock.patch.object(threat_intel, "perform_threat_check",
-                           return_value=fake_threat), \
-         mock.patch.object(threat_intel, "recalculate_threat_level",
-                           return_value="high"), \
-         _capture_pushback("203.0.113.211") as m_publish:
-        geo.check_threats()
+    with _capture_pushback("203.0.113.211") as m_publish:
+        geo.check_threats(check_internal=lambda ip: fake_internal,
+                          sync_config=_sync_enabled())
 
     assert not m_publish.called, (
         "check_threats() with no signal rise must not enqueue; "
@@ -255,11 +246,10 @@ def test_pushback_is_async_never_inline_http(opts):
         ip_address="203.0.113.220", provider="mojo", threat_level=None,
     )
 
-    patches = _enable_sync()
-    with patches[0], patches[1], \
-         _capture_pushback("203.0.113.220") as m_publish, \
+    with _capture_pushback("203.0.113.220") as m_publish, \
          mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
-        geo.block(reason="test_async_only", ttl=600, broadcast=False)
+        geo.block(reason="test_async_only", ttl=600, broadcast=False,
+                  sync_config=_sync_enabled())
 
     assert m_publish.called, "push-back must go through jobs.publish"
     assert not m_post.called, (
@@ -278,12 +268,11 @@ def test_publish_failure_does_not_raise(opts):
         ip_address="203.0.113.221", provider="mojo", threat_level=None,
     )
 
-    patches = _enable_sync()
-    with patches[0], patches[1], \
-         _capture_pushback(
-             "203.0.113.221", side_effect=RuntimeError("redis down")):
+    with _capture_pushback(
+            "203.0.113.221", side_effect=RuntimeError("redis down")):
         # Should not raise
-        geo.block(reason="test_publish_failure", ttl=600, broadcast=False)
+        geo.block(reason="test_publish_failure", ttl=600, broadcast=False,
+                  sync_config=_sync_enabled())
 
     geo.refresh_from_db()
     assert geo.is_blocked is True, (

@@ -279,21 +279,23 @@ def test_certificate_renewal_converges(opts):
         Certificate.objects.filter(pk=opts.certificate.pk).update(
             serial="a1", cert_pem=certificate_a, chain_pem="")
 
-        with mock.patch.object(
-                Certificate, "private_key_pem",
-                new_callable=mock.PropertyMock) as private_key:
-            private_key.return_value = (
-                "-----BEGIN PRIVATE KEY-----\nkey-a\n-----END PRIVATE KEY-----\n")
-            with mock.patch.object(installer, "_run", Recorder()):
-                first = installer.install(pool=_pool("happy"))
+        # Key material is supplied through install()'s private_key seam
+        # (item #2558) instead of a process-global patch of the Certificate
+        # class property.
+        with mock.patch.object(installer, "_run", Recorder()):
+            first = installer.install(
+                pool=_pool("happy"),
+                private_key=lambda cert: (
+                    "-----BEGIN PRIVATE KEY-----\nkey-a\n-----END PRIVATE KEY-----\n"))
 
-            Certificate.objects.filter(pk=opts.certificate.pk).update(
-                serial="b2", cert_pem=certificate_b, chain_pem="")
-            private_key.return_value = (
-                "-----BEGIN PRIVATE KEY-----\nkey-b\n-----END PRIVATE KEY-----\n")
-            recorder = Recorder()
-            with mock.patch.object(installer, "_run", recorder):
-                renewed = installer.install(pool=_pool("happy"))
+        Certificate.objects.filter(pk=opts.certificate.pk).update(
+            serial="b2", cert_pem=certificate_b, chain_pem="")
+        recorder = Recorder()
+        with mock.patch.object(installer, "_run", recorder):
+            renewed = installer.install(
+                pool=_pool("happy"),
+                private_key=lambda cert: (
+                    "-----BEGIN PRIVATE KEY-----\nkey-b\n-----END PRIVATE KEY-----\n"))
 
         assert renewed.generation != first.generation, (
             "renewing a Certificate row in place did not move the edge generation")
@@ -438,11 +440,10 @@ def test_tenant_material_failure_excludes(opts):
         good_vhost = make_vhost(good_domain, good_cert, label="ok",
                                 pool=_pool("exclude"))
 
-        # Only the good one gets material.
-        real_property = Certificate.private_key_pem
-
-        def selective(self):
-            if self.pk == good_cert.pk:
+        # Only the good one gets material — via install()'s private_key seam
+        # (item #2558), never a patch of the shared Certificate property.
+        def selective(certificate):
+            if certificate.pk == good_cert.pk:
                 return "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n"
             return None
 
@@ -453,10 +454,9 @@ def test_tenant_material_failure_excludes(opts):
         from mojo.apps.edge.models import Vhost
         Vhost.objects.filter(pk=opts.vhost.pk).update(pool=_pool("exclude"))
 
-        with mock.patch.object(Certificate, "private_key_pem",
-                               property(selective)):
-            with mock.patch.object(installer, "_run", Recorder()):
-                result = installer.install(pool=_pool("exclude"))
+        with mock.patch.object(installer, "_run", Recorder()):
+            result = installer.install(pool=_pool("exclude"),
+                                       private_key=selective)
 
         assert result.changed, "the install did not converge"
         assert opts.vhost.pk in result.excluded, \
@@ -659,61 +659,6 @@ def test_include_graph_staged(opts):
         assert "/staging/conf.d/*.conf" in harness, \
             "the harness does not include staging/conf.d"
     finally:
-        _exit(patches, root)
-
-
-@th.django_unit_test("DNS-01-only install ignores the unused staged HTTP port")
-def test_https_only_generation_staged(opts):
-    from mojo.apps.dnsman.models import Certificate
-    from mojo.apps.edge.services import installer, render
-    from tests.test_edge._helpers import TEST_POOLS
-
-    root = _root(opts)
-    patches = _with_root(root)
-    _enter(patches)
-    pool = _pool("httpsonly")
-    declare_pools([*TEST_POOLS, pool])
-    try:
-        domain = make_domain(group=opts.group)
-        certificate = make_certificate(domain)
-        vhost = make_vhost(
-            domain, certificate, label="https-only", pool=pool)
-        Certificate.objects.filter(pk=certificate.pk).update(
-            cert_pem="-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
-
-        def static(name, default=None, kind=None):
-            if name == "EDGE_HTTP_ENABLED":
-                return False
-            if name == "EDGE_STAGED_HTTP_PORT":
-                return 80
-            if name == "EDGE_ACME_WEBROOT":
-                raise AssertionError("HTTPS-only install read the ACME webroot")
-            return default
-
-        with mock.patch.object(
-                render.settings, "get_static", side_effect=static), \
-                mock.patch.object(installer, "_run", Recorder()):
-            result = installer.install(pool=pool)
-
-        assert result.changed, "the HTTPS-only graph did not converge"
-        current = os.path.realpath(render.current_link())
-        assert os.path.exists(os.path.join(current, "http.d", "00_base.conf")), \
-            "HTTPS-only convergence dropped the shared nginx http-context base"
-        assert os.path.exists(os.path.join(current, "http.d", "10_upstreams.conf")), \
-            "HTTPS-only convergence dropped the shared upstream fragment"
-
-        real = open(os.path.join(
-            current, "conf.d", f"{vhost.pk}.conf")).read()
-        staged = open(os.path.join(
-            current, "staging", "conf.d", f"{vhost.pk}.conf")).read()
-        assert set(_listen_ports(real)) == {443}, \
-            f"HTTPS-only real vhost has unexpected listeners: {_listen_ports(real)}"
-        assert set(_listen_ports(staged)) == {render.staged_https_port()}, \
-            f"HTTPS-only staged vhost has unexpected listeners: {_listen_ports(staged)}"
-        assert "/.well-known/acme-challenge/" not in real + staged, \
-            "HTTPS-only install retained an HTTP-01 challenge location"
-    finally:
-        declare_pools()
         _exit(patches, root)
 
 

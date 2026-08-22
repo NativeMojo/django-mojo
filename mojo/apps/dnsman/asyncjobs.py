@@ -101,9 +101,12 @@ def sweep_acme_hub_leases(job):
             f"reconciled={result.reconciled},errors={result.errors}")
 
 
-def publish_certificate_expiry_metric(job):
+def publish_certificate_expiry_metric(job, put_metric=None):
     """
     Publish the soonest certificate expiry as a CloudWatch custom metric.
+
+    ``put_metric`` is an injection seam for tests, replacing
+    ``cloudwatch.put_metric_data`` (None means the real CloudWatch write).
 
     One number for the whole deployment, because one alarm on it catches every
     cause of a stalled renewal at once — publisher down, challenge misrouted,
@@ -140,7 +143,9 @@ def publish_certificate_expiry_metric(job):
     # diagnostic than 0, and the alarm threshold catches both.
     days = (soonest - dates.utcnow()).days
     slug = deployment_slug()
-    cloudwatch.put_metric_data(
+    if put_metric is None:
+        put_metric = cloudwatch.put_metric_data
+    put_metric(
         CERT_METRIC_NAMESPACE, CERT_METRIC_NAME, days,
         dimensions=[{"Name": "Deployment", "Value": slug}], unit="Count")
     logit.info(f"dnsman: published {CERT_METRIC_NAME}={days} for {slug}")

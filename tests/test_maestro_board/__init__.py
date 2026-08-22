@@ -1,4 +1,5 @@
 TESTIT = {
     "default_core": True,
+    "cold_budget": 2,
     "requires_apps": ["mojo.apps.incident", "mojo.apps.jobs"],
 }

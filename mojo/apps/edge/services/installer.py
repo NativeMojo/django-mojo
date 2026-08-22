@@ -310,13 +310,20 @@ def current_target():
 # staging
 # ----------------------------------------------------------------------
 
-def _write_material(generation, certificate):
+def _write_material(generation, certificate, private_key=None):
     """Write one certificate's material into the generation, 0600.
 
     Returns True when the material landed. A False here is NOT an error by
     itself — the caller decides whether the owning vhost is droppable.
+
+    ``private_key`` is an injection seam for tests: a loader called with the
+    certificate, returning its PEM (or None for unreadable custody). None
+    means the row's own KMS-backed ``private_key_pem``.
     """
-    private_key = certificate.private_key_pem
+    if private_key is not None:
+        private_key = private_key(certificate)
+    else:
+        private_key = certificate.private_key_pem
     if not private_key or not certificate.cert_pem:
         # KSMSecrets returns an empty mapping when KMS decryption fails, so
         # this means "custody unavailable", not "this certificate has no key".
@@ -506,7 +513,7 @@ def _write_rendered(path, body, gen_is_live):
 
 def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
                      previous=None, pool="default", http=None,
-                     carry_upgrade_map=False):
+                     carry_upgrade_map=False, private_key=None):
     """Build `generations/<generation>/` completely.
 
     Returns `objict(excluded, cert_excluded)`: every vhost left out of the
@@ -595,7 +602,8 @@ def stage_generation(vhosts, generation, webapps=None, fetch_failures=None,
                 "Edge release fetch failed; serving the previous release",
                 key=key)
 
-        if _write_material(generation, vhost.certificate):
+        if _write_material(generation, vhost.certificate,
+                           private_key=private_key):
             installable.append(vhost)
             continue
 
@@ -784,11 +792,15 @@ def prune_generations(keep=None):
 # the install
 # ----------------------------------------------------------------------
 
-def install(pool="default", force=False, pools=None):
+def install(pool="default", force=False, pools=None, *, private_key=None):
     """Converge this node onto the current desired state for `pool`.
 
     Returns an objict-ish dict describing what happened. Raises InstallError on
     a failure that left `current` unchanged — which is every failure.
+
+    ``private_key`` is an injection seam for tests: a loader called with each
+    certificate, returning its PEM (or None). None means the rows' own
+    KMS-backed material.
     """
     from objict import objict
 
@@ -860,7 +872,8 @@ def install(pool="default", force=False, pools=None):
                                   fetch_failures=fetch_failures,
                                   previous=previous, pool=selected_pools[0],
                                   http=payload["http"],
-                                  carry_upgrade_map=carry)
+                                  carry_upgrade_map=carry,
+                                  private_key=private_key)
         excluded = staged.excluded
 
         gen_dir = render.generation_dir(local_generation)

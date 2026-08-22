@@ -52,6 +52,14 @@ DEFAULT_CHANNELS = [
 # channels to declare, and opt into strictness by declaring them.
 JOB_CHANNELS = settings.get_static('JOBS_CHANNELS', DEFAULT_CHANNELS)
 JOBS_ALLOWED_CHANNELS = settings.get_static('JOBS_ALLOWED_CHANNELS', None)
+
+# Test capture hook (maestro item #2558). None in production — publish() pays
+# one attribute read. testit's capture_publishes registers scoped captures
+# through this router instead of rebinding this module's `publish` attribute:
+# import-time binders (e.g. mojo.apps.jobs.rest.jobs binds `publish` at
+# import) never see an attribute rebind, and two concurrent wrap-style
+# captures could restore each other out of order and strand a stale wrapper.
+_capture_router = None
 JOBS_PAYLOAD_MAX_BYTES = settings.get_static('JOBS_PAYLOAD_MAX_BYTES', 16384)
 JOBS_DEFAULT_EXPIRES_SEC = settings.get_static('JOBS_DEFAULT_EXPIRES_SEC', 900)
 JOBS_DEFAULT_MAX_RETRIES = settings.get_static('JOBS_DEFAULT_MAX_RETRIES', 0)
@@ -313,6 +321,17 @@ def publish(
         ValueError: If func is not registered or arguments are invalid
         RuntimeError: If publishing fails
     """
+    if _capture_router is not None:
+        handled, captured_result = _capture_router({
+            "func": func, "payload": payload, "channel": channel,
+            "delay": delay, "run_at": run_at, "broadcast": broadcast,
+            "max_retries": max_retries, "backoff_base": backoff_base,
+            "backoff_max": backoff_max, "expires_in": expires_in,
+            "expires_at": expires_at, "max_exec_seconds": max_exec_seconds,
+            "idempotency_key": idempotency_key})
+        if handled:
+            return captured_result
+
     from .models import Job, JobEvent
 
     # Convert callable to module path string

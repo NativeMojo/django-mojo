@@ -425,17 +425,23 @@ def _security_problems(info, require_root):
     return problems
 
 
-def _read_config(path, require_root):
-    """Parse one descriptor after applying every filesystem safety check."""
+def _read_config(path, require_root, *, os_ops=None):
+    """Parse one descriptor after applying every filesystem safety check.
+
+    os_ops is a test seam for the descriptor-level filesystem calls; None
+    means the real os module.
+    """
+    if os_ops is None:
+        os_ops = os
     try:
         flags = os.O_RDONLY
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
-        descriptor = os.open(path, flags)
+        descriptor = os_ops.open(path, flags)
     except OSError as err:
         raise ConfigError(f"cannot open config {path}: {err}") from err
     try:
-        info = os.fstat(descriptor)
+        info = os_ops.fstat(descriptor)
         problems = _security_problems(info, require_root)
         if problems:
             raise ConfigError("config security check failed: " + "; ".join(problems))
@@ -444,7 +450,7 @@ def _read_config(path, require_root):
         chunks = []
         total = 0
         while total <= MAX_CONFIG_BYTES:
-            block = os.read(descriptor, min(65536, MAX_CONFIG_BYTES + 1 - total))
+            block = os_ops.read(descriptor, min(65536, MAX_CONFIG_BYTES + 1 - total))
             if not block:
                 break
             chunks.append(block)
@@ -459,17 +465,17 @@ def _read_config(path, require_root):
         raise ConfigError(f"cannot read config {path}: {err}") from err
     finally:
         if descriptor is not None:
-            os.close(descriptor)
+            os_ops.close(descriptor)
     return supplied
 
 
-def load_config(path, require_root=None):
+def load_config(path, require_root=None, *, os_ops=None):
     """Load untrusted desired policy, expanding a named profile once."""
     if require_root is None:
         require_root = os.geteuid() == 0
-    return build_config(_read_config(path, require_root))
+    return build_config(_read_config(path, require_root, os_ops=os_ops))
 
 
-def load_effective_config(path):
+def load_effective_config(path, *, os_ops=None):
     """Load the root-owned canonical runtime artifact without re-expansion."""
-    return validate_effective_config(_read_config(path, True))
+    return validate_effective_config(_read_config(path, True, os_ops=os_ops))

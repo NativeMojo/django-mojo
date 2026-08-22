@@ -182,16 +182,21 @@ def test_deploy_status_command(opts):
     from mojo.apps.edge.services import deploy, platform_deploy
 
     deploy.get_client().delete(deploy.TARGET_KEY, deploy.STATUS_KEY)
-    row, _ = platform_deploy.create(SHA_C, actor="test", source="test")
+    # The row is owned by THIS runner, so the command's evidence write lands
+    # for real instead of behind a process-global patch of
+    # platform_deploy.evidence (item #2558).
+    from mojo.apps.edge.models import PlatformDeployment
+    row = PlatformDeployment.objects.create(
+        sha=SHA_C, actor="test", source="test", request_key=str(uuid.uuid4()),
+        frozen_roster=[deploy.local_runner_id()], transitions=[])
     deploy.set_target(SHA_C, actor="test", deployment_id=row.pk)
     deploy.arm_status(SHA_C, deployment_id=row.pk)
 
-    with mock.patch.object(platform_deploy, "evidence"):
-        with_setting(
-            "EDGE_NODE_ID", "edge-deploy-status-test",
-            lambda: call_command(
-                "deploy_status", "set", "deploying", sha=SHA_C,
-                deployment=str(row.pk)))
+    with_setting(
+        "EDGE_NODE_ID", "edge-deploy-status-test",
+        lambda: call_command(
+            "deploy_status", "set", "deploying", sha=SHA_C,
+            deployment=str(row.pk)))
     out = io.StringIO()
     call_command("deploy_status", "get", stdout=out)
     state = json.loads(out.getvalue())
@@ -397,9 +402,11 @@ def test_deploy_status_deploying_closes_the_node_job(opts):
 
     row, job = _armed_attempt()
     try:
-        with mock.patch.object(platform_deploy, "evidence"):
-            call_command("deploy_status", "set", "deploying", sha=SHA_C,
-                         deployment=str(row.pk))
+        # The attempt is owned by this runner, so the command's evidence
+        # write lands for real — no patch of platform_deploy.evidence
+        # (item #2558).
+        call_command("deploy_status", "set", "deploying", sha=SHA_C,
+                     deployment=str(row.pk))
 
         job.refresh_from_db()
         th.assert_eq(job.status, "completed",
@@ -500,10 +507,9 @@ def test_deploy_status_phases(opts):
 
     row, _job = _armed_attempt()
     try:
-        with mock.patch.object(platform_deploy, "evidence"):
-            call_command("deploy_status", "set", "deploying", sha=SHA_C,
-                         deployment=str(row.pk),
-                         phases="var/deploy/phase_timings")
+        call_command("deploy_status", "set", "deploying", sha=SHA_C,
+                     deployment=str(row.pk),
+                     phases="var/deploy/phase_timings")
         row.refresh_from_db()
         th.assert_eq(
             [item["phase"] for item in (row.detail.get("phases") or [])],
@@ -515,9 +521,8 @@ def test_deploy_status_phases(opts):
 
     second, _second_job = _armed_attempt()
     try:
-        with mock.patch.object(platform_deploy, "evidence"):
-            call_command("deploy_status", "set", "deploying", sha=SHA_C,
-                         deployment=str(second.pk))
+        call_command("deploy_status", "set", "deploying", sha=SHA_C,
+                     deployment=str(second.pk))
         second.refresh_from_db()
         th.assert_true("phases" not in (second.detail or {}),
                        f"an older node script passes no --phases and must "
@@ -528,10 +533,9 @@ def test_deploy_status_phases(opts):
 
     third, _third_job = _armed_attempt()
     try:
-        with mock.patch.object(platform_deploy, "evidence"):
-            call_command("deploy_status", "set", "deploying", sha=SHA_C,
-                         deployment=str(third.pk),
-                         phases="var/deploy/does-not-exist")
+        call_command("deploy_status", "set", "deploying", sha=SHA_C,
+                     deployment=str(third.pk),
+                     phases="var/deploy/does-not-exist")
         third.refresh_from_db()
         th.assert_true("phases" not in (third.detail or {}),
                        f"an unreadable timings file is no timings, never a "

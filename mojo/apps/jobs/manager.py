@@ -102,7 +102,8 @@ class JobManager:
 
     def get_runners_bounded(self, channel: str, limit: int = 128,
                             max_scan_pages: int = 16,
-                            timeout: float = 1.0) -> List[Dict[str, Any]]:
+                            timeout: float = 1.0,
+                            client=None, connect=None) -> List[Dict[str, Any]]:
         """Return one exact live-channel roster or fail closed.
 
         Unlike ``get_runners()``, this never scans the shared Redis keyspace.
@@ -110,9 +111,20 @@ class JobManager:
         unrelated app keys and unrelated runners cannot make a small roster
         look incomplete. The legacy ``max_scan_pages`` argument remains
         accepted for caller compatibility.
+
+        ``client`` is an injection seam for tests (None means a bounded
+        primary-only connection is opened for the read). ``connect`` is the
+        narrower seam for asserting HOW that connection is asked for — the
+        roster read must be primary-only, since a replica-lagged roster is a
+        fleet-safety answer that is quietly incomplete.
         """
-        from mojo.helpers.redis import get_bounded_connection
-        with get_bounded_connection(
+        if client is not None:
+            return self._read_bounded_runners(
+                client, channel, limit, max_scan_pages, timeout)
+        if connect is None:
+            from mojo.helpers.redis import get_bounded_connection
+            connect = get_bounded_connection
+        with connect(
                 timeout=timeout, max_connections=2,
                 read_from_replicas=False) as client:
             return self._read_bounded_runners(

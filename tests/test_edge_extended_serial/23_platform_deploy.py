@@ -356,3 +356,67 @@ def test_close_handoff_job_swallows_failures(opts):
     _clean_node_jobs()
     _clean_deploy_state()
 
+
+# ---------------------------------------------------------------------------
+# Moved from tests/test_edge/23_platform_deploy.py (maestro #2558): these two
+# assert the CONNECTION wiring itself, which is only observable by patching
+# mojo.helpers.redis.get_bounded_connection / the redis client's settings
+# singleton — process-global, so unsafe under the parallel default tier. The
+# fail-closed discovery semantics stay in the default module through the
+# `client=` seam on JobManager.get_runners_bounded.
+# ---------------------------------------------------------------------------
+
+
+@th.django_unit_test("bounded runner discovery ignores unrelated Redis keyspace size")
+def test_bounded_runner_discovery_does_not_scan_global_keyspace(opts):
+    import json
+    from django.utils import timezone
+    from mojo.apps.jobs.manager import JobManager
+
+    client = mock.MagicMock()
+    client.__enter__.return_value = client
+    client.zcount.return_value = 0
+    client.zrangebyscore.return_value = [b"mv1-engine", b"mv2-engine"]
+    client.scan.side_effect = AssertionError(
+        "runner discovery must not scan the shared Redis keyspace")
+    pipe = client.pipeline.return_value
+    pipe.execute.return_value = [json.dumps({
+        "runner_id": name, "channels": ["edge"],
+        "last_heartbeat": timezone.now().isoformat(),
+    }) for name in ("mv1-engine", "mv2-engine")]
+    manager = JobManager()
+    with mock.patch(
+            "mojo.helpers.redis.get_bounded_connection",
+            return_value=client) as get_connection:
+        rows = manager.get_runners_bounded(
+            "edge", limit=2, max_scan_pages=1)
+    assert [row["runner_id"] for row in rows] == [
+        "mv1-engine", "mv2-engine"], \
+        "dedicated roster lookup did not return both healthy edge runners"
+    assert not client.scan.called, \
+        "runner discovery still depends on unrelated Redis keyspace pages"
+    assert get_connection.call_args.kwargs["read_from_replicas"] is False, \
+        "fleet safety discovery allowed a replica-lagged roster read"
+    assert client.zrangebyscore.call_args.args[0].endswith(
+        "runner_registry:edge"), \
+        "edge discovery read a global rather than channel-specific index"
+
+
+@th.django_unit_test("bounded Redis safety reads can require the cluster primary")
+def test_bounded_connection_primary_override(opts):
+    from mojo.helpers.redis import client as redis_client
+
+    def setting(name, default=None):
+        if name == "REDIS_CLUSTER":
+            return True
+        if name == "REDIS_READ_FROM_REPLICAS":
+            return "1"
+        return default
+
+    with mock.patch.object(redis_client.settings, "get_static",
+                           side_effect=setting), \
+         mock.patch.object(redis_client.RedisCluster,
+                           "from_url") as from_url:
+        redis_client.get_bounded_connection(read_from_replicas=False)
+    assert from_url.call_args.kwargs["read_from_replicas"] is False, \
+        "explicit primary-only safety read inherited replica settings"

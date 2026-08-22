@@ -292,22 +292,27 @@ def _domain_summary(domain):
     return {"id": domain.pk, "name": domain.name, "provider": domain.provider}
 
 
-def _verify_external_cname(hostname, target):
+def _verify_external_cname(hostname, target, resolve_cname=None):
     """Authoritatively confirm the user published ``hostname`` CNAME -> target.
 
     Unlike delegated ACME's one-hop ``_acme-challenge`` proof, the app CNAME
     target (``EDGE_WEBAPP_CNAME_TARGET``) may itself be a CNAME — e.g. to an
     ELB — so this deliberately does NOT use ``probe.verify_one_hop_cname``'s
     one-hop restriction on the target side.
+
+    ``resolve_cname`` is an injection seam for tests (None means the live
+    authoritative probe, ``probe.query_cname``).
     """
     from mojo.helpers.dns import probe
 
-    result = probe.query_cname(hostname)
+    if resolve_cname is None:
+        resolve_cname = probe.query_cname
+    result = resolve_cname(hostname)
     targets = sorted(str(value).rstrip(".") for value in (result.targets or []))
     return targets == [target.rstrip(".")]
 
 
-def _wildcard_synthesized(domain, targets):
+def _wildcard_synthesized(domain, targets, resolve_cname=None):
     """Whether a probed CNAME answer came from a ``*.{domain}`` record.
 
     A wildcard answers every otherwise-empty name in its zone, so a random
@@ -318,8 +323,10 @@ def _wildcard_synthesized(domain, targets):
     """
     from mojo.helpers.dns import probe
 
+    if resolve_cname is None:
+        resolve_cname = probe.query_cname
     sibling = f"mojo-wildcard-check-{uuid.uuid4().hex[:12]}.{domain.name}"
-    result = probe.query_cname(sibling)
+    result = resolve_cname(sibling)
     sibling_targets = sorted(
         str(value).rstrip(".") for value in (result.targets or []))
     return bool(sibling_targets) and sibling_targets == targets
@@ -354,13 +361,16 @@ def _external_records(hostname, target, domain, include_challenge=False):
     return records
 
 
-def precheck(group, raw_url, group_intent="existing"):
+def precheck(group, raw_url, group_intent="existing", *, resolve_cname=None):
     """Stateless URL-first pre-flight for the wizard, before any operation.
 
     Given the address a user typed, work out what onboarding will require and
     steer un-serveable shapes. Never touches provider credentials: the only
     network call is one authoritative CNAME probe (never ``dns.list_records``,
     which would enumerate a whole provider zone on shared credentials per click).
+
+    ``resolve_cname`` is an injection seam for tests (None means the live
+    authoritative probe, ``probe.query_cname``).
     """
     from urllib.parse import urlsplit
 
@@ -489,7 +499,8 @@ def precheck(group, raw_url, group_intent="existing"):
         if blocked is not None:
             return blocked
         records = _external_records(hostname, destination.value, domain)
-        published = _verify_external_cname(hostname, destination.value)
+        published = _verify_external_cname(
+            hostname, destination.value, resolve_cname=resolve_cname)
         return result("ready" if published else "records_needed",
                       normalized=normalized, domain=_domain_summary(domain),
                       records=records)
@@ -499,10 +510,11 @@ def precheck(group, raw_url, group_intent="existing"):
     destination, blocked = destination_or_block()
     if blocked is not None:
         return blocked
-    probe_result = probe.query_cname(hostname)
+    probe_result = (resolve_cname or probe.query_cname)(hostname)
     targets = sorted(str(v).rstrip(".") for v in (probe_result.targets or []))
     if (targets and targets != [destination.value.rstrip(".")]
-            and not _wildcard_synthesized(domain, targets)):
+            and not _wildcard_synthesized(domain, targets,
+                                          resolve_cname=resolve_cname)):
         return result("conflict", normalized=normalized,
                       domain=_domain_summary(domain),
                       reason="That address already points somewhere else")
@@ -1077,7 +1089,7 @@ def _matching_legacy_address_records(records, target):
     return matched
 
 
-def _advance_address(operation):
+def _advance_address(operation, *, resolve_cname=None):
     from mojo.apps.dnsman.models import Certificate, Domain, DomainPurchase
     from mojo.apps.dnsman.models.certificate import STATUS_ACTIVE as CERT_ACTIVE
     from mojo.apps.dnsman.models.domain import PROVIDER_MOJO
@@ -1168,7 +1180,8 @@ def _advance_address(operation):
         # cannot write the record (dns.list_records/upsert_record both raise for
         # provider "mojo"). The user publishes the CNAME at their own host and
         # we confirm it authoritatively — no error budget while they do.
-        if not (target and _verify_external_cname(hostname, target)):
+        if not (target and _verify_external_cname(
+                hostname, target, resolve_cname=resolve_cname)):
             state = dict(operation.state or {})
             intent = dict(state.get("intent") or {})
             intent["dns"] = {"provider": "mojo", "type": "CNAME",

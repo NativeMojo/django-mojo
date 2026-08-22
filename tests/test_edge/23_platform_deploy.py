@@ -93,17 +93,21 @@ def test_bounded_runner_discovery(opts):
     client.zrangebyscore.return_value = ["a", "b", "c"]
     pipe = client.pipeline.return_value
     manager = JobManager()
-    with mock.patch(
-            "mojo.helpers.redis.get_bounded_connection",
-            return_value=client):
-        with th.assert_raises(RuntimeError):
-            manager.get_runners_bounded("edge", limit=2)
+    with th.assert_raises(RuntimeError):
+        manager.get_runners_bounded("edge", limit=2, client=client)
     assert not pipe.get.called, \
         "overflowing runner index should fail before heartbeat reads"
 
 
-@th.django_unit_test("bounded runner discovery ignores unrelated Redis keyspace size")
-def test_bounded_runner_discovery_does_not_scan_global_keyspace(opts):
+@th.django_unit_test("fleet roster discovery opens a bounded, primary-only connection")
+def test_bounded_runner_discovery_requires_the_primary(opts):
+    """The default-tier half of the replica contract (item #2558).
+
+    A roster read served by a lagging replica is quietly incomplete, and this
+    roster is what fleet safety counts. The `connect=` seam records how the
+    connection is ASKED for, so the demand can be asserted without patching
+    `mojo.helpers.redis` — a shared helper every parallel module reads.
+    """
     import json
     from django.utils import timezone
     from mojo.apps.jobs.manager import JobManager
@@ -111,50 +115,29 @@ def test_bounded_runner_discovery_does_not_scan_global_keyspace(opts):
     client = mock.MagicMock()
     client.__enter__.return_value = client
     client.zcount.return_value = 0
-    client.zrangebyscore.return_value = [b"mv1-engine", b"mv2-engine"]
-    client.scan.side_effect = AssertionError(
-        "runner discovery must not scan the shared Redis keyspace")
-    pipe = client.pipeline.return_value
-    pipe.execute.return_value = [json.dumps({
-        "runner_id": name, "channels": ["edge"],
+    client.zrangebyscore.return_value = [b"mv1-engine"]
+    client.pipeline.return_value.execute.return_value = [json.dumps({
+        "runner_id": "mv1-engine", "channels": ["edge"],
         "last_heartbeat": timezone.now().isoformat(),
-    }) for name in ("mv1-engine", "mv2-engine")]
-    manager = JobManager()
-    with mock.patch(
-            "mojo.helpers.redis.get_bounded_connection",
-            return_value=client) as get_connection:
-        rows = manager.get_runners_bounded(
-            "edge", limit=2, max_scan_pages=1)
-    assert [row["runner_id"] for row in rows] == [
-        "mv1-engine", "mv2-engine"], \
-        "dedicated roster lookup did not return both healthy edge runners"
-    assert not client.scan.called, \
-        "runner discovery still depends on unrelated Redis keyspace pages"
-    assert get_connection.call_args.kwargs["read_from_replicas"] is False, \
-        "fleet safety discovery allowed a replica-lagged roster read"
-    assert client.zrangebyscore.call_args.args[0].endswith(
-        "runner_registry:edge"), \
-        "edge discovery read a global rather than channel-specific index"
+    })]
+    asked = []
 
+    def connect(**kwargs):
+        asked.append(kwargs)
+        return client
 
-@th.django_unit_test("bounded Redis safety reads can require the cluster primary")
-def test_bounded_connection_primary_override(opts):
-    from mojo.helpers.redis import client as redis_client
+    rows = JobManager().get_runners_bounded("edge", limit=2, connect=connect)
 
-    def setting(name, default=None):
-        if name == "REDIS_CLUSTER":
-            return True
-        if name == "REDIS_READ_FROM_REPLICAS":
-            return "1"
-        return default
-
-    with mock.patch.object(redis_client.settings, "get_static",
-                           side_effect=setting), \
-         mock.patch.object(redis_client.RedisCluster,
-                           "from_url") as from_url:
-        redis_client.get_bounded_connection(read_from_replicas=False)
-    assert from_url.call_args.kwargs["read_from_replicas"] is False, \
-        "explicit primary-only safety read inherited replica settings"
+    assert [row["runner_id"] for row in rows] == ["mv1-engine"], \
+        f"the roster read did not return the live edge runner: {rows}"
+    assert len(asked) == 1, \
+        f"one roster read opened {len(asked)} connections: {asked}"
+    assert asked[0].get("read_from_replicas") is False, \
+        (f"fleet safety discovery allowed a replica-lagged roster read: "
+         f"{asked[0]}")
+    assert asked[0].get("max_connections") == 2, \
+        (f"the roster read did not bound its pool, so a slow read can hold a "
+         f"shared connection: {asked[0]}")
 
 
 @th.django_unit_test("released fleets are reconciled into terminal UUID proof")
@@ -173,10 +156,15 @@ def test_reconcile_released_fleet(opts):
         modified=timezone.now() - timedelta(
             seconds=platform_deploy.FLEET_PROOF_GRACE + 1))
     result = mock.Mock(status=PlatformDeployment.STATUS_CONVERGED)
-    with mock.patch.object(
-            platform_deploy, "verify", return_value=result) as verify:
-        changed = platform_deploy.reconcile_stale()
-    verify.assert_called_once_with(row.pk)
+    verified = []
+
+    def verify_fleet(pk):
+        verified.append(pk)
+        return result
+
+    changed = platform_deploy.reconcile_stale(verify_fleet=verify_fleet)
+    assert verified == [row.pk], \
+        f"exactly this released fleet must be verified, got {verified}"
     assert changed == 1, \
         "the released fleet was not closed from restarted-runner proof"
 
@@ -363,11 +351,8 @@ def test_bounded_runner_discovery_rejects_stale_heartbeat(opts):
         "runner_id": "mv1-engine", "channels": ["edge"],
         "last_heartbeat": (timezone.now() - timedelta(minutes=1)).isoformat(),
     })]
-    with mock.patch(
-            "mojo.helpers.redis.get_bounded_connection",
-            return_value=client):
-        with th.assert_raises(RuntimeError):
-            JobManager().get_runners_bounded("edge")
+    with th.assert_raises(RuntimeError):
+        JobManager().get_runners_bounded("edge", client=client)
 
 
 @th.django_unit_test("malformed declared heartbeats fail roster discovery closed")
@@ -384,11 +369,8 @@ def test_bounded_runner_discovery_rejects_malformed_heartbeat(opts):
         "runner_id": "mv1-engine", "channels": "edge",
         "last_heartbeat": timezone.now().isoformat(),
     })]
-    with mock.patch(
-            "mojo.helpers.redis.get_bounded_connection",
-            return_value=client):
-        with th.assert_raises(RuntimeError):
-            JobManager().get_runners_bounded("edge")
+    with th.assert_raises(RuntimeError):
+        JobManager().get_runners_bounded("edge", client=client)
 
 
 @th.django_unit_test("future registry timestamps fail roster discovery closed")
@@ -399,11 +381,8 @@ def test_bounded_runner_discovery_rejects_future_score(opts):
     client.__enter__.return_value = client
     client.zrangebyscore.return_value = []
     client.zcount.return_value = 1
-    with mock.patch(
-            "mojo.helpers.redis.get_bounded_connection",
-            return_value=client):
-        with th.assert_raises(RuntimeError):
-            JobManager().get_runners_bounded("edge")
+    with th.assert_raises(RuntimeError):
+        JobManager().get_runners_bounded("edge", client=client)
 
 
 @th.django_unit_test("bounded runner discovery rejects a missing heartbeat document")
@@ -422,11 +401,9 @@ def test_bounded_runner_discovery_missing_heartbeat(opts):
         "last_heartbeat": timezone.now().isoformat(),
     }), None]
     manager = JobManager()
-    with mock.patch(
-            "mojo.helpers.redis.get_bounded_connection",
-            return_value=client):
-        with th.assert_raises(RuntimeError):
-            manager.get_runners_bounded("edge", limit=2, max_scan_pages=3)
+    with th.assert_raises(RuntimeError):
+        manager.get_runners_bounded("edge", limit=2, max_scan_pages=3,
+                                    client=client)
 
 
 @th.django_unit_test("provider and callback messages never persist as deploy detail")

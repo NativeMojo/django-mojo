@@ -140,19 +140,24 @@ class KMSHelper:
         encryption_context_key: str = "ctx",
         *,
         ensure_key: bool = True,
+        client_factory=None,
     ):
         """
         :param kms_key_id: ARN, KeyId, or alias (e.g., "alias/app-prod")
         :param region_name: AWS region (e.g., "us-east-1")
         :param encryption_context_key: Field name used in KMS EncryptionContext (default "ctx")
         :param ensure_key: If True and kms_key_id is an alias, ensure key+alias exist and rotation enabled
+        :param client_factory: keyword-only test seam (item #2558) with the
+            ``boto3.client(service, **kwargs)`` signature. Default (None) uses
+            ``boto3.client`` itself, byte-identical to before.
         """
         self.kms_key_id = kms_key_id
         self.region_name = region_name
         self.context_key = encryption_context_key
 
         # Configured AWS keys first, boto3's own chain when they are unset
-        self.kms = boto3.client("kms", **client_kwargs(region_name))
+        build_client = client_factory or boto3.client
+        self.kms = build_client("kms", **client_kwargs(region_name))
 
         if ensure_key:
             self._ensure_key_and_alias_if_needed()

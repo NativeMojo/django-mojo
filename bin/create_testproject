@@ -122,6 +122,30 @@ except Exception:
 PYEOF
 
 # ---------- testproject/config/settings/__init__.py ----------
+mkdir -p "$TESTPROJECT/config/testit_support"
+cat > "$TESTPROJECT/config/testit_support/__init__.py" << 'PYEOF'
+PYEOF
+
+cat > "$TESTPROJECT/config/testit_support/apps.py" << 'PYEOF'
+"""Test-project support app (maestro item #2558).
+
+Registers the reserved TESTIT_PROTECTED_SENTINEL key as a protected setting so
+the default tier can exercise the generic /api/settings denial contract
+against a key that can never touch real configuration. ready() runs in BOTH
+the test process and the separate uvicorn server process — a settings-file
+line would only reach one of them.
+"""
+from django.apps import AppConfig
+
+
+class TestitSupportConfig(AppConfig):
+    name = "testit_support"
+
+    def ready(self):
+        from mojo.apps.account.services import system_settings
+        system_settings.register_protected_setting("TESTIT_PROTECTED_SENTINEL")
+PYEOF
+
 cat > "$TESTPROJECT/config/settings/__init__.py" << 'PYEOF'
 from mojo.helpers import paths, modules, settings
 
@@ -203,6 +227,7 @@ INSTALLED_APPS = [
     "mojo.apps.chat",
     "mojo.apps.assistant",
     "mojo.apps.github",
+    "testit_support",
     "django.contrib.humanize",
     "django.contrib.auth",
     "django.contrib.contenttypes",

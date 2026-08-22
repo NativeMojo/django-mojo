@@ -89,8 +89,9 @@ _SYS_MODULES_WRITE_METHODS = frozenset({"update", "setdefault", "pop", "clear", 
 
 # The enforcement ring (maestro item #1839): the mutation classes that have
 # produced recorded cross-module release failures. These BLOCK the default
-# tier. Everything else the scanner finds (app-internal provider mocks and
-# similar) is advisory until the cold-ring migration lands.
+# tier. What the scanner finds outside this ring — an app's own mock of its
+# external-world boundary — is accepted by design but capped per package by
+# `cold_budget` (item #2558), so it can shrink but never grow.
 HOT_CODES = frozenset({
     "settings_singleton_mutation",
     "django_settings_mutation",
@@ -108,11 +109,52 @@ HOT_CODES = frozenset({
 # redirected VAR_ROOT poisons the ready-signal/conf reads of every concurrent
 # server_settings() context.
 SHARED_PATCH_PREFIXES = (
-    "mojo.helpers.settings",
-    "mojo.helpers.paths",
+    # The whole helpers namespace: a helper is shared by definition, and its
+    # patch window is visible to every module that calls through it
+    # (maestro item #2558 promoted this from the advisory ring).
+    "mojo.helpers.",
     "mojo.apps.incident",
     "mojo.apps.jobs",
     "testit.",
+)
+
+# App services that two or more test packages patch, or that one package
+# patches while another CALLS them — a patch window here swallows a foreign
+# module's real call. The live instance that proved the class: test_aws
+# patched `aws_check._setting` with finite side_effect iterators while
+# test_dnsman instantiated AWSCheckRunner inside that window.
+#
+# Membership is historical, not current: a target stays listed after being
+# remediated so the exposure cannot silently return. Opt-in serial packages
+# are exempt, which is where the exhaustive variants of these now live.
+CROSS_PACKAGE_TARGETS = (
+    # Remediated and pinned: no default-tier package may patch these again.
+    "mojo.apps.account.models.setting.Setting.RestMeta",
+    "mojo.apps.account.services.system_settings",
+    "mojo.apps.aws.services.aws_check",
+    "mojo.apps.edge.services.render.settings",
+    "mojo.deploy.audit",
+    "mojo.deploy.config_sync",
+    "mojo.deploy.mojosec",
+    "mojo.deploy.nginx_runtime",
+)
+
+# Cross-package-exposed but NOT yet pinned: still carrying default-tier
+# patches whose only remedy would be reshaping production code for test
+# convenience (an audit call inside a REST view, a PROTECTED-FK queryset, a
+# startup-path callback) or ~68 unrelated conversions. They stay capped by
+# each package's
+# `cold_budget` — which already prevents growth — and move onto this roster
+# as they are cleared. Tracked as the #2558 follow-up.
+DEFERRED_CROSS_PACKAGE_TARGETS = (
+    "mojo.apps.account.services.admin_platform",
+    "mojo.apps.account.utils.tokens",
+    "mojo.apps.aws.services.capacity",
+    "mojo.apps.dnsman.services.certs",
+    "mojo.apps.dnsman.models.Certificate",
+    "mojo.apps.dnsman.services.delegation",
+    "mojo.apps.edge.services.platform_deploy",
+    "mojo.mojosec.",
 )
 
 _TARGET_RE = re.compile(r"'([A-Za-z0-9_.]+)'")
@@ -130,9 +172,12 @@ def is_hot_violation(row):
         if "settings singleton" in row.detail:
             return True
         # A detail may quote both the attribute name and the dotted target —
-        # any quoted token in a shared namespace makes the site hot.
+        # any quoted token in a shared namespace, or on the cross-package
+        # roster, makes the site hot.
         for token in _TARGET_RE.findall(row.detail):
             if token.startswith(SHARED_PATCH_PREFIXES):
+                return True
+            if token.startswith(CROSS_PACKAGE_TARGETS):
                 return True
     return False
 
@@ -606,10 +651,44 @@ class _FileScanner(ast.NodeVisitor):
         if path is None:
             return
         if path == _REST_PROTECTED_PATH or path.startswith(_REST_PROTECTED_PATH + "/"):
+            if self._rest_payload_key_is_reserved(node):
+                return
             self._flag(
                 "protected_rest_write", node,
                 f"{func.attr.upper()} {path} writes production settings "
                 "through the live server, visible to every parallel module")
+
+    def _rest_payload_key_is_reserved(self, node):
+        """True only when the write's payload names a literal reserved
+        (TESTIT_-prefixed) settings key.
+
+        A denial test may exercise the generic /api/settings surface against a
+        sentinel key the test project registers as protected — that write can
+        never touch real production configuration. Anything less provable — no
+        payload, a non-dict payload, a dynamic or non-literal ``key``, or a key
+        outside the reserved namespace — keeps the fail-closed flag exactly as
+        before.
+        """
+        if len(node.args) < 2:
+            return False
+        payload = node.args[1]
+        if not isinstance(payload, ast.Dict):
+            return False
+        if any(key_node is None for key_node in payload.keys):
+            # A **splat anywhere can smuggle any key — not provable.
+            return False
+        # EVERY "key" entry must be reserved, not just the first. A dict
+        # literal may repeat a key — Python keeps the LAST — so returning on
+        # the first match would let {"key": "TESTIT_X", "key": "SECRET_KEY"}
+        # scan as reserved and execute against a real protected key.
+        setting_keys = []
+        for key_node, value_node in zip(payload.keys, payload.values):
+            if self._resolve_string(key_node) == "key":
+                setting_keys.append(self._resolve_string(value_node))
+        if not setting_keys:
+            return False
+        return all(isinstance(name, str) and name.startswith(ALLOWED_KEY_PREFIX)
+                   for name in setting_keys)
 
     def _check_setattr_call(self, node):
         """setattr()/delattr() with a provable shared target is a mutation of
@@ -773,6 +852,45 @@ def evaluate_package_state(config, violations, *, origin, has_config):
                 "serial=True — requires_extra alone is not isolation: --all "
                 "still runs eligible modules in parallel")
     return problems
+
+
+def evaluate_cold_budget(config, cold_violations, *, origin, has_config):
+    """Two-sided cold-site ratchet for one default-tier repository package.
+
+    `cold_budget` in TESTIT is the package's exact advisory-site count. Over
+    budget fails naming the new sites (the growth the ratchet exists to stop);
+    UNDER budget also fails ("budget stale — lower it") so remediation can
+    never accrue silent headroom. Absent key = budget 0: a new package starts
+    clean. Opt-in packages are exempt — their isolation story is serial
+    execution, not site accounting.
+
+    Returns a list of problem strings (empty = within budget).
+    """
+    if origin != "django_mojo" or not has_config:
+        return []
+    config = config or {}
+    if not bool(config.get("default_core", False)):
+        return []
+    budget = config.get("cold_budget", 0)
+    if not isinstance(budget, int) or isinstance(budget, bool) or budget < 0:
+        return [f"cold_budget must be a non-negative integer, got {budget!r}"]
+    count = len(cold_violations)
+    if count == budget:
+        return []
+    if count > budget:
+        lines = "\n".join(
+            f"    {row.file}:{row.line}: [{row.code}] {row.detail}"
+            for row in cold_violations)
+        return [
+            f"{count} advisory (cold) isolation site(s) exceed the package's "
+            f"cold_budget of {budget}. New app-internal patches of production "
+            f"code are not accepted in the default tier — give the entry "
+            f"point an injectable seam, or move the test to the package's "
+            f"*_extended_serial sibling. Sites:\n{lines}"]
+    return [
+        f"only {count} advisory (cold) isolation site(s) remain but "
+        f"cold_budget is {budget} — the budget is stale; lower it to {count} "
+        f"in this package's TESTIT so the headroom cannot absorb new sites"]
 
 
 def format_violations(violations):

@@ -951,9 +951,8 @@ def test_infrastructure_mode_agrees_with_the_django_helper(opts):
              "EXTERNAL", "External ", "mangaed", "extenral", 7, True, [],
              {"a": 1})
     for raw in table:
-        with mock.patch.object(infrastructure, "settings") as fake_settings:
-            fake_settings.get_static.return_value = raw
-            theirs = infrastructure.infrastructure_mode()
+        theirs = infrastructure.infrastructure_mode(
+            reader=lambda key, default, value=raw: value)
         ours = inputs.infrastructure_mode({inputs.MODE_KEY: raw})
         th.assert_eq(ours, theirs,
                      f"the CLI and the portal must agree on {raw!r}: the CLI "

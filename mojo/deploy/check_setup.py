@@ -1144,7 +1144,11 @@ def topology_enabled(requested, config):
     return str(value).strip().lower() == "reference"
 
 
-def main(argv):
+def main(argv, *, session_factory=None):
+    # session_factory is a test seam: it must build (or fake) the boto3
+    # session from (config, profile). None keeps the real build_session.
+    if session_factory is None:
+        session_factory = build_session
     parser = argparse.ArgumentParser(
         prog="python3 -m mojo.deploy.check_setup",
         description="Audit an AWS account for django-mojo deployment gaps")
@@ -1180,7 +1184,7 @@ def main(argv):
     topology = topology_enabled(args.topology, config)
 
     try:
-        session = build_session(config, args.profile)
+        session = session_factory(config, args.profile)
     except ImportError:
         print("boto3 is not installed", file=sys.stderr)
         return 2

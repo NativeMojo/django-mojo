@@ -781,9 +781,14 @@ def _provider_unavailable(frontend):
             "_collector_reason": "no_load_balancer"}
 
 
-def _load_balancer(refresh=False):
-    """Serving-tier health from the balancer's own registered targets."""
-    frontend = _cached_frontend(refresh)
+def _load_balancer(refresh=False, *, frontend=None):
+    """Serving-tier health from the balancer's own registered targets.
+
+    ``frontend`` is an injection seam for tests (None means the shared
+    cached ELBv2 read).
+    """
+    if frontend is None:
+        frontend = _cached_frontend(refresh)
     balancer = frontend.get("balancer") or {}
     serving = [row for row in frontend.get("groups") or [] if row["registered"]]
     data = {
@@ -1093,7 +1098,7 @@ def _attention_message(sources, down):
     return f"{count} {noun} review — nothing is down."
 
 
-def dashboard_overview(request, refresh=False):
+def dashboard_overview(request, refresh=False, *, collectors=None):
     """Return the small, independently permissioned Admin landing matrix.
 
     This intentionally never calls System Setup readiness. Setup is a
@@ -1101,22 +1106,43 @@ def dashboard_overview(request, refresh=False):
     ``_dashboard_sanity`` adds only the bounded node checks (one local HTTP
     probe with a 1s budget, plus a bounded Redis client), never the readiness
     report's provider fan-out.
+
+    ``collectors`` is a keyword test seam (item #2558): a dict of
+    source-name -> zero-arg callable overriding the real collectors. The
+    permission gating in ``_section_map`` is untouched by it; default None
+    keeps production behavior byte-identical.
     """
     platform = ("view_platform", "manage_platform", "admin")
     security = ("view_security", "manage_security", "security", "admin")
+    source_collectors = {
+        "load_balancer": lambda: _load_balancer(refresh),
+        "compute": lambda: _compute(refresh),
+        "database": _dashboard_database,
+        "cache": _dashboard_cache,
+        "certificates": _dashboard_certificates,
+        "public_api": _api,
+        "framework": lambda: _framework(refresh),
+        "sms": _dashboard_sms,
+        "email": _dashboard_email,
+        "last_deployment": _dashboard_deployment,
+        "jobs": _dashboard_jobs,
+        "sanity": _dashboard_sanity,
+    }
+    if collectors:
+        source_collectors.update(collectors)
     raw = _section_map(request, {
-        "load_balancer": (platform, lambda: _load_balancer(refresh)),
-        "compute": (platform, lambda: _compute(refresh)),
-        "database": (platform, _dashboard_database),
-        "cache": (platform, _dashboard_cache),
-        "certificates": (platform, _dashboard_certificates),
-        "public_api": (platform, _api),
-        "framework": (platform, lambda: _framework(refresh)),
-        "sms": (platform, _dashboard_sms),
-        "email": (("manage_aws", "comms", "admin"), _dashboard_email),
-        "last_deployment": (platform, _dashboard_deployment),
-        "jobs": (platform, _dashboard_jobs),
-        "sanity": (platform, _dashboard_sanity),
+        "load_balancer": (platform, source_collectors["load_balancer"]),
+        "compute": (platform, source_collectors["compute"]),
+        "database": (platform, source_collectors["database"]),
+        "cache": (platform, source_collectors["cache"]),
+        "certificates": (platform, source_collectors["certificates"]),
+        "public_api": (platform, source_collectors["public_api"]),
+        "framework": (platform, source_collectors["framework"]),
+        "sms": (platform, source_collectors["sms"]),
+        "email": (("manage_aws", "comms", "admin"), source_collectors["email"]),
+        "last_deployment": (platform, source_collectors["last_deployment"]),
+        "jobs": (platform, source_collectors["jobs"]),
+        "sanity": (platform, source_collectors["sanity"]),
     })
     raw["incidents"] = _attention(request, "incidents", security)
     raw["tickets"] = _attention(request, "tickets", security)

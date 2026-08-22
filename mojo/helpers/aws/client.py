@@ -48,8 +48,14 @@ def _has_configured_endpoint(session, service):
     return bool(provider.provide())
 
 
-def get_session(access_key=None, secret_key=None, region=None, profile=None):
-    """Build a boto3 session without bypassing its normal credential chain."""
+def get_session(access_key=None, secret_key=None, region=None, profile=None,
+                *, session_cls=None):
+    """Build a boto3 session without bypassing its normal credential chain.
+
+    ``session_cls`` is an injection seam for tests (None means boto3.Session).
+    """
+    if session_cls is None:
+        session_cls = boto3.Session
     if bool(access_key) != bool(secret_key):
         missing = "AWS_SECRET" if access_key else "AWS_KEY"
         raise PartialCredentialsError(provider="django-settings", cred_var=missing)
@@ -63,19 +69,29 @@ def get_session(access_key=None, secret_key=None, region=None, profile=None):
         kwargs["region_name"] = region
     if profile:
         kwargs["profile_name"] = profile
-    return boto3.Session(**kwargs)
+    return session_cls(**kwargs)
 
 
 def get_assumed_session(role_arn, region=None, external_id=None, session_name=None,
-                        duration=None, access_key=None, secret_key=None, profile=None):
+                        duration=None, access_key=None, secret_key=None, profile=None,
+                        *, session_factory=None, fetcher_cls=None, credentials_cls=None):
     """Build a boto3 session whose clients act as an assumed IAM role.
 
     The source identity is resolved by ``get_session``, so it may be static
     keys, a named profile, or whatever the botocore default chain finds. The
     returned session refreshes the role credentials on its own; clients created
     from it after this call pick up the assumed identity.
+
+    ``session_factory``, ``fetcher_cls`` and ``credentials_cls`` are injection
+    seams for tests; None keeps the production collaborators.
     """
-    base = get_session(
+    if session_factory is None:
+        session_factory = get_session
+    if fetcher_cls is None:
+        fetcher_cls = AssumeRoleCredentialFetcher
+    if credentials_cls is None:
+        credentials_cls = DeferredRefreshableCredentials
+    base = session_factory(
         access_key=access_key,
         secret_key=secret_key,
         region=region,
@@ -94,14 +110,14 @@ def get_assumed_session(role_arn, region=None, external_id=None, session_name=No
         extra_args["ExternalId"] = external_id
     extra_args["DurationSeconds"] = int(duration or DEFAULT_ROLE_DURATION)
 
-    fetcher = AssumeRoleCredentialFetcher(
+    fetcher = fetcher_cls(
         client_creator=botocore_session.create_client,
         source_credentials=source,
         role_arn=role_arn,
         extra_args=extra_args,
         cache=_ASSUME_ROLE_CACHE,
     )
-    botocore_session._credentials = DeferredRefreshableCredentials(
+    botocore_session._credentials = credentials_cls(
         method="assume-role",
         refresh_using=fetcher.fetch_credentials,
     )

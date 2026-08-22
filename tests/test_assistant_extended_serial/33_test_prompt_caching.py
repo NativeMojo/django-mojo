@@ -5,10 +5,17 @@ Prompt-caching tests moved from tests/test_assistant/33_test_prompt_caching.py
 is unsafe under the parallel default tier (maestro item #1839). Runs opt-in
 (`extended`) and serial.
 
+Item #2558 moved `test_zero_usage_warning_fires_once` here too: it asserts a
+once-PER-PROCESS warning, so it resets the module-global
+`mojo.helpers.llm._zero_cache_warned` guard and attaches a handler to the
+shared `llm` logger. The process-globalness is the assertion, so there is no
+seam to convert it to.
+
 Covers:
 - llm.call() omits cache_control when the setting is False
 - run_assistant() persists summed usage on the final Message
 - per-turn cache usage is logged to assistant.log
+- a zero-cache-usage first call logs a one-time, once-per-process warning
 """
 import logging
 from unittest import mock
@@ -223,4 +230,54 @@ def test_assistant_logs_per_turn_cache_usage(opts):
     assert_true(
         len(matches) >= 1,
         f"Expected at least one INFO log with 'llm turn ... cache_read=999', got {[r.getMessage() for r in handler.records]}",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Zero-cache warning
+# ---------------------------------------------------------------------------
+
+@th.django_unit_test()
+def test_zero_usage_warning_fires_once(opts):
+    """When caching is enabled but both counters are 0, WARN once per process.
+
+    Moved here from tests/test_assistant/33_test_prompt_caching.py (maestro
+    item #2558): the contract is once-PER-PROCESS, so the test must reset the
+    module-global ``llm._zero_cache_warned`` guard and attach a handler to the
+    shared ``llm`` logger. Both are process-global mutations of
+    ``mojo.helpers.llm``, unsafe in the parallel default tier, and neither is
+    convertible to a seam — the process-globalness IS what is asserted.
+    """
+    from mojo.helpers import llm
+
+    # Reset the process-level guard so this test is deterministic.
+    llm._zero_cache_warned = False
+
+    fake_client, _ = _make_fake_client(_canned_response(usage={
+        "input_tokens": 5, "output_tokens": 3,
+        "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+    }))
+
+    stdlib_logger = llm.logger.logger
+    handler = _ListHandler()
+    stdlib_logger.addHandler(handler)
+    prev_level = stdlib_logger.level
+    stdlib_logger.setLevel(logging.WARNING)
+
+    try:
+        # Two calls — both return zero cache counters
+        llm.call(messages=[{"role": "user", "content": "hi"}], model="m",
+                 client=fake_client)
+        llm.call(messages=[{"role": "user", "content": "hi2"}], model="m",
+                 client=fake_client)
+    finally:
+        stdlib_logger.removeHandler(handler)
+        stdlib_logger.setLevel(prev_level)
+        llm._zero_cache_warned = False  # restore for other tests
+
+    warnings = [r for r in handler.records if r.levelno == logging.WARNING and "caching" in r.getMessage().lower()]
+    assert_eq(
+        len(warnings), 1,
+        f"WARNING should fire exactly once across 2 zero-cache calls, got {len(warnings)}: "
+        f"{[r.getMessage() for r in warnings]}",
     )

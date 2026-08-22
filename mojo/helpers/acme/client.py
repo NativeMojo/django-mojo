@@ -96,7 +96,7 @@ class AcmeClient(object):
     """An ACMEv2 account bound to one directory URL and one P-256 account key."""
 
     def __init__(self, directory_url, account_key, contact_email=None,
-                 kid=None, timeout=DEFAULT_TIMEOUT):
+                 kid=None, timeout=DEFAULT_TIMEOUT, http=None):
         self.directory_url = directory_url
         self.account_key = account_key
         self.contact_email = contact_email
@@ -106,6 +106,9 @@ class AcmeClient(object):
         self.timeout = timeout
         self.nonce = None
         self._directory = None
+        # Injection seam for tests: a stand-in for the ``requests`` module
+        # (None means the real one).
+        self.http = http if http is not None else requests
 
     # ------------------------------------------------------------------
     # transport
@@ -183,7 +186,7 @@ class AcmeClient(object):
     def directory(self):
         """Fetch (once) and cache the CA's directory document."""
         if self._directory is None:
-            resp = requests.get(
+            resp = self.http.get(
                 self.directory_url,
                 headers=self._headers({"Accept": "application/json"}),
                 timeout=self.timeout)
@@ -204,7 +207,7 @@ class AcmeClient(object):
     def new_nonce(self):
         """HEAD newNonce and cache the returned Replay-Nonce."""
         url = self._directory_url_for("newNonce")
-        resp = requests.head(url, headers=self._headers(), timeout=self.timeout)
+        resp = self.http.head(url, headers=self._headers(), timeout=self.timeout)
         self._update_nonce(resp)
         if not self.nonce:
             raise me.ValueException(f"The ACME server returned no nonce from {url}")
@@ -238,7 +241,7 @@ class AcmeClient(object):
         headers = {"Content-Type": JOSE_CONTENT_TYPE}
         if accept:
             headers["Accept"] = accept
-        resp = requests.post(
+        resp = self.http.post(
             url,
             data=json.dumps(body),
             headers=self._headers(headers),

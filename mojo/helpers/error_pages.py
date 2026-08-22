@@ -159,10 +159,16 @@ def brand_name():
         return None
 
 
-def _render_html(name, context):
-    """Render one page by template basename, honoring project overrides."""
+def _render_html(name, context, select_template=None):
+    """Render one page by template basename, honoring project overrides.
+
+    select_template is a keyword test seam (item #2558) defaulting to
+    Django's loader.select_template; production behavior is unchanged.
+    """
+    if select_template is None:
+        select_template = loader.select_template
     try:
-        template = loader.select_template([f"errors/{name}", f"mojo/errors/{name}"])
+        template = select_template([f"errors/{name}", f"mojo/errors/{name}"])
         return template.render(context)
     except TemplateDoesNotExist:
         pass

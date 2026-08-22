@@ -184,41 +184,43 @@ def test_analyze_image_calls_llm_with_vision(opts):
     mock_fh.read.return_value = fake_bytes
     mock_file.file_manager.backend.open.return_value = mock_fh
 
-    # Mock llm.call
+    # Fake llm.call injected through the tool's llm_call seam (item #2558) —
+    # no patch of the shared mojo.helpers.llm module.
     fake_response = {
         "content": [{"type": "text", "text": "This is a test image showing a logo."}]
     }
+    mock_call = mock.Mock(return_value=fake_response)
 
     with mock.patch(
         "mojo.apps.fileman.models.File.objects.select_related"
     ) as mock_sr:
         mock_sr.return_value.get.return_value = mock_file
-        with mock.patch("mojo.helpers.llm.call", return_value=fake_response) as mock_call:
-            result = _tool_analyze_image(
-                {"file_id": 42, "prompt": "What is in this image?"},
-                opts.file_user,
-            )
+        result = _tool_analyze_image(
+            {"file_id": 42, "prompt": "What is in this image?"},
+            opts.file_user,
+            llm_call=mock_call,
+        )
 
-            assert_true("analysis" in result, f"Expected 'analysis' key, got {result}")
-            assert_eq(result["file_id"], 42, "Should return the file ID")
-            assert_eq(result["filename"], "test.png", "Should return the filename")
-            assert_true("logo" in result["analysis"],
-                        f"Analysis should contain mocked response, got: {result['analysis']}")
+    assert_true("analysis" in result, f"Expected 'analysis' key, got {result}")
+    assert_eq(result["file_id"], 42, "Should return the file ID")
+    assert_eq(result["filename"], "test.png", "Should return the filename")
+    assert_true("logo" in result["analysis"],
+                f"Analysis should contain mocked response, got: {result['analysis']}")
 
-            # Verify llm.call was called with image content block
-            assert_true(mock_call.called, "llm.call should have been called")
-            call_args = mock_call.call_args
-            messages = call_args[0][0]
-            assert_eq(len(messages), 1, "Should send 1 message")
-            content = messages[0]["content"]
-            assert_eq(len(content), 2, "Message should have 2 content blocks")
-            assert_eq(content[0]["type"], "image",
-                      "First content block should be image type")
-            assert_eq(content[0]["source"]["type"], "base64",
-                      "Image source should be base64")
-            assert_eq(content[0]["source"]["media_type"], "image/png",
-                      "Media type should match file content_type")
-            assert_eq(content[1]["type"], "text",
-                      "Second content block should be text")
-            assert_true("What is in this image" in content[1]["text"],
-                        "Text block should contain the prompt")
+    # Verify the injected llm caller received an image content block
+    assert_true(mock_call.called, "llm.call should have been called")
+    call_args = mock_call.call_args
+    messages = call_args[0][0]
+    assert_eq(len(messages), 1, "Should send 1 message")
+    content = messages[0]["content"]
+    assert_eq(len(content), 2, "Message should have 2 content blocks")
+    assert_eq(content[0]["type"], "image",
+              "First content block should be image type")
+    assert_eq(content[0]["source"]["type"], "base64",
+              "Image source should be base64")
+    assert_eq(content[0]["source"]["media_type"], "image/png",
+              "Media type should match file content_type")
+    assert_eq(content[1]["type"], "text",
+              "Second content block should be text")
+    assert_true("What is in this image" in content[1]["text"],
+                "Text block should contain the prompt")

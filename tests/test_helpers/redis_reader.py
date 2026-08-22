@@ -1,3 +1,8 @@
+"""Reader-endpoint resolution for the shared Redis helper.
+
+`_resolve_reader_url` takes an injected settings getter, so these cases run
+with test-owned data and touch no process-global state.
+"""
 from testit import helpers as th
 
 
@@ -77,24 +82,12 @@ def test_reader_url_resolution(opts):
         "Cluster mode must ignore the standalone reader endpoint")
 
 
-@th.django_unit_test()
-def test_unconfigured_reader_returns_primary_singleton(opts):
-    from mojo.helpers.redis import client
-
-    prior_reader_client = client._READER_CLIENT
-    prior_reader_url = client._READER_URL
-    try:
-        client._READER_CLIENT = None
-        client._READER_URL = -1
-        primary = client.get_connection()
-        reader = client.get_connection(reader=True)
-        assert reader is primary, (
-            "An unconfigured reader request must return the primary singleton")
-        assert client._READER_CLIENT is None, (
-            "The primary singleton must not be aliased into _READER_CLIENT")
-    finally:
-        client._READER_CLIENT = prior_reader_client
-        client._READER_URL = prior_reader_url
+# test_unconfigured_reader_returns_primary_singleton moved to
+# tests/test_helpers_extended_serial/redis_reader.py (maestro item #2558): it
+# rebinds the module-global _READER_CLIENT / _READER_URL singletons on
+# mojo.helpers.redis.client, which every parallel module reads through
+# get_connection(). The assertions ARE about that module state, so there is no
+# seam to convert it to.
 
 
 @th.django_unit_test()
