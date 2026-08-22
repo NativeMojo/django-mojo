@@ -52,7 +52,16 @@ class AuthenticationMiddleware(MiddlewareMixin):
         with use_primary():
             instance, error = handler(token, request)
         if error is not None:
-            return JsonResponse({'error': error}, status=401)
+            response = JsonResponse({'error': error}, status=401)
+            # A bad bearer never reaches a view, so this is the ONLY place a
+            # spec-compliant WWW-Authenticate can be attached to the 401 that
+            # an OAuth resource server's client is waiting for. The handler
+            # stamps the value (only at a live registered resource path); we
+            # just copy it, so no other endpoint's 401 grows a header.
+            challenge = getattr(request, "www_authenticate", None)
+            if challenge:
+                response["WWW-Authenticate"] = challenge
+            return response
         key = AUTH_BEARER_NAME_MAP.get(prefix, prefix)
         setattr(request, key, instance)
         request.bearer = prefix

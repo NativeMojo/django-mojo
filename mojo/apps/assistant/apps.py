@@ -12,6 +12,29 @@ class AppConfig(BaseAppConfig):
         # Then discover assistant_tools.py in all installed apps
         autodiscover_modules("assistant_tools")
         self.register_settings_descriptors()
+        self.register_oauth_resource()
+
+    def register_oauth_resource(self):
+        """Declare the MCP endpoint to the account app's authorization server.
+
+        Registration is what makes `/api/assistant/mcp` a resource the server
+        will mint tokens for and confine them to; the `enabled` callable is
+        re-read on every check, so ASSISTANT_MCP_ENABLED takes effect
+        immediately in both directions. Guarded on the account app being
+        installed: the assistant can ship without it.
+        """
+        from django.apps import apps
+
+        if not apps.is_installed("mojo.apps.account"):
+            return
+        from mojo.apps.account.services import oauth_server
+        from mojo.helpers.settings import settings
+
+        oauth_server.register_resource(
+            "/" + settings.get_static(
+                "ASSISTANT_MCP_PATH", "api/assistant/mcp").strip("/"),
+            ["mcp"],
+            lambda: settings.get("ASSISTANT_MCP_ENABLED", False, kind="bool"))
 
     def register_settings_descriptors(self):
         """Advertise the Assistant's configuration in the Admin catalog.

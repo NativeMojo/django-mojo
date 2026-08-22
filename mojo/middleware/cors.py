@@ -177,8 +177,12 @@ class CORSMiddleware:
         response['Access-Control-Max-Age'] = '86400'
 
         # Expose headers that frontend might need
+        # WWW-Authenticate is exposed so a browser-hosted OAuth/MCP client can
+        # read the RFC 9728 challenge off a 401 and discover where to
+        # authenticate. Without it the header is present but unreadable to JS.
         response['Access-Control-Expose-Headers'] = (
-            'Content-Disposition, X-Total-Count, X-Bouncer-Muid, X-Bouncer-Reason'
+            'Content-Disposition, X-Total-Count, X-Bouncer-Muid, '
+            'X-Bouncer-Reason, WWW-Authenticate'
         )
 
         return response

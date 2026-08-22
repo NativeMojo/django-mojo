@@ -46,7 +46,12 @@ class JWToken:
         payload['exp'] = self._get_exp_time(self.access_token_expiry)
         payload['token_type'] = token_type
         payload["iat"] = int(time.time())
-        payload["jti"] = secrets.token_hex(4)
+        # A caller-supplied jti wins. The OAuth server stores the jti of the
+        # current access token on the grant row, which is how a presented token
+        # resolves back to its grant; overwriting it here would make that link
+        # impossible. Callers that pass none keep the old random value.
+        if "jti" not in payload:
+            payload["jti"] = secrets.token_hex(4)
         token = jwt.encode(payload, self.key, algorithm=self.alg)
         self.payload = objict.fromdict(payload)
         self.token = token
@@ -74,11 +79,18 @@ class JWToken:
     def _get_exp_time(self, expiry_seconds):
         return datetime.datetime.utcnow() + datetime.timedelta(seconds=expiry_seconds)
 
-    def is_token_valid(self, token):
+    def is_token_valid(self, token, audience=None):
+        """Verify signature and expiry, and — when given — the `aud` claim.
+
+        PyJWT refuses ANY token carrying `aud` when no audience is supplied, so
+        an audience-bound token cannot be validated through the legacy call.
+        With `audience=None` the behaviour is byte-identical to before: a
+        legacy-shaped token that somehow carries an `aud` still fails.
+        """
         try:
             self.is_expired = False
             self.invalid_sig = False
-            jwt.decode(token, self.key, algorithms=['HS256'])
+            jwt.decode(token, self.key, algorithms=['HS256'], audience=audience)
             self.is_valid = True
             return True
         except jwt.ExpiredSignatureError:

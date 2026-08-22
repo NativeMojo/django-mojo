@@ -10,6 +10,9 @@ DUID_HEADER = f"HTTP_{DUID_HEADER}"
 
 REQUEST_PARSER = RequestDataParser()
 API_ROOT = "/" + settings.get_static("MOJO_PREFIX", "api/").strip("/")
+# The OAuth server's path root is read here separately, from the same setting
+# the service reads: mojo/helpers must not import mojo.apps at import time.
+OAUTH_ROOT = "/" + settings.get_static("OAUTH_SERVER_PATH", "api/account/oauth").strip("/")
 
 def parse_request_data(request):
     """
@@ -119,6 +122,14 @@ def sensitive_body_label(request):
     # allowed to set the key) and into requests.log.
     if path == f"{API_ROOT}/account/admin/assistant":
         return "assistant_setup"
+    # OAuth 2.1 credential carriers: `token` bodies hold a code_verifier or a
+    # refresh token, `revoke` a live token, and `approve` the session bearer
+    # plus the PKCE material. `register` and the discovery documents carry no
+    # secret, so they are deliberately absent.
+    if method == "POST" and path in (f"{OAUTH_ROOT}/token", f"{OAUTH_ROOT}/revoke"):
+        return "oauth_token"
+    if method == "POST" and path == f"{OAUTH_ROOT}/approve":
+        return "oauth_approve"
     if path == f"{API_ROOT}/edge/webapp/link_key":
         return "webapp_deployment_key"
     if method == "POST" and path in (

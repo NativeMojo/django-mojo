@@ -49,12 +49,18 @@ def _build_request_meta(request):
         key_backed = bool(request_helpers.is_key_backed_session(request))
     except Exception:
         key_backed = True
+    # An OAuth grant is the marker for a remote MCP caller. request.bearer
+    # stays "bearer" (the middleware overwrites it, and changing it would make
+    # fresh_auth skip step-up for these callers), so the grant attribute is
+    # what tells a tool it is not talking to a person at a keyboard.
+    bearer = "mcp" if getattr(request, "oauth_grant", None) is not None \
+        else getattr(request, "bearer", None)
     return objict.objict(
         ip=getattr(request, "ip", None),
         user_agent=getattr(request, "META", {}).get("HTTP_USER_AGENT", ""),
         path=getattr(request, "path", ""),
         method=getattr(request, "method", ""),
-        bearer=getattr(request, "bearer", None),
+        bearer=bearer,
         key_backed=key_backed,
     )
 
