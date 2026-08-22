@@ -388,6 +388,7 @@ set_request_service() { # exact sealed stage-0 projection value
 # ── tests ────────────────────────────────────────────────────────────────────
 
 setup_tls_case() {
+    local server_name="${1:-app.example.test}"
     setup_env
     echo 9.9.9 > "$CTL/mojo.version"
     TLS_LIVE="$TMP/letsencrypt/live/app.example.test"
@@ -400,9 +401,10 @@ setup_tls_case() {
     ln -s ../../archive/app.example.test/fullchain7.pem "$TLS_LIVE/fullchain.pem"
     ln -s ../../archive/app.example.test/privkey7.pem "$TLS_LIVE/privkey.pem"
     cat > "$PROJ/aws/nginx/conf.d/app.conf" <<EOF
+# HTTPS — repository-owned vhost comments may use UTF-8.
 server {
     listen 443 ssl;
-    server_name app.example.test;
+    server_name $server_name;
     ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
     ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
     add_header X-Repository yes;
@@ -466,6 +468,8 @@ test_tls_lineage_preservation() {
         "the proven private-key lineage survives repository convergence"
     assert_has "$TMP/nginx_etc/conf.d/app.conf" "X-Repository yes" \
         "the repository remains authoritative for non-certificate directives"
+    assert_has "$TMP/nginx_etc/conf.d/app.conf" "HTTPS — repository-owned" \
+        "UTF-8 repository comments survive certificate overlay"
     assert_lacks "$TMP/nginx_etc/conf.d/app.conf" "old-operator-route" \
         "an installed route is not carried into repository bytes"
     assert_lacks "$TMP/nginx_etc/conf.d/app.conf" "options-ssl-nginx.conf" \
@@ -483,6 +487,19 @@ test_tls_lineage_preservation() {
     else
         fail "the TLS-lineage overlay changed bytes on its second run"
     fi
+
+    setup_tls_case
+    write_installed_tls app.example.test \
+        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
+        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
+    printf '\377' >> "$PROJ/aws/nginx/conf.d/app.conf"
+    assert_tls_refused "invalid UTF-8 repository bytes"
+
+    setup_tls_case k.example.test
+    write_installed_tls K.example.test \
+        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
+        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
+    assert_tls_refused "a Unicode-confusable server name"
 
     setup_tls_case
     write_installed_tls app.example.test \

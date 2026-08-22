@@ -308,9 +308,9 @@ def unchanged(path, prior):
 
 def tokens(data):
     try:
-        text = data.decode("ascii")
+        text = data.decode("utf-8")
     except UnicodeDecodeError:
-        raise Refused("non-ascii-config")
+        raise Refused("invalid-utf8-config")
     result = []
     index = 0
     size = len(text)
@@ -434,7 +434,8 @@ def tls_block(data, allow_none=False):
     return candidates[0]
 
 
-SERVER_NAME = re.compile(r"^(?:\*\.)?[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$", re.I)
+SERVER_NAME = re.compile(
+    r"^(?:\*\.)?[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$", re.I | re.ASCII)
 LINEAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$")
 
 
@@ -442,7 +443,12 @@ def names(block):
     values = []
     for directive in block.get("server_name", []):
         for token in directive[1:]:
-            value = token[0].lower().rstrip(".")
+            raw_value = token[0]
+            try:
+                raw_value.encode("ascii")
+            except UnicodeEncodeError:
+                raise Refused("unsafe-server-name")
+            value = raw_value.lower().rstrip(".")
             if token[3] or not SERVER_NAME.fullmatch(value):
                 raise Refused("unsafe-server-name")
             values.append(value)
@@ -544,10 +550,13 @@ def overlay(repo_data, repo_block, cert, key):
         (sole_value(repo_block, "ssl_certificate")[1:3], cert),
         (sole_value(repo_block, "ssl_certificate_key")[1:3], key),
     ]
-    output = repo_data
+    try:
+        output = repo_data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Refused("invalid-utf8-config")
     for (start, end), value in sorted(replacements, reverse=True):
-        output = output[:start] + value.encode("ascii") + output[end:]
-    return output
+        output = output[:start] + value + output[end:]
+    return output.encode("utf-8")
 
 
 def main():
