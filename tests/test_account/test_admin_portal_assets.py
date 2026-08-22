@@ -276,6 +276,8 @@ def test_maintenance_asset_contract(opts):
     assert "capabilities.maintenance" in feature and "route: 'maintenance'" in feature, \
         "the Maintenance sidebar entry is not gated on its capability"
     assert "refresh:" in core, "the refresh icon is missing from the shared catalog"
+    assert "api(`${FRAMEWORK_PATH}${refresh ? '?refresh=1' : ''}`, {signal})" in maintenance, \
+        "the Maintenance refresh control leaves the framework version cache stale"
 
     # A browser confirm() cannot carry the apply window or the typed echo, and
     # cannot be styled as the destructive action it is.
