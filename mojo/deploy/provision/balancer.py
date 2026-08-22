@@ -117,16 +117,19 @@ def ensure_balancer(clients, spec, observed, apply=False):
                 STEP, "balancer.provisioning",
                 f"{names['balancer']} is still provisioning"))
     else:
+        preserved_mode = bool(getattr(spec, "nlb_eip_allocations", None))
         findings.append(report.missing(
             STEP, "balancer.missing",
             f"network load balancer {names['balancer']} does not exist",
             f"apply creates it across {len(subnet_ids) or spec_module.AZ_COUNT} "
-            f"public subnet(s) with a fixed address in each"))
+            f"public subnet(s) with "
+            f"{'temporary AWS addresses' if preserved_mode else 'a fixed address in each'}"))
         actions.append(report.Action(STEP, "create", names["balancer"]))
         if not apply:
             if spec.fleet:
-                _subnet_mappings(ec2, spec, observed, subnet_ids,
-                                 findings, actions, apply=False)
+                if not preserved_mode:
+                    _subnet_mappings(ec2, spec, observed, subnet_ids,
+                                     findings, actions, apply=False)
                 _preview_new_balancer(spec, observed, instance_ids,
                                       findings, actions)
             return findings, actions, result
@@ -136,21 +139,25 @@ def ensure_balancer(clients, spec, observed, apply=False):
                 "the public subnets are not resolved yet",
                 "let the network step run first"))
             return findings, actions, result
-        mappings = _subnet_mappings(ec2, spec, observed, subnet_ids,
-                                    findings, actions)
-        if len(mappings) != len(subnet_ids):
-            findings.append(report.Finding(
-                STEP, report.BLIND, "balancer.address_mappings",
-                f"resolved {len(mappings)} of {len(subnet_ids)} exact NLB "
-                f"address mappings",
-                "fix the failed allocation and re-run; the successfully "
-                "tagged address is retained, but no one-AZ NLB was created"))
-            return findings, actions, result
+        mappings = []
+        if not preserved_mode:
+            mappings = _subnet_mappings(ec2, spec, observed, subnet_ids,
+                                        findings, actions)
+            if len(mappings) != len(subnet_ids):
+                findings.append(report.Finding(
+                    STEP, report.BLIND, "balancer.address_mappings",
+                    f"resolved {len(mappings)} of {len(subnet_ids)} exact NLB "
+                    f"address mappings",
+                    "fix the failed allocation and re-run; the successfully "
+                    "tagged address is retained, but no one-AZ NLB was created"))
+                return findings, actions, result
+        placement = ({"Subnets": list(subnet_ids)} if preserved_mode else
+                     {"SubnetMappings": mappings})
         created = report.safe(
             findings, STEP, "elbv2.create_load_balancer",
             lambda: elbv2.create_load_balancer(
                 Name=names["balancer"], Type="network",
-                Scheme="internet-facing", SubnetMappings=mappings,
+                Scheme="internet-facing", **placement,
                 Tags=spec_module.tag_list(spec, "balancer",
                                           name=names["balancer"])))
         if not created:

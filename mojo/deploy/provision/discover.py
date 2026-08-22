@@ -46,6 +46,17 @@ STEP = "discover"
 DESTRUCTIVE_PREFIXES = ("delete_", "terminate_", "destroy_", "deregister_",
                         "revoke_", "remove_")
 
+# These provider verbs do not carry an obviously destructive prefix, but they
+# cross the live-ingress cutover boundary just as surely as a delete.  The
+# ordinary managed and brownfield clients can never reach them.  The preserved
+# address workflow builds a different, positive-allowlist client after assuming
+# its dedicated role; it does not weaken this seam.
+FORBIDDEN_METHODS = frozenset((
+    ("ec2", "disassociate_address"),
+    ("ec2", "release_address"),
+    ("elbv2", "set_subnets"),
+))
+
 # "Not there" is an answer, not a failure. Every one of these is a normal
 # response to asking about a resource on an empty account.
 NOT_FOUND_CODES = (
@@ -96,6 +107,11 @@ class GuardedClient:
         self._mutation_policy = mutation_policy
 
     def __getattr__(self, name):
+        if (self._service, name) in FORBIDDEN_METHODS:
+            raise DestructiveCallBlocked(
+                f"{self._service}.{name} crosses the preserved-address "
+                f"cutover boundary and is unavailable to ordinary "
+                f"provisioning clients")
         if self._mutation_policy is not None:
             self._mutation_policy.authorize(self._service, name)
         if name.startswith(DESTRUCTIVE_PREFIXES):

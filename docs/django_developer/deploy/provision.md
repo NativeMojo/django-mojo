@@ -47,6 +47,7 @@ is:
 ```json
 {
   "schema_version": 1,
+  "manage_dns": false,
   "account_id": "123456789012",
   "region": "us-west-2",
   "project": "maestro",
@@ -218,7 +219,191 @@ An existing single preserved EIP can maintain one public-IP continuity path;
 it cannot by itself provide multi-AZ ingress redundancy. Do not represent one
 preserved address as a redundant edge. DNS providers that can point at the NLB
 name may move independently later; providers pinned to an IP need a rehearsed
-EIP handoff. Neither operation belongs to these commands.
+EIP handoff. The handoff is a separate command and credential boundary; it
+never changes DNS. `manage_dns` is required in every brownfield manifest and
+must be the literal `false`. Missing is not treated as false.
+
+### Preserved-EIP handoff and exact rollback
+
+Add these fields only after the ordinary shadow fleet is two-AZ, deployed,
+healthy, and serving every Host/SNI canary through its temporary addresses:
+
+```json
+{
+  "manage_dns": false,
+  "nlb_eip_allocations": {
+    "us-west-2a": "eipalloc-0123456789abcdef0"
+  },
+  "eip_handoff_role_arn": "arn:aws:iam::123456789012:role/mojo-eip-handoff",
+  "eip_handoff_canaries": [
+    {
+      "name": "maestro-api-version",
+      "target": "nlb",
+      "protocol": "https",
+      "port": 443,
+      "tls_sni": "maestromojo.com",
+      "host": "maestromojo.com",
+      "path": "/api/version",
+      "expected_status": 200,
+      "expected_marker": "version",
+      "timeout": 5
+    }
+  ]
+}
+```
+
+One or both selected AZs may be mapped. Allocation IDs are unique and every AZ
+must be one of the exact two NLB subnets. At least one `target: nlb` canary is
+mandatory; node-local canaries may be added but cannot replace proof through
+the temporary public edge. One preserved allocation keeps that legacy fixed IP
+but does **not** create two customer-known ingress addresses. Fixed-IP clients
+remain effectively single-ingress/single-AZ until a later edge expansion.
+
+With those fields, `fleet-apply` creates the shadow NLB in the normal two
+subnets using AWS temporary public addresses. It does not allocate, tag,
+attach, or adopt the preserved EIP. Ordinary managed and brownfield clients
+reject `DisassociateAddress`, `ReleaseAddress`, and `SetSubnets`. Brownfield's
+ordinary positive allowlist also rejects `AssociateAddress`; managed
+greenfield stable-node EIPs keep their existing association behavior.
+
+#### IAM uses two principals
+
+Keep this explicit deny on the ordinary provisioning role (scope resources
+more tightly where AWS supports it):
+
+```json
+{
+  "Effect": "Deny",
+  "Action": [
+    "ec2:AssociateAddress",
+    "ec2:DisassociateAddress",
+    "ec2:ReleaseAddress",
+    "elasticloadbalancing:SetSubnets"
+  ],
+  "Resource": "*"
+}
+```
+
+The dedicated role trust policy admits only the operator/release role used for
+cutover. Its policy allows provider reads, `SetSubnets` on the exact shadow
+NLB and declared subnets, `DisassociateAddress`/`AssociateAddress` on the exact
+elastic-IP and original network-interface ARNs, and `s3:GetObject`/
+`s3:PutObject` plus bucket-versioning/encryption reads for the exact
+`storage.fleet_config` handoff prefix. The EC2 statements also bind the
+`ec2:AllocationId`, `ec2:NetworkInterfaceID`, and `ec2:Region` condition keys.
+The command independently binds the association ID, private IP, and complete
+request shape because those values are not all expressible as IAM conditions.
+The Python guard is defense in depth; it is not a substitute for this IAM
+boundary. Do **not** grant
+`ec2:ReleaseAddress`, Route 53, ACM, ELB deletion, EC2 termination, tagging,
+address allocation, S3 delete, or general provisioning permissions.
+
+Representative dedicated-role policy shape (replace the placeholders with the
+manifest's exact values):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Sid": "ReadExactHandoffEvidence", "Effect": "Allow", "Action": ["sts:GetCallerIdentity", "ec2:DescribeAddresses", "ec2:DescribeInstances", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSubnets", "elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeLoadBalancerAttributes", "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeTags", "elasticloadbalancing:DescribeTargetGroups", "elasticloadbalancing:DescribeTargetHealth"], "Resource": "*"},
+    {"Sid": "ReadJournalBucketControls", "Effect": "Allow", "Action": ["s3:GetBucketVersioning", "s3:GetEncryptionConfiguration"], "Resource": "arn:aws:s3:::<fleet-config-bucket>"},
+    {"Sid": "CASExactHandoffJournalPrefix", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"], "Resource": "arn:aws:s3:::<fleet-config-bucket>/<exact-handoff-prefix>/*"},
+    {"Sid": "SetExactShadowNLBSubnets", "Effect": "Allow", "Action": "elasticloadbalancing:SetSubnets", "Resource": "<exact-nlb-arn>", "Condition": {"ForAllValues:StringEqualsIgnoreCase": {"elasticloadbalancing:Subnet": ["<exact-subnet-a>", "<exact-subnet-b>"]}}},
+    {"Sid": "DisassociateExactSourceA", "Effect": "Allow", "Action": "ec2:DisassociateAddress", "Resource": ["arn:aws:ec2:<region>:<account>:elastic-ip/<exact-allocation-a>", "arn:aws:ec2:<region>:<account>:network-interface/<exact-source-eni-a>"], "Condition": {"StringEquals": {"ec2:AllocationId": "<exact-allocation-a>", "ec2:NetworkInterfaceID": "<exact-source-eni-a>", "ec2:Region": "<region>"}}},
+    {"Sid": "RestoreExactSourceA", "Effect": "Allow", "Action": "ec2:AssociateAddress", "Resource": ["arn:aws:ec2:<region>:<account>:elastic-ip/<exact-allocation-a>", "arn:aws:ec2:<region>:<account>:network-interface/<exact-source-eni-a>"], "Condition": {"StringEquals": {"ec2:AllocationId": "<exact-allocation-a>", "ec2:NetworkInterfaceID": "<exact-source-eni-a>", "ec2:Region": "<region>"}}}
+  ]
+}
+```
+
+Repeat the two EC2 statements for each declared source EIP/ENI pair. Current
+AWS IAM supports both resource types and those condition keys for both address
+actions, but has no condition for `AssociationId` or `PrivateIpAddress`;
+therefore the runtime exact-request guard remains mandatory. The
+`ForAllValues` subnet condition rejects any subnet outside the declared pair
+while still allowing the intentional one-subnet removal transition. Generate
+the concrete policy from the immutable preview plan with
+`handoff.cutover_role_policy(topology, plan)` and review it before creating the
+role; this command does not create or modify IAM.
+
+The command assumes that exact role a second time even when `--profile` or
+`--role-arn` selects an ordinary source credential. Its refreshable session is
+checked with STS for account, region and role before every live/recovery path.
+The cutover client cannot construct a Route 53 client.
+
+#### Preview, rehearsal, handoff, resume and rollback
+
+```bash
+python3 -m mojo.deploy.provision eip-handoff --fleet shadow --mode preview
+
+python3 -m mojo.deploy.provision eip-handoff --fleet shadow --mode rehearse \
+  --plan-digest <digest> --confirm '<printed REHEARSE phrase>'
+
+python3 -m mojo.deploy.provision eip-handoff --fleet shadow --mode apply \
+  --plan-digest <digest> --confirm '<printed HANDOFF phrase>'
+
+python3 -m mojo.deploy.provision eip-handoff --fleet shadow --mode resume \
+  --operation-id <uuid> --plan-digest <digest> \
+  --confirm 'RESUME <uuid> <digest>'
+
+python3 -m mojo.deploy.provision eip-rollback --fleet shadow --mode preview \
+  --operation-id <uuid> --plan-digest <digest>
+
+python3 -m mojo.deploy.provision eip-rollback --fleet shadow --mode apply \
+  --operation-id <uuid> --plan-digest <digest> \
+  --confirm 'ROLLBACK <uuid> <digest>'
+```
+
+`--dry-run` forces preview. Handoff/rollback have no `--yes`, `--nlb`, or
+ordinary apply override. The 0600 plan binds account, region, role, manifest,
+allocation/public IP/tags, original instance/ENI/private IP/subnet/AZ/VPC,
+target NLB ARN, complete map and explicit map digests, listeners, target health, canary summaries,
+exact NLB/target-group ownership-tag summaries, journal coordinates,
+disruption and exact inverse. Every non-preview command
+requires its exact digest and a distinct exact phrase.
+
+A live handoff is authorized only by a terminal `rehearsed` lock for the exact
+same plan digest. A failed rehearsal never authorizes handoff. Rehearsal may be
+retried under a new operation ID and a freshly generated plan; only after that
+retry reaches `rehearsed` may the same digest enter live handoff. This also
+terminalizes caught local/S3 rehearsal failures as `rehearsal_failed`, so a
+fixed rehearsal can retry without leaving the fleet locked.
+
+The remote fleet-wide lock is acquired before any local write, so a losing
+operator cannot overwrite active write-ahead intent. Each operation has its
+own mode-`0600` local journal under `var/provision/eip-handoffs/`. Before a
+provider mutation, every transition is flushed/fsynced locally and then
+conditionally written under the versioned/encrypted fleet S3 prefix. The one
+stable project/environment/fleet lock uses `If-None-Match: *`; it deliberately
+does not depend on the allocation set, so overlapping `{A}` and `{A,B}` runs
+cannot race. A terminal lock is reassigned only with `If-Match`, a new operation
+ID, and proof that the new journal key is absent. The active lock contains the
+full recovery seed, so a crash after lock creation but before local/remote
+journal creation on a live handoff remains resumable. Active locks are never
+silently stolen, including an active rehearsal after a hard process death; that
+case requires explicit audited operator recovery. No lock or journal object is deleted;
+terminal state is another conditional version.
+
+Every `SetSubnets` call re-reads and compares the complete mapping. It retains
+the untouched AZ, removes only the selected AZ, waits for removal, re-checks
+the source association, disassociates it, waits until free, and adds the same
+subnet with the preserved allocation. The transferred-IP canary must pass
+before another allocation begins. Resume accepts only the two journaled sides
+of a write-ahead transition and the handoff-direction lock. Unknown association
+or map drift stops without guessing.
+
+Rollback works from the same active partial operation or its completed lock.
+It CAS-switches the lock direction, removes the preserved target mapping,
+waits for the allocation to become free, associates the journaled ENI/private
+IP with `AllowReassociation=False`, then adds the same NLB subnet without an
+allocation ID so AWS supplies a temporary address. A failed replacement target
+or canary never vetoes rollback; its gates are identity, lock/journal direction,
+exact map classification and original-source restorability.
+
+Removing an NLB subnet terminates that AZ's active connections and AWS says it
+can take up to three minutes. Clients using the transferred IP can briefly fail
+between source disassociation and NLB association. Every partial failure prints
+both journal coordinates. Never manually remap or release the EIP while an
+operation is active.
 
 ### Failure and recovery
 

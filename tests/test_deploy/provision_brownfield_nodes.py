@@ -1,7 +1,7 @@
 from objict import objict
 from testit import helpers as th
 
-from .brownfield_fixture import topology
+from .brownfield_fixture import handoff_topology, topology
 
 
 @th.django_unit_test()
@@ -198,6 +198,46 @@ def test_second_eip_failure_never_creates_one_az_balancer(opts):
                  f"the retained EIP must identify its exact subnet: {tags}")
     th.assert_true(any(row.status == report.BLIND for row in findings),
                    f"partial mappings must block the edge step: {findings}")
+
+
+@th.django_unit_test()
+def test_preserved_mode_prepares_two_az_nlb_with_temporary_addresses(opts):
+    from mojo.deploy.provision import balancer
+
+    spec = handoff_topology()
+    observed = objict(
+        vpc_id=spec.brownfield_manifest["network"]["vpc_id"],
+        node_records=[{"instance_id": "i-serving", "serving_target": True}],
+        target_groups={}, balancer=None, addresses=[], listeners=[], targets={},
+        balancer_attributes={})
+
+    class _EC2:
+        def allocate_address(self, **kwargs):
+            raise AssertionError(
+                "preserved mode must not allocate replacement EIPs")
+
+    class _ELB:
+        def __init__(self):
+            self.request = None
+
+        def create_target_group(self, Name, **kwargs):
+            return {"TargetGroups": [{"TargetGroupArn": f"tg/{Name}"}]}
+
+        def create_load_balancer(self, **kwargs):
+            self.request = kwargs
+            return {"LoadBalancers": [{"LoadBalancerArn": "lb/shadow"}]}
+
+        def __getattr__(self, name):
+            return lambda **kwargs: {}
+
+    elb = _ELB()
+    balancer.ensure_balancer(
+        _ClientsForBalancer(ec2=_EC2(), elbv2=elb), spec, observed,
+        apply=True)
+    th.assert_eq(elb.request["Subnets"], spec.nlb_subnet_ids,
+                 f"AWS must assign temporary addresses in both AZs: {elb.request}")
+    th.assert_eq("SubnetMappings" in elb.request, False,
+                 f"live allocation ids must not reach preparation: {elb.request}")
 
 
 @th.django_unit_test()

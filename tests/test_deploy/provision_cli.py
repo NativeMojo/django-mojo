@@ -1208,3 +1208,66 @@ def test_the_spec_carries_the_answers_that_change_aws(opts):
                  f"{built.db_retention_days}")
     th.assert_eq(spec_module.wants_balancer(built), True,
                  "--nlb must reach the balancer decision")
+
+
+@th.django_unit_test()
+def test_eip_commands_have_isolated_fail_closed_arguments(opts):
+    from mojo.deploy.provision import __main__ as cli
+
+    parser = cli.build_parser()
+    handoff = parser.parse_args([
+        "eip-handoff", "--fleet", "shadow", "--mode", "apply",
+        "--plan-digest", "a" * 64, "--confirm", "exact"])
+    rollback = parser.parse_args([
+        "eip-rollback", "--fleet", "shadow", "--operation-id", "op-1",
+        "--plan-digest", "a" * 64])
+    for args in (handoff, rollback):
+        th.assert_eq(hasattr(args, "yes"), False,
+                     "destructive EIP commands must have no --yes shortcut")
+        th.assert_eq(hasattr(args, "nlb"), False,
+                     "destructive EIP commands must not accept apply overrides")
+    th.assert_eq(handoff.mode, "apply",
+                 "handoff mode must be explicit parser data")
+    th.assert_eq(rollback.mode, "preview",
+                 "rollback defaults to a read-only preview")
+
+
+@th.django_unit_test()
+def test_eip_interrupt_and_failure_repeat_recovery_coordinates(opts):
+    from mojo.deploy.provision import __main__ as cli
+    from mojo.deploy.provision import handoff
+    from .brownfield_fixture import handoff_topology
+    from .provision_handoff import _plan
+
+    topology = handoff_topology()
+    plan = _plan(topology)
+    argv = ["eip-handoff", "--fleet", "shadow", "--mode", "apply",
+            "--plan-digest", plan["plan_digest"], "--confirm", "exact"]
+    for error, expected_exit in ((KeyboardInterrupt(), cli.EXIT_INTERRUPTED),
+                                 (handoff.HandoffRefused("stopped"),
+                                  cli.EXIT_FINDINGS)):
+        script = _Script()
+        with mock.patch.object(cli, "_handoff_context",
+                               return_value=(topology, object(), "plan.json")), \
+                mock.patch.object(handoff, "load_plan", return_value=plan), \
+                mock.patch.object(handoff, "handoff", side_effect=error), \
+                mock.patch("uuid.uuid4", return_value="op-recovery"):
+            result = cli.main(argv, console=script.console())
+        th.assert_eq(result, expected_exit,
+                     f"{error.__class__.__name__} must return a bounded exit")
+        for marker in ("operation id:", "local journal:", "remote journal:",
+                       "remote lock:"):
+            th.assert_in(marker, script.text,
+                         f"{marker} must survive {error.__class__.__name__}: "
+                         f"{script.text}")
+        coordinates = handoff.journal_coordinates(topology, "op-recovery")
+        for value in (coordinates["remote_journal"],
+                      coordinates["remote_lock"]):
+            th.assert_in(value, script.text,
+                         f"printed recovery coordinate must equal store key: "
+                         f"{script.text}")
+        # The shared helper is the constructor's only coordinate source; pin
+        # the environment/fleet-stable lock name in the CLI contract too.
+        th.assert_in("locks/maestro-prod-shadow.json",
+                     coordinates["remote_lock"],
+                     f"lock path must not depend on allocation subset: {coordinates}")

@@ -2,7 +2,7 @@ import shlex
 
 from testit import helpers as th
 
-from .brownfield_fixture import raw_manifest
+from .brownfield_fixture import handoff_raw, raw_manifest
 
 
 def _error(raw):
@@ -97,6 +97,68 @@ def test_manifest_rejects_string_booleans_and_prefix_containment(opts):
     message = _error(raw)
     th.assert_in("overlaps read-only config", message,
                  f"a writable parent of live config must be rejected: {message}")
+
+
+@th.django_unit_test()
+def test_brownfield_dns_boundary_is_explicit_serialized_false(opts):
+    missing = raw_manifest()
+    missing.pop("manage_dns")
+    message = _error(missing)
+    th.assert_in("manage_dns", message,
+                 f"omission must be ambiguous and fail closed: {message}")
+
+    enabled = raw_manifest()
+    enabled["manage_dns"] = True
+    message = _error(enabled)
+    th.assert_in("explicitly false", message,
+                 f"true must never reach a brownfield AWS client: {message}")
+
+
+@th.django_unit_test()
+def test_preserved_eip_contract_is_complete_exact_and_nlb_canaried(opts):
+    from mojo.deploy.provision import brownfield_inputs
+
+    raw = handoff_raw(single=False)
+    manifest = brownfield_inputs.validate(raw)
+    th.assert_eq(manifest["nlb_eip_allocations"], {
+        "us-west-2a": "eipalloc-0123456789abcdef0",
+        "us-west-2b": "eipalloc-1123456789abcdef0"},
+        "one or both selected AZs must normalize without changing allocation ids")
+
+    duplicate = handoff_raw(single=False)
+    duplicate["nlb_eip_allocations"]["us-west-2b"] = (
+        "eipalloc-0123456789abcdef0")
+    th.assert_in("unique", _error(duplicate),
+                 "one allocation must never be mapped into two AZs")
+
+    missing_role = handoff_raw()
+    missing_role.pop("eip_handoff_role_arn")
+    th.assert_in("role", _error(missing_role),
+                 "partial handoff declarations must fail closed")
+
+    node_only = handoff_raw()
+    node_only["eip_handoff_canaries"][0]["target"] = "node"
+    node_only["eip_handoff_canaries"][0]["addresses"] = ["172.31.1.20"]
+    message = _error(node_only)
+    th.assert_in("NLB shadow/application canary", message,
+                 f"node readiness alone cannot prove the public path: {message}")
+
+
+@th.django_unit_test()
+def test_handoff_spec_derives_bounded_journal_coordinates(opts):
+    from mojo.deploy.provision import brownfield_inputs
+
+    topology = brownfield_inputs.to_spec(
+        brownfield_inputs.validate(handoff_raw()), project_root="/srv/maestro")
+    th.assert_eq(topology.manage_dns, False,
+                 "the serialized DNS boundary must survive manifest-to-spec")
+    th.assert_eq(topology.eip_handoff_local_journal,
+                 "/srv/maestro/var/provision/eip-handoffs/"
+                 "maestro-prod-shadow.json",
+                 "local recovery state must stay below the project root")
+    th.assert_eq(topology.eip_handoff_prefix,
+                 "fleets/shadow/eip-handoffs/maestro-prod-shadow",
+                 "remote recovery state must stay below the fleet-owned prefix")
 
 
 @th.django_unit_test()

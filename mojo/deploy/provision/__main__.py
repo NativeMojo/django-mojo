@@ -55,6 +55,7 @@ import sys
 from mojo.deploy.provision import certificate as certificate_module
 from mojo.deploy.provision import brownfield_inputs, brownfield_plan
 from mojo.deploy.provision import brownfield_policy
+from mojo.deploy.provision import handoff as handoff_module
 from mojo.deploy.provision import clients as clients_module
 from mojo.deploy.provision import (checkout, discover, github, inputs, plan,
                                    remote, render, report, storage)
@@ -145,7 +146,8 @@ def build_parser():
                     "idempotently. Creates and modifies; never deletes.")
     commands = parser.add_subparsers(
         dest="command", required=True,
-        metavar="{init,apply,configure,admin,status,fleet-status,fleet-apply}")
+        metavar=("{init,apply,configure,admin,status,fleet-status,fleet-apply,"
+                 "eip-handoff,eip-rollback}"))
     commands.add_parser(
         "init", parents=[shared],
         help="ask the eight questions and write the environment file")
@@ -206,6 +208,31 @@ def build_parser():
     commands.add_parser(
         "fleet-apply", parents=[fleet_shared],
         help="revalidate and create only the declared shadow nodes/NLB")
+    handoff_shared = argparse.ArgumentParser(add_help=False)
+    handoff_shared.add_argument("--fleet", required=True)
+    handoff_shared.add_argument("--project-root", default=".")
+    handoff_shared.add_argument("--profile")
+    handoff_shared.add_argument(
+        "--role-arn",
+        help="source role used only to assume the manifest's dedicated role")
+    handoff_shared.add_argument("--plan-file")
+    handoff_shared.add_argument("--plan-digest")
+    handoff_shared.add_argument("--confirm")
+    handoff_shared.add_argument("--operation-id")
+    handoff_shared.add_argument(
+        "--dry-run", action="store_true",
+        help="force preview mode; never invokes a provider mutation")
+    eip_handoff = commands.add_parser(
+        "eip-handoff", parents=[handoff_shared],
+        help="preview, rehearse, execute, or resume an exact EIP handoff")
+    eip_handoff.add_argument(
+        "--mode", choices=("preview", "rehearse", "apply", "resume"),
+        default="preview")
+    eip_rollback = commands.add_parser(
+        "eip-rollback", parents=[handoff_shared],
+        help="preview or execute exact source restoration from a journal")
+    eip_rollback.add_argument(
+        "--mode", choices=("preview", "apply"), default="preview")
     return parser
 
 
@@ -235,10 +262,20 @@ def main(argv, console=None):
             return run_fleet_status(args, console)
         if args.command == "fleet-apply":
             return run_fleet_apply(args, console)
+        if args.command == "eip-handoff":
+            return run_eip_handoff(args, console)
+        if args.command == "eip-rollback":
+            return run_eip_rollback(args, console)
         return run_status(args, console)
     except KeyboardInterrupt:
-        print("\ninterrupted — re-run `apply` to pick up where this stopped; "
-              "there is no state file to clean up", file=sys.stderr)
+        if args.command in ("eip-handoff", "eip-rollback"):
+            print("\ninterrupted — do not guess or run ordinary apply; use "
+                  "the recorded operation and journal to resume or rollback.",
+                  file=sys.stderr)
+            _repeat_recovery(args, console)
+        else:
+            print("\ninterrupted — re-run `apply` to pick up where this stopped; "
+                  "there is no state file to clean up", file=sys.stderr)
         return EXIT_INTERRUPTED
     except inputs.EnvFileError as err:
         print(f"error: {err}", file=sys.stderr)
@@ -253,6 +290,19 @@ def main(argv, console=None):
     except brownfield_plan.DependencyDriftError as err:
         print(f"error: {err}", file=sys.stderr)
         return EXIT_FINDINGS
+    except handoff_module.HandoffError as err:
+        print(f"error: EIP handoff refused: {err}", file=sys.stderr)
+        _repeat_recovery(args, console)
+        return EXIT_FINDINGS
+    except Exception as err:
+        if (args.command in ("eip-handoff", "eip-rollback")
+                and (err.__class__.__module__.startswith("botocore")
+                     or isinstance(err, OSError))):
+            print(f"error: EIP operation failed: "
+                  f"{handoff_module.bounded_error(err)}", file=sys.stderr)
+            _repeat_recovery(args, console)
+            return EXIT_FINDINGS
+        raise
 
 
 # ── init ────────────────────────────────────────────────────────────────────
@@ -406,6 +456,149 @@ def run_fleet_apply(args, console):
     render_findings(findings, console.say)
     render_summary(findings, run, console.say)
     return _exit_for(run)
+
+
+def _handoff_context(args):
+    path = brownfield_inputs.fleet_path(args.project_root, args.fleet)
+    manifest = brownfield_inputs.load(path)
+    if manifest["fleet"] != args.fleet:
+        raise inputs.EnvFileError(
+            f"{path} declares fleet {manifest['fleet']!r}, not "
+            f"{args.fleet!r}")
+    topology = brownfield_inputs.to_spec(
+        manifest, project_root=args.project_root)
+    connection = clients_module.build_handoff_clients(
+        topology, profile=args.profile, role_arn=args.role_arn)
+    plan_path = args.plan_file or handoff_module.default_plan_path(topology)
+    return topology, connection, plan_path
+
+
+def _require_handoff_args(args, *names):
+    missing = [f"--{name.replace('_', '-')}" for name in names
+               if not getattr(args, name, None)]
+    if missing:
+        raise handoff_module.HandoffRefused(
+            f"{args.command} --mode {args.mode} requires "
+            f"{', '.join(missing)}")
+
+
+def run_eip_handoff(args, console):
+    topology, connection, plan_path = _handoff_context(args)
+    mode = "preview" if args.dry_run else args.mode
+    if args.dry_run and args.mode not in ("preview", "rehearse"):
+        console.say("--dry-run forced preview mode; no provider mutation is reachable.")
+    if mode == "preview":
+        plan = handoff_module.build_plan(connection, topology)
+        handoff_module.save_plan(plan_path, plan)
+        _render_handoff_plan(plan, plan_path, console)
+        console.say("")
+        console.say("preview is read-only: no address, NLB mapping, DNS record, "
+                    "certificate, or data-plane resource was changed.")
+        return EXIT_OK
+
+    _require_handoff_args(args, "plan_digest", "confirm")
+    plan = handoff_module.load_plan(plan_path)
+    if mode == "resume":
+        _require_handoff_args(args, "operation_id")
+    elif not args.operation_id:
+        import uuid
+        args.operation_id = str(uuid.uuid4())
+    handoff_module.validate_operation_id(args.operation_id)
+    args._handoff_recovery = (topology, args.operation_id)
+    console.say("recovery coordinates (record these before continuing):")
+    _render_handoff_coordinates(topology, args.operation_id, console)
+    if mode == "rehearse":
+        journal = handoff_module.rehearse(
+            connection, topology, plan, args.plan_digest, args.confirm,
+            operation_id=args.operation_id)
+        console.say(f"rehearsal {journal['operation_id']} completed without "
+                    f"a provider mutation")
+        _render_handoff_coordinates(topology, journal["operation_id"], console)
+        return EXIT_OK
+    if mode == "resume":
+        journal = handoff_module.resume(
+            connection, topology, plan, args.plan_digest, args.confirm,
+            args.operation_id)
+    else:
+        journal = handoff_module.handoff(
+            connection, topology, plan, args.plan_digest, args.confirm,
+            operation_id=args.operation_id)
+    console.say(f"handoff {journal['operation_id']} reached {journal['state']}")
+    _render_handoff_coordinates(topology, journal["operation_id"], console)
+    return EXIT_OK
+
+
+def run_eip_rollback(args, console):
+    topology, connection, plan_path = _handoff_context(args)
+    _require_handoff_args(args, "plan_digest", "operation_id")
+    handoff_module.validate_operation_id(args.operation_id)
+    plan = handoff_module.load_plan(plan_path)
+    args._handoff_recovery = (topology, args.operation_id)
+    handoff_module._bind_plan(plan, args.plan_digest)
+    handoff_module._bind_boundary_from_plan(connection, plan)
+    if args.dry_run or args.mode == "preview":
+        store = handoff_module.JournalStore(
+            connection, topology, args.operation_id)
+        store.verify_bucket()
+        store.inspect_lock(plan["plan_digest"])
+        journal = store.load(recover=False)
+        handoff_module._journal_matches(journal, plan)
+        state = handoff_module.revalidate_runtime(
+            connection, topology, plan, journal, direction="rollback")
+        console.say("rollback preview — no provider mutation is reachable")
+        console.say(json_dump({
+            "operation_id": args.operation_id,
+            "plan_digest": plan["plan_digest"],
+            "journal_state": journal["state"],
+            "current_nlb_map": state["map"],
+            "exact_inverse": plan["inverse"],
+            "confirmation": handoff_module.expected_confirmation(
+                plan, "ROLLBACK", args.operation_id),
+        }))
+        _render_handoff_coordinates(topology, journal["operation_id"], console)
+        return EXIT_OK
+    _require_handoff_args(args, "confirm")
+    console.say("recovery coordinates (record these before continuing):")
+    _render_handoff_coordinates(topology, args.operation_id, console)
+    journal = handoff_module.rollback(
+        connection, topology, plan, args.plan_digest, args.confirm,
+        args.operation_id)
+    console.say(f"rollback {journal['operation_id']} reached "
+                f"{journal['state']}")
+    _render_handoff_coordinates(topology, journal["operation_id"], console)
+    return EXIT_OK
+
+
+def _render_handoff_plan(plan, path, console):
+    console.say(json_dump(plan))
+    console.say("")
+    console.say(f"immutable plan: {path} (0600)")
+    console.say(f"plan digest: {plan['plan_digest']}")
+    console.say("rehearsal confirmation:")
+    console.say(f"  {handoff_module.expected_confirmation(plan, 'REHEARSE')}")
+    console.say("live handoff confirmation:")
+    console.say(f"  {handoff_module.expected_confirmation(plan, 'HANDOFF')}")
+
+
+def _render_handoff_coordinates(topology, operation_id, console):
+    coordinates = handoff_module.journal_coordinates(topology, operation_id)
+    console.say(f"operation id: {coordinates['operation_id']}")
+    console.say(f"local journal: {coordinates['local_journal']}")
+    console.say(f"remote journal: {coordinates['remote_journal']}")
+    console.say(f"remote lock: {coordinates['remote_lock']}")
+
+
+def _repeat_recovery(args, console):
+    recovery = getattr(args, "_handoff_recovery", None)
+    if recovery:
+        topology, operation_id = recovery
+        console.say("recovery coordinates:")
+        _render_handoff_coordinates(topology, operation_id, console)
+
+
+def json_dump(value):
+    import json
+    return json.dumps(value, indent=2, sort_keys=True, default=str)
 
 
 def _render_fleet_preview(topology, findings, actions, run, console):

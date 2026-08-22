@@ -13,6 +13,7 @@ def raw_manifest():
     role = f"arn:aws:iam::{ACCOUNT}:role/maestro-api-fleet"
     return {
         "schema_version": 1,
+        "manage_dns": False,
         "account_id": ACCOUNT,
         "region": REGION,
         "project": "maestro",
@@ -104,6 +105,31 @@ def raw_manifest():
         "alarm_topic_arn": f"arn:aws:sns:{REGION}:{ACCOUNT}:maestro-alarms",
         "compatibility_instance_ids": ["i-0123456789abcdef0"],
     }
+
+
+def handoff_raw(single=True):
+    raw = raw_manifest()
+    raw["nlb_eip_allocations"] = {
+        "us-west-2a": "eipalloc-0123456789abcdef0"}
+    if not single:
+        raw["nlb_eip_allocations"]["us-west-2b"] = (
+            "eipalloc-1123456789abcdef0")
+    raw["eip_handoff_role_arn"] = (
+        f"arn:aws:iam::{ACCOUNT}:role/mojo-eip-handoff")
+    raw["eip_handoff_canaries"] = [{
+        "name": "api-version", "protocol": "https", "port": 443,
+        "tls_sni": "maestromojo.com", "host": "maestromojo.com",
+        "path": "/api/version", "expected_status": 200,
+        "expected_marker": "version", "timeout": 5, "target": "nlb",
+    }]
+    return raw
+
+
+def handoff_topology(single=True, project_root=None):
+    from mojo.deploy.provision import brownfield_inputs
+    return brownfield_inputs.to_spec(
+        brownfield_inputs.validate(handoff_raw(single=single)),
+        project_root=project_root)
 
 
 def manifest():

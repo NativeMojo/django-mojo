@@ -52,6 +52,7 @@ SESSION_NAME = "django-mojo-provision"
 # is deliberately not raised: a longer credential is not the fix for a run that
 # might outlive it — `--profile` is.
 SESSION_SECONDS = 3600
+HANDOFF_SESSION_NAME = "django-mojo-eip-handoff"
 
 
 class CredentialError(RuntimeError):
@@ -139,6 +140,71 @@ def build_clients(profile=None, role_arn=None, region=None, session=None,
         session = build_session(profile=profile, role_arn=role_arn,
                                 region=region)
     return discover.Clients(session=session, mutation_policy=mutation_policy)
+
+
+def build_handoff_clients(topology, profile=None, role_arn=None,
+                          base_session=None):
+    """Assume the manifest's exact cutover role and return its narrow seam.
+
+    ``profile``/``role_arn`` select only the source credential.  They never
+    replace ``topology.eip_handoff_role_arn``: the second assume is mandatory,
+    so ordinary provisioning credentials cannot accidentally become cutover
+    credentials merely because a caller constructed a different client type.
+    """
+    from mojo.deploy.provision import handoff
+
+    handoff.validate_topology(topology)
+    if base_session is None:
+        base_session = build_session(profile=profile, role_arn=role_arn,
+                                     region=topology.region)
+    session = _assume_from_session(
+        base_session, topology.eip_handoff_role_arn, topology.region,
+        HANDOFF_SESSION_NAME)
+    return handoff.HandoffClients(session=session, topology=topology)
+
+
+def _assume_from_session(base_session, role_arn, region, session_name):
+    from botocore.credentials import DeferredRefreshableCredentials
+    from botocore.exceptions import BotoCoreError, ClientError
+    from botocore.session import get_session
+
+    sts = base_session.client("sts")
+
+    def refresh():
+        try:
+            answer = sts.assume_role(
+                RoleArn=role_arn, RoleSessionName=session_name,
+                DurationSeconds=SESSION_SECONDS)
+        except (BotoCoreError, ClientError) as err:
+            raise CredentialError(
+                f"could not refresh dedicated role {role_arn}: {err}")
+        credentials = (answer or {}).get("Credentials") or {}
+        missing = [key for key in (
+            "AccessKeyId", "SecretAccessKey", "SessionToken", "Expiration")
+            if not credentials.get(key)]
+        if missing:
+            raise CredentialError(
+                f"sts:AssumeRole answered without {', '.join(missing)}")
+        expiration = credentials["Expiration"]
+        if hasattr(expiration, "isoformat"):
+            expiration = expiration.isoformat()
+        return {
+            "access_key": credentials["AccessKeyId"],
+            "secret_key": credentials["SecretAccessKey"],
+            "token": credentials["SessionToken"],
+            "expiry_time": expiration,
+        }
+
+    try:
+        import boto3
+    except ImportError:
+        raise CredentialError("boto3 is required for EIP handoff")
+    botocore_session = get_session()
+    botocore_session._credentials = DeferredRefreshableCredentials(
+        refresh_using=refresh, method="django-mojo-eip-handoff")
+    botocore_session.set_config_variable("region", region)
+    return boto3.Session(botocore_session=botocore_session,
+                         region_name=region)
 
 
 def identify(clients):

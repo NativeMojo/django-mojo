@@ -23,6 +23,12 @@ class _Raw:
     def get_secret_value(self):
         return {"SecretString": "secret"}
 
+    def disassociate_address(self):
+        return {}
+
+    def release_address(self):
+        return {}
+
 
 @th.django_unit_test()
 def test_positive_client_policy_blocks_every_unlisted_mutation_via_getattr(opts):
@@ -34,7 +40,7 @@ def test_positive_client_policy_blocks_every_unlisted_mutation_via_getattr(opts)
                  "explicit read operations must remain reachable")
     th.assert_eq(client.run_instances(), {"Instances": []},
                  "declared preparation mutations must remain reachable")
-    for method in ("associate_address", "set_subnets", "create_db_cluster"):
+    for method in ("associate_address", "create_db_cluster"):
         raised = None
         try:
             getattr(client, method)
@@ -42,6 +48,13 @@ def test_positive_client_policy_blocks_every_unlisted_mutation_via_getattr(opts)
             raised = err
         th.assert_true(raised is not None,
                        f"dynamic getattr must not bypass the block on {method}")
+    raised = None
+    try:
+        client.set_subnets
+    except discover.DestructiveCallBlocked as err:
+        raised = err
+    th.assert_true(raised is not None,
+                   "SetSubnets must stop at the stronger global cutover seam")
 
 
 @th.django_unit_test()
@@ -86,3 +99,25 @@ def test_metadata_boundary_blocks_object_and_secret_bodies_via_getattr(opts):
             raised = err
         th.assert_true(raised is not None,
                        f"{service}.{method} must never expose value bytes")
+
+
+@th.django_unit_test()
+def test_ordinary_clients_cannot_cross_the_preserved_address_boundary(opts):
+    from mojo.deploy.provision import discover
+
+    for service, method in (("ec2", "disassociate_address"),
+                            ("ec2", "release_address"),
+                            ("elbv2", "set_subnets")):
+        guarded = discover.GuardedClient(_Raw(), service)
+        raised = None
+        try:
+            getattr(guarded, method)
+        except discover.DestructiveCallBlocked as err:
+            raised = err
+        th.assert_true(raised is not None,
+                       f"ordinary {service}.{method} must fail at the client seam")
+
+    # Managed stable-node EIPs still use this non-destructive association path.
+    managed = discover.GuardedClient(_Raw(), "ec2")
+    th.assert_eq(managed.associate_address(), {},
+                 "the global guard must not break managed stable-node EIPs")
