@@ -48,6 +48,7 @@ POST /api/assistant/mcp
       unknown / hidden name → "Unknown tool: <name>"  + assistant:permission_denied (6)
       permission miss       → "Permission denied. …"  + assistant:permission_denied (5)
       mutates=True          → approvals.propose() → an approval CARD, no side effect
+      mutates=True, owner_state → True → the handler runs + assistant:tool:<name>
       otherwise             → the handler runs
 ```
 
@@ -164,13 +165,12 @@ nobody else can.
 `tools/list` and `tools/call` both read `mcp/server.projected_registry()`, which
 is `get_registry()` minus:
 
-* **`HIDDEN_TOOLS`**, three named sets in `mcp/server.py`, each with one reason.
+* **`HIDDEN_TOOLS`**, two named sets in `mcp/server.py`, each with one reason.
   A tool is hidden for what it **is**, never for who is calling:
 
   | Set | Names | Why |
   |---|---|---|
   | `_META_TOOLS` | `agent.META_TOOLS` (`load_tools`, `create_plan`, `update_plan`) + `list_tools` + `add_context` | The meta-tools steer an agent loop that does not exist here — the client runs its own model. `list_tools` is a discovery tool that reads the **raw** registry, so it would hand back exactly the names this projection exists to withhold, and MCP already has `tools/list`. `add_context` is a chat-context builder whose per-pk validation makes it a model-row existence oracle, and the context it builds has nowhere to go on a stateless transport. Deriving from `agent.META_TOOLS` means a new meta-tool is hidden the day it is added. |
-  | `_CHAT_STATE_WRITERS` | `write_memory`, `delete_memory`, `save_skill`, `update_skill`, `delete_skill` | They shape the **chat** assistant's own state; exposing them would put approval cards for the operator's own memory and skills in front of an external client for no benefit. The readers — `read_memory`, `find_skill`, `list_skills` — stay. |
   | `_LLM_SPENDING_READS` | `analyze_image` | **A read tool that spends the platform LLM credential is not exposed over MCP.** `analyze_image` sends an image plus a client-chosen free-text prompt through `helpers.llm` on `LLM_HANDLER_API_KEY`, and read-only tools carry no approval gate — over MCP that is an unmetered spend of the installation's own credential, driven by a remote client. Re-run `grep -rn "helpers.llm\|LLM_HANDLER_API_KEY" mojo/apps/assistant/services/tools/` when adding tools and add anything it finds to this set. |
 
 * **`requires_managed_infrastructure` tools when `infrastructure.is_external()`.**
@@ -179,6 +179,14 @@ is `get_registry()` minus:
 renders each entry as `{name, description, inputSchema, annotations}` with
 `annotations.readOnlyHint = not mutates` and `annotations.destructiveHint =
 mutates`. Registry order; no pagination cursor.
+
+The five memory and skill WRITERS — `write_memory`, `delete_memory`,
+`save_skill`, `update_skill`, `delete_skill` — are offered here, alongside the
+readers. They carry an `owner_state` predicate, so a call that touches only the
+connected operator's own tier (a `user`-tier memory, a user-tier skill they own)
+executes and returns its result; a global or group tier, or anyone else's skill,
+still returns an approval card. That decision is made in `agent._execute_tool`,
+never here — see [approvals.md](approvals.md#declaring-a-mutating-tool).
 
 `projected_registry` is deliberately **not** permission-filtered:
 `_execute_tool` keeps its own permission gate and its own denial event, and a
@@ -386,8 +394,9 @@ slot with a null id, and a batch of only notifications is a 202. `MAX_BATCH` is
 - `tests/test_assistant/44_test_mcp_server.py` — framing and classification,
   `initialize` negotiation, ping/notifications/batches/unknown methods, the
   projection and its annotations, the lazy per-grant conversation, a mutating
-  call yielding a card that never runs, the conversation scope of the two
-  MCP-only tools, and every refusal string and incident level.
+  call yielding a card that never runs, the owner-state writers executing for the
+  operator's own tier and still proposing for anyone else's, the conversation
+  scope of the two MCP-only tools, and every refusal string and incident level.
 - `tests/test_assistant/45_test_mcp_gate.py` — the token-kind gate and its
   challenges, the disabled door over the wire (including that the rate-limit
   bucket is never touched), the sensitive-body label, and the descriptors,

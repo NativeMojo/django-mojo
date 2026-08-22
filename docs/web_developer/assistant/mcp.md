@@ -16,8 +16,10 @@ Three things to know before you start:
    flow, which most MCP clients perform for you.
 2. **Tools run with the connected operator's own permissions.** You see exactly
    the tools that operator can use, and nothing else.
-3. **A tool that changes data never executes.** It returns an approval card, and
-   a human resolves it in the Admin. There is no way to approve over MCP. See
+3. **A tool that changes SHARED data never executes.** It returns an approval
+   card, and a human resolves it in the Admin. There is no way to approve over
+   MCP. The exception is the operator's own assistant state — a `user`-tier
+   memory, or a skill they own — which is written immediately. See
    [Approvals](approvals.md).
 
 The transport is **stateless Streamable HTTP**: plain `application/json`
@@ -113,14 +115,30 @@ elicitation. Follow with the usual `notifications/initialized`, which answers
 ```
 
 The list is not paginated — there is no cursor. `destructiveHint: true` means
-"this tool changes data", which on this server means "this tool will produce an
-approval card rather than doing anything".
+"this tool changes data" — on this server, that means an approval card rather
+than anything happening, *unless* the call touches only the operator's own
+memory or a skill they own.
 
 The list reflects the operator's permissions and this installation's
 configuration, so two operators may legitimately see different tools. A handful
 of the Admin's own conversation tools (`load_tools`, `create_plan`,
-`update_plan`, and the memory/skill *writers*) are deliberately not offered here;
-the memory and skill *readers* are.
+`update_plan`, `list_tools`, `add_context`) are deliberately not offered here,
+and neither is `analyze_image`.
+
+The memory and skill tools ARE offered — both the readers (`read_memory`,
+`find_skill`, `list_skills`) and the five writers (`write_memory`,
+`delete_memory`, `save_skill`, `update_skill`, `delete_skill`). A writer call in
+the operator's own `user` tier, or on a user-tier skill they own, runs
+immediately and returns the handler's result; a `global` or `group` tier, or
+anyone else's skill, returns an approval card. `initialize` says the same thing
+in its `instructions`:
+
+> Tools run with the connected operator's own permissions. A tool that changes
+> shared data never executes here: it returns an approval card (status
+> approval_required) that the operator resolves in the Admin; poll
+> get_pending_action with the action_id to learn the outcome. Writes to the
+> operator's own memory and skills (tier "user", or a skill they own) run
+> immediately and return the result.
 
 ### tools/call
 

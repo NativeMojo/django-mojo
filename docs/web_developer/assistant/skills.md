@@ -178,7 +178,7 @@ The assistant calls `list_skills` and responds with a summary grouped by tier.
 
 > "Forget the 'rebuild sales reports' skill."
 
-The assistant calls `delete_skill` (which requires user confirmation via an `action` block as it mutates data).
+The assistant calls `delete_skill`. A skill you own (tier `user`) is deleted immediately; any other skill produces an [approval card](approvals.md) an operator resolves in the Admin. Saving and updating work the same way.
 
 ---
 

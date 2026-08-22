@@ -701,19 +701,20 @@ Each step object:
 | Tool | Permission | Mutates | Description |
 |---|---|---|---|
 | `read_memory` | `assistant` | No | Read stored memory entries grouped by tier. The system prompt already injects memories, but this tool lets the LLM check raw keys before updating or deleting. |
-| `write_memory` | `assistant` | Yes | Store or update a memory entry. Requires `tier`, `key`, `value`. Enforces key format, size limits, and secret detection. |
-| `delete_memory` | `assistant` | Yes | Delete a memory entry by tier and key. |
+| `write_memory` | `assistant` | Yes | Store or update a memory entry. Requires `tier`, `key`, `value`. Enforces key format, size limits, and secret detection. **Owner-state:** a `user`-tier write runs immediately; `global` and `group` produce an approval card. |
+| `delete_memory` | `assistant` | Yes | Delete a memory entry by tier and key. **Owner-state:** a `user`-tier delete runs immediately; `global` and `group` produce an approval card. |
 
 ### Skills Domain (`assistant`)
 
-All four tools are `core=True` — always available without calling `load_tools`.
+All five tools are `core=True` — always available without calling `load_tools`.
 
 | Tool | Permission | Core | Mutates | Description |
 |---|---|---|---|---|
 | `find_skill` | `assistant` | Yes | No | Search for a skill by keywords. Returns matching skills with full step definitions for replay. |
-| `save_skill` | `assistant` | Yes | Yes | Create or update a skill with name, description, trigger phrases, and ordered steps. Upserts on name within the same scope. |
+| `save_skill` | `assistant` | Yes | Yes | Create or update a skill with name, description, trigger phrases, and ordered steps. Upserts on name within the same scope. **Owner-state:** a `user`-tier save runs immediately; `global` and `group` produce an approval card. |
 | `list_skills` | `assistant` | Yes | No | List all accessible skills grouped by tier. Returns summaries (no step details). |
-| `delete_skill` | `assistant` | Yes | Yes | Delete a skill by ID. Owner or admin only. |
+| `update_skill` | `assistant` | Yes | Yes | Partial update of a skill by ID. **Owner-state:** your own user-tier skill is changed immediately; any other skill produces an approval card. |
+| `delete_skill` | `assistant` | Yes | Yes | Delete a skill by ID. Owner or admin only. **Owner-state:** your own user-tier skill is deleted immediately; any other skill produces an approval card. |
 
 See [skills.md](skills.md) for the full model reference, service API, step format, and settings.
 
@@ -1065,16 +1066,17 @@ def _tool_query_orders(params, user):
 | `permission` | Yes | Permission string checked via `user.has_permission()` |
 | `description` | Yes | Human-readable description shown to the LLM |
 | `input_schema` | Yes | JSON Schema dict for the tool's parameters |
-| `mutates` | No | Default `False`. If `True`, the tool **cannot execute on the model's call** — it produces an approval the operator must resolve. See [Approvals](approvals.md). |
+| `mutates` | No | Default `False`. If `True`, the tool **cannot execute on the model's call** — it produces an approval the operator must resolve, unless an `owner_state` predicate returns `True` for that call. See [Approvals](approvals.md). |
 | `core` | No | Default `False`. If `True`, tool is always sent to the LLM (two-tier tier 1). Set this for tools that should be available in every conversation without loading a domain. |
 | `fresh_auth_seconds` | No | Mutating only. Recency window mirroring `@md.requires_fresh_auth(seconds=N)` on the Admin twin. Forces REST-only resolution. |
 | `requires_superuser` | No | Mutating only. AND-check for a live literal `User.is_superuser`. |
 | `requires_managed_infrastructure` | No | Mutating only. Hidden and refused when `INFRASTRUCTURE_MODE=external`. |
 | `summarize` | No | Mutating only. `(params, user) -> str` — the card's one sentence. |
 | `preview` | No | Mutating only. `(params, user) -> {"summary", "details", "revision"}`, read-only; the revision is bound and re-checked. Raising it refuses the proposal. |
+| `owner_state` | No | Mutating only. `(params, user) -> bool`. Returning **exactly `True`** runs the handler directly on every transport (the `assistant:tool:<name>` event still fires); anything else proposes a card. Only for state the caller alone owns. Cannot be combined with `fresh_auth_seconds`, `requires_managed_infrastructure` or `preview`. |
 | `authorize` | No | **Any** tool. `(user) -> bool`, evaluated in addition to `permission` wherever that check runs. |
 
-> Passing any of the five mutating-only gates without `mutates=True` raises
+> Passing any of the six mutating-only gates without `mutates=True` raises
 > `ValueError` **at import time** — a misdeclared tool breaks the import rather
 > than degrading into a silent no-op.
 
