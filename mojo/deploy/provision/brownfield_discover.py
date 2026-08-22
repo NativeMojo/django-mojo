@@ -284,12 +284,41 @@ def _cache(clients, manifest, network, findings, observed, inventory):
     )
     for label, current, expected in checks:
         _same(findings, f"Valkey {label}", current, expected)
-    current_groups = sorted(row.get("SecurityGroupId")
-                            for row in group.get("SecurityGroups") or [])
+    # ReplicationGroup does not carry subnet-group or VPC security-group
+    # fields in the ElastiCache provider model. It names MemberClusters; those
+    # cache-cluster records are the authoritative network attachment shape.
+    member_ids = sorted(set(group.get("MemberClusters") or []))
+    if not member_ids:
+        _missing(findings, "Valkey member cluster", wanted["identifier"])
+    member_clusters = []
+    for member_id in member_ids:
+        cluster_answer = _read(
+            findings, "elasticache.describe_cache_clusters",
+            lambda cluster_id=member_id: clients.get(
+                "elasticache").describe_cache_clusters(
+                    CacheClusterId=cluster_id), {})
+        cluster = _one(cluster_answer.get("CacheClusters"))
+        if not cluster:
+            _missing(findings, "Valkey member cluster", member_id)
+            continue
+        member_clusters.append(cluster)
+        cluster_groups = sorted(
+            row.get("SecurityGroupId")
+            for row in cluster.get("SecurityGroups") or [])
+        _same(findings, f"Valkey member {member_id} security groups",
+              cluster_groups, sorted(wanted["security_group_ids"]))
+        _same(findings, f"Valkey member {member_id} subnet group",
+              cluster.get("CacheSubnetGroupName"), wanted["subnet_group_name"])
+    current_groups = sorted(set(
+        row.get("SecurityGroupId") for cluster in member_clusters
+        for row in cluster.get("SecurityGroups") or []))
     _same(findings, "Valkey security groups", current_groups,
           sorted(wanted["security_group_ids"]))
-    _same(findings, "Valkey subnet group", group.get("CacheSubnetGroupName"),
-          wanted["subnet_group_name"])
+    current_subnet_groups = sorted(set(
+        cluster.get("CacheSubnetGroupName") for cluster in member_clusters
+        if cluster.get("CacheSubnetGroupName")))
+    _same(findings, "Valkey subnet group", current_subnet_groups,
+          [wanted["subnet_group_name"]])
     subnet_answer = _read(
         findings, "elasticache.describe_cache_subnet_groups",
         lambda: clients.get("elasticache").describe_cache_subnet_groups(
@@ -298,6 +327,7 @@ def _cache(clients, manifest, network, findings, observed, inventory):
     _same(findings, "Valkey subnet-group VPC",
           (subnet_group or {}).get("VpcId"), network["vpc_id"])
     observed.cache_group = discover.wrap(group)
+    observed.cache_clusters = discover.wrap(member_clusters)
     observed.cache_endpoint = endpoint.get("Address")
     observed.cache_port = endpoint.get("Port")
     inventory["cache"] = {
@@ -310,7 +340,15 @@ def _cache(clients, manifest, network, findings, observed, inventory):
         "transit_encryption": bool(group.get("TransitEncryptionEnabled")),
         "auth_enabled": bool(group.get("AuthTokenEnabled")),
         "security_group_ids": current_groups,
-        "subnet_group": group.get("CacheSubnetGroupName"),
+        "subnet_group": (current_subnet_groups[0]
+                         if len(current_subnet_groups) == 1 else None),
+        "member_clusters": [{
+            "id": cluster.get("CacheClusterId"),
+            "security_group_ids": sorted(
+                row.get("SecurityGroupId")
+                for row in cluster.get("SecurityGroups") or []),
+            "subnet_group": cluster.get("CacheSubnetGroupName"),
+        } for cluster in member_clusters],
         "vpc_id": (subnet_group or {}).get("VpcId"),
     }
     if wanted.get("credential"):

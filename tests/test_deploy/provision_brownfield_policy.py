@@ -5,6 +5,9 @@ class _Raw:
     def describe_vpcs(self):
         return {"Vpcs": []}
 
+    def describe_cache_clusters(self, **kwargs):
+        return {"CacheClusters": []}
+
     def run_instances(self):
         return {"Instances": []}
 
@@ -40,6 +43,11 @@ def test_positive_client_policy_blocks_every_unlisted_mutation_via_getattr(opts)
                  "explicit read operations must remain reachable")
     th.assert_eq(client.run_instances(), {"Instances": []},
                  "declared preparation mutations must remain reachable")
+    cache_client = discover.GuardedClient(
+        _Raw(), "elasticache", brownfield_policy.MutationPolicy())
+    th.assert_eq(cache_client.describe_cache_clusters(
+        CacheClusterId="cache-member"), {"CacheClusters": []},
+        "member-cluster metadata must remain reachable for network proof")
     for method in ("associate_address", "create_db_cluster"):
         raised = None
         try:
@@ -50,7 +58,8 @@ def test_positive_client_policy_blocks_every_unlisted_mutation_via_getattr(opts)
                        f"dynamic getattr must not bypass the block on {method}")
     raised = None
     try:
-        client.set_subnets
+        discover.GuardedClient(
+            _Raw(), "elbv2", brownfield_policy.MutationPolicy()).set_subnets
     except discover.DestructiveCallBlocked as err:
         raised = err
     th.assert_true(raised is not None,

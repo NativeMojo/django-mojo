@@ -428,7 +428,12 @@ def _converged(spec):
     observed.balancer_attributes = {
         "load_balancing.cross_zone.enabled": "true",
         "deletion_protection.enabled": "true"}
-    observed.listeners = [{"Port": 443}, {"Port": 80}]
+    observed.listeners = [
+        {"Port": 443, "Protocol": "TCP", "DefaultActions": [{
+            "Type": "forward", "TargetGroupArn": "arn:tg-api"}]},
+        {"Port": 80, "Protocol": "TCP", "DefaultActions": [{
+            "Type": "forward", "TargetGroupArn": "arn:tg-certbot"}]},
+    ]
     observed.target_groups = {
         "api": dict(groups["api"], TargetGroupArn="arn:tg-api",
                     TargetGroupName=names["api_target_group"]),

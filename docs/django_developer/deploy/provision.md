@@ -153,6 +153,12 @@ for a typed confirmation, re-observes everything, and refuses before mutation
 if either digest changed. A newly needed but otherwise allowed mutation is
 therefore not smuggled in after confirmation.
 
+ElastiCache exposes the replication-group endpoint and encryption posture on
+the replication group, but exposes its subnet group and VPC security groups on
+the member cache clusters. Brownfield discovery follows every declared member
+cluster and requires each one to match the manifest before the dependency
+digest can pass.
+
 The mutation boundary is a positive allowlist:
 
 | Step | May create or converge | Never does |
