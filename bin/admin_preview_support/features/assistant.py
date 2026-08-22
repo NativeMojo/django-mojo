@@ -36,15 +36,21 @@ def describe(capabilities):
 def _state(handler):
     scenario = getattr(handler, "assistant_state", "configured")
     key = {"configured": True, "hint": KEY_HINT, "source": "admin"}
+    handler_key = {"configured": True, "hint": KEY_HINT, "source": "admin"}
     verify = {"ok": True, "code": "verified",
               "message": "Anthropic accepted this key.",
               "at": "2026-08-19T11:02:00+00:00"}
+    handler_verify = dict(verify)
+    unchecked = {"ok": None, "code": "", "message": "", "at": ""}
     if scenario == "unset":
         key = {"configured": False, "hint": "", "source": "none"}
-        verify = {"ok": None, "code": "", "message": "", "at": ""}
+        handler_key = {"configured": False, "hint": "", "source": "none"}
+        verify = dict(unchecked)
+        handler_verify = dict(unchecked)
     elif scenario == "fallback":
+        # Only the platform key is stored; the Assistant resolves through it.
         key = {"configured": True, "hint": KEY_HINT, "source": "fallback"}
-        verify = {"ok": None, "code": "", "message": "", "at": ""}
+        verify = dict(unchecked)
     elif scenario == "verify_failed":
         verify = {"ok": False, "code": "invalid_key",
                   "message": "Anthropic rejected this key.",
@@ -53,6 +59,7 @@ def _state(handler):
         "schema_version": 1,
         "enabled": scenario != "disabled",
         "key": key,
+        "handler_key": handler_key,
         "model": {
             "selected": "" if scenario == "unset" else "claude-sonnet-5",
             "effective": "claude-sonnet-5",
@@ -60,6 +67,7 @@ def _state(handler):
             "choices": deepcopy(CHOICES),
         },
         "verify": verify,
+        "handler_verify": handler_verify,
         "assistant_installed": True,
         "realtime_installed": True,
     }
@@ -83,7 +91,8 @@ def post(handler, path, payload):
                            "message": "Anthropic accepted this key."},
                      "state": state}
     if action == "save":
-        if handler.assistant_state == "verify_failed" and payload.get("api_key"):
+        if handler.assistant_state == "verify_failed" and (
+                payload.get("api_key") or payload.get("handler_api_key")):
             return 400, {"error": "The API key was not accepted. "
                                   "Anthropic rejected this key."}
         handler.assistant_state = "configured" if payload.get("enabled") else "disabled"

@@ -3,7 +3,13 @@ from mojo.apps import jobs
 from mojo.helpers.settings import settings
 
 HEALTH_MONITORING_ENABLED = settings.get_static("HEALTH_MONITORING_ENABLED", False)
-LLM_TRIAGE_ENABLED = settings.get_static("LLM_HANDLER_API_KEY", None)
+
+
+def _llm_triage_enabled():
+    # Read at call time, never cached at import: the platform LLM key can be
+    # stored from the built-in Admin (a database row), and a cron that froze
+    # the deployment-file value at startup would ignore it until a restart.
+    return bool(settings.get("LLM_HANDLER_API_KEY", None))
 
 _health_defaults_checked = False
 
@@ -126,7 +132,7 @@ def recheck_active_threats(force=False, verbose=False, now=None):
 # Twice a day — triage any new incidents that haven't been LLM-assessed yet
 @schedule(hours="9,18")
 def triage_new_incidents(force=False, verbose=False, now=None):
-    if not LLM_TRIAGE_ENABLED:
+    if not _llm_triage_enabled():
         return
     jobs.publish(
         func="mojo.apps.incident.asyncjobs.triage_new_incidents",

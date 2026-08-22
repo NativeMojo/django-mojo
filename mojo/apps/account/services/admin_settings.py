@@ -35,16 +35,17 @@ FLEET_PROVIDER_KEYS = frozenset({
     "GEOIP_MOJO_SYNC_ENABLED", "GEOIP_API_KEY_MOJO",
     "ADMIN_PROVIDER_SETUP_REVISION", "ADMIN_PROVIDER_VERIFY_STATE",
 })
-# The Assistant's own keys.  The writable four are owned by
-# ``services/assistant_setup`` and reached only through the owner-tier endpoint;
-# ``LLM_HANDLER_API_KEY`` joins them read-only because a global database row
-# would outrank the deployment file (``helpers/settings/helper.py``) and make a
-# descriptor labelled "Deployment settings" a lie.
+# The LLM keys.  All six are owned by ``services/assistant_setup`` and reached
+# only through the owner-tier endpoint: the Assistant's own credential, model
+# and flag, and the PLATFORM credential ``LLM_HANDLER_API_KEY`` (every LLM
+# feature, and the Assistant's fallback).  A global database row outranks the
+# deployment file (``helpers/settings/helper.py``), which is exactly why the
+# generic settings surface must refuse them and only the owner editor may write.
 ASSISTANT_WRITABLE_KEYS = frozenset({
     "LLM_ADMIN_ENABLED", "LLM_ADMIN_API_KEY", "LLM_ADMIN_MODEL",
-    "LLM_ADMIN_VERIFY_STATE",
+    "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY", "LLM_HANDLER_VERIFY_STATE",
 })
-ASSISTANT_KEYS = ASSISTANT_WRITABLE_KEYS | {"LLM_HANDLER_API_KEY"}
+ASSISTANT_KEYS = ASSISTANT_WRITABLE_KEYS
 # Keys whose one dedicated writer may pass ``_protected_writer=<key>`` through
 # ``Setting.save``.  Naming the key twice is the point: a writer proves it owns
 # exactly the row it is saving, so a shared helper cannot smuggle a different

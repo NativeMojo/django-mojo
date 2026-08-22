@@ -496,7 +496,7 @@ The LLM agent provides autonomous security triage. When invoked via the `llm://`
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `LLM_HANDLER_API_KEY` | None | Anthropic API key. **Required** to enable LLM handlers. |
+| `LLM_HANDLER_API_KEY` | None | Anthropic API key. **Required** to enable LLM handlers. Settable from the built-in Admin's Assistant setup (stored encrypted; read at call time, no restart needed). |
 | `LLM_HANDLER_MODEL` | (auto-detect) | Model to use for triage. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
 
 If `LLM_HANDLER_API_KEY` is not set, `llm://` handlers silently skip.
@@ -897,7 +897,7 @@ Single-server job functions follow the engine's calling convention: `func(job)` 
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `LLM_HANDLER_API_KEY` | None | Anthropic API key. Required for `llm://` handlers. |
+| `LLM_HANDLER_API_KEY` | None | Anthropic API key. Required for `llm://` handlers. Also settable from the built-in Admin's Assistant setup. |
 | `LLM_HANDLER_MODEL` | (auto-detect) | Claude model for triage. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
 
 ### OSSEC Settings

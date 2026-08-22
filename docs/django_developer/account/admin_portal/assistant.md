@@ -155,7 +155,9 @@ which is not installed for every operator.
 
 ## The setup surface
 
-`services/assistant_setup.py` is the only writer for the four assistant keys,
+`services/assistant_setup.py` is the only writer for the six LLM keys — the
+Assistant's own flag, model and key, and the platform key every LLM feature
+uses —
 and `rest/admin_assistant.py` is its only boundary. See
 [the assistant application docs](../../assistant/README.md#admin-setup-surface)
 for the keys, the protection, and the resolution precedence.

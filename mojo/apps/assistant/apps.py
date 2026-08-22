@@ -22,7 +22,7 @@ class AppConfig(BaseAppConfig):
         The runtime protection (``admin_settings.is_catalog_protected``) is
         unconditional and does not depend on this registration.
 
-        All four are read-only in the catalog: an unknown ``writable`` value
+        All are read-only in the catalog: an unknown ``writable`` value
         yields can_write / can_clear / can_owner_edit all false, exactly as
         ``fleet_config`` and ``provider_setup`` already behave. The owner
         editor lives at POST /api/account/admin/assistant.
@@ -49,14 +49,16 @@ class AppConfig(BaseAppConfig):
             resolver="dynamic", sensitivity="configured_only",
             writable="assistant_setup", owner="Assistant setup",
             change_behavior="immediate", storage="database"))
-        # Visible as PROVENANCE, never as an editor: the fallback is read from
-        # the deployment file, and a page whose job is "how this platform is
-        # configured" has to be able to say where the credential comes from.
+        # The PLATFORM credential: incident triage, the LLM agent, and the
+        # Assistant's fallback all read it. Settable from the same owner editor
+        # as the Assistant key; a deployment-file value still applies when no
+        # row is stored.
         register_descriptor(Descriptor(
-            "LLM_HANDLER_API_KEY", "Assistant fallback API key",
+            "LLM_HANDLER_API_KEY", "Platform LLM API key",
             "Security & operations",
-            "Deployment credential used when no Assistant key is configured.",
-            "configured", resolver="static", sensitivity="configured_only",
-            writable="none", owner="Deployment settings",
-            change_behavior="deploy",
-            unset_meaning="the Assistant has no fallback credential"))
+            "Encrypted Anthropic credential used by every LLM feature and as "
+            "the Assistant's fallback.",
+            "configured", resolver="dynamic", sensitivity="configured_only",
+            writable="assistant_setup", owner="Assistant setup",
+            change_behavior="immediate", storage="database",
+            unset_meaning="LLM features are off and the Assistant has no fallback"))

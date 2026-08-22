@@ -36,22 +36,29 @@ def on_admin_assistant_mutate(request):
     # An exact key set, never a superset: silently ignoring a field a browser
     # sent is how it ends up believing it saved something this call never wrote.
     if action == "verify":
-        if keys - {"action", "api_key"}:
-            raise merrors.ValueException("Verify accepts only action and api_key")
-        result = assistant_setup.verify(request.user, request.DATA.get("api_key"))
+        if keys - {"action", "api_key", "target"}:
+            raise merrors.ValueException(
+                "Verify accepts only action, api_key, and target")
+        result = assistant_setup.verify(
+            request.user, request.DATA.get("api_key"),
+            target=request.DATA.get("target"))
         return {"schema_version": assistant_setup.SCHEMA_VERSION,
                 "verified": True, "result": result,
                 "state": assistant_setup.state()}
     if action == "save":
-        if keys - {"action", "enabled", "model", "api_key", "clear_api_key"}:
+        if keys - {"action", "enabled", "model", "api_key", "clear_api_key",
+                   "handler_api_key", "clear_handler_api_key"}:
             raise merrors.ValueException(
-                "Save accepts only action, enabled, model, api_key, and clear_api_key")
+                "Save accepts only action, enabled, model, api_key, clear_api_key, "
+                "handler_api_key, and clear_handler_api_key")
         saved = assistant_setup.save(
             request.user,
             enabled=request.DATA.get("enabled") is True,
             model=request.DATA.get("model"),
             api_key=request.DATA.get("api_key"),
-            clear_api_key=request.DATA.get("clear_api_key") is True)
+            clear_api_key=request.DATA.get("clear_api_key") is True,
+            handler_api_key=request.DATA.get("handler_api_key"),
+            clear_handler_api_key=request.DATA.get("clear_handler_api_key") is True)
         # Both actions answer with the fresh state, so a second editor holding a
         # stale page sees the truth on its very next call.
         return {"schema_version": assistant_setup.SCHEMA_VERSION,

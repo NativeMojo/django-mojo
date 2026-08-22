@@ -203,27 +203,32 @@ model from the built-in Admin, without editing a settings file.
 read *and* write — see
 [the API reference](../../web_developer/account/admin_portal/assistant.md)).
 
-### The five protected keys
+### The six protected keys
 
 | Key | Owned by | Stored as |
 |---|---|---|
 | `LLM_ADMIN_ENABLED` | `assistant_setup` | Plain global `Setting` row |
-| `LLM_ADMIN_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row |
+| `LLM_ADMIN_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row — the Assistant's own key, optional |
 | `LLM_ADMIN_MODEL` | `assistant_setup` | Plain row, absent means automatic |
-| `LLM_ADMIN_VERIFY_STATE` | `assistant_setup` | How the STORED key last checked |
-| `LLM_HANDLER_API_KEY` | The deployment file | Never written from Admin |
+| `LLM_ADMIN_VERIFY_STATE` | `assistant_setup` | How the STORED Assistant key last checked |
+| `LLM_HANDLER_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row — the **platform** key |
+| `LLM_HANDLER_VERIFY_STATE` | `assistant_setup` | How the STORED platform key last checked |
 
-All five are **catalog-protected**: `admin_settings.is_catalog_protected()`
+All six are **catalog-protected**: `admin_settings.is_catalog_protected()`
 returns true, so `Setting.set()`, the generic `/api/settings` REST surface, a
-shell save and every other writer refuse them. The four writable keys have one
-dedicated escape — `row.save(_protected_writer=<key>)` — and the writer must
-name the exact key the row carries, so no writer can smuggle a different
-protected key past the guard.
+shell save and every other writer refuse them. Each has one dedicated escape —
+`row.save(_protected_writer=<key>)` — and the writer must name the exact key
+the row carries, so no writer can smuggle a different protected key past the
+guard.
 
-`LLM_HANDLER_API_KEY` is protected **read-only**. A global database row would
-outrank the deployment file (`SettingsHelper.get` reads database rows before
-`django.conf`), which would make a value labelled "Deployment settings" a lie.
-Nothing writes it; it stays visible as provenance.
+`LLM_HANDLER_API_KEY` is the **platform** credential: incident triage and the
+LLM agent read it, and it is the Assistant's fallback. It is settable from the
+same owner editor as the Assistant key (`handler_api_key` /
+`clear_handler_api_key` on `save`, `target: "handler"` on `verify`). A value in
+the deployment file still applies when no row is stored, and `state()` reports
+which one is live as `handler_key.source` (`admin` / `deployment` / `none`).
+The incident readers resolve it at call time, so a key stored from the Admin
+takes effect without a restart.
 
 ### Writes go through the guarded save path, never `.update()`
 
@@ -249,13 +254,15 @@ credential and protect it accordingly.
 
 ```
 LLM_ADMIN_API_KEY (Admin row)  ->  LLM_ADMIN_API_KEY (deployment file)
-                               ->  LLM_HANDLER_API_KEY (deployment fallback)
+                               ->  LLM_HANDLER_API_KEY (Admin row)
+                               ->  LLM_HANDLER_API_KEY (deployment file)
 ```
 
 This is existing behaviour, not new code: `llm.get_api_key()` already prefers
 `LLM_ADMIN_API_KEY`, and a database row already outranks the file. `state()`
 reports which one is live as `key.source` (`admin` / `deployment` / `fallback` /
-`none`) with a four-character hint, and never the value.
+`none`) with a four-character hint, and never the value; `fallback` means the
+Assistant is resolving through the platform key.
 
 ### Verification
 

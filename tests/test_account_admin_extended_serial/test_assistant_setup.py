@@ -19,7 +19,9 @@ REGULAR_EMAIL = "assistant-setup-regular@test.com"
 REGULAR_PASSWORD = "Assistant_setup_Regular_99"
 
 KEYS = ("LLM_ADMIN_ENABLED", "LLM_ADMIN_API_KEY", "LLM_ADMIN_MODEL",
-        "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY")
+        "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY",
+        "LLM_HANDLER_VERIFY_STATE")
+PLATFORM_KEY = "sk-ant-platform-setup-wxyz5678"
 
 STORED_KEY = "sk-ant-assistant-setup-abcd1234"
 
@@ -337,5 +339,114 @@ def test_endpoint_refuses_below_owner(opts):
         opts.client.logout()
         assert write.status_code in (403, 404, 440), \
             f"a manage_settings holder wrote Assistant settings: {write.status_code} {write.body}"
+    finally:
+        _wipe()
+
+
+@th.django_unit_test("the platform LLM key is settable, encrypted, honoured by every reader, and clearable")
+def test_platform_key_is_settable_from_admin(opts):
+    from mojo.apps.account.models import Setting
+    from mojo.apps.account.services import assistant_setup
+    from mojo.apps.incident import cronjobs as incident_cron
+    from mojo.apps.incident.models import event as incident_event
+    from mojo.helpers import llm
+    from mojo.helpers.settings import settings
+
+    _wipe()
+    try:
+        before = assistant_setup.state()
+        assert before["handler_key"]["source"] == "none", \
+            f"a wiped installation still reports a platform key: {before['handler_key']!r}"
+        assert incident_cron._llm_triage_enabled() is False, \
+            "incident triage believes a platform key exists before one is stored"
+
+        with _accepts():
+            state = assistant_setup.save(
+                _admin(opts), enabled=True, model="", handler_api_key=PLATFORM_KEY)
+
+        row = Setting.objects.get(key="LLM_HANDLER_API_KEY", group=None)
+        assert row.is_secret is True, "the platform key row is not marked secret"
+        assert row.value == "", f"the plaintext platform key was stored in `value`: {row.value!r}"
+        assert row.get_value() == PLATFORM_KEY, "the stored platform key does not decrypt back"
+        assert set(state["handler_key"]) == {"configured", "hint", "source"}, \
+            f"the platform key state carries more than presence, hint and provenance: {state['handler_key']!r}"
+        assert state["handler_key"]["source"] == "admin" and \
+            state["handler_key"]["hint"] == PLATFORM_KEY[-4:], \
+            f"a stored platform key is not reported as Admin-owned: {state['handler_key']!r}"
+        # With no Assistant key of its own, the Assistant resolves through the
+        # platform key — and says so.
+        assert state["key"]["source"] == "fallback" and state["key"]["hint"] == PLATFORM_KEY[-4:], \
+            f"the Assistant does not resolve through the stored platform key: {state['key']!r}"
+        assert PLATFORM_KEY not in ujson.dumps(state), \
+            "the platform key appears somewhere in the setup state payload"
+        assert state["handler_verify"]["ok"] is True, \
+            f"storing a verified platform key did not record its verification: {state['handler_verify']!r}"
+
+        # Every reader that used to freeze the deployment-file value at import
+        # now sees the Admin-stored row.
+        assert llm.get_api_key() == PLATFORM_KEY, "the LLM helper does not resolve the stored platform key"
+        assert settings.get("LLM_HANDLER_API_KEY") == PLATFORM_KEY, \
+            "settings.get does not resolve the stored platform key"
+        assert incident_cron._llm_triage_enabled() is True, \
+            "incident triage ignores a platform key stored from the Admin"
+        assert incident_event._llm_api_key() == PLATFORM_KEY, \
+            "the default LLM triage path ignores a platform key stored from the Admin"
+
+        # Checking the stored platform key records against ITS record, not the
+        # Assistant's.
+        with _rejects():
+            result = assistant_setup.verify(_admin(opts), target="handler")
+        state = assistant_setup.state()
+        assert result["code"] == "invalid_key" and state["handler_verify"]["code"] == "invalid_key", \
+            f"a platform-key check was not recorded on the platform record: {state['handler_verify']!r}"
+        assert state["verify"]["code"] != "invalid_key", \
+            f"a platform-key check leaked into the Assistant key's record: {state['verify']!r}"
+
+        with _accepts():
+            state = assistant_setup.save(
+                _admin(opts), enabled=True, model="", clear_handler_api_key=True)
+        assert state["handler_key"]["source"] == "none" and state["key"]["source"] == "none", \
+            f"clearing the platform key did not fall back honestly: {state['handler_key']!r} / {state['key']!r}"
+        assert not Setting.objects.filter(
+            key__in=["LLM_HANDLER_API_KEY", "LLM_HANDLER_VERIFY_STATE"]).exists(), \
+            "clearing the platform key left rows behind"
+        assert settings.get("LLM_HANDLER_API_KEY") is None, \
+            "the cleared platform key is still served from the settings cache"
+    finally:
+        _wipe()
+
+
+@th.django_unit_test("the platform key edit obeys the same refusals as the Assistant key")
+def test_platform_key_edit_validation(opts):
+    from mojo import errors as merrors
+    from mojo.apps.account.models import Setting
+    from mojo.apps.account.services import assistant_setup
+
+    _wipe()
+    try:
+        with _rejects(), th.assert_raises(merrors.ValueException):
+            assistant_setup.save(
+                _admin(opts), enabled=True, model="", handler_api_key=PLATFORM_KEY)
+        assert not Setting.objects.filter(key="LLM_HANDLER_API_KEY").exists(), \
+            "a rejected platform key was stored anyway"
+        with th.assert_raises(merrors.ValueException):
+            assistant_setup.save(
+                _admin(opts), enabled=True, model="",
+                handler_api_key=PLATFORM_KEY, clear_handler_api_key=True)
+        with th.assert_raises(merrors.ValueException):
+            assistant_setup.verify(_admin(opts), target="everything")
+
+        assert opts.client.login(ADMIN_EMAIL, ADMIN_PASSWORD), "assistant admin login failed"
+        origin = opts.client.host.rstrip("/")
+        response = opts.client.post(
+            "/api/account/admin/assistant",
+            json={"action": "save", "enabled": True, "model": "",
+                  "handler_api_key": PLATFORM_KEY, "unexpected": 1},
+            headers={"Origin": origin})
+        opts.client.logout()
+        assert response.status_code == 400, \
+            f"a save with an unexpected field was not refused: {response.status_code} {response.body}"
+        assert not Setting.objects.filter(key="LLM_HANDLER_API_KEY").exists(), \
+            "a refused save still stored the platform key"
     finally:
         _wipe()

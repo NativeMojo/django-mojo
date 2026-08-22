@@ -33,6 +33,7 @@ trip.
     "schema_version": 1,
     "enabled": true,
     "key": {"configured": true, "hint": "4d1a", "source": "admin"},
+    "handler_key": {"configured": true, "hint": "9c2e", "source": "admin"},
     "model": {
       "selected": "claude-sonnet-5",
       "effective": "claude-sonnet-5",
@@ -42,6 +43,7 @@ trip.
     "verify": {"ok": true, "code": "verified",
                "message": "Anthropic accepted this key.",
                "at": "2026-08-19T11:02:00+00:00"},
+    "handler_verify": {"ok": null, "code": "", "message": "", "at": ""},
     "assistant_installed": true,
     "realtime_installed": true
   }
@@ -53,12 +55,14 @@ trip.
 | `enabled` | The `LLM_ADMIN_ENABLED` flag |
 | `key.configured` | Whether **any** credential resolves |
 | `key.hint` | The last four characters, or `""` when the value is too short to hint at safely |
-| `key.source` | `admin` (stored here) · `deployment` (the settings file) · `fallback` (`LLM_HANDLER_API_KEY`) · `none` |
+| `key.source` | `admin` (stored here) · `deployment` (the settings file) · `fallback` (resolving through the platform key) · `none` |
+| `handler_key` | The **platform** key, `LLM_HANDLER_API_KEY` — used by every LLM feature (incident triage, the LLM agent) and as the Assistant's fallback. Same `configured` / `hint` / `source` shape; `source` is `admin` · `deployment` · `none` |
 | `model.selected` | The stored pin, `""` for automatic |
 | `model.effective` | What resolution actually returns right now |
 | `model.source` | `admin` · `deployment` · `automatic` |
 | `model.choices` | Picker suggestions only. Never validated against — the list is network-dependent |
-| `verify` | How the **stored** credential last checked. `ok` is `null` when it never has |
+| `verify` | How the **stored** Assistant credential last checked. `ok` is `null` when it never has |
+| `handler_verify` | The same record for the stored platform key |
 
 `verify.code` is one of `verified`, `invalid_key`, `unreachable`,
 `not_configured`, and `verify.message` is the fixed sentence for that code. No
@@ -78,9 +82,15 @@ page sees the truth on its very next call.
 ### `action: "verify"`
 
 ```json
-{"action": "verify"}                      // check the stored credential
-{"action": "verify", "api_key": "sk-…"}   // check a candidate before saving
+{"action": "verify"}                                  // check what the Assistant resolves
+{"action": "verify", "target": "handler"}             // check the stored platform key
+{"action": "verify", "api_key": "sk-…"}               // check a candidate before saving
+{"action": "verify", "api_key": "sk-…", "target": "handler"}
 ```
+
+`target` is `assistant` (default) or `handler`. It chooses which stored key is
+checked when no candidate is supplied, and which record (`verify` /
+`handler_verify`) a stored-key check is written to.
 
 ```json
 200 {"status": true, "data": {
@@ -99,22 +109,27 @@ configuration this installation is running.
 
 ```json
 {"action": "save", "enabled": true, "model": "claude-sonnet-5",
- "api_key": "sk-ant-…", "clear_api_key": false}
+ "api_key": "sk-ant-…", "clear_api_key": false,
+ "handler_api_key": "sk-ant-…", "clear_handler_api_key": false}
 ```
 
 | Field | Rules |
 |---|---|
 | `enabled` | Boolean. Required |
 | `model` | `""` for automatic, otherwise `^[a-z0-9][a-z0-9.\-]{0,80}$`. Required |
-| `api_key` | Optional. **Omit it to leave the stored credential alone** — an empty string is not "store nothing", so send nothing |
-| `clear_api_key` | Optional boolean. Removes the stored credential. Cannot be combined with `api_key` |
+| `api_key` | Optional. The Assistant's own key. **Omit it to leave the stored credential alone** — an empty string is not "store nothing", so send nothing |
+| `clear_api_key` | Optional boolean. Removes the stored Assistant key. Cannot be combined with `api_key` |
+| `handler_api_key` | Optional. The **platform** key (`LLM_HANDLER_API_KEY`). Same omit-to-keep rule |
+| `clear_handler_api_key` | Optional boolean. Removes the stored platform key and its verification record. Cannot be combined with `handler_api_key` |
 
-Only these keys are accepted; anything else is a `400`. A supplied `api_key` is
-**verified before anything is written**, and a rejected key refuses the whole
-save — the installation never runs a credential nobody proved.
+Only these keys are accepted; anything else is a `400`. A supplied key —
+either one — is **verified before anything is written**, and a rejected key
+refuses the whole save — the installation never runs a credential nobody
+proved.
 
-Clearing the key while `enabled` stays true is allowed, and the next read says
-so honestly: `key.source` falls back to `deployment`, `fallback` or `none`.
+Clearing a key while `enabled` stays true is allowed, and the next read says so
+honestly: `key.source` falls back to `deployment`, `fallback` or `none`, and
+`handler_key.source` to `deployment` or `none`.
 
 ---
 

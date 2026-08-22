@@ -125,7 +125,8 @@ def test_assistant_keys_are_catalog_protected(opts):
     from mojo.apps.account.services import admin_settings
 
     for key in ("LLM_ADMIN_ENABLED", "LLM_ADMIN_API_KEY", "LLM_ADMIN_MODEL",
-                "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY"):
+                "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY",
+                "LLM_HANDLER_VERIFY_STATE"):
         assert admin_settings.is_catalog_protected(key), \
             f"{key} can still be written through the generic settings API"
 
@@ -135,8 +136,14 @@ def test_assistant_keys_are_catalog_protected(opts):
         "the assistant keys have no dedicated-writer escape, so their own writer is blocked"
     assert "GEOIP_API_KEY_MOJO" in admin_settings.PROTECTED_WRITER_KEYS, \
         "the pre-existing provider-setup escape was dropped"
-    assert "LLM_HANDLER_API_KEY" not in admin_settings.PROTECTED_WRITER_KEYS, \
-        "the deployment fallback gained a database writer — it must stay file-owned"
+    # The platform key is settable from the Admin, so its one dedicated writer
+    # must have the escape too — and nothing else may write it.
+    assert "LLM_HANDLER_API_KEY" in admin_settings.PROTECTED_WRITER_KEYS, \
+        "the platform LLM key has no dedicated-writer escape, so the Admin cannot store it"
+    assert "LLM_HANDLER_VERIFY_STATE" in admin_settings.PROTECTED_WRITER_KEYS, \
+        "the platform key's verification record has no dedicated writer"
+    with th.assert_raises(merrors.PermissionDeniedException):
+        Setting.set("LLM_HANDLER_API_KEY", "sk-should-never-store-either")
 
     with th.assert_raises(merrors.PermissionDeniedException):
         Setting.set("LLM_ADMIN_API_KEY", "sk-should-never-store")

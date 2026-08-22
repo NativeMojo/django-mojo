@@ -11,7 +11,12 @@ logger = logit.get_logger(__name__, "incident.log")
 
 INCIDENT_LEVEL_THRESHOLD = settings.get_static('INCIDENT_LEVEL_THRESHOLD', 7)
 INCIDENT_METRICS_MIN_GRANULARITY = settings.get_static("INCIDENT_METRICS_MIN_GRANULARITY", "hours")
-LLM_API_KEY = settings.get_static("LLM_HANDLER_API_KEY", None)
+
+
+def _llm_api_key():
+    # Call-time read: the platform LLM key may be stored from the built-in
+    # Admin as a database row, which a value frozen at import would never see.
+    return settings.get("LLM_HANDLER_API_KEY", None)
 
 # Event categories that should bump the aggregate ``auth:failures`` counter.
 # Used by the portal Security Dashboard so a single fetch replaces the
@@ -382,7 +387,7 @@ class Event(models.Model, MojoModel):
                                     rule_set.run_handler(self, incident)
                         except Exception:
                             logger.exception("Error during re-trigger check (incident=%s)", incident.pk)
-                elif created and allow_default_llm and LLM_API_KEY:
+                elif created and allow_default_llm and _llm_api_key():
                     # No rule matched but level exceeded threshold — default to LLM triage
                     try:
                         from mojo.apps import jobs

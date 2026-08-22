@@ -1,16 +1,22 @@
 """Owner-only Assistant enablement, credential storage, and verification.
 
-The four keys this service owns are the ones ``mojo.helpers.llm`` already
-reads, so nothing here re-implements resolution:
+The six keys this service owns are the ones ``mojo.helpers.llm`` and the
+incident LLM handlers already read, so nothing here re-implements resolution:
 
-    LLM_ADMIN_ENABLED       feature flag
-    LLM_ADMIN_API_KEY       encrypted credential (secret Setting row)
-    LLM_ADMIN_MODEL         explicit model pin, absent means "automatic"
-    LLM_ADMIN_VERIFY_STATE  how the STORED credential last verified
+    LLM_ADMIN_ENABLED          feature flag
+    LLM_ADMIN_API_KEY          the Assistant's own credential (optional)
+    LLM_ADMIN_MODEL            explicit model pin, absent means "automatic"
+    LLM_ADMIN_VERIFY_STATE     how the STORED Assistant credential last verified
+    LLM_HANDLER_API_KEY        the PLATFORM credential: every LLM feature
+                               (incident triage and agent) and the Assistant's
+                               fallback
+    LLM_HANDLER_VERIFY_STATE   how the STORED platform credential last verified
 
-``SettingsHelper.get`` resolves database rows ahead of ``django.conf``, so an
-Admin-stored credential is live the moment it commits and outranks both the
-deployment file and the ``LLM_HANDLER_API_KEY`` fallback. All four are
+Both credentials are encrypted secret ``Setting`` rows. ``SettingsHelper.get``
+resolves database rows ahead of ``django.conf``, so an Admin-stored credential
+is live the moment it commits and outranks the deployment file. Resolution
+order is unchanged: the Assistant prefers its own key and falls back to the
+platform key. All six are
 catalog-protected (``admin_settings.is_catalog_protected``), so the generic
 ``/api/settings`` surface and every other ``Setting`` writer refuse them; this
 service is the only writer, and it goes through the ``_protected_writer`` save
@@ -38,7 +44,16 @@ ENABLED_KEY = "LLM_ADMIN_ENABLED"
 API_KEY = "LLM_ADMIN_API_KEY"
 MODEL_KEY = "LLM_ADMIN_MODEL"
 VERIFY_STATE_KEY = "LLM_ADMIN_VERIFY_STATE"
-FALLBACK_KEY = "LLM_HANDLER_API_KEY"
+HANDLER_KEY = "LLM_HANDLER_API_KEY"
+HANDLER_VERIFY_STATE_KEY = "LLM_HANDLER_VERIFY_STATE"
+FALLBACK_KEY = HANDLER_KEY
+
+# The two credentials an owner can store, check and clear. Each has its own
+# verification record so the page can say how each STORED key last checked.
+TARGETS = {
+    "assistant": (API_KEY, VERIFY_STATE_KEY),
+    "handler": (HANDLER_KEY, HANDLER_VERIFY_STATE_KEY),
+}
 
 MAX_API_KEY_LENGTH = 4096
 # Structural only. The fetched catalogue is network-dependent, so validating a
@@ -97,10 +112,23 @@ def _key_state():
     if deployed:
         return {"configured": True, "hint": key_hint(deployed),
                 "source": "deployment"}
-    fallback = settings.get(FALLBACK_KEY, None)
+    fallback = settings.get(HANDLER_KEY, None)
     if fallback:
         return {"configured": True, "hint": key_hint(fallback),
                 "source": "fallback"}
+    return {"configured": False, "hint": "", "source": "none"}
+
+
+def _handler_key_state():
+    """Where the platform credential comes from: this Admin, the deployment
+    file, or nowhere. Same disclosure rule as ``_key_state``."""
+    stored = _stored_value(HANDLER_KEY)
+    if stored:
+        return {"configured": True, "hint": key_hint(stored), "source": "admin"}
+    deployed = settings.get_static(HANDLER_KEY, None)
+    if deployed:
+        return {"configured": True, "hint": key_hint(deployed),
+                "source": "deployment"}
     return {"configured": False, "hint": "", "source": "none"}
 
 
@@ -121,9 +149,9 @@ def _model_state(refresh=False):
     }
 
 
-def read_verify_state():
-    """The persisted record of how the STORED credential last verified."""
-    value = _stored_value(VERIFY_STATE_KEY)
+def read_verify_state(key=VERIFY_STATE_KEY):
+    """The persisted record of how one STORED credential last verified."""
+    value = _stored_value(key)
     if isinstance(value, (bytes, bytearray)):
         value = value.decode("utf-8", "ignore")
     if isinstance(value, str):
@@ -159,8 +187,10 @@ def state(refresh=False):
         "schema_version": SCHEMA_VERSION,
         "enabled": bool(settings.get(ENABLED_KEY, False, kind="bool")),
         "key": _key_state(),
+        "handler_key": _handler_key_state(),
         "model": _model_state(refresh=refresh),
-        "verify": read_verify_state(),
+        "verify": read_verify_state(VERIFY_STATE_KEY),
+        "handler_verify": read_verify_state(HANDLER_VERIFY_STATE_KEY),
         "assistant_installed": apps.is_installed("mojo.apps.assistant"),
         "realtime_installed": apps.is_installed("mojo.apps.realtime"),
     }
@@ -190,8 +220,8 @@ def _verify_candidate(candidate):
     return {"ok": False, "code": code, "message": VERIFY_MESSAGES[code]}
 
 
-def _write_verify_state(result):
-    """Record how the STORED credential verified. Never a rejected candidate.
+def _write_verify_state(result, key=VERIFY_STATE_KEY):
+    """Record how one STORED credential verified. Never a rejected candidate.
 
     A draft that was never saved is not the configuration this installation is
     running, so recording it would make the setup page describe something that
@@ -204,30 +234,41 @@ def _write_verify_state(result):
         "at": timezone.now().isoformat(),
     })
     with transaction.atomic():
-        rows = _global_rows(VERIFY_STATE_KEY, lock=True)
-        row = rows[0] if rows else Setting(
-            key=VERIFY_STATE_KEY, group=None, is_secret=False)
+        rows = _global_rows(key, lock=True)
+        row = rows[0] if rows else Setting(key=key, group=None, is_secret=False)
         row.is_secret = False
         row.mojo_secrets = None
         row.value = entry
-        row.save(_protected_writer=VERIFY_STATE_KEY, _skip_cache=True)
+        row.save(_protected_writer=key, _skip_cache=True)
         if len(rows) > 1:
             Setting.objects.filter(
                 pk__in=[item.pk for item in rows[1:]]).delete()
         transaction.on_commit(row.push_to_cache)
 
 
-def verify(actor, api_key=None):
-    """Test a candidate key, or the effective one when none is supplied."""
+def normalize_target(value):
+    if value in (None, ""):
+        return "assistant"
+    if not isinstance(value, str) or value not in TARGETS:
+        raise merrors.ValueException("target must be assistant or handler")
+    return value
+
+
+def verify(actor, api_key=None, target="assistant"):
+    """Test a candidate key, or the stored one for ``target`` when none is
+    supplied. ``assistant`` tests what the Assistant effectively resolves (its
+    own key, else the platform key); ``handler`` tests the platform key."""
     system_settings.require_system_admin(actor)
+    target = normalize_target(target)
     candidate = _normalize_api_key(api_key)
     tested_stored = not candidate
     if tested_stored:
-        candidate = llm.get_api_key()
+        candidate = llm.get_api_key() if target == "assistant" \
+            else settings.get(HANDLER_KEY, None)
     result = _verify_candidate(candidate)
     if tested_stored and result["code"] != "not_configured":
-        _write_verify_state(result)
-    _audit(actor, ["verify"], "verified" if result["ok"] else "unverified")
+        _write_verify_state(result, TARGETS[target][1])
+    _audit(actor, [f"verify_{target}"], "verified" if result["ok"] else "unverified")
     return result
 
 
@@ -315,24 +356,14 @@ def _audit(actor, fields, outcome):
     transaction.on_commit(write)
 
 
-def save(actor, *, enabled, model, api_key=None, clear_api_key=False):
-    """Apply one owner edit atomically, or refuse the whole thing.
-
-    A newly supplied credential is verified BEFORE the transaction opens: a
-    provider round trip must not be made while the installation lock is held,
-    and refusing early means a rejected key never reaches the database at all.
-    """
-    system_settings.require_system_admin(actor)
-    if not isinstance(enabled, bool):
-        raise merrors.ValueException("enabled must be true or false")
-    if not isinstance(clear_api_key, bool):
-        raise merrors.ValueException("clear_api_key must be true or false")
-    candidate = _normalize_api_key(api_key)
-    model = normalize_model(model)
-    if candidate and clear_api_key:
+def _credential_edit(label, candidate, clear):
+    """Validate one credential's replace/clear pair and pre-verify a candidate."""
+    if not isinstance(clear, bool):
+        raise merrors.ValueException(f"clear_{label} must be true or false")
+    candidate = _normalize_api_key(candidate)
+    if candidate and clear:
         raise merrors.ValueException(
-            "Clearing the API key and supplying one are different edits")
-
+            f"Clearing the {label.replace('_', ' ')} and supplying one are different edits")
     verified = None
     if candidate:
         verified = _verify_candidate(candidate)
@@ -340,7 +371,27 @@ def save(actor, *, enabled, model, api_key=None, clear_api_key=False):
             # Nothing is stored. An installation must never run a credential
             # nobody proved.
             raise merrors.ValueException(
-                f"The API key was not accepted. {verified['message']}")
+                f"The {label.replace('_', ' ')} was not accepted. {verified['message']}")
+    return candidate, verified
+
+
+def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
+         handler_api_key=None, clear_handler_api_key=False):
+    """Apply one owner edit atomically, or refuse the whole thing.
+
+    ``api_key`` is the Assistant's own credential; ``handler_api_key`` is the
+    platform credential every LLM feature uses. A newly supplied credential is
+    verified BEFORE the transaction opens: a provider round trip must not be
+    made while the installation lock is held, and refusing early means a
+    rejected key never reaches the database at all.
+    """
+    system_settings.require_system_admin(actor)
+    if not isinstance(enabled, bool):
+        raise merrors.ValueException("enabled must be true or false")
+    model = normalize_model(model)
+    candidate, verified = _credential_edit("api_key", api_key, clear_api_key)
+    handler_candidate, handler_verified = _credential_edit(
+        "handler_api_key", handler_api_key, clear_handler_api_key)
 
     from mojo.apps.account.models import User
     changed = ["enabled", "model"]
@@ -357,6 +408,13 @@ def save(actor, *, enabled, model, api_key=None, clear_api_key=False):
         elif candidate:
             _write_secret(API_KEY, candidate)
             changed.append("api_key")
+        if clear_handler_api_key:
+            _clear_value(HANDLER_KEY)
+            _clear_value(HANDLER_VERIFY_STATE_KEY)
+            changed.append("clear_handler_api_key")
+        elif handler_candidate:
+            _write_secret(HANDLER_KEY, handler_candidate)
+            changed.append("handler_api_key")
         _write_value(ENABLED_KEY, bool(enabled))
         if model:
             _write_value(MODEL_KEY, model)
@@ -364,8 +422,10 @@ def save(actor, *, enabled, model, api_key=None, clear_api_key=False):
             _clear_value(MODEL_KEY)
         _audit(actor, changed, "saved")
 
+    # The key that was just stored IS the stored key, so its verification is
+    # an observation of the running configuration.
     if verified is not None:
-        # The key that was just stored IS the stored key, so its verification
-        # is an observation of the running configuration.
-        _write_verify_state(verified)
+        _write_verify_state(verified, VERIFY_STATE_KEY)
+    if handler_verified is not None:
+        _write_verify_state(handler_verified, HANDLER_VERIFY_STATE_KEY)
     return state()
