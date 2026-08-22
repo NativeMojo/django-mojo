@@ -396,6 +396,107 @@ html[data-theme="dark"] {
   font-weight: 400;
 }
 
+/* ── Capacity: outbound addresses ────────────────────────────────────────── */
+
+/* The allowlist an operator came here to copy. It sits above the switch
+   because it is the answer; the switch is what changes it. */
+.egress-allowlist {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 13px 16px 0;
+}
+
+.egress-ips {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.egress-warn {
+  font-size: 10px;
+  color: var(--warning);
+}
+
+.egress-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* One control for both directions: what it says is the state it is IN, and
+   clicking it opens the confirmation for the move it would make. */
+.egress-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 34px;
+  padding: 0 12px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.egress-switch:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+
+.egress-switch:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.egress-track {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  transition: background .15s ease;
+}
+
+.egress-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform .15s ease, background .15s ease;
+}
+
+.egress-switch.on .egress-track {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+.egress-switch.on .egress-knob {
+  background: var(--accent);
+  transform: translateX(16px);
+}
+
+.egress-state {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* The last refusal, with a way to clear it once it has been read. */
+.egress-outcome {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.egress-outcome .fleet-blocked {
+  padding-right: 0;
+}
+
 /* ── Metrics ─────────────────────────────────────────────────────────────── */
 
 .metrics-body {

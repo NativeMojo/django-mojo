@@ -31,6 +31,7 @@ import {errorState, loadingState} from '../../components/views.js';
 import {
   remove as removeOperation, upsert as upsertOperation,
 } from '../../components/operations.js';
+import {egressPanel} from './egress.js';
 
 const CAPACITY_PATH = '/api/aws/capacity';
 const STATUS_PATH = '/api/aws/capacity/status';
@@ -1060,6 +1061,10 @@ export function capacityTab(ctx, signal = null, actions = null) {
         icon('alert'), h('p', {text: EXTERNAL_SUB})),
       summaryStrip(),
       nodePanel(),
+      // Per-node egress, so it follows the nodes. Its switch is fleet-wide and
+      // holds its own server-side claim, so it never joins the staged plan —
+      // it applies itself and publishes its own operation. See egress.js.
+      egressPanel({report, managed, offer, signal, reload: () => load(true)}),
       cachePanel(),
       databasePanel(),
       warningsPanel(),

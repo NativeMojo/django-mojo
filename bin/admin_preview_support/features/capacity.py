@@ -8,6 +8,13 @@ controls, a single-node fleet where removal is refused, an add already in
 flight through its phase ladder, a denied IAM read, a database with no reader,
 a fleet that pins EDGE_NODE_ID, and an installation whose infrastructure is
 external.
+
+The stable-outbound-address states are their own four: ``stable_ips_off``
+(policy off, reservations kept), ``stable_ips_partial`` (on, one node still
+without an address), ``egress_unknown`` (the policy read failed — unknown, not
+off) and ``balancer_less`` (nothing registered behind a balancer, one box
+holding its own address outside this portal). Every other state serves a
+converged fleet, so the roster and the disable path are always reachable.
 """
 
 from urllib.parse import parse_qs
@@ -90,6 +97,28 @@ SIZES = {
     ],
 }
 
+# ── stable outbound addresses ───────────────────────────────────────────────
+#
+# One Elastic IP per fleet node, so the "give providers" line and the roster
+# have something real to show. The addresses are deterministic per instance so
+# a screenshot is stable across runs.
+EIP_MONTHLY_USD = 3.6
+
+EGRESS_IPS = {
+    "i-0a1b2c3d4e5f60011": "52.10.0.11",
+    "i-0a1b2c3d4e5f60022": "52.10.0.22",
+    "i-0a1b2c3d4e5f60033": "52.10.0.33",
+    "i-0a1b2c3d4e5f60044": "52.10.0.44",
+}
+
+# A balancer-less install: one box holding its own address, attached outside
+# this portal. Read-only in the panel, and deliberately untagged.
+FALLBACK_ATTACHED = [
+    {"instance": "i-0f5e4d3c2b1a09988", "instance_name": "mojo-solo",
+     "public_ip": "52.10.0.77", "allocation_id": "eipalloc-0solo0000000001",
+     "managed": False},
+]
+
 DENIED_WARNING = {
     "code": "databases",
     "iam_action": "rds:DescribeDBClusters",
@@ -116,6 +145,12 @@ def reset(handler, fixtures, *, capacity_state="healthy", **options):
     handler.capacity_operations = {}
     handler.capacity_plans = {}
     handler.capacity_batches = {}
+    # A dict, not an attribute: reset() is handed the handler CLASS while an
+    # apply is handed the request instance, so only a mutation of a shared
+    # container survives the request that made it. None = "whatever this state
+    # starts as"; an enable/disable apply pins it, so the report re-read after
+    # the operation shows the new truth.
+    handler.capacity_flags = {"egress_enabled": None}
     if capacity_state == "external_mode":
         # The installation-wide mode, not a provider scenario — set here so the
         # bootstrap payload and the panel agree from the first render.
@@ -127,7 +162,72 @@ def _nodes(state):
         return [dict(NODES[0])]
     if state == "adding":
         return [dict(row) for row in NODES] + [dict(ADDING_NODE)]
+    if state == "balancer_less":
+        # Nothing registered behind a balancer — the fallback egress shape.
+        return []
     return [dict(row) for row in NODES]
+
+
+def _egress(handler, state, nodes):
+    """The stable-outbound picture, in the server's envelope shape.
+
+    Mirrors mojo/apps/aws/services/capacity.py ``_egress_envelope``: what is
+    ATTACHED is ground truth, ``pending_nodes`` is every fleet node without an
+    address (policy off or on), and a failed read is reported as unreadable
+    rather than as "off".
+    """
+    if state == "egress_unknown":
+        return {
+            "enabled": False, "available": True,
+            "fleet_available": True, "addresses_available": True,
+            "policy_available": False,
+            "addresses": [], "attached": [], "pending_nodes": [],
+            "reserved": [], "to_allocate": 0,
+            "monthly_usd_per_address": EIP_MONTHLY_USD,
+            "fallback_attached": [],
+        }
+    enabled = getattr(handler, "capacity_flags", {}).get("egress_enabled")
+    if enabled is None:
+        enabled = state not in ("stable_ips_off", "balancer_less")
+    ids = [row["id"] for row in nodes]
+    if not enabled:
+        holders = []
+    elif state == "stable_ips_partial":
+        # Half-converged: the first node holds its address, the rest do not.
+        holders = ids[:1]
+    else:
+        holders = ids
+    attached = [{"instance": node_id,
+                 "public_ip": EGRESS_IPS.get(node_id, "52.10.0.1"),
+                 "allocation_id": "eipalloc-0" + node_id[-15:],
+                 "managed": True}
+                for node_id in holders]
+    pending = [node_id for node_id in ids if node_id not in holders]
+    if enabled:
+        # One spare reservation while converging, none once converged.
+        reserved = ([{"allocation_id": "eipalloc-0reserved00001",
+                      "public_ip": "52.10.0.90"}] if pending else [])
+    else:
+        # Disable keeps the reservations, so re-enabling restores the exact
+        # same allowlisted addresses.
+        reserved = [{"allocation_id": "eipalloc-0" + node_id[-15:],
+                     "public_ip": EGRESS_IPS.get(node_id, "52.10.0.1")}
+                    for node_id in ids]
+    return {
+        "enabled": enabled,
+        "available": True,
+        "fleet_available": True,
+        "addresses_available": True,
+        "policy_available": True,
+        "addresses": sorted({row["public_ip"] for row in attached}),
+        "attached": attached,
+        "pending_nodes": pending,
+        "reserved": reserved,
+        "to_allocate": max(0, len(pending) - len(reserved)),
+        "monthly_usd_per_address": EIP_MONTHLY_USD,
+        "fallback_attached": ([dict(row) for row in FALLBACK_ATTACHED]
+                              if state == "balancer_less" else []),
+    }
 
 
 def _databases(state):
@@ -138,7 +238,39 @@ def _databases(state):
     return [dict(row) for row in DATABASES]
 
 
-def _actions(handler, state, nodes, databases):
+def _egress_blocks(external, egress, nodes):
+    """``(enable_block, disable_block)`` — the server's gate, reproduced.
+
+    Order matters: an unknown fleet is not an empty fleet, and no failed read
+    may render its answer as canonical.
+    """
+    def block():
+        if external:
+            return "infrastructure_external"
+        if not egress.get("fleet_available"):
+            return "fleet_unavailable"
+        if not egress.get("addresses_available"):
+            return "addresses_unavailable"
+        if not egress.get("policy_available"):
+            return "policy_unavailable"
+        return None
+
+    enable_block = block()
+    if enable_block is None:
+        if not nodes:
+            enable_block = "no_fleet_nodes"
+        elif egress.get("enabled") and not egress.get("pending_nodes"):
+            enable_block = "already_enabled"
+    disable_block = block()
+    if disable_block is None:
+        managed_attached = any(row.get("managed")
+                               for row in egress.get("attached") or [])
+        if not egress.get("enabled") and not managed_attached:
+            disable_block = "not_enabled"
+    return enable_block, disable_block
+
+
+def _actions(handler, state, nodes, databases, egress):
     external = getattr(handler, "infrastructure_mode", "managed") == "external"
     healthy = [row for row in nodes if row["healthy"]]
 
@@ -154,7 +286,10 @@ def _actions(handler, state, nodes, databases):
         node_block = "no_source_node"
     remove_block = "infrastructure_external" if external else (
         "last_healthy_target" if len(healthy) <= 1 else None)
+    enable_block, disable_block = _egress_blocks(external, egress, nodes)
     return {
+        "enable_stable_ips": offer(enable_block),
+        "disable_stable_ips": offer(disable_block),
         "add_node": offer(node_block),
         "drain_node": offer(remove_block),
         "terminate_node": offer("infrastructure_external" if external else None),
@@ -176,6 +311,10 @@ def _report(handler):
     nodes = _nodes(state)
     databases = _databases(state)
     external = getattr(handler, "infrastructure_mode", "managed") == "external"
+    egress = _egress(handler, state, nodes)
+    held = {row["instance"] for row in egress["attached"]}
+    for row in nodes:
+        row["stable_ip"] = row["id"] in held
     return 200, {
         "schema_version": 1,
         "region": "us-east-1",
@@ -189,18 +328,20 @@ def _report(handler):
                         "target_type": "instance", "port": 443,
                         "protocol": "TCP"}],
             "instances": nodes,
-            "self": nodes[0]["id"] if state != "denied" else None,
+            "self": nodes[0]["id"] if (nodes and state != "denied") else None,
             # "denied" is the honest unavailable case: the portal could not
             # match itself to any instance, and says so rather than implying
             # the check passed.
-            "self_check": "unavailable" if state == "denied" else "matched",
+            "self_check": ("unavailable" if state in ("denied", "balancer_less")
+                           else "matched"),
         },
+        "egress": egress,
         "databases": databases,
         "caches": [dict(row) for row in CACHES],
         "sizes": {kind: [dict(row) for row in rows]
                   for kind, rows in SIZES.items()},
         "warnings": [dict(DENIED_WARNING)] if state == "denied" else [],
-        "actions": _actions(handler, state, nodes, databases),
+        "actions": _actions(handler, state, nodes, databases, egress),
         # Reader routing is the serving process's self-report. "healthy" shows
         # both on so the Fleet page's chips and conditional copy render their
         # configured shape; every other state shows the off/unconfigured shape.
@@ -298,6 +439,18 @@ DONE_COPY = {
     "resize_database": ("the instance now runs the new class. The instance "
                         "restarted to change class — that was the few minutes "
                         "of downtime this action warned about."),
+    "enable_stable_ips": ("every registered node holds its stable outbound "
+                          "address. Give providers the addresses listed on "
+                          "the panel."),
+    "disable_stable_ips": ("the stable addresses are detached and kept "
+                           "reserved — re-enabling restores the same ones."),
+}
+
+# The phase ladders the stable-outbound runners walk, matching the server's
+# ACTION_PHASES for these two actions.
+STABLE_IP_PHASES = {
+    "enable_stable_ips": ["planning", "associating", "verifying"],
+    "disable_stable_ips": ["detaching", "verifying"],
 }
 
 
@@ -478,7 +631,15 @@ def post(handler, path, payload):
     if path != "/api/aws/capacity/apply":
         return None
     action = payload.get("action") or "add_node"
-    phases = list(ADD_PHASES) if action == "add_node" else ["working"]
+    if action == "add_node":
+        phases = list(ADD_PHASES)
+    else:
+        phases = list(STABLE_IP_PHASES.get(action, ["working"]))
+    if action in STABLE_IP_PHASES:
+        # The switch has flipped; the report re-read after the operation
+        # finishes shows the new roster.
+        getattr(handler, "capacity_flags", {})["egress_enabled"] = (
+            action == "enable_stable_ips")
     operation_id = f"op-{len(getattr(handler, 'capacity_operations', {})) + 1}"
     record = {
         "schema_version": 1, "id": operation_id, "action": action,
