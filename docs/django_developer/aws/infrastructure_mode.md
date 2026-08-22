@@ -90,6 +90,20 @@ section that reports the mode without gating anything:
 | `POST /api/account/admin/platform/framework/update` | `mojo/apps/account/rest/admin_platform.py` | `admin_platform.apply_framework_update` raises `PermissionDeniedException` |
 | `python3 -m mojo.deploy.provision apply` | `mojo/deploy/provision/__main__.py` refuses with exit `3` | — the CLI *is* the only caller of its own converge |
 | System Setup's `aws_infrastructure` section | reported as a `warn` row, not a refusal | `infra_setup.refuse_external()` raises `DefinitiveSetupFailure` |
+| Assistant tool `apply_framework_update` | `requires_managed_infrastructure=True` | hidden from the model, refused at proposal and at execution |
+| Assistant tool `apply_managed_upgrade` | `requires_managed_infrastructure=True` | same |
+| Assistant tool `apply_capacity_change` | `requires_managed_infrastructure=True` | same |
+| Assistant tool `apply_capacity_plan` | `requires_managed_infrastructure=True` | same |
+
+External mode does more than refuse the four Assistant tools: it **hides them
+from the model's tool list** (`get_tools_for_user`, `get_core_tools_for_user`,
+`get_domain_tools_for_user`, `get_available_domains`), refuses a proposal with
+no record created, and refuses an already-pending approval at execution with
+`infrastructure_external`. The Assistant's three deploy tools
+(retry/verify/converge) deliberately do NOT carry the gate, because their
+endpoints do not call `infrastructure.refuse()` either — mirroring the Admin
+means copying it, not tightening it. See
+[assistant/cloud_tools.md](../assistant/cloud_tools.md).
 
 ### The third surface: `aws_infrastructure`
 

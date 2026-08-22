@@ -161,8 +161,6 @@ stays `pending` and is not promotable.
 
 ## Rollback
 
-Two ways, both human-driven.
-
 **From the admin portal**, `POST /api/edge/webapp/rollback` with `webapp` and an
 earlier `release` id repoints the site immediately. It is **human-only** — a CI
 key-backed session is refused (`403`) — so automation still cannot start a
@@ -171,9 +169,10 @@ completion. A `release` from another site returns `404`, and a `pending`
 (unverified) release is refused. The response is the deployment status payload
 (`GET /api/edge/release/deployment/<id>` shape).
 
-**By rerunning the GitHub workflow** for the older commit: its identical version
-and manifest are reused, then normal verified completion deploys it through the
-same fleet coordinator.
+Rerunning the GitHub workflow for an older commit is not this rollback. The
+canonical workflow includes the commit SHA, GitHub run id, and run-attempt
+number in `version`, so that run registers and deploys a new immutable release.
+Use the Admin action when the intent is to repoint to an existing release.
 
 Nodes retain a bounded number of releases, and a target that has aged out is
 simply **re-fetched from S3** on the next converge. Recent releases stay a pure

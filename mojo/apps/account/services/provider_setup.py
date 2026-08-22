@@ -115,7 +115,7 @@ def _published(s3, bucket, key, allowed):
     }
 
 
-def _key_hint(value):
+def key_hint(value):
     """Last four characters of a stored key, or "" when that would say too much.
 
     Four characters of an eight-character-or-longer credential identify which
@@ -158,7 +158,7 @@ def state(include_remote=True):
     secret_row = Setting.objects.filter(
         key="GEOIP_API_KEY_MOJO", group=None, is_secret=True).order_by("pk").first()
     secret_configured = secret_row is not None
-    secret_hint = _key_hint(secret_row.get_value()) if secret_row else ""
+    secret_hint = key_hint(secret_row.get_value()) if secret_row else ""
     sms = {"configured": False, "remote_url": "", "api_key_configured": False,
            "api_key_hint": ""}
     if apps.is_installed("mojo.apps.phonehub"):
@@ -170,7 +170,7 @@ def state(include_remote=True):
                 "configured": True,
                 "remote_url": row.mojo_remote_url or "",
                 "api_key_configured": bool(stored_key),
-                "api_key_hint": _key_hint(stored_key),
+                "api_key_hint": key_hint(stored_key),
                 "test_mode": bool(row.test_mode),
             }
     desired_geoip = dict(_loaded_values())

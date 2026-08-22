@@ -971,7 +971,7 @@ def test_framework_update_clears_pin_and_redeploys(opts):
 
     root = User.objects.get(pk=opts.platform_root)
     Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
-    request = mock.Mock(user=root, META={})
+    actor = root
     row = mock.Mock(pk="converged-row", sha="a" * 40)
     made = mock.Mock(pk="new-row")
     try:
@@ -983,7 +983,7 @@ def test_framework_update_clears_pin_and_redeploys(opts):
                                   return_value=made) as retry, \
                 mock.patch.object(platform_deploy, "serialize", return_value={"id": "new-row"}), \
                 mock.patch.object(admin_platform, "audit_after_commit") as audit:
-            result = admin_platform.apply_framework_update(request, "1.13.0")
+            result = admin_platform.apply_framework_update(actor, "1.13.0")
 
         assert deploy.framework_version_pin() == "", \
             "the pin survived the update, so the fleet would reinstall the old version"
@@ -1018,7 +1018,7 @@ def test_framework_update_leaves_an_unpinned_fleet_alone(opts):
 
     root = User.objects.get(pk=opts.platform_root)
     Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
-    request = mock.Mock(user=root, META={})
+    actor = root
     row = mock.Mock(pk="converged-row", sha="b" * 40)
     try:
         with mock.patch.object(platform_deploy, "last_converged_deployment",
@@ -1028,7 +1028,7 @@ def test_framework_update_leaves_an_unpinned_fleet_alone(opts):
                 mock.patch.object(platform_deploy, "serialize", return_value={}), \
                 mock.patch.object(system_settings, "set_value") as writer, \
                 mock.patch.object(admin_platform, "audit_after_commit"):
-            result = admin_platform.apply_framework_update(request, "1.13.0")
+            result = admin_platform.apply_framework_update(actor, "1.13.0")
         assert writer.call_count == 0, \
             "an unpinned fleet still wrote a protected setting"
         assert result["cleared_pin"] is None, \
@@ -1045,13 +1045,13 @@ def test_framework_update_requires_a_converged_commit(opts):
     from mojo.apps.edge.services import platform_deploy
 
     root = User.objects.get(pk=opts.platform_root)
-    request = mock.Mock(user=root, META={})
+    actor = root
     with mock.patch.object(platform_deploy, "last_converged_deployment",
                            return_value=None), \
             mock.patch.object(platform_deploy, "same_sha_retry") as retry, \
             mock.patch.object(admin_platform, "audit_after_commit"):
         try:
-            admin_platform.apply_framework_update(request, "1.13.0")
+            admin_platform.apply_framework_update(actor, "1.13.0")
             raise AssertionError("an unconverged fleet was redeployed anyway")
         except me.ValueException as err:
             assert err.status == 409, f"the refusal is not a 409: {err.status}"
@@ -1071,13 +1071,13 @@ def test_framework_update_pin_clear_is_superuser_only(opts):
     Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
     try:
         system_settings.set_value(root, FRAMEWORK_VERSION_KEY, "1.12.0")
-        request = mock.Mock(user=user, META={})
+        actor = user
         with mock.patch.object(platform_deploy, "last_converged_deployment",
                                return_value=mock.Mock(pk="row", sha="c" * 40)), \
                 mock.patch.object(platform_deploy, "same_sha_retry") as retry, \
                 mock.patch.object(admin_platform, "audit_after_commit"):
             with th.assert_raises(me.PermissionDeniedException):
-                admin_platform.apply_framework_update(request, "1.13.0")
+                admin_platform.apply_framework_update(actor, "1.13.0")
         assert retry.call_count == 0, \
             "the refused pin clear still queued a deployment"
         from mojo.apps.edge.services import deploy
@@ -1127,7 +1127,7 @@ def test_framework_update_service_backstop(opts):
 
     root = User.objects.get(pk=opts.platform_root)
     Setting.objects.filter(key=FRAMEWORK_VERSION_KEY).delete()
-    request = mock.Mock(user=root, META={})
+    actor = root
     try:
         system_settings.set_value(root, FRAMEWORK_VERSION_KEY, "1.12.0")
         with _override_setting("INFRASTRUCTURE_MODE", "external"):
@@ -1136,7 +1136,7 @@ def test_framework_update_service_backstop(opts):
                     mock.patch.object(platform_deploy, "same_sha_retry") as retry, \
                     mock.patch.object(admin_platform, "audit_after_commit"):
                 with th.assert_raises(me.PermissionDeniedException):
-                    admin_platform.apply_framework_update(request, "1.13.0")
+                    admin_platform.apply_framework_update(actor, "1.13.0")
                 assert retry.call_count == 0, \
                     "the refused update still queued a deployment"
         assert deploy.framework_version_pin() == "1.12.0", \

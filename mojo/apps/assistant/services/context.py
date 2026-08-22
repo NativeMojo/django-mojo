@@ -47,6 +47,14 @@ def resolve_model(model_string):
     if getattr(model, "RestMeta", None) is None:
         return None, {"error": f"'{model_string}' has no REST interface"}
 
+    # NO_REST is a structural data boundary, not a permission the caller can
+    # overcome — the same guard `services/tools/models.py:_resolve_model` applies,
+    # mirrored here because `build_context` then reads the row by pk with no owner
+    # scope at all. Without it, `POST /api/assistant/context` was a read primitive
+    # for every NO_REST model, including another operator's assistant.PendingAction.
+    if getattr(model.RestMeta, "NO_REST", False):
+        return None, {"error": f"'{model_string}' is not available for querying"}
+
     return model, None
 
 

@@ -6,10 +6,18 @@ on_realtime_message hook. LLM processing runs as a background job
 so the WebSocket handler returns immediately.
 
 Message types (client → server):
-  - assistant_message: Send a new message to the assistant
+  - assistant_message:  Send a new message to the assistant
+  - assistant_action:   Quick-reply button — replays its `value` as a message.
+                        Carries NO authority; its `action_id` is ignored.
+  - assistant_approval: Resolve a pending approval (approve / cancel). This is
+                        the ONLY client message that can cause a mutation, and
+                        only for actions with no fresh-auth requirement.
 
 Response types (server → client, via realtime publish):
   - assistant_thinking:   Processing has started
+  - assistant_approval_required: A mutating tool produced an approval card
+  - assistant_approval_ack:      An approval decision was accepted for processing
+  - assistant_approval_result:   The resolved approval block (terminal for that action)
   - assistant_text:       Intermediate assistant prose from a turn that also
                           calls tools (fires before assistant_tool_call events
                           for that turn). Payload: {conversation_id, text, blocks}
@@ -34,6 +42,7 @@ logger = logit.get_logger("assistant", "assistant.log")
 ASSISTANT_MESSAGE_TYPES = {
     "assistant_message",
     "assistant_action",
+    "assistant_approval",
 }
 
 
@@ -100,8 +109,23 @@ def handle_assistant_message(user, data):
 
     message_type = data.get("type") or data.get("action")
 
+    if message_type == "assistant_approval":
+        try:
+            return _handle_approval(user, data, request_id=request_id)
+        except Exception:
+            logger.exception("assistant approval handler crashed for user %s", user.pk)
+            return _response_with_request_id({
+                "type": "assistant_error",
+                "code": "action_unavailable",
+                "error": "This action is no longer available.",
+            }, request_id)
+
     if message_type == "assistant_action":
-        # Action block response — convert to a regular message with the chosen value
+        # Quick-reply button — convert to a regular message with the chosen
+        # value. `action_id` is present in the payload (it is a documented field
+        # of this message) and is deliberately DISCARDED: this path has never
+        # carried authority and gains none. Mutations resolve only through
+        # `assistant_approval` below.
         action_value = (data.get("value") or "").strip()
         if not action_value:
             return _response_with_request_id(
@@ -149,6 +173,7 @@ def _handle_message(user, data, request_id=None, _reporter=None):
     """Handle a new assistant message — validate, enqueue, ack."""
     from mojo.helpers.settings import settings
     from mojo.apps.assistant.models import Conversation, Message
+    from mojo.apps.assistant.services.agent import build_ws_request_meta
 
     # Check feature flag
     if not settings.get("LLM_ADMIN_ENABLED", False, kind="bool"):
@@ -239,10 +264,16 @@ def _handle_message(user, data, request_id=None, _reporter=None):
     # Run the agent in a background thread — no job engine dependency.
     # The handler returns assistant_thinking immediately, and the thread
     # publishes assistant_response or assistant_error when done.
+    # The socket's own request_meta, built from the `_bearer` the realtime
+    # consumer stamps on every delivered message. It is what lets a tool tell
+    # an interactive operator session from an api key on this transport; the
+    # REST path gets the same two fields off the Django request.
+    request_meta = build_ws_request_meta(data.get("_bearer"))
+
     import threading
     thread = threading.Thread(
         target=_run_agent_thread,
-        args=(user.pk, conversation.pk, message, request_id),
+        args=(user.pk, conversation.pk, message, request_id, request_meta),
         daemon=True,
     )
     thread.start()
@@ -256,10 +287,142 @@ def _handle_message(user, data, request_id=None, _reporter=None):
 
 
 # ---------------------------------------------------------------------------
+# Approval resolution over the socket
+# ---------------------------------------------------------------------------
+
+def _approval_unavailable(request_id, conversation_id=None):
+    """The one non-oracular failure, in its WebSocket shape."""
+    from mojo.apps.assistant.services import approvals
+
+    response = {
+        "type": "assistant_error",
+        "code": approvals.CODE_UNAVAILABLE,
+        "error": approvals.GENERIC_UNAVAILABLE,
+    }
+    if conversation_id is not None:
+        response["conversation_id"] = conversation_id
+    return _response_with_request_id(response, request_id)
+
+
+def _handle_approval(user, data, request_id=None):
+    """Resolve one pending action over the socket.
+
+    Refused for anything but an ordinary interactive bearer session. The realtime
+    consumer stamps `_bearer` on every delivered message, always overwriting what
+    the client sent (mojo/apps/realtime/handler.py), so this is a server fact.
+    An identity-type check would NOT do: an ApiKey with override_user hands back
+    a literal User.
+
+    Actions whose tool declares `fresh_auth_seconds` cannot resolve here at all
+    — the socket authenticates once at connect and holds no per-message token,
+    and putting one in a message body is exactly what must not happen. The
+    service refuses those with `reauth_required` and the client re-submits over
+    REST after its normal step-up.
+    """
+    from mojo.helpers.settings import settings
+
+    conversation_id = data.get("conversation_id")
+
+    if not settings.get("LLM_ADMIN_ENABLED", False, kind="bool"):
+        return _response_with_request_id({
+            "type": "assistant_error",
+            "error": "Assistant is not enabled. Set LLM_ADMIN_ENABLED=True in settings.",
+        }, request_id)
+
+    if data.get("_bearer") != "bearer":
+        logger.error("assistant approval refused: non-bearer socket, user %s", user.pk)
+        return _approval_unavailable(request_id, conversation_id)
+
+    if not user.has_permission("view_admin"):
+        logger.info("assistant approval: permission denied for user %s", user.pk)
+        return _approval_unavailable(request_id, conversation_id)
+
+    action_id = data.get("action_id")
+    decision = data.get("decision")
+    if not action_id or decision not in ("approve", "cancel"):
+        return _approval_unavailable(request_id, conversation_id)
+
+    import threading
+    thread = threading.Thread(
+        target=_run_approval_thread,
+        args=(user.pk, conversation_id, str(action_id), decision, request_id),
+        daemon=True,
+    )
+    thread.start()
+    logger.info("assistant approval thread started for user %s, action %s",
+                user.pk, action_id)
+
+    return _response_with_request_id({
+        "type": "assistant_approval_ack",
+        "conversation_id": conversation_id,
+        "action_id": str(action_id),
+    }, request_id)
+
+
+def _run_approval_thread(user_id, conversation_id, action_id, decision, request_id=None):
+    """Resolve the action off the socket thread and publish the outcome.
+
+    RELIABILITY CONTRACT: always publishes either assistant_approval_result or
+    assistant_error.
+    """
+    import django
+    try:
+        django.setup()
+    except Exception:
+        pass
+
+    from mojo.apps.account.models import User
+    from mojo.apps.assistant.services import approvals
+
+    user = User.objects.filter(pk=user_id, is_active=True).first()
+    if user is None:
+        _send_ws_event(user_id, "error", conversation_id, {
+            "code": approvals.CODE_UNAVAILABLE,
+            "error": approvals.GENERIC_UNAVAILABLE,
+        }, request_id)
+        return
+
+    try:
+        result = approvals.resolve(
+            user, action_id, decision,
+            request=None, conversation_id=conversation_id)
+    except approvals.ApprovalRefused as refusal:
+        payload = {"code": refusal.code, "error": refusal.message}
+        if refusal.code == approvals.CODE_REAUTH:
+            payload["action_id"] = action_id
+            payload["error"] = (
+                "Re-authenticate, then approve this action over "
+                "POST /api/assistant/action.")
+        _send_ws_event(user_id, "error", conversation_id, payload, request_id)
+        return
+    except Exception:
+        logger.exception("assistant approval thread failed for user %s action %s",
+                         user_id, action_id)
+        _send_ws_event(user_id, "error", conversation_id, {
+            "code": approvals.CODE_UNAVAILABLE,
+            "error": approvals.GENERIC_UNAVAILABLE,
+        }, request_id)
+        return
+
+    block = result["block"]
+    _send_ws_event(
+        user_id, "approval_result",
+        conversation_id if conversation_id is not None else block.get("conversation_id"),
+        {
+            "action_id": block["action_id"],
+            "block": block,
+            "message_id": result.get("message_id"),
+        },
+        request_id,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Background thread — runs the LLM agent and publishes WS events
 # ---------------------------------------------------------------------------
 
-def _run_agent_thread(user_id, conversation_id, message, request_id=None):
+def _run_agent_thread(user_id, conversation_id, message, request_id=None,
+                      request_meta=None):
     """
     Run the assistant agent in a background thread.
 
@@ -299,7 +462,8 @@ def _run_agent_thread(user_id, conversation_id, message, request_id=None):
 
     # --- Run agent ---
     try:
-        result = run_assistant_ws(user, message, conversation_id, on_event=on_event)
+        result = run_assistant_ws(user, message, conversation_id,
+                                  on_event=on_event, request_meta=request_meta)
     except Exception:
         logger.exception("assistant thread: agent crashed for user %s conv %s",
                          user_id, conversation_id)

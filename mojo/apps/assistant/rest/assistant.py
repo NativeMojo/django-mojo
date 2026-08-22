@@ -3,6 +3,8 @@ REST endpoints for the admin assistant.
 
 Endpoints:
     POST /api/assistant                    — Send message, get LLM response
+    POST /api/assistant/action             — Approve or cancel a pending action
+    GET  /api/assistant/action             — Owner-scoped pending/resolved actions
     POST /api/assistant/context            — Create conversation with model context
     GET  /api/assistant/conversation       — List user's conversations
     GET  /api/assistant/conversation/<pk>  — Conversation detail (?graph=detail for messages)
@@ -56,8 +58,110 @@ def on_assistant_message(request):
     blocks = result.get("blocks")
     if blocks:
         data["blocks"] = blocks
+    pending_actions = result.get("pending_actions")
+    if pending_actions:
+        data["pending_actions"] = pending_actions
 
     return JsonResponse({"status": True, "data": data})
+
+
+def _approval_refusal(refusal):
+    """Map one ``ApprovalRefused`` code to its HTTP shape. Stated exactly once.
+
+    Every unresolvable case — unknown id, wrong user, wrong conversation, wrong
+    tool, expired, used, canceled, superseded, unregistered, de-mutated,
+    fingerprint mismatch — arrives here as ``action_unavailable`` and returns the
+    identical body, so a stolen id learns nothing. The distinguishable outcomes
+    exist only for the bound owner of a live record.
+    """
+    from mojo import errors as merrors
+    from mojo.helpers import infrastructure
+    from mojo.apps.assistant.services import approvals
+
+    if refusal.code == approvals.CODE_REAUTH:
+        raise merrors.ReauthRequiredException()
+    if refusal.code == approvals.CODE_PERMISSION:
+        return JsonResponse({
+            "status": False,
+            "error": refusal.message,
+            "error_code": approvals.CODE_PERMISSION,
+        }, status=403)
+    if refusal.code == approvals.CODE_INFRASTRUCTURE:
+        return JsonResponse({
+            "status": False,
+            "error": refusal.message,
+            "error_code": infrastructure.ERROR_CODE,
+            "data": {"mode": infrastructure.EXTERNAL, "setting": infrastructure.SETTING},
+        }, status=403)
+    return JsonResponse({
+        "status": False,
+        "error": refusal.message,
+        "error_code": refusal.code,
+    }, status=409)
+
+
+@md.POST('action')
+@md.denies_key_backed_session()
+@md.requires_global_perms('view_admin', 'assistant')
+@md.rate_limit("assistant_action", ip_limit=60, duid_limit=30)
+@md.requires_params('action_id', 'decision')
+def on_assistant_action(request):
+    """Approve or cancel one pending mutating action.
+
+    The `Authorization` JWT is the sole carrier of fresh-auth evidence — the
+    `auth_time` claim proves recency with no new transport, which is why an
+    action whose tool declares `fresh_auth_seconds` can only resolve here. The
+    step-up check runs INSIDE the body, not as a decorator, because the
+    requirement is per-action; the same conditional pattern is used at
+    mojo/apps/aws/rest/s3.py:122.
+
+    A handler that ran and failed is NOT an HTTP error: it is 200 with
+    `state: "failed"`, because the mutation was attempted and the operator has
+    to be told so.
+    """
+    from mojo.apps.assistant.services import approvals
+
+    try:
+        result = approvals.resolve(
+            request.user,
+            request.DATA.get("action_id"),
+            request.DATA.get("decision"),
+            request=request,
+            conversation_id=request.DATA.get("conversation_id"),
+        )
+    except approvals.ApprovalRefused as refusal:
+        return _approval_refusal(refusal)
+
+    return JsonResponse({"status": True, "data": {
+        "action": result["block"],
+        "message_id": result.get("message_id"),
+    }})
+
+
+@md.GET('action')
+@md.denies_key_backed_session()
+@md.requires_global_perms('view_admin', 'assistant')
+def on_assistant_action_list(request):
+    """The caller's own approval cards with their CURRENT state (50 most recent).
+
+    Owner-scoped in the query, not by a permission: an approval belongs to the
+    operator it was proposed for, and `view_admin` is not a licence to read
+    someone else's. Pass `?conversation=<id>` to scope to one conversation.
+    """
+    from mojo.apps.assistant.services import approvals
+
+    conversation_id = request.DATA.get("conversation")
+    if conversation_id:
+        conversation = Conversation.objects.filter(
+            pk=conversation_id, user=request.user).first()
+        if conversation is None:
+            return JsonResponse({"status": False, "error": "Conversation not found"},
+                                status=404)
+        actions = approvals.states_for_conversation(conversation)
+    else:
+        actions = approvals.states_for_user(request.user)
+
+    return JsonResponse({"status": True, "data": {"actions": actions}})
 
 
 @md.POST('context')

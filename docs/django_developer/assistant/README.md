@@ -20,9 +20,19 @@ User sends message via REST
         → Separate meta-tools from regular tools
         → Meta-tools (load_tools, create_plan, update_plan) run first, serially
         → Regular tools run in parallel via ThreadPoolExecutor (LLM_ADMIN_MAX_PARALLEL_TOOLS)
-        → Permission gate per tool: user.has_permission(tool.permission)?
+        → Permission gate per tool: user.has_permission(tool.permission)
+          AND tool.authorize(user) when declared?
           → No: return permission error to LLM
-          → Yes: execute handler(params, user), return result to LLM
+          → Yes, and tool.mutates:
+              → APPROVAL GATE — the handler is NOT called.
+                approvals.propose() stores a PendingAction, returns an
+                approval card, fires "assistant_approval_required".
+                The operator resolves it later over
+                POST /api/assistant/action or the WS assistant_approval
+                message; only approvals.resolve() ever calls the handler.
+                See approvals.md.
+          → Yes, and not mutating: execute handler(params, user), return
+            result to LLM
         → If tool == load_tools with domain arg:
             → Persist domain in conversation.metadata["active_domains"]
             → Inject new domain tools into active tool list immediately
@@ -35,8 +45,15 @@ User sends message via REST
             → Publish WS event "assistant_plan_update"
         → Repeat until LLM stops calling tools
     → Store assistant response as Message
-    → Return response + conversation_id
+    → Return response + conversation_id + pending_actions
 ```
+
+> **Mutating tools do not execute on the model's call.** See
+> [Approvals](approvals.md) for the boundary, the `PendingAction` state machine,
+> the gate arguments (`fresh_auth_seconds`, `requires_superuser`,
+> `requires_managed_infrastructure`, `summarize`, `preview`, `authorize`), the
+> transports, and the tool → Admin-twin → gates table for all 38 built-in
+> mutating tools.
 
 ## Two-Tier Tool Loading
 
@@ -73,6 +90,7 @@ All other tools (security, jobs, users, groups, metrics, docit, full discovery) 
 | `metrics` | Fetch time-series metrics, system health, and incident trends |
 | `docit` | Search the documentation knowledge base (docit books and pages) |
 | `discovery` | Full tool listing (`list_tools`) |
+| `cloud` | Cloud and fleet operations: platform/dashboard health, capacity, managed-engine upgrades, framework version, recorded drift, CloudWatch metrics, System Setup readiness (read-only), and the Admin's deploy/framework/upgrade/capacity controls behind an approval |
 
 ### `load_tools` — the primary gateway
 
@@ -176,6 +194,84 @@ LLM_ADMIN_API_KEY = "sk-ant-..."  # or falls back to LLM_HANDLER_API_KEY
 
 Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 
+## Admin setup surface
+
+An owner can enable the assistant, store and check a provider key, and pin a
+model from the built-in Admin, without editing a settings file.
+`mojo/apps/account/services/assistant_setup.py` is the only writer;
+`GET`/`POST /api/account/admin/assistant` is its only boundary (owner-only for
+read *and* write — see
+[the API reference](../../web_developer/account/admin_portal/assistant.md)).
+
+### The five protected keys
+
+| Key | Owned by | Stored as |
+|---|---|---|
+| `LLM_ADMIN_ENABLED` | `assistant_setup` | Plain global `Setting` row |
+| `LLM_ADMIN_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row |
+| `LLM_ADMIN_MODEL` | `assistant_setup` | Plain row, absent means automatic |
+| `LLM_ADMIN_VERIFY_STATE` | `assistant_setup` | How the STORED key last checked |
+| `LLM_HANDLER_API_KEY` | The deployment file | Never written from Admin |
+
+All five are **catalog-protected**: `admin_settings.is_catalog_protected()`
+returns true, so `Setting.set()`, the generic `/api/settings` REST surface, a
+shell save and every other writer refuse them. The four writable keys have one
+dedicated escape — `row.save(_protected_writer=<key>)` — and the writer must
+name the exact key the row carries, so no writer can smuggle a different
+protected key past the guard.
+
+`LLM_HANDLER_API_KEY` is protected **read-only**. A global database row would
+outrank the deployment file (`SettingsHelper.get` reads database rows before
+`django.conf`), which would make a value labelled "Deployment settings" a lie.
+Nothing writes it; it stays visible as provenance.
+
+### Writes go through the guarded save path, never `.update()`
+
+`Setting.resolve` reads Redis *first*. A queryset `.update()` or `bulk_create`
+skips `push_to_cache`, so the ORM read looks right while the resolver keeps
+serving the old value — a disable that silently does not take effect. Every
+assistant write is `row.save(_protected_writer=<key>, _skip_cache=True)` plus
+`transaction.on_commit(row.push_to_cache)`; clearing a key deletes the rows and
+`hdel`s the cache entry in the same `on_commit`.
+
+The credential is stored through `MojoSecrets`, so it is encrypted **in the
+database**: `value` is empty and the plaintext lives only in the encrypted
+`mojo_secrets` column.
+
+**It is not encrypted in Redis.** `push_to_cache` writes the *decrypted* value
+into the `settings:global` hash, and `Setting.resolve` would back-fill that hash
+on first read anyway. This is pre-existing framework behaviour, identical to
+`GEOIP_API_KEY_MOJO`, and it is why the UI says "stored encrypted in the
+database" rather than "stored encrypted" — treat Redis as holding a live
+credential and protect it accordingly.
+
+### Resolution precedence
+
+```
+LLM_ADMIN_API_KEY (Admin row)  ->  LLM_ADMIN_API_KEY (deployment file)
+                               ->  LLM_HANDLER_API_KEY (deployment fallback)
+```
+
+This is existing behaviour, not new code: `llm.get_api_key()` already prefers
+`LLM_ADMIN_API_KEY`, and a database row already outranks the file. `state()`
+reports which one is live as `key.source` (`admin` / `deployment` / `fallback` /
+`none`) with a four-character hint, and never the value.
+
+### Verification
+
+`verify(actor, api_key=None)` checks a candidate, or the stored credential when
+none is given, through `llm.verify_api_key()`. The outcome is reduced to a fixed
+vocabulary — `verified`, `invalid_key`, `unreachable`, `not_configured` — so no
+provider response body, exception repr or key fragment can reach an
+operator-visible string.
+
+Only a check of the **stored** credential is recorded in
+`LLM_ADMIN_VERIFY_STATE`. A rejected candidate was never stored, so recording it
+would make the settings page describe a configuration the installation is not
+running. A `save` that supplies a new key verifies it **before** the transaction
+opens and refuses the whole save when it fails, so the installation never runs a
+credential nobody proved.
+
 ## Settings
 
 | Setting | Default | Description |
@@ -188,6 +284,7 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | `LLM_ADMIN_MAX_PARALLEL_TOOLS` | `4` | Max concurrent threads for parallel tool execution |
 | `LLM_ADMIN_SYSTEM_PROMPT` | (built-in) | Override the default system prompt |
 | `LLM_ADMIN_PROMPT_CACHE_ENABLED` | `True` | Enable Anthropic prompt caching on assistant LLM calls (see [Prompt Caching](#prompt-caching)) |
+| `LLM_ADMIN_APPROVAL_TTL` | `600` | Seconds an operator has to approve a mutating action before it expires. Clamped to 60–3600. See [Approvals](approvals.md). |
 | `LLM_BROWSE_MAX_LENGTH` | `20000` | Max character length of content returned by `browse_url` and `read_docs` |
 | `LLM_BROWSE_TIMEOUT` | `10` | HTTP request timeout in seconds for `browse_url` |
 | `LLM_DOCS_BASE_URL` | `https://raw.githubusercontent.com/NativeMojo/django-mojo/refs/heads/main/docs/` | Base URL for fetching framework docs via `read_docs` |
@@ -251,12 +348,21 @@ Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
 | `query_users` | `view_admin` | No | Search/filter users by name, email, status, permission |
 | `get_user_detail` | `view_admin` | No | Full user profile, permissions, group memberships |
 | `get_user_activity` | `view_admin` | No | Recent security events for a user |
-| `query_rate_limits` | `view_admin` | No | Currently active rate limit entries from Redis |
+| `query_rate_limits` | `view_admin` | No | Fair, bounded sample of currently active fixed- and sliding-window rate limit entries from Redis |
 | `get_permission_summary` | `view_admin` | No | User permissions breakdown (user-level + group-level) |
 | `update_user_permission` | `manage_users` | Yes | Add or remove a permission from a user |
 | `disable_user` | `manage_users` | Yes | Disable account + rotate auth_key (invalidates all sessions). Cannot disable yourself. Does not write `metadata.protected.disable.*` — use the REST `disable` action for audited disables. |
 | `enable_user` | `manage_users` | Yes | Re-enable a disabled account. Does not update `metadata.protected.disable.*` history. |
 | `force_logout` | `manage_users` | Yes | Rotate auth_key to invalidate all sessions (account stays active) |
+
+`query_rate_limits` returns at most 50 entries and shares its bounded Redis
+inspection work fairly between fixed-window (`rl:*`) and sliding-window
+(`srl:*`) keys. On Redis Cluster it scans each primary explicitly and allocates
+the same global command budget across family/primary lanes; it never uses
+cluster SCAN's all-primary fanout. Its `truncated` boolean is `true` when the
+result, inspected-key, or SCAN-call limit stopped the query before Redis was
+proven exhausted; callers must not treat a truncated response as a complete
+inventory.
 
 ### Groups Domain (`view_groups`)
 
@@ -288,6 +394,24 @@ Full reference: [metrics_tools.md](metrics_tools.md).
 | `get_incident_trends` | `view_security` | No | Incident/event trends over 1h/6h/24h/7d |
 
 Every read tool calls `mojo.apps.metrics.rest.helpers.check_view_permissions(request, account)`; the write tool calls `check_write_permissions`. This matches the REST layer exactly: per-account gating for `public`, `global`, `group-<id>`, `user-<id>`, and custom accounts. Denials return `{"error": ...}` and fire a level-5 security event.
+
+### Cloud Domain (`manage_aws` / `manage_platform` / platform read grants)
+
+Full reference: [cloud_tools.md](cloud_tools.md).
+
+Twenty on-demand tools that mirror the built-in Admin's cloud and fleet
+surfaces. Thirteen reads (platform health, platform sections, advanced
+inventory, framework status, fleet capacity, capacity operation status, managed
+upgrades, upgrade status, System Setup readiness and operation progress,
+recorded version drift, CloudWatch resources and metrics) and seven mutating
+tools (deploy retry/verify/converge, framework update, managed engine upgrade,
+single capacity change, capacity plan+apply).
+
+Every tool declares the gates its Admin twin declares — `fresh_auth_seconds=600`
+on all seven mutations, `requires_managed_infrastructure` exactly where the twin
+calls `infrastructure.refuse()`, and `requires_superuser` on the two capacity
+tools. System Setup **repair** is deliberately absent: every setup mutation is
+bound to the originating browser Origin.
 
 ### Web Domain (`view_admin`)
 
@@ -550,6 +674,49 @@ All four tools are `core=True` — always available without calling `load_tools`
 
 See [skills.md](skills.md) for the full model reference, service API, step format, and settings.
 
+### WebApp Domain (`view_admin` + group WebApp authority)
+
+Loaded on demand with `load_tools(domain="webapp")`. 26 tools — 12 reads, 14
+mutating — each a thin wrapper over the service the matching Admin endpoint
+already calls. The registry gate is `view_admin` because WebApp authority is
+group-scoped and `user.has_permission()` reads global grants only; every tool
+also declares `authorize=`, so the domain is listed only for operators who
+manage apps somewhere, and the exact per-group check runs in `preview` and
+again in the handler.
+
+| Tool | Mutates | Fresh auth | Description |
+|---|---|---|---|
+| `list_webapp_groups` | No | — | Workspaces where this operator can create and manage apps. |
+| `get_webapp_setup_options` | No | — | Server-owned setup choices: buckets, environments, destination, apps domain. |
+| `precheck_new_webapp_address` | No | — | Verdict for a typed address before any app exists. Purchase options stripped. |
+| `list_webapps` | No | — | Apps the caller may list, with address, certificate, version, last deploy, fleet summary. |
+| `get_webapp` | No | — | One app's full summary. Secret-free; the deploy key is `{linked, active}`. |
+| `get_webapp_serving` | No | — | Address, certificate, shape, routes, every address. Pools/upstreams `null` for a viewer. |
+| `preview_webapp_alias` | No | — | What adding an address would do. Carries the WRITE authority, as its twin does. |
+| `check_webapp_health` | No | — | Live HTTPS probe. Never a raw probe exception. |
+| `get_webapp_deploy_history` | No | — | Recent versions and deployments. Fleet targets stay out. |
+| `get_webapp_deployment` | No | — | Node counts for everyone; per-node detail and 5 truncated errors for a writer; runner ids for nobody. |
+| `get_webapp_deploy_setup` | No | — | Safe key status plus the GitHub Actions workflow file. Never mints or reveals a key. |
+| `get_webapp_setup_status` | No | — | A setup's step, revision, evidence and activity. Readable across surfaces. |
+| `start_webapp_setup` | Yes | — | Create an app and open its guided setup in an existing workspace. |
+| `answer_webapp_setup_step` | Yes | 600 | Answer the current step. Binds the numeric revision, the cursor and a choice hash. |
+| `cancel_webapp_setup` | Yes | 600 | Stop a setup; anything already created is kept. |
+| `attach_webapp_address` | Yes | 600 | Add one more address. Re-enterable, one provider write at most. |
+| `detach_webapp_address` | Yes | 600 | Remove one EXTRA address. |
+| `take_webapp_offline` | Yes | 600 | Stop serving every address. The app and its versions are kept. |
+| `set_webapp_serving` | Yes | 600 | Change node pool or single-page fallback, on every address. |
+| `switch_webapp_certificate` | Yes | 600 | Switch onto an active certificate that really covers the address. |
+| `request_webapp_certificate` | Yes | 600 | Request a certificate for this address alone. Requesting only. |
+| `add_webapp_route` / `remove_webapp_route` | Yes | 600 | Send one path elsewhere, or stop. Managed auth paths refused. |
+| `rollback_webapp` | Yes | 600 | Roll back to an earlier verified version. |
+| `revoke_webapp_deploy_key` | Yes | 300 | Turn the deploy key off. Never reads or returns a key. |
+| `delete_webapp` | Yes | 600 | Permanent delete. Escalated: the REST delete carries no step-up. |
+
+Minting or rotating a deploy key, buying a domain, and uploading a build are
+**excluded by design** and are handoffs — see
+[webapp_tools.md](webapp_tools.md) for why, plus the `ASSISTANT_ORIGIN` seam
+that keeps a chat setup and a portal setup from ever crossing.
+
 ## Incident Event Reporting
 
 The assistant reports security-relevant actions and errors to the incident system via `incident.report_event()`. Events flow through the rule engine for automated response (blocking, ticketing, notifications).
@@ -560,7 +727,12 @@ The assistant reports security-relevant actions and errors to the incident syste
 |---|---|---|
 | `assistant:permission_denied` | 5 | User's tool call blocked by permission gate |
 | `assistant:permission_denied` | 6 | LLM requested a tool not in the registry |
-| `assistant:tool:<name>` | 5 | Successful mutating tool execution (block_ip, disable_user, etc.) |
+| `assistant:approval:proposed` | 4 | A mutating tool call created a pending action |
+| `assistant:approval:approved` | 5 | Operator approved; the action was consumed and execution started |
+| `assistant:approval:canceled` | 4 | Operator declined |
+| `assistant:approval:denied` | 6 | A resolution was refused (suppressed + budgeted — see [Approvals](approvals.md)) |
+| `assistant:approval:failed` | 6 | An approved handler raised or returned an error |
+| `assistant:tool:<name>` | 5 | Successful mutating tool execution (block_ip, disable_user, etc.). Unchanged — it now fires from `approvals.resolve()`, so existing RuleSets keep working. |
 | `assistant:error` | 6 | Tool handler raised an unhandled exception |
 | `assistant:error` | 7 | Agent loop crashed |
 | `assistant:error` | 5 | Max tool turns exhausted |
@@ -573,7 +745,8 @@ The assistant reports security-relevant actions and errors to the incident syste
 ### Design
 
 - **Permission denied = always an event.** These are security signals for probing/brute-force detection.
-- **Mutating tools = event on success only.** No event when the tool returns an error dict (operation failed).
+- **Mutating tools = event on success only.** No event when the tool returns an error dict (operation failed) — that files `assistant:approval:failed` instead.
+- **Approval lifecycle = evidence at every point.** Proposal, approval, cancel, denial and failure all file bounded events carrying actor, tool, conversation and a secret-free argument fingerprint — never argument values.
 - **Read-only tools = no events.** Too high volume, low signal.
 - **Events supplement, not replace, file logging.** Existing `logger` calls remain for debug.
 - **`_report_event()` never raises** — wrapped in try/except to avoid breaking the assistant if the incident system is down.
@@ -588,6 +761,7 @@ The model mutation tools (`save_model_instance`, `delete_model_instance`) write 
 | `assistant:model:updated` | `save_model_instance` — existing row updated successfully |
 | `assistant:model:deleted` | `delete_model_instance` — row deleted successfully |
 | `assistant:model:save_failed` | `save_model_instance` — `on_rest_save()` raised an exception |
+| `assistant:approval:<state>` | Every approval lifecycle point, against `assistant.PendingAction` |
 
 **What is recorded:**
 
@@ -782,8 +956,14 @@ Every tool call passes through a permission gate before execution. The gate chec
 - Even if Claude somehow requests a tool the user can't use, execution is blocked
 - Permission changes mid-conversation are reflected immediately
 - Mutating tools require `manage_*` permissions, never just `view_*`
+- A tool may declare `authorize(user)` for a rule `has_permission` cannot express (a compound grant, group-scoped authority). It is an ADDITIONAL check, never a substitute, and a `False` result is indistinguishable from a missing permission.
 
 Sensitive fields (`password`, `auth_key`, `onetime_code`) are never included in tool results.
+
+**Permission is necessary but not sufficient for a mutating tool.** Holding
+`manage_security` lets the model *propose* `block_ip`; only an operator approving
+that specific proposal executes it, and the permission is re-checked against a
+freshly reloaded `User` immediately before dispatch. See [Approvals](approvals.md).
 
 ## Adding Custom Tools
 
@@ -842,8 +1022,18 @@ def _tool_query_orders(params, user):
 | `permission` | Yes | Permission string checked via `user.has_permission()` |
 | `description` | Yes | Human-readable description shown to the LLM |
 | `input_schema` | Yes | JSON Schema dict for the tool's parameters |
-| `mutates` | No | Default `False`. If True, LLM is told to confirm before executing |
+| `mutates` | No | Default `False`. If `True`, the tool **cannot execute on the model's call** — it produces an approval the operator must resolve. See [Approvals](approvals.md). |
 | `core` | No | Default `False`. If `True`, tool is always sent to the LLM (two-tier tier 1). Set this for tools that should be available in every conversation without loading a domain. |
+| `fresh_auth_seconds` | No | Mutating only. Recency window mirroring `@md.requires_fresh_auth(seconds=N)` on the Admin twin. Forces REST-only resolution. |
+| `requires_superuser` | No | Mutating only. AND-check for a live literal `User.is_superuser`. |
+| `requires_managed_infrastructure` | No | Mutating only. Hidden and refused when `INFRASTRUCTURE_MODE=external`. |
+| `summarize` | No | Mutating only. `(params, user) -> str` — the card's one sentence. |
+| `preview` | No | Mutating only. `(params, user) -> {"summary", "details", "revision"}`, read-only; the revision is bound and re-checked. Raising it refuses the proposal. |
+| `authorize` | No | **Any** tool. `(user) -> bool`, evaluated in addition to `permission` wherever that check runs. |
+
+> Passing any of the five mutating-only gates without `mutates=True` raises
+> `ValueError` **at import time** — a misdeclared tool breaks the import rather
+> than degrading into a silent no-op.
 
 #### Organizing Tools in Modules
 
@@ -892,9 +1082,11 @@ register_tool(
 | `input_schema` | Yes | JSON Schema dict for the tool's parameters |
 | `handler` | Yes | Callable `(params, user) -> dict or list` |
 | `permission` | Yes | Permission string checked via `user.has_permission()` |
-| `mutates` | No | Default `False`. If True, LLM is told to confirm before executing |
+| `mutates` | No | Default `False`. If `True`, the tool is gated behind an operator approval. See [Approvals](approvals.md). |
 | `domain` | No | Default `"custom"`. Logical grouping for the tool |
 | `core` | No | Default `False`. If `True`, always included in every conversation (tier 1). |
+| `fresh_auth_seconds`, `requires_superuser`, `requires_managed_infrastructure`, `summarize`, `preview` | No | Mutating-only approval gates — same meaning as on `@tool`. |
+| `authorize` | No | `(user) -> bool`, allowed on any tool. |
 
 ### Tool Handler Guidelines
 
@@ -910,10 +1102,11 @@ The dispatcher inspects handler signatures at first call (result is cached). Han
 
 | Kwarg | Type | Description |
 |---|---|---|
-| `request_meta` | `objict` or `None` | Slim HTTP context from the originating request: `ip`, `user_agent`, `path`, `method`. `None` when there is no HTTP request (e.g. WS path or programmatic call). |
+| `request_meta` | `objict` or `None` | Slim transport context: `ip`, `user_agent`, `path`, `method`, plus `bearer` (the credential prefix — only `"bearer"` is an interactive JWT) and `key_backed` (an ApiKey or group-scoped token, whoever it acts as). `None` only for a programmatic call with no request at all. The last two **fail closed**: an unreadable request reads as key-backed. |
 | `conversation` | `Conversation` instance | The active Conversation model instance. Use to read metadata or to associate audit records with the conversation. |
+| `approval` | `PendingAction` or `None` | The consumed approval record, on the approval path only (`None` for read-only tools, which never have one). `str(approval.uuid)` is the idempotency key to hand the underlying service; `approval.revision` is the bound `preview` revision. See [Approvals](approvals.md). |
 
-Both kwargs are keyword-only (`*` in the signature):
+All three kwargs are keyword-only (`*` in the signature):
 
 ```python
 @tool(name="my_tool", domain="myapp", permission="view_admin", mutates=True,
@@ -924,7 +1117,9 @@ def _tool_my_tool(params, user, *, request_meta=None, conversation=None):
     ...
 ```
 
-`run_assistant()` now accepts an optional `request=None` parameter. When the REST endpoint passes the Django request through, `request_meta` is populated automatically for all tool handlers that opt in. WebSocket calls do not pass a request; `request_meta` is `None` in that path.
+`run_assistant()` accepts an optional `request=None` parameter. When the REST endpoint passes the Django request through, `request_meta` is populated automatically for all tool handlers that opt in.
+
+The WebSocket path carries a `request_meta` too, built by `agent.build_ws_request_meta()` from the `_bearer` prefix `mojo/apps/realtime/handler.py` stamps on every delivered message (always overwriting what the client sent, so it is a server fact). It reports `ip`/`path`/`method` as `"websocket"`, and `key_backed` is true for anything that is not the literal `"bearer"`. A handler that needs to know "is a person driving this" reads those two fields on either transport.
 
 ### Other Registry Functions
 

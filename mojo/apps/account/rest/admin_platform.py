@@ -125,7 +125,9 @@ def on_admin_platform_framework_update(request):
             f"Reload Platform and try again.", code=409, status=409)
     if request.DATA.get("confirm_version") != version:
         raise me.ValueException("confirm_version must exactly match the version")
-    return _admin_platform.apply_framework_update(request, version)
+    return _admin_platform.apply_framework_update(
+        request.user, version,
+        idempotency_key=request.META.get("HTTP_IDEMPOTENCY_KEY"))
 
 
 @md.POST("account/admin/advanced/settings")

@@ -137,7 +137,10 @@ Rows are neither editable nor deletable.
 The canonical GitHub action retries the current presigned PUT when S3 returns
 a transient HTTP status or the runner encounters a timeout, connection reset,
 or remote disconnect. Backoff is bounded; permanent HTTP failures still fail
-immediately, and rerunning the same immutable release remains safe.
+immediately. The generated workflow versions releases with the commit SHA,
+GitHub run id, and run-attempt number. Retries inside one attempt reuse its
+immutable release, while a workflow rerun creates a distinct release even for
+the same commit.
 
 Manifest paths are relative and slash-delimited. Each segment accepts letters,
 digits, `.`, `_`, `-`, `!`, and `~`; the last two are required by Next.js
@@ -195,9 +198,11 @@ never overwrite a newer one. Periodic and startup convergence remain the
 backstop for nodes that were offline during the snapshot.
 
 There is no manual hold or promotion endpoint. The protected GitHub branch is
-the human control plane. Intentional rollback means rerunning the workflow for
-an older commit; its immutable manifest is reused and the same deployment
-coordinator converges it.
+the human control plane. Intentional rollback is the human-only Admin action:
+it repoints the site to an existing verified release and the same deployment
+coordinator converges it. Rerunning a workflow for an older commit creates a
+new immutable release and is a new deployment, not a rollback of release
+state.
 
 ## Permissions
 
@@ -928,6 +933,15 @@ supersede-safe primitive as forward promotion, under a `select_for_update` row
 lock. A deployment row cascade-deleted with its WebApp (safe-delete racing an
 in-flight deploy) makes `webapp_deploy.orchestrate` a superseded no-op rather
 than a crashing `DoesNotExist`.
+
+The two destructive transactions above — take-offline and safe-delete — live in
+`services/webapp_lifecycle.py` (`take_offline`, `teardown`). The REST detach
+handler and `WebApp.on_rest_delete` are thin callers, and so is the Admin
+Assistant, which reaches this same day-2 surface through its `webapp` tool
+domain (`docs/django_developer/assistant/webapp_tools.md`). Chat gets the same
+services under the same authority and the same fresh-auth windows; minting or
+rotating `MOJO_DEPLOY_KEY`, buying a domain, and uploading a build are not
+available there and stay portal-only.
 
 ### Serving: address, certificate, shape, and paths
 

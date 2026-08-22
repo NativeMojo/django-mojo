@@ -424,6 +424,22 @@ checks may also include their documented bounded domain fields. Display the
 exact denied IAM action as remediation. Never expect raw AWS messages,
 credentials, provider payloads, or request parameters.
 
+## The Admin Assistant cannot repair setup
+
+The Assistant's `cloud` domain exposes System Setup **read-only**:
+`get_setup_readiness` (run one readiness section) and `get_setup_operation`
+(progress on an operation a human started here). There is no chat equivalent of
+`create`, `choose`, `advance` or `cancel`.
+
+That is by design, not a gap. Every setup mutation is bound to the browser
+Origin that started it, and the server compares the request's `Origin` against
+the operation's stored origin on every step — so a setup operation can only be
+driven from the same Admin tab that began it. Both read tools additionally
+require an active superuser on an interactive session and refuse an API key.
+
+If a user asks the Assistant to fix setup, the correct outcome is the readiness
+report plus a pointer back to this page.
+
 ## Protected settings
 
 `BASE_URL`, installation identity, monitoring topic ownership, and expected

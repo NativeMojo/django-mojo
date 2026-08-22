@@ -840,3 +840,49 @@ def test_email_preview_states(opts):
                                  {"mailbox": 13, "scope": "system"})
     assert code == 200 and payload["data"]["is_system_default"] is True, \
         f"the mailbox-default fixture refused a valid claim: {payload!r}"
+
+
+@th.django_unit_test("preview serves every Assistant setup state and never a key value")
+def test_assistant_preview_states(opts):
+    from urllib.parse import urlparse
+
+    server = _server()
+    bootstrap = server.bootstrap([])
+    for capability in ("assistant", "assistant_ready", "assistant_setup"):
+        assert bootstrap["capabilities"].get(capability) is True, \
+            f"the deterministic bootstrap fixed roster omits {capability}"
+    assistant = bootstrap["features"].get("assistant")
+    assert assistant and assistant["enabled"] is True, \
+        f"the preview bootstrap does not publish the Assistant namespace: {assistant!r}"
+    assert set(assistant["capabilities"]) == {"view", "ready", "setup"}, \
+        f"the Assistant preview namespace drifted: {assistant!r}"
+
+    feature = server.assistant
+    for state in ("configured", "unset", "fallback", "verify_failed", "disabled"):
+        class Handler:
+            pass
+
+        feature.reset(Handler, {}, assistant_state=state)
+        code, report = feature.get(Handler, urlparse("/api/account/admin/assistant"))
+        assert code == 200, f"{state}: the Assistant fixture answered {code}"
+        assert set(report["key"]) == {"configured", "hint", "source"}, \
+            f"{state}: the fixture key state carries more than presence and provenance"
+        assert len(report["key"]["hint"]) in (0, 4), \
+            f"{state}: the fixture hint is not four characters — a leak could ship " \
+            f"looking correct: {report['key']!r}"
+        assert "api_key" not in report and "value" not in report["key"], \
+            f"{state}: the Assistant fixture emitted a key value: {report!r}"
+        assert report["enabled"] is (state != "disabled"), \
+            f"{state}: the enabled flag does not follow the scenario"
+    assert report["key"]["source"] == "admin", \
+        "the disabled scenario lost its stored-credential provenance"
+
+    class Failing:
+        pass
+
+    feature.reset(Failing, {}, assistant_state="verify_failed")
+    status, refused = feature.post(
+        Failing, "/api/account/admin/assistant",
+        {"action": "save", "enabled": True, "model": "", "api_key": "sk-nope"})
+    assert status == 400, \
+        f"a failing verification fixture accepted a credential save: {refused!r}"

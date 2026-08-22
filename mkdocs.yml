@@ -71,6 +71,7 @@ nav:
                 - Admin Dashboard: django_developer/account/admin_portal/dashboard.md
                 - Admin People: django_developer/account/admin_portal/people.md
                 - Platform Admin: django_developer/account/admin_portal/platform.md
+                - Admin Assistant Panel: django_developer/account/admin_portal/assistant.md
                 - Webhook Signing: django_developer/account/webhook_signing.md
                 - Webhook Subscriptions: django_developer/account/webhook_subscriptions.md
           - Logging:
@@ -121,6 +122,7 @@ nav:
                 - Admin Dashboard API: web_developer/account/admin_portal/dashboard.md
                 - Admin People: web_developer/account/admin_portal/people.md
                 - Platform Admin APIs: web_developer/account/admin_portal/platform.md
+                - Admin Assistant API: web_developer/account/admin_portal/assistant.md
                 - API Keys: web_developer/account/api_keys.md
                 - Webhook Signing: web_developer/account/webhook_signing.md
                 - Webhook Subscriptions: web_developer/account/webhook_subscriptions.md

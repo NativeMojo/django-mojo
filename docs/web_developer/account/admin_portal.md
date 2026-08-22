@@ -271,6 +271,11 @@ on localhost. External OAuth callbacks are not supported. Deterministic fixture
 mode remains the correct way to exercise write, busy, 440, error, and
 ambiguous-response states without mutating a live installation.
 
+Alongside those lanes the portal carries one **shell-level panel**: the
+Assistant. It is docked to the right of every page, has no route and no
+navigation entry, and survives route changes because the shell replaces only the
+page content node. It is gated by `features.assistant`, never by a lane.
+
 The packaged portal is divided into seven fixed, capability-gated feature lanes.
 Primary navigation is Dashboard, Deployments, Domains & DNS, Serving, People,
 Activity, Metrics, Maintenance, and Settings, then literal-superuser System
@@ -354,10 +359,23 @@ Bootstrap returns both the stable flat `capabilities` object and a namespaced
     "activity": {"id": "activity", "enabled": true,
                  "capabilities": {"view_logs": true,
                                   "view_security": true,
-                                  "manage_security": false}}
+                                  "manage_security": false}},
+    "assistant": {"id": "assistant", "enabled": true,
+                  "capabilities": {"view": true, "ready": true,
+                                   "setup": true}}
   }
 }
 ```
+
+The `assistant` namespace is **not a navigation lane** — it has no route and no
+sidebar entry. `view` decides whether the Assistant panel is mounted at all
+(`view_admin` alone, because the assistant WebSocket handler admits nothing
+else); `ready` says the feature is switched on and a credential resolves, so a
+false `ready` means render the not-configured state instead of a composer; and
+`setup` says the caller may open the owner-only setup view
+([Assistant setup API](admin_portal/assistant.md)). `enabled` follows `view`
+alone: readiness is a fact about the installation, and folding it in would offer
+a chat panel whose every message the server refuses.
 
 Unknown namespaces are not loaded. Malformed server provider output disables
 that namespace. The browser registry likewise imports a fixed set of local

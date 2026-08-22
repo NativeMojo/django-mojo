@@ -136,6 +136,15 @@ just `view_platform` receives the same entry with everything else intact
 captured", never as an error. The three deployment actions above always
 include it, since they already require `manage_platform` and fresh auth.
 
+**These actions are also reachable through the Admin Assistant** (`cloud`
+domain: `retry_platform_deployment`, `verify_platform_deployment`,
+`converge_platform_deployment`, `apply_framework_update`, plus the capacity
+controls). The Assistant adds a gate rather than relaxing one — the same
+permissions and the same 600-second fresh-auth window, plus a server-authored
+approval card the operator must approve before anything runs, and a refusal for
+any attempt status the Admin itself does not offer that control for. See
+[assistant/cloud_tools.md](../../assistant/cloud_tools.md).
+
 Render `unhealthy`, `unauthorized`, `unavailable`, `timeout`, and
 `unconfigured` distinctly. Never infer health from absence or retain evidence
 past `stale_after`. Provider errors are intentionally not exposed.

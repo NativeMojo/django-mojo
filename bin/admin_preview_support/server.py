@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from .gallery import bootstrap, reset
-from .features import activity, advanced, capacity, email, maintenance, platform, settings, sms, webapps
+from .features import activity, advanced, assistant, capacity, email, maintenance, platform, settings, sms, webapps
 from .features import dashboard
 
 
@@ -634,7 +634,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if activity_response is not None:
             status, payload = activity_response
             return self._send(payload, status=status)
-        for provider in (dashboard, webapps, platform, advanced, settings, sms, email, maintenance, capacity):
+        for provider in (dashboard, webapps, platform, advanced, settings, sms, email, maintenance, capacity, assistant):
             response = provider.get(self, parsed)
             if response is not None:
                 status, payload = response
@@ -770,7 +770,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         payload = self._read_body()
         self._record_event(path, payload)
-        for provider in (webapps, platform, advanced, settings, sms, email, maintenance, capacity):
+        for provider in (webapps, platform, advanced, settings, sms, email, maintenance, capacity, assistant):
             response = provider.post(self, path, payload)
             if response is not None:
                 status, body = response
@@ -982,6 +982,7 @@ def main():
     # sub-pages needed to be QA'd against each one.
     parser.add_argument("--sms-state", choices=("configured", "unset", "test_mode", "verify_failed", "not_installed"), default="configured")
     parser.add_argument("--email-state", choices=("configured", "unset", "conflict"), default="configured")
+    parser.add_argument("--assistant-state", choices=("configured", "unset", "fallback", "verify_failed", "disabled"), default="configured")
     parser.add_argument("--infrastructure-mode", choices=("managed", "external"), default="managed")
     parser.add_argument("--upstream", help="Public HTTPS django-mojo origin for live QA")
     args = parser.parse_args()
@@ -1011,6 +1012,7 @@ def main():
        capacity_state=args.capacity_state,
        sms_state=args.sms_state,
        email_state=args.email_state,
+       assistant_state=args.assistant_state,
        infrastructure_mode=args.infrastructure_mode)
     PreviewHandler.upstream = upstream
     PreviewHandler.setup_behavior = args.setup_state

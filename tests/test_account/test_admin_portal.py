@@ -77,9 +77,12 @@ def test_authenticated_admin_delivery(opts):
         "available": True, "http_enabled": True,
         "dnsman_issuance": "dns-01"}, \
         f"Admin bootstrap omitted the edge certificate posture: {data.get('edge')}"
+    # `assistant` is a shell-level panel, not a navigation lane: it publishes a
+    # feature namespace so the shell knows whether to mount the panel, but it
+    # has no route and no registry descriptor (see test_admin_portal_assets).
     assert tuple(data.get("features", {})) == (
         "dashboard", "people", "webapps", "activity", "platform", "advanced",
-        "settings", "sms", "email"), data.get("features")
+        "settings", "sms", "email", "assistant"), data.get("features")
     assert data["features"]["activity"] == {
         "id": "activity", "enabled": True,
         "capabilities": {

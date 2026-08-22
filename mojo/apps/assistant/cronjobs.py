@@ -13,3 +13,14 @@ def memory_cleanup(force=False, verbose=False, now=None):
         channel="cleanup",
         payload={},
     )
+
+
+# Nightly approval sweep — persists lapsed pending/executing states and prunes
+# terminal rows. Not a correctness dependency: effective_state() answers lazily.
+@schedule(minutes="15", hours="3")
+def approval_sweep(force=False, verbose=False, now=None):
+    jobs.publish(
+        func="mojo.apps.assistant.jobs.assistant_approval_sweep",
+        channel="cleanup",
+        payload={},
+    )

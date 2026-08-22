@@ -176,7 +176,7 @@ def _tool_get_group_activity(params, user):
     name="create_group",
     domain="groups",
     permission="manage_groups",
-    description="Create a new group (organization, merchant, team, etc.). IMPORTANT: Confirm with the user before executing.",
+    description="Create a new group (organization, merchant, team, etc.). Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {
@@ -222,7 +222,7 @@ def _tool_create_group(params, user):
     name="invite_to_group",
     domain="groups",
     permission="manage_groups",
-    description="Invite a user to a group by email. Creates the user if they don't exist and sends an invite. IMPORTANT: Confirm with the user before executing.",
+    description="Invite a user to a group by email. Creates the user if they don't exist and sends an invite. Requires operator approval: calling this tool creates an approval card and does not execute.",
     input_schema={
         "type": "object",
         "properties": {

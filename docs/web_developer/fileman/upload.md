@@ -83,8 +83,12 @@ unsigned request still has no S3 permission.
 curl -X PUT \
   -H "Content-Type: video/mp4" \
   --data-binary @large-video.mp4 \
-  "https://s3.amazonaws.com/bucket/file_xyz?X-Amz-Signature=..."
+  "https://bucket.s3.us-west-2.amazonaws.com/file_xyz?X-Amz-Signature=..."
 ```
+
+The AWS hostname reflects the S3 region configured for the selected
+FileManager. Treat the entire URL as opaque; custom S3-compatible storage may
+return a different host and path.
 
 ### Step 2b: Upload to Direct Token URL (local/other backends)
 

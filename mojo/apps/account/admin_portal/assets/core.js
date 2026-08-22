@@ -28,6 +28,7 @@ const SVG = {
   chart: '<path d="M4 3v16a2 2 0 0 0 2 2h15"/><path d="m8 15 3.5-4.5 3 2.2L20 6"/>',
   phone: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  assistant: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4H6.5"/><path d="M8.5 8.5h7m-7 3h4"/>',
 };
 
 export function icon(name, label = '') {
