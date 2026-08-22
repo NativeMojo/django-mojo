@@ -1,0 +1,206 @@
+/* Deployments: merged fleet list (shared rows.css grammar) + URL-first wizard
+   + per-app management + API/framework drill-ins. Themed with the shared
+   tokens only — use --line for borders; the --border token is undefined here. */
+
+/* ---- API + framework drill-ins ---- */
+.deploy-history { display: grid; gap: .85rem; }
+.deploy-attempts { display: grid; gap: .6rem; }
+.deploy-attempt { display: grid; gap: .45rem; }
+.deploy-attempt-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.deploy-technical summary { color: var(--muted); cursor: pointer; font-size: .78rem; font-weight: 700; }
+.framework-detail { display: grid; gap: .85rem; }
+
+/* ---- failure story + compact attempt timeline ---- */
+.deploy-failure { display: grid; gap: .4rem; padding: .75rem .85rem; border: 1px solid var(--danger); border-radius: 9px; }
+.deploy-failure p { margin: 0; }
+.deploy-failure-headline { margin: 0; font-weight: 600; font-size: .85rem; }
+.deploy-stderr { margin: 0; padding: .5rem .65rem; border-radius: 7px; background: var(--surface-2); overflow-x: auto; font-size: .78rem; line-height: 1.45; }
+.deploy-timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: .25rem; }
+.deploy-timeline li { display: flex; gap: .6rem; align-items: baseline; font-size: .8rem; }
+.deploy-timeline-status { font-weight: 600; }
+.deploy-serving { border-top: 1px solid var(--line); padding-top: .45rem; }
+.deploy-older summary { color: var(--muted); cursor: pointer; font-size: .78rem; font-weight: 700; }
+.deploy-older .deploy-attempts { margin-top: .6rem; }
+
+/* ---- wizard shell ---- */
+.wizard-body { display: grid; gap: 1rem; }
+.wizard-panel { display: grid; gap: 1rem; }
+.wizard-loading, .wizard-choice { display: grid; gap: .9rem; }
+.wizard-loading { place-items: center; padding: 2rem 0; color: var(--muted); }
+.wizard-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .5rem; list-style: none; margin: 0; padding: 0; }
+.wizard-steps li { display: flex; align-items: center; gap: .45rem; color: var(--muted); font-size: .82rem; }
+.wizard-steps li span { display: grid; place-items: center; width: 1.6rem; height: 1.6rem; border: 1px solid var(--line); border-radius: 50%; flex: 0 0 auto; }
+.wizard-steps li.current { color: var(--text); font-weight: 700; }
+.wizard-steps li.current span { border-color: var(--accent); color: var(--accent); }
+.wizard-steps li.complete span { border-color: var(--success); color: var(--success); }
+
+.wizard-intro { display: flex; align-items: flex-start; gap: .7rem; padding: .85rem; border-radius: 9px; background: var(--surface-2); }
+.wizard-intro svg { flex: 0 0 auto; margin-top: .12rem; color: var(--accent); }
+.wizard-intro strong { display: block; }
+.wizard-intro p { margin: .2rem 0 0; color: var(--muted); font-size: .82rem; line-height: 1.45; }
+.wizard-advanced { border-top: 1px solid var(--line); padding-top: .65rem; }
+.wizard-advanced summary { color: var(--muted); cursor: pointer; font-size: .78rem; font-weight: 700; }
+.wizard-advanced .field, .wizard-advanced p { margin-top: .6rem; }
+
+/* ---- address entry + verdict steering ---- */
+.address-entry { display: flex; gap: .5rem; flex-wrap: wrap; }
+.address-entry input { flex: 1 1 16rem; }
+.verdict-area { display: grid; gap: .75rem; }
+.verdict { display: flex; align-items: flex-start; gap: .7rem; padding: .85rem; border-radius: 9px; border: 1px solid var(--line); }
+.verdict svg { flex: 0 0 auto; margin-top: .1rem; }
+.verdict strong { display: block; }
+.verdict p { margin: .25rem 0 0; color: var(--muted); font-size: .84rem; }
+.verdict code { font-size: .85rem; }
+.verdict.steer { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.verdict.blocked { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.verdict .button { margin-left: auto; align-self: center; }
+
+/* ---- domain choice cards ---- */
+.choice-cards { display: grid; gap: .6rem; }
+.choice-card { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: .35rem 1rem; text-align: left; padding: .9rem 1rem; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+.choice-card:hover, .choice-card:focus-visible { border-color: var(--accent); }
+.choice-card.recommended { border-color: var(--accent); }
+.choice-card strong { grid-column: 1; }
+.choice-card p { grid-column: 1; margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.4; }
+.choice-card svg { grid-column: 2; grid-row: 1 / span 2; color: var(--muted); }
+.choice-badge { grid-column: 2; grid-row: 1; justify-self: end; font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--accent); }
+
+/* ---- DNS record cards ---- */
+.records-block { display: grid; gap: .75rem; }
+.record-card { display: grid; gap: .4rem; padding: .75rem .85rem; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); }
+.record-purpose { margin: 0; font-weight: 600; font-size: .84rem; }
+.record-line { display: grid; grid-template-columns: 5.5rem 1fr auto; align-items: center; gap: .5rem; }
+.record-line .record-key { color: var(--muted); font-size: .74rem; text-transform: uppercase; letter-spacing: .03em; }
+.record-line code { overflow-wrap: anywhere; font-size: .82rem; }
+
+.hostname-preview { display: grid; gap: .2rem; padding: .75rem .85rem; border: 1px solid var(--line); border-radius: 8px; }
+.hostname-preview span { color: var(--muted); font-size: .72rem; }
+.hostname-value { overflow-wrap: anywhere; font-size: .9rem; }
+
+/* ---- run panel ---- */
+.run-heading { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.run-busy { display: flex; align-items: flex-start; gap: .7rem; padding: .85rem; border-radius: 9px; background: var(--surface-2); }
+.run-busy svg { flex: 0 0 auto; margin-top: .1rem; color: var(--accent); }
+.run-busy p { margin: .2rem 0 0; color: var(--muted); font-size: .82rem; }
+.run-evidence { color: var(--muted); font-size: .75rem; }
+.run-evidence summary { cursor: pointer; font-weight: 700; }
+.run-evidence .details { margin-top: .5rem; }
+.result-state { display: flex; align-items: flex-start; gap: .8rem; padding: 1rem; border-radius: 10px; border: 1px solid var(--line); }
+.result-state svg { flex: 0 0 auto; margin-top: .1rem; }
+.result-state.success { border-color: var(--success); }
+.result-state.success svg { color: var(--success); }
+.result-state.danger { border-color: var(--danger); }
+.result-state.danger svg { color: var(--danger); }
+.result-state p { margin: .25rem 0 0; color: var(--muted); font-size: .85rem; }
+
+/* ---- one app's own page ---- */
+.apps-detail-body { display: grid; gap: .85rem; }
+.detail-grid { display: grid; grid-template-columns: minmax(8rem, auto) 1fr; gap: .35rem .9rem; margin: 0; }
+.detail-grid dt { color: var(--muted); font-size: .8rem; }
+.detail-grid dd { margin: 0; }
+.address-cell { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.section-subhead { margin: .5rem 0 0; font-size: .85rem; }
+.timeline-view { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+.timeline-view li { display: grid; grid-template-columns: auto 1fr; gap: .6rem; align-items: start; }
+.timeline-view .timeline-dot { width: .6rem; height: .6rem; margin-top: .35rem; border-radius: 50%; background: var(--accent); }
+.timeline-view time { display: block; color: var(--muted); font-size: .74rem; }
+.credential-status { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .75rem .85rem; border: 1px solid var(--line); border-radius: 9px; }
+
+.setup-block { display: grid; gap: .7rem; }
+.setup-list { margin: 0; padding-left: 1.2rem; display: grid; gap: .4rem; font-size: .85rem; }
+.command code { display: block; padding: .5rem .65rem; border-radius: 7px; background: var(--surface-2); overflow-x: auto; }
+
+/* ---- addresses card (app page overview) ---- */
+.address-block { display: grid; gap: .6rem; }
+.record-cell { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.record-cell code { overflow-wrap: anywhere; font-size: .82rem; }
+
+/* ---- serving tab: address, certificate, shape, routes ---- */
+.serving-card { display: grid; gap: .55rem; padding: .9rem; border: 1px solid var(--line); border-radius: 10px; }
+.serving-card > p { margin: 0; }
+.serving-card .field, .serving-card .check-field { margin: 0; }
+.serving-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.serving-row code { overflow-wrap: anywhere; font-size: .85rem; }
+.route-managed { display: inline-flex; align-items: center; }
+.serving-operator { border-top: 1px solid var(--line); padding-top: .55rem; }
+
+/* ---- danger area ---- */
+.danger-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .85rem; border: 1px solid var(--line); border-radius: 9px; }
+.danger-row.danger { border-color: var(--danger); }
+.danger-row .button { flex: 0 0 auto; }
+.resume-banner { border-color: var(--accent); }
+
+/* ---- name-first creation + app page ---- */
+.wizard-name-area { display: grid; gap: .9rem; }
+.row-inline-actions { display: inline-flex; align-items: center; gap: .4rem; }
+.back-link { margin: 0 0 .35rem; font-size: .82rem; }
+.setup-ways { display: grid; gap: .85rem; }
+.setup-way { display: grid; gap: .7rem; }
+
+/* ---- the app page's truthful serving line ---- */
+/* One severity per fact: the header states WHICH release is live, and the tone
+   belongs to that fact — never to the app's mood. */
+.apps-detail-header { align-items: flex-start; }
+.apps-serving { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; margin: .35rem 0 0; font-size: .85rem; }
+.apps-serving-from { overflow-wrap: anywhere; color: var(--muted); }
+.apps-serving.tone-warn { color: var(--warning); }
+.apps-serving.tone-danger { color: var(--danger); }
+
+/* A link that leaves v2 says so, in the same voice Home uses for the same fact. */
+.apps-note { color: var(--muted); font-size: .72rem; font-weight: 400; }
+
+/* ---- upload a build (Set up deploys ▸ Upload) ---- */
+.upload-build { display: grid; gap: .7rem; }
+.upload-drop { display: grid; justify-items: center; gap: .25rem; padding: 1.6rem 1rem; border: 2px dashed var(--line); border-radius: 10px; background: var(--surface-2); cursor: pointer; text-align: center; }
+.upload-drop svg { width: 1.4rem; height: 1.4rem; color: var(--muted); }
+.upload-drop p { margin: 0; }
+.upload-drop.active, .upload-drop:focus-visible { border-color: var(--accent); outline: 0; background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+
+/* ---- a verdict that is ready to go through ---- */
+.verdict.ready { border-color: var(--success); background: color-mix(in srgb, var(--success) 8%, transparent); }
+.verdict.ready svg { color: var(--success); }
+
+/* ---- table action spacing (pinned contract) ---- */
+.domain-actions, .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: .5rem; flex-wrap: wrap; }
+.row-actions { white-space: nowrap; }
+
+/* ---------------------------------------------------------------------------
+   Serving (advanced) — the operator sub-page.
+
+   The shape-card, convergence-card and record-values rules are v1's, ported
+   rather than shared: a feature stylesheet only loads when its feature is
+   enabled, so Domains' copy of the neighbouring card rules cannot be relied on
+   here.
+   --------------------------------------------------------------------------- */
+.serving-body, .serving-tab { display: grid; gap: 14px; }
+.serving-filter { margin: 10px 16px 0; }
+
+.shape-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; }
+.shape-card { display: flex; align-items: flex-start; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); text-align: left; cursor: pointer; }
+.shape-card:hover { border-color: var(--accent); background: var(--accent-soft); }
+.shape-card > .icon { color: var(--accent); margin-top: 2px; }
+.shape-card strong { display: block; font-size: 12px; }
+.shape-card p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
+
+.convergence-card { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 11px; padding: 11px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+.convergence-card > .icon { color: var(--accent); }
+.convergence-card span, .convergence-card strong { display: block; }
+.convergence-card span { font-size: 9px; color: var(--muted); text-transform: uppercase; }
+.convergence-card strong { margin-top: 2px; font-size: 10px; font-weight: 600; }
+
+.record-values { display: flex; flex-direction: column; gap: 2px; max-width: 520px; }
+.record-values code { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10px; color: var(--text); }
+
+@media (max-width: 600px) {
+  .shape-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 540px) {
+  .wizard-steps { grid-template-columns: 1fr 1fr; }
+  .record-line { grid-template-columns: 4rem 1fr; }
+  .record-line .button { grid-column: 2; justify-self: start; }
+  .danger-row { flex-direction: column; align-items: stretch; }
+  .verdict .button { margin-left: 0; }
+  .serving-card .run-heading { flex-direction: column; align-items: stretch; gap: .5rem; }
+  .serving-row { align-items: flex-start; }
+}

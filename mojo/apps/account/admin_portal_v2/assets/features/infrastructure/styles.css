@@ -1,0 +1,722 @@
+/* Infrastructure's own vocabulary. Everything reusable — panels, badges,
+   chips, member rows, callouts, the stat strip, tabs, the disclosure — lives
+   in assets/admin.css. What is here is the handful of shapes that only exist
+   on these three tabs: the fleet's staging controls and apply bar, the metric
+   chart, and the maintenance modals' definition list. */
+
+/* ── Series palette ──────────────────────────────────────────────────────── */
+
+/* Declared in all three theme blocks so a chart keeps its contrast whether the
+   operator picked light, dark, or followed the system. */
+:root {
+  --chart-1: #3c5ccf;
+  --chart-2: #0f8a6a;
+  --chart-3: #b3560f;
+  --chart-4: #8a3fbd;
+  --chart-5: #0d7d99;
+  --chart-6: #b62a55;
+}
+
+html[data-theme="dark"] {
+  --chart-1: #7f97ff;
+  --chart-2: #4dc398;
+  --chart-3: #e9a35b;
+  --chart-4: #c191f0;
+  --chart-5: #5cc4dd;
+  --chart-6: #f284a4;
+}
+
+@media (prefers-color-scheme: dark) {
+  html[data-theme="system"] {
+    --chart-1: #7f97ff;
+    --chart-2: #4dc398;
+    --chart-3: #e9a35b;
+    --chart-4: #c191f0;
+    --chart-5: #5cc4dd;
+    --chart-6: #f284a4;
+  }
+}
+
+/* ── The destination ─────────────────────────────────────────────────────── */
+
+.infrastructure-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ── Capacity: panels and staging ────────────────────────────────────────── */
+
+/* The apply bar is sticky at the bottom, so the last panel needs room to clear
+   it rather than hiding behind it. */
+.fleet-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 96px;
+}
+
+/* A panel whose controls hold a staged change is outlined: the operator can
+   see what they have edited without reading the bar. */
+.fleet-panel.changed {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  box-shadow: 0 6px 24px -14px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.stat-strip .stat-qualifier {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.fleet-controls {
+  display: flex;
+  align-items: flex-start;
+  gap: 28px;
+  flex-wrap: wrap;
+  padding: 13px 16px;
+}
+
+.fleet-control {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* A column flex parent stretches its children across by default, which turns a
+   stepper or a select into a full-label-width box with dead space after it.
+   These size to their content, not to their caption. */
+.fleet-stepper,
+.fleet-control select {
+  align-self: flex-start;
+}
+
+.fleet-control select {
+  width: auto;
+  min-width: 150px;
+  height: 34px;
+}
+
+.fleet-control select:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.fleet-label {
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* The consequence under a control: what this change costs, how long it takes,
+   or what stops it being offered. Never optional decoration. */
+.fleet-floor {
+  max-width: 34ch;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.fleet-blocked {
+  margin: 0;
+  padding: 13px 16px;
+  color: var(--warning);
+  font-size: 11px;
+}
+
+.fleet-stepper {
+  display: inline-flex;
+  align-items: stretch;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.fleet-stepper button {
+  width: 36px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.fleet-stepper button:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+
+.fleet-stepper button:disabled {
+  opacity: .35;
+  cursor: not-allowed;
+}
+
+.fleet-stepper-num {
+  display: grid;
+  place-items: center;
+  min-width: 46px;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.fleet-stepper-num.up {
+  color: var(--accent);
+}
+
+.fleet-stepper-num.down {
+  color: var(--warning);
+}
+
+.fleet-callout {
+  padding: 0 16px 13px;
+}
+
+.fleet-members {
+  padding: 12px 16px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.fleet-members .member {
+  background: var(--surface);
+}
+
+/* A member's badge and the routing chip both carry the PROVIDER's word —
+   "unused", "modifying", "Reader reads: on". The shared badge capitalizes
+   every word, which would quietly rewrite them, so these two say exactly what
+   was reported. */
+.fleet-members .member > .badge,
+.fleet-panel .panel-head .badge {
+  text-transform: none;
+}
+
+/* Staged, not real: a row that only exists because the operator asked for it. */
+.fleet-members .member.ghost {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+
+/* Staged for removal: still there, already spoken for. */
+.fleet-members .member.leaving .name {
+  text-decoration: line-through;
+  opacity: .55;
+}
+
+/* The provider has not finished with this member — see capacity.js. */
+.fleet-members .member.pending {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+
+.member-note {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.fleet-link {
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10.5px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.fleet-link:hover {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+}
+
+.fleet-link.undo:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.fleet-tech {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.fleet-tech-body p {
+  max-width: 72ch;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+/* ── Capacity: the edge-runner roster ────────────────────────────────────── */
+
+/* Read-only evidence about the nodes above it, collapsed by default: the
+   platform read is paid only when the disclosure is opened. See runners.js. */
+.fleet-runners {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.fleet-runners-body {
+  margin-top: 8px;
+}
+
+.fleet-runners-line {
+  max-width: 72ch;
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.fleet-runners .fleet-members {
+  padding: 0;
+  border-top: 0;
+  background: transparent;
+}
+
+/* ── Capacity: the apply bar ─────────────────────────────────────────────── */
+
+/* Nothing is applied from a control. The staged changes collect here, priced
+   and worded by the server, and this bar is the only way to run them. */
+.fleet-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 9;
+  margin: 0 -2px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 11px 11px 0 0;
+  box-shadow: 0 -10px 30px -18px rgba(6, 10, 18, .5);
+  transform: translateY(110%);
+  transition: transform .25s cubic-bezier(.22, 1, .36, 1);
+}
+
+.fleet-bar.show {
+  transform: none;
+}
+
+.fleet-bar-in {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 12px 16px 14px;
+}
+
+.fleet-bar-list {
+  flex: 1;
+  min-width: 260px;
+}
+
+.fleet-bar-list h4 {
+  margin: 0 0 6px;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.fleet-bar-list ul {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fleet-bar-list li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11.5px;
+}
+
+.fleet-bar-note {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.fleet-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fleet-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: 0 0 auto;
+  transform: translateY(-1px);
+}
+
+.fleet-dot.remove {
+  background: var(--warning);
+}
+
+.fleet-confirm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fleet-confirm-list li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+}
+
+/* One line per step of the running batch, in the server's order. */
+.fleet-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 13px 16px 15px;
+}
+
+.fleet-pstep {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.fleet-pstep.active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.fleet-pstep.done {
+  color: var(--success);
+}
+
+.fleet-pstep.failed {
+  color: var(--danger);
+}
+
+.fleet-tick {
+  display: grid;
+  place-items: center;
+  width: 13px;
+  flex: 0 0 auto;
+  font-size: 10px;
+}
+
+.fleet-phase {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 400;
+}
+
+/* ── Capacity: outbound addresses ────────────────────────────────────────── */
+
+/* The allowlist an operator came here to copy. It sits above the switch
+   because it is the answer; the switch is what changes it. */
+.egress-allowlist {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 13px 16px 0;
+}
+
+.egress-ips {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.egress-warn {
+  font-size: 10px;
+  color: var(--warning);
+}
+
+.egress-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* One control for both directions: what it says is the state it is IN, and
+   clicking it opens the confirmation for the move it would make. */
+.egress-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 34px;
+  padding: 0 12px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.egress-switch:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+
+.egress-switch:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.egress-track {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  transition: background .15s ease;
+}
+
+.egress-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform .15s ease, background .15s ease;
+}
+
+.egress-switch.on .egress-track {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+.egress-switch.on .egress-knob {
+  background: var(--accent);
+  transform: translateX(16px);
+}
+
+.egress-state {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* The last refusal, with a way to clear it once it has been read. */
+.egress-outcome {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.egress-outcome .fleet-blocked {
+  padding-right: 0;
+}
+
+/* ── Metrics ─────────────────────────────────────────────────────────────── */
+
+.metrics-body {
+  display: grid;
+  gap: 14px;
+}
+
+.metrics-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.metrics-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: .8rem;
+}
+
+.metrics-chart-slot {
+  min-height: 12rem;
+}
+
+.metrics-chart {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+}
+
+.metrics-chart-frame {
+  overflow-x: auto;
+}
+
+.metrics-chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-width: 22rem;
+  touch-action: pan-y;
+}
+
+.metrics-gridline {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.metrics-guide {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.metrics-line {
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.metrics-axis-label {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.metrics-chart-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: .78rem;
+}
+
+.metrics-readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-height: 1.2rem;
+  color: var(--muted);
+  font-size: .78rem;
+}
+
+.metrics-readout-at {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.metrics-readout-item,
+.metrics-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.metrics-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: .8rem;
+}
+
+.metrics-legend-value {
+  color: var(--muted);
+}
+
+.metrics-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+.metrics-resources {
+  display: grid;
+  gap: 14px;
+}
+
+.metrics-resources .metrics-pick {
+  width: auto;
+  margin: 0;
+}
+
+/* ── Maintenance ─────────────────────────────────────────────────────────── */
+
+.maintenance-body {
+  display: grid;
+  gap: 14px;
+}
+
+.maintenance-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: .8rem;
+}
+
+.maintenance-arrow {
+  color: var(--muted);
+}
+
+.maintenance-windows {
+  display: grid;
+  gap: 4px;
+  margin: 4px 0 14px;
+}
+
+.maintenance-window {
+  align-items: flex-start;
+  margin: 0;
+}
+
+.maintenance-window span {
+  display: grid;
+  gap: 2px;
+}
+
+.maintenance-window small {
+  color: var(--muted);
+}
+
+/* The before/after pair every upgrade confirmation states. */
+.details {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin: 0 0 12px;
+}
+
+.details dt {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.details dd {
+  margin: 2px 0;
+  font-size: 11px;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 700px) {
+  .fleet-controls {
+    gap: 12px;
+  }
+
+  .metrics-controls .toolbar-select {
+    flex: 1 1 45%;
+  }
+
+  .member .chip {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fleet-bar {
+    transition: none;
+  }
+}

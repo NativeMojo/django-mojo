@@ -164,6 +164,22 @@ def test_private_asset_manifest_is_exact(opts):
                   "assets/features/people/../platform/page.js", "/etc/passwd"):
         assert admin_assets.asset_path(value) is None, value
 
+    # The v2 portal is a SECOND exact manifest reached through the same asset
+    # route under a "v2/" prefix. It is proven at import time like v1's, and
+    # the prefix must not become a way around either manifest.
+    assert admin_assets.load_manifest(
+        admin_assets.ROOT_V2,
+        admin_assets.V2_FEATURES) == admin_assets.PRIVATE_ASSETS_V2
+    assert "assets/features/home/feature.js" in admin_assets.PRIVATE_ASSETS_V2
+    assert admin_assets.asset_path("v2/assets/features/home/feature.js").is_file()
+    for value in ("v2/manifest.json", "v2/assets/pages.js", "v2/../memory.md",
+                  "v2/assets/features/home/../apps/page.js",
+                  # A v1-only asset is not reachable through the v2 prefix, and
+                  # a v2-only asset is not reachable without it.
+                  "v2/assets/features/people/feature.js",
+                  "assets/features/home/feature.js"):
+        assert admin_assets.asset_path(value) is None, value
+
 
 # ── INFRASTRUCTURE_MODE ─────────────────────────────────────────────────────
 

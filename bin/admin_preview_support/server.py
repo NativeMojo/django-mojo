@@ -22,6 +22,7 @@ from .features import dashboard
 
 
 ROOT = Path(__file__).resolve().parents[2] / "mojo/apps/account/admin_portal"
+ROOT_V2 = Path(__file__).resolve().parents[2] / "mojo/apps/account/admin_portal_v2"
 HOST = "127.0.0.1"
 PREVIEW_COOKIE = "mojo_admin_preview"
 MAX_REQUEST_BODY = 2 * 1024 * 1024
@@ -144,6 +145,10 @@ CREDENTIALS = [
     {"id": 31, "name": "GoDaddy production", "provider": "godaddy", "is_active": True, "verified": True, "verified_at": "2026-08-08T19:00:00Z", "modified": "2026-08-08T19:00:00Z", "domain_count": 1, "api_key_masked": "********7F2A", "group": {"id": 9, "name": "Web Operations"}},
 ]
 RECORDS = [
+    # A real zone always carries its own delegation records at the apex. They
+    # are here so the DNS editor's apex NS/SOA refusal has something to refuse.
+    {"type": "NS", "name": "nativemojo.com", "record_values": ["ns-1.awsdns-00.org.", "ns-2.awsdns-11.co.uk."], "ttl": 172800},
+    {"type": "SOA", "name": "nativemojo.com", "record_values": ["ns-1.awsdns-00.org. awsdns-hostmaster.amazon.com. 1 7200 900 1209600 86400"], "ttl": 900},
     {"type": "A", "name": "nativemojo.com", "record_values": ["203.0.113.42"], "ttl": 300},
     {"type": "CNAME", "name": "www.nativemojo.com", "record_values": ["nativemojo.com"], "ttl": 300},
     {"type": "MX", "name": "nativemojo.com", "record_values": ["10 inbound-smtp.us-west-2.amazonaws.com"], "ttl": 600},
@@ -539,14 +544,29 @@ class PreviewHandler(BaseHTTPRequestHandler):
         except PreviewProxyError as error:
             return self._send({"error": str(error)}, status=403)
 
+    @staticmethod
+    def _admin_target(path):
+        """Map one request path to a portal root and a file inside it.
+
+        Admin v2 is served from its own package under `/v2/` (and `/admin/v2/`
+        in live-QA mode), exactly like production serves it beside v1. Every
+        other path stays v1's, unchanged.
+        """
+        for prefix in ("/admin/v2", "/v2"):
+            if path == prefix or path == prefix + "/":
+                return ROOT_V2 / "index.html", ROOT_V2
+            if path.startswith(prefix + "/"):
+                relative = path[len(prefix) + 1:]
+                return (ROOT_V2 / relative).resolve(), ROOT_V2
+        if path in ("/", "/admin", "/admin/"):
+            return ROOT / "index.html", ROOT
+        relative = path.removeprefix("/admin/").lstrip("/")
+        return (ROOT / relative).resolve(), ROOT
+
     def _serve_admin(self, parsed):
-        if parsed.path in ("/", "/admin", "/admin/"):
-            target = ROOT / "index.html"
-        else:
-            relative = parsed.path.removeprefix("/admin/").lstrip("/")
-            target = (ROOT / relative).resolve()
-            if ROOT.resolve() not in target.parents:
-                return self._send("Not found", "text/plain", 404)
+        target, root = self._admin_target(parsed.path)
+        if target != root / "index.html" and root.resolve() not in target.parents:
+            return self._send("Not found", "text/plain", 404)
         if not target.is_file():
             return self._send("Not found", "text/plain", 404)
         headers = None
@@ -695,9 +715,17 @@ class PreviewHandler(BaseHTTPRequestHandler):
             return self._send({"webapp": 42, "secret_name": "MOJO_DEPLOY_KEY", "status": self._key_status()})
         if path == "/api/edge/webapp/onboarding/options":
             new_intent = parse_qs(parsed.query).get("group_intent") == ["new"]
+            # A brand-new workspace owns no domain yet, so name-first creation
+            # cannot apply to it — the wizard's own not-ready panel is the right
+            # answer there. An existing workspace resolves the apps domain, which
+            # is what the one-input name step needs to preview a hostname.
             return self._send({"schema_version": 1, "buckets": ["mojo-releases"],
                                "environments": ["production", "staging", "preview", "development"],
                                "cname_target": "edge.nativemojo.com",
+                               "apps_domain": None if new_intent else {
+                                   "id": 11, "name": "nativemojo.com", "provider": "route53"},
+                               "apps_domain_error": ("This workspace has no domain managed here yet."
+                                                     if new_intent else None),
                                "group_intent": "new" if new_intent else "existing",
                                "github_connected": False if new_intent else True,
                                "limits": {"attempts": 8, "lease_seconds": 90}})
@@ -716,7 +744,9 @@ class PreviewHandler(BaseHTTPRequestHandler):
                                   {"Location": "/admin/"})
             if parsed.path == "/__preview__/context":
                 return self._serve_preview_context()
-            if parsed.path in ("/admin", "/admin/") or parsed.path.startswith("/admin/assets/"):
+            if (parsed.path in ("/admin", "/admin/", "/admin/v2", "/admin/v2/")
+                    or parsed.path.startswith("/admin/assets/")
+                    or parsed.path.startswith("/admin/v2/assets/")):
                 return self._serve_admin(parsed)
             return self._proxy()
         if parsed.path == "/__preview__/events":
@@ -946,7 +976,12 @@ def main():
     parser.add_argument("--metrics-state", choices=("live", "empty", "unconfigured", "denied", "partial"), default="live")
     parser.add_argument("--maintenance-state", choices=("findings", "denied", "in_flight", "stalled", "unavailable", "framework_pinned", "framework_none", "clear"), default="findings")
     parser.add_argument("--deployments-state", choices=("mixed", "converged", "failed", "empty"), default="mixed")
-    parser.add_argument("--capacity-state", choices=("healthy", "single_node", "adding", "denied", "no_reader", "node_id_pinned", "external_mode"), default="healthy")
+    parser.add_argument("--capacity-state", choices=("healthy", "single_node", "adding", "denied", "no_reader", "node_id_pinned", "external_mode", "stable_ips_off", "stable_ips_partial", "egress_unknown", "balancer_less", "transitioning"), default="healthy")
+    # The messaging fixtures have always carried these scenarios; they were
+    # reachable only through the gallery defaults until the v2 Settings
+    # sub-pages needed to be QA'd against each one.
+    parser.add_argument("--sms-state", choices=("configured", "unset", "test_mode", "verify_failed", "not_installed"), default="configured")
+    parser.add_argument("--email-state", choices=("configured", "unset", "conflict"), default="configured")
     parser.add_argument("--assistant-state", choices=("configured", "unset", "fallback", "verify_failed", "disabled"), default="configured")
     parser.add_argument("--assistant-mcp-state", choices=("off", "reachable", "unreachable", "connected"), default="connected")
     parser.add_argument("--infrastructure-mode", choices=("managed", "external"), default="managed")
@@ -976,6 +1011,8 @@ def main():
        maintenance_state=args.maintenance_state,
        deployments_state=args.deployments_state,
        capacity_state=args.capacity_state,
+       sms_state=args.sms_state,
+       email_state=args.email_state,
        assistant_state=args.assistant_state,
        assistant_mcp_state=args.assistant_mcp_state,
        infrastructure_mode=args.infrastructure_mode)
@@ -988,6 +1025,7 @@ def main():
         print("Password authentication is supported; external OAuth callbacks are not bridged.", flush=True)
     else:
         print(f"Admin visual fixture ({args.key_state} key): http://{HOST}:{args.port}/", flush=True)
+        print(f"Admin v2: http://{HOST}:{args.port}/v2/", flush=True)
     try:
         ThreadingHTTPServer((HOST, args.port), PreviewHandler).serve_forever()
     except KeyboardInterrupt:

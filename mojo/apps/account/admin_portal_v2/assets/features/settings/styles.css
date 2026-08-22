@@ -1,0 +1,132 @@
+/* Settings, and the two integration sub-pages it owns.
+   The shared row grid in components/rows.css is untouched; the name column is
+   widened here because settings labels are sentences-worth of noun, not
+   service names. */
+.settings-page .status-row{grid-template-columns:7px 170px minmax(0,1fr) auto}
+.settings-page .status-row.is-linked{cursor:pointer}
+.settings-page .status-row.is-linked:hover{background:var(--surface-2)}
+.settings-page .status-row.is-linked:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.settings-page .row-link.muted{color:var(--muted)}
+/* A single-column grid sizes its column to content unless told otherwise, so
+   the non-wrapping chip strip would otherwise widen the whole page past the
+   viewport and take every row with it. */
+.settings-page,.settings-list,.settings-page .row-section,.settings-page .row-list{grid-template-columns:minmax(0,1fr)}
+.settings-list{display:grid;gap:28px}
+.settings-categories{min-width:0}
+.settings-note{color:var(--muted);font-size:11px}
+p.settings-note{margin:0}
+.settings-lead{margin:0;font-size:14px;overflow-wrap:anywhere}
+.settings-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.settings-toolbar .search{background:var(--surface);min-height:34px}
+.settings-categories{display:flex;gap:6px;flex-wrap:wrap}
+.settings-categories button{padding:5px 9px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--muted);cursor:pointer;font-size:10px}
+.settings-categories button.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:700}
+.settings-guidance{padding:8px;border-radius:7px;background:var(--surface-2);color:var(--muted);font-size:11px;overflow-wrap:anywhere}
+.settings-success{padding:9px 11px;border:1px solid color-mix(in srgb,var(--success) 30%,var(--line));border-radius:8px;background:color-mix(in srgb,var(--success) 8%,var(--surface));color:var(--success);font-size:11px;font-weight:700}
+.settings-empty{padding:30px;color:var(--muted);text-align:center}
+
+/* One topic per panel: a form, its own errors, and the technical detail the
+   list no longer carries. */
+.settings-panel{max-width:720px;gap:12px}
+.settings-wide{grid-column:1/-1}
+.settings-picker{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:0 9px}
+.settings-picker .check-field span{white-space:nowrap}
+.settings-secret-slot{display:grid;gap:8px}
+.settings-secret-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
+.settings-secret-state{min-width:0;overflow-wrap:anywhere;font-size:12px;font-weight:600}
+.settings-secret-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.settings-field-error{color:var(--danger);font-size:11px}
+.settings-field-error:empty{display:none}
+.settings-result{color:var(--success);font-size:11px;font-weight:700}
+.settings-result:empty{display:none}
+.settings-owner-link{display:inline-flex;align-items:baseline;gap:5px;flex-wrap:wrap;justify-content:flex-end}
+.settings-footer{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:6px}
+.settings-technical{margin-top:12px;padding-top:9px;border-top:1px solid var(--line)}
+.settings-details{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:10px 0 0}
+.settings-details div{min-width:0}
+.settings-details dt{color:var(--muted);font-size:9px}
+.settings-details dd{margin:2px 0;overflow-wrap:anywhere;font-size:10px}
+.settings-methods{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 9px;margin:0 0 13px;padding:12px;border:1px solid var(--line);border-radius:8px}
+.settings-methods legend{font-size:11px;font-weight:700}
+.settings-methods .field{grid-column:1/-1}
+.settings-token-editor{display:grid;gap:7px}
+.settings-token-list{display:flex;gap:5px;flex-wrap:wrap;min-height:24px}
+.settings-token{display:inline-flex;align-items:center;gap:4px;max-width:100%;padding:3px 5px 3px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface-2);font-size:10px}
+.settings-token span{overflow-wrap:anywhere}
+.settings-token button{display:grid;place-items:center;width:18px;height:18px;padding:0;border:0;border-radius:50%;background:transparent;cursor:pointer}
+.settings-token-add{display:flex;gap:6px}
+.settings-token-add input{min-width:0}
+.settings-token-add .button{flex:0 0 auto}
+
+/* The two integration sub-pages. Same back-pill-above-the-header shape every
+   sub-page in this portal wears. */
+.settings-sub-page{display:grid;gap:12px;grid-template-columns:minmax(0,1fr)}
+.settings-sub-page .page-header{margin:0}
+
+/* Text messages */
+.sms-page .sms-body{display:flex;flex-direction:column;gap:14px}
+.sms-note{margin:6px 0 0;font-size:10px;color:var(--muted)}
+.sms-note.warning{color:var(--warning)}
+.sms-actions{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap}
+.sms-actions input{flex:0 1 190px;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:var(--surface-2);font-size:12px}
+.sms-results{min-height:16px}
+.sms-result{margin:0;font-size:11px}
+.sms-result-ok{color:var(--success)}
+.sms-result-warn{color:var(--warning)}
+.sms-result-danger{color:var(--danger)}
+.sms-editor{padding:14px;border:1px solid var(--line);border-radius:11px;background:var(--surface)}
+.sms-editor h2{margin:0 0 4px;font-size:14px}
+.sms-editor .sms-note{margin-bottom:12px}
+
+/* Email */
+.email-page .email-body{display:flex;flex-direction:column;gap:14px}
+.email-note{margin:6px 0 0;font-size:10px;color:var(--muted)}
+.email-note.warning{color:var(--warning)}
+.email-results{min-height:16px}
+.email-result{margin:0;font-size:11px}
+.email-result-ok{color:var(--success)}
+.email-result-danger{color:var(--danger)}
+/* A mailbox address is longer than a service name, so the name column carries
+   one. The make-default control is appended after the row's own three cells,
+   so it is placed deliberately instead of landing back under the dot. */
+.email-page .status-row{grid-template-columns:7px 190px minmax(0,1fr) auto}
+.email-default-control{display:inline-flex;gap:6px;align-items:center}
+.email-page .status-row>.email-default-control{grid-column:2/-1;justify-self:end;margin-top:4px}
+.email-default-control .button{white-space:nowrap}
+.email-test{padding:14px;border:1px solid var(--line);border-radius:11px;background:var(--surface)}
+.email-test h2{margin:0 0 4px;font-size:14px}
+.email-test .email-note{margin-bottom:12px}
+.email-domain-detail{display:flex;flex-direction:column;gap:10px}
+.email-audit{min-height:20px}
+.email-check{margin:2px 0;font-size:11px}
+.email-check-ok{color:var(--success)}
+.email-check-warn{color:var(--warning)}
+.email-check-danger{color:var(--danger)}
+.email-recommendations{margin:6px 0 0;padding-left:16px;font-size:11px}
+.email-recommendations p{margin:2px 0 6px}
+.email-technical{margin-top:8px}
+.email-technical pre{max-height:240px;overflow:auto}
+
+/* The audit modal's definition list and the raw audit block: v1 carries both
+   in its shared stylesheet, v2's foundation does not, so they live with the one
+   feature that uses them. */
+.email-domain-detail .details{display:grid;grid-template-columns:1fr 1fr;margin:0}
+.email-domain-detail .details dt{color:var(--muted);font-size:9px}
+.email-domain-detail .details dd{margin:2px 0;font-size:11px}
+.evidence-json{margin:8px 0 0;padding:9px;border-radius:7px;background:var(--surface-2);color:var(--text);font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+.email-recommendations .small{font-size:10px}
+
+/* Security posture: the read-only platform evidence behind the Security &
+   operations row. One line per control, the dot carrying the on/off state the
+   collector reported — nothing here is derived. See posture.js. */
+.settings-posture{margin-top:14px}
+.settings-posture-head{margin:0;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.settings-posture-list{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px}
+.settings-posture-list li{display:flex;align-items:center;gap:8px;font-size:12px}
+.settings-posture-slot .settings-lead{margin-bottom:4px}
+
+@media(max-width:760px){.settings-toolbar,.settings-toolbar .search{width:100%}.settings-categories{width:100%;flex-wrap:nowrap;overflow-x:auto;padding-bottom:3px}.settings-categories button{white-space:nowrap}.settings-methods{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* A settings row's value is a sentence and its right side is a pointer, so on a
+   phone they stack instead of competing for the same line. */
+@media(max-width:600px){.settings-list{gap:22px}.settings-page .status-row{grid-template-columns:7px minmax(0,1fr);row-gap:2px}.settings-page .status-row>.row-name,.settings-page .status-row>.row-value,.settings-page .status-row>.row-right{grid-column:2}.settings-page .status-row>.row-right{justify-content:flex-start;text-align:left}.sms-actions input{flex:1 1 100%}}
+@media(max-width:390px){.settings-details{grid-template-columns:1fr}.settings-methods{grid-template-columns:1fr}.settings-secret-row{display:block}.settings-secret-actions{margin-top:9px;justify-content:space-between}.settings-token-add{align-items:stretch}.settings-token-add .button{min-width:52px}}

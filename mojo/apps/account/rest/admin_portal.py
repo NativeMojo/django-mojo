@@ -21,6 +21,12 @@ _ADMIN_ROOT = f"/{admin_portal_service.ADMIN_PATH}"
 _ADMIN_ROOT_SLASH = f"/{admin_portal_service.ADMIN_PATH}/"
 _ADMIN_ASSET = f"/{admin_portal_service.ADMIN_PATH}/<path:asset>"
 _ADMIN_SESSION = f"/{admin_portal_service.ADMIN_PATH}/_session"
+# Admin v2 ships beside v1 at <admin>/v2/, behind the same source-session gate
+# and the same cookie (which is path-scoped to /<admin>, so it already covers
+# this subtree). Its assets ride the existing <admin>/<path:asset> route:
+# admin_assets.asset_path understands the "v2/" prefix.
+_ADMIN_V2_ROOT = f"/{admin_portal_service.ADMIN_PATH}/v2"
+_ADMIN_V2_ROOT_SLASH = f"/{admin_portal_service.ADMIN_PATH}/v2/"
 
 
 def _headers(response, *, csp=None):
@@ -34,9 +40,10 @@ def _headers(response, *, csp=None):
     return response
 
 
-def _gate():
+def _gate(target=None):
     nonce = secrets.token_urlsafe(18)
-    auth_path = "/auth?redirect=" + quote(_ADMIN_ROOT_SLASH, safe="/")
+    target = target or _ADMIN_ROOT_SLASH
+    auth_path = "/auth?redirect=" + quote(target, safe="/")
     body = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Admin access</title><style nonce="{nonce}">html{{color-scheme:light dark}}body{{margin:0;font:14px system-ui;background:#f5f7fa;color:#172033}}main{{max-width:360px;margin:18vh auto;padding:28px;background:Canvas;border:1px solid #d9dee8;border-radius:14px}}h1{{font-size:20px;margin:0 0 8px}}p{{line-height:1.5;color:#667085}}button{{font:inherit;padding:9px 14px;border:0;border-radius:8px;background:#4665e8;color:white;cursor:pointer}}</style></head>
@@ -94,6 +101,22 @@ def on_admin_root(request):
     if admin_portal_service.validate(request) is None:
         return _gate()
     return _private_file("index.html")
+
+
+# Registration order is what makes this route reachable: absolute patterns are
+# appended to ABSOLUTE_URLPATTERNS as this module executes, and Django resolves
+# them in that order. Defined here — above on_admin_asset — the literal
+# "<admin>/v2/" is matched before the "<admin>/<path:asset>" catch-all that
+# would otherwise swallow it and return the v2 index as a raw asset.
+@md.GET(_ADMIN_V2_ROOT)
+@md.GET(_ADMIN_V2_ROOT_SLASH)
+@md.public_endpoint("Admin v2 source gate; private bytes require a source session")
+def on_admin_v2_root(request):
+    if request.path.rstrip("/") == _ADMIN_V2_ROOT and not request.path.endswith("/"):
+        return _headers(HttpResponseRedirect(_ADMIN_V2_ROOT_SLASH))
+    if admin_portal_service.validate(request) is None:
+        return _gate(_ADMIN_V2_ROOT_SLASH)
+    return _private_file("v2/index.html")
 
 
 @md.GET(_ADMIN_ASSET)

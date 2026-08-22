@@ -130,9 +130,13 @@ def _summary(handler):
             "domains": domains, "mailboxes": mailboxes}
 
 
+# The preview server wraps every dict body in {"status", "data"} on the way
+# out, and the portal's api() unwraps exactly that one layer. These handlers
+# used to wrap a second time, so every Email read reached the page as
+# {status, data} and the portal saw no domains at all — in v1 as well as v2.
 def get(handler, parsed):
     if parsed.path == SUMMARY_PATH:
-        return 200, {"status": True, "data": _summary(handler)}
+        return 200, _summary(handler)
     if parsed.path.startswith(AUDIT_PREFIX) and parsed.path.endswith("/audit"):
         try:
             pk = int(parsed.path[len(AUDIT_PREFIX):].split("/", 1)[0])
@@ -141,7 +145,7 @@ def get(handler, parsed):
         audit = _AUDITS.get(pk)
         if audit is None:
             return 404, {"error": "EmailDomain not found", "code": 404}
-        return 200, {"status": True, "data": deepcopy(audit)}
+        return 200, deepcopy(audit)
     return None
 
 
@@ -150,23 +154,23 @@ def post(handler, path, payload):
         from_email = str(payload.get("from_email") or "")
         to = str(payload.get("to") or "")
         if not from_email or not to:
-            return 200, {"status": True, "data": {
+            return 200, {
                 "sent": False, "error_code": "invalid_request",
                 "error": "Choose the mailbox to send from."
                 if not from_email else
-                "At least one 'to' recipient is required"}}
+                "At least one 'to' recipient is required"}
         failure = _TEST_FAILURES.get(from_email)
         if failure:
-            return 200, {"status": True, "data": {
-                "sent": False, "error_code": failure[0], "error": failure[1]}}
+            return 200, {
+                "sent": False, "error_code": failure[0], "error": failure[1]}
         if to.startswith("fail@"):
-            return 200, {"status": True, "data": {
+            return 200, {
                 "sent": True, "message_id": None, "status": "failed",
                 "status_reason": "MessageRejected: address is on the "
-                                 "suppression list"}}
-        return 200, {"status": True, "data": {
+                                 "suppression list"}
+        return 200, {
             "sent": True, "message_id": "preview-message-id",
-            "status": "sending", "status_reason": None}}
+            "status": "sending", "status_reason": None}
     if path == DEFAULT_PATH:
         try:
             pk = int(payload.get("mailbox"))
@@ -177,11 +181,11 @@ def post(handler, path, payload):
             return 404, {"error": "Mailbox not found", "code": 404}
         scope = payload.get("scope") or "system"
         handler.email_state = "configured"
-        return 200, {"status": True, "data": {
+        return 200, {
             "mailbox": pk, "email": box["email"], "scope": scope,
             "is_system_default": scope == "system",
             "is_domain_default": scope == "domain" or box["is_domain_default"],
-        }}
+        }
     return None
 
 

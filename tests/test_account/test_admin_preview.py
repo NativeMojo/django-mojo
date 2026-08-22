@@ -799,7 +799,7 @@ def test_email_preview_states(opts):
     feature.reset(Handler, {})
     code, payload = feature.get(Handler, urlparse("/api/aws/email/summary"))
     assert code == 200, f"the email summary fixture answered {code}"
-    report = payload["data"]
+    report = payload
     names = {row["name"] for row in report["domains"]}
     assert {"mojo.example", "sandbox.example", "inbound.example"} <= names, \
         f"the fixture lost a documented domain scenario: {names}"
@@ -813,9 +813,9 @@ def test_email_preview_states(opts):
         "the half-configured receiving scenario changed shape"
 
     code, payload = feature.get(Handler, urlparse("/api/aws/email/domain/2/audit"))
-    assert code == 200 and payload["data"]["audit_pass"] is False, \
+    assert code == 200 and payload["audit_pass"] is False, \
         "the sandbox domain's audit fixture no longer reports its finding"
-    assert payload["data"]["recommendations"], \
+    assert payload["recommendations"], \
         "the failing audit fixture carries no plain-words recommendation"
 
     for from_email, expected in (
@@ -826,19 +826,19 @@ def test_email_preview_states(opts):
         code, payload = feature.post(Handler, "/api/aws/email/test", {
             "from_email": from_email, "to": "you@example.org", "subject": "s"})
         assert code == 200, f"{expected}: the test-send fixture answered {code}"
-        assert payload["data"]["sent"] is False \
-            and payload["data"]["error_code"] == expected, \
-            f"{expected}: wrong structured error: {payload['data']!r}"
+        assert payload["sent"] is False \
+            and payload["error_code"] == expected, \
+            f"{expected}: wrong structured error: {payload!r}"
 
     code, payload = feature.post(Handler, "/api/aws/email/test", {
         "from_email": "support@mojo.example", "to": "fail@example.org",
         "subject": "s"})
-    assert code == 200 and payload["data"]["status"] == "failed", \
-        f"the SES-refusal scenario changed shape: {payload['data']!r}"
+    assert code == 200 and payload["status"] == "failed", \
+        f"the SES-refusal scenario changed shape: {payload!r}"
 
     code, payload = feature.post(Handler, "/api/aws/email/mailbox-default",
                                  {"mailbox": 13, "scope": "system"})
-    assert code == 200 and payload["data"]["is_system_default"] is True, \
+    assert code == 200 and payload["is_system_default"] is True, \
         f"the mailbox-default fixture refused a valid claim: {payload!r}"
 
 

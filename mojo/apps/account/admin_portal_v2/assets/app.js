@@ -1,0 +1,260 @@
+import {api, h, icon} from './core.js';
+import {clearBusy, closeAllOverlays, openModal} from './components/overlays.js';
+import {renderOpBanner} from './components/operations.js';
+import {decodeRouteState, routeHref} from './components/routes.js';
+import {loadingState} from './components/views.js';
+import {featureForRoute, installFeatureStyles, navigationFor} from './features/registry.js';
+
+const app = document.getElementById('app');
+let context = null; let content = null; let navigation = null; let title = null;
+let generation = 0; let controller = null; let dispose = null;
+let reauthClose = null; let opBannerDispose = null; let disposeAssistant = null;
+
+// v2's home route. decodeRouteState() falls back to v1's 'dashboard' for an
+// empty or malformed hash — that route does not exist here, so it lands on
+// HOME_ROUTE through the same "route not in this feature" path as any other
+// unknown route.
+const HOME_ROUTE = 'home';
+
+// v1 hashes operators have bookmarked or been sent. Each maps to the v2 route
+// that carries the same subject, and the query state rides along — so an old
+// `#/fleet` lands on Capacity and an old `#/routes?vhost=31` keeps its filter.
+// v1's Metrics used `tab` for the charted resource kind; v2's Infrastructure
+// uses `tab` for its own tabs, so that one value moves to `kind`. System Setup
+// is still the current Admin's page, so its alias leaves v2 for it.
+const LEGACY_ROUTES = {
+  dashboard: {route: 'home'},
+  'messaging-sms': {route: 'settings-sms'},
+  'messaging-email': {route: 'settings-email'},
+  metrics: {route: 'infrastructure', state: {tab: 'metrics'}, rename: {tab: 'kind'}},
+  maintenance: {route: 'infrastructure', state: {tab: 'maintenance'}},
+  fleet: {route: 'infrastructure', state: {tab: 'capacity'}},
+  vhosts: {route: 'apps-serving', state: {tab: 'vhosts'}},
+  routes: {route: 'apps-serving', state: {tab: 'routes'}},
+  upstreams: {route: 'apps-serving', state: {tab: 'upstreams'}},
+};
+
+// Rewrites a legacy hash in place (no history entry: Back still leaves the
+// portal the way the operator arrived). Returns true when the page must not
+// render because the hash has left v2 altogether.
+function resolveLegacyRoute() {
+  const requested = decodeRouteState();
+  if (requested.route === 'setup') {
+    location.assign(`${context.admin_path || '/admin/'}#/setup`);
+    return true;
+  }
+  const legacy = LEGACY_ROUTES[requested.route];
+  if (!legacy) return false;
+  const state = {...requested.state};
+  for (const [from, to] of Object.entries(legacy.rename || {})) {
+    if (state[from] != null && state[to] == null) { state[to] = state[from]; delete state[from]; }
+  }
+  history.replaceState({}, '', routeHref(legacy.route, {...state, ...(legacy.state || {})}));
+  return false;
+}
+
+function routeName() { return decodeRouteState().route; }
+
+function navigate(route, {replace = false, state = {}} = {}) {
+  const hash = routeHref(route, state);
+  if (location.hash === hash) { render().catch(showFatal); return; }
+  if (replace) { history.replaceState({}, '', hash); render().catch(showFatal); }
+  else location.hash = hash;
+}
+
+async function logout(path) {
+  await fetch(`${path}_session`, {method: 'DELETE'}).catch(() => {});
+  window.MojoAuth?.logout?.(); location.assign(path);
+}
+
+function setTheme(value) { localStorage.setItem('mojo-admin-theme', value); document.documentElement.dataset.theme = value; }
+function cycleTheme(button) {
+  const current = document.documentElement.dataset.theme;
+  const next = current === 'system' ? 'light' : current === 'light' ? 'dark' : 'system';
+  setTheme(next); button.setAttribute('aria-label', `Color theme: ${next}. Activate to change.`);
+}
+
+/**
+ * The one way down from a sub-page. Same shape on every screen: a pill above
+ * the page title carrying a chevron and the destination it returns to.
+ */
+export function backPill(label, route) {
+  return h('a', {class: 'back-pill', href: `#/${route}`}, icon('back'), h('span', {text: `Back to ${label}`}));
+}
+
+// Six destinations, one flat level, no section labels: v2's sidebar never
+// scrolls and never groups. A destination's dot mirrors the worst state inside
+// it, so no dot means genuinely nothing to do there.
+// Entries are grouped under section labels (Control plane / Messaging /
+// System) exactly as v1 groups them. An `external` entry is a real link into
+// the current Admin for a page v2 does not carry yet; it never reads as active
+// and it says where it goes.
+function refreshNavigation(route) {
+  const children = []; let section = null;
+  for (const item of navigationFor(context)) {
+    if (item.section && item.section !== section) {
+      section = item.section;
+      children.push(h('div', {class: `nav-label${children.length ? ' nav-space' : ''}`, text: section}));
+    }
+    const active = !item.external && (item.matches || [item.route]).includes(route);
+    children.push(h('a', {
+      href: item.external ? item.href : `#/${item.route}`,
+      class: `${active ? 'active' : ''}${item.external ? ' external' : ''}`.trim(),
+      title: item.external ? 'Opens the current Admin' : null,
+    }, icon(item.icon), h('span', {text: item.label}),
+    item.external ? h('span', {class: 'nav-ext', 'aria-hidden': 'true', text: '↗'}) : null,
+    item.badge ? h('span', {class: `nav-badge ${item.badgeTone || ''}`.trim(), 'aria-label': 'Needs attention'}) : null));
+  }
+  navigation.replaceChildren(...children);
+}
+
+// The sidebar footer names the installation and the framework build. The
+// hostname is the one identifier that is always right and costs nothing — the
+// bootstrap payload carries no site or brand name to use instead.
+function sidebarFooterText() {
+  return `${instanceName()} · django-mojo ${context.version}`;
+}
+
+function mountShell() {
+  navigation = h('nav', {class: 'nav'});
+  const sidebar = h('aside', {class: 'sidebar', 'aria-label': 'Admin navigation'},
+    h('div', {class: 'brand'}, h('img', {class: 'brand-mark', src: 'assets/mojo-logo.png', alt: ''}), h('div', {}, h('strong', {text: 'MOJO'}), h('small', {text: 'ADMIN'}))),
+    navigation, h('div', {class: 'sidebar-footer'}, h('span', {text: sidebarFooterText()})));
+  sidebar.addEventListener('click', (event) => { if (event.target.closest('a')) sidebar.classList.remove('open'); });
+  title = h('div', {class: 'topbar-title', text: 'Admin'});
+  content = h('div', {id: 'page-content', class: 'content'}, loadingState('Loading Admin'));
+  // The operation banner is global: it sits under the topbar on every page and
+  // is fed by the operation store, never by the page currently rendered.
+  const opBanner = h('div', {class: 'op-banner-host'});
+  opBannerDispose?.();
+  opBannerDispose = renderOpBanner(opBanner);
+  const theme = document.documentElement.dataset.theme;
+  const main = h('main', {class: 'main'}, h('header', {class: 'topbar'},
+    h('button', {class: 'mobile-menu', 'aria-label': 'Toggle navigation', 'aria-expanded': 'false', onclick: (event) => {
+      const open = sidebar.classList.toggle('open'); event.currentTarget.setAttribute('aria-expanded', String(open));
+    }}, '☰'), title,
+    h('div', {class: 'topbar-actions'},
+      h('button', {class: 'icon-button', 'aria-label': `Color theme: ${theme}. Activate to change.`, onclick: (event) => cycleTheme(event.currentTarget)}, icon('sun')),
+      h('div', {class: 'user-menu'}, h('span', {class: 'avatar small', text: (context.user.display_name || context.user.email || '?').slice(0, 2).toUpperCase()}), h('div', {}, h('strong', {text: context.user.display_name || context.user.email}), h('small', {text: context.user.is_superuser ? 'Superuser' : 'Administrator'}))),
+      h('button', {class: 'button ghost compact', onclick: () => logout(context.admin_path)}, 'Sign out'))), opBanner, content);
+  app.replaceChildren(sidebar, main);
+}
+
+// Every admin tab said "MOJO Admin", so a row of them was unreadable: you
+// could not tell which page, or which installation, any tab was showing.
+//
+// The instance comes from the hostname because it is the one identifier that
+// is always right and costs nothing — the bootstrap payload carries no site or
+// brand name to use instead. A leading "admin." is dropped: it is constant for
+// this portal, so it only eats the characters a truncated tab can least spare.
+function instanceName() {
+  const host = location.hostname || '';
+  return host.replace(/^admin\./, '') || 'admin';
+}
+
+function setDocumentTitle(pageTitle) {
+  // Page first: with several tabs open on one installation, the page is what
+  // tells them apart, and a browser truncates the end.
+  document.title = pageTitle ? `${pageTitle} · ${instanceName()}` : instanceName();
+}
+
+async function render() {
+  if (!context) return;
+  if (resolveLegacyRoute()) return;
+  const requestedRoute = routeName(); const feature = featureForRoute(requestedRoute, context);
+  const route = feature.routes.includes(requestedRoute) ? requestedRoute : HOME_ROUTE;
+  if (route !== requestedRoute) history.replaceState({}, '', routeHref(route));
+  const current = ++generation; controller?.abort();
+  const renderController = new AbortController(); controller = renderController;
+  if (typeof dispose === 'function') { try { dispose(); } finally { dispose = null; } }
+  closeAllOverlays(); refreshNavigation(route);
+  const pageTitle = feature.title(route, context);
+  title.textContent = pageTitle;
+  setDocumentTitle(pageTitle);
+  content.replaceChildren(loadingState(`Loading ${pageTitle}`));
+  const page = await feature.render({ctx: context, route, navigate, signal: renderController.signal});
+  if (!(page instanceof Node)) throw new Error(`Admin feature ${feature.id} must render exactly one Node`);
+  if (renderController.signal.aborted || current !== generation) { page.dispose?.(); return; }
+  dispose = typeof page.dispose === 'function' ? () => page.dispose() : null;
+  content.replaceChildren(page); content.querySelector('.page-header h1, h1')?.focus?.({preventScroll: true});
+}
+
+async function start() {
+  setTheme(localStorage.getItem('mojo-admin-theme') || 'system');
+  if (!window.MojoAuth) throw new Error('Authentication client unavailable');
+  window.MojoAuth.init({baseURL: location.origin});
+  context = await api('/api/account/admin/bootstrap');
+  installFeatureStyles(context); mountShell(); await render();
+  // The Assistant rides the same right-side dock it has in the current Admin:
+  // loaded only when the bootstrap says the caller may use it, after the shell
+  // exists so its launcher has a topbar to sit in.
+  if (context.features?.assistant?.enabled === true) {
+    const {install} = await import('./assistant/panel.js');
+    disposeAssistant = install({ctx: context, app}).dispose;
+  }
+}
+
+function showFatal(error) {
+  if (error?.code === 'fresh_auth_required') return;
+  controller?.abort(); dispose?.(); disposeAssistant?.(); disposeAssistant = null; closeAllOverlays();
+  const adminPath = `/${location.pathname.split('/').filter(Boolean)[0] || 'admin'}/`;
+  setDocumentTitle('Could not load');
+  app.replaceChildren(h('div', {class: 'fatal'}, icon('alert'), h('h1', {text: 'Admin could not load'}), h('p', {text: error.message}), h('a', {class: 'button primary', href: `/auth?redirect=${encodeURIComponent(adminPath)}`}, 'Sign in again')));
+}
+
+function showFreshAuth(event) {
+  const detail = event.detail || {};
+  if (typeof detail.resolve !== 'function' || typeof detail.reject !== 'function') return;
+  detail.handled = true; clearBusy();
+  if (reauthClose) return;
+  let settled = false;
+  const identity = context.user.username;
+  const message = h('div', {class: 'form-message', role: 'alert'});
+  const password = h('input', {type: 'password', autocomplete: 'current-password', required: true, autofocus: true});
+  const cancel = h('button', {class: 'button ghost', type: 'button'}, 'Cancel');
+  const passkey = window.MojoAuth.isPasskeySupported?.()
+    ? h('button', {class: 'button ghost', type: 'button'}, 'Use passkey') : null;
+  const confirm = h('button', {class: 'button primary', type: 'submit'}, 'Confirm');
+  const buttons = [cancel, passkey, confirm].filter(Boolean);
+  const finish = (error = null) => {
+    if (settled) return;
+    settled = true; reauthClose?.();
+    if (error) detail.reject(error); else detail.resolve();
+  };
+  const authenticate = async (action) => {
+    buttons.forEach((button) => { button.disabled = true; }); message.textContent = '';
+    try {
+      const result = await action();
+      if (result?.mfa_required || result?.requires_password_change) {
+        throw new Error('This account needs another sign-in step. Use a passkey, or sign out and sign in again.');
+      }
+      if (result?.user?.id != null && String(result.user.id) !== String(context.user.id)) {
+        window.MojoAuth.logout();
+        throw new Error('The confirmed account does not match this Admin session. Sign in again.');
+      }
+      finish();
+    } catch (error) {
+      message.textContent = window.MojoAuth.getError?.(error) || error.message || 'Could not confirm your identity.';
+      buttons.forEach((button) => { button.disabled = false; }); password.focus();
+    }
+  };
+  const form = h('form', {onsubmit: (submitEvent) => {
+    submitEvent.preventDefault();
+    authenticate(() => window.MojoAuth.login(context.user.username, password.value));
+  }},
+  h('p', {class: 'modal-copy', text: 'Your session is still active. Confirm your identity here before this protected change can continue.'}),
+  h('label', {class: 'field'}, h('span', {text: `Password for ${identity}`}), password),
+  message, h('div', {class: 'form-actions'}, ...buttons));
+  reauthClose = openModal({title: 'Recent authentication required', content: form,
+    dismissible: false, onClose: () => {
+      reauthClose = null;
+      if (!settled) { settled = true; detail.reject(detail.error); }
+    }});
+  cancel.addEventListener('click', () => finish(detail.error));
+  passkey?.addEventListener('click', () => authenticate(
+    () => window.MojoAuth.loginWithPasskey(context.user.username)));
+}
+
+window.addEventListener('hashchange', () => render().catch(showFatal));
+window.addEventListener('mojo-admin:fresh-auth', showFreshAuth);
+start().catch(showFatal);
