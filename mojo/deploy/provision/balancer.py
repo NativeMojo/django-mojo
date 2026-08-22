@@ -34,11 +34,14 @@ MUTABLE_TARGET_GROUP_FIELDS = ("HealthCheckProtocol", "HealthCheckPort",
                                "HealthyThresholdCount",
                                "UnhealthyThresholdCount", "Matcher")
 
-HEALTH_PATH = "/api/version"
+HEALTH_PATH = spec_module.HEALTH_PATH_DEFAULT
 
 
 def target_group_specs(spec, vpc_id):
     """The two groups, as the exact shape `CreateTargetGroup` takes."""
+    api_health_path = getattr(spec, "api_health_path", None) or HEALTH_PATH
+    certbot_health_path = (
+        getattr(spec, "certbot_health_path", None) or HEALTH_PATH)
     return {
         "api": {
             "Name": spec_module.names(spec)["api_target_group"],
@@ -48,7 +51,7 @@ def target_group_specs(spec, vpc_id):
             "TargetType": "instance",
             "HealthCheckProtocol": "HTTPS",
             "HealthCheckPort": "traffic-port",
-            "HealthCheckPath": HEALTH_PATH,
+            "HealthCheckPath": api_health_path,
             "HealthCheckIntervalSeconds": 30,
             "HealthyThresholdCount": 3,
             "UnhealthyThresholdCount": 3,
@@ -61,7 +64,7 @@ def target_group_specs(spec, vpc_id):
             "TargetType": "instance",
             "HealthCheckProtocol": "HTTP",
             "HealthCheckPort": "traffic-port",
-            "HealthCheckPath": HEALTH_PATH,
+            "HealthCheckPath": certbot_health_path,
             "HealthCheckIntervalSeconds": 30,
             "HealthyThresholdCount": 3,
             "UnhealthyThresholdCount": 3,

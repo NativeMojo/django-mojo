@@ -170,6 +170,14 @@ CACHE_GROUP_ID_MAX = 40
 # derived from the two slugs an operator chose.
 ELB_NAME_MAX = 32
 
+# ELBv2's CreateTargetGroup and ModifyTargetGroup APIs accept an absolute
+# health-check path from 1 through 1024 characters.  Managed environments keep
+# the framework's historical route; brownfield manifests may select an
+# application-owned readiness route at their explicit input seam.
+HEALTH_PATH_DEFAULT = "/api/version"
+HEALTH_PATH_MIN = 1
+HEALTH_PATH_MAX = 1024
+
 # CloudWatch Logs. One prefix per environment, three groups under it, and the
 # retention is stated here rather than left at "never expire" — an unbounded log
 # group is a bill that only ever goes up.
@@ -297,6 +305,8 @@ class Spec:
         self.nlb_name = None
         self.api_target_group_name = None
         self.certbot_target_group_name = None
+        self.api_health_path = None
+        self.certbot_health_path = None
 
         for key, value in overrides.items():
             if not hasattr(self, key):
