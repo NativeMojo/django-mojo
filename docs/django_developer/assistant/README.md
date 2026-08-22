@@ -424,7 +424,7 @@ bound to the originating browser Origin.
 
 | Tool | Permission | Mutates | Description |
 |---|---|---|---|
-| `browse_url` | `view_admin` | No | Fetch a web page and return clean readable text. Supports an optional CSS selector to narrow content to a specific element. Only `http`/`https` URLs are allowed; private/internal IPs are blocked (SSRF protection). Content is truncated to `LLM_BROWSE_MAX_LENGTH` chars. |
+| `browse_url` | `view_admin` | No | Fetch a web page and return clean readable text. Supports an optional CSS selector to narrow content to a specific element. Only `http`/`https` URLs are allowed; private/internal IPs are blocked (SSRF protection, via `mojo.helpers.safe_fetch`). Content is truncated to `LLM_BROWSE_MAX_LENGTH` chars. |
 
 ### Docs Domain (`view_admin`)
 

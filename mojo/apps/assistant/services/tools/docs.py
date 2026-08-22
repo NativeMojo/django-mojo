@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 import requests
 
 from mojo.apps.assistant import tool
+from mojo.helpers.safe_fetch import is_private_hostname
 from mojo.helpers.settings import settings
 
 DEFAULT_BASE_URL = "https://raw.githubusercontent.com/NativeMojo/django-mojo/refs/heads/main/docs/"
@@ -21,9 +22,7 @@ def _validate_base_url(base_url):
     parsed = urlparse(base_url)
     if parsed.scheme != "https":
         return False
-    # Import SSRF guard from web module
-    from mojo.apps.assistant.services.tools.web import _is_private_hostname
-    if parsed.hostname and _is_private_hostname(parsed.hostname):
+    if parsed.hostname and is_private_hostname(parsed.hostname):
         return False
     return True
 
