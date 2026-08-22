@@ -361,7 +361,9 @@ def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
     from mojo.apps.dnsman.services import delegation
     from mojo.apps.dnsman.services import dns
     from mojo.apps.dnsman.services import record_reservations
-    from mojo.helpers import acme
+    # Aliased: the module must not shadow this function's `acme`
+    # loader seam (maestro item #2558).
+    from mojo.helpers import acme as acme_helpers
 
     with transaction.atomic():
         claimed = Certificate.objects.select_for_update().select_related(
@@ -467,13 +469,13 @@ def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
 
         # finalize needs `ready`, not `valid` — polling to `valid` here would
         # wait forever for a certificate no one has asked for yet.
-        order = client.poll_order(order.get("url"), until=acme.ORDER_READY)
+        order = client.poll_order(order.get("url"), until=acme_helpers.ORDER_READY)
         if order.get("status") == "invalid":
             raise me.ValueException(
                 f"The CA could not validate the order: {_order_error(order)}")
 
-        key = acme.generate_key()
-        client.finalize(order, acme.make_csr(key, names))
+        key = acme_helpers.generate_key()
+        client.finalize(order, acme_helpers.make_csr(key, names))
 
         order = client.poll_order(order.get("url"))
         if order.get("status") != "valid":
@@ -490,7 +492,7 @@ def _issue_locked(certificate, acme=None, sync=None, wait_for_txt=None):
 
         certificate.cert_pem = cert_pem
         certificate.chain_pem = chain_pem
-        certificate.set_private_key_pem(acme.dump_key(key))
+        certificate.set_private_key_pem(acme_helpers.dump_key(key))
         certificate.issuer = (details.issuer or "")[:255] or None
         certificate.serial = details.serial
         certificate.not_before = details.not_before

@@ -1,5 +1,6 @@
 TESTIT = {
     "default_core": True,
+    "cold_budget": 6,
     "requires_apps": ["mojo.apps.account"],
     # These tests patch module-level key accessors (token_manager.crypto_keys,
     # assess.crypto_keys). Test modules run as threads in ONE process, and
