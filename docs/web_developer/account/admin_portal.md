@@ -150,7 +150,9 @@ Take-offline handles either supported serving shape (`site` or `site_api`) and,
 like delete, removes every alias address in the same transaction — an app that
 is offline must not still answer on a customer's own domain. A malformed link
 to a non-site vhost or an invalid alias kind is refused without unlinking or
-deleting anything. `manage_webapp` on the app is not enough to attach an
+deleting anything. Custom path routes are retained as app desired state and
+rematerialized when the primary address is restored; hosted-auth routes remain
+derived. `manage_webapp` on the app is not enough to attach an
 address under a **parent** workspace's domain: writing that record or
 requesting its certificate needs manage authority in the workspace that owns
 the domain.

@@ -279,6 +279,11 @@ def test_addressless_webapp_row_reaches_management(opts):
     assert "'Finish setup'" in window and "changeAddressFor(ctx, app, reload)" in window \
         and "deleteWebApp(app, reload)" in window, \
         "the addressless row lost its inline finish-setup and delete actions"
+    assert "current_release: full.current_release" in page, \
+        "the repair wizard cannot distinguish an existing deploy from a new app"
+    assert "applying its current deploy across your fleet" in (
+        root / "mojo/apps/account/admin_portal/assets/features/webapps/wizard.js").read_text(), \
+        "address restore still claims an already-deployed app is showing a welcome page"
     # Setup stays one click away: the Overview tab offers Set address for an
     # addressless app, so reaching the app page doesn't hide the common action.
     overview = page[page.index("section === 'overview'"):page.index("section === 'deploys'")]
@@ -736,6 +741,14 @@ def test_webapp_serving_tab_contract(opts):
         "Change address is still filed under Danger beside Delete app"
     assert "Take offline" in danger and "Delete this app" in danger, \
         "the Danger tab lost one of its destructive actions"
+    assert "].filter(Boolean))" in danger, \
+        "an offline app still passes a null child to replaceChildren and renders it as text"
+
+    detail = page[page.index("async function webappDetailPage"):page.index("function resumeBanner")]
+    assert "const standing = !address.hostname" in detail, \
+        "the detail header still claims a release is serving before checking for an address"
+    assert "not reachable — no address is configured" in detail, \
+        "the offline detail header does not explain that the app has no address"
 
 
 @th.django_unit_test("WebApp list rows state their health plainly and the copy carries no plumbing words")

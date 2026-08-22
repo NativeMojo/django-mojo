@@ -20,17 +20,19 @@
 #      environment — AFTER bootstrap, precisely so it overwrites bootstrap's
 #      unpinned install. Reversed, the unpinned install wins and the node runs
 #      a different framework release than the one that built it.
-#   4. ec2_deploy.sh — the project: nginx vhosts, systemd units, var/ layout.
+#   4. render the JUST-INSTALLED framework's cron/systemd templates into
+#      var/deploy. A fresh node has no previous post-deploy render to inherit.
+#   5. ec2_deploy.sh — the project: nginx vhosts, systemd units, var/ layout.
 #      Note it does an unconditional `cp -f` of the shipped nginx config, so
 #      anything written into /etc/nginx before this point is lost here.
-#   5. var/profile = "prod" — BEFORE config_sync. settings/helper.py defaults
+#   6. var/profile = "prod" — BEFORE config_sync. settings/helper.py defaults
 #      to `local` unless VAR_ROOT/profile exists, so a node without this boots
 #      the local profile and silently ignores every endpoint just provisioned.
-#   6. the CloudWatch agent — its config comes down from the config bucket
+#   7. the CloudWatch agent — its config comes down from the config bucket
 #      already substituted with this environment's three log-group names.
 #      A failed install WARNS and continues: logging is not worth failing a
 #      bootstrap over, and a re-run picks it up.
-#   7. config_sync LAST. It publishes var/django.conf and, because
+#   8. config_sync LAST. It publishes var/django.conf and, because
 #      CONFIG_SYNC_RESTART=true, restarts mojo-asgi — which must not happen
 #      until var/profile exists, or the app comes up on settings.local.
 #
@@ -49,6 +51,7 @@ STAGE1_LOG="${STAGE1_LOG:-/var/log/mojo-stage1.log}"
 CW_AGENT_ETC="${CW_AGENT_ETC:-/opt/aws/amazon-cloudwatch-agent/etc}"
 APP_USER="${APP_USER:-ec2-user}"
 WEB_USER="${WEB_USER:-www}"
+ASGI_WORKERS="${ASGI_WORKERS:-4}"
 
 DJANGO_MOJO_VERSION="@DJANGO_MOJO_VERSION@"
 
@@ -149,12 +152,28 @@ until pip install "${pin_args[@]}" --upgrade "django-mojo==${DJANGO_MOJO_VERSION
     sleep "$DJANGO_MOJO_RETRY_DELAY"
 done
 
-# ── 4. the project ───────────────────────────────────────────────────────────
+# ── 4. the installed node contract ───────────────────────────────────────────
+
+# ec2_deploy.sh converges systemd from this rendered contract. Render with the
+# JUST-PINNED package rather than relying on a project checkout to carry copies
+# of framework units: that is what lets a fresh node receive a packaging fix
+# from the same django-mojo version that provisioned it.
+
+log "rendering the installed node contract into ${PROJ_PATH}/var/deploy"
+python3 -m mojo.deploy render --dest "${PROJ_PATH}/var/deploy" \
+    --project-path "$PROJ_PATH" --app-user "$APP_USER" \
+    --web-user "$WEB_USER" --workers "$ASGI_WORKERS" || \
+    die "the installed django-mojo templates could not be rendered"
+
+[ -f "${PROJ_PATH}/var/deploy/systemd/mojo-asgi.service" ] || \
+    die "the rendered node contract has no mojo-asgi.service"
+
+# ── 5. the project ───────────────────────────────────────────────────────────
 
 log "running ec2_deploy.sh (nginx vhosts, systemd units, var layout)"
 bash "${PROJ_PATH}/aws/ec2_deploy.sh"
 
-# ── 5. the profile ───────────────────────────────────────────────────────────
+# ── 6. the profile ───────────────────────────────────────────────────────────
 # Written after ec2_deploy.sh (its var/ ownership sweep would otherwise be the
 # last word) and before config_sync (whose restart would otherwise boot the
 # app on settings.local).
@@ -164,7 +183,7 @@ echo prod > "${PROJ_PATH}/var/profile"
 chown "${APP_USER}:${WEB_USER}" "${PROJ_PATH}/var/profile"
 chmod 640 "${PROJ_PATH}/var/profile"
 
-# ── 6. logs off the box ──────────────────────────────────────────────────────
+# ── 7. logs off the box ──────────────────────────────────────────────────────
 # The log groups, their retention and the node role's scoped logs:* grant are
 # all created by the provisioning run (provision/observability.py and
 # provision/identity.py). This only points the agent at them.
@@ -192,7 +211,7 @@ if command -v amazon-cloudwatch-agent-ctl >/dev/null 2>&1; then
     fi
 fi
 
-# ── 7. the application config ────────────────────────────────────────────────
+# ── 8. the application config ────────────────────────────────────────────────
 # LAST. This installs var/django.conf from the config bucket and, with
 # CONFIG_SYNC_RESTART=true, restarts mojo-asgi — which is only correct once
 # var/profile above says prod.

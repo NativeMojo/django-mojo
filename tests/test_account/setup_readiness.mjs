@@ -47,3 +47,28 @@ test('a scalar check cannot crash the readiness rendering pipeline', () => {
   assert.deepEqual(renderStatuses(report), ['WARN', 'WARN']);
   assert.equal(report.truncated, true);
 });
+
+test('bounded reports preserve authoritative totals and omitted severity', () => {
+  const report = operatorReport({
+    overall: 'fail', summary: {pass: 69, warn: 0, fail: 1, pending: 0},
+    coverage: {checks: {total: 70, returned: 1, omitted: 69}},
+    truncated: true,
+    sections: [{
+      code: 'bounded', label: 'Bounded', status: 'fail', fixable: true,
+      coverage: {total: 70, returned: 1, omitted: 69},
+      checks: [{code: 'bounded.pass', status: 'pass', explanation: 'Ready.',
+        remediation: 'Do not show this.', fixable: true}],
+    }],
+  });
+  assert.deepEqual(report.summary, {pass: 69, warn: 0, fail: 1, pending: 0});
+  assert.equal(report.overall, 'fail');
+  assert.equal(report.sections[0].status, 'fail');
+  assert.equal(report.sections[0].checks[0].remediation, '');
+  assert.equal(report.sections[0].checks[0].fixable, false);
+});
+
+test('Run all is a read-only refresh and Fix all uses the visible authoritative report', () => {
+  assert.match(page, /Run all checks/);
+  assert.doesNotMatch(page, /actions\.create\('check'\).*Run all checks/s);
+  assert.match(page, /actionableSections\(report\)/);
+});

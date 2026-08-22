@@ -258,6 +258,7 @@ def _group_facts(row):
     multi_az = str(row.get("MultiAZ") or "").lower()
     return {
         "identifier": row.get("ReplicationGroupId"),
+        "arn": row.get("ARN"),
         "status": str(row.get("Status") or "").lower(),
         "description": row.get("Description"),
         # Group-wide in ElastiCache: every member runs the same node type, so
@@ -308,6 +309,20 @@ def replication_groups(client=None, region=None):
     return [_group_facts(row)
             for row in (page.get("ReplicationGroups") or [])[:MAX_ROWS]
             if row.get("ReplicationGroupId")]
+
+
+def replication_group_tags(arn, client=None, region=None):
+    """The ownership tags for one replication group, keyed by tag name."""
+    if not arn:
+        return {}
+    cache = _cache(client, region)
+    page = _caller.call(
+        "elasticache.list_tags_for_resource",
+        lambda: cache.list_tags_for_resource(ResourceName=str(arn)),
+        iam_action="elasticache:ListTagsForResource", mutation=False)
+    return {tag.get("Key"): tag.get("Value")
+            for tag in (page.get("TagList") or [])[:MAX_ROWS]
+            if tag.get("Key")}
 
 
 def set_replica_count(identifier, new_count, apply_immediately, facts=None,

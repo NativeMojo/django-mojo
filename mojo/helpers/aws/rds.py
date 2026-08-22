@@ -74,6 +74,17 @@ def _facts(status, engine_version, pending):
     }
 
 
+def _tag_map(row):
+    return {tag.get("Key"): tag.get("Value")
+            for tag in row.get("TagList") or row.get("Tags") or []
+            if tag.get("Key")}
+
+
+def _tag_list(tags):
+    return [{"Key": key, "Value": str(value)}
+            for key, value in sorted((tags or {}).items())]
+
+
 def _instance_facts(row):
     facts = _facts(row.get("DBInstanceStatus"), row.get("EngineVersion"),
                    row.get("PendingModifiedValues"))
@@ -82,12 +93,15 @@ def _instance_facts(row):
     # capacity report a per-instance class for every Aurora member at zero
     # extra API calls.
     facts["instance_class"] = row.get("DBInstanceClass")
+    facts["tags"] = _tag_map(row)
     return facts
 
 
 def _cluster_facts(row):
-    return _facts(row.get("Status"), row.get("EngineVersion"),
-                  row.get("PendingModifiedValues"))
+    facts = _facts(row.get("Status"), row.get("EngineVersion"),
+                   row.get("PendingModifiedValues"))
+    facts["tags"] = _tag_map(row)
+    return facts
 
 
 def instance_statuses(client=None, region=None):
@@ -236,6 +250,7 @@ def instance_role(identifier, client=None, region=None):
         "replica_source": source,
         "is_replica": bool(source),
         "endpoint": _endpoint(row),
+        "tags": _tag_map(row),
     }
 
 
@@ -273,11 +288,13 @@ def cluster_members(identifier, client=None, region=None):
         "members": members,
         "readers": [member["id"] for member in members if not member["is_writer"]],
         "writer": next((member["id"] for member in members if member["is_writer"]), None),
+        "tags": _tag_map(row),
     }
 
 
 def create_cluster_reader(cluster_id, instance_id, instance_class, engine,
-                          availability_zone=None, client=None, region=None):
+                          availability_zone=None, tags=None, client=None,
+                          region=None):
     """Add ONE reader to an Aurora cluster.
 
     ``create_db_instance`` with ``DBClusterIdentifier``, NOT
@@ -294,13 +311,16 @@ def create_cluster_reader(cluster_id, instance_id, instance_class, engine,
     }
     if availability_zone:
         params["AvailabilityZone"] = availability_zone
+    if tags:
+        params["Tags"] = _tag_list(tags)
     return _caller.call(
         "rds.create_db_instance", lambda: rds.create_db_instance(**params),
         iam_action="rds:CreateDBInstance", mutation=True)
 
 
 def create_read_replica(source_id, replica_id, instance_class=None,
-                        availability_zone=None, client=None, region=None):
+                        availability_zone=None, tags=None, client=None,
+                        region=None):
     """Add ONE read replica of a STANDALONE DB instance. See the Aurora twin."""
     rds = _rds(client, region)
     params = {
@@ -311,6 +331,8 @@ def create_read_replica(source_id, replica_id, instance_class=None,
         params["DBInstanceClass"] = instance_class
     if availability_zone:
         params["AvailabilityZone"] = availability_zone
+    if tags:
+        params["Tags"] = _tag_list(tags)
     return _caller.call(
         "rds.create_db_instance_read_replica",
         lambda: rds.create_db_instance_read_replica(**params),

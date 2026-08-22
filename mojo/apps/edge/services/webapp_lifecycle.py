@@ -62,6 +62,11 @@ def take_offline(web_app):
             if vhost.kind not in SERVING_KINDS or vhost.alias_of_id is not None:
                 raise me.ValueException(
                     "Only a site address can be taken offline from a WebApp.")
+            # A VhostRoute is materialized serving state and dies with this
+            # vhost. Capture the custom (non-auth) contract on the WebApp first
+            # so restoring an address can reproduce it exactly.
+            from mojo.apps.edge.services import webapp_serving
+            webapp_serving.capture_desired_routes(locked, vhost)
             locked.vhost = None
             locked.save(update_fields=["vhost", "modified"])
             vhost.delete()

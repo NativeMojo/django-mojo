@@ -80,11 +80,13 @@ def _choice_schema(entry):
     return schema({}) if callable(schema) else schema
 
 
-def _build_steps(mode, section=""):
+def _build_steps(mode, section="", selected_sections=None):
     if mode == "check":
         return [_step("readiness", "Run readiness checks", "readiness", section=section)]
+    selected = None if selected_sections is None else set(selected_sections)
     steps = []
-    if not section or section == "django":
+    if ((selected is None and (not section or section == "django")) or
+            (selected is not None and "django" in selected)):
         steps.extend([
             _step("installation_identity", "Freeze installation identity", "identity"),
             _step("base_url", "Configure public BASE_URL", "base_url", {
@@ -94,7 +96,8 @@ def _build_steps(mode, section=""):
             }),
         ])
     for entry in system_readiness.sections():
-        if not entry.get("fix") or (section and entry["code"] != section):
+        if (not entry.get("fix") or (section and entry["code"] != section) or
+                (selected is not None and entry["code"] not in selected)):
             continue
         steps.append(_step(
             f"section:{entry['code']}", f"Repair {entry['label']}", "section",
@@ -104,11 +107,15 @@ def _build_steps(mode, section=""):
     return steps
 
 
-def _fingerprint(user, mode, section, origin, replay_key):
-    raw = json.dumps({
+def _fingerprint(user, mode, section, selected_sections, origin, replay_key):
+    payload = {
         "user": user.pk, "mode": mode, "section": section,
         "origin": origin, "replay_key": replay_key,
-    }, sort_keys=True, separators=(",", ":"))
+    }
+    # Preserve fingerprints minted before selective Fix all existed.
+    if selected_sections is not None:
+        payload["selected_sections"] = selected_sections
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -130,7 +137,7 @@ def options(request):
     })
 
 
-def create(request, mode, section="", replay_key=""):
+def create(request, mode, section="", replay_key="", selected_sections=None):
     actor = require_request_admin(request)
     origin = request_origin(request)
     mode = str(mode or "").strip().lower()
@@ -142,7 +149,20 @@ def create(request, mode, section="", replay_key=""):
         raise merrors.ValueException("replay_key is too long")
     if section and system_readiness.get_section(section) is None:
         raise merrors.ValueException("Unknown readiness section")
-    fingerprint = _fingerprint(actor, mode, section, origin, replay_key)
+    if selected_sections is not None:
+        if mode != "fix" or section or not isinstance(selected_sections, list):
+            raise merrors.ValueException(
+                "sections is only supported for a full fix operation")
+        allowed = {"django"} | {
+            item["code"] for item in system_readiness.sections() if item.get("fix")}
+        selected_sections = list(dict.fromkeys(
+            str(item or "").strip() for item in selected_sections))
+        if len(selected_sections) > len(allowed):
+            raise merrors.ValueException("Too many readiness sections")
+        if any(not item or item not in allowed for item in selected_sections):
+            raise merrors.ValueException("Unknown or non-fixable readiness section")
+    fingerprint = _fingerprint(
+        actor, mode, section, selected_sections, origin, replay_key)
     existing = SystemSetupOperation.objects.filter(
         replay_fingerprint=fingerprint).first()
     if existing:
@@ -157,7 +177,7 @@ def create(request, mode, section="", replay_key=""):
         operation = SystemSetupOperation.objects.create(
             created_by=actor, mode=mode, section=section, status="planned",
             replay_fingerprint=fingerprint, bound_origin=origin,
-            steps=_build_steps(mode, section))
+            steps=_build_steps(mode, section, selected_sections))
     except IntegrityError:
         existing = SystemSetupOperation.objects.filter(
             replay_fingerprint=fingerprint).first()

@@ -12,6 +12,7 @@ settings, and this package is already serial.
 """
 
 import uuid
+from unittest import mock
 
 from objict import objict
 from testit import helpers as th
@@ -448,6 +449,7 @@ def test_setup_step_refuses_a_portal_operation(opts):
 def test_start_setup_binds_profile_and_refuses_group_intent(opts):
     from mojo.apps.assistant import get_registry
     from mojo.apps.assistant.services import approvals
+    from mojo.apps.edge.services import webapp_destination
     from tests.test_edge._helpers import RELEASE_BUCKET
 
     schema = get_registry()["start_webapp_setup"]["definition"]["input_schema"]
@@ -468,9 +470,15 @@ def test_start_setup_binds_profile_and_refuses_group_intent(opts):
     # The installation-level backstop the create endpoint runs: with no serving
     # destination configured there is nothing to point an address at, and the
     # preview refuses with that plain steer instead of creating an app.
-    unready = _refusal("start_webapp_setup",
-                       {"group": opts.group.pk, "slug": "chatapp",
-                        "bucket": RELEASE_BUCKET}, opts.manager)
+    # Extended AWS setup coverage deliberately leaves a valid protected
+    # BASE_URL behind. This serial package still runs after that package under
+    # --all, so isolate the absence this assertion means to prove through the
+    # service's documented seams instead of depending on global DB order.
+    with mock.patch.object(webapp_destination, "_override", return_value=""), \
+            mock.patch.object(webapp_destination, "_base_url", return_value=""):
+        unready = _refusal("start_webapp_setup",
+                           {"group": opts.group.pk, "slug": "chatapp",
+                            "bucket": RELEASE_BUCKET}, opts.manager)
     assert unready is not None and "System Setup" in str(unready), (
         "an installation with no serving destination still produced a setup "
         f"card: {unready}")
