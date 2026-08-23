@@ -31,6 +31,7 @@
 #                  MOJO_REQUEST_SERVICE=true|false authority
 #   NGINX_ETC / SYSTEMD_ETC / CRON_ETC / LOGROTATE_ETC  test seams, prod defaults
 #   MOJOSEC_ETC / MOJOSEC_STABLE_HELPER                 test seams, prod defaults
+#   MOJO_ETC      the /etc/mojo authority root          test seam, prod default
 #
 # The release-critical path fails loudly: dependencies, migrations, rendered
 # web configuration, the web service and real request probes. Host housekeeping
@@ -59,6 +60,7 @@ CRON_ETC="${CRON_ETC:-/etc/cron.d}"
 LOGROTATE_ETC="${LOGROTATE_ETC:-/etc/logrotate.d}"
 MOJOSEC_ETC="${MOJOSEC_ETC:-/etc/mojosec}"
 MOJOSEC_PYTHON="${MOJOSEC_PYTHON:-/usr/bin/python3}"
+MOJO_ETC="${MOJO_ETC:-/etc/mojo}"
 cd "$PROJ_PATH"
 
 DEPLOY_DIR="${PROJ_PATH}/var/deploy"
@@ -878,6 +880,96 @@ if [ -n "$MOJOSEC_CURRENT_HELPER" ] && [ -f "$MOJOSEC_CURRENT_HELPER" ] && \
     fi
 fi
 
+# ── node role ────────────────────────────────────────────────────────────────
+#
+# A repo that describes more than one KIND of box declares which converged
+# files belong to which role in aws/node_roles.conf (`<role> <kind>/<name>`
+# lines; an unlisted name is shared by every role). Without that file this
+# whole block is one `[ -f ]` test: no subprocess, no new code path, and every
+# existing project keeps converging exactly what it converges today.
+#
+# The placement is load-bearing at both ends. It is BEFORE migrate_locked and
+# collectstatic, so a node the manifest cannot place dies having changed
+# nothing. It is AFTER the MojoSec stable-helper refresh, so MOJOSEC_CHANGES_-
+# AVAILABLE is settled and the seal below is a real journaled trusted change.
+
+NODE_ROLE_RESOLVED=""
+NODE_ROLE_SOURCE=""
+NODE_ROLE_FOREIGN_CONFD=""
+NODE_ROLE_FOREIGN_CRON=""
+NODE_ROLE_FOREIGN_SYSTEMD=""
+
+# Is <name> a name of <kind> that belongs to some OTHER role?
+role_owns_elsewhere() { # kind name
+    local list=""
+    case "$1" in
+        conf.d)  list="$NODE_ROLE_FOREIGN_CONFD" ;;
+        cron.d)  list="$NODE_ROLE_FOREIGN_CRON" ;;
+        systemd) list="$NODE_ROLE_FOREIGN_SYSTEMD" ;;
+    esac
+    [ -n "$list" ] || return 1
+    printf '%s\n' "$list" | grep -Fqx -- "$2"
+}
+
+if [ -f "${PROJ_PATH}/aws/node_roles.conf" ]; then
+    if ! python3 -c "import mojo.deploy.node_role" >/dev/null 2>&1; then
+        # A rollback ACROSS this feature lands here: update.sh re-enters the
+        # new script body while --framework has already installed the old
+        # package. Converging every declared name is precisely what that older
+        # framework did on this node, so this warns and continues. It must
+        # never die — a rollback that cannot complete is the worst outcome
+        # available.
+        record_warning node_role \
+            "installed django-mojo has no mojo.deploy.node_role — converging every declared name until the framework catches up"
+    else
+        NODE_ROLE_JSON="$(python3 -m mojo.deploy.node_role resolve \
+                --project-path "$PROJ_PATH" --etc "$MOJO_ETC" --json)" \
+            || die "aws/node_roles.conf declares node roles but this node's role could not be resolved — see the message above"
+        # Both values are validated role/source identifiers on the way out of
+        # the resolver, so this extraction can never carry a conf byte.
+        NODE_ROLE_RESOLVED="$(printf '%s' "$NODE_ROLE_JSON" \
+            | sed -n 's/.*"role"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+        NODE_ROLE_SOURCE="$(printf '%s' "$NODE_ROLE_JSON" \
+            | sed -n 's/.*"source"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+        [ -n "$NODE_ROLE_RESOLVED" ] \
+            || die "aws/node_roles.conf declares node roles but this node is unlabeled — label it in ONE of: the sealed ${MOJO_ETC}/deploy-role.conf authority, a NODE_ROLE export in aws/post_deploy.sh, or MOJO_NODE_ROLE in ${PROJ_PATH}/var/bootstrap.conf"
+        log "Node role: ${NODE_ROLE_RESOLVED} (declared by ${NODE_ROLE_SOURCE})"
+
+        NODE_ROLE_FOREIGN_CONFD="$(python3 -m mojo.deploy.node_role foreign \
+                --project-path "$PROJ_PATH" --role "$NODE_ROLE_RESOLVED" \
+                --kind conf.d --etc "$MOJO_ETC")" \
+            || die "cannot decide which vhosts this node's role owns"
+        NODE_ROLE_FOREIGN_CRON="$(python3 -m mojo.deploy.node_role foreign \
+                --project-path "$PROJ_PATH" --role "$NODE_ROLE_RESOLVED" \
+                --kind cron.d --etc "$MOJO_ETC")" \
+            || die "cannot decide which cron entries this node's role owns"
+        NODE_ROLE_FOREIGN_SYSTEMD="$(python3 -m mojo.deploy.node_role foreign \
+                --project-path "$PROJ_PATH" --role "$NODE_ROLE_RESOLVED" \
+                --kind systemd --etc "$MOJO_ETC")" \
+            || die "cannot decide which systemd units this node's role owns"
+
+        # Promote an app-influenceable declaration to the root-sealed
+        # authority, once — AFTER the manifest has agreed the role exists, so a
+        # typo cannot leave the node labeled with a role nothing declares. A
+        # failed seal keeps this deploy on the role it already resolved: the
+        # label is a fact about the node, not a step the release depends on.
+        case "$NODE_ROLE_SOURCE" in
+            env|bootstrap)
+                if trusted_change sealed-node-role \
+                        "${MOJO_ETC}/deploy-role.conf" -- \
+                        python3 -m mojo.deploy.node_role seal \
+                        --project-path "$PROJ_PATH" \
+                        --role "$NODE_ROLE_RESOLVED" --etc "$MOJO_ETC"; then
+                    log "  sealed the node role at ${MOJO_ETC}/deploy-role.conf"
+                else
+                    record_warning node_role \
+                        "could not seal the node role; it stays declared by ${NODE_ROLE_SOURCE}"
+                fi
+                ;;
+        esac
+    fi
+fi
+
 # ── migrations ───────────────────────────────────────────────────────────────
 #
 # Migrations run ONLY when the deploy says so (--migrate — the canary run),
@@ -914,6 +1006,10 @@ phase_begin render
 # This unchanged argv is also the first-upgrade nginx runtime repair hook:
 # the newly installed Python module converges and verifies the persistent
 # spill paths before this old-inode shell can reach MojoSec or nginx reload.
+# The role reaches render through the ENVIRONMENT, never a new flag: on a
+# rollback this newer shell can be paired with an older module, which would die
+# on unknown argv but ignores a variable it does not read.
+MOJO_NODE_ROLE="$NODE_ROLE_RESOLVED" \
 python3 -m mojo.deploy render --dest "$DEPLOY_DIR" \
         --project-path "$PROJ_PATH" --app-user "$APP_USER" \
         --web-user "$WEB_USER" --workers "$ASGI_WORKERS" \
@@ -976,6 +1072,10 @@ if compgen -G "${PROJ_PATH}/aws/nginx/conf.d/*.conf" > /dev/null; then
     for vhost in "${PROJ_PATH}/aws/nginx/conf.d/"*.conf; do
         name="$(basename "$vhost")"
         case "$name" in *.example*) continue ;; esac
+        if role_owns_elsewhere conf.d "$name"; then
+            log "  skipping ${name}: owned by another role"
+            continue
+        fi
         install_vhost "$vhost" "${NGINX_ETC}/conf.d/${name}"
         VHOSTS=$((VHOSTS+1))
     done
@@ -1272,6 +1372,25 @@ if [[ -f "$RETIRED_LIST" ]]; then
     done < "$RETIRED_LIST"
 fi
 
+# ── foreign vhosts ───────────────────────────────────────────────────────────
+#
+# Vhosts aws/node_roles.conf gives to a DIFFERENT role. Skipping the install
+# above is not enough on a node that was converged before the manifest existed
+# (or before it was re-labeled): the file is already in conf.d, claiming a
+# server_name and possibly a default_server. This runs before the `nginx -t`
+# gate so the graph this deploy validates is the graph this role should serve.
+if [ -n "$NODE_ROLE_FOREIGN_CONFD" ]; then
+    while IFS= read -r foreign_name; do
+        [ -n "$foreign_name" ] || continue
+        target="${NGINX_ETC}/conf.d/${foreign_name}"
+        [ -f "$target" ] || continue
+        log "  removing ${foreign_name}: owned by another role, not ${NODE_ROLE_RESOLVED}"
+        trusted_change role-foreign-config "$target" -- rm -f "$target" \
+            || record_warning role_config \
+                "could not remove a host config another role owns: ${foreign_name}"
+    done <<< "$NODE_ROLE_FOREIGN_CONFD"
+fi
+
 # Gate the reload on the config test, and treat a failed test as fatal. nginx
 # keeps serving the old config either way, but continuing the deploy would
 # restart the app behind a web server running configuration that no longer
@@ -1323,6 +1442,34 @@ for unit in "${UNIT_SRC}/"*.timer; do
     fi
 done
 
+# Units aws/node_roles.conf gives to a DIFFERENT role. The render no longer
+# produces them, so nothing above installed one — but a node converged before
+# the manifest existed still has the unit file, enabled and firing. Shedding it
+# is background operation: it is reported, never fatal.
+if [ -n "$NODE_ROLE_FOREIGN_SYSTEMD" ]; then
+    role_units_removed=0
+    while IFS= read -r foreign_name; do
+        [ -n "$foreign_name" ] || continue
+        target="${SYSTEMD_ETC}/${foreign_name}"
+        [ -e "$target" ] || continue
+        log "  removing ${foreign_name}: owned by another role, not ${NODE_ROLE_RESOLVED}"
+        systemctl disable --now "$foreign_name" \
+            || record_warning auxiliary_systemd \
+                "could not disable a unit another role owns: ${foreign_name}"
+        if trusted_change role-foreign-unit "$target" -- rm -f "$target"; then
+            role_units_removed=1
+        else
+            record_warning auxiliary_systemd \
+                "could not remove a unit another role owns: ${foreign_name}"
+        fi
+    done <<< "$NODE_ROLE_FOREIGN_SYSTEMD"
+    if [ "$role_units_removed" = "1" ]; then
+        systemctl daemon-reload \
+            || record_warning auxiliary_systemd \
+                "systemd rejected the removal of another role's units"
+    fi
+fi
+
 # ── cron ─────────────────────────────────────────────────────────────────────
 #
 # The RENDERED var/deploy/cron.d/ IS the set, not merely a subset that gets
@@ -1342,6 +1489,24 @@ if compgen -G "${DEPLOY_DIR}/cron.d/*" > /dev/null; then
         install_aux_file cron "$source" "${CRON_ETC}/$(basename "$source")" || true
     done
 fi
+
+# Cron entries aws/node_roles.conf gives to a DIFFERENT role. This runs AFTER
+# the install loop on purpose: a removal before it could be undone by a stale
+# rendered copy the same pass reinstalls. It complements the structural sweep
+# below rather than duplicating it — the sweep only sees files that mention
+# PROJ_PATH, and another role's entry need not.
+if [ -n "$NODE_ROLE_FOREIGN_CRON" ]; then
+    while IFS= read -r foreign_name; do
+        [ -n "$foreign_name" ] || continue
+        target="${CRON_ETC}/${foreign_name}"
+        [ -f "$target" ] || continue
+        log "  removing ${foreign_name}: owned by another role, not ${NODE_ROLE_RESOLVED}"
+        trusted_change role-foreign-cron "$target" -- rm -f "$target" \
+            || record_warning role_cron \
+                "could not remove a cron entry another role owns: ${foreign_name}"
+    done <<< "$NODE_ROLE_FOREIGN_CRON"
+fi
+
 for installed in "${CRON_ETC}"/*; do
     [[ -f "$installed" ]] || continue
     name="$(basename "$installed")"

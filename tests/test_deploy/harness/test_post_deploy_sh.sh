@@ -11,8 +11,9 @@
 # to fail instead). Packaged deltas under test: templates render into
 # var/deploy/ and install from there fully substituted, the
 # node_overrides.conf collision policy, node_retired.conf retirement, the
-# PROBE_URL / APP_USER / WEB_USER / ASGI_WORKERS inputs, and the post-success
-# self-snapshot. The mverify-era orderings and absences (deps before
+# node_roles.conf per-role convergence (resolve, seal, filter, remove, prune),
+# the PROBE_URL / APP_USER / WEB_USER / ASGI_WORKERS inputs, and the
+# post-success self-snapshot. The mverify-era orderings and absences (deps before
 # framework, migrate before restart, bare never migrates, die-loudly) are
 # preserved.
 set -u
@@ -152,11 +153,13 @@ PYEOF
 setup_env() {
     rm -rf "$PROJ" "$STUB" "$CTL" "$TMP/nginx_etc" "$TMP/letsencrypt" \
            "$TMP/systemd_etc" "$TMP/cron_etc" \
-           "$TMP/logrotate_etc" "$TMP/mojosec_etc" "$TMP/mojosec_lib" "$TMP/journal"
+           "$TMP/logrotate_etc" "$TMP/mojosec_etc" "$TMP/mojosec_lib" \
+           "$TMP/journal" "$TMP/mojo_etc"
     mkdir -p "$PROJ/var/logs" "$PROJ/bin" "$PROJ/aws/nginx/systemd" "$PROJ/aws/nginx/sec.d" \
              "$PROJ/aws/nginx/conf.d" "$PROJ/aws/cron.d" \
              "$STUB" "$CTL" "$TMP/nginx_etc" "$TMP/systemd_etc" "$TMP/cron_etc" \
-             "$TMP/logrotate_etc" "$TMP/mojosec_etc" "$TMP/mojosec_lib" "$TMP/journal"
+             "$TMP/logrotate_etc" "$TMP/mojosec_etc" "$TMP/mojosec_lib" \
+             "$TMP/journal" "$TMP/mojo_etc"
     : > "$CALLLOG"
     write_trusted_shim
 
@@ -337,8 +340,19 @@ case "\$*" in
         exec env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$REPO" "$REAL_PYTHON3" \
             "$TMP/trusted_shim.py" "\$@"
         ;;
-    "-m mojo.deploy"*)
+    *"import mojo.deploy.node_role"*)
+        # The importability probe. node_role.import.exit forces the
+        # rollback-across-the-feature shape (new script, old package).
+        [ -f "\$STUBCTL/node_role.import.exit" ] && exit "\$(cat "\$STUBCTL/node_role.import.exit")"
+        exec env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$REPO" "$REAL_PYTHON3" "\$@"
+        ;;
+    "-m mojo.deploy render"*)
+        # render.exit gates the RENDER only — node_role runs for real beside a
+        # forced render failure.
         if [ -f "\$STUBCTL/render.exit" ]; then exit "\$(cat "\$STUBCTL/render.exit")"; fi
+        exec env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$REPO" "$REAL_PYTHON3" "\$@"
+        ;;
+    "-m mojo.deploy"*)
         exec env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$REPO" "$REAL_PYTHON3" "\$@"
         ;;
     *"print(mojo.__version__)"*)
@@ -355,14 +369,15 @@ EOF
     chmod +x "$STUB/python3"
 }
 
-# MOJOSEC_ETC / MOJOSEC_STABLE_HELPER default into $TMP for EVERY run, so no
-# scenario depends on the host's real /etc/mojosec being absent (on an enrolled
-# Linux box it is not).
+# MOJOSEC_ETC / MOJOSEC_STABLE_HELPER / MOJO_ETC default into $TMP for EVERY
+# run, so no scenario depends on the host's real /etc/mojosec or /etc/mojo
+# being absent (on an enrolled Linux box neither is), and nothing here can ever
+# write to the real authority root.
 run_post_deploy() { # args...
     ( cd "$TMP" && PROJ_PATH="$PROJ" NGINX_ETC="$TMP/nginx_etc" \
         SYSTEMD_ETC="$TMP/systemd_etc" CRON_ETC="$TMP/cron_etc" \
         LOGROTATE_ETC="$TMP/logrotate_etc" PATH="$STUB:$PATH" \
-        MOJOSEC_ETC="$TMP/mojosec_etc" \
+        MOJOSEC_ETC="$TMP/mojosec_etc" MOJO_ETC="$TMP/mojo_etc" \
         MOJOSEC_STABLE_HELPER="$TMP/mojosec_lib/mojosec_changes.py" \
         MOJOSEC_PYTHON=python3 \
         bash "$PROJ/aws/post_deploy.sh" "$@" )
@@ -374,6 +389,7 @@ run_post_deploy_env() { # VAR=val ... -- args...
     shift
     ( cd "$TMP" && env MOJOSEC_ETC="$TMP/mojosec_etc" \
         MOJOSEC_STABLE_HELPER="$TMP/mojosec_lib/mojosec_changes.py" \
+        MOJO_ETC="$TMP/mojo_etc" \
         "${envs[@]}" PROJ_PATH="$PROJ" NGINX_ETC="$TMP/nginx_etc" \
         SYSTEMD_ETC="$TMP/systemd_etc" CRON_ETC="$TMP/cron_etc" \
         LOGROTATE_ETC="$TMP/logrotate_etc" PATH="$STUB:$PATH" \
@@ -1164,6 +1180,182 @@ run_post_deploy --framework 9.9.9 >/dev/null 2>&1
 rc=$?
 if [ "$rc" -ne 0 ]; then ok "failed install exits non-zero"; else fail "failed install exited 0"; fi
 assert_not_in_log "systemctl restart mojo-asgi" "no restart after a failed install"
+
+# ── node roles ───────────────────────────────────────────────────────────────
+#
+# aws/node_roles.conf: a repo describing more than one KIND of box. The vhost
+# app.conf and cron 9_api_extra belong to `api`; worker.conf, 9_worker_extra
+# and worker-drain.timer belong to `worker`; probe.conf is unlisted and stays
+# shared by every role.
+
+setup_role_case() {
+    setup_env
+    printf '# which converged files each role owns\napi conf.d/app.conf\napi cron.d/9_api_extra\nworker conf.d/worker.conf\nworker cron.d/9_worker_extra\nworker systemd/worker-drain.timer\n' \
+        > "$PROJ/aws/node_roles.conf"
+    echo "# test worker vhost" > "$PROJ/aws/nginx/conf.d/worker.conf"
+    printf '* * * * * root %s/bin/api.sh\n' "$PROJ" > "$PROJ/aws/cron.d/9_api_extra"
+    printf '* * * * * root %s/bin/worker.sh\n' "$PROJ" > "$PROJ/aws/cron.d/9_worker_extra"
+    printf '[Unit]\nDescription=drain\n[Timer]\nOnBootSec=1min\n' \
+        > "$PROJ/aws/nginx/systemd/worker-drain.timer"
+}
+
+enroll_trusted_journal() {
+    echo '{}' > "$TMP/mojosec_etc/config.json"
+    : > "$TMP/mojosec_lib/mojosec_changes.py"
+}
+
+assert_order_last() { # first_pattern later_pattern label — LAST match of the later
+    local a b
+    a="$(grep -n "$1" "$CALLLOG" | head -1 | cut -d: -f1)"
+    b="$(grep -n "$2" "$CALLLOG" | tail -1 | cut -d: -f1)"
+    if [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]; then
+        ok "$3"
+    else
+        fail "$3 ('$1' at ${a:-none}, last '$2' at ${b:-none})"
+    fi
+}
+
+echo "post_deploy.sh: a labeled node converges only the names its role owns"
+setup_role_case
+run_post_deploy_env NODE_ROLE=api -- > "$OUT" 2>&1
+rc=$?
+[ "$rc" -eq 0 ] || sed -n '1,25p' "$OUT"
+assert_eq "$rc" 0 "a labeled node deploys"
+assert_has "$OUT" "Node role: api (declared by env)" \
+    "the resolved role and the authority that declared it are logged"
+assert_file "$TMP/nginx_etc/conf.d/app.conf" "the role's own vhost is installed"
+assert_file "$TMP/nginx_etc/conf.d/probe.conf" \
+    "a vhost no role claims stays shared by every role"
+assert_no_file "$TMP/nginx_etc/conf.d/worker.conf" \
+    "another role's vhost is never installed"
+assert_has "$OUT" "skipping worker.conf: owned by another role" \
+    "the skipped vhost is logged, never silent"
+assert_file "$TMP/cron_etc/9_api_extra" "the role's own cron is installed"
+assert_file "$TMP/cron_etc/3_mojo_jobs" "an unlisted framework cron stays shared"
+assert_no_file "$TMP/cron_etc/9_worker_extra" "another role's cron is never installed"
+assert_no_file "$TMP/systemd_etc/worker-drain.timer" \
+    "another role's timer is never installed"
+assert_in_log "CMD nginx -t" "the nginx config gate still runs on a role node"
+assert_in_log "CMD systemctl restart mojo-asgi" "the app still restarts"
+
+echo "post_deploy.sh: names another role owns are actively removed, in order"
+setup_role_case
+enroll_trusted_journal
+echo "# stale worker vhost from before the split" > "$TMP/nginx_etc/conf.d/worker.conf"
+printf '* * * * * root %s/bin/worker.sh\n' "$PROJ" > "$TMP/cron_etc/9_worker_extra"
+printf '[Unit]\nDescription=drain\n' > "$TMP/systemd_etc/worker-drain.timer"
+run_post_deploy_env NODE_ROLE=api -- > "$OUT" 2>&1
+rc=$?
+[ "$rc" -eq 0 ] || sed -n '1,25p' "$OUT"
+assert_eq "$rc" 0 "a node carrying another role's files still deploys"
+assert_no_file "$TMP/nginx_etc/conf.d/worker.conf" "the foreign vhost is removed"
+assert_no_file "$TMP/cron_etc/9_worker_extra" "the foreign cron is removed"
+assert_no_file "$TMP/systemd_etc/worker-drain.timer" "the foreign unit is removed"
+assert_has "$OUT" "removing worker.conf: owned by another role, not api" \
+    "the removal names the role reason"
+assert_in_log "kind role-foreign-config" "the vhost removal is a trusted change"
+assert_order "kind role-foreign-config" "CMD nginx -t" \
+    "foreign vhosts go BEFORE the nginx gate — the graph this deploy validates \
+is the graph this role should serve"
+assert_order "path .*cron_etc/9_api_extra" "kind role-foreign-cron" \
+    "foreign crons go AFTER the install loop — an earlier removal could be \
+undone by the same pass reinstalling a stale rendered copy"
+assert_in_log "CMD systemctl disable --now worker-drain.timer" \
+    "the foreign timer is stopped and disabled before removal"
+assert_order_last "CMD systemctl disable --now worker-drain.timer" \
+    "CMD systemctl daemon-reload" "a daemon-reload follows the unit removal"
+
+echo "post_deploy.sh: a stale rendered copy is pruned, so it cannot be reinstalled"
+setup_role_case
+mkdir -p "$PROJ/var/deploy/cron.d"
+printf '* * * * * root %s/bin/worker.sh\n' "$PROJ" > "$PROJ/var/deploy/cron.d/9_worker_extra"
+run_post_deploy_env NODE_ROLE=api -- > "$OUT" 2>&1
+assert_eq "$?" 0 "a node with a stale rendered contract deploys"
+assert_no_file "$PROJ/var/deploy/cron.d/9_worker_extra" \
+    "the render prunes what it did not write"
+assert_no_file "$TMP/cron_etc/9_worker_extra" \
+    "and the install loop therefore never reinstalls it"
+
+echo "post_deploy.sh: no manifest means the role machinery never runs at all"
+setup_env
+run_post_deploy > "$OUT" 2>&1
+assert_eq "$?" 0 "a project without node_roles.conf deploys unchanged"
+assert_not_in_log "node_role" \
+    "without the manifest not one node_role subprocess is spawned"
+assert_file "$TMP/nginx_etc/conf.d/app.conf" "every repo vhost still converges"
+assert_file "$TMP/nginx_etc/conf.d/probe.conf" "every repo vhost still converges"
+assert_no_file "$TMP/mojo_etc/deploy-role.conf" "nothing is sealed"
+
+echo "post_deploy.sh: a framework without the module warns and converges everything"
+setup_role_case
+echo 1 > "$CTL/node_role.import.exit"
+run_post_deploy_env NODE_ROLE=api -- > "$OUT" 2>&1
+assert_eq "$?" 0 \
+    "a rollback across this feature must never fail the deploy — the old \
+framework converged every name and so does this"
+assert_has "$OUT" "phase=node_role; deploy continues" \
+    "the missing module is an explicit deployment warning"
+assert_in_log "manage.py deploy_warning node_role" "the warning files an incident"
+assert_file "$TMP/nginx_etc/conf.d/app.conf" "the node converges its own vhost"
+assert_file "$TMP/nginx_etc/conf.d/worker.conf" \
+    "and every other declared vhost, exactly as the older framework did"
+
+echo "post_deploy.sh: a manifest with an unlabeled node dies before it changes anything"
+setup_role_case
+run_post_deploy --migrate > "$OUT" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then ok "an unlabeled node refuses to deploy"; else fail "an unlabeled node deployed"; fi
+assert_has "$OUT" "this node is unlabeled" "the fatal names the actual problem"
+assert_has "$OUT" "deploy-role.conf" "the fatal names the sealed authority"
+assert_has "$OUT" "NODE_ROLE export" "the fatal names the shim export"
+assert_has "$OUT" "bootstrap.conf" "the fatal names the bootstrap declaration"
+assert_not_in_log "migrate_locked" "an unlabeled node never migrates"
+assert_not_in_log "collectstatic" "an unlabeled node never collects static files"
+assert_not_in_log "CMD nginx -t" "an unlabeled node never reaches nginx"
+assert_no_file "$TMP/nginx_etc/nginx.conf" "/etc is left exactly as it was"
+
+echo "post_deploy.sh: a role the manifest never declares dies, and is not sealed"
+setup_role_case
+run_post_deploy_env NODE_ROLE=ghost -- > "$OUT" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then ok "an undeclared role refuses to deploy"; else fail "an undeclared role deployed"; fi
+assert_has "$OUT" "not declared in aws/node_roles.conf" \
+    "the fatal names the manifest that does not know this role"
+assert_no_file "$TMP/mojo_etc/deploy-role.conf" \
+    "a role the manifest rejects is never sealed onto the node"
+assert_not_in_log "migrate" "an undeclared role never migrates"
+
+echo "post_deploy.sh: the role is promoted out of bootstrap.conf into the sealed authority"
+setup_role_case
+printf 'AWS_REGION=us-west-2\nAWS_KEY=AKIAEXAMPLEKEY\nAWS_SECRET=sup3r-s3cret-value\nMOJO_NODE_ROLE=api\n' \
+    > "$PROJ/var/bootstrap.conf"
+run_post_deploy > "$OUT" 2>&1
+rc=$?
+[ "$rc" -eq 0 ] || sed -n '1,25p' "$OUT"
+assert_eq "$rc" 0 "a bootstrap-labeled node deploys"
+assert_has "$OUT" "Node role: api (declared by bootstrap)" \
+    "the provisioned bootstrap role is what placed this node"
+assert_file "$TMP/mojo_etc/deploy-role.conf" "the run seals the role it resolved"
+assert_has "$TMP/mojo_etc/deploy-role.conf" "MOJO_NODE_ROLE=api" \
+    "the sealed authority holds exactly the resolved role"
+assert_lacks "$OUT" "sup3r-s3cret-value" \
+    "no byte of bootstrap.conf's credentials reaches the deploy log"
+assert_no_file "$TMP/nginx_etc/conf.d/worker.conf" "the bootstrap role is applied"
+
+run_post_deploy > "$OUT" 2>&1
+assert_eq "$?" 0 "the second run on the same node deploys"
+assert_has "$OUT" "Node role: api (declared by sealed)" \
+    "once sealed, the role comes from the authority the app cannot influence"
+
+printf 'AWS_SECRET=sup3r-s3cret-value\nMOJO_NODE_ROLE=worker\n' \
+    > "$PROJ/var/bootstrap.conf"
+run_post_deploy > "$OUT" 2>&1
+assert_eq "$?" 0 "a disagreeing bootstrap does not fail the deploy"
+assert_has "$OUT" "Node role: api (declared by sealed)" \
+    "the seal outranks a bootstrap.conf that has since changed"
+assert_file "$TMP/nginx_etc/conf.d/app.conf" "the node keeps converging its sealed role"
+assert_no_file "$TMP/nginx_etc/conf.d/worker.conf" \
+    "a rewritten bootstrap.conf cannot re-label a sealed node"
 
 # ── result ───────────────────────────────────────────────────────────────────
 
