@@ -434,8 +434,18 @@ What is refused outright (an error response, not a status), because retrying
 cannot help: a wildcard (`*.example.com`), the bare domain (use
 `www.example.com`), a deeper name (`a.b.example.com` — one label only, so every
 extra address stays inside the domain's existing certificate), a name already
-serving anything else here, and — on a managed domain — a name that already
-carries other DNS records or points somewhere else.
+serving anything else here (whether that address is live or just parked), and —
+on a managed domain — a name that already carries other DNS records or points
+somewhere else.
+
+**Overlapping calls for the same hostname are safe.** Two admins pressing Add
+at once, or a Check fired on top of an in-flight Add, no longer produce a server
+error. The two calls converge: for the app that won the address the second call
+comes back `attached` with `created: false` — the same answer as any other
+re-check — and a call from a *different* app comes back as the ordinary
+"already serving something else here" refusal (a 400 you render verbatim), not a
+500. You do not need to serialize, debounce or retry-on-500 around
+`attach_domain`; treat a 500 from it as a real bug worth reporting.
 
 If the domain belongs to a **parent** workspace rather than this app's own, you
 need manage authority in the workspace that owns the domain; reading it is not
