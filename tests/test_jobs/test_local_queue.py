@@ -369,3 +369,33 @@ def test_local_queue_graceful_shutdown(opts):
     assert not stats['running'], "Queue should be stopped"
 
     reset_local_queue()
+
+
+@th.django_unit_test()
+def test_stop_during_inflight_job_completes_quickly(opts):
+    """REGRESSION (maestro #2789): stop() held self._lock across
+    worker_thread.join() while the executing worker needed the same lock to
+    record the finished job, so a stop overlapping job execution always burned
+    the full join timeout and logged "did not stop cleanly"."""
+    from mojo.apps.jobs.local_queue import LocalQueue
+
+    q = LocalQueue(maxsize=10)
+    started = threading.Event()
+
+    def slow_job():
+        started.set()
+        time.sleep(0.5)
+
+    assert q.put(slow_job, (), {}, job_id="dm2789-stop-inflight"), \
+        "the in-flight job must enqueue"
+    assert started.wait(5.0), "the worker never picked up the in-flight job"
+
+    t0 = time.time()
+    q.stop(timeout=5.0)
+    elapsed = time.time() - t0
+    assert elapsed < 2.0, (
+        f"stop() overlapping an executing job must return promptly once the "
+        f"job finishes; took {elapsed:.2f}s - the old lock-order deadlock "
+        f"burned the whole join timeout")
+    assert not (q.worker_thread and q.worker_thread.is_alive()), \
+        "the worker thread must actually be stopped, not abandoned"

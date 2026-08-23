@@ -86,6 +86,8 @@ class LocalQueue:
         with self._lock:
             if not self.started:
                 return
+            # Flip inside the lock so a concurrent second stop() returns above.
+            self.started = False
 
             logit.info("Stopping local job queue worker...")
             self.stop_event.set()
@@ -96,14 +98,18 @@ class LocalQueue:
             except queue.Full:
                 pass
 
-            if self.worker_thread and self.worker_thread.is_alive():
-                self.worker_thread.join(timeout)
-                if self.worker_thread.is_alive():
-                    logit.warn("Local job worker thread did not stop cleanly")
+            worker = self.worker_thread
 
-            self.started = False
-            logit.info(f"Local job queue stopped (processed={self._processed_count}, "
-                      f"errors={self._error_count})")
+        # Join OUTSIDE the lock (maestro #2789): the worker takes self._lock to
+        # record a finished job, so holding it across join() deadlocked every
+        # stop that overlapped job execution until the join timeout expired.
+        if worker and worker.is_alive():
+            worker.join(timeout)
+            if worker.is_alive():
+                logit.warn("Local job worker thread did not stop cleanly")
+
+        logit.info(f"Local job queue stopped (processed={self._processed_count}, "
+                  f"errors={self._error_count})")
 
     def put(self, func: Callable, args: tuple, kwargs: dict,
             job_id: str, run_at: Optional[datetime] = None) -> bool:

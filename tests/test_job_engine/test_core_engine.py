@@ -457,3 +457,30 @@ def test_cleanup_core_engine(opts):
 
     for key in test_keys:
         opts.redis.delete(key)
+
+
+@th.django_unit_test()
+def test_engine_stop_latency(opts):
+    """REGRESSION (maestro #2789): _control_loop blocked in
+    pubsub.get_message(timeout=5.0) and never observed stop_event, so every
+    stop() waited a uniform 0-5s residual on the control thread (and the
+    heartbeat/reaper inter-pass sleeps added up to another second). Three
+    initialize()+stop() round-trips must complete in under 3s total; before
+    the fix the expected total was ~7.5s."""
+    from mojo.apps.jobs.job_engine import JobEngine
+
+    t0 = time.time()
+    for i in range(3):
+        engine = JobEngine(channels=[opts.test_channel])
+        engine.initialize()
+        # Let the control thread drain its subscribe confirmations and park
+        # inside get_message() - the state a long-running engine is always in
+        # when stop() arrives. Stopping instantly after initialize() would
+        # catch it before its first blocking read and prove nothing.
+        time.sleep(0.5)
+        engine.stop(timeout=10.0)
+    total = time.time() - t0
+    assert total < 3.0, (
+        f"three initialize()+stop() round-trips took {total:.2f}s (>3s): the "
+        f"engine's stop path is waiting out thread timeouts instead of being "
+        f"woken by stop_event")

@@ -397,11 +397,10 @@ class JobEngine:
             except Exception as e:
                 logger.warning(f"Heartbeat update failed: {e}")
 
-            # Sleep with periodic wake for stop check
-            for _ in range(self.heartbeat_interval):
-                if self.stop_event.is_set():
-                    break
-                time.sleep(1)
+            # Event-interruptible sleep: returns immediately on stop (maestro
+            # #2789); the old 1s-granularity loop left up to a second of
+            # residual on every engine stop.
+            self.stop_event.wait(self.heartbeat_interval)
 
     def _publish_heartbeat(self):
         """Publish one fail-closed heartbeat and its channel indexes."""
@@ -462,7 +461,10 @@ class JobEngine:
 
         try:
             while self.running and not self.stop_event.is_set():
-                message = pubsub.get_message(timeout=5.0)
+                # Short timeout so stop_event is observed promptly (maestro
+                # #2789): at 5.0 every stop() waited a uniform 0-5s for this
+                # thread to fall out of get_message.
+                message = pubsub.get_message(timeout=0.25)
                 if message and message.get('type') == 'message':
                     self._handle_control_message(message.get('data'), message.get('channel'))
         finally:
@@ -984,8 +986,5 @@ class JobEngine:
                             self._remove_from_processing(ch, jid)
             except Exception as e:
                 logger.warning(f"Reaper loop error: {e}")
-            # Sleep a bit before next pass
-            for _ in range(5):
-                if self.stop_event.is_set():
-                    break
-                time.sleep(1)
+            # Event-interruptible sleep before the next pass (maestro #2789).
+            self.stop_event.wait(5)
