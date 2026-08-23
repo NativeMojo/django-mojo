@@ -477,6 +477,26 @@ When a large app has many tests, split it into domain-focused packages (`test_au
 > already holding the exclusive hold is granted the shared hold immediately
 > (it is the restarter — it cannot tear down its own socket behind its own back).
 
+> **Prefer NOT to reload at all in a parallel package (maestro #2791).** Each
+> `server_settings()` context is two uvicorn reloads (~2.3s) under the exclusive
+> lock above, freezing every other parallel worker's in-flight request for the
+> duration — the dominant avoidable cost in the default tier. Reach for a reload
+> only when nothing else works, and in the **core** tier the isolation scanner
+> forbids it outright. Three cheaper patterns, chosen by how production reads the
+> key (see [Tiers.md](Tiers.md)):
+> 1. **DB/Redis-backed key** (read via `settings.get`, not `get_static`, and not
+>    in `isolation.PROTECTED_KEYS`) → `Setting.set(key, value)` / `Setting.remove`
+>    in a `try/finally`. Read live by the running server, no reload. The pattern
+>    in `test_shortlink`, `test_oauth`, `test_dnsman`.
+> 2. **Static (`get_static`) key the whole suite can share** → bake a test value
+>    into `bin/create_testproject`'s generated conf (e.g. the Maestro keys), or
+>    add a loopback + `MOJO_TEST_MODE`-gated `X-Mojo-Test-*` request-header seam
+>    (the `test_geofence`/`test_register` pattern).
+> 3. **Boot-time key a reload genuinely needs** (a `get_static` read at module
+>    load, `DEBUG`, an auth-handler registry) → move that test to the package's
+>    opt-in serial sibling (`*_extended_serial` / a `slow` package), where
+>    `server_settings()` is legal because nothing runs beside it.
+
 ### How `server_settings()` waits — a readiness signal, not a sleep
 
 Both reloads (applying overrides, then restoring them) used to be fixed sleeps —
