@@ -107,28 +107,27 @@ def raw_manifest():
     }
 
 
-def handoff_raw(single=True):
+def preserved_raw(single=True):
+    """A manifest declaring elastic IPs that are held OUTSIDE this fleet.
+
+    Nothing here asks django-mojo to move an address — the provisioner has no
+    such command. Declaring the allocations only tells fleet preparation that
+    those addresses are already spoken for, so the shadow NLB must take AWS
+    temporary addresses instead of allocating replacements.
+    """
     raw = raw_manifest()
     raw["nlb_eip_allocations"] = {
         "us-west-2a": "eipalloc-0123456789abcdef0"}
     if not single:
         raw["nlb_eip_allocations"]["us-west-2b"] = (
             "eipalloc-1123456789abcdef0")
-    raw["eip_handoff_role_arn"] = (
-        f"arn:aws:iam::{ACCOUNT}:role/mojo-eip-handoff")
-    raw["eip_handoff_canaries"] = [{
-        "name": "api-version", "protocol": "https", "port": 443,
-        "tls_sni": "maestromojo.com", "host": "maestromojo.com",
-        "path": "/api/version", "expected_status": 200,
-        "expected_marker": "version", "timeout": 5, "target": "nlb",
-    }]
     return raw
 
 
-def handoff_topology(single=True, project_root=None):
+def preserved_topology(single=True, project_root=None):
     from mojo.deploy.provision import brownfield_inputs
     return brownfield_inputs.to_spec(
-        brownfield_inputs.validate(handoff_raw(single=single)),
+        brownfield_inputs.validate(preserved_raw(single=single)),
         project_root=project_root)
 
 
