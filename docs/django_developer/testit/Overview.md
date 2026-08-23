@@ -208,47 +208,60 @@ The **key is never read from a config file** — those are committed, and a key 
 
 Only `https` is allowed, except to a loopback host — the request carries a bearer key, and it will not be sent in cleartext to anything else. Redirects are never followed.
 
-### Tiers — default, `slow`, `extended`
+### Tiers — buckets and presets
 
-Two opt-in tiers; `--all` turns on both.
+A test declares the **bucket** it belongs to (`core`, `framework`, `bug`,
+`extended`, `admin`, `edge`, `slow`); a runner selects a **preset**, a named set
+of buckets. **[Tiers.md](Tiers.md) is the canonical reference** — buckets,
+presets, the legacy mapping, the per-bucket isolation contract, and budgets.
 
 ```bash
-./bin/run_tests                        # default tier only
-./bin/run_tests --all                  # + slow + extended
-./bin/run_tests --extra extended       # + just one tier
+./bin/run_tests                        # the framework preset (the default)
+./bin/run_tests --tier core            # just the ≤30s baseline
+./bin/run_tests --tier framework       # django-mojo's own critical tier
+./bin/run_tests --all                  # everything (== --tier all)
+./bin/run_tests --extra extended       # framework preset + ad-hoc extended tag
 ```
 
-The retired `--full` spelling remains accepted as a hidden compatibility shim,
-but it runs the ordinary default tier. Use `--all` when every opt-in tier is
-intended.
+`--tier` is repeatable; a name that is not a preset (`core`/`framework`/`all`)
+is a literal bucket, so `--tier admin --tier edge` selects exactly those two.
+`--extra X` still adds an ad-hoc tag on top of the preset, `--all` is an alias
+for `--tier all`, and the retired `--full` spelling remains a hidden no-op that
+runs the framework preset.
 
-| Tier | Tag | Meaning |
-|---|---|---|
-| default | *(none)* | Critical. Runs on every invocation. |
-| `slow` | `requires_extra: ["slow"]` | Expensive, or only meaningful before a release. |
-| `extended` | `@th.requires_extra("extended")` | Correct and worth keeping, but not a critical contract. |
-
-Two words rather than one because they are chosen on different grounds — `slow` is a
-statement about cost, `extended` about criticality — and "why is this opt-in?" should be
-answerable from the tag alone.
+> **Transition (maestro #2790).** The bucket mechanism is live, but until Phase
+> 3 curates tests into buckets, packages still use the legacy `default_core` /
+> `requires_extra` keys, which map onto buckets automatically (`default_core →
+> framework`, `requires_extra → its opt-in tags`). A bare `bin/run_tests` runs
+> the **framework** preset — byte-identical to the old default tier — until
+> Phase 3 populates `core` and flips the default to it.
 
 Currently `slow`: `test_security` (bouncer/rate-limiting, serial), `test_incident`,
 `test_deploy_scripts` (the packaged node-script shell harnesses — not serial, each
 harness runs in its own `mktemp` project path), the live-assistant tests.
 
-#### Deciding the tier
+#### Deciding the bucket
 
-A test belongs in the **default tier regardless of cost** if it covers a security boundary
-(permissions, auth, tenant isolation, secrets), a core framework contract (model
-save/serialize, REST dispatch, graphs, `request.DATA`), a bug that has already shipped
-once, or anything whose failure means the framework is broken for *every* consumer. The
-slowest single test in the suite is a shortlink scheme-injection test and it stays in the
-default tier — cost alone never demotes a security test.
+Pick the **lowest-cost bucket that still catches the failure it must catch**;
+[Tiers.md](Tiers.md) has the full table. In short:
 
-**`extended`** is for exhaustive input matrices past the first representative case, deep
-feature-internal variants of one app, coverage already asserted elsewhere, and tests whose
-cost *is* a timeout — an assertion that nothing arrives can only pass by waiting, so keep
-the positive path in the default tier and demote the negative one.
+- **`core`** — a security boundary (permissions, auth, tenant isolation,
+  secrets) or a framework contract whose failure means django-mojo is broken for
+  *every* consumer, **and** the test is parallel-safe and fast. This is the
+  ≤30s baseline; keep it small and clean.
+- **`framework`** — django-mojo's own critical contracts (model
+  save/serialize, REST dispatch, graphs, `request.DATA`) that are not part of
+  the universal baseline. Cost alone never demotes a security-relevant test out
+  of a critical bucket — the slowest single test, a shortlink scheme-injection
+  test, stays critical.
+- **`bug`** — one isolated regression per fixed bug (a security regression is
+  tagged `core` instead).
+- **`extended`** — exhaustive input matrices past the first representative case,
+  deep feature-internal variants of one app, coverage already asserted
+  elsewhere, and tests whose cost *is* a timeout (keep the positive path
+  critical, demote the negative one).
+- **`admin` / `edge`** — admin-portal and edge-deployment coverage most
+  consumers do not exercise.
 
 Deployment applies that distinction directly: the default `test_deploy` package retains
 representative brownfield safety boundaries across inputs, discovery, identity, nodes,
@@ -269,8 +282,10 @@ parallel-safe test for a critical contract and move exhaustive coverage that tru
 process-wide mutation to an opt-in, serial module. `requires_extra` selects coverage; it
 does not serialize it, so the module must declare `"serial": true` as well.
 
-To move a whole module, add `"requires_extra": ["slow"]` (or `["extended"]`) to its
-`__init__.py` TESTIT config. For a single test, use the decorator.
+To place a whole module, add `"tier": "extended"` (or any bucket) to its
+`__init__.py` TESTIT config — or the legacy `"requires_extra": ["slow"]`, which
+still works. For a single test use `@th.tier("bug")`, or `TESTIT_TIER = "bug"`
+for a whole file. See [Tiers.md](Tiers.md).
 
 #### The enforced isolation policy (repository packages only)
 
@@ -420,7 +435,21 @@ TESTIT = {
     "requires_extra": ["extended"],
     "serial": True,                          # mandatory: requires_extra alone is not isolation
 }
+
+# A package using the new tier vocabulary (maestro #2790). See Tiers.md.
+TESTIT = {
+    "tier": "extended",                      # the bucket this package belongs to
+    "serial": True,                          # mandatory when a non-parallel bucket mutates
+    "time_budget": 20,                       # optional: flag if this package exceeds 20s
+    # "file_parallel": True,                 # opt-in file-granular scheduling (Phase 3)
+}
 ```
+
+Keys the runner recognizes: `server_settings`, `serial`, `requires_apps`,
+`requires_extra`, `default_core`, `cold_budget`, and (maestro #2790) `tier`,
+`time_budget`, `file_parallel`. `tier` and `default_core` are mutually
+exclusive — one vocabulary per package. See [Tiers.md](Tiers.md) for the bucket
+contracts and the legacy mapping.
 
 When a large app has many tests, split it into domain-focused packages (`test_auth`, `test_mfa`, `test_user_mgmt`, etc.) rather than one monolithic `test_accounts`. Each package runs in parallel by default.
 

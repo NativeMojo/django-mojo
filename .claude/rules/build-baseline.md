@@ -23,6 +23,13 @@ Three different things used to all get called "the full suite". They are not the
 Never write "full suite" when you mean the whole-suite run — `--all` is a different,
 heavier thing. Say "whole suite" or "all-tier run".
 
+> **Tier presets (maestro #2790).** A bare `bin/run_tests --agent` now selects the
+> **framework** preset, which until Phase 3 is byte-identical to the whole default tier —
+> so "whole suite" and `--tier framework` are the same run today. `--tier core` (the future
+> ≤30s baseline) and `--tier all` (== `--all`) are also available. See
+> `docs/django_developer/testit/Tiers.md`. This vocabulary table stays accurate; the bare
+> run's selection does not change until Phase 3 populates `core` and flips the default.
+
 ## The rule
 
 Read the tier from the item's `quality_contract` (or its `### Verification` block),

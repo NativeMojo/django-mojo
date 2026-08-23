@@ -25,6 +25,9 @@ Before writing any test, read `docs/django_developer/testit/Overview.md`. This i
   for the tiers, picking the modules for a `targeted` run, and what counts as `full` here
 - Use `--all` to include opt-in modules (`requires_extra` — `slow` and `extended`) — needed
   for pre-publish validation, or when you changed what `--all` selects
+- Tests declare a **tier bucket** and runners select a **preset** (`--tier core` ⊂
+  `framework` ⊂ `all`); a bare run selects `framework` (== today's default tier until Phase
+  3). See `docs/django_developer/testit/Tiers.md`
 - Never use `--plain` — it disables the rich progress UI and parallel execution
 
 ## Tiers and Isolation

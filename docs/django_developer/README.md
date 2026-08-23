@@ -53,6 +53,7 @@ Companion track for REST integrators: [docs/web_developer/README.md](../web_deve
 | [assistant/webapp_tools](assistant/webapp_tools.md) | The assistant's `webapp` domain — two-tier authority, the tool table, the bound revisions, `ASSISTANT_ORIGIN`, and the three exclusions |
 | [github/](github/README.md) | GitHub App integration — GitHubInstall model, JWT/token service, webhook verification, OAuth login |
 | [testit/](testit/Overview.md) | Testing framework and patterns for django-mojo projects |
+| [testit/Tiers](testit/Tiers.md) | Test tiers — buckets, presets (`--tier core`/`framework`/`all`), and wall-clock budgets |
 | [testit/Isolation](testit/Isolation.md) | Per-checkout test isolation — how two worktrees run suites without colliding |
 
 ## Quick Start Pattern
