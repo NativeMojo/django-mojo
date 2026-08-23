@@ -29,7 +29,16 @@ pins a node to a fork.
 post_deploy.sh installs /etc copies FROM the rendered dest, and check_node
 byte-compares /etc against the same dest — so `<dest>` (by contract
 `${PROJ_PATH}/var/deploy`) is the single source of truth for what this node's
-last deploy shipped.
+last deploy shipped. Each rendered subdirectory is therefore PRUNED to exactly
+the set this run wrote: a leftover copy is not merely stale, it is reinstalled
+into /etc on the next pass.
+
+ROLE FILTERING — `MOJO_NODE_ROLE` in the ENVIRONMENT (never argv: a rollback
+runs a newer post_deploy.sh against an older module, where an unknown flag
+would die and an unread variable is ignored). When it is set, the cron and
+systemd names `<project-path>/aws/node_roles.conf` gives to some OTHER role are
+skipped in both loops, so a multi-role project converges each box through the
+same pass. Unset, not one byte changes.
 
 Pre-Django by contract, like every module in this package: imports argparse /
 os / sys only. See mojo/deploy/__init__.py.
@@ -240,6 +249,29 @@ def cmd_render(args):
     rendered = 0
     overlaid = 0
 
+    # This node's role arrives through the ENVIRONMENT, never argv: a rollback
+    # pairs a newer post_deploy.sh with an older mojo.deploy, and an unknown
+    # flag would die there while an unread variable is simply ignored. Unset or
+    # empty means every name is this node's, byte-for-byte the old behavior.
+    role = (os.environ.get("MOJO_NODE_ROLE") or "").strip()
+    skip = {subdir: set() for subdir, _ in TEMPLATE_SETS}
+    if role:
+        from mojo.deploy.node_role import NodeRoleError, foreign, read_manifest
+        try:
+            manifest = read_manifest(project)
+            for subdir, _ in TEMPLATE_SETS:
+                skip[subdir] = set(foreign(manifest, role, subdir))
+        except NodeRoleError as err:
+            print("mojo.deploy render: %s" % err, file=sys.stderr)
+            return 1
+        for subdir, _ in TEMPLATE_SETS:
+            if skip[subdir]:
+                print("mojo.deploy render: role %s does not own %s"
+                      % (role, ", ".join("%s/%s" % (subdir, name)
+                                         for name in sorted(skip[subdir]))))
+
+    produced = []
+
     for subdir, overlay_rel in TEMPLATE_SETS:
         src_dir = template_dir(subdir)
         names = list_files(src_dir)
@@ -258,8 +290,12 @@ def cmd_render(args):
                   file=sys.stderr)
             return 1
 
+        written = set()
+
         # Framework templates first: substitute, refuse leftovers, write 0644.
         for name in names:
+            if name in skip[subdir]:
+                continue
             with open(os.path.join(src_dir, name)) as handle:
                 text = substitute(handle.read(), context)
             leftover = unresolved_placeholders(text)
@@ -275,12 +311,15 @@ def cmd_render(args):
                 print("mojo.deploy render: cannot write %s/%s: %s"
                       % (dest_dir, name, err), file=sys.stderr)
                 return 1
+            written.add(name)
             rendered += 1
 
         # Project overlay: extras copy through verbatim; a name collision is
         # inert unless declared in aws/node_overrides.conf (see module doc).
         overlay_dir = os.path.join(project, overlay_rel)
         for name in list_files(overlay_dir):
+            if name in skip[subdir]:
+                continue
             collides = name in names
             if collides and name not in overrides:
                 print("mojo.deploy render: WARNING: project file %s/%s "
@@ -300,7 +339,32 @@ def cmd_render(args):
             if collides:
                 print("mojo.deploy render: declared override applied: %s/%s "
                       "replaces the framework template" % (overlay_rel, name))
+            written.add(name)
             overlaid += 1
+
+        produced.append((subdir, dest_dir, written))
+
+    # PRUNE, only once every write above succeeded. var/deploy IS the contract
+    # — post_deploy installs from it and check_node audits against it — so a
+    # copy this render did not produce is not merely stale, it gets reinstalled
+    # into /etc on the next pass and shields the structural sweep. That is what
+    # would otherwise make the role filter inert on an already-deployed node.
+    # Only regular non-symlink files go; directories and links are left alone.
+    for subdir, dest_dir, written in produced:
+        for name in sorted(list_files(dest_dir)):
+            if name in written:
+                continue
+            path = os.path.join(dest_dir, name)
+            if os.path.islink(path) or not os.path.isfile(path):
+                continue
+            try:
+                os.unlink(path)
+            except OSError as err:
+                print("mojo.deploy render: cannot remove stale %s/%s: %s"
+                      % (subdir, name, err), file=sys.stderr)
+                return 1
+            print("mojo.deploy render: removed stale %s/%s from the rendered "
+                  "contract" % (subdir, name))
 
     print("mojo.deploy render: %d framework template(s) + %d project file(s) "
           "-> %s" % (rendered, overlaid, args.dest))
