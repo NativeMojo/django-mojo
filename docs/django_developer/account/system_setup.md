@@ -144,7 +144,7 @@ actions through their existing guarded services.
 |---|---|
 | `hosting_dns` | Managed-domain status and credential usability, active/unexpired certificates, delegated ACME state, and live DNS challenge reservations |
 | `hosting_vhosts` | Every enabled Vhost has an active domain and certificate; no enabled rows is pending |
-| `edge_fleet` | Every protected topology node answers on an `edge`-channel runner with the installed django-mojo version, matching per-pool desired generation, and a combined serving generation that equals the live generation, with zero excluded/pending content or certificates |
+| `edge_fleet` | Every protected topology node answers on an `edge`-channel runner with the installed django-mojo version, matching per-pool desired generation, and a combined serving generation that equals the live generation, with zero excluded/pending content or certificates. If the runner roster itself cannot be read, the section returns a single `fleet.roster` **fail** instead of a verdict per node — blaming every node for a Redis fault or one skewed clock was the old behavior. A node whose clock runs more than one heartbeat window ahead is enough to reach this state, and the remediation names it |
 | `webapp_keys` | Safe WebApp key metadata and latest mint/rotate/revoke receipt; no token or recoverable credential material |
 | `webapp_destination` | Where a guided WebApp address will point (`webapp_destination.resolve()`'s result and provenance) and whether it resolves at all |
 | `apps_domain` (order 45) | Whether the installation-level [apps domain](../edge/webapps.md#the-apps-domain) (`webapp_apps_domain.installation_domain()`) already has its wildcard CNAME and covering certificate, so new web apps go live with zero per-app DNS work |
