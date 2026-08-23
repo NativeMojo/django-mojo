@@ -281,6 +281,15 @@ application supplies. The request grammar is one bounded JSON object on stdin
 {"operation": "abort", "operation_id": "content-publish-<32 hex>"}
 ```
 
+An application does not speak that protocol by hand — `mojo.deploy.publish_client`
+ships `publish_window(root, subtrees, ttl_seconds=900)`, a context manager that
+sends `begin` on entry and `end` (or `abort` on exception) on exit, wrapping the
+tenant's own writes in between. It never raises into the publish path: a broker
+failure is logged and the publish proceeds, its writes surfacing as ordinary
+unannotated events. Open the window **before** the first write — including
+before a delete, since a path removed before `begin` has no before-state and
+stays unexplained.
+
 The caller declares **scope**, not paths: a tenant root plus at most 64 subtree
 names, each a single path component. Root walks those subtrees itself at
 `begin` and again at `end` (the union, because a publish creates and deletes),
