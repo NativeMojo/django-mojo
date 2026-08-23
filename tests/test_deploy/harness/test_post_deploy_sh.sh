@@ -301,8 +301,26 @@ case "\$*" in
         printf '%s\n' "\$value"
         exit 0
         ;;
-    *"- __mojo_tls_vhost__ "*)
-        exec env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$REPO" "$REAL_PYTHON3" "\$@"
+    *"-c import mojo.deploy.vhost_install"*)
+        # The interpreter probe post_deploy.sh runs once before the vhost loop.
+        # vhost_install.absent forces "cannot import", which is the only way to
+        # reach the install_file fallback branch from a test.
+        [ -f "\$STUBCTL/vhost_install.absent" ] && exit 1
+        exec env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$REPO" "$REAL_PYTHON3" \
+            -c 'import mojo.deploy.vhost_install'
+        ;;
+    *"-m mojo.deploy.vhost_install"*)
+        # Strip the production -E/-P before passing through: -E would discard
+        # the PYTHONPATH this passthrough depends on to find the repo's mojo.
+        # The harness therefore does NOT exercise the production flag set —
+        # a known, deliberate gap.
+        vhost_args=()
+        for arg in "\$@"; do
+            case "\$arg" in -E|-P) continue ;; esac
+            vhost_args+=("\$arg")
+        done
+        exec env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$REPO" "$REAL_PYTHON3" \
+            "\${vhost_args[@]}"
         ;;
     *"sys.version_info >= (3,11)"*)
         [ -f "\$STUBCTL/mojosec.version.exit" ] && exit "\$(cat "\$STUBCTL/mojosec.version.exit")"
