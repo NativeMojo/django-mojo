@@ -779,6 +779,7 @@ def test_capacity_preview_placement(opts):
 def test_capacity_preview_placement_error_envelope(opts):
     server = _server()
     server.capacity.reset(server.PreviewHandler, {})
+    previous_upstream = server.PreviewHandler.upstream
 
     def request(payload):
         handler = object.__new__(server.PreviewHandler)
@@ -794,21 +795,25 @@ def test_capacity_preview_placement_error_envelope(opts):
         return handler.send_response.call_args.args[0], json.loads(
             handler.wfile.getvalue().decode())
 
-    code, refused = request({
-        "action": "add_node", "confirm_resource": "add_node",
-        "subnet_id": "subnet-0refused"})
-    assert code == 409, f"the refused subnet answered HTTP {code}"
-    assert refused == {
-        "status": False,
-        "error": "subnet-0refused cannot take this clone because it has no free addresses.",
-        "error_code": "subnet_not_usable",
-        "data": {"reason": "no_free_addresses", "subnet_id": "subnet-0refused"},
-    }, f"the browser wire envelope hid the provider refusal: {refused!r}"
+    server.PreviewHandler.upstream = None
+    try:
+        code, refused = request({
+            "action": "add_node", "confirm_resource": "add_node",
+            "subnet_id": "subnet-0refused"})
+        assert code == 409, f"the refused subnet answered HTTP {code}"
+        assert refused == {
+            "status": False,
+            "error": "subnet-0refused cannot take this clone because it has no free addresses.",
+            "error_code": "subnet_not_usable",
+            "data": {"reason": "no_free_addresses", "subnet_id": "subnet-0refused"},
+        }, f"the browser wire envelope hid the provider refusal: {refused!r}"
 
-    code, success = request({"action": "add_node", "confirm_resource": "add_node"})
-    assert code == 200 and success["status"] is True \
-        and success["data"]["action"] == "add_node", \
-        f"the success wire envelope changed: {success!r}"
+        code, success = request({"action": "add_node", "confirm_resource": "add_node"})
+        assert code == 200 and success["status"] is True \
+            and success["data"]["action"] == "add_node", \
+            f"the success wire envelope changed: {success!r}"
+    finally:
+        server.PreviewHandler.upstream = previous_upstream
 
     class Handler:
         pass
