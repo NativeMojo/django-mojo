@@ -819,6 +819,11 @@ def test_add_node_placement_asset_contract(opts):
             "subnet prefix validation is not exposed accessibly"
         assert "callbacks.onInput" in source and "callbacks.onCommit" in source, \
             "placement keystrokes and committed changes are not separate events"
+        assert "let commitTimer = null" in source \
+            and "setTimeout(() => callbacks.onCommit" in source, \
+            "placement commit can replace controls before focus finishes moving"
+        assert "data-placement-control" in source, \
+            "placement controls have no stable focus identity across renders"
         assert "return {element, values, valid}" in source, \
             "the placement wrapper can be appended as [object Object]"
         assert "subnet.placeholder" in source and "source uses" in source, \
@@ -835,6 +840,10 @@ def test_add_node_placement_asset_contract(opts):
             "Apply can be enabled while placement is locally invalid"
         assert "want.addNodes ? placement.element : null" in source, \
             "the staged Add Node controls do not append their DOM element"
+        assert "root.contains(document.activeElement)" in source \
+            and "dataset?.placementControl" in source \
+            and "focus({preventScroll: true})" in source, \
+            "a plan or placement render does not restore the active placement control"
 
     assert "confirm_resource: ADD_NODE" in legacy and "...placement.values()" in legacy, \
         "the Dashboard changed the literal add_node echo or omitted placement"

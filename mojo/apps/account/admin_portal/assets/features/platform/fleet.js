@@ -910,6 +910,8 @@ export async function fleetPage(ctx, signal = null) {
   // ── page ────────────────────────────────────────────────────────────────
 
   function render() {
+    const placementFocus = root.contains(document.activeElement)
+      ? document.activeElement?.dataset?.placementControl : '';
     syncPlan();
     root.replaceChildren(...[
       managed() ? null : h('div', {class: 'callout warning'},
@@ -922,6 +924,10 @@ export async function fleetPage(ctx, signal = null) {
       techDetails(),
       applyBar(),
     ].filter(Boolean));
+    if (placementFocus) {
+      root.querySelector(`[data-placement-control="${placementFocus}"]`)
+        ?.focus({preventScroll: true});
+    }
   }
 
   async function load(refresh = false) {
