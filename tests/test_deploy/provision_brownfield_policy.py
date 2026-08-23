@@ -64,11 +64,12 @@ def test_positive_client_policy_blocks_every_unlisted_mutation_via_getattr(opts)
         th.assert_true(raised is not None,
                        f"dynamic getattr must not bypass the block on {method}")
     # FORBIDDEN_METHODS keys on (service, method) and holds
-    # ("elbv2", "set_subnets"), so the cutover seam only fires on an elbv2
-    # client. On the ec2 client above the same name is simply an unlisted
-    # mutation, which the positive policy blocks one layer later — both are
-    # refusals, but only the elbv2 one exercises the stronger seam this
-    # assertion is about.
+    # ("elbv2", "set_subnets"), so the live-ingress cutover seam only fires on
+    # an elbv2 client. On the ec2 client above the same name is simply an
+    # unlisted mutation, which the positive policy blocks one layer later —
+    # both are refusals, but only the elbv2 one exercises the stronger seam
+    # this assertion is about. No client in the package is exempt from it:
+    # moving a live public address is external operator work.
     elbv2 = discover.GuardedClient(
         _Raw(), "elbv2", brownfield_policy.MutationPolicy())
     raised = None
@@ -90,7 +91,7 @@ def test_positive_client_policy_blocks_every_unlisted_mutation_via_getattr(opts)
 
 
 @th.django_unit_test()
-def test_closed_policy_excludes_data_dns_certificates_handoff_and_teardown(opts):
+def test_closed_policy_excludes_data_dns_certificates_cutover_and_teardown(opts):
     from mojo.deploy.provision import brownfield_policy
 
     forbidden = {
@@ -101,7 +102,8 @@ def test_closed_policy_excludes_data_dns_certificates_handoff_and_teardown(opts)
         "acm": ("request_certificate", "import_certificate"),
         "rds": ("create_db_cluster", "modify_db_cluster"),
         "elasticache": ("create_replication_group",),
-        "s3": ("put_object", "put_bucket_policy", "put_bucket_tagging"),
+        "s3": ("list_objects_v2", "put_object", "put_bucket_policy",
+               "put_bucket_tagging"),
         "kms": ("create_key", "put_key_policy"),
     }
     policy = brownfield_policy.MutationPolicy()

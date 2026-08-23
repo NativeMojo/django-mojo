@@ -383,7 +383,7 @@ reveal-once deployment token in a report.
 |---|---|
 | `hosting_dns` | Managed domains can change DNS, certificates are active/unexpired, delegated ACME is verified, and no challenge reservation remains live |
 | `hosting_vhosts` | At least one enabled Vhost has an active domain and certificate, and every enabled Vhost passes that check |
-| `edge_fleet` | Every node/pool in `EDGE_EXPECTED_TOPOLOGY` answers from an `edge`-channel runner with the expected django-mojo version and desired generation, and its combined serving generation equals the live generation, with no excluded or pending material |
+| `edge_fleet` | Every node/pool in `EDGE_EXPECTED_TOPOLOGY` answers from an `edge`-channel runner with the expected django-mojo version and desired generation, and its combined serving generation equals the live generation, with no excluded or pending material. When the runner roster cannot be read at all, `checks` carries a single `fleet.roster` entry with status `fail` and no `fleet.node.*` entries — treat that as "fleet state unknown", not as "every node is down" |
 | `webapp_keys` | Every WebApp's safe key metadata is active; missing is `pending`, inactive is `fail`, and revoked is `warn` |
 | `webapp_destination` | A guided WebApp address has somewhere to point: the `EDGE_WEBAPP_CNAME_TARGET` override or the platform's own `BASE_URL` hostname resolves. Unconfigured is `pending`; a set-but-unusable override is `fail` |
 | `apps_domain` | The installation's [apps domain](../../django_developer/edge/webapps.md#the-apps-domain) — the domain new web apps go live under with zero per-app DNS work — already has its wildcard CNAME and covering certificate. No qualifying domain yet, or one that hasn't converged, is `pending`; a DNS-read error is `fail` |

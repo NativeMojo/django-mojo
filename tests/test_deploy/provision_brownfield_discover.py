@@ -69,6 +69,48 @@ def test_unowned_node_name_collision_never_enters_node_convergence(opts):
 
 
 @th.django_unit_test()
+def test_second_page_duplicate_node_prevents_adoption(opts):
+    from mojo.deploy.provision import brownfield_discover, report
+
+    spec = topology()
+    manifest = spec.brownfield_manifest
+    manifest["compatibility_instance_ids"] = []
+    declaration = manifest["nodes"]["items"][0]
+    tags = [
+        {"Key": "Name", "Value": declaration["name"]},
+        {"Key": "managed-by", "Value": "django-mojo"},
+        {"Key": "mojo:project", "Value": spec.project},
+        {"Key": "mojo:env", "Value": spec.env},
+        {"Key": "mojo:fleet", "Value": spec.fleet},
+        {"Key": "mojo:role", "Value": "node"},
+        {"Key": "mojo:application-role", "Value": declaration["role"]},
+    ]
+
+    class _EC2:
+        def describe_instances(self, **kwargs):
+            suffix = "b" if kwargs.get("NextToken") else "a"
+            answer = {"Reservations": [{"Instances": [{
+                "InstanceId": f"i-{suffix * 17}", "Tags": tags,
+            }]}]}
+            if not kwargs.get("NextToken"):
+                answer["NextToken"] = "next"
+            return answer
+
+    findings, observed, inventory = [], objict(), {}
+    observed.brownfield_profiles = {
+        declaration["role"]: {
+            "profile_arn": declaration["instance_profile_arn"]}}
+    brownfield_discover._instances(
+        _Clients(ec2=_EC2()), spec, manifest, findings, observed, inventory)
+    th.assert_eq(list(observed.instances), [],
+                 "duplicate names on a later page must never be adopted")
+    th.assert_true(any(
+        row.status == report.BLIND and "match count" in row.message
+        for row in findings),
+        f"the complete-set duplicate must block convergence: {findings}")
+
+
+@th.django_unit_test()
 def test_node_observation_validates_vpc_subnet_profile_role_and_security_group(opts):
     from mojo.deploy.provision import brownfield_discover, report
 
@@ -472,6 +514,212 @@ def test_owned_iam_role_with_admin_policy_is_rejected(opts):
                  "AdministratorAccess must never reach node launch")
     th.assert_true(any(item.status == report.BLIND for item in findings),
                    f"the broadened role must block apply: {findings}")
+
+
+@th.django_unit_test()
+def test_pagination_merges_complete_results_and_discards_partial_failures(opts):
+    from botocore.exceptions import ClientError
+    from mojo.deploy.provision import brownfield_discover, report
+
+    class _EC2:
+        def __init__(self, pages):
+            self.pages = iter(pages)
+
+        def describe_vpcs(self, **kwargs):
+            page = next(self.pages)
+            if isinstance(page, Exception):
+                raise page
+            return page
+
+    findings = []
+    answer = brownfield_discover._read_pages(
+        findings, "ec2.describe_vpcs", _EC2([
+            {"Vpcs": [{"VpcId": "vpc-first"}], "NextToken": "next"},
+            {"Vpcs": [{"VpcId": "vpc-second"}]},
+        ]))
+    th.assert_eq([row["VpcId"] for row in answer["Vpcs"]],
+                 ["vpc-first", "vpc-second"],
+                 "every provider page must enter the dependency inventory")
+    th.assert_eq(findings, [],
+                 "complete pagination must not add a blocking finding")
+
+    error = ClientError(
+        {"Error": {"Code": "AccessDenied", "Message": "later page"}},
+        "DescribeVpcs")
+    findings = []
+    answer = brownfield_discover._read_pages(
+        findings, "ec2.describe_vpcs", _EC2([
+            {"Vpcs": [{"VpcId": "vpc-first"}], "NextToken": "next"},
+            error,
+        ]))
+    th.assert_eq(answer, {"Vpcs": []},
+                 "a failed later page must discard every partial result")
+    th.assert_true(any(row.status == report.BLIND for row in findings),
+                   f"a later-page failure must block apply: {findings}")
+
+    for token in (None, "again"):
+        pages = [{"Vpcs": [{"VpcId": "vpc-first"}],
+                  "NextToken": "again"}]
+        if token == "again":
+            pages.append({"Vpcs": [{"VpcId": "vpc-second"}],
+                          "NextToken": "again"})
+        else:
+            pages = [{"Vpcs": [{"VpcId": "vpc-first"}],
+                      "NextToken": token}]
+        findings = []
+        answer = brownfield_discover._read_pages(
+            findings, "ec2.describe_vpcs", _EC2(pages))
+        if token is None:
+            th.assert_eq(answer, {"Vpcs": [{"VpcId": "vpc-first"}]},
+                         "an absent token without a continuation claim is final")
+            th.assert_eq(findings, [],
+                         "a provider may finish by omitting its token")
+        else:
+            th.assert_eq(answer, {"Vpcs": []},
+                         "a repeated token must discard partial inventory")
+            th.assert_true(any(
+                row.code == "dependency.enumeration_truncated"
+                for row in findings),
+                f"a repeated token must fail closed: {findings}")
+
+    class _KMS:
+        def list_grants(self, **kwargs):
+            return {"Grants": [{"GrantId": "partial"}], "Truncated": True}
+
+    findings = []
+    answer = brownfield_discover._read_pages(
+        findings, "kms.list_grants", _KMS(), {"KeyId": "alias/test"})
+    th.assert_eq(answer, {"Grants": []},
+                 "a missing required continuation token must discard results")
+    th.assert_true(any(
+        row.code == "dependency.enumeration_truncated" for row in findings),
+        f"a missing continuation token must fail closed: {findings}")
+
+
+@th.django_unit_test()
+def test_second_page_iam_policy_collision_is_rejected(opts):
+    from mojo.deploy.provision import brownfield_discover, report
+
+    spec = managed_topology()
+    manifest = spec.brownfield_manifest
+    managed = manifest["nodes"]["profiles"]["api"]["managed"]
+    tags = [
+        {"Key": "managed-by", "Value": "django-mojo"},
+        {"Key": "mojo:project", "Value": spec.project},
+        {"Key": "mojo:env", "Value": spec.env},
+        {"Key": "mojo:fleet", "Value": spec.fleet},
+        {"Key": "mojo:role", "Value": "identity"},
+        {"Key": "mojo:application-role", "Value": "api"},
+    ]
+    role_arn = f"arn:aws:iam::123456789012:role/{managed['role_name']}"
+
+    class _IAM:
+        def get_instance_profile(self, **kwargs):
+            return {"InstanceProfile": {
+                "Arn": ("arn:aws:iam::123456789012:instance-profile/"
+                        f"{managed['profile_name']}"),
+                "Tags": tags, "Roles": [{"Arn": role_arn}]}}
+
+        def get_role(self, **kwargs):
+            return {"Role": {"Arn": role_arn, "Tags": tags,
+                             "AssumeRolePolicyDocument":
+                                 brownfield_discover.EC2_TRUST}}
+
+        def list_role_policies(self, **kwargs):
+            if kwargs.get("Marker"):
+                return {"PolicyNames": ["unexpected-admin"],
+                        "IsTruncated": False}
+            return {"PolicyNames": [f"{managed['role_name']}-runtime"],
+                    "IsTruncated": True, "Marker": "next"}
+
+        def list_attached_role_policies(self, **kwargs):
+            return {"AttachedPolicies": [], "IsTruncated": False}
+
+    findings, observed, inventory = [], objict(), {}
+    brownfield_discover._profiles(
+        _Clients(iam=_IAM()), manifest, findings, observed, inventory)
+    row = observed.brownfield_profiles["api"]
+    th.assert_true(row.role_collision and row.profile_collision,
+                   f"a second-page policy must withhold the role: {row}")
+    th.assert_true(any(item.status == report.BLIND for item in findings),
+                   f"the second-page policy collision must block: {findings}")
+
+
+@th.django_unit_test()
+def test_missing_elb_resource_remains_an_optional_empty_collection(opts):
+    from botocore.exceptions import ClientError
+    from mojo.deploy.provision import brownfield_discover, report
+
+    class _ELB:
+        def describe_load_balancers(self, **kwargs):
+            raise ClientError({"Error": {
+                "Code": "LoadBalancerNotFound", "Message": "not found"}},
+                "DescribeLoadBalancers")
+
+    findings = []
+    answer = brownfield_discover._read_pages(
+        findings, "elbv2.describe_load_balancers", _ELB(),
+        {"Names": ["missing"]}, not_found=True)
+    th.assert_eq(answer, {"LoadBalancers": []},
+                 "an absent optional balancer must remain creatable")
+    th.assert_eq(findings, [],
+                 "normal ELB absence must not be reported as blind")
+
+    class _VanishingELB:
+        def describe_load_balancers(self, **kwargs):
+            if not kwargs.get("Marker"):
+                return {"LoadBalancers": [{"LoadBalancerArn": "partial"}],
+                        "NextMarker": "next"}
+            raise ClientError({"Error": {
+                "Code": "LoadBalancerNotFound", "Message": "vanished"}},
+                "DescribeLoadBalancers")
+
+    findings = []
+    answer = brownfield_discover._read_pages(
+        findings, "elbv2.describe_load_balancers", _VanishingELB(),
+        {"Names": ["vanishing"]}, not_found=True)
+    th.assert_eq(answer, {"LoadBalancers": []},
+                 "later-page absence must discard partial edge evidence")
+    th.assert_true(any(row.status == report.BLIND for row in findings),
+                   f"later-page absence must fail closed: {findings}")
+
+
+@th.django_unit_test()
+def test_storage_inventory_uses_exact_metadata_without_prefix_occupancy(opts):
+    from mojo.deploy.provision import brownfield_discover
+
+    spec = topology()
+    manifest = spec.brownfield_manifest
+    by_key = {row["key"]: row for row in manifest["bootstrap"].values()}
+
+    class _S3:
+        def get_bucket_location(self, **kwargs):
+            return {"LocationConstraint": manifest["region"]}
+
+        def head_object(self, **kwargs):
+            reference = by_key[kwargs["Key"]]
+            return {"VersionId": reference["version_id"], "ETag": "etag",
+                    "ContentLength": 10,
+                    "Metadata": {"sha256": reference["sha256"]}}
+
+        def list_objects_v2(self, **kwargs):
+            raise AssertionError("storage prefixes must never be enumerated")
+
+    findings, observed, inventory = [], objict(), {}
+    brownfield_discover._storage(
+        _Clients(s3=_S3()), manifest, findings, observed, inventory)
+    expected = {
+        label: {"bucket": reference["bucket"],
+                "prefix": reference["prefix"],
+                "region": manifest["region"]}
+        for label, reference in manifest["storage"].items()
+    }
+    th.assert_eq(inventory["storage"], expected,
+                 "storage evidence must contain only exact stable fields")
+    th.assert_true(observed.bootstrap_payload,
+                   f"pinned bootstrap metadata must still be proven: {inventory}")
+    th.assert_eq(findings, [],
+                 f"exact storage metadata should converge: {findings}")
 
 
 @th.django_unit_test()

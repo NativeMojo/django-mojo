@@ -274,6 +274,13 @@ hook closes the other end of the same gap: a node that boots — from a deploy,
 an AMI, a crash — reconciles itself immediately instead of waiting out the
 sweep, and publishes nothing to do it.
 
+`convergence.publish_pool` hand-rolls the fan-out rather than using
+`broadcast=True` (it needs a per-target idempotency key that fits the
+`varchar(64)` column), but it shares the roster policy: `jobs.broadcast_roster`
+reads the exact per-channel index, reports a roster it cannot prove as a
+`jobs:degraded_broadcast` incident, and never raises. See
+[jobs/publishing.md](../jobs/publishing.md#how-a-broadcast-resolves-its-roster).
+
 `EDGE_CONVERGE_ENABLED = False` (settings-file-only, read with `get_static`)
 switches the sweep **and** the startup converge off for deployments that
 install this app **only** for the fleet-deploy plane ([deploy.md](deploy.md))

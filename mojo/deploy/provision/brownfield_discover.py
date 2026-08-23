@@ -20,6 +20,90 @@ EC2_TRUST = {
     }],
 }
 SSM_CORE_POLICY = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+_PAGE_FAILED = object()
+_PAGE_NOT_FOUND = object()
+_PAGINATION = {
+    "ec2.describe_vpcs": {
+        "request": "NextToken", "response": "NextToken",
+        "results": ("Vpcs",),
+    },
+    "ec2.describe_subnets": {
+        "request": "NextToken", "response": "NextToken",
+        "results": ("Subnets",),
+    },
+    "ec2.describe_route_tables": {
+        "request": "NextToken", "response": "NextToken",
+        "results": ("RouteTables",),
+    },
+    "ec2.describe_security_groups": {
+        "request": "NextToken", "response": "NextToken",
+        "results": ("SecurityGroups",),
+    },
+    "ec2.describe_images": {
+        "request": "NextToken", "response": "NextToken",
+        "results": ("Images",),
+    },
+    "ec2.describe_instances": {
+        "request": "NextToken", "response": "NextToken",
+        "results": ("Reservations",),
+    },
+    "ec2.describe_volumes": {
+        "request": "NextToken", "response": "NextToken",
+        "results": ("Volumes",),
+    },
+    "rds.describe_db_clusters": {
+        "request": "Marker", "response": "Marker",
+        "results": ("DBClusters",),
+    },
+    "rds.describe_db_subnet_groups": {
+        "request": "Marker", "response": "Marker",
+        "results": ("DBSubnetGroups",),
+    },
+    "elasticache.describe_replication_groups": {
+        "request": "Marker", "response": "Marker",
+        "results": ("ReplicationGroups",),
+    },
+    "elasticache.describe_cache_clusters": {
+        "request": "Marker", "response": "Marker",
+        "results": ("CacheClusters",),
+    },
+    "elasticache.describe_cache_subnet_groups": {
+        "request": "Marker", "response": "Marker",
+        "results": ("CacheSubnetGroups",),
+    },
+    "kms.list_grants": {
+        "request": "Marker", "response": "NextMarker",
+        "more": "Truncated", "results": ("Grants",),
+    },
+    "iam.list_role_policies": {
+        "request": "Marker", "response": "Marker",
+        "more": "IsTruncated", "results": ("PolicyNames",),
+    },
+    "iam.list_attached_role_policies": {
+        "request": "Marker", "response": "Marker",
+        "more": "IsTruncated", "results": ("AttachedPolicies",),
+    },
+    "elbv2.describe_load_balancers": {
+        "request": "Marker", "response": "NextMarker",
+        "results": ("LoadBalancers",),
+    },
+    "elbv2.describe_target_groups": {
+        "request": "Marker", "response": "NextMarker",
+        "results": ("TargetGroups",),
+    },
+    "elbv2.describe_listeners": {
+        "request": "Marker", "response": "NextMarker",
+        "results": ("Listeners",),
+    },
+    "logs.describe_log_groups": {
+        "request": "nextToken", "response": "nextToken",
+        "results": ("logGroups",),
+    },
+    "cloudwatch.describe_alarms": {
+        "request": "NextToken", "response": "NextToken",
+        "results": ("MetricAlarms", "CompositeAlarms"),
+    },
+}
 
 
 def observe(clients, topology):
@@ -54,8 +138,8 @@ def observe(clients, topology):
 
     network = manifest["network"]
     ec2 = clients.get("ec2")
-    vpcs = _read(findings, "ec2.describe_vpcs",
-                 lambda: ec2.describe_vpcs(VpcIds=[network["vpc_id"]]), {})
+    vpcs = _read_pages(findings, "ec2.describe_vpcs", ec2,
+                       {"VpcIds": [network["vpc_id"]]})
     vpc = _one(vpcs.get("Vpcs"))
     if not vpc:
         _missing(findings, "vpc", network["vpc_id"])
@@ -63,8 +147,8 @@ def observe(clients, topology):
     observed.vpc_id = (vpc or {}).get("VpcId")
 
     subnet_ids = [row["id"] for row in network["public_subnets"]]
-    answer = _read(findings, "ec2.describe_subnets",
-                   lambda: ec2.describe_subnets(SubnetIds=subnet_ids), {})
+    answer = _read_pages(findings, "ec2.describe_subnets", ec2,
+                         {"SubnetIds": subnet_ids})
     subnets = answer.get("Subnets") or []
     by_id = {row.get("SubnetId"): row for row in subnets}
     for declaration in network["public_subnets"]:
@@ -98,10 +182,11 @@ def observe(clients, topology):
                   "NetworkBorderGroup"),
               declaration["network_border_group"])
 
-    routes = _read(findings, "ec2.describe_route_tables",
-                   lambda: ec2.describe_route_tables(Filters=[{
-                       "Name": "association.subnet-id", "Values": subnet_ids,
-                   }]), {})
+    routes = _read_pages(findings, "ec2.describe_route_tables", ec2, {
+        "Filters": [{
+            "Name": "association.subnet-id", "Values": subnet_ids,
+        }],
+    })
     _validate_public_routes(findings, routes.get("RouteTables") or [], subnet_ids)
     observed.route_tables = discover.wrap(routes.get("RouteTables") or [])
 
@@ -111,9 +196,8 @@ def observe(clients, topology):
            if manifest["load_balancer"].get("security_group_id") else [])
         + manifest["database"]["security_group_ids"]
         + manifest["cache"]["security_group_ids"]))
-    groups = _read(findings, "ec2.describe_security_groups",
-                   lambda: ec2.describe_security_groups(
-                       GroupIds=tier_group_ids), {})
+    groups = _read_pages(findings, "ec2.describe_security_groups", ec2,
+                         {"GroupIds": tier_group_ids})
     group_rows = groups.get("SecurityGroups") or []
     group_by_id = {row.get("GroupId"): row for row in group_rows}
     node_group = group_by_id.get(network["node_security_group_id"])
@@ -216,9 +300,9 @@ def _finish_dependencies(manifest, group_by_id, node_group, findings,
         _missing(findings, "key pair", manifest["nodes"]["key_pair_name"])
     observed.key_pair = discover.wrap(key_pair)
     observed.key_pair_name = (key_pair or {}).get("KeyName")
-    image_answer = _read(findings, "ec2.describe_images",
-                         lambda: ec2.describe_images(
-                             ImageIds=[manifest["nodes"]["ami_id"]]), {})
+    image_answer = _read_pages(
+        findings, "ec2.describe_images", ec2,
+        {"ImageIds": [manifest["nodes"]["ami_id"]]})
     image = _one(image_answer.get("Images"))
     if not image:
         _missing(findings, "AMI", manifest["nodes"]["ami_id"])
@@ -273,9 +357,9 @@ def _finish_dependencies(manifest, group_by_id, node_group, findings,
 
 def _database(clients, manifest, network, findings, observed, inventory):
     wanted = manifest["database"]
-    answer = _read(findings, "rds.describe_db_clusters",
-                   lambda: clients.get("rds").describe_db_clusters(
-                       DBClusterIdentifier=wanted["identifier"]), {})
+    answer = _read_pages(
+        findings, "rds.describe_db_clusters", clients.get("rds"),
+        {"DBClusterIdentifier": wanted["identifier"]})
     cluster = _one(answer.get("DBClusters"))
     if not cluster:
         _missing(findings, "Aurora cluster", wanted["identifier"])
@@ -299,10 +383,9 @@ def _database(clients, manifest, network, findings, observed, inventory):
           sorted(wanted["security_group_ids"]))
     _same(findings, "Aurora subnet group", cluster.get("DBSubnetGroup"),
           wanted["subnet_group_name"])
-    subnet_answer = _read(
-        findings, "rds.describe_db_subnet_groups",
-        lambda: clients.get("rds").describe_db_subnet_groups(
-            DBSubnetGroupName=wanted["subnet_group_name"]), {})
+    subnet_answer = _read_pages(
+        findings, "rds.describe_db_subnet_groups", clients.get("rds"),
+        {"DBSubnetGroupName": wanted["subnet_group_name"]})
     subnet_group = _one(subnet_answer.get("DBSubnetGroups"))
     _same(findings, "Aurora subnet-group VPC",
           (subnet_group or {}).get("VpcId"), network["vpc_id"])
@@ -331,9 +414,10 @@ def _database(clients, manifest, network, findings, observed, inventory):
 
 def _cache(clients, manifest, network, findings, observed, inventory):
     wanted = manifest["cache"]
-    answer = _read(findings, "elasticache.describe_replication_groups",
-                   lambda: clients.get("elasticache").describe_replication_groups(
-                       ReplicationGroupId=wanted["identifier"]), {})
+    answer = _read_pages(
+        findings, "elasticache.describe_replication_groups",
+        clients.get("elasticache"),
+        {"ReplicationGroupId": wanted["identifier"]})
     group = _one(answer.get("ReplicationGroups"))
     if not group:
         _missing(findings, "Valkey replication group", wanted["identifier"])
@@ -362,11 +446,9 @@ def _cache(clients, manifest, network, findings, observed, inventory):
         _missing(findings, "Valkey member cluster", wanted["identifier"])
     member_clusters = []
     for member_id in member_ids:
-        cluster_answer = _read(
+        cluster_answer = _read_pages(
             findings, "elasticache.describe_cache_clusters",
-            lambda cluster_id=member_id: clients.get(
-                "elasticache").describe_cache_clusters(
-                    CacheClusterId=cluster_id), {})
+            clients.get("elasticache"), {"CacheClusterId": member_id})
         cluster = _one(cluster_answer.get("CacheClusters"))
         if not cluster:
             _missing(findings, "Valkey member cluster", member_id)
@@ -389,10 +471,10 @@ def _cache(clients, manifest, network, findings, observed, inventory):
         if cluster.get("CacheSubnetGroupName")))
     _same(findings, "Valkey subnet group", current_subnet_groups,
           [wanted["subnet_group_name"]])
-    subnet_answer = _read(
+    subnet_answer = _read_pages(
         findings, "elasticache.describe_cache_subnet_groups",
-        lambda: clients.get("elasticache").describe_cache_subnet_groups(
-            CacheSubnetGroupName=wanted["subnet_group_name"]), {})
+        clients.get("elasticache"),
+        {"CacheSubnetGroupName": wanted["subnet_group_name"]})
     subnet_group = _one(subnet_answer.get("CacheSubnetGroups"))
     _same(findings, "Valkey subnet-group VPC",
           (subnet_group or {}).get("VpcId"), network["vpc_id"])
@@ -437,15 +519,9 @@ def _storage(clients, manifest, findings, observed, inventory):
                 Bucket=bucket, ExpectedBucketOwner=manifest["account_id"]), {})
         region = location.get("LocationConstraint") or "us-east-1"
         _same(findings, f"{label} bucket region", region, manifest["region"])
-        prefix = _read(
-            findings, "s3.list_objects_v2",
-            lambda ref=reference: s3.list_objects_v2(
-                Bucket=ref["bucket"], Prefix=ref["prefix"], MaxKeys=1,
-                ExpectedBucketOwner=manifest["account_id"]), {})
         buckets[label] = {"bucket": reference["bucket"],
                           "prefix": reference["prefix"],
-                          "region": region,
-                          "has_objects": bool(prefix.get("Contents"))}
+                          "region": region}
     objects = {}
     for label, reference in manifest["bootstrap"].items():
         metadata = _head_object(s3, reference, findings, label,
@@ -538,9 +614,9 @@ def _key_and_topic(clients, manifest, findings, observed, inventory):
         lambda: kms.get_key_policy(KeyId=manifest["kms_key_arn"],
                                    PolicyName="default"), {})
     key_policy = _decode_policy(policy_answer.get("Policy")) or {}
-    grants_answer = _read(
-        findings, "kms.list_grants",
-        lambda: kms.list_grants(KeyId=manifest["kms_key_arn"]), {})
+    grants_answer = _read_pages(
+        findings, "kms.list_grants", kms,
+        {"KeyId": manifest["kms_key_arn"]})
     grants = grants_answer.get("Grants") or []
     partition = manifest["kms_key_arn"].split(":", 2)[1]
     account_root = f"arn:{partition}:iam::{manifest['account_id']}:root"
@@ -619,14 +695,12 @@ def _profiles(clients, manifest, findings, observed, inventory):
                     role_collision = True
                     role_owned = False
             if role_owned:
-                inline = _read(
-                    findings, "iam.list_role_policies",
-                    lambda name=managed["role_name"]:
-                    iam.list_role_policies(RoleName=name), {})
-                attached = _read(
-                    findings, "iam.list_attached_role_policies",
-                    lambda name=managed["role_name"]:
-                    iam.list_attached_role_policies(RoleName=name), {})
+                inline = _read_pages(
+                    findings, "iam.list_role_policies", iam,
+                    {"RoleName": managed["role_name"]})
+                attached = _read_pages(
+                    findings, "iam.list_attached_role_policies", iam,
+                    {"RoleName": managed["role_name"]})
                 expected_inline = f"{managed['role_name']}-runtime"
                 extra_inline = sorted(
                     set(inline.get("PolicyNames") or ()) - {expected_inline})
@@ -717,8 +791,8 @@ def _instances(clients, topology, manifest, findings, observed, inventory):
         {"Name": "instance-state-name",
          "Values": ["pending", "running", "stopping", "stopped"]},
     ]
-    owned_answer = _read(findings, "ec2.describe_instances",
-                         lambda: ec2.describe_instances(Filters=filters), {})
+    owned_answer = _read_pages(
+        findings, "ec2.describe_instances", ec2, {"Filters": filters})
     candidates = _reservation_instances(owned_answer)
     volume_ids = []
     for row in candidates:
@@ -729,9 +803,9 @@ def _instances(clients, topology, manifest, findings, observed, inventory):
                 volume_ids.append(volume_id)
     volume_rows = []
     if volume_ids:
-        volume_answer = _read(
-            findings, "ec2.describe_volumes",
-            lambda: ec2.describe_volumes(VolumeIds=sorted(set(volume_ids))), {})
+        volume_answer = _read_pages(
+            findings, "ec2.describe_volumes", ec2,
+            {"VolumeIds": sorted(set(volume_ids))})
         volume_rows = volume_answer.get("Volumes") or []
     volumes = {row.get("VolumeId"): row for row in volume_rows}
     by_name = {}
@@ -851,9 +925,9 @@ def _instances(clients, topology, manifest, findings, observed, inventory):
             instances.append(row)
     compatibility = []
     if declared_ids:
-        compat_answer = _read(findings, "ec2.describe_instances",
-                              lambda: ec2.describe_instances(
-                                  InstanceIds=declared_ids), {})
+        compat_answer = _read_pages(
+            findings, "ec2.describe_instances", ec2,
+            {"InstanceIds": declared_ids})
         compatibility = _reservation_instances(compat_answer)
         by_id = {row.get("InstanceId"): row for row in compatibility}
         for instance_id in declared_ids:
@@ -892,24 +966,17 @@ def _owned_edge(clients, topology, manifest, findings, observed, inventory):
                       ]), {})
     address_rows = addresses.get("Addresses") or []
     elbv2 = clients.get("elbv2")
-    balancer = None
-    try:
-        answer = elbv2.describe_load_balancers(
-            Names=[manifest["load_balancer"]["name"]])
-        balancer = _one(answer.get("LoadBalancers"))
-    except Exception as err:
-        if not _not_found(err):
-            _call_error(findings, "elbv2.describe_load_balancers", err)
+    answer = _read_pages(
+        findings, "elbv2.describe_load_balancers", elbv2,
+        {"Names": [manifest["load_balancer"]["name"]]}, not_found=True)
+    balancer = _one(answer.get("LoadBalancers"))
     target_groups = {}
     for role, name in (("api", manifest["load_balancer"]["api_target_group"]),
                        ("certbot", manifest["load_balancer"]["certbot_target_group"])):
-        try:
-            answer = elbv2.describe_target_groups(Names=[name])
-            group = _one(answer.get("TargetGroups"))
-        except Exception as err:
-            group = None
-            if not _not_found(err):
-                _call_error(findings, "elbv2.describe_target_groups", err)
+        answer = _read_pages(
+            findings, "elbv2.describe_target_groups", elbv2,
+            {"Names": [name]}, not_found=True)
+        group = _one(answer.get("TargetGroups"))
         if group:
             target_groups[role] = group
     listeners, targets, attributes = [], {}, {}
@@ -935,9 +1002,9 @@ def _owned_edge(clients, topology, manifest, findings, observed, inventory):
     observed.addresses = discover.wrap(valid_addresses)
     if balancer:
         arn = balancer.get("LoadBalancerArn")
-        listener_answer = _read(findings, "elbv2.describe_listeners",
-                                lambda: elbv2.describe_listeners(
-                                    LoadBalancerArn=arn), {})
+        listener_answer = _read_pages(
+            findings, "elbv2.describe_listeners", elbv2,
+            {"LoadBalancerArn": arn})
         listeners = listener_answer.get("Listeners") or []
         attr_answer = _read(
             findings, "elbv2.describe_load_balancer_attributes",
@@ -1105,9 +1172,9 @@ def _owned_elbv2(client, topology, arn, findings, label):
 def _telemetry(clients, topology, findings, observed, inventory):
     prefix = f"/mojo/{topology.project}-{topology.fleet}"
     logs_client = clients.get("logs")
-    logs = _read(findings, "logs.describe_log_groups",
-                 lambda: logs_client.describe_log_groups(
-                     logGroupNamePrefix=prefix), {})
+    logs = _read_pages(
+        findings, "logs.describe_log_groups", logs_client,
+        {"logGroupNamePrefix": prefix})
     expected_tags = _owned_tags(
         topology.brownfield_manifest, None, "telemetry")
     expected_tags.pop("mojo:application-role", None)
@@ -1135,9 +1202,9 @@ def _telemetry(clients, topology, findings, observed, inventory):
     cloudwatch = clients.get("cloudwatch")
     alarm_names = [f"{topology.project}-{topology.fleet}-{role}-unhealthy"
                    for role in ("api", "certbot")]
-    alarms = _read(findings, "cloudwatch.describe_alarms",
-                   lambda: cloudwatch.describe_alarms(
-                       AlarmNames=alarm_names), {})
+    alarms = _read_pages(
+        findings, "cloudwatch.describe_alarms", cloudwatch,
+        {"AlarmNames": alarm_names})
     owned_alarms, alarm_collisions = [], []
     for row in alarms.get("MetricAlarms") or []:
         if row.get("AlarmName") not in alarm_names:
@@ -1301,6 +1368,46 @@ def _policy_allows(policy, principal):
 
 def _read(findings, name, func, default):
     return report.safe(findings, STEP, name, func, default)
+
+
+def _read_pages(findings, name, client, params=None, not_found=False):
+    spec = _PAGINATION[name]
+    method = getattr(client, name.split(".", 1)[1])
+    request = dict(params or {})
+    answer = {key: [] for key in spec["results"]}
+    seen_tokens = set()
+    successful_pages = 0
+    while True:
+        def attempt():
+            try:
+                return method(**request)
+            except Exception as err:
+                if not_found and successful_pages == 0 and _not_found(err):
+                    return _PAGE_NOT_FOUND
+                raise
+
+        page = report.safe(
+            findings, STEP, name, attempt, _PAGE_FAILED)
+        if page is _PAGE_NOT_FOUND:
+            return {key: [] for key in spec["results"]}
+        if page is _PAGE_FAILED:
+            return {key: [] for key in spec["results"]}
+        for key in spec["results"]:
+            answer[key].extend(page.get(key) or [])
+        successful_pages += 1
+        token = page.get(spec["response"])
+        more_key = spec.get("more")
+        has_more = bool(page.get(more_key)) if more_key else bool(token)
+        if not has_more:
+            return answer
+        if token in (None, "") or token in seen_tokens:
+            findings.append(report.Finding(
+                STEP, report.BLIND, "dependency.enumeration_truncated",
+                f"{name} reported another page without a usable continuation token",
+                "fix the AWS enumeration before applying; nothing was mutated"))
+            return {key: [] for key in spec["results"]}
+        seen_tokens.add(token)
+        request[spec["request"]] = token
 
 
 def _same(findings, label, current, expected):

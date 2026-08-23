@@ -85,6 +85,11 @@ incidents. What to do when upgrading:
   your code publishes to that needs declaring (including
   `ScheduledTask.channel` values). Add them to `JOBS_ALLOWED_CHANNELS`, set
   identically on every box.
+- Watch for `jobs:degraded_broadcast` incidents too — a broadcast whose runner
+  roster could not be proven, so fleet-wide work may have reached fewer nodes
+  than intended. Usual causes are a node whose clock runs more than one
+  heartbeat window ahead, a runner that exited without deregistering, or Redis
+  latency. See [publishing.md](publishing.md#how-a-broadcast-resolves-its-roster).
 - Once the setting exists, enforcement is on: an undeclared publish raises
   `ValueError` with a `jobs:rejected_channel` incident and queues nothing,
   and an undeclared `ScheduledTask.channel` fails at save.

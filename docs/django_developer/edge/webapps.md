@@ -771,10 +771,13 @@ Four things are **refusals**, not statuses, because retrying will never help:
 - a deeper label (`a.b.example.com`). One label keeps every alias inside the
   apex+wildcard certificate the domain already has; a deeper name would need
   its own certificate;
-- **any** foreign enabled vhost at that name — another app's primary, another
-  app's alias, or an admin-created vhost of any kind. Refusing plainly is what
-  keeps the enabled-name uniqueness constraint from surfacing as an
-  `IntegrityError`;
+- **any** foreign vhost at that name, **enabled or parked** — another app's
+  primary, another app's alias, or an admin-created vhost of any kind. The
+  service rule is deliberately stricter than the database's: the partial
+  `edge_vhost_unique_enabled_server_name` constraint only sees enabled rows,
+  and minting a second row over someone's parked one would leave its owner
+  unable to ever re-enable it. Refusing plainly is what keeps that constraint
+  from surfacing as an `IntegrityError`;
 - managed DNS where the name already carries other records, or a CNAME pointing
   somewhere else. (A `*.{domain}` CNAME already at the destination routes this
   name too, so no per-host record is written.)
@@ -792,6 +795,46 @@ alias, and every application route copies its upstream FK from the primary
 row. Re-checking is idempotent. A duplicate logical path, an alias-only path,
 or the same path pointing at another upstream is refused atomically rather
 than guessed at or silently rewritten.
+
+**Occupancy is decided twice, and the second one is the claim.** `attach()`
+does provider work — a managed CNAME upsert, an authoritative probe, a
+certificate lookup — between reading the name and committing the alias, so the
+first read is only a cheap "don't touch a provider for a name that is plainly
+someone else's". Both reads run the same `_alias_occupancy()` helper, so they
+cannot drift; the second one runs inside the final transaction with
+`select_for_update`, and that is the one that decides. Two overlapping calls
+therefore converge instead of racing to the unique index: the same app's second
+call finds its own committed alias and returns `attached` with `created: false`,
+a different app's call gets the ordinary "already serving something else here"
+`ValueException` — a 400 — rather than a raw `IntegrityError` 500 (item #2724).
+
+The final transaction takes its locks **WebApp → Domain → Vhost**, the same
+order `_reconcile_routes()`, `webapp_auth_routes.reconcile()` and
+`webapp_serving.reconcile_desired_routes()` already use, so alias attach cannot
+invert against them. The **Domain** row is what makes the claim work at all: a
+`SELECT … FOR UPDATE` over the Vhosts at a name that does not exist yet locks
+nothing, whereas the owning Domain row exists either way and serializes every
+compliant attach for any label under it. Alias attaches are rare and the
+transaction contains database work only, so a domain-wide mutex is the cheap
+answer — a per-host claim table and migration would not be.
+
+**Provider work stays outside that transaction, and a loser rolls none of it
+back.** Holding an ownership lock across remote I/O is what the two-phase split
+exists to avoid. `dns.upsert_record()` keeps its own Domain lock across the
+provider mutation (`record_reservations.mutation_guard()`), and
+`certs.request_certificate()` already serializes on the Domain row and reuses a
+pending/issuing/active row, so this fix adds no second ACME mechanism. A call
+that loses the final claim may have completed the same domain-level
+prerequisite the winner needed: the CNAME target is installation-wide and the
+apex+wildcard certificate is owned by the Domain, so deleting either to "clean
+up" would break the winner.
+
+**There is deliberately no `IntegrityError` translation path.** Every
+`attach()` caller passes through the WebApp-then-Domain mutex, so the locked
+occupancy decision handles the documented races before any write. The partial
+unique constraint stays as the last-resort backstop for code that bypasses the
+service, and an unexplained integrity failure — including one raised by route
+reconciliation — propagates rather than being guessed into a success.
 
 `detach(web_app, vhost)` removes one alias — `Vhost.delete()` publishes fleet
 convergence on commit, so nodes drop the server block without waiting for the

@@ -239,3 +239,91 @@ def test_stubber_validates_rds_cache_and_s3_metadata_request_shapes(opts):
         th.assert_true(inventory["credential_metadata"][
             "database credential"]["metadata_proven"],
             f"the S3 metadata proof must be retained: {inventory}")
+
+
+@th.django_unit_test()
+def test_brownfield_pagination_exhausts_each_provider_token_family(opts):
+    from botocore.stub import Stubber
+    from mojo.deploy.provision import brownfield_discover
+
+    expected_operations = {
+        "ec2.describe_vpcs", "ec2.describe_subnets",
+        "ec2.describe_route_tables", "ec2.describe_security_groups",
+        "ec2.describe_images", "ec2.describe_instances",
+        "ec2.describe_volumes", "rds.describe_db_clusters",
+        "rds.describe_db_subnet_groups",
+        "elasticache.describe_replication_groups",
+        "elasticache.describe_cache_clusters",
+        "elasticache.describe_cache_subnet_groups", "kms.list_grants",
+        "iam.list_role_policies", "iam.list_attached_role_policies",
+        "elbv2.describe_load_balancers", "elbv2.describe_target_groups",
+        "elbv2.describe_listeners", "logs.describe_log_groups",
+        "cloudwatch.describe_alarms",
+    }
+    th.assert_eq(set(brownfield_discover._PAGINATION), expected_operations,
+                 "the registry must name every paginatable brownfield read")
+
+    grant = {
+        "GrantId": "grant-first", "GranteePrincipal":
+            "arn:aws:iam::123456789012:role/test",
+        "Operations": ["Decrypt"],
+    }
+    second_grant = dict(grant, GrantId="grant-second")
+    balancer_arn = ("arn:aws:elasticloadbalancing:us-west-2:123456789012:"
+                    "loadbalancer/net/test/1234567890123456")
+    cases = (
+        ("ec2", "ec2.describe_vpcs", {"VpcIds": ["vpc-12345678"]},
+         {"Vpcs": [{"VpcId": "vpc-11111111"}], "NextToken": "ec2-next"},
+         {"Vpcs": [{"VpcId": "vpc-22222222"}]},
+         {"VpcIds": ["vpc-12345678"], "NextToken": "ec2-next"}),
+        ("rds", "rds.describe_db_clusters", {"DBClusterIdentifier": "db"},
+         {"DBClusters": [{"DBClusterIdentifier": "first"}],
+          "Marker": "rds-next"},
+         {"DBClusters": [{"DBClusterIdentifier": "second"}]},
+         {"DBClusterIdentifier": "db", "Marker": "rds-next"}),
+        ("kms", "kms.list_grants", {"KeyId": "alias/test"},
+         {"Grants": [grant], "Truncated": True,
+          "NextMarker": "kms-next"},
+         {"Grants": [second_grant], "Truncated": False},
+         {"KeyId": "alias/test", "Marker": "kms-next"}),
+        ("iam", "iam.list_role_policies", {"RoleName": "test-role"},
+         {"PolicyNames": ["first"], "IsTruncated": True,
+          "Marker": "iam-next"},
+         {"PolicyNames": ["second"], "IsTruncated": False},
+         {"RoleName": "test-role", "Marker": "iam-next"}),
+        ("elbv2", "elbv2.describe_load_balancers", {"Names": ["test-nlb"]},
+         {"LoadBalancers": [{"LoadBalancerArn": balancer_arn}],
+          "NextMarker": "elb-next"},
+         {"LoadBalancers": [{"LoadBalancerArn": f"{balancer_arn}2"}]},
+         {"Names": ["test-nlb"], "Marker": "elb-next"}),
+        ("logs", "logs.describe_log_groups",
+         {"logGroupNamePrefix": "/mojo/test"},
+         {"logGroups": [{"logGroupName": "/mojo/test/first"}],
+          "nextToken": "logs-next"},
+         {"logGroups": [{"logGroupName": "/mojo/test/second"}]},
+         {"logGroupNamePrefix": "/mojo/test", "nextToken": "logs-next"}),
+        ("cloudwatch", "cloudwatch.describe_alarms",
+         {"AlarmNames": ["test-alarm"]},
+         {"MetricAlarms": [{"AlarmName": "metric-first"}],
+          "CompositeAlarms": [{"AlarmName": "composite-first"}],
+          "NextToken": "alarm-next"},
+         {"MetricAlarms": [{"AlarmName": "metric-second"}],
+          "CompositeAlarms": [{"AlarmName": "composite-second"}]},
+         {"AlarmNames": ["test-alarm"], "NextToken": "alarm-next"}),
+    )
+    for service, operation, params, first, second, second_params in cases:
+        client = _client(service)
+        method = operation.split(".", 1)[1]
+        stubber = Stubber(client)
+        stubber.add_response(method, first, params)
+        stubber.add_response(method, second, second_params)
+        findings = []
+        with stubber:
+            answer = brownfield_discover._read_pages(
+                findings, operation, client, params)
+        stubber.assert_no_pending_responses()
+        th.assert_eq(findings, [],
+                     f"{operation} pagination must not add findings")
+        for result_key in brownfield_discover._PAGINATION[operation]["results"]:
+            th.assert_eq(len(answer.get(result_key) or []), 2,
+                         f"{operation} must merge both provider pages")

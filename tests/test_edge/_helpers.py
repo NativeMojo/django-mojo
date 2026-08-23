@@ -28,7 +28,12 @@ def declare_edge_runner(runner_id="edge-test-engine"):
     client = get_client()
     keys = JobKeys()
     client.zadd(keys.runner_registry("edge"), {runner_id: time.time()})
-    client.expire(keys.runner_registry("edge"), 30)
+    # Same TTL as the heartbeat row below, deliberately. A registry entry that
+    # OUTLIVES its heartbeat row is exactly the state the bounded roster reader
+    # raises runner_roster_invalid on, and this fixture writes to shared Redis —
+    # a longer expiry here leaves that trap behind for any later module that
+    # reads the roster for real.
+    client.expire(keys.runner_registry("edge"), 15)
     client.set(keys.runner_hb(runner_id), json.dumps({
         "runner_id": runner_id,
         "hostname": "test-host",

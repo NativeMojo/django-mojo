@@ -277,6 +277,46 @@ def _write_managed_cname(domain, hostname, target):
     return True
 
 
+def _alias_occupancy(web_app, domain, label, hostname, lock=False):
+    """Who holds `(domain, label)` — and what this app is allowed to do there.
+
+    Every row at this name, ENABLED OR NOT. Scanning only enabled rows matched
+    the partial unique constraint but missed a PARKED one — another app's
+    disabled address, or one an admin took down. Attach would then mint a
+    second (enabled) row for the same name, and the parked row's owner could
+    never re-enable it: that write hits the constraint as an `IntegrityError`
+    with nothing left to do about it.
+
+    Returns this app's own row (enabled or parked) when every row here is its
+    own, None when the name is free, and raises the plain refusal when ANY row
+    belongs elsewhere — another app's primary, another app's alias, an
+    admin-created vhost of any kind — so the enabled-name uniqueness constraint
+    is never reached as an `IntegrityError`.
+
+    `lock=True` is the same decision taken under a row lock, for the final
+    claim. It must only be used inside `transaction.atomic()`. `of=("self",)`
+    keeps the mutex on Vhost rows: there is no join to widen it to, and saying
+    so keeps it that way. A `SELECT ... FOR UPDATE` over an EMPTY result set
+    locks nothing, which is why the caller holds the owning Domain row as the
+    namespace mutex before calling this.
+
+    Item #2724: shared by the cheap pre-provider check and the final
+    transactional one, so the two cannot drift into disagreeing about who owns
+    a hostname.
+    """
+    from mojo.apps.edge.models import Vhost
+
+    rows = Vhost.objects.filter(domain=domain, label=label)
+    if lock:
+        rows = rows.select_for_update(of=("self",))
+    rows = list(rows.order_by("-is_enabled", "pk"))
+    ours = [row for row in rows if row.alias_of_id == web_app.pk]
+    if len(ours) != len(rows):
+        raise me.ValueException(
+            f"{hostname} is already serving something else here.")
+    return ours[0] if ours else None
+
+
 def _reconcile_routes(web_app, alias):
     """Make an alias serve the primary's complete route contract.
 
@@ -345,6 +385,7 @@ def attach(web_app, hostname, actor, retry_certificate=False, *,
     ``resolve_cname`` is an injection seam for tests (None means the live
     authoritative probe, ``probe.query_cname``).
     """
+    from mojo.apps.dnsman.models import Domain
     from mojo.apps.dnsman.models.domain import PROVIDER_MOJO
     from mojo.apps.dnsman.services import certs
     from mojo.apps.edge.models import Vhost, WebApp
@@ -358,25 +399,12 @@ def attach(web_app, hostname, actor, retry_certificate=False, *,
         return objict(status="needs_domain", hostname=hostname,
                       reason=_needs_domain_reason(hostname))
     label = resolved.label
-    # Every row at this name, ENABLED OR NOT. Scanning only enabled rows
-    # matched the partial unique constraint but missed a PARKED one — another
-    # app's disabled address, or one an admin took down. Attach would then mint
-    # a second (enabled) row for the same name, and the parked row's owner
-    # could never re-enable it: that write hits the constraint as an
-    # IntegrityError with nothing left to do about it.
-    rows = list(Vhost.objects.filter(domain=domain, label=label)
-                .select_related("certificate")
-                .order_by("-is_enabled", "pk"))
-    ours = [row for row in rows if row.alias_of_id == web_app.pk]
-    if len(ours) != len(rows):
-        # Anything here that is not already this app's own alias — another
-        # app's primary, another app's alias, an admin-created vhost of any
-        # kind, enabled or parked — is the same plain refusal, so the
-        # enabled-name uniqueness constraint is never reached as an
-        # IntegrityError.
-        raise me.ValueException(
-            f"{hostname} is already serving something else here.")
-    existing = ours[0] if ours else None
+    # The CHEAP occupancy read: a name that is plainly someone else's is
+    # refused here, before any provider write. It is not the claim — that is
+    # re-decided under lock in the final transaction (item #2724) — so a
+    # conflict appearing after this point is caught there rather than by the
+    # database constraint.
+    existing = _alias_occupancy(web_app, domain, label, hostname)
     if existing is not None and existing.is_enabled:
         # Already ours and live: report success without touching DNS again.
         # This is what makes the Check button free to press. Reconcile anyway —
@@ -453,26 +481,44 @@ def attach(web_app, hostname, actor, retry_certificate=False, *,
         if not current.vhost_id:
             raise me.ValueException(
                 "Give this app its own address first, then add a custom one.")
+        # WebApp, then Domain, then Vhosts — the order `_reconcile_routes()`
+        # and the other route reconcilers already take, so this claim cannot
+        # invert against them. The Domain row is what makes the claim work: it
+        # exists whether or not a Vhost at this name does, so two attaches
+        # racing for the same FREE name still serialize here, where locking an
+        # empty set of Vhosts would not (item #2724).
+        domain = Domain.objects.select_for_update().get(pk=domain.pk)
+        # The claim, re-decided on committed rows rather than the pre-provider
+        # read. A same-owner racer now sees its winner's alias; a different
+        # owner gets the same plain refusal it would have got up front.
+        existing = _alias_occupancy(current, domain, label, hostname,
+                                    lock=True)
         primary = Vhost.objects.select_for_update().get(pk=current.vhost_id)
-        if existing is not None:
+        if existing is not None and existing.is_enabled:
+            # Ours and already live — a racer whose twin got here first, or a
+            # retry that did its provider work against a stale empty read.
+            # Reconcile and report the alias that exists; never a second row.
+            vhost = existing
+            created = False
+        elif existing is not None:
             # This app's own parked address, revived — never a duplicate row.
-            existing = Vhost.objects.select_for_update().get(
-                pk=existing.pk, alias_of=current)
             existing.certificate = certificate
             existing.pool = primary.pool
             existing.spa = True
             existing.is_enabled = True
             existing.save()
             vhost = existing
+            created = False
         else:
             vhost = Vhost.objects.create(
                 domain=domain, label=label, kind="site_api",
                 certificate=certificate, pool=primary.pool, spa=True,
                 alias_of=current)
+            created = True
         vhost = _reconcile_routes(current, vhost)
     return objict(status="attached", hostname=hostname, vhost=vhost.pk,
                   domain=domain.pk, certificate=certificate.pk,
-                  dns=_dns_mode(domain), created=existing is None)
+                  dns=_dns_mode(domain), created=created)
 
 
 def detach(web_app, vhost):
