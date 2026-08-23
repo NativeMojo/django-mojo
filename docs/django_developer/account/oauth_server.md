@@ -113,6 +113,37 @@ idempotent. `unregister_resource(path)` removes one.
 consent 404s, refresh is refused and live tokens stop validating — but the grant
 rows survive, so the Admin still sees them and re-enabling brings them back.
 
+### Registration also decides what the discovery route MATCHES
+
+`/.well-known/oauth-protected-resource/<resource path>` is a framework route
+registered by the `account` app, and `account` loads before every app that
+depends on it — so it is always ahead of a downstream app's own patterns. It
+therefore claims **only the resource paths this installation has registered**.
+
+The capture uses a custom path converter (`mojo_oauth_resource`) whose
+`to_python` raises `ValueError` for an unregistered path. Django treats that as
+**no match**, not a 404: the resolver simply carries on to the next urlpattern,
+at every nesting level. So the two supported choices are mutually exclusive, and
+you pick one per path:
+
+| You want | Do this |
+|---|---|
+| The framework to serve the RFC 9728 document | `register_resource(path, …)`. The route claims the path and the document is built from the registry. |
+| To serve your **own** document at that well-known URL | Do **not** register the path. The framework's route no longer matches it, so your own route — in your app's `rest` module, or in the project's root urlconf — is reached. |
+
+There is no half-way position: a path cannot be both registered and served by
+your own view, because registration is exactly what makes the framework's route
+claim it.
+
+**Registration is observable, deliberately.** A registered-but-disabled path
+still answers the RFC `{"error": "not_found"}` 404 from this view, while an
+unregistered one falls through to the application's ordinary 404 — so an
+unauthenticated prober can tell the two apart. That is an accepted trade. The
+alternative is consulting the `enabled` callable during URL resolution, which
+would put an uncached database read on a public path *ahead of* the view's rate
+limiter, and would change what a registered resource answers. RFC 9728 documents
+are public by design and the registered paths are documented defaults.
+
 ### The `registry=` seam
 
 `ResourceRegistry` is a class with one shared default instance (`REGISTRY`).
