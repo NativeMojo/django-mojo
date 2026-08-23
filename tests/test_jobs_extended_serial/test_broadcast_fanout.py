@@ -42,7 +42,7 @@ def record_call(job):
     return "ok"
 
 
-FUNC = "test_jobs.test_broadcast_fanout.record_call"
+FUNC = "test_jobs_extended_serial.test_broadcast_fanout.record_call"
 
 
 def _clear(opts):
@@ -60,21 +60,82 @@ def _clear(opts):
 
 
 class _Roster:
-    """Swap jobs.get_runners for a fixed roster, restore on exit."""
+    """Swap the EXACT roster reader for a fixed roster, restore on exit.
+
+    publish() resolves its fan-out targets through broadcast_roster(), which
+    reads get_runners_bounded — item #2729. Stubbing get_runners here instead
+    would leave every test in this file silently exercising the degraded
+    fallback branch while still passing.
+    """
 
     def __init__(self, runners):
         self.runners = runners
 
     def __enter__(self):
         from mojo.apps import jobs
-        self.original = jobs.get_runners
-        jobs.get_runners = lambda channel=None: list(self.runners)
+        self.original = jobs.get_runners_bounded
+        jobs.get_runners_bounded = lambda channel, **kwargs: list(self.runners)
         return self
 
     def __exit__(self, *exc):
         from mojo.apps import jobs
-        jobs.get_runners = self.original
+        jobs.get_runners_bounded = self.original
         return False
+
+
+class _BrokenRoster:
+    """Make the exact reader raise, and record whether the cheap one was used.
+
+    Both readers are swapped so a test can prove which branch ran: the
+    fault-selective fallback is the whole design decision under test.
+    """
+
+    def __init__(self, fault, fallback=None):
+        self.fault = fault
+        self.fallback = fallback or []
+        self.fallback_calls = 0
+
+    def __enter__(self):
+        from mojo.apps import jobs
+
+        def _raise(channel, **kwargs):
+            raise RuntimeError(self.fault)
+
+        def _cheap(channel=None):
+            self.fallback_calls += 1
+            return list(self.fallback)
+
+        self.original_bounded = jobs.get_runners_bounded
+        self.original_plain = jobs.get_runners
+        jobs.get_runners_bounded = _raise
+        jobs.get_runners = _cheap
+        return self
+
+    def __exit__(self, *exc):
+        from mojo.apps import jobs
+        jobs.get_runners_bounded = self.original_bounded
+        jobs.get_runners = self.original_plain
+        return False
+
+
+def _clear_degraded_notices(channels=CHANNELS):
+    """The suppression key has an hour TTL on a long-lived Redis, so a suite
+    re-run inside the hour would see no second Event and mis-read it."""
+    from mojo.apps import incident
+    from mojo.apps.incident.models import Event
+    from mojo.apps.jobs import DEGRADED_BROADCAST_CATEGORY
+    from mojo.helpers.redis import get_connection
+
+    client = get_connection()
+    for channel in channels:
+        client.delete(incident.notice_key(DEGRADED_BROADCAST_CATEGORY, channel))
+    Event.objects.filter(category=DEGRADED_BROADCAST_CATEGORY).delete()
+
+
+def _degraded_events():
+    from mojo.apps.incident.models import Event
+    from mojo.apps.jobs import DEGRADED_BROADCAST_CATEGORY
+    return Event.objects.filter(category=DEGRADED_BROADCAST_CATEGORY)
 
 
 def _alive(runner_id):
@@ -89,6 +150,7 @@ def setup_broadcast_fanout(opts):
     opts.redis = get_adapter()
     opts.keys = JobKeys()
     _clear(opts)
+    _clear_degraded_notices()
 
 
 @th.django_unit_test("an immediate broadcast reaches EVERY live runner")
@@ -222,3 +284,115 @@ def test_delayed_broadcast_is_not_fanned_out(opts):
             f"expected the job in the sched_broadcast ZSET, found {scheduled}")
     finally:
         _clear(opts)
+
+
+@th.django_unit_test("a timeout does NOT fall back to the unbounded scan")
+def test_unreadable_roster_timeout_does_not_fall_back(opts):
+    """get_runners scans the keyspace on the process pool, whose socket
+    timeout defaults to 60s. Answering 'Redis is slow' with that, inside
+    publish(), inside a cron minute, is worse than not answering."""
+    from mojo.apps import jobs
+    from mojo.apps.jobs.models import Job
+
+    _clear(opts)
+    _clear_degraded_notices()
+    try:
+        with _BrokenRoster("runner_roster_timeout",
+                           fallback=[_alive(RUNNER_A)]) as roster:
+            result = jobs.publish(FUNC, {"n": 5}, channel=CH, broadcast=True)
+
+        assert roster.fallback_calls == 0, (
+            "a roster TIMEOUT fell back to the unbounded keyspace scan — the "
+            "one fault where the cheap reader is the wrong answer")
+        assert isinstance(result, str), (
+            f"with no usable roster the job waits on the shared queue, so one "
+            f"id is expected, got {type(result).__name__}: {result!r}")
+        assert Job.objects.filter(channel=CH).count() == 1, (
+            "the job should be queued once on the shared channel queue")
+        assert _degraded_events().count() == 1, (
+            f"an unprovable roster must be reported, not swallowed; found "
+            f"{_degraded_events().count()} incidents")
+    finally:
+        _clear(opts)
+        _clear_degraded_notices()
+
+
+@th.django_unit_test("an invalid roster falls back and still fans out")
+def test_unreadable_roster_invalid_falls_back(opts):
+    """A stale registry entry or a skewed clock makes the exact reader raise
+    while Redis is answering promptly — there the cheap reader is right, and
+    is likely to return the better roster."""
+    from mojo.apps import jobs
+    from mojo.apps.jobs.models import Job
+
+    _clear(opts)
+    _clear_degraded_notices()
+    try:
+        with _BrokenRoster("runner_roster_invalid",
+                           fallback=[_alive(RUNNER_A), _alive(RUNNER_B)]) as roster:
+            result = jobs.publish(FUNC, {"n": 6}, channel=CH, broadcast=True)
+
+        assert roster.fallback_calls == 1, (
+            f"an invalid roster must fall back to the cheap reader, got "
+            f"{roster.fallback_calls} calls")
+        assert isinstance(result, list) and len(result) == 2, (
+            f"the fallback roster must still fan out to both runners, got "
+            f"{result!r}")
+        channels = sorted(r.channel for r in Job.objects.filter(id__in=result))
+        assert channels == sorted([RUNNER_A, RUNNER_B]), (
+            f"degraded delivery still addresses box-direct channels: {channels}")
+        assert _degraded_events().count() == 1, (
+            "a degraded roster must be reported even when delivery succeeded")
+    finally:
+        _clear(opts)
+        _clear_degraded_notices()
+
+
+@th.django_unit_test("a repeat degradation inside the window files no second incident")
+def test_degraded_roster_incident_is_suppressed(opts):
+    """dnsman publishes one broadcast per certificate on a bulk renewal; an
+    Event per publish is the flood the suppression exists to prevent."""
+    from mojo.apps import jobs
+
+    _clear(opts)
+    _clear_degraded_notices()
+    try:
+        with _BrokenRoster("runner_roster_timeout"):
+            jobs.publish(FUNC, {"n": 7}, channel=CH, broadcast=True)
+            jobs.publish(FUNC, {"n": 8}, channel=CH, broadcast=True)
+
+        assert _degraded_events().count() == 1, (
+            f"expected exactly one incident for two degraded publishes on one "
+            f"channel, got {_degraded_events().count()}")
+    finally:
+        _clear(opts)
+        _clear_degraded_notices()
+
+
+@th.django_unit_test("edge publish_pool shares the same roster policy")
+def test_convergence_publish_pool_reports_degraded_roster(opts):
+    """publish_pool hand-rolls the fan-out, so it inherited the same defect
+    and must inherit the same fix."""
+    from mojo.apps import jobs
+    from mojo.apps.edge.services import convergence
+
+    _clear_degraded_notices([convergence.EDGE_CHANNEL])
+    try:
+        with _BrokenRoster("runner_roster_invalid",
+                           fallback=[_alive(RUNNER_A)]) as roster:
+            result = convergence.publish_pool(
+                "default", jobs_module=jobs, generation="g-2729")
+
+        assert roster.fallback_calls == 1, (
+            f"publish_pool did not use the shared roster policy, got "
+            f"{roster.fallback_calls} fallback calls")
+        assert result.status == "published", (
+            f"a degraded-but-usable roster must still publish: {result}")
+        assert result.targets == [RUNNER_A], (
+            f"publish_pool should address the fallback roster, got {result.targets}")
+        assert _degraded_events().count() == 1, (
+            "publish_pool must report an unprovable roster like publish() does")
+    finally:
+        from mojo.apps.jobs.models import Job
+        Job.objects.filter(channel__in=[RUNNER_A, convergence.EDGE_CHANNEL]).delete()
+        _clear_degraded_notices([convergence.EDGE_CHANNEL])

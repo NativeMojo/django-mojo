@@ -32,9 +32,16 @@ def publish_pool(pool, jobs_module=None, generation=None):
 
     generation = generation or desired_generation(pool)
     try:
+        # Same roster policy as jobs.publish(broadcast=True): this function
+        # hand-rolls that fan-out and inherited the same defect (item #2729).
+        # A swallowed get_runners error looked like an empty fleet, and the
+        # `or [EDGE_CHANNEL]` below then queued one job for a single runner to
+        # win. broadcast_roster reports what it could not prove; the empty
+        # fallback stays, but is no longer reachable from a hidden failure.
+        rows, _roster_exact = jobs_module.broadcast_roster(
+            EDGE_CHANNEL, INSTALL_JOB)
         runners = [
-            row.get("runner_id")
-            for row in jobs_module.get_runners(channel=EDGE_CHANNEL)
+            row.get("runner_id") for row in rows
             if row.get("alive") and row.get("runner_id")]
         targets = sorted(set(runners)) or [EDGE_CHANNEL]
         job_ids = []

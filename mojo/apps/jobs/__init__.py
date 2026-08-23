@@ -206,6 +206,86 @@ def _report_undeclared_channel(channel, func_path, enforced):
         logit.error(f"jobs: failed to report undeclared channel {channel}: {e}")
 
 
+# ---------------------------------------------------------------------------
+# Fan-out roster (item #2729)
+#
+# A fan-out decides who receives fleet-wide work, so an incomplete roster is a
+# silent under-delivery, not a cosmetic gap. get_runners() SCANs the shared
+# keyspace and swallows every exception into [] — indistinguishable from "no
+# runners", which is how a Redis blip turned a broadcast back into the unicast
+# item #1771 existed to fix. get_runners_bounded() reads one dedicated
+# per-channel index, primary-only, and RAISES instead of returning short.
+# ---------------------------------------------------------------------------
+
+# Deliberately generous. With a fallback in place a tight bound buys nothing —
+# bounded would raise overflow, the fallback would return every runner anyway,
+# and the fan-out would publish to all of them with an incident attached. This
+# keeps overflow a real sanity ceiling instead of a slow path.
+JOBS_BROADCAST_ROSTER_LIMIT = 512
+
+DEGRADED_BROADCAST_CATEGORY = "jobs:degraded_broadcast"
+
+# The exception message is the ONLY signal get_runners_bounded gives about
+# which fault occurred. invalid/overflow mean Redis answered promptly, so the
+# cheap reader will too and is likely to return the better roster. A timeout
+# means Redis is SLOW: answering that with get_runners' unbounded scan_iter on
+# the process-shared pool (60s socket timeout by default) — inside publish(),
+# inside a cron minute — is strictly worse than not answering at all.
+_ROSTER_FALLBACK_FAULTS = ("runner_roster_invalid", "runner_roster_overflow")
+
+
+def _report_degraded_broadcast(channel, func_path, err):
+    """File a suppressed incident for a roster this publish could not prove.
+
+    fail_open=False, unlike _report_undeclared_channel above: that trigger is a
+    config error, so reporting without suppression is the safe direction. This
+    trigger IS a Redis fault, so failing open would remove suppression exactly
+    when the flood happens — dnsman publishes one broadcast per certificate on
+    a bulk renewal. Never raises: a lost diagnostic must not fail the publish.
+    """
+    try:
+        from mojo.apps import incident
+        incident.report_event_suppressed(
+            f"jobs.publish(broadcast=True) on channel '{channel}' could not "
+            f"prove its runner roster ({type(err).__name__}: {err}). Publisher "
+            f"func: {func_path}. Fleet-wide work may have reached fewer nodes "
+            f"than intended. Likely causes, in order: a node whose clock runs "
+            f"more than one heartbeat window ahead, a runner that exited "
+            f"without deregistering, or Redis latency.",
+            key=channel,
+            title=f"Degraded broadcast roster: {channel}",
+            category=DEGRADED_BROADCAST_CATEGORY,
+            level=3,
+            window=REJECTED_RENOTIFY_SEC,
+            budget=8,
+            fail_open=False,
+            channel=channel,
+            func=func_path,
+            fault=str(err)[:120])
+    except Exception as e:
+        logit.error(
+            f"jobs: failed to report a degraded broadcast on {channel}: {e}")
+
+
+def broadcast_roster(channel, func_path):
+    """Live runner rows for a fan-out decision, with any failure REPORTED.
+
+    Returns (rows, exact). `exact` is False when the roster could not be
+    proven: the caller still fans out to whatever it got, but the degradation
+    has been surfaced instead of swallowed. Never raises — a raising publish
+    inside run_now() skips every later scheduled function that minute.
+    """
+    try:
+        rows = get_runners_bounded(
+            channel, limit=JOBS_BROADCAST_ROSTER_LIMIT)
+        return (rows or []), True
+    except Exception as err:
+        _report_degraded_broadcast(channel, func_path, err)
+        if str(err) in _ROSTER_FALLBACK_FAULTS:
+            return (get_runners(channel) or []), False
+        return [], False
+
+
 def register_sched_channel(channel):
     """
     Record that `channel` has scheduled (delayed or retrying) work.
@@ -408,8 +488,9 @@ def publish(
                 f"out — it promotes to the shared queue and one runner wins. "
                 f"func={func_path}")
         else:
+            rows, roster_exact = broadcast_roster(channel, func_path)
             targets = [
-                r.get("runner_id") for r in (get_runners(channel) or [])
+                r.get("runner_id") for r in rows
                 if r.get("alive") and r.get("runner_id")
             ]
             if targets:
@@ -433,12 +514,20 @@ def publish(
                     f"Broadcast {func_path} on {channel} fanned out to "
                     f"{len(job_ids)} runner(s): {sorted(targets)}")
                 return job_ids
-            # No live runner consumes this channel. Fall through to the normal
-            # enqueue so the job waits on the shared queue for one to appear —
-            # the pre-existing behaviour, and better than dropping it.
-            logit.warning(
-                f"Broadcast {func_path} on {channel}: no live runners; queued "
-                f"on the shared channel queue for whichever runner arrives")
+            # Fall through to the normal enqueue so the job waits on the shared
+            # queue for a runner to appear — the pre-existing behaviour, and
+            # better than dropping it. The two ways of getting here are NOT the
+            # same event and must not read the same in the logs.
+            if roster_exact:
+                logit.warning(
+                    f"Broadcast {func_path} on {channel}: no live runners; queued "
+                    f"on the shared channel queue for whichever runner arrives")
+            else:
+                logit.error(
+                    f"Broadcast {func_path} on {channel}: roster UNREADABLE and no "
+                    f"fallback runners; queued on the shared channel queue, so this "
+                    f"fleet-wide work will reach ONE node. See the "
+                    f"{DEGRADED_BROADCAST_CATEGORY} incident for the fault.")
 
     # From here the channel is used verbatim — never rerouted. An allowed
     # channel this box does not consume is a supported target (that is how work

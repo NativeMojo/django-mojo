@@ -292,7 +292,9 @@ def test_convergence_publication_is_post_commit_and_idempotent(opts):
 
     callbacks = []
     jobs = mock.Mock()
-    jobs.get_runners.return_value = []
+    # publish_pool resolves its roster through the shared fan-out policy
+    # (item #2729); a bare Mock would return a non-iterable for it.
+    jobs.broadcast_roster.return_value = ([], True)
     jobs.publish.return_value = ["job-a"]
     with mock.patch.object(transaction, "on_commit",
                            side_effect=lambda callback: callbacks.append(callback)), \
@@ -365,7 +367,9 @@ def test_sequential_partial_route_pending_repair(opts):
         domain, certificate, label="partial", kind="site_api", pool="default")
     callbacks = []
     jobs = mock.Mock()
-    jobs.get_runners.return_value = []
+    # publish_pool resolves its roster through the shared fan-out policy
+    # (item #2729); a bare Mock would return a non-iterable for it.
+    jobs.broadcast_roster.return_value = ([], True)
     jobs.publish.side_effect = [
         RuntimeError("private transport detail"), "job-ok"]
     publications = []
@@ -407,7 +411,9 @@ def test_convergence_publish_failure_is_pending(opts):
     from mojo.apps.edge.services import convergence
 
     jobs = mock.Mock()
-    jobs.get_runners.return_value = []
+    # publish_pool resolves its roster through the shared fan-out policy
+    # (item #2729); a bare Mock would return a non-iterable for it.
+    jobs.broadcast_roster.return_value = ([], True)
     jobs.publish.side_effect = RuntimeError("token=do-not-log-this")
     with mock.patch.object(convergence.logit, "error") as logged:
         result = convergence.publish_pool(
