@@ -34,6 +34,12 @@ class Runtime:
         else:
             self.fim = (FimCollector(collectors["fim"], config["expected_changes_path"])
                         if collectors["fim"]["enabled"] else None)
+        # Only enrollment-substituted tiers declare tenant roots, so this is
+        # empty on every host-only node and the store relaxes nothing there.
+        self.content_roots = tuple(sorted({
+            root for collector in self.integrity_collectors.values()
+            for root in getattr(collector, "content_roots", ())
+        }))
         self.sender = sender or Sender(config, self.store)
         self.collector_status = {}
         self.last_delivery = {}
@@ -265,7 +271,9 @@ class Runtime:
             if expected_path == "/etc/mojosec/expected_changes.json":
                 from mojo.deploy.mojosec_changes import ChangeJournal
                 active_paths = ChangeJournal().active_paths()
-            self.store.annotate_pending_fim(expected_path, active_paths=active_paths)
+            self.store.annotate_pending_fim(
+                expected_path, active_paths=active_paths,
+                directory_metadata_roots=self.content_roots)
         except Exception as err:
             self._collector_error("expected_changes", err)
         try:

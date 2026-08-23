@@ -15,6 +15,10 @@ _DEPLOYMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _OPERATION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _EVIDENCE_KINDS = {"file", "symlink", "directory", "other"}
 MAX_OPERATION_CORRELATION_SECONDS = 300
+# Domain separator for the relaxed content-directory digest below. Its presence
+# in the digest material makes a relaxed digest unable to collide with a full
+# one, so relaxation can never be smuggled onto an ordinary host annotation.
+_RELAXED_DIRECTORY_SCOPE = "directory_metadata_relaxed"
 
 
 class ExpectedChangeError(ValueError):
@@ -40,6 +44,32 @@ def _timestamp(value):
     if parsed.tzinfo is None:
         raise ExpectedChangeError("expected-change expiry must include a timezone")
     return parsed.astimezone(datetime.timezone.utc)
+
+
+def relaxed_directory_digest(value):
+    """Digest one content-root directory by ownership and mode alone.
+
+    Publishing into a tenant tree moves the containing directory's mtime, size
+    and (on a rename-based publish) its inode, none of which the producer can
+    predict when it snapshots `after`. Ownership and mode are exactly the
+    properties a publish must NOT change, so they are what stays in the digest.
+    This narrows nothing else: every file created, modified or deleted inside
+    the directory is still its own FIM change needing its own annotation.
+    """
+    if not isinstance(value, dict) or value.get("kind") != "directory":
+        return None, None
+    material = {field: value.get(field) for field in ("kind", "mode", "uid", "gid")}
+    material["scope"] = _RELAXED_DIRECTORY_SCOPE
+    payload = json.dumps(
+        material, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return "directory", hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def contained(path, root):
+    try:
+        return os.path.commonpath((path, root)) == root
+    except ValueError:
+        return False
 
 
 def evidence_digest(value):
@@ -152,8 +182,15 @@ def load_manifest(path, require_root=None):
     return result
 
 
-def annotation(entries, path, change, before, after, now=None, observed_at=None):
-    """Return a bounded annotation for an exact live entry; never suppress."""
+def annotation(entries, path, change, before, after, now=None, observed_at=None,
+               correlation_seconds=None, directory_metadata_roots=()):
+    """Return a bounded annotation for an exact live entry; never suppress.
+
+    correlation_seconds is the tier's post-completion match window; None keeps
+    the shared deploy window. directory_metadata_roots names the content roots
+    inside which a DIRECTORY annotation matches on ownership and mode alone
+    (see relaxed_directory_digest) — outside them nothing is relaxed.
+    """
     now = now or datetime.datetime.now(datetime.timezone.utc)
     if isinstance(now, (int, float)):
         now = datetime.datetime.fromtimestamp(now, datetime.timezone.utc)
@@ -164,16 +201,22 @@ def annotation(entries, path, change, before, after, now=None, observed_at=None)
     elif isinstance(observed_at, str):
         observed_at = _timestamp(observed_at)
     evidence = before if change == "deleted" else after
+    correlation = (MAX_OPERATION_CORRELATION_SECONDS if correlation_seconds is None
+                   else int(correlation_seconds))
+    relaxable = any(contained(path, root) for root in directory_metadata_roots or ())
     for entry in entries:
         if entry["path"] != path or entry["change"] != change or entry["_expiry"] < now:
             continue
         if "evidence_kind" in entry:
-            kind, digest = evidence_digest(evidence)
+            if relaxable and entry["evidence_kind"] == "directory":
+                kind, digest = relaxed_directory_digest(evidence)
+            else:
+                kind, digest = evidence_digest(evidence)
             if kind != entry["evidence_kind"] or digest != entry["sha256"]:
                 continue
             if (observed_at < entry["_started"] or
                     observed_at > entry["_completed"] + datetime.timedelta(
-                        seconds=MAX_OPERATION_CORRELATION_SECONDS)):
+                        seconds=correlation)):
                 continue
         else:
             digest = (evidence or {}).get("sha256")

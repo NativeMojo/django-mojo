@@ -7,7 +7,10 @@ import stat
 
 from ..events import observation
 from ..evidence import safe_text
-from ..expected_changes import ExpectedChangeError, load_manifest, annotation
+from ..expected_changes import (
+    MAX_OPERATION_CORRELATION_SECONDS, ExpectedChangeError, load_manifest,
+    annotation,
+)
 from ..profiles import PRIVATE_TREES
 from ..protocol import canonical_json
 
@@ -25,9 +28,22 @@ class FimCollector:
             canonical_json(config["targets"]).encode("utf-8")).hexdigest()
         self.identity = dict(identity or {})
         self.profile = self.identity.get("digest", graph_digest)
-        self.baseline_key = ":".join(filter(None, (
-            self.identity.get("name", "legacy"), self.profile, tier,
-        )))
+        # Read, never derived from interval_seconds: rpm.py builds this
+        # collector with configs that carry no interval at all.
+        self.correlation_seconds = self.config.get(
+            "correlation_seconds", MAX_OPERATION_CORRELATION_SECONDS)
+        self.content_roots = tuple(
+            target["path"] for target in config["targets"]
+            if isinstance(target, dict) and target.get("tenant_scoped"))
+        components = [self.identity.get("name", "legacy"), self.profile, tier]
+        if self.content_roots:
+            # The profile digest is deliberately blind to enrolled roots, so an
+            # enrollment-substituted tier carries them here instead. Changing a
+            # node's roots therefore retires that tier's baseline rather than
+            # silently diffing new trees against an old one. Non-substituted
+            # tiers keep the exact three-component key they have always had.
+            components.append(graph_digest[:16])
+        self.baseline_key = ":".join(filter(None, components))
 
     def _excluded(self, target, path):
         for private in PRIVATE_TREES:
@@ -59,6 +75,23 @@ class FimCollector:
         fields = ("device", "inode", "size", "mtime_ns", "ctime_ns",
                   "mode", "uid", "gid")
         return previous and all(previous.get(field) == entry.get(field) for field in fields)
+
+    def _containment_root(self, target, path):
+        """The tree a symlink at `path` may point inside without alarming.
+
+        For an ordinary target that is the target itself. For a tenant-scoped
+        content root it is the tenant subtree — `<root>/<first component>` —
+        so a link out of one tenant and into a sibling reads as an escape
+        rather than as ordinary in-target movement.
+        """
+        root = target["path"]
+        if not target.get("tenant_scoped"):
+            return root
+        relative = os.path.relpath(path, root)
+        first = relative.split(os.sep)[0]
+        if first in (os.curdir, os.pardir):
+            return root
+        return os.path.join(root, first)
 
     def _pth_anomaly(self, path, material, root):
         if not path.endswith(".pth") or material is None:
@@ -141,8 +174,9 @@ class FimCollector:
             resolved = os.path.normpath(
                 link_target if os.path.isabs(link_target)
                 else os.path.join(os.path.dirname(path), link_target))
+            containment = self._containment_root(target, path)
             try:
-                contained = os.path.commonpath((resolved, target["path"])) == target["path"]
+                contained = os.path.commonpath((resolved, containment)) == containment
             except ValueError:
                 contained = False
             if not contained:
@@ -302,7 +336,18 @@ class FimCollector:
                     "device", "inode", "sha256", "target_sha256", "anomaly"):
                 if field in entry:
                     attributes[field] = entry[field]
-            expected_annotation = annotation(expected, path, change, before, after)
+            if self.correlation_seconds != MAX_OPERATION_CORRELATION_SECONDS:
+                # Carry this tier's window on the durable evidence so the
+                # store's re-annotation pass holds a still-unexplained change
+                # for exactly as long as its own producer may take. Stripped
+                # before delivery, and never part of the fingerprint; a tier on
+                # the shared window stamps nothing, so deploy-tier evidence is
+                # byte-identical to what it has always been.
+                attributes["correlation_seconds"] = self.correlation_seconds
+            expected_annotation = annotation(
+                expected, path, change, before, after,
+                correlation_seconds=self.correlation_seconds,
+                directory_metadata_roots=self.content_roots)
             if expected_annotation:
                 attributes["expected_change"] = expected_annotation
             observations.append(observation(

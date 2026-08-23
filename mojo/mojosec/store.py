@@ -41,9 +41,15 @@ PENDING_OPERATION_MAX_BYTES = 32 * 1024 * 1024
 FIREWALL_RECEIPT_MAX_BYTES = 32 * 1024 * 1024
 WAL_MAX_BYTES = 64 * 1024 * 1024
 ANNOTATION_GRACE_SECONDS = 120
-# The producer caps an active operation at 15 minutes. Retain exact active
-# paths for that ceiling plus the five-minute post-completion match window.
+# The producer caps an active operation at 15 minutes (mojo.deploy
+# .mojosec_changes.MAX_TTL_SECONDS). Retain exact active paths for that ceiling
+# plus the post-completion match window of whichever tier produced the change.
+ANNOTATION_MAX_OPERATION_SECONDS = 15 * 60
+# The default hold, for every tier on the shared 300s deploy window.
 ANNOTATION_MAX_GRACE_SECONDS = 20 * 60
+# A tier may not hold evidence longer than the producer TTL plus the widest
+# window config permits (collectors.fim.tiers.*.correlation_seconds).
+ANNOTATION_MAX_CORRELATION_SECONDS = 1800
 LOCAL_ONLY_RECONCILE_LIMIT = 256
 SATURATING_COUNTER_MAX = 2 ** 63 - 1
 _BROKER_FUNCTION_OPERATIONS = {
@@ -1367,7 +1373,17 @@ class Store:
             self.db.execute("ROLLBACK")
             raise
 
-    def annotate_pending_fim(self, expected_changes_path, active_paths=None, now=None):
+    @staticmethod
+    def _event_grace(attributes):
+        """This event's bounded hold: producer TTL plus its own tier window."""
+        found = attributes.get("correlation_seconds")
+        if (not isinstance(found, int) or isinstance(found, bool) or
+                not 0 < found <= ANNOTATION_MAX_CORRELATION_SECONDS):
+            return ANNOTATION_MAX_GRACE_SECONDS
+        return ANNOTATION_MAX_OPERATION_SECONDS + found
+
+    def annotate_pending_fim(self, expected_changes_path, active_paths=None, now=None,
+                             directory_metadata_roots=()):
         """Enrich already-durable FIM evidence during its bounded delivery grace."""
         from .expected_changes import ExpectedChangeError, annotation, load_manifest
 
@@ -1377,6 +1393,7 @@ class Store:
             entries = []
         now = now if now is not None else time.time()
         active_paths = set(active_paths or ())
+        directory_metadata_roots = tuple(directory_metadata_roots or ())
         changed = 0
         self.db.execute("BEGIN IMMEDIATE")
         try:
@@ -1392,10 +1409,11 @@ class Store:
                     continue
                 attributes = event["attributes"]
                 deadline = row["annotation_deadline"]
+                grace = self._event_grace(attributes)
                 if (attributes.get("path") in active_paths and
-                        now < row["created"] + ANNOTATION_MAX_GRACE_SECONDS):
+                        now < row["created"] + grace):
                     deadline = min(
-                        row["created"] + ANNOTATION_MAX_GRACE_SECONDS,
+                        row["created"] + grace,
                         max(deadline, now + ANNOTATION_GRACE_SECONDS),
                     )
                     if deadline > row["annotation_deadline"]:
@@ -1412,6 +1430,8 @@ class Store:
                     evidence if attributes.get("change") == "deleted" else None,
                     evidence if attributes.get("change") != "deleted" else None,
                     now=now, observed_at=row["created"],
+                    correlation_seconds=attributes.get("correlation_seconds"),
+                    directory_metadata_roots=directory_metadata_roots,
                 )
                 if value is None:
                     continue
@@ -1462,7 +1482,7 @@ class Store:
                 attributes = event.get("attributes", {})
                 for field in (
                         "mtime_ns", "ctime_ns", "device", "inode",
-                        "sha256", "target_sha256"):
+                        "sha256", "target_sha256", "correlation_seconds"):
                     attributes.pop(field, None)
             payload = canonical_json(event)
             size = len(payload.encode("utf-8")) + 1
