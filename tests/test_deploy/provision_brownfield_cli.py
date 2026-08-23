@@ -75,7 +75,7 @@ def test_fleet_dry_run_never_reaches_apply_or_managed_dag(opts):
         th.assert_eq(applied.called, False,
                      "--dry-run must structurally stop before fleet apply")
         for phrase in ("dependency digest", "manifest digest", "forced false", "DNS",
-                       "certificates/ACM", "preserved-EIP"):
+                       "certificates/ACM", "external public cutover"):
             th.assert_in(phrase, console.text,
                          f"the preview must say the negative boundary: {console.text}")
     finally:

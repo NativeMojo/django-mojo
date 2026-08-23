@@ -35,7 +35,6 @@ TOP_KEYS = frozenset((
     "fleet", "network", "database", "cache", "storage", "bootstrap",
     "nodes", "load_balancer", "kms_key_arn", "alarm_topic_arn",
     "compatibility_instance_ids", "manage_dns", "nlb_eip_allocations",
-    "eip_handoff_role_arn", "eip_handoff_canaries",
 ))
 NETWORK_KEYS = frozenset((
     "vpc_id", "node_security_group_id", "public_subnets",
@@ -76,10 +75,6 @@ BALANCER_KEYS = frozenset((
 ))
 CREDENTIAL_KEYS = frozenset((
     "object", "provider", "metadata_key",
-))
-CANARY_KEYS = frozenset((
-    "name", "protocol", "port", "tls_sni", "host", "path", "request",
-    "expected_status", "expected_marker", "timeout", "target", "addresses",
 ))
 ALLOCATION_RE = re.compile(r"^eipalloc-[0-9a-f]+$")
 SECURITY_GROUP_RE = re.compile(r"^sg-[0-9a-f]{8,17}$")
@@ -180,8 +175,8 @@ def validate(raw, path="fleet manifest"):
     if raw["manage_dns"] is not False:
         raise inputs.EnvFileError(
             f"{path}.manage_dns must be explicitly false; brownfield fleet "
-            f"and preserved-address commands never manage DNS")
-    _handoff(raw, path, account_id, region)
+            f"preparation never manages DNS")
+    _preserved_allocations(raw, path)
 
     parse_arn(raw["kms_key_arn"], f"{path}.kms_key_arn", account_id, region,
               ("kms",))
@@ -245,21 +240,15 @@ def to_spec(manifest, project_root=None):
     built.want_balancer = True
     built.stable_node_ips = False
     built.manage_dns = manifest["manage_dns"]
+    # Kept deliberately, and it is the ONLY thing left of the retired EIP
+    # transfer engine. `balancer.ensure_balancer()` reads nothing but its
+    # presence: a fleet that declares externally held allocations gets a
+    # shadow NLB on AWS temporary addresses instead of freshly allocated
+    # replacement EIPs. The exact AZ-to-allocation map is not consumed by any
+    # AWS call — it is validated operator evidence of which addresses are
+    # already spoken for.
     built.nlb_eip_allocations = dict(
         manifest.get("nlb_eip_allocations") or {})
-    built.eip_handoff_role_arn = manifest.get("eip_handoff_role_arn")
-    built.eip_handoff_canaries = list(
-        manifest.get("eip_handoff_canaries") or ())
-    journal_name = (f"{manifest['project']}-{manifest['environment']}-"
-                    f"{manifest['fleet']}")
-    built.eip_handoff_local_journal = os.path.join(
-        project_root or ".", "var", "provision", "eip-handoffs",
-        f"{journal_name}.json")
-    built.eip_handoff_bucket = manifest["storage"]["fleet_config"]["bucket"]
-    prefix = manifest["storage"]["fleet_config"]["prefix"].strip("/")
-    built.eip_handoff_prefix = (
-        f"{prefix}/eip-handoffs/{journal_name}" if prefix
-        else f"eip-handoffs/{journal_name}")
     built.brownfield_manifest = manifest
     built.manifest_digest = manifest["manifest_digest"]
     return built
@@ -511,129 +500,64 @@ def _health_path(value, label):
     return value
 
 
-def _handoff(raw, path, account_id, region):
-    """Validate the optional destructive capability as one all-or-none set.
+def _preserved_allocations(raw, path):
+    """Validate the optional `nlb_eip_allocations` declaration, or nothing.
 
-    The ordinary brownfield language remains useful without a handoff.  Once
-    one preserved allocation is declared, however, omission is ambiguity and
-    every field needed to prove and invert the operation becomes mandatory.
+    This package NEVER transfers, releases, or reattaches an elastic IP; that
+    is external operator work.  The declaration survives for exactly one
+    reason: `balancer.ensure_balancer()` reads its presence and prepares the
+    shadow NLB on AWS temporary addresses rather than allocating replacement
+    EIPs that would sit unused next to production addresses already held
+    elsewhere.  The exact map is therefore operator evidence, and it is
+    validated exactly, because a manifest that names the wrong AZ or a typo'd
+    allocation is evidence of nothing.
+
+    Omission is valid and means "no addresses are spoken for".  A present
+    value must be a non-empty, unique AZ-to-`eipalloc-*` mapping inside the
+    selected NLB subnets and no larger than `AZ_COUNT`.  Every AZ and every
+    allocation is proved to be a plain string BEFORE anything hashes or
+    compares them, so a JSON list or object in either position is a bounded,
+    field-named `EnvFileError` instead of the raw `TypeError` an unhashable
+    value used to raise out of the uniqueness check.
     """
-    allocations = raw.get("nlb_eip_allocations")
-    role_arn = raw.get("eip_handoff_role_arn")
-    canaries = raw.get("eip_handoff_canaries")
-    enabled = any(value not in (None, {}, [])
-                  for value in (allocations, role_arn, canaries))
-    if not enabled:
-        if any(key in raw for key in (
-                "nlb_eip_allocations", "eip_handoff_role_arn",
-                "eip_handoff_canaries")):
-            raise inputs.EnvFileError(
-                f"{path} has an empty preserved-address field; omit all three "
-                f"handoff fields or declare a complete handoff")
+    if "nlb_eip_allocations" not in raw:
         return
+    allocations = raw.get("nlb_eip_allocations")
     if not isinstance(allocations, dict) or not allocations:
         raise inputs.EnvFileError(
             f"{path}.nlb_eip_allocations must be a non-empty AZ-to-allocation "
-            f"object")
+            f"object, or be omitted entirely")
     if len(allocations) > spec_module.AZ_COUNT:
         raise inputs.EnvFileError(
             f"{path}.nlb_eip_allocations may contain at most "
             f"{spec_module.AZ_COUNT} mappings")
+
+    # Shape first, on every entry, so nothing unhashable or non-comparable
+    # reaches the subnet and uniqueness checks below.
+    for az, allocation_id in allocations.items():
+        if not isinstance(az, str) or not ID_RE.match(az):
+            raise inputs.EnvFileError(
+                f"{path}.nlb_eip_allocations has invalid AZ {az!r}")
+        if not isinstance(allocation_id, str):
+            raise inputs.EnvFileError(
+                f"{path}.nlb_eip_allocations.{az} must be an eipalloc id "
+                f"string, not {type(allocation_id).__name__}")
+        if not ALLOCATION_RE.match(allocation_id):
+            raise inputs.EnvFileError(
+                f"{path}.nlb_eip_allocations.{az} is not an eipalloc id")
+
     selected = {
-        row["availability_zone"]: row
+        row["availability_zone"]
         for row in raw["network"]["public_subnets"]
         if row["id"] in raw["load_balancer"]["subnet_ids"]}
     if not set(allocations).issubset(selected):
-        unknown = sorted(set(allocations) - set(selected))
+        unknown = sorted(set(allocations) - selected)
         raise inputs.EnvFileError(
             f"{path}.nlb_eip_allocations names AZ(s) outside the selected "
             f"NLB subnets: {', '.join(unknown)}")
     if len(set(allocations.values())) != len(allocations):
         raise inputs.EnvFileError(
             f"{path}.nlb_eip_allocations must use unique allocation ids")
-    for az, allocation_id in allocations.items():
-        if not ID_RE.match(az or ""):
-            raise inputs.EnvFileError(
-                f"{path}.nlb_eip_allocations has invalid AZ {az!r}")
-        if not ALLOCATION_RE.match(allocation_id or ""):
-            raise inputs.EnvFileError(
-                f"{path}.nlb_eip_allocations.{az} is not an eipalloc id")
-    if not role_arn:
-        raise inputs.EnvFileError(
-            f"{path}.eip_handoff_role_arn is required with preserved EIPs")
-    parsed = parse_arn(role_arn, f"{path}.eip_handoff_role_arn", account_id,
-                       None, ("iam",))
-    if not parsed["resource"].startswith("role/"):
-        raise inputs.EnvFileError(
-            f"{path}.eip_handoff_role_arn must name an IAM role")
-    if not isinstance(canaries, list) or not canaries:
-        raise inputs.EnvFileError(
-            f"{path}.eip_handoff_canaries must be a non-empty list")
-    names = []
-    nlb_canaries = 0
-    for index, canary in enumerate(canaries):
-        label = f"{path}.eip_handoff_canaries[{index}]"
-        _object(canary, CANARY_KEYS, label)
-        _required(canary, ("name", "protocol", "port", "host", "timeout"),
-                  label)
-        _safe_text(canary["name"], f"{label}.name")
-        protocol = str(canary["protocol"]).lower()
-        if protocol not in ("http", "https", "tcp"):
-            raise inputs.EnvFileError(
-                f"{label}.protocol must be http, https, or tcp")
-        if not isinstance(canary["port"], int) or not 1 <= canary["port"] <= 65535:
-            raise inputs.EnvFileError(f"{label}.port must be 1..65535")
-        if not isinstance(canary["timeout"], (int, float)) or isinstance(
-                canary["timeout"], bool) or not 0 < canary["timeout"] <= 30:
-            raise inputs.EnvFileError(f"{label}.timeout must be > 0 and <= 30")
-        _safe_text(canary["host"], f"{label}.host")
-        request = canary.get("request")
-        if request is not None:
-            if not isinstance(request, str) or not request or len(request) > 8192:
-                raise inputs.EnvFileError(
-                    f"{label}.request must be a non-empty string no longer "
-                    f"than 8192 characters")
-            lowered = request.casefold()
-            credential_markers = (
-                "authorization", "proxy-authorization", "cookie",
-                "bearer ", "basic ", "token", "secret", "password",
-                "api-key", "api_key", "x-api-key",
-            )
-            if any(marker in lowered for marker in credential_markers):
-                raise inputs.EnvFileError(
-                    f"{label}.request cannot contain credential-bearing "
-                    f"material; use a public canary or out-of-band secret "
-                    f"resolution")
-        if protocol == "https" and not canary.get("tls_sni"):
-            raise inputs.EnvFileError(
-                f"{label}.tls_sni is required for an HTTPS canary")
-        target = canary.get("target", "nlb")
-        if target not in ("nlb", "node"):
-            raise inputs.EnvFileError(f"{label}.target must be nlb or node")
-        if target == "nlb":
-            nlb_canaries += 1
-        addresses = canary.get("addresses") or []
-        if target == "node" and not addresses:
-            raise inputs.EnvFileError(
-                f"{label}.addresses is required for a node canary")
-        if addresses and (not isinstance(addresses, list)
-                          or not all(isinstance(value, str) and value
-                                     for value in addresses)):
-            raise inputs.EnvFileError(
-                f"{label}.addresses must be a non-empty string list")
-        status = canary.get("expected_status")
-        if protocol in ("http", "https") and (
-                not isinstance(status, int) or not 100 <= status <= 599):
-            raise inputs.EnvFileError(
-                f"{label}.expected_status must be an HTTP status")
-        names.append(canary["name"])
-    if len(names) != len(set(names)):
-        raise inputs.EnvFileError(
-            f"{path}.eip_handoff_canaries has duplicate names")
-    if not nlb_canaries:
-        raise inputs.EnvFileError(
-            f"{path}.eip_handoff_canaries needs at least one address-specific "
-            f"NLB shadow/application canary")
 
 
 def _credential(value, label):

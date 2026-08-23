@@ -47,10 +47,11 @@ DESTRUCTIVE_PREFIXES = ("delete_", "terminate_", "destroy_", "deregister_",
                         "revoke_", "remove_")
 
 # These provider verbs do not carry an obviously destructive prefix, but they
-# cross the live-ingress cutover boundary just as surely as a delete.  The
-# ordinary managed and brownfield clients can never reach them.  The preserved
-# address workflow builds a different, positive-allowlist client after assuming
-# its dedicated role; it does not weaken this seam.
+# cross the live-ingress cutover boundary just as surely as a delete, so the
+# name-prefix check above would let them straight through.  No client this
+# package builds can reach them: moving a live public address or remapping a
+# live balancer's subnets is external operator work, done deliberately
+# elsewhere, and this package promises never to tear down live ingress.
 FORBIDDEN_METHODS = frozenset((
     ("ec2", "disassociate_address"),
     ("ec2", "release_address"),
@@ -109,9 +110,9 @@ class GuardedClient:
     def __getattr__(self, name):
         if (self._service, name) in FORBIDDEN_METHODS:
             raise DestructiveCallBlocked(
-                f"{self._service}.{name} crosses the preserved-address "
-                f"cutover boundary and is unavailable to ordinary "
-                f"provisioning clients")
+                f"{self._service}.{name} crosses the live-ingress cutover "
+                f"boundary — mojo.deploy.provision never moves a live public "
+                f"address or remaps a live balancer's subnets")
         if self._mutation_policy is not None:
             self._mutation_policy.authorize(self._service, name)
         if name.startswith(DESTRUCTIVE_PREFIXES):

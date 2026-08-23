@@ -3,7 +3,7 @@ import hashlib
 from objict import objict
 from testit import helpers as th
 
-from .brownfield_fixture import handoff_topology, topology
+from .brownfield_fixture import preserved_topology, topology
 
 
 @th.django_unit_test()
@@ -330,7 +330,7 @@ def test_second_eip_failure_never_creates_one_az_balancer(opts):
 def test_preserved_mode_prepares_two_az_nlb_with_temporary_addresses(opts):
     from mojo.deploy.provision import balancer
 
-    spec = handoff_topology()
+    spec = preserved_topology()
     spec.nlb_security_group_id = "sg-3123456789abcdef0"
     observed = objict(
         vpc_id=spec.brownfield_manifest["network"]["vpc_id"],
