@@ -824,6 +824,9 @@ def test_add_node_placement_asset_contract(opts):
             "placement commits do not carry focus identity across a render"
         assert "event.relatedTarget?.dataset?.placementControl" in source, \
             "subnet blur does not retain its explicit keyboard destination"
+        assert "subnet.addEventListener('blur'" in source \
+            and "subnet.addEventListener('change'" not in source, \
+            "subnet change can replace the input before keyboard blur completes"
         assert "data-placement-control" in source, \
             "placement controls have no stable focus identity across renders"
         assert "return {element, values, valid}" in source, \
