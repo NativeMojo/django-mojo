@@ -1280,7 +1280,7 @@ sensor; invalid policy keeps the prior canonical file and service.
 | Material | Contract |
 |---|---|
 | `/opt/api/var/mojosec.json` | app-managed, nonsecret desired collectors/FIM/batching policy; never read by the root service |
-| `/etc/mojosec/enrollment.json` | root:root 0600 host identity, exact HTTPS receiver, nginx plane/trusted proxies, and allowed FIM roots |
+| `/etc/mojosec/enrollment.json` | root:root 0600 host identity, exact HTTPS receiver, nginx plane/trusted proxies, allowed FIM roots, and (content nodes) `fim_content_roots` |
 | `/etc/mojosec/config.json` | root:root 0600 generated canonical runtime config; never hand-edit |
 | `/etc/mojosec/credential` | root:root 0600 per-installation API key |
 | `/var/lib/mojosec` | root:root 0700 durable SQLite spool; retained across off/rollback |
@@ -1288,6 +1288,8 @@ sensor; invalid policy keeps the prior canonical file and service.
 | `/etc/mojosec/expected_changes.json` | optional root:root 0600 v2 exact FIM annotations; v1 remains readable during rollout |
 | `/etc/systemd/system/mojosec.service` | root-owned packaged unit, Python safe-path launch, runs as root with systemd hardening |
 | `/usr/local/lib/mojosec/mojosec_changes.py` | root-owned stable producer helper used before pip replaces site-packages |
+| `/usr/local/sbin/mojo-publish-broker` | root:root 0755 publish broker wrapper; installed only where `fim_content_roots` is enrolled |
+| `/etc/sudoers.d/71-mojo-publish-broker` | root:root 0440 empty-argv grant for `ec2-user`; removed with the broker when content enrollment ends |
 
 The recommended desired policy sets `"profile":"al2023-web-v2"`. The profile
 is packaged and immutable: fast host/config/home/cloud-init/local-library
@@ -1296,8 +1298,35 @@ hours, and RPM verification includes the isolated system Python's constrained
 site-packages roots. It excludes `/opt/api`, `/opt/www`, and MojoSec's own
 private/control state. Profile activation is an explicit
 `baseline-preview` → `baseline-initialize --confirm-digest <digest>` ceremony;
-ordinary service startup never blesses the first scan. `check_node` fails an
-active digest without initialized fast, slow, and RPM baselines.
+ordinary service startup never blesses the first scan. `check_node` requires
+initialized fast, slow, and RPM baselines, and holds every other tier a node
+reports to the same standard.
+
+A node that serves tenant content selects `"profile":"al2023-content-v1"`
+instead — the same host graph plus a five-minute `content` tier over the roots
+enrolled in `fim_content_roots` (0–8, root enrollment only; desired policy
+cannot set them). Enrollment refuses a content root that overlaps a monitored
+host root, an application release tree, or MojoSec state. Converge installs the
+publish broker and its sudoers where content roots are enrolled and removes
+both where they are not, so a retired content node keeps no unusable grant.
+
+Content roots are outside the profile digest and inside the content tier's
+baseline key, so every content node in a fleet shares one profile identity
+while a change to *this* node's roots retires only that node's content
+baseline. When the resolved content graph digest differs from the one recorded
+in `/etc/mojosec/deploy.json`, converge runs
+`baseline-initialize-tier content --confirm-digest <graph digest>` once and
+records the digest, so repeat deploys are no-ops. The sensor refuses to re-seed
+an already initialized tier; a failed seeding is reported and the digest
+withheld so the next converge retries, and it never fails the deploy. Sizing,
+the broker's request grammar, and the overflow remedy are in
+`docs/django_developer/security/mojosec_sensor.md`.
+
+> On the cutover deploy the running `post_deploy.sh` body is the previously
+> installed generation's, so that first converge writes the broker assets
+> before any declaration covers them and FIM reports them unexplained once.
+> This is the expected one-generation skew (item 2014); the next deploy
+> declares them.
 
 An enabled RPM tier additionally requires the AL2023 system `python3-rpm`
 binding at the configured interpreter. One `-I` helper opens one read-only

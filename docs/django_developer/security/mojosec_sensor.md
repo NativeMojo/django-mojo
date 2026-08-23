@@ -20,7 +20,7 @@ package from a root-owned working directory with safe-path mode:
 |---|---|---|
 | journald | accepted SSH logins, failed SSH authentication, sudo commands/failures, non-SSH PAM session opens, systemd unit-failure declarations (PID 1), and kernel out-of-memory kills; the exact trusted `systemd-user` lifecycle tuple is local-status-only unless its root diagnostic override is active | routine PAM close chatter, ordinary and err-level daemon log lines, kernel non-OOM errors, and userspace text echoing failure/OOM phrases |
 | structured nginx log | known exploit-path probes, 401/403 denials, and 5xx responses; bounded raw request target, referrer, and user agent in root-only sensor state and the protected central receipt | ordinary 2xx/3xx/404/499 traffic, User-Agent-only suspicion, bodies, cookies, authorization, arbitrary headers, and raw log lines |
-| immutable tiered integrity | 60-second host/config FIM, six-hour boot/system-binary FIM, RPM verification, and system-Python package integrity under the packaged `al2023-web-v2` profile | application release trees, MojoSec private state, symlink traversal, file contents, or an implicit whole-disk watch |
+| immutable tiered integrity | 60-second host/config FIM, six-hour boot/system-binary FIM, RPM verification, and system-Python package integrity under the packaged `al2023-web-v2` profile; on `al2023-content-v1`, a fourth five-minute tier over the enrolled tenant content roots | the two application release trees (`/opt/api`, `/opt/www`), MojoSec private state, symlink traversal, file contents, or an implicit whole-disk watch |
 
 Sudo evidence retains bounded command context in the root-owned sensor spool,
 the protected central receipt, and the existing security-admin Event surface:
@@ -239,6 +239,126 @@ replayable, but projecting **no** per-receipt operator Event — while
 unannotated protected changes stay immediate individual Events (see
 `docs/django_developer/logging/incidents.md` for the cutover contract, ack
 ownership, and rollback).
+
+### Content-serving nodes: the content tier and the publish broker
+
+A node that serves tenant content has a tree the *application* rewrites all day
+— a new revision, an atomic `current` swap, a retired revision deleted. Under a
+host-only profile that tree is either unwatched (a defacement is invisible) or
+watched with no way to explain a legitimate publish (every release is an
+alarm). The `al2023-content-v1` profile is the third option: the same host
+graph as `al2023-web-v2` plus a `content` tier over the enrolled roots, and a
+root-owned broker the unprivileged application uses to explain its own writes.
+
+**Content roots are a third path category.** They are neither application
+release trees — `/opt/api` and `/opt/www` stay forbidden everywhere they are
+today — nor host state. Root enrollment declares 0–8 of them in
+`fim_content_roots`; desired policy cannot, and a root that overlaps a
+monitored host root, a release tree, or MojoSec private state is refused at
+enrollment. A content profile with zero roots is refused outright rather than
+reporting a healthy tier that watches nothing.
+
+**Roots sit outside the profile digest and inside the tier's baseline key.**
+Which tenant trees a node serves is node identity, not policy identity, so
+`profile_digest` empties the content tier's targets as a constant of the code:
+every content node in a fleet shares one digest, one activation ceremony, and
+one digest-drift alarm. The roots re-enter identity one level down — the
+content tier's baseline key gains a fourth component, the SHA-256 of its
+resolved target graph. Change a node's roots and that tier's baseline is
+retired rather than silently reused, while `fast`, `slow` and `rpm` keep their
+exact three-component keys.
+
+**The broker is a broker, not a wrapper.** `begin` opens an annotation window
+and returns; the application performs its own write, as itself; `end` closes
+it. The content write never runs as root, and root never runs anything the
+application supplies. The request grammar is one bounded JSON object on stdin
+(the broker accepts no argv at all):
+
+```json
+{"operation": "begin", "root": "/opt/content/acme",
+ "subtrees": ["rev-7", "current"], "ttl_seconds": 900}
+{"operation": "end",   "operation_id": "content-publish-<32 hex>"}
+{"operation": "abort", "operation_id": "content-publish-<32 hex>"}
+```
+
+The caller declares **scope**, not paths: a tenant root plus at most 64 subtree
+names, each a single path component. Root walks those subtrees itself at
+`begin` and again at `end` (the union, because a publish creates and deletes),
+bounded at 65,536 paths and depth 64, recording symlinks but never following
+them. Paths and evidence digests are root's alone, which is the whole
+guarantee:
+
+> An application annotation can only ever excuse a change the application was
+> already authorized to make.
+
+Note the honest limit of that. **One OS principal publishes for every tenant on
+a node** — an annotation can only excuse what the app could already write, not
+one tenant from another. A caller that can write another tenant's tree could
+already do so unannotated; the broker neither adds nor removes that ability.
+
+**Tenant names** must match `[A-Za-z0-9][A-Za-z0-9_.-]{0,63}` and address an
+immediate child of an enrolled root. A leading underscore is refused, so a
+sibling like `_certs` can never be declared as a tenant and its changes always
+alarm. Keep TLS material outside the enrolled content root entirely — the
+recommendation, not merely the default.
+
+**Open the window before the first write, including before a delete.** The
+broker snapshots `before` at `begin`; a path removed before the window opened
+has no before-state to compare against and stays unexplained.
+
+**Directory metadata inside a content root** matches on kind, mode, uid and
+gid alone, ignoring mtime, ctime, size, device and inode. Publishing moves the
+containing directory's mtime and (on a rename-based swap) its inode in ways the
+producer cannot predict when it snapshots `after`. This weakens nothing else:
+the relaxation applies only to `directory` evidence, only under an enrolled
+content root, and never to ownership or mode — the two properties a publish
+must not change. Every file created, modified or deleted inside that directory
+is still its own `fim.change` needing its own exact annotation, and a directory
+anywhere outside a content root is compared in full as before.
+
+**Correlation is per tier.** The content tier declares
+`correlation_seconds: 900` because a publish annotated by an unprivileged
+caller needs a longer gap between the producer's completion and the tier's next
+five-minute walk. Every other tier — on every profile, including this one —
+stays at exactly 300. A change's local delivery hold follows the tier that
+produced it: the 15-minute producer TTL plus its own window, so deploy evidence
+keeps its historical 20-minute ceiling and only content evidence reaches 25.
+
+**Publishes cannot starve a deploy.** The journal caps `content-publish` at 64
+of its 128 operation slots, so a deploy always has 64 waiting for it no matter
+how many tenants publish at once. `end` and `abort` accept only a broker-minted
+id *and* verify the recorded operation kind, so a publisher can never complete
+a deploy's in-flight operation.
+
+**Re-enrollment re-baselines exactly one tier.** When the resolved content
+graph digest differs from the one recorded in `/etc/mojosec/deploy.json`,
+converge runs `baseline-initialize-tier content --confirm-digest <graph
+digest>` once, loudly, and records the digest so it never repeats. The sensor
+refuses to seed a tier that has already been seeded — creating a baseline is
+allowed, overwriting one would let an attacker launder a change they had
+already made into the new known-good state. A failed seeding is reported and
+the digest withheld so the next converge retries; it never fails the deploy.
+
+#### Sizing the content tier
+
+Entries are `tenants x retained revisions x files per revision`, plus one entry
+per directory. 200 tenants x 3 retained revisions x 400 files is roughly
+240,000 entries against the tier's 500,000 ceiling; `check_node` warns at 80%.
+These are falsifiable working assumptions, not measurements — revisit them
+against a real estate:
+
+- **≤ 60 publishes per minute node-wide**, and **≤ 65,536 manifest entries**.
+  Above roughly 300 publishes per minute, shard the journal per tenant
+  (deliberately not built now).
+- A publish holds no lock while walking: the journal lock is taken briefly to
+  read the operation, released for the walk and snapshots, and retaken only to
+  free the slot and rewrite the manifest.
+
+Overflow does not degrade quietly — the tier stops and emits `fim.overflow`.
+The operator remedy, in order: shorten revision retention so fewer revisions
+are on disk, add an `exclude` for generated assets that do not need integrity
+coverage, or split the estate across more nodes. Raising the ceiling is a
+profile change and therefore a new profile name.
 
 Deploy the producer-capable package before activating `al2023-web-v2`. During
 that first stage the profile stays inactive while normal deploy, node setup,
