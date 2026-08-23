@@ -5,6 +5,8 @@ import os
 import stat
 from pathlib import Path
 
+import redis
+
 from mojo.apps.account.services import system_readiness, system_settings
 from mojo.helpers import dates
 from mojo.helpers.settings import settings
@@ -13,6 +15,26 @@ from mojo.helpers.settings import settings
 DETAIL_LIMIT = 16
 IDENTITY_LIMIT = 4096
 LEGACY_IDENTITY_LIMIT = 128
+
+# Matches platform_deploy.MAX_ROSTER. The panel must not read clean at a fleet
+# size where the deploy path it is diagnosing hard-fails runner_roster_overflow.
+FLEET_ROSTER_LIMIT = 128
+
+# get_runners_bounded signals the fault only through its message, and each one
+# points somewhere different. Sending every fault to "check Redis" is the same
+# class of misdirection this check was fixed for.
+_ROSTER_HINT_DEFAULT = "Check Redis reachability from this host."
+_ROSTER_HINTS = {
+    "runner_roster_invalid":
+        "Check node clock skew first — a single edge box more than one "
+        "heartbeat window ahead makes the whole roster unreadable — then look "
+        "for a runner that exited without deregistering.",
+    "runner_roster_overflow":
+        f"More than {FLEET_ROSTER_LIMIT} runners answer on the edge channel; "
+        f"the roster bound must be raised before the fleet can be assessed.",
+    "runner_roster_timeout":
+        "Check Redis reachability and latency from this host.",
+}
 
 
 def _read_bounded(path, limit):
@@ -287,8 +309,31 @@ def check_fleet(context):
     pools = topology["pools"]
     desired = _desired_generations(pools)
     # This filter is a security boundary: unrelated job runners are never
-    # treated as edge nodes and never receive node-proof calls.
-    runners = jobs.get_runners(channel="edge")
+    # treated as edge nodes and never receive node-proof calls. The bounded
+    # reader enforces it harder than get_runners did — it RAISES on a channel
+    # mismatch where the old one merely skipped the row.
+    try:
+        runners = jobs.get_runners_bounded(
+            channel="edge", limit=FLEET_ROSTER_LIMIT,
+            timeout=float(context.get("timeout", 2.0)))
+    except (RuntimeError, redis.exceptions.RedisError) as err:
+        # The roster is the input to every row below, so without a trustworthy
+        # one there is no honest per-node answer — and no legitimate set of
+        # runners to issue node-proof calls to. Reporting N nodes as "did not
+        # provide edge proof" would send the operator to the one place the
+        # problem is not (item #2730).
+        #
+        # The catch is narrow on purpose: a TypeError or any other programming
+        # error must propagate to system_readiness.run(), whose generic
+        # wrapper says "inspect the server log" — the right message for a bug
+        # and the wrong one for a Redis fault.
+        fault = str(err)
+        return [system_readiness.result(
+            "fleet.roster", "fail",
+            f"The edge runner roster could not be read "
+            f"({type(err).__name__}: {fault}); no node state below could be "
+            f"determined.",
+            _ROSTER_HINTS.get(fault, _ROSTER_HINT_DEFAULT))]
     proofs = _runner_proofs(runners, pools, float(context.get("timeout", 2.0)))
     rows = []
     counts = {"pass": 0, "warn": 0, "pending": 0, "fail": 0}
