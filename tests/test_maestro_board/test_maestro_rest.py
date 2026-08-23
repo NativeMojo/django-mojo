@@ -69,11 +69,12 @@ def _jobs(name):
 
 
 def _server_config():
-    return th.server_settings(
-        MAESTRO_API_KEY=TEST_KEY,
-        MAESTRO_API_URL="https://maestro.example.test",
-        MAESTRO_CALLBACK_BASE="https://client.example.test",
-    )
+    # The Maestro config these tests need is baked into the generated test
+    # project (bin/create_testproject; MAESTRO_API_KEY == TEST_KEY), so there is
+    # nothing to reload — no server_settings() freeze of the parallel workers
+    # (maestro #2791). Kept as a no-op context so the call sites read unchanged.
+    import contextlib
+    return contextlib.nullcontext()
 
 
 @th.django_unit_test()
@@ -126,17 +127,11 @@ def test_push_to_maestro_default_and_explicit_board(opts):
     assert not _jobs("maestro_push_source"), "invalid selector must not enqueue"
 
 
-@th.django_unit_test()
-def test_missing_setting_rejects_manual_push_without_disclosing_secret(opts):
-    ticket = _make_ticket(title=f"{PREFIX} missing config")
-    assert opts.client.login(opts.admin_name, PWORD), "admin login failed"
-    with th.server_settings(MAESTRO_API_KEY=""):
-        response = opts.client.post(
-            f"/api/incident/ticket/{ticket.pk}", json={"push_to_maestro": True})
-    assert response.status_code == 400, f"missing config must fail clearly: {response.status_code}: {response.body}"
-    rendered = str(response.response)
-    assert "MAESTRO_API_KEY" in rendered, f"response must name missing setting: {rendered}"
-    assert TEST_KEY not in rendered, "response must not disclose a credential"
+# test_missing_setting_rejects_manual_push_without_disclosing_secret moved to
+# tests/test_maestro_board_extended_serial/missing_config.py (maestro #2791):
+# with MAESTRO_API_KEY now baked into the test project, proving the
+# missing-config path requires UNSETTING it, which is a server reload — legal
+# only in the serial sibling.
 
 
 @th.django_unit_test()

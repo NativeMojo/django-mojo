@@ -304,6 +304,16 @@ TOTP_RECOVERY_BCRYPT_ROUNDS = 4
 # endpoint degrades to its no-upstream shape.
 EDGE_PYPI_URL = "http://127.0.0.1:9/"
 
+# Maestro reporting config for the incident app under test (maestro #2791):
+# these are read via settings.get_static by mojo.apps.incident so the workspace
+# push tests no longer need a per-test server_settings() reload. They feed only
+# the APP — testit's own run reporter reads MAESTRO_URL/API_KEY from the
+# environment / MCP discovery, never from Django settings, so this never causes
+# a real report. The host is a .test sink that resolves nowhere.
+MAESTRO_API_KEY = "rest" + "k" * 44        # == tests/test_maestro_board TEST_KEY
+MAESTRO_API_URL = "https://maestro.example.test"
+MAESTRO_CALLBACK_BASE = "https://client.example.test"
+
 LOGGING = {"version": 1, "disable_existing_loggers": False}
 
 INCIDENT_EVENT_METRICS = False  # no metrics processing needed in tests
