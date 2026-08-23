@@ -32,7 +32,7 @@ ALLOWED_DEST = "https://example.com/app"
 ALLOWED_WILDCARD_DEST = "https://tenant.handoff.example.net/app/home"
 # The allowlist ENTRIES that admit the two destinations above. Enforcement is
 # opt-in, so the test server has no allowlist by default — the enforcement test
-# installs these with th.server_settings().
+# installs these with Setting.set (read live via settings.get; maestro #2791).
 ALLOWED_ENTRY = "https://example.com/"
 ALLOWED_WILDCARD_ENTRY = "https://*.handoff.example.net/app"
 
