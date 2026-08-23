@@ -546,6 +546,21 @@ def test_roles_reports_the_role_and_the_authority_that_declared_it(opts):
                    f"effect, and the operator must hear it: "
                    f"{_findings(report, 'roles')}")
 
+    report, _ = _roles_report(_role_runner(
+        payload=_role_payload(sealed="api", env="worker")))
+    finding = _find(report, "roles", "NODE_ROLE export disagrees")
+    th.assert_true(finding is not None and finding["status"] == cn.WARN,
+                   f"a node sealed one role whose shim exports another must "
+                   f"never audit clean: {_findings(report, 'roles')}")
+    th.assert_in("worker", finding["detail"],
+                 f"the finding must name the value the shim exports: {finding}")
+
+    report, _ = _roles_report(_role_runner(
+        payload=_role_payload(sealed="api", env="api", bootstrap="api")))
+    th.assert_true(_find(report, "roles", "disagrees") is None,
+                   f"three authorities that agree are not a disagreement: "
+                   f"{_findings(report, 'roles')}")
+
 
 @th.django_unit_test()
 def test_roles_unlabeled_node_fails_naming_all_three_declaration_sites(opts):

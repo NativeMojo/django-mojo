@@ -384,12 +384,43 @@ def test_manifest_refuses_every_violation(opts):
             ("api systemd/mojo-asgi.service\n", "package-owned",
              "the ASGI unit's lifecycle belongs to the sealed request-service "
              "authority, not to a role manifest"),
+            ("worker systemd/mojosec.service\n", "package-owned",
+             "claiming the sensor for one role would disable and delete it "
+             "on every other node, as a journaled trusted change"),
+            ("worker systemd/mojosec-audit-health.service\n", "package-owned",
+             "the audit-health service is the sensor's own unit, never a "
+             "role's to own"),
+            ("worker systemd/mojosec-audit-health.timer\n", "package-owned",
+             "the audit-health timer is the sensor's own unit, never a "
+             "role's to own"),
         )
         for text, fragment, why in cases:
             _write(path, text)
             th.assert_in(fragment, _refusal(nr.read_manifest, repo), why)
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+@th.django_unit_test()
+def test_refused_unit_names_track_the_units_mojosec_actually_installs(opts):
+    """node_role mirrors these names; nothing may let the two drift apart."""
+    import os
+
+    from mojo.deploy import mojosec, node_role as nr
+
+    installed = {
+        os.path.basename(mojosec.SERVICE_PATH),
+        os.path.basename(mojosec.AUDIT_HEALTH_SERVICE_PATH),
+        os.path.basename(mojosec.AUDIT_HEALTH_TIMER_PATH),
+    }
+    refused = set(nr.REFUSED_NAMES["systemd"])
+    th.assert_true(
+        installed <= refused,
+        f"every unit the sensor installs must be unclaimable by a role, or a "
+        f"manifest line disables and deletes the sensor on every other node: "
+        f"missing {sorted(installed - refused)}")
+    th.assert_in("mojo-asgi.service", refused,
+                 "the ASGI unit must stay refused alongside the sensor's units")
 
 
 @th.django_unit_test()

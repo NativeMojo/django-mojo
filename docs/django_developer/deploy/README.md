@@ -918,12 +918,16 @@ edge
 - A bare role line (`edge` above) declares a role that owns nothing. It is how
   a third kind of node exists without claiming a file.
 
-Three names are **refused at parse time**, and the whole file is refused with
+Six names are **refused at parse time**, and the whole file is refused with
 them: `conf.d/00_django_mojo_runtime.conf` and `conf.d/00_mojosec.conf` are
 package-owned and converged *after* the install loop, so role removal would
 delete what the deploy just installed; `systemd/mojo-asgi.service` has its
 lifecycle decided by the sealed request-service authority (above), not by a
-role manifest.
+role manifest; and `systemd/mojosec.service`,
+`systemd/mojosec-audit-health.service` and
+`systemd/mojosec-audit-health.timer` are the security sensor's own units —
+giving one to a role would disable and delete the sensor on every node of every
+*other* role, as a journaled trusted change nobody alarms on.
 
 With the manifest present, `post_deploy.sh` resolves this node's role before it
 migrates and then, for the rest of the pass: renders only what the role owns,
@@ -1065,6 +1069,7 @@ authority declared it, and grades:
 | Role resolves, and the manifest declares it | INFO + PASS |
 | Role still declared by env or bootstrap, not sealed | WARN (the next deploy promotes it) |
 | `bootstrap.conf` disagrees with the sealed role | WARN — a re-label that edited only bootstrap has NOT taken effect |
+| The `NODE_ROLE` export disagrees with the sealed role | WARN — same thing for the shim's export; the seal wins for convergence, but anything on the node reading the export sees a role this box does not play |
 | Manifest present, node unlabeled | FAIL, naming all three declaration sites |
 | Role not declared in the manifest | FAIL |
 | Manifest the grammar refuses | FAIL, naming the line |

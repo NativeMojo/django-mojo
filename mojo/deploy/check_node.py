@@ -410,6 +410,20 @@ def check_roles(report, run, state, proj, repo):
             "effect",
             f"re-seal the node (root writes {ROLE_AUTHORITY}) if "
             "the new value is the intended one")
+    if state["sealed"] and state["env"] and state["sealed"] != state["env"]:
+        # Same disagreement, the other lower authority. Without this a node
+        # sealed `worker` whose shim exports NODE_ROLE=api audits clean, and
+        # every tool that reads the export instead of the seal is wrong about
+        # what this box is.
+        report.warn(
+            "roles", "the NODE_ROLE export disagrees with the sealed role",
+            f"the sealed authority says {state['sealed']} and the shim exports "
+            f"NODE_ROLE={state['env']} — the seal wins for convergence, so a "
+            "re-labeling that only edited aws/post_deploy.sh has not taken "
+            "effect, and anything on the node reading the export sees a role "
+            "this node does not play",
+            f"re-seal the node (root writes {ROLE_AUTHORITY}) if the exported "
+            "value is the intended one, or drop the stale NODE_ROLE export")
 
     if role not in state["manifest"]:
         report.fail(
