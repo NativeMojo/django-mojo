@@ -12,9 +12,8 @@ TESTIT = {
     # it to cache — moved there as well, so nothing left here retunes a
     # parallel module.
     #
-    # Serial is retained as an execution choice only (this module seeds and
-    # counts incident Events in bulk, and the package is small). It no longer
-    # guards a mutation; drop it once a parallel run has confirmed the Event
-    # seeding is as address-scoped as it reads.
-    "serial": True,
+    # Serial dropped (maestro #2789): the precondition above was checked —
+    # every Event query in this package filters on its own fixed TEST-NET-3
+    # source_ip (203.0.113.x), no other parallel package uses those addresses,
+    # and the whole-suite parallel run confirmed it.
 }
