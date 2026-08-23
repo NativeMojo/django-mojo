@@ -1019,14 +1019,47 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
         ("firewall broker", "/usr/local/sbin/mojo-firewall-broker", "755"),
         ("firewall broker sudoers", "/etc/sudoers.d/70-mojo-firewall-broker", "440"),
     )
+    publish_assets = (
+        ("publish broker", "/usr/local/sbin/mojo-publish-broker", "755"),
+        ("publish broker sudoers", "/etc/sudoers.d/71-mojo-publish-broker", "440"),
+    )
     if mode == "observe":
-        for name, path, wanted in provenance_assets:
+        content_projection = (
+            "import json;"
+            f"p=json.load(open('{MOJOSEC_DEPLOY_STATE_PATH}'));"
+            "print(json.dumps({'roots':p.get('content_roots') or []},"
+            "separators=(',',':')))"
+        )
+        rc_content, content_text, _ = run(f"{sudo}python3 -c {q(content_projection)}")
+        try:
+            content_roots = (json.loads(content_text).get("roots")
+                             if rc_content == 0 else [])
+        except json.JSONDecodeError:
+            content_roots = []
+        # The publish broker exists only on a content node, so audit its assets
+        # exactly where they are supposed to exist — and require their ABSENCE
+        # where they are not, so a retired content node cannot keep a live sudo
+        # grant to a root broker.
+        expected_assets = provenance_assets + (
+            publish_assets if content_roots else ())
+        for name, path, wanted in expected_assets:
             found = _secure_metadata(run, path, wanted, sudo=sudo)
             if found is not None and found[1]:
                 report.passed("mojosec", name, f"{path} is root:root {wanted}")
             else:
                 report.fail("mojosec", f"{name} absent or unsafe", path,
                             "sudo bash aws/post_deploy.sh")
+        if not content_roots:
+            stale = [path for _name, path, _wanted in publish_assets
+                     if run(f"{sudo}test -e {q(path)}")[0] == 0]
+            if stale:
+                report.fail(
+                    "mojosec", "publish broker present without content enrollment",
+                    ", ".join(stale),
+                    "sudo bash aws/post_deploy.sh")
+            else:
+                report.passed("mojosec", "publish broker absent",
+                              "no content roots are enrolled and no grant exists")
         rc, audit_status, _ = run(f"{sudo}/sbin/auditctl -s")
         rc_rules, audit_rules, _ = run(f"{sudo}/sbin/auditctl -l")
         projection = (
@@ -1230,6 +1263,23 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                         "profile digest, baseline, or per-tier health is incomplete "
                         "(fast/slow/RPM are required; every reported tier must be "
                         "initialized and complete)")
+                content = tiers.get("content") if isinstance(tiers, dict) else None
+                if isinstance(content, dict):
+                    # Overflow does not degrade quietly — it stops the tier —
+                    # so warn while there is still room to add an exclude or
+                    # shorten retention, not after the scan has already failed.
+                    entries = content.get("entries") or 0
+                    ceiling = (content.get("bounds") or {}).get("max_entries") or 0
+                    if ceiling and entries >= ceiling * 0.8:
+                        report.warn(
+                            "mojosec", "content tier approaching its entry bound",
+                            f"{entries} of {ceiling} entries; prune retained "
+                            "revisions or exclude generated assets before the "
+                            "tier overflows")
+                    elif ceiling:
+                        report.passed(
+                            "mojosec", "content tier capacity",
+                            f"{entries} of {ceiling} entries")
             spooled = status.get("spooled_events")
             if isinstance(spooled, int) and 0 <= spooled <= 10000:
                 report.passed("mojosec", "spool backlog", f"{spooled} pending event(s)")

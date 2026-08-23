@@ -1149,6 +1149,8 @@ retire_mojosec_provenance_assets() {
         /etc/systemd/system/mojosec-audit-health.timer
         /etc/sudoers.d/70-mojo-firewall-broker
         /usr/local/sbin/mojo-firewall-broker
+        /etc/sudoers.d/71-mojo-publish-broker
+        /usr/local/sbin/mojo-publish-broker
         "$MOJOSEC_AUDIT_HELPER"
         /run/mojosec/audit-health.json
     )
@@ -1221,6 +1223,8 @@ if [ "$MOJOSEC_MODULE_AVAILABLE" = "1" ]; then
             /etc/systemd/system/mojosec-audit-health.timer \
             /etc/sudoers.d/70-mojo-firewall-broker \
             /usr/local/sbin/mojo-firewall-broker \
+            /etc/sudoers.d/71-mojo-publish-broker \
+            /usr/local/sbin/mojo-publish-broker \
             /usr/local/lib/mojosec/mojosec_audit.py -- \
             "$MOJOSEC_PYTHON" "${MOJOSEC_PY_FLAGS[@]}" \
             -m mojo.deploy.mojosec converge \
