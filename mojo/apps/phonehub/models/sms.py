@@ -185,6 +185,27 @@ class SMS(models.Model, MojoModel):
         if provider_name == 'mojo':
             base_url = (config.mojo_remote_url or '').rstrip('/') if config else ''
             api_key = config.get_mojo_api_key() if config else ''
+
+            # Fictional-number short-circuit comes BEFORE config validation
+            # (maestro #2789): a fictional +1555 number never needs a working
+            # provider, and validating first meant one tenant's incomplete
+            # (or mid-mutation) system-scoped mojo config failed every other
+            # caller's test send. The twilio branch already short-circuits
+            # before it can fail this way.
+            if to_number.startswith("+1555"):
+                fake_mapping = SMS_FAKE_MAPPINGS.get(to_number[:8])
+                if not fake_mapping:
+                    sms = cls.objects.create(
+                        user=user, group=group, direction='outbound',
+                        from_number=from_number or '', to_number=to_number,
+                        body=body, status='queued', provider='mojo',
+                        metadata=metadata or {},
+                    )
+                    sms.is_test = True
+                    sms.mark_sent(f"test{to_number}")
+                    return sms
+                to_number = fake_mapping
+
             if not base_url or not api_key:
                 sms = cls.objects.create(
                     user=user, group=group, direction='outbound',
@@ -202,16 +223,6 @@ class SMS(models.Model, MojoModel):
                 from_number=from_number or '', to_number=to_number, body=body,
                 status='queued', provider='mojo', metadata=metadata or {},
             )
-
-            # Test-number short-circuit stays ahead of the network call so
-            # local dev/test runs never reach the remote.
-            if to_number.startswith("+1555"):
-                fake_mapping = SMS_FAKE_MAPPINGS.get(to_number[:8])
-                if not fake_mapping:
-                    sms.is_test = True
-                    sms.mark_sent(f"test{to_number}")
-                    return sms
-                to_number = fake_mapping
 
             from mojo.apps.phonehub.services import mojo_provider
             resp = mojo_provider.send_sms(
