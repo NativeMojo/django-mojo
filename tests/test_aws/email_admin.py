@@ -111,16 +111,20 @@ def test_rest_save_audits_real_actor(opts):
                                 {"is_system_default": True})
         assert resp.status_code == 200, \
             f"REST mailbox save failed: {resp.status_code}"
+
+        row = Event.objects.filter(
+            category="admin_platform", details__contains="mailbox_default"
+        ).filter(details__contains=_addr("alt")).order_by("-id").first()
+        assert row is not None, \
+            "a REST default-flag change filed no admin audit event"
+        assert f"actor={user.pk}" in (row.details or ""), \
+            f"the audit event does not name the real acting user: {row.details!r}"
     finally:
         opts.client.logout()
-
-    row = Event.objects.filter(
-        category="admin_platform", details__contains="mailbox_default"
-    ).filter(details__contains=_addr("alt")).order_by("-id").first()
-    assert row is not None, \
-        "a REST default-flag change filed no admin audit event"
-    assert f"actor={user.pk}" in (row.details or ""), \
-        f"the audit event does not name the real acting user: {row.details!r}"
+        # Never leave a live system default behind (maestro #2789): a stray
+        # is_system_default row makes every later send_template_email in the
+        # whole run resolve a real SES mailbox.
+        Mailbox.objects.filter(domain__name=DOMAIN).update(is_system_default=False)
 
 
 @th.django_unit_test("REGRESSION: one locked writer leaves exactly one system default")
@@ -153,6 +157,8 @@ def test_single_locked_default_writer(opts):
             f"a REST save left more or less than one default: {_my_defaults()}"
     finally:
         opts.client.logout()
+        # See test_rest_save_audits_real_actor — no live default may survive.
+        Mailbox.objects.filter(domain__name=DOMAIN).update(is_system_default=False)
 
 
 # ── test-send: every foreseeable failure is a structured 200 ────────────────
@@ -299,6 +305,14 @@ def test_dashboard_source_states(opts):
     from mojo.apps.aws.models import EmailDomain, Mailbox
     from mojo.apps.aws.services import email_admin
 
+    try:
+        _run_dashboard_source_states(opts, EmailDomain, Mailbox, email_admin)
+    finally:
+        # See test_rest_save_audits_real_actor — no live default may survive.
+        Mailbox.objects.filter(domain__name=DOMAIN).update(is_system_default=False)
+
+
+def _run_dashboard_source_states(opts, EmailDomain, Mailbox, email_admin):
     seen = []
 
     with mock.patch.object(email_admin, "_domains", return_value=[]):

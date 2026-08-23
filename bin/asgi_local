@@ -12,6 +12,17 @@ if [ -f "$REPO_ROOT/.env" ]; then
     set +a
 fi
 
+# Isolate the test server from the developer's real AWS (maestro #2789).
+# Env credentials are the FIRST leg of boto's chain and .env was just sourced,
+# so clear them; a stale AWS_PROFILE would raise ProfileNotFound rather than
+# fall through, so it goes too. /dev/null parses as an empty ini. Tests seed
+# AWS access through mojo-level Setting rows — the ambient chain must never
+# supply real credentials to a test process.
+export AWS_SHARED_CREDENTIALS_FILE=/dev/null
+export AWS_CONFIG_FILE=/dev/null
+export AWS_EC2_METADATA_DISABLED=true
+unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE 2>/dev/null || true
+
 # Use venv Python if available
 if [ -f "$REPO_ROOT/.venv/bin/python" ]; then
     PYTHON="$REPO_ROOT/.venv/bin/python"

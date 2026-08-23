@@ -22,6 +22,16 @@ if [ -f "$REPO_ROOT/.env" ]; then
     set +a
 fi
 
+# Isolate the test process from the developer's real AWS (maestro #2789) —
+# same block as bin/asgi_local, which covers the server side. Env credentials
+# are boto's first chain leg and .env was just sourced; a stale AWS_PROFILE
+# raises ProfileNotFound instead of falling through. Tests seed AWS access
+# through mojo-level Setting rows only.
+export AWS_SHARED_CREDENTIALS_FILE=/dev/null
+export AWS_CONFIG_FILE=/dev/null
+export AWS_EC2_METADATA_DISABLED=true
+unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE 2>/dev/null || true
+
 # Start server if not already running; track so we know to stop it after
 STARTED_SERVER=0
 if ! "$SCRIPT_DIR/asgi_local" status | grep -q "Running"; then
