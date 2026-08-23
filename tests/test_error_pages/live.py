@@ -17,10 +17,9 @@ CURL = {"Accept": "*/*"}
 # mojo/decorators/http.py rather than to Django's handler404.
 DISPATCH_MISS = "/s/2262nope"
 
-# A path nothing resolves at all — Django's own handler404, which the project
-# URLconf owns. Django only calls it when DEBUG is off, so the test that uses
-# it flips DEBUG on the server.
-UNRESOLVED_PATH = "/api/2262/definitely-not-a-route"
+# The unresolved-path handler404 test needs DEBUG off (a server reload), so it
+# lives in tests/test_error_pages_extended_serial/live_handler404.py
+# (maestro #2791).
 
 
 @th.django_unit_test("live: the unconfigured root serves the page to a browser, at 200")
@@ -65,21 +64,6 @@ def test_dispatcher_miss_html(opts):
     assert_true(DISPATCH_MISS not in body, "the 404 page must not echo the request path")
 
 
-@th.django_unit_test("live: the project's handler404 negotiates for a genuinely unresolved path")
-def test_project_handler404(opts):
-    # Django routes to handler404 only when DEBUG is off; with DEBUG on it
-    # serves its own technical page and the project handler never runs.
-    with th.server_settings(DEBUG=False):
-        api = opts.client.get(UNRESOLVED_PATH, headers=CURL)
-        api_body = opts.client.last_response.body
-        page = opts.client.get(UNRESOLVED_PATH, headers=BROWSER)
-        page_body = str(page.text)
-
-    assert_eq(api.status_code, 404, "an unresolved path must still be a JSON 404 for API clients")
-    assert_eq(api.response.error, "Not found",
-              f"the project handler404 JSON envelope must be unchanged, got {api_body!r}")
-    assert_eq(page.status_code, 404, "the browser must get a true 404 from handler404 too")
-    assert_true("That page doesn&rsquo;t exist" in page_body,
-                f"handler404 must serve the styled page to a browser, got: {page_body[:300]!r}")
-    assert_true("Traceback" not in page_body and "URLconf" not in page_body,
-                "the styled page must replace Django's technical 404, not sit beside it")
+# test_project_handler404 moved to
+# tests/test_error_pages_extended_serial/live_handler404.py (maestro #2791):
+# it needs DEBUG off, which requires a server reload.
