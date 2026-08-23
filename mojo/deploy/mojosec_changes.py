@@ -639,11 +639,16 @@ def _change_entries(operation, paths, after, completed, relax_directories=False)
 
 class ChangeJournal:
     def __init__(self, journal_path=JOURNAL_PATH, lock_path=LOCK_PATH,
-                 manifest_path=MANIFEST_PATH, allowed_roots=None):
+                 manifest_path=MANIFEST_PATH, allowed_roots=None, *,
+                 max_manifest_entries=None):
         self.journal_path = journal_path
         self.lock_path = lock_path
         self.manifest_path = manifest_path
         self.allowed_roots = allowed_roots
+        # Injection seam for the manifest ceiling. None is the shipped bound,
+        # so production behavior is byte-identical when it is not supplied.
+        self.max_manifest_entries = (MAX_PACKAGE_PATHS if max_manifest_entries is None
+                                     else max_manifest_entries)
 
     def _locked(self):
         os.makedirs(os.path.dirname(self.lock_path), mode=0o700, exist_ok=True)
@@ -676,7 +681,7 @@ class ChangeJournal:
                 value["schema"] != "mojosec.expected_changes" or
                 value["version"] not in (1, 2) or
                 not isinstance(value["entries"], list) or
-                len(value["entries"]) > MAX_PACKAGE_PATHS):
+                len(value["entries"]) > self.max_manifest_entries):
             raise ChangeError("expected-change v2 envelope is invalid")
         now = _timestamp(_now())
         value["entries"] = [entry for entry in value["entries"]
@@ -795,7 +800,7 @@ class ChangeJournal:
             if key not in keys:
                 manifest["entries"].append(entry)
                 keys.add(key)
-        if len(manifest["entries"]) > MAX_PACKAGE_PATHS:
+        if len(manifest["entries"]) > self.max_manifest_entries:
             raise ChangeError("expected-change entry bound was exceeded")
         _atomic_write(self.manifest_path, manifest)
         return entries

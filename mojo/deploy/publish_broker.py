@@ -95,7 +95,12 @@ def parse_request(payload):
     return value
 
 
-def _read_root_owned_json(path, maximum):
+def _read_root_owned_json(path, maximum, require_root=None):
+    # require_root mirrors expected_changes.load_manifest: the real broker runs
+    # as root and demands root ownership; a non-root reader still enforces the
+    # mode bound. This is a read, never an authorization decision.
+    if require_root is None:
+        require_root = os.geteuid() == 0
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(path, flags)
@@ -105,8 +110,10 @@ def _read_root_owned_json(path, maximum):
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode):
             raise PublishError(f"{path} must be a regular file")
-        if info.st_uid != 0 or info.st_mode & 0o077:
-            raise PublishError(f"{path} must be root-owned and 0600 or stricter")
+        if info.st_mode & 0o077:
+            raise PublishError(f"{path} must be 0600 or stricter")
+        if require_root and info.st_uid != 0:
+            raise PublishError(f"{path} must be owned by root")
         if info.st_size > maximum:
             raise PublishError(f"{path} is too large")
         payload = os.read(descriptor, maximum + 1)
@@ -123,9 +130,9 @@ def _read_root_owned_json(path, maximum):
     return value
 
 
-def load_content_roots(path=ENROLLMENT_PATH):
+def load_content_roots(path=ENROLLMENT_PATH, require_root=None):
     """Read the enrolled content roots; an unenrolled node publishes nothing."""
-    enrollment = _read_root_owned_json(path, MAX_ENROLLMENT_BYTES)
+    enrollment = _read_root_owned_json(path, MAX_ENROLLMENT_BYTES, require_root)
     roots = enrollment.get("fim_content_roots") or []
     if not isinstance(roots, list) or not roots:
         raise PublishError("this node has no enrolled content roots")

@@ -247,6 +247,140 @@ def test_safe_path_launcher_retains_system_site_without_env_or_cwd(opts):
 
 
 @th.django_unit_test()
+def test_enrollment_owns_content_roots_and_desired_policy_cannot(opts):
+    from mojo.deploy import mojosec as deploy
+
+    enrollment = {
+        "version": 1, "sensor_id": "i-content.us-west-2",
+        "endpoint": "https://incident.example/api/incident/mojosec/batch",
+        "fim_allowed_roots": ["/etc"], "fim_content_roots": ["/opt/content"],
+    }
+    validated = deploy._validate_enrollment(enrollment)
+    th.assert_eq(validated["fim_content_roots"], ["/opt/content"],
+                 "root enrollment is the only source of a node's content roots")
+
+    for roots in (["/opt/api/releases"], ["/opt/www"], ["/etc/tenants"],
+                  ["/usr/local"], ["/var/lib/mojosec"], ["/run/mojosec"],
+                  ["/"], ["relative"], ["/srv/a", "/srv/a/b"], ["/srv/a", "/srv/a"],
+                  [f"/srv/t{index}" for index in range(9)]):
+        with th.assert_raises(deploy.DeployError):
+            deploy._validate_enrollment(dict(enrollment, fim_content_roots=roots))
+
+    th.assert_true("content_roots" not in deploy.DESIRED_KEYS,
+                   "fleet desired policy must never select which trees are content")
+    desired = {"version": 1, "profile": "al2023-content-v1", "policy_revision": "r9"}
+
+    def read(path, *args, **kwargs):
+        if path == deploy.DESIRED_CONFIG_PATH:
+            return desired, json.dumps(desired).encode()
+        return enrollment, json.dumps(enrollment).encode()
+
+    config, _payload, protected = deploy._prepare_effective_config(loader=read)
+    th.assert_eq(config["content_roots"], ["/opt/content"],
+                 "the effective config must carry the enrolled roots")
+    th.assert_eq(sorted(config["collectors"]["fim"]["tiers"]),
+                 ["content", "fast", "slow"],
+                 "a content profile must resolve its tier against the enrolled roots")
+    th.assert_eq(protected["fim_content_roots"], ["/opt/content"],
+                 "converge must see the protected roots it installs the broker for")
+
+    poisoned = dict(desired, content_roots=["/etc"])
+
+    def poisoned_read(path, *args, **kwargs):
+        if path == deploy.DESIRED_CONFIG_PATH:
+            return poisoned, json.dumps(poisoned).encode()
+        return enrollment, json.dumps(enrollment).encode()
+
+    with th.assert_raises(deploy.DeployError):
+        deploy._prepare_effective_config(loader=poisoned_read)
+
+
+@th.django_unit_test()
+def test_content_rebaseline_runs_once_per_graph_and_never_gates_a_deploy(opts):
+    from mojo.deploy import mojosec as deploy
+    from mojo.mojosec.config import build_config
+
+    config = build_config({
+        "sensor_id": "i-content",
+        "endpoint": "https://incident.example/api/incident/mojosec/batch",
+        "profile": "al2023-content-v1", "content_roots": ["/opt/content"],
+    })
+    digest = deploy.content_graph_digest(config)
+    th.assert_eq(len(digest), 64, "the content tier must have a resolvable graph digest")
+    other = deploy.content_graph_digest(build_config({
+        "sensor_id": "i-content",
+        "endpoint": "https://incident.example/api/incident/mojosec/batch",
+        "profile": "al2023-content-v1", "content_roots": ["/srv/tenants"],
+    }))
+    th.assert_true(digest != other,
+                   "a different root set must be a different graph digest")
+    th.assert_eq(
+        deploy.content_graph_digest(build_config({
+            "sensor_id": "i-host",
+            "endpoint": "https://incident.example/api/incident/mojosec/batch",
+            "profile": "al2023-web-v2"})),
+        "",
+        "a host-only node must never trigger the content ceremony")
+
+    invoked = []
+
+    def runner(argv):
+        invoked.append(argv)
+        return '{"initialized":true}'
+
+    th.assert_true(deploy._rebaseline_content_tier(digest, runner=runner),
+                   "a successful seeding must report success")
+    th.assert_eq(len(invoked), 1, "the ceremony must run exactly one command")
+    argv = invoked[0]
+    th.assert_in("baseline-initialize-tier", argv,
+                 "the ceremony must use the one-tier seeding entry point")
+    th.assert_in("content", argv, "it must name exactly the content tier")
+    th.assert_eq(argv[argv.index("--confirm-digest") + 1], digest,
+                 "seeding must be confirmed against the exact resolved graph digest")
+
+    def failing(argv):
+        raise deploy.DeployError("the sensor refused: tier already initialized")
+
+    th.assert_eq(deploy._rebaseline_content_tier(digest, runner=failing), False,
+                 "a refused seeding must report failure so the digest is withheld")
+
+
+@th.django_unit_test()
+def test_converge_journals_and_retires_both_brokers(opts):
+    from mojo.deploy import mojosec as deploy
+    from mojo.deploy.publish_broker import BROKER_PATH, SUDOERS_PATH
+
+    journalable = deploy._journalable_converge_paths()
+    for path in (BROKER_PATH, SUDOERS_PATH):
+        th.assert_in(path, journalable,
+                     f"converge's own write of {path} must be explainable to FIM")
+    th.assert_true(
+        all(not path.startswith(("/etc/mojosec", "/var/lib/mojosec", "/run/mojosec"))
+            for path in journalable),
+        "MojoSec control state is converge-owned and never journalable (item 2014)")
+
+    th.assert_in("mojo.deploy.publish_broker", deploy.PUBLISH_BROKER_WRAPPER_TEXT,
+                 "the installed wrapper must exec the packaged publish broker")
+    for expected in ("-E", "-P", "/usr/bin/python3"):
+        th.assert_in(expected, deploy.PUBLISH_BROKER_WRAPPER_TEXT,
+                     f"the root broker wrapper must launch safely: {expected}")
+
+    path = os.path.join(os.path.dirname(deploy.__file__), "scripts", "post_deploy.sh")
+    with open(path, encoding="utf-8") as handle:
+        script = handle.read()
+    declaration = script[script.index("trusted_change mojosec-converge"):]
+    declaration = declaration[:declaration.index(" -- ")]
+    for asset in (BROKER_PATH, SUDOERS_PATH):
+        th.assert_in(asset, declaration,
+                     f"post_deploy must declare {asset} in the converge change")
+    retirement = script[script.index("retire_mojosec_provenance_assets()"):]
+    retirement = retirement[:retirement.index("rm -f")]
+    for asset in (BROKER_PATH, SUDOERS_PATH):
+        th.assert_in(asset, retirement,
+                     f"a package downgrade must retire {asset}")
+
+
+@th.django_unit_test()
 def test_downgrade_handoff_quiesces_writer_through_flush_and_restore(opts):
     from mojo.deploy import mojosec as deploy
 
