@@ -178,10 +178,291 @@ _DEFAULT_CONFIG = objict(
     requires_apps=[],
     requires_extra=[],
     default_core=False,
+    tier=None,
+    time_budget=None,
+    file_parallel=False,
 )
 
 # Opt-in tiers that --all turns on. See setup_parser for what each one means.
 ALL_EXTRAS = ("slow", "extended")
+
+# ---------------------------------------------------------------------------
+# Named tiers (maestro #2790)
+# ---------------------------------------------------------------------------
+# A package declares which BUCKET it belongs to; a runner selects a PRESET, a
+# named set of buckets. A preset name not in this table is treated as a literal
+# single bucket, so `--tier admin --tier edge` selects exactly those two.
+#
+#   core       — the ≤30s baseline every consumer runs (populated in Phase 3)
+#   framework  — django-mojo's own critical contracts (today's default tier)
+#   bug        — one isolated regression per fixed bug
+#   extended   — correct-but-not-critical / exhaustive variants
+#   admin/edge — admin-portal and edge-deployment coverage most consumers skip
+#   slow       — expensive, pre-release only
+TIER_PRESETS = {
+    "core": {"core"},
+    "framework": {"core", "framework", "bug"},
+    # "all" is handled specially (select every package) — listed for --list-tiers.
+    "all": None,
+}
+
+# The preset a bare `bin/run_tests` selects. Phase 3 flips this to "core" once
+# core is populated; until then it is "framework" so the bare run is
+# byte-identical to today's default tier.
+DEFAULT_PRESET = "framework"
+
+# Buckets whose packages run in the parallel ring and are held to the
+# isolation contract. `serial` remains an orthogonal execution attribute.
+PARALLEL_TIERS = frozenset({"core", "framework"})
+
+
+def _resolve_tags(config):
+    """The set of tier tags one package belongs to, unifying the new `tier`
+    key with the legacy `default_core`/`requires_extra` vocabulary.
+
+    Legacy mapping (so every existing package lands correctly with zero edits):
+      - default_core=True                      -> {"framework"}
+      - nonempty requires_extra, no tier       -> those opt-in tags (as today)
+      - neither (permissive/consumer default)  -> {"framework"} (runs by default)
+      - tier="X"                               -> {"X"} (plus any requires_extra)
+
+    One-vocabulary errors (default_core with tier, or default_core with
+    requires_extra) are reported by the isolation policy, not here — this helper
+    only computes selection tags and must never raise mid-run.
+    """
+    tier = config.get("tier")
+    default_core = bool(config.get("default_core", False))
+    extras = set(_normalize_extra_value(config.get("requires_extra")))
+    tags = set(extras)
+    if tier:
+        tags.add(tier)
+    elif default_core:
+        tags.add("framework")
+    if not tags:
+        # No tier, not default_core, no requires_extra: the historical
+        # permissive default ran in the default tier, so it belongs to
+        # framework. (Repository packages in this state fail the fail-closed
+        # policy separately; consumer roots are exempt and keep running.)
+        tags.add("framework")
+    return tags
+
+
+def _selected_tags(opts):
+    """Resolve the run's selected tier tags. Returns (tags, select_all).
+
+    select_all=True short-circuits filtering — every package runs (the `all`
+    preset / legacy `--all`). Otherwise a package runs iff its tags intersect
+    `tags`. `--extra X` adds ad-hoc tags on top of the preset, preserving the
+    historical "default tier PLUS the X packages" meaning of `--extra`.
+    """
+    tier_names = list(getattr(opts, "tiers", None) or [])
+    if getattr(opts, "all", False):
+        tier_names.append("all")
+    tags = set()
+    select_all = False
+    if not tier_names:
+        tags |= TIER_PRESETS[DEFAULT_PRESET]
+    for name in tier_names:
+        if name == "all":
+            select_all = True
+        elif name in TIER_PRESETS and TIER_PRESETS[name] is not None:
+            tags |= TIER_PRESETS[name]
+        else:
+            tags.add(name)
+    tags |= set(getattr(opts, "extra_list", None) or [])
+    return tags, select_all
+
+
+def _selected_preset_label(opts):
+    """A short label naming what this run selected, for the report and the
+    maestro suite identity (so core / framework / all report separately).
+    Safe to call before selection resolves select_all."""
+    if getattr(opts, "select_all", False) or getattr(opts, "all", False):
+        return "all"
+    tiers = list(getattr(opts, "tiers", None) or [])
+    if not tiers:
+        return DEFAULT_PRESET
+    if "all" in tiers:
+        return "all"
+    return "+".join(sorted(set(tiers)))
+
+
+# Whole-suite wall-clock budgets per preset (seconds), overridable in
+# tests/testit.json {"budgets": {...}} and scaled by TESTIT_BUDGET_SCALE for
+# slow machines (maestro #2790).
+_DEFAULT_TIER_BUDGETS = {"core": 30.0, "framework": 90.0}
+
+
+def _load_tier_budgets(parent_test_root):
+    budgets = dict(_DEFAULT_TIER_BUDGETS)
+    if not parent_test_root:
+        return budgets
+    path = os.path.join(parent_test_root, "testit.json")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return budgets
+    declared = data.get("budgets")
+    if isinstance(declared, dict):
+        for key, value in declared.items():
+            try:
+                budgets[key] = float(value)
+            except (TypeError, ValueError):
+                pass
+    return budgets
+
+
+def _budget_scale():
+    try:
+        return max(0.1, float(os.environ.get("TESTIT_BUDGET_SCALE", "1") or "1"))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _compute_budget_violations(opts, report, parent_test_root):
+    """Wall-clock budget check (maestro #2790). Over budget x1.25 is a
+    violation; below 0.6x budget is a stale-warning (lower it). Covers the
+    selected preset's whole-suite budget and any per-package `time_budget`.
+    Returns a list of dicts for the report and for printing."""
+    scale = _budget_scale()
+    violations = []
+    # A partial run (-t / --ignore) is not the preset's wall clock, so the
+    # whole-suite budget would be meaningless — but per-package time_budgets
+    # still apply to whatever ran.
+    partial = bool(getattr(opts, "test_modules", None)
+                   or getattr(opts, "ignore_modules", None))
+    preset = getattr(opts, "selected_preset", None)
+    budgets = _load_tier_budgets(parent_test_root)
+    if not partial and preset in budgets:
+        budget = budgets[preset] * scale
+        actual = report.get("duration") or 0
+        if budget > 0 and actual > budget * 1.25:
+            violations.append({
+                "scope": "preset", "name": preset, "kind": "over",
+                "budget": round(budget, 1), "actual": round(actual, 1)})
+        elif budget > 0 and actual < budget * 0.6:
+            violations.append({
+                "scope": "preset", "name": preset, "kind": "stale",
+                "budget": round(budget, 1), "actual": round(actual, 1)})
+    time_budgets = getattr(opts, "_time_budgets", None) or {}
+    modules = report.get("modules") or {}
+    for name, budget in time_budgets.items():
+        if not budget:
+            continue
+        try:
+            budget = float(budget) * scale
+        except (TypeError, ValueError):
+            continue
+        actual = (modules.get(name) or {}).get("duration") or 0
+        if budget > 0 and actual > budget * 1.25:
+            violations.append({
+                "scope": "package", "name": name, "kind": "over",
+                "budget": round(budget, 1), "actual": round(actual, 1)})
+    return violations
+
+
+# Slow-test stack dump (maestro #2790): a background watchdog that captures
+# every thread's stack when a single test runs longer than the threshold. This
+# is the tool for the unexplained exact-10s block/unblock stall that reproduces
+# only under the parallel suite. Collected here for the report.
+_SLOW_STACKS = []
+_SLOW_STACKS_LOCK = threading.Lock()
+
+
+def _slow_dump_threshold():
+    try:
+        return max(1.0, float(os.environ.get("TESTIT_SLOW_DUMP_SECS", "15") or "15"))
+    except (TypeError, ValueError):
+        return 15.0
+
+
+def _capture_all_stacks(test_key, age):
+    """Snapshot every thread's stack — the diagnostic for a test that hangs."""
+    frames = sys._current_frames()
+    names = {t.ident: t.name for t in threading.enumerate()}
+    dump = []
+    for tid, frame in frames.items():
+        stack = "".join(traceback.format_stack(frame))
+        dump.append(f"--- thread {names.get(tid, tid)} ({tid}) ---\n{stack}")
+    text = "\n".join(dump)
+    entry = {"test": test_key, "age": round(age, 1), "stacks": text}
+    with _SLOW_STACKS_LOCK:
+        _SLOW_STACKS.append(entry)
+    try:
+        logit.get_logger("testit", "testit.log").error(
+            f"SLOW TEST >{round(age,1)}s: {test_key}\n{text}")
+    except Exception:
+        pass
+
+
+class _SlowTestWatchdog(threading.Thread):
+    """Polls the active-test registry; dumps stacks once per slow test."""
+
+    def __init__(self, threshold, poll=2.0):
+        super().__init__(daemon=True)
+        self.threshold = threshold
+        self.poll = poll
+        self._stop = threading.Event()
+        self._dumped = set()
+
+    def run(self):
+        while not self._stop.wait(self.poll):
+            try:
+                for key, age in helpers.active_test_ages():
+                    if age >= self.threshold and key not in self._dumped:
+                        self._dumped.add(key)
+                        _capture_all_stacks(key, age)
+            except Exception:
+                pass
+
+    def stop(self):
+        self._stop.set()
+
+
+def _print_budget_violations(opts, violations):
+    """Print budget violations (maestro #2790). Informational for every preset;
+    the exit-code consequence is decided by the caller."""
+    if not violations:
+        return
+    print("\n  Tier budget:")
+    for v in violations:
+        if v["kind"] == "over":
+            print(f"    ! {v['scope']} '{v['name']}' took {v['actual']}s, "
+                  f"budget {v['budget']}s — tag slow tests into extended/bug, "
+                  f"give them a seam, or raise the budget in tests/testit.json")
+        elif v["kind"] == "stale":
+            print(f"    · {v['scope']} '{v['name']}' took {v['actual']}s, well "
+                  f"under budget {v['budget']}s — consider lowering the budget "
+                  f"in tests/testit.json so it cannot silently regrow")
+
+
+def _budget_fails_run(opts, violations):
+    """Whether budget violations should fail the exit code (maestro #2790).
+
+    The core preset is a hard gate — it is the ≤30s baseline. Other presets
+    (framework included) only warn locally; framework is not under budget until
+    Phases 2-3 land, and CI enforcement is wired in Phase 4."""
+    preset = getattr(opts, "selected_preset", None)
+    if preset == "core":
+        return any(v["kind"] == "over" and v["scope"] in ("preset", "package")
+                   for v in violations)
+    return False
+
+
+def _record_has_selected_tag(record, selected_tags):
+    """True when a package that does not match at the package level still holds
+    per-file (TESTIT_TIER) or per-function (@th.tier) tests tagged into a
+    selected bucket. No such tags exist until Phase 3 curation, so this returns
+    False everywhere today and leaves selection byte-identical."""
+    if not selected_tags:
+        return False
+    from testit import isolation
+    for _test_name, file_path in _discover_record_files(record):
+        facts = isolation.cached_file_facts(file_path)
+        if getattr(facts, "tiers", None) and facts.tiers & selected_tags:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -416,8 +697,9 @@ def setup_parser(argv=None):
     config_parser = argparse.ArgumentParser(add_help=False)
     config_parser.add_argument("--config", type=str,
                                help="Path to a JSON config file with default options")
-    config_parser.add_argument("--list-extras", action="store_true",
-                               help="Scan tests and list declared @requires_extra flags")
+    config_parser.add_argument("--list-extras", "--list-tiers", action="store_true",
+                               dest="list_extras",
+                               help="Scan tests and list declared tier / @requires_extra flags")
 
     parser = argparse.ArgumentParser(
         description="Django Test Runner",
@@ -454,8 +736,12 @@ def setup_parser(argv=None):
                         help="Write structured failure report to var/test_failures.json for LLM agents")
     parser.add_argument("--plain", action="store_true",
                         help="Force plain text output (no rich progress UI)")
+    parser.add_argument("--tier", action="append", dest="tiers",
+                        help="Select a tier preset (core, framework, all) or a "
+                             "literal bucket (bug, extended, admin, edge, slow). "
+                             "Repeatable. Default: the framework preset.")
     parser.add_argument("--all", action="store_true",
-                        help="Include every opt-in tier (same as --extra slow,extended)")
+                        help="Run every tier (same as --tier all)")
     # Compatibility only: old commands keep running the ordinary default
     # suite, but the retired spelling no longer selects opt-in tiers or appears
     # in help.
@@ -478,6 +764,10 @@ def setup_parser(argv=None):
     opts.list_extras = config_args.list_extras or getattr(opts, "list_extras", False)
     opts.test_modules = list(opts.test_modules or [])
     opts.ignore_modules = list(opts.ignore_modules or [])
+    opts.tiers = list(opts.tiers or [])
+    # Resolved again in main() once select_all is known; set here too so early
+    # readers (the maestro suite identity) see the right label (maestro #2790).
+    opts.selected_preset = _selected_preset_label(opts)
 
     # Normalize extras for both config defaults and CLI input.
     extra_values = _normalize_extra_value(opts.extra)
@@ -742,6 +1032,17 @@ def run_module_tests(opts, module, test_name, module_name):
             if _abort_event.is_set():
                 helpers.mark_aborted()
                 raise helpers.TestitAbort()
+            # Tier gate (maestro #2790): a test tagged into a bucket this run
+            # did not select is a COUNTED skip, decided here before invoking so
+            # the module still pays no setup for it. No @th.tier decorators
+            # exist until Phase 3, so this is inert today.
+            func_tier = getattr(func, "_tier", None)
+            if func_tier and not getattr(opts, "select_all", False):
+                selected = getattr(opts, "selected_tags", None) or set()
+                if func_tier not in selected:
+                    helpers.record_tier_skip(
+                        module_name, test_name, func_name, func_tier)
+                    continue
             # Track current test for the running display
             dfn = helpers._get_display_fn()
             if dfn:
@@ -1271,6 +1572,8 @@ def _build_agent_report(opts, display=None, conf_drift=None):
 
         failures.append(entry)
 
+    module_tiers = getattr(opts, "_module_tiers", None) or {}
+
     # Per-module stats from rich display trackers (when available)
     modules = {}
     if display and hasattr(display, "trackers"):
@@ -1285,6 +1588,8 @@ def _build_agent_report(opts, display=None, conf_drift=None):
             }
             if t.skip_reason:
                 entry["skipped_reason"] = t.skip_reason
+            if module_tiers.get(name):
+                entry["tier"] = module_tiers[name]
             modules[name] = entry
     else:
         # Build per-module stats from records
@@ -1333,6 +1638,9 @@ def _build_agent_report(opts, display=None, conf_drift=None):
 
     report = {
         "status": "passed" if helpers.TEST_RUN.failed == 0 else "failed",
+        # The tier preset this run selected (maestro #2790) — core / framework /
+        # all / a literal bucket. Distinguishes suite identities on the board.
+        "preset": getattr(opts, "selected_preset", None),
         "total": totals["tests"],
         "passed": totals["passed"],
         "failed": totals["failed"],
@@ -1494,7 +1802,13 @@ def _enforce_repository_policy(parent_test_root):
             # on it used to block the whole run.
             continue
         config, state = _load_module_config_ex(package_path)
-        scanned = isolation.scan_package(package_path)
+        # A `core` package is scanned under the strict contract (maestro #2790):
+        # its `_`-prefixed helpers are scanned too and the stricter grammar
+        # fires. No package declares tier="core" until Phase 3, so strict stays
+        # False here and every scan is byte-identical to the pre-tier behavior.
+        tier = config.get("tier")
+        strict = tier == "core"
+        scanned = isolation.scan_package(package_path, strict=strict)
         hot, cold = isolation.partition_violations(scanned.violations)
         if cold:
             cold_sites += len(cold)
@@ -1505,7 +1819,13 @@ def _enforce_repository_policy(parent_test_root):
             config, cold, origin=ORIGIN_REPO, has_config=(state == "ok"))
         for problem in package_problems:
             problems.append(f"{name}: {problem}")
-        if hot and not (config.requires_extra and config.serial):
+        # A serial opt-in package may carry mutation (its isolation is serial
+        # execution) — legacy requires_extra+serial, or a new non-parallel
+        # bucket (bug/extended/admin/edge/slow) declared serial.
+        opt_in_serial = bool(config.serial) and (
+            bool(config.requires_extra)
+            or (tier and tier not in isolation.PARALLEL_TIERS))
+        if hot and not opt_in_serial:
             problems.append(
                 f"{name}: {len(hot)} blocking isolation violation(s):\n"
                 + "\n".join(
@@ -1759,12 +2079,25 @@ def main(opts):
     skipped_modules = []    # (name, reason, test_count)
     file_specs = []         # records with kind="file"
 
+    # Resolve which tier buckets this run selects (maestro #2790). The bucket a
+    # package declares is matched against the preset the runner selected; the
+    # selected tags are also merged into extra_list so per-function
+    # @requires_extra / @th.tier decorators satisfy on the same basis.
+    selected_tags, select_all = _selected_tags(opts)
+    opts.selected_tags = selected_tags
+    opts.select_all = select_all
+    opts.extra_list = sorted(set(opts.extra_list or []) | selected_tags)
+    opts.selected_preset = _selected_preset_label(opts)
+    time_budgets = {}   # record.name -> declared time_budget (maestro #2790)
+    module_tiers = {}   # record.name -> sorted tier tags, for the report
+
     for record in all_records:
         if record.kind == "file":
             file_specs.append(record)
             continue
 
         config = _load_module_config(record.path)
+        module_tiers[record.name] = sorted(_resolve_tags(config))
 
         # Check app requirements
         if config.requires_apps:
@@ -1784,20 +2117,31 @@ def main(opts):
             except Exception:
                 pass
 
-        # Check extra requirements (opt-in modules like "slow", "security")
-        if config.requires_extra:
-            required = set(_normalize_extra_value(config.requires_extra))
-            provided = set(opts.extra_list or [])
-            if not required.intersection(provided):
+        # Tier selection (maestro #2790). A package runs when its declared
+        # buckets intersect the selected tags, OR when it holds per-file /
+        # per-function tests tagged into a selected bucket (Phase 3 curation).
+        # An explicit `-t pkg` spec means "run this package regardless of tags".
+        if not select_all and not opts.test_modules:
+            pkg_tags = _resolve_tags(config)
+            if not (pkg_tags & selected_tags) and not _record_has_selected_tag(
+                    record, selected_tags):
                 total = _count_record_tests(record)
-                flags = ", ".join(sorted(required))
-                skipped_modules.append((record.name, f"requires --extra {flags}", total))
+                want = ", ".join(sorted(selected_tags)) or "(none)"
+                skipped_modules.append(
+                    (record.name,
+                     f"not in selected tier(s): {want}", total))
                 continue
+
+        if config.time_budget:
+            time_budgets[record.name] = config.time_budget
 
         if config.serial or opts.jobs <= 1:
             serial_modules.append(record)
         else:
             parallel_modules.append(record)
+
+    opts._time_budgets = time_budgets
+    opts._module_tiers = module_tiers
 
     # Longest-first (LPT) submission (maestro #2789): with package-granular
     # work units, alphabetical order regularly started a large module last and
@@ -1809,6 +2153,14 @@ def main(opts):
             key=lambda r: -prev_durations.get(r.name, float("inf")))
 
     # --- Execute ---
+    # Slow-test stack-dump watchdog (maestro #2790). Off with -s/-v (serial
+    # debugging already surfaces a hang).
+    _SLOW_STACKS.clear()
+    slow_watchdog = None
+    if not opts.stop and not opts.verbose:
+        slow_watchdog = _SlowTestWatchdog(_slow_dump_threshold())
+        slow_watchdog.start()
+
     display = None
 
     if use_rich:
@@ -1972,6 +2324,9 @@ def main(opts):
             except helpers.TestitAbort:
                 break
 
+    if slow_watchdog is not None:
+        slow_watchdog.stop()
+
     # Clear checkpoint on clean completion
     if helpers.TEST_RUN.failed == 0:
         clear_checkpoint()
@@ -1980,11 +2335,25 @@ def main(opts):
     drifted = _conf_drift(conf_before, _snapshot_conf())
     _report_conf_drift(drifted)
 
-    # Agent report — structured JSON for LLM consumption
-    report = None
+    # Structured report — built for every run so the tier budget (maestro
+    # #2790) and the maestro reporter both see the same object. Written to disk
+    # only in --agent mode.
+    report = _build_agent_report(opts, display=display, conf_drift=drifted)
+    report["budget_violations"] = _compute_budget_violations(
+        opts, report, parent_test_root)
+    with _SLOW_STACKS_LOCK:
+        report["slow_stacks"] = list(_SLOW_STACKS)
+    if report["slow_stacks"]:
+        print(f"\n  {len(report['slow_stacks'])} slow test(s) captured a stack "
+              "dump — see the agent report's slow_stacks / testit.log")
+    _print_budget_violations(opts, report["budget_violations"])
+    budget_failed = _budget_fails_run(opts, report["budget_violations"])
+
     if opts.agent:
-        report = _write_agent_report(opts, display=display, conf_drift=drifted)
         report_path = os.path.join(paths.VAR_ROOT, "test_failures.json")
+        os.makedirs(os.path.dirname(report_path), exist_ok=True)
+        with open(report_path, "w", encoding="utf-8") as fh:
+            json.dump(report, fh, indent=2, default=str)
         print(f"\n  Agent report: {report_path}")
         if helpers.TEST_RUN.failed > 0:
             print(f"  {helpers.TEST_RUN.failed} failure(s) — read the report for diagnostics")
@@ -2007,15 +2376,14 @@ def main(opts):
         if refused:
             print(f"\n  Maestro: not reporting — {refused}, so this is not the suite's result")
         else:
-            testit.maestro.report_run(
-                maestro_settings,
-                lambda: report if report is not None else _build_agent_report(
-                    opts, display=display, conf_drift=drifted),
-            )
+            testit.maestro.report_run(maestro_settings, lambda: report)
 
-    # Exit with failure status if any test failed
+    # Exit with failure status if any test failed, or the core-tier budget was
+    # blown (maestro #2790).
     if helpers.TEST_RUN.failed > 0:
         sys.exit("  Tests failed!")
+    if budget_failed:
+        sys.exit("  Tier budget exceeded — see 'Tier budget' above.")
 
 
 if __name__ == "__main__":

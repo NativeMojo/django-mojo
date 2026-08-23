@@ -1,0 +1,6 @@
+{
+  "budgets": {
+    "core": 30,
+    "framework": 90
+  }
+}

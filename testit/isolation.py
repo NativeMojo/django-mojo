@@ -72,6 +72,11 @@ def save_scan_cache():
         pass
 
 
+# Buckets whose packages run in the parallel ring and are held to the
+# no-mutation contract (maestro #2790). Kept in sync with runner.PARALLEL_TIERS
+# — duplicated rather than imported to avoid a runner<->isolation import cycle.
+PARALLEL_TIERS = frozenset({"core", "framework"})
+
 # Namespaces whose module attributes are production state shared by every
 # parallel test thread in the process.
 PRODUCTION_PREFIXES = ("mojo.", "django.", "testit.")
@@ -152,6 +157,9 @@ HOT_CODES = frozenset({
     "protected_setting_unresolved",
     "protected_rest_write",
     "scan_error",
+    # Core-tier-only (maestro #2790): emitted solely in strict scans, so it
+    # can never surface in a framework/default package's byte-identical scan.
+    "server_reload",
 })
 
 # A patch of — or assignment to — these surfaces has cross-app blast radius:
@@ -267,8 +275,13 @@ class _Provenance:
 
 
 class _FileScanner(ast.NodeVisitor):
-    def __init__(self, filename):
+    def __init__(self, filename, strict=False):
         self.filename = filename
+        # strict = the core-tier contract (maestro #2790): additional mutation
+        # classes (Setting.set/remove classmethod writes, server_settings
+        # reloads) become blocking. Off for framework/default so their scans
+        # stay byte-identical to the pre-tier behavior.
+        self.strict = strict
         self.violations = []
         # name -> objict(kind, dotted, value)
         self.names = {}
@@ -786,27 +799,85 @@ class _FileScanner(ast.NodeVisitor):
         elif base == "os" and func.attr in ("putenv", "unsetenv"):
             self._flag("environ_mutation", node, f"os.{func.attr}() call")
 
+    def _check_setting_classmethod(self, node):
+        """Setting.set(key, ...) / Setting.remove(key) classmethod writes
+        (maestro #2790, strict/core only). The ORM-chain check sees only
+        Setting.objects.<write>; the classmethod writers are a separate
+        surface that writes the same protected rows."""
+        if not self.strict:
+            return False
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            return False
+        if func.attr not in ("set", "remove"):
+            return False
+        if not isinstance(func.value, ast.Name):
+            return False
+        info = self._lookup(func.value.id)
+        if not info or not info.dotted:
+            return False
+        if not (info.dotted.endswith(".models.Setting") or info.dotted == "Setting"):
+            return False
+        if not node.args:
+            return False
+        key = self._resolve_string(node.args[0])
+        if key is None:
+            self._flag(
+                "protected_setting_unresolved", node,
+                f"Setting.{func.attr}() key cannot be resolved — a dynamic or "
+                "absent key cannot be proven outside the protected roster")
+            return True
+        if is_protected_key(key):
+            self._flag(
+                "protected_setting_write", node,
+                f"Setting.{func.attr}('{key}') writes a protected configuration "
+                "key visible to every parallel module")
+        return True
+
+    def _check_server_settings(self, node):
+        """th.server_settings(...) reloads the shared test server, freezing
+        every parallel worker (maestro #2790, strict/core only)."""
+        if not self.strict:
+            return
+        func = node.func
+        name = None
+        if isinstance(func, ast.Attribute):
+            name = func.attr
+        elif isinstance(func, ast.Name):
+            name = func.id
+        if name == "server_settings":
+            self._flag(
+                "server_reload", node,
+                "server_settings() reloads the shared test server, freezing "
+                "every parallel worker — not permitted in the core tier; use "
+                "test-owned data/injection or move the test to framework/extended")
+
     def visit_Call(self, node):
         form = self._resolve_patch_callable(node.func)
         if form:
             self._check_patch_call(node, form)
         else:
             if not self._check_setting_chain(node):
-                self._check_service_writer(node)
-                self._check_rest_write(node)
+                if not self._check_setting_classmethod(node):
+                    self._check_service_writer(node)
+                    self._check_rest_write(node)
             self._check_setattr_call(node)
             self._check_environ_calls(node)
+            self._check_server_settings(node)
         self.generic_visit(node)
 
 
-def scan_source(source, filename="<source>"):
-    """Scan one test source text. Returns a list of violation objicts."""
+def scan_source(source, filename="<source>", strict=False):
+    """Scan one test source text. Returns a list of violation objicts.
+
+    strict enables the core-tier contract (maestro #2790): Setting.set/remove
+    classmethod writes and server_settings() reloads become violations."""
     try:
         tree = ast.parse(source, filename=filename)
     except SyntaxError as error:
         return [violation("scan_error", filename, error.lineno or 0,
                           f"source could not be parsed: {error.msg}")]
-    scanner = _FileScanner(filename)
+    scanner = _FileScanner(filename, strict=strict)
     scanner.visit(tree)
     return scanner.violations
 
@@ -819,6 +890,59 @@ def _count_tests_in_tree(tree):
     return count
 
 
+def _tier_flag(decorator):
+    """The bucket string of a @th.tier("x") / @tier("x") decorator, else None."""
+    target = decorator
+    args = []
+    keywords = []
+    if isinstance(decorator, ast.Call):
+        target = decorator.func
+        args = decorator.args
+        keywords = decorator.keywords
+    name = None
+    if isinstance(target, ast.Name):
+        name = target.id
+    elif isinstance(target, ast.Attribute):
+        name = target.attr
+    if name != "tier":
+        return None
+    if args and isinstance(args[0], ast.Constant) and isinstance(args[0].value, str):
+        return args[0].value.strip()
+    for kw in keywords:
+        if kw.arg in (None, "name", "bucket") and isinstance(kw.value, ast.Constant) \
+                and isinstance(kw.value.value, str):
+            return kw.value.value.strip()
+    return None
+
+
+def _extract_tiers_from_tree(tree):
+    """Tier tags a file declares (maestro #2790): a module-level
+    `TESTIT_TIER = "x"` constant, plus every @th.tier("x") function decorator
+    (module-level or inside a class). Returned as a set of bucket names."""
+    tiers = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "TESTIT_TIER":
+                    if isinstance(node.value, ast.Constant) \
+                            and isinstance(node.value.value, str):
+                        tiers.add(node.value.value.strip())
+
+    def visit(node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for decorator in node.decorator_list:
+                flag = _tier_flag(decorator)
+                if flag:
+                    tiers.add(flag)
+        elif isinstance(node, ast.ClassDef):
+            for child in node.body:
+                visit(child)
+
+    for stmt in tree.body:
+        visit(stmt)
+    return tiers
+
+
 def cached_file_facts(path):
     """Violations plus top-level test count for one file, from ONE AST parse,
     cached across runs (maestro #2789). The scan and the runner's test
@@ -828,7 +952,7 @@ def cached_file_facts(path):
         with open(key, "rb") as handle:
             raw = handle.read()
     except OSError as error:
-        return objict(tests=0, violations=[violation(
+        return objict(tests=0, tiers=set(), violations=[violation(
             "scan_error", str(path), 0, f"source could not be read: {error}")])
 
     # Content hash, not (mtime, size): content-preserving-mtime operations
@@ -840,15 +964,17 @@ def cached_file_facts(path):
     entry = _CACHE["files"].get(key)
     if entry and entry.get("sig") == sig:
         rows = [violation(*row) for row in entry.get("violations", [])]
-        return objict(tests=int(entry.get("tests", 0)), violations=rows)
+        return objict(tests=int(entry.get("tests", 0)), violations=rows,
+                      tiers=set(entry.get("tiers", [])))
 
     try:
         source = raw.decode("utf-8")
     except UnicodeDecodeError as error:
-        return objict(tests=0, violations=[violation(
+        return objict(tests=0, tiers=set(), violations=[violation(
             "scan_error", str(path), 0, f"source could not be decoded: {error}")])
 
     tests = 0
+    tiers = set()
     try:
         tree = ast.parse(source, filename=key)
     except SyntaxError as error:
@@ -859,19 +985,39 @@ def cached_file_facts(path):
         scanner.visit(tree)
         rows = scanner.violations
         tests = _count_tests_in_tree(tree)
+        tiers = _extract_tiers_from_tree(tree)
 
     _CACHE["files"][key] = {
-        "sig": sig, "tests": tests,
+        "sig": sig, "tests": tests, "tiers": sorted(tiers),
         "violations": [[r.code, r.file, r.line, r.detail] for r in rows]}
     _CACHE["dirty"] = True
-    return objict(tests=tests, violations=rows)
+    return objict(tests=tests, violations=rows, tiers=tiers)
 
 
-def scan_file(path):
-    return cached_file_facts(path).violations
+def scan_file(path, strict=False):
+    """Non-strict scans use the cross-run content-hash cache. Strict scans
+    (core-tier only, maestro #2790) are uncached — core packages are few and a
+    strict verdict must never be served from the non-strict cache."""
+    if not strict:
+        return cached_file_facts(path).violations
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except OSError as error:
+        return [violation("scan_error", str(path), 0,
+                          f"source could not be read: {error}")]
+    try:
+        source = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        return [violation("scan_error", str(path), 0,
+                          f"source could not be decoded: {error}")]
+    return scan_source(source, filename=str(path), strict=True)
 
 
-def _iter_test_files(package_path):
+def _iter_test_files(package_path, include_private=False):
+    """Yield a package's scannable test files. include_private also scans
+    `_`-prefixed helper files (maestro #2790, core-tier only) — those hold
+    settings/setattr mutations invisible to the historical scan."""
     try:
         entries = sorted(os.listdir(package_path))
     except OSError:
@@ -879,18 +1025,21 @@ def _iter_test_files(package_path):
     for entry in entries:
         if not entry.endswith(".py"):
             continue
-        if entry in ("__init__.py", "setup.py") or entry.startswith("_"):
+        if entry in ("__init__.py", "setup.py"):
+            continue
+        if entry.startswith("_") and not include_private:
             continue
         yield os.path.join(package_path, entry)
 
 
-def scan_package(package_path):
-    """Scan every test file of one package directory."""
+def scan_package(package_path, strict=False):
+    """Scan every test file of one package directory. In strict (core) mode
+    `_`-prefixed helper files are scanned too and the stricter grammar fires."""
     violations = []
     files_scanned = 0
-    for path in _iter_test_files(package_path):
+    for path in _iter_test_files(package_path, include_private=strict):
         files_scanned += 1
-        violations.extend(scan_file(path))
+        violations.extend(scan_file(path, strict=strict))
     return objict(files_scanned=files_scanned, violations=violations)
 
 
@@ -926,6 +1075,47 @@ def evaluate_package_state(config, violations, *, origin, has_config):
         requires_extra = [item.strip() for item in requires_extra.split(",") if item.strip()]
     serial = bool(config.get("serial", False))
     has_violations = bool(violations)
+    tier = config.get("tier")
+
+    # New tier vocabulary (maestro #2790). Packages still using the legacy
+    # default_core/requires_extra keys fall through to the unchanged branch
+    # below, keeping their evaluation byte-identical.
+    if tier:
+        if default_core:
+            problems.append(
+                "declare either tier=... or the legacy default_core, not both "
+                "— one vocabulary per package")
+        if tier == "core":
+            if serial:
+                problems.append(
+                    "tier='core' packages may not be serial — core runs in the "
+                    "parallel ring; move mutation-bound tests to extended")
+            if has_violations:
+                problems.append(
+                    f"tier='core' but the isolation policy found {len(violations)} "
+                    "violation(s) — core is the strictest bucket: give the entry "
+                    "point an injectable seam, use test-owned data, or tag the "
+                    "test into another bucket")
+        elif tier in PARALLEL_TIERS:
+            if has_violations:
+                problems.append(
+                    f"tier='{tier}' runs in the parallel ring but the isolation "
+                    f"policy found {len(violations)} mutation violation(s) — "
+                    "convert to local injection/test-owned data, or move the "
+                    "coverage to an opt-in serial bucket")
+            if serial and has_violations:
+                problems.append(
+                    "serial=True does not license mutation in a parallel bucket "
+                    "— serial ordering is not process isolation")
+        else:
+            # Opt-in buckets (bug, extended, admin, edge, slow): serial when
+            # they mutate, exactly like a requires_extra package.
+            if has_violations and not serial:
+                problems.append(
+                    f"tier='{tier}' carries mutation violations but is not "
+                    "serial=True — a non-parallel bucket that mutates must be "
+                    "serial=True")
+        return problems
 
     if default_core:
         if requires_extra:
@@ -970,8 +1160,33 @@ def evaluate_cold_budget(config, cold_violations, *, origin, has_config):
     if origin != "django_mojo" or not has_config:
         return []
     config = config or {}
+    tier = config.get("tier")
+    if tier:
+        # New tier vocabulary (maestro #2790).
+        if tier == "core":
+            budget = config.get("cold_budget", 0)
+            if budget:
+                return ["tier='core' may not declare a cold_budget — core "
+                        "forbids advisory sites too; remove the mutation"]
+            if cold_violations:
+                lines = "\n".join(
+                    f"    {row.file}:{row.line}: [{row.code}] {row.detail}"
+                    for row in cold_violations)
+                return [f"tier='core' has {len(cold_violations)} advisory "
+                        f"isolation site(s); core forbids them:\n{lines}"]
+            return []
+        if tier in PARALLEL_TIERS:
+            return _cold_budget_ratchet(config, cold_violations)
+        # Opt-in buckets are exempt — their isolation story is serial execution.
+        return []
     if not bool(config.get("default_core", False)):
         return []
+    return _cold_budget_ratchet(config, cold_violations)
+
+
+def _cold_budget_ratchet(config, cold_violations):
+    """The two-sided cold-site ratchet shared by legacy default_core packages
+    and the new parallel-ring `framework` tier."""
     budget = config.get("cold_budget", 0)
     if not isinstance(budget, int) or isinstance(budget, bool) or budget < 0:
         return [f"cold_budget must be a non-negative integer, got {budget!r}"]

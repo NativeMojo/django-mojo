@@ -338,12 +338,19 @@ def setup(opts):
         except (TypeError, ValueError):
             timeout = DEFAULT_TIMEOUT
 
-        # An `--all` run is a different question than a default run — it adds
-        # the opt-in tiers — so it gets its own suite. Sharing one would let a
-        # later default run report green over a red extended module.
+        # Each tier preset is a different question — core / framework / all
+        # select different sets — so each reports as its own suite. Sharing one
+        # would let a later core run report green over a red extended module.
+        # (maestro #2790; the historical --all==="full" name is preserved.)
         suite = _first(os.environ.get("MAESTRO_SUITE"), block.get("suite"))
-        if suite is None and getattr(opts, "all", False):
-            suite = "full"
+        if suite is None:
+            preset = getattr(opts, "selected_preset", None)
+            # Lazy import avoids a runner<->maestro cycle at module load.
+            from testit.runner import DEFAULT_PRESET
+            if getattr(opts, "all", False):
+                suite = "full"
+            elif preset and preset != DEFAULT_PRESET:
+                suite = preset
 
         return objict(
             url=url.rstrip("/"),

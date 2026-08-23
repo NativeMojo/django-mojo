@@ -91,7 +91,7 @@ def requires_app(app_label):
                 raise TestitSkip(f"app '{app_label}' not installed")
             return func(*args, **kwargs)
         # Preserve testit attributes
-        for attr in ("_test_name", "_requires_extra"):
+        for attr in ("_test_name", "_requires_extra", "_tier"):
             if hasattr(func, attr):
                 setattr(wrapper, attr, getattr(func, attr))
         return wrapper
@@ -267,8 +267,28 @@ def _run_unit(func, name, *args, **kwargs):
     return False
 
 
+# Active-test registry (maestro #2790): thread id -> (test_key, monotonic
+# start). Feeds the slow-test stack-dump watchdog, which needs cross-thread
+# visibility that thread-local state cannot give.
+_ACTIVE_TESTS = {}
+_ACTIVE_LOCK = threading.Lock()
+
+
 def _set_active_test(key):
     _thread_local.active_test = key
+    with _ACTIVE_LOCK:
+        if key:
+            _ACTIVE_TESTS[threading.get_ident()] = (key, time.monotonic())
+        else:
+            _ACTIVE_TESTS.pop(threading.get_ident(), None)
+
+
+def active_test_ages():
+    """Snapshot of (test_key, age_seconds) for every currently-running test,
+    across all worker threads. Used by the slow-test watchdog (maestro #2790)."""
+    now = time.monotonic()
+    with _ACTIVE_LOCK:
+        return [(key, now - started) for key, started in _ACTIVE_TESTS.values()]
 
 
 def _active_context():
@@ -355,6 +375,8 @@ def unit_test(name=None):
             _run_unit(func, name, *args, **kwargs)
         if hasattr(func, "_requires_extra"):
             wrapper._requires_extra = getattr(func, "_requires_extra")
+        if hasattr(func, "_tier"):
+            wrapper._tier = getattr(func, "_tier")
         return wrapper
     return decorator
 
@@ -390,6 +412,8 @@ def django_unit_test(arg=None):
             wrapper._test_name = arg
         if hasattr(func, "_requires_extra"):
             wrapper._requires_extra = getattr(func, "_requires_extra")
+        if hasattr(func, "_tier"):
+            wrapper._tier = getattr(func, "_tier")
         return wrapper
 
     if callable(arg):
@@ -435,6 +459,44 @@ def requires_extra(flag=None):
         return wrapper
 
     return decorator
+
+
+def tier(bucket):
+    """Tag a test with the tier BUCKET it belongs to (maestro #2790).
+
+    A pure marker: it records ``func._tier`` and returns the function
+    unchanged. The runner reads ``._tier`` before invoking and records a
+    COUNTED skip when that bucket is not in the selected tier(s) — never a
+    silent no-op. Composes with @unit_test / @django_unit_test in either
+    order, since both propagate ``._tier``.
+
+    Usage:
+        @th.tier("bug")
+        @th.django_unit_test("regression: widget 500 on empty name")
+        def test_widget_empty_name(opts):
+            ...
+    """
+    def decorator(func):
+        func._tier = bucket
+        return func
+    return decorator
+
+
+def record_tier_skip(module_name, test_name, func_name, bucket):
+    """Count a test skipped because its tier bucket was not selected
+    (maestro #2790). Mirrors the counted-skip path in _run_unit so the skip
+    lands in the totals and the per-module report instead of vanishing."""
+    display_name = func_name[5:] if func_name.startswith("test_") else func_name
+    _set_active_test(f"{module_name}:{test_name}:{func_name}")
+    if TEST_RUN.started_at is None:
+        TEST_RUN.started_at = time.time()
+    _increment("total")
+    detail = f"tier '{bucket}' not selected"
+    _record_result(display_name, status="skipped", detail=detail)
+    _increment("skipped")
+    dfn = _get_display_fn()
+    if dfn:
+        dfn("test_result", name=display_name, status="skipped", detail=detail)
 
 
 def get_database_kind():
