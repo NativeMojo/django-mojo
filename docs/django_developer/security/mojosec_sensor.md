@@ -294,8 +294,15 @@ The caller declares **scope**, not paths: a tenant root plus at most 64 subtree
 names, each a single path component. Root walks those subtrees itself at
 `begin` and again at `end` (the union, because a publish creates and deletes),
 bounded at 65,536 paths and depth 64, recording symlinks but never following
-them. Paths and evidence digests are root's alone, which is the whole
-guarantee:
+them. That walk is driven entirely from descriptors opened `O_NOFOLLOW` — the
+declared tenant root component by component from `/`, then every directory
+beneath it — the same discipline the sensor's own scan uses, so a symlink
+planted at `<content root>/<tenant>` is refused outright rather than traversed,
+and a link deeper in the tree is recorded as its own path. Root also hashes at
+most 16 MiB per file here, the content tier's own `max_file_bytes`: an
+oversized file is recorded with a `hash_skipped` marker and no digest, which
+means its change stays unexplained rather than costing root an unbounded read.
+Paths and evidence digests are root's alone, which is the whole guarantee:
 
 > An application annotation can only ever excuse a change the application was
 > already authorized to make.

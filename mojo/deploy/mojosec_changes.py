@@ -44,6 +44,12 @@ MAX_PACKAGE_PATHS = 65536
 # caller-declared bound.
 MAX_CONTENT_PATHS = 65536
 MAX_CONTENT_DEPTH = 64
+# The consumer half of the content tier hashes at most this much of one file
+# (mojo.mojosec.profiles AL2023_CONTENT_V1 -> tiers.content.max_file_bytes).
+# The publish path is driven by an UNPRIVILEGED caller over a tree it controls,
+# so root applies the same bound instead of hashing whatever it is pointed at.
+# Deploy-declared paths are unbounded exactly as they have always been.
+CONTENT_MAX_FILE_BYTES = 16 * 1024 * 1024
 CONTENT_PUBLISH_KIND = "content-publish"
 # Per-kind slot budgets. Publishes are driven by an unprivileged application
 # and deploys are not, so publishes may never consume the whole journal: with
@@ -398,11 +404,31 @@ def _prepare_pip_change(child):
     return temporary, paths, install
 
 
-def _snapshot(path):
+def _snapshot(path, max_file_bytes=None):
+    """Evidence for one exact path. `max_file_bytes` bounds what root hashes.
+
+    None keeps the historical unbounded hash, which is what every root-declared
+    deploy path uses. The publish path passes CONTENT_MAX_FILE_BYTES: above it
+    the entry is still recorded, with the same `hash_skipped` marker the sensor
+    writes for an oversized file (mojo.mojosec.collectors.fim._entry_at), and
+    with no digest. Such an entry can never match a sensor entry — the sensor's
+    own oversized entry carries no sha256 either, so expected_changes
+    .evidence_digest refuses both sides — which means an oversized file's
+    change stays unexplained. That is the fail-closed direction: noise, never
+    laundering.
+    """
     try:
         info = os.lstat(path)
     except FileNotFoundError:
         return None
+    if stat.S_ISREG(info.st_mode) and max_file_bytes is not None and \
+            info.st_size > max_file_bytes:
+        return {
+            "kind": "file", "mode": stat.S_IMODE(info.st_mode),
+            "uid": info.st_uid, "gid": info.st_gid, "size": info.st_size,
+            "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns,
+            "device": info.st_dev, "inode": info.st_ino, "hash_skipped": True,
+        }
     if stat.S_ISREG(info.st_mode):
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(path, flags)
@@ -462,13 +488,52 @@ def _relaxed_directory_digest(value):
     return "directory", hashlib.sha256(_canonical(material).encode("utf-8")).hexdigest()
 
 
+def _directory_flags():
+    return (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) |
+            getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+
+
+def _open_content_root(root):
+    """Open the declared tenant root with EVERY component no-follow.
+
+    The same discipline as the sensor's own walk
+    (mojo.mojosec.collectors.fim.FimCollector._open_directory): descend from
+    `/` one component at a time with O_NOFOLLOW|O_DIRECTORY, so no symlink
+    anywhere in the declared path — least of all one the application planted at
+    `<content root>/<tenant>` — can move root's walk somewhere else. Returns
+    None when the root simply does not exist yet (a first publish into a new
+    tenant); anything else is refused.
+    """
+    descriptor = os.open("/", _directory_flags())
+    try:
+        for component in [part for part in os.path.normpath(root).split(os.sep) if part]:
+            child = os.open(component, _directory_flags(), dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        info = os.fstat(descriptor)
+        if not stat.S_ISDIR(info.st_mode):
+            raise ChangeError(f"content publish root is not a directory: {root}")
+    except FileNotFoundError:
+        os.close(descriptor)
+        return None
+    except OSError as err:
+        os.close(descriptor)
+        raise ChangeError(f"cannot open content publish root: {err}") from err
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
 def _content_subtree_paths(root, subtrees, max_paths=MAX_CONTENT_PATHS,
                            max_depth=MAX_CONTENT_DEPTH):
     """Enumerate every exact path under the declared subtrees, bounded.
 
     The caller declares SCOPE (a tenant root plus subtree names); root derives
-    the paths. Symlinks are recorded but never followed, so a link planted
-    inside a tenant tree cannot walk this enumeration out of the content root.
+    the paths. The whole enumeration is driven from descriptors opened
+    O_NOFOLLOW — the tenant root itself and every directory beneath it — so a
+    symlink planted anywhere in the tree is RECORDED as a path and never
+    traversed. A symlinked tenant root is refused outright rather than walked.
 
     Exceeding either bound truncates rather than raising: annotation only ever
     ADDS an explanation for an exact path, so a short enumeration leaves the
@@ -478,14 +543,14 @@ def _content_subtree_paths(root, subtrees, max_paths=MAX_CONTENT_PATHS,
     paths = []
     complete = True
 
-    def walk(path, depth):
+    def walk(parent_fd, name, path, depth):
         nonlocal complete
         if len(paths) >= max_paths:
             complete = False
             return
         paths.append(path)
         try:
-            info = os.lstat(path)
+            info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
             return
         except OSError as err:
@@ -496,17 +561,37 @@ def _content_subtree_paths(root, subtrees, max_paths=MAX_CONTENT_PATHS,
             complete = False
             return
         try:
-            with os.scandir(path) as iterator:
-                children = sorted(entry.path for entry in iterator)
+            descriptor = os.open(name, _directory_flags(), dir_fd=parent_fd)
         except FileNotFoundError:
             return
         except OSError as err:
             raise ChangeError(f"cannot walk content subtree: {err}") from err
-        for child in children:
-            walk(child, depth + 1)
+        try:
+            opened = os.fstat(descriptor)
+            if opened.st_dev != info.st_dev or opened.st_ino != info.st_ino:
+                raise ChangeError(f"content subtree raced while walking: {path}")
+            with os.scandir(descriptor) as iterator:
+                children = sorted(entry.name for entry in iterator)
+            for child in children:
+                walk(descriptor, child, os.path.join(path, child), depth + 1)
+        except FileNotFoundError:
+            return
+        except OSError as err:
+            raise ChangeError(f"cannot walk content subtree: {err}") from err
+        finally:
+            os.close(descriptor)
 
-    for name in subtrees:
-        walk(os.path.join(root, name), 0)
+    root_fd = _open_content_root(root)
+    if root_fd is None:
+        # Nothing exists to enumerate. The declared subtree roots are still in
+        # scope (see publish_broker._declared_paths), so a first publish into a
+        # brand-new tenant is explainable without this walk finding anything.
+        return paths, complete
+    try:
+        for name in subtrees:
+            walk(root_fd, name, os.path.join(root, name), 0)
+    finally:
+        os.close(root_fd)
     return paths, complete
 
 
@@ -722,7 +807,11 @@ class ChangeJournal:
         exact = validate_paths(paths, self.allowed_roots, max_paths=max_paths)
         exact = _with_immediate_parents(
             exact, allowed_roots=self.allowed_roots, max_paths=max_paths)
-        before = {path: _snapshot(path) for path in exact}
+        # A declared scope is a content publish and nothing else, so it is the
+        # exact set of operations an unprivileged caller can open — and the
+        # only one whose hashing root bounds.
+        bound = CONTENT_MAX_FILE_BYTES if scope is not None else None
+        before = {path: _snapshot(path, max_file_bytes=bound) for path in exact}
         descriptor = self._locked()
         try:
             journal = self._load_journal()
@@ -843,7 +932,8 @@ class ChangeJournal:
             union = union[:MAX_CONTENT_PATHS]
             complete = False
         completed = _now()
-        after = {path: _snapshot(path) for path in union}
+        after = {path: _snapshot(path, max_file_bytes=CONTENT_MAX_FILE_BYTES)
+                 for path in union}
         entries = _change_entries(
             operation, union, after, completed, relax_directories=True)
         descriptor = self._locked()

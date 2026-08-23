@@ -300,6 +300,106 @@ def test_publish_annotates_a_wide_subtree_and_a_delete(opts):
 
 
 @th.django_unit_test()
+def test_publish_never_walks_out_of_the_tenant_through_a_symlink(opts):
+    """Root derives paths from descriptors, so a planted link cannot move it."""
+    from mojo.deploy import publish_broker as broker
+    from mojo.deploy.mojosec_changes import ChangeError, _content_subtree_paths
+
+    with tempfile.TemporaryDirectory() as base:
+        base = os.path.realpath(base)
+        content, tenant, journal = _fixture(base)
+        elsewhere = os.path.join(base, "elsewhere", "deep")
+        os.makedirs(elsewhere)
+        with open(os.path.join(elsewhere, "secret"), "w", encoding="utf-8") as handle:
+            handle.write("root must never hash this\n")
+
+        # An application that can write the content root plants a tenant name
+        # that is a symlink to a tree outside it.
+        linked = os.path.join(content, "linked")
+        os.symlink(os.path.join(base, "elsewhere"), linked)
+        with th.assert_raises(ChangeError):
+            broker.execute(
+                {"operation": "begin", "root": linked, "subtrees": ["deep"]},
+                journal=journal, content_roots=(content,))
+        th.assert_eq(journal.status()["active_operations"], 0,
+                     "a symlinked tenant root must never open a journal window")
+        th.assert_true(
+            not os.path.exists(os.path.join(base, "expected.json")),
+            "a refused walk must not write one manifest entry")
+        with th.assert_raises(ChangeError):
+            _content_subtree_paths(linked, ["deep"])
+
+        # A link DEEPER inside a declared subtree is ordinary content: it is
+        # recorded as its own path and its target tree is never enumerated.
+        inner = os.path.join(tenant, "current", "escape")
+        os.symlink(os.path.join(base, "elsewhere"), inner)
+        found, complete = _content_subtree_paths(tenant, ["current"])
+        th.assert_true(complete, "a small tenant tree must enumerate completely")
+        th.assert_in(inner, found,
+                     f"a symlink inside the tenant must be recorded: {found}")
+        th.assert_true(
+            not any(path.startswith(inner + "/") for path in found),
+            f"no path may be derived through a symlink: {found}")
+        th.assert_true(
+            not any(path.startswith(os.path.join(base, "elsewhere")) for path in found),
+            f"the walk must never leave the declaring tenant: {found}")
+
+        begun = broker.execute(
+            {"operation": "begin", "root": tenant, "subtrees": ["current"]},
+            journal=journal, content_roots=(content,))
+        broker.execute({"operation": "end", "operation_id": begun["operation_id"]},
+                       journal=journal, content_roots=(content,))
+        entries = json.load(open(os.path.join(base, "expected.json"),
+                                 encoding="utf-8"))["entries"]
+        th.assert_true(
+            all(not item["path"].startswith(os.path.join(base, "elsewhere"))
+                for item in entries),
+            "no annotation may ever name a path outside the tenant tree")
+
+
+@th.django_unit_test()
+def test_publish_records_an_oversized_file_without_hashing_it(opts):
+    from mojo.deploy import publish_broker as broker
+    from mojo.deploy.mojosec_changes import CONTENT_MAX_FILE_BYTES, _snapshot
+
+    with tempfile.TemporaryDirectory() as base:
+        base = os.path.realpath(base)
+        content, tenant, journal = _fixture(base)
+        huge = os.path.join(tenant, "current", "release.tar")
+
+        begun = broker.execute(
+            {"operation": "begin", "root": tenant, "subtrees": ["current"]},
+            journal=journal, content_roots=(content,))
+        with open(huge, "wb") as handle:
+            # Sparse: the point is the declared size, not the bytes on disk.
+            handle.truncate(CONTENT_MAX_FILE_BYTES + 1)
+        finished = broker.execute(
+            {"operation": "end", "operation_id": begun["operation_id"]},
+            journal=journal, content_roots=(content,))
+        th.assert_true(finished["complete"],
+                       "an oversized file must not make the publish incomplete")
+
+        entry = _snapshot(huge, max_file_bytes=CONTENT_MAX_FILE_BYTES)
+        th.assert_eq(entry["kind"], "file",
+                     "an oversized file is still recorded as a file entry")
+        th.assert_true(entry.get("hash_skipped") is True,
+                       f"the skip marker must match the sensor's: {entry}")
+        th.assert_true("sha256" not in entry,
+                       "root must not claim a digest it never computed")
+        th.assert_eq(_snapshot(huge)["kind"], "file",
+                     "an unbounded caller keeps the historical hashing behavior")
+        th.assert_true("sha256" in _snapshot(huge),
+                       "the deploy path must still hash without a bound")
+
+        entries = json.load(open(os.path.join(base, "expected.json"),
+                                 encoding="utf-8"))["entries"]
+        th.assert_true(
+            any(item["path"] == huge and item["change"] == "created"
+                for item in entries),
+            f"the oversized path must still carry a bounded entry: {len(entries)}")
+
+
+@th.django_unit_test()
 def test_publish_window_never_raises_into_the_publish_path(opts):
     from mojo.deploy.publish_client import publish_window
 
