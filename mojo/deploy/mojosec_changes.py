@@ -39,6 +39,17 @@ MAX_OPERATIONS = 128
 # binds first.
 MAX_PATHS = 4096
 MAX_PACKAGE_PATHS = 65536
+# A tenant publish is derived by walking the declared subtrees, so it gets the
+# same wide secondary ceiling as a package RECORD rather than the narrow
+# caller-declared bound.
+MAX_CONTENT_PATHS = 65536
+MAX_CONTENT_DEPTH = 64
+CONTENT_PUBLISH_KIND = "content-publish"
+# Per-kind slot budgets. Publishes are driven by an unprivileged application
+# and deploys are not, so publishes may never consume the whole journal: with
+# this cap a deploy always has MAX_OPERATIONS - 64 slots waiting for it, no
+# matter how many tenants are publishing at once.
+_KIND_OPERATION_BUDGETS = {CONTENT_PUBLISH_KIND: 64}
 # Active operations are held locally by the sensor for this whole ceiling,
 # plus its bounded post-completion correlation window. Keep producer TTLs
 # coherent with that delivery hold instead of promising day-long operations.
@@ -437,7 +448,71 @@ def _snapshot(path):
     }
 
 
-def _evidence_digest(value):
+def _relaxed_directory_digest(value):
+    """Producer half of mojo.mojosec.expected_changes.relaxed_directory_digest.
+
+    Kept as a mirror rather than an import so this module still runs as a bare
+    `python3 -m mojo.deploy.mojosec_changes`. The two must stay byte-identical;
+    a test pins them against each other.
+    """
+    if not isinstance(value, dict) or value.get("kind") != "directory":
+        return None, None
+    material = {field: value.get(field) for field in ("kind", "mode", "uid", "gid")}
+    material["scope"] = "directory_metadata_relaxed"
+    return "directory", hashlib.sha256(_canonical(material).encode("utf-8")).hexdigest()
+
+
+def _content_subtree_paths(root, subtrees, max_paths=MAX_CONTENT_PATHS,
+                           max_depth=MAX_CONTENT_DEPTH):
+    """Enumerate every exact path under the declared subtrees, bounded.
+
+    The caller declares SCOPE (a tenant root plus subtree names); root derives
+    the paths. Symlinks are recorded but never followed, so a link planted
+    inside a tenant tree cannot walk this enumeration out of the content root.
+
+    Exceeding either bound truncates rather than raising: annotation only ever
+    ADDS an explanation for an exact path, so a short enumeration leaves the
+    remaining changes unexplained — which is the safe direction — while a
+    raise would leave the whole publish unexplained.
+    """
+    paths = []
+    complete = True
+
+    def walk(path, depth):
+        nonlocal complete
+        if len(paths) >= max_paths:
+            complete = False
+            return
+        paths.append(path)
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            return
+        except OSError as err:
+            raise ChangeError(f"cannot inspect content path: {err}") from err
+        if not stat.S_ISDIR(info.st_mode):
+            return
+        if depth >= max_depth:
+            complete = False
+            return
+        try:
+            with os.scandir(path) as iterator:
+                children = sorted(entry.path for entry in iterator)
+        except FileNotFoundError:
+            return
+        except OSError as err:
+            raise ChangeError(f"cannot walk content subtree: {err}") from err
+        for child in children:
+            walk(child, depth + 1)
+
+    for name in subtrees:
+        walk(os.path.join(root, name), 0)
+    return paths, complete
+
+
+def _evidence_digest(value, relaxed=False):
+    if relaxed:
+        return _relaxed_directory_digest(value)
     kind = value.get("kind") if isinstance(value, dict) else None
     if kind not in ("file", "symlink", "directory", "other"):
         return None, None
@@ -499,6 +574,67 @@ def _atomic_write(path, value, mode=0o600):
                 os.unlink(temporary)
             except OSError:
                 pass
+
+
+_SUBTREE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+MAX_CONTENT_SUBTREES = 64
+
+
+def _validate_content_scope(scope):
+    """Bound the persisted publish scope: one root plus named subtrees."""
+    if not isinstance(scope, dict) or set(scope) != {"root", "subtrees"}:
+        raise ChangeError("content publish scope is malformed")
+    root = scope["root"]
+    if (not isinstance(root, str) or not os.path.isabs(root) or "\x00" in root or
+            os.path.normpath(root) != root or root == "/"):
+        raise ChangeError(f"content publish root is not normalized: {root!r}")
+    subtrees = scope["subtrees"]
+    if (not isinstance(subtrees, list) or not subtrees or
+            len(subtrees) > MAX_CONTENT_SUBTREES):
+        raise ChangeError(
+            f"content publish requires 1-{MAX_CONTENT_SUBTREES} declared subtrees")
+    seen = []
+    for name in subtrees:
+        # Single path components only. No separator, no traversal, no absolute
+        # path — the declared name can only ever address a direct child.
+        if not isinstance(name, str) or not _SUBTREE_NAME.fullmatch(name):
+            raise ChangeError(f"content publish subtree name is invalid: {name!r}")
+        if name not in seen:
+            seen.append(name)
+    return {"root": root, "subtrees": seen}
+
+
+def _change_entries(operation, paths, after, completed, relax_directories=False):
+    """Render one operation's before/after difference as manifest entries."""
+    expiry = completed + datetime.timedelta(seconds=operation["ttl_seconds"])
+    entries = []
+    for path in paths:
+        before = operation["before"].get(path)
+        found = after.get(path)
+        if before == found:
+            continue
+        if before is None:
+            change, evidence = "created", found
+        elif found is None:
+            change, evidence = "deleted", before
+        else:
+            change, evidence = "modified", found
+        relaxed = relax_directories and isinstance(evidence, dict) and \
+            evidence.get("kind") == "directory"
+        evidence_kind, evidence_sha256 = _evidence_digest(evidence, relaxed=relaxed)
+        if not evidence_kind or not evidence_sha256:
+            raise ChangeError(f"trusted-change path lacks bounded digest evidence: {path}")
+        entries.append({
+            "path": path, "change": change, "sha256": evidence_sha256,
+            "evidence_kind": evidence_kind,
+            "expires_at": _timestamp(expiry),
+            "deployment_id": operation["deployment_id"],
+            "operation_id": operation["operation_id"],
+            "operation_kind": operation["operation_kind"],
+            "started_at": operation["started_at"],
+            "completed_at": _timestamp(completed),
+        })
+    return entries
 
 
 class ChangeJournal:
@@ -568,7 +704,7 @@ class ChangeJournal:
         return len(expired)
 
     def begin(self, operation_id, operation_kind, paths, deployment_id=None,
-              ttl_seconds=900, max_paths=MAX_PATHS):
+              ttl_seconds=900, max_paths=MAX_PATHS, scope=None):
         if (not isinstance(operation_id, str) or not _IDENTITY.fullmatch(operation_id) or
                 not isinstance(operation_kind, str) or not _IDENTITY.fullmatch(operation_kind)):
             raise ChangeError("trusted-change operation identity is invalid")
@@ -592,6 +728,11 @@ class ChangeJournal:
                 "deployment_id": deployment_id, "paths": exact, "before": before,
                 "started_at": _timestamp(_now()), "ttl_seconds": ttl_seconds,
             }
+            if scope is not None:
+                # Root remembers the declared scope so `end` cannot widen it:
+                # the completion re-derives paths from THIS record, never from
+                # anything the caller says a second time.
+                requested["scope"] = _validate_content_scope(scope)
             if existing is not None:
                 # Compare the DECLARED identity only. `before` snapshots of
                 # auto-added parent directories are volatile (any concurrent
@@ -599,14 +740,23 @@ class ChangeJournal:
                 # read as a different operation because a hot directory moved.
                 identity = (
                     "operation_id", "operation_kind", "deployment_id",
-                    "paths", "ttl_seconds",
+                    "paths", "ttl_seconds", "scope",
                 )
-                if any(existing.get(field) != requested[field]
+                if any(existing.get(field) != requested.get(field)
                        for field in identity):
                     raise ChangeError("operation id is already active with different scope")
                 if reaped:
                     _atomic_write(self.journal_path, journal)
                 return existing
+            budget = _KIND_OPERATION_BUDGETS.get(operation_kind)
+            if budget is not None:
+                active = sum(
+                    1 for item in journal["operations"].values()
+                    if isinstance(item, dict) and
+                    item.get("operation_kind") == operation_kind)
+                if active >= budget:
+                    raise ChangeError(
+                        f"{operation_kind} operation bound was exceeded")
             if len(journal["operations"]) >= MAX_OPERATIONS:
                 raise ChangeError("trusted-change operation bound was exceeded")
             journal["operations"][operation_id] = requested
@@ -615,56 +765,93 @@ class ChangeJournal:
         finally:
             os.close(descriptor)
 
-    def complete(self, operation_id):
+    def _active_operation(self, journal, operation_id, expect_kind):
+        operation = journal["operations"].get(operation_id)
+        if operation is None:
+            raise ChangeError("trusted-change operation is not active")
+        if expect_kind is not None and operation.get("operation_kind") != expect_kind:
+            # A caller authorized for one kind may not complete another's
+            # operation: the publish broker can only ever finish a publish, so
+            # it can never annotate a deploy's in-flight writes.
+            raise ChangeError("trusted-change operation kind does not match")
+        return operation
+
+    def _commit_entries(self, journal, operation_id, entries):
+        """Free the slot durably FIRST, then bound-check and write the manifest.
+
+        Order is the fix for a real leak: raising the manifest-bound error
+        before the slot was released left the operation active until its TTL
+        expired, so an overflowing producer could hold slots indefinitely. The
+        changes stay unannotated either way — that is the safe outcome — but
+        the slot must not be held for it.
+        """
+        del journal["operations"][operation_id]
+        _atomic_write(self.journal_path, journal)
+        manifest = self._load_manifest()
+        keys = {(item["path"], item["change"], item["sha256"])
+                for item in manifest["entries"]}
+        for entry in entries:
+            key = (entry["path"], entry["change"], entry["sha256"])
+            if key not in keys:
+                manifest["entries"].append(entry)
+                keys.add(key)
+        if len(manifest["entries"]) > MAX_PACKAGE_PATHS:
+            raise ChangeError("expected-change entry bound was exceeded")
+        _atomic_write(self.manifest_path, manifest)
+        return entries
+
+    def complete(self, operation_id, expect_kind=None):
         descriptor = self._locked()
         try:
             journal = self._load_journal()
-            operation = journal["operations"].get(operation_id)
-            if operation is None:
-                raise ChangeError("trusted-change operation is not active")
+            operation = self._active_operation(journal, operation_id, expect_kind)
             completed = _now()
-            expiry = completed + datetime.timedelta(seconds=operation["ttl_seconds"])
-            entries = []
-            for path in operation["paths"]:
-                before = operation["before"].get(path)
-                after = _snapshot(path)
-                if before == after:
-                    continue
-                if before is None:
-                    change, evidence = "created", after
-                elif after is None:
-                    change, evidence = "deleted", before
-                else:
-                    change, evidence = "modified", after
-                evidence_kind, evidence_sha256 = _evidence_digest(evidence)
-                if not evidence_kind or not evidence_sha256:
-                    raise ChangeError(f"trusted-change path lacks bounded digest evidence: {path}")
-                entries.append({
-                    "path": path, "change": change, "sha256": evidence_sha256,
-                    "evidence_kind": evidence_kind,
-                    "expires_at": _timestamp(expiry),
-                    "deployment_id": operation["deployment_id"],
-                    "operation_id": operation["operation_id"],
-                    "operation_kind": operation["operation_kind"],
-                    "started_at": operation["started_at"],
-                    "completed_at": _timestamp(completed),
-                })
-            manifest = self._load_manifest()
-            keys = {(item["path"], item["change"], item["sha256"])
-                    for item in manifest["entries"]}
-            for entry in entries:
-                key = (entry["path"], entry["change"], entry["sha256"])
-                if key not in keys:
-                    manifest["entries"].append(entry)
-                    keys.add(key)
-            if len(manifest["entries"]) > MAX_PACKAGE_PATHS:
-                raise ChangeError("expected-change entry bound was exceeded")
-            del journal["operations"][operation_id]
-            _atomic_write(self.manifest_path, manifest)
-            _atomic_write(self.journal_path, journal)
-            return entries
+            after = {path: _snapshot(path) for path in operation["paths"]}
+            entries = _change_entries(
+                operation, operation["paths"], after, completed)
+            return self._commit_entries(journal, operation_id, entries)
         finally:
             os.close(descriptor)
+
+    def complete_derived(self, operation_id, expect_kind=None):
+        """Complete a scope-declared operation by re-walking its own subtrees.
+
+        A publish creates and deletes paths, so the completion scope is the
+        UNION of what root saw at begin and what it sees now. The walk and its
+        snapshots run UNLOCKED — a large tenant tree must not hold the journal
+        lock against every other publisher on the node — and the lock is
+        retaken only to free the slot and rewrite the manifest.
+        """
+        descriptor = self._locked()
+        try:
+            journal = self._load_journal()
+            operation = json.loads(json.dumps(
+                self._active_operation(journal, operation_id, expect_kind)))
+        finally:
+            os.close(descriptor)
+        scope = _validate_content_scope(operation.get("scope"))
+        found, complete = _content_subtree_paths(scope["root"], scope["subtrees"])
+        derived = validate_paths(
+            found, (scope["root"],), max_paths=MAX_CONTENT_PATHS) if found else []
+        union = list(dict.fromkeys(list(operation["paths"]) + derived))
+        if len(union) > MAX_CONTENT_PATHS:
+            union = union[:MAX_CONTENT_PATHS]
+            complete = False
+        completed = _now()
+        after = {path: _snapshot(path) for path in union}
+        entries = _change_entries(
+            operation, union, after, completed, relax_directories=True)
+        descriptor = self._locked()
+        try:
+            journal = self._load_journal()
+            if operation_id not in journal["operations"]:
+                # The TTL reaped it while this walk was running; the writes
+                # already happened and simply stay unexplained.
+                raise ChangeError("trusted-change operation expired before completion")
+            self._commit_entries(journal, operation_id, entries)
+        finally:
+            os.close(descriptor)
+        return {"entries": entries, "complete": complete, "paths": len(union)}
 
     def abort(self, operation_id):
         descriptor = self._locked()
