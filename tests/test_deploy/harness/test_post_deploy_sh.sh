@@ -304,8 +304,26 @@ case "\$*" in
         printf '%s\n' "\$value"
         exit 0
         ;;
-    *"- __mojo_tls_vhost__ "*)
-        exec env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$REPO" "$REAL_PYTHON3" "\$@"
+    *"-c import mojo.deploy.vhost_install"*)
+        # The interpreter probe post_deploy.sh runs once before the vhost loop.
+        # vhost_install.absent forces "cannot import", which is the only way to
+        # reach the install_file fallback branch from a test.
+        [ -f "\$STUBCTL/vhost_install.absent" ] && exit 1
+        exec env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$REPO" "$REAL_PYTHON3" \
+            -c 'import mojo.deploy.vhost_install'
+        ;;
+    *"-m mojo.deploy.vhost_install"*)
+        # Strip the production -E/-P before passing through: -E would discard
+        # the PYTHONPATH this passthrough depends on to find the repo's mojo.
+        # The harness therefore does NOT exercise the production flag set —
+        # a known, deliberate gap.
+        vhost_args=()
+        for arg in "\$@"; do
+            case "\$arg" in -E|-P) continue ;; esac
+            vhost_args+=("\$arg")
+        done
+        exec env -u DJANGO_SETTINGS_MODULE PYTHONPATH="$REPO" "$REAL_PYTHON3" \
+            "\${vhost_args[@]}"
         ;;
     *"sys.version_info >= (3,11)"*)
         [ -f "\$STUBCTL/mojosec.version.exit" ] && exit "\$(cat "\$STUBCTL/mojosec.version.exit")"
@@ -403,6 +421,15 @@ set_request_service() { # exact sealed stage-0 projection value
 
 # ── tests ────────────────────────────────────────────────────────────────────
 
+# ── the TLS vhost contract ───────────────────────────────────────────────────
+#
+# Most of the vhost validator's surface is now unit-tested in
+# tests/test_deploy/vhost_install.py, which calls main() directly against a
+# tmpdir. What stays here is only what shell alone can prove: that a downgrade
+# reaches record_warning and the incident phase, that a refusal reaches `die`
+# with /etc untouched, that a racing writer is refused, and that the
+# module-absent fallback still installs.
+
 setup_tls_case() {
     local server_name="${1:-app.example.test}"
     setup_env
@@ -416,13 +443,21 @@ setup_tls_case() {
     chmod 0600 "$TLS_ARCHIVE/privkey7.pem"
     ln -s ../../archive/app.example.test/fullchain7.pem "$TLS_LIVE/fullchain.pem"
     ln -s ../../archive/app.example.test/privkey7.pem "$TLS_LIVE/privkey.pem"
+    # The repository's first-boot placeholder. It must EXIST: installing a
+    # vhost whose own certificate paths are absent produces a conf nginx
+    # rejects, so a downgrade refuses rather than write one.
+    TLS_SNAKEOIL="$TMP/snakeoil"
+    rm -rf "$TLS_SNAKEOIL"
+    mkdir -p "$TLS_SNAKEOIL"
+    printf 'placeholder-certificate\n' > "$TLS_SNAKEOIL/ssl-cert-snakeoil.pem"
+    printf 'placeholder-key\n' > "$TLS_SNAKEOIL/ssl-cert-snakeoil.key"
     cat > "$PROJ/aws/nginx/conf.d/app.conf" <<EOF
 # HTTPS — repository-owned vhost comments may use UTF-8.
 server {
     listen 443 ssl;
     server_name $server_name;
-    ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
-    ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
+    ssl_certificate $TLS_SNAKEOIL/ssl-cert-snakeoil.pem;
+    ssl_certificate_key $TLS_SNAKEOIL/ssl-cert-snakeoil.key;
     add_header X-Repository yes;
 }
 EOF
@@ -444,36 +479,24 @@ $extra
 EOF
 }
 
+install_valid_lineage() { # the state every case below starts from
+    write_installed_tls "${1:-app.example.test}" \
+        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
+        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
+}
+
 assert_repo_tls() {
     assert_has "$TMP/nginx_etc/conf.d/app.conf" "ssl-cert-snakeoil.pem" "$1 uses the repository certificate"
     assert_has "$TMP/nginx_etc/conf.d/app.conf" "ssl-cert-snakeoil.key" "$1 uses the repository key"
 }
 
-assert_tls_refused() {
-    local label="$1" rc
-    run_post_deploy > "$OUT" 2>&1
-    rc=$?
-    if [ "$rc" -ne 0 ]; then ok "$label is refused"; else fail "$label deployed"; fi
-    assert_lacks "$TMP/nginx_etc/conf.d/app.conf" "ssl-cert-snakeoil" \
-        "$label leaves the installed vhost untouched"
-    assert_has "$OUT" "TLS vhost convergence refused unsafe or changed state" \
-        "$label reports one bounded refusal"
-    assert_lacks "$OUT" "$TLS_LIVE" "$label does not log certificate paths"
-}
-
 test_tls_lineage_preservation() {
-    echo "post_deploy.sh: repository vhost keeps only a proven TLS lineage"
+    echo "post_deploy.sh: a proven TLS lineage survives; anything else warns, not aborts"
 
+    # 1. The happy path: a proven lineage is carried into repository bytes,
+    #    and doing it twice produces the same bytes.
     setup_tls_case
-    run_post_deploy > "$OUT" 2>&1
-    assert_eq "$?" 0 "a fresh placeholder vhost deploys"
-    assert_repo_tls "a fresh vhost"
-
-    setup_tls_case
-    write_installed_tls app.example.test \
-        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
-        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
-
+    install_valid_lineage
     run_post_deploy > "$OUT" 2>&1
     local rc=$?
     [ "$rc" -eq 0 ] || sed -n '1,20p' "$OUT"
@@ -484,125 +507,75 @@ test_tls_lineage_preservation() {
         "the proven private-key lineage survives repository convergence"
     assert_has "$TMP/nginx_etc/conf.d/app.conf" "X-Repository yes" \
         "the repository remains authoritative for non-certificate directives"
-    assert_has "$TMP/nginx_etc/conf.d/app.conf" "HTTPS — repository-owned" \
-        "UTF-8 repository comments survive certificate overlay"
     assert_lacks "$TMP/nginx_etc/conf.d/app.conf" "old-operator-route" \
         "an installed route is not carried into repository bytes"
-    assert_lacks "$TMP/nginx_etc/conf.d/app.conf" "options-ssl-nginx.conf" \
-        "an installed Certbot option include is not carried forward"
-    assert_lacks "$TMP/nginx_etc/conf.d/app.conf" "installed-only comment" \
-        "an installed comment is not carried forward"
-
+    assert_not_in_log "deploy_warning nginx_vhost" \
+        "a preserved lineage files no deploy warning"
     cp "$TMP/nginx_etc/conf.d/app.conf" "$TMP/first-app.conf"
     run_post_deploy > "$OUT" 2>&1
-    rc=$?
-    [ "$rc" -eq 0 ] || sed -n '1,20p' "$OUT"
-    assert_eq "$rc" 0 "a repeated valid-lineage deploy succeeds"
+    assert_eq "$?" 0 "a repeated valid-lineage deploy succeeds"
     if cmp -s "$TMP/first-app.conf" "$TMP/nginx_etc/conf.d/app.conf"; then
         ok "the TLS-lineage overlay is byte-idempotent"
     else
         fail "the TLS-lineage overlay changed bytes on its second run"
     fi
 
+    # 2. THE REGRESSION (item 2719). A rename is a state an operator reaches by
+    #    editing a vhost. It must warn and install the repository bytes.
     setup_tls_case
-    write_installed_tls app.example.test \
-        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
-        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
-    printf '\377' >> "$PROJ/aws/nginx/conf.d/app.conf"
-    assert_tls_refused "invalid UTF-8 repository bytes"
-
-    setup_tls_case k.example.test
-    write_installed_tls K.example.test \
-        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
-        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
-    assert_tls_refused "a Unicode-confusable server name"
-
-    setup_tls_case
-    write_installed_tls app.example.test \
-        "    ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;" \
-        "    ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;"
+    install_valid_lineage renamed.example.test
     run_post_deploy > "$OUT" 2>&1
-    assert_eq "$?" 0 "an unambiguous non-Certbot pair takes repository bytes"
-    assert_repo_tls "an unambiguous non-Certbot pair"
-    assert_lacks "$TMP/nginx_etc/conf.d/app.conf" "old-operator-route" \
-        "a non-Certbot vhost retains no installed routing"
+    rc=$?
+    [ "$rc" -eq 0 ] || sed -n '1,20p' "$OUT"
+    assert_eq "$rc" 0 "a renamed host deploys"
+    assert_repo_tls "a renamed host"
+    assert_has "$TMP/nginx_etc/conf.d/app.conf" "server_name app.example.test" \
+        "a renamed host takes the repository server_name"
+    assert_has "$OUT" "server-name-mismatch" \
+        "a renamed host names the code that dropped preservation"
+    assert_has "$OUT" "phase=nginx_vhost_tls" \
+        "a renamed host files the TLS-severity deploy warning"
+    assert_in_log "deploy_warning nginx_vhost_tls" \
+        "a renamed host reaches the nginx_vhost_tls incident phase"
+    assert_lacks "$OUT" "$TLS_LIVE" "a renamed host does not log certificate paths"
+    cp "$TMP/nginx_etc/conf.d/app.conf" "$TMP/first-app.conf"
+    run_post_deploy > "$OUT" 2>&1
+    assert_eq "$?" 0 "a repeated downgraded deploy succeeds"
+    if cmp -s "$TMP/first-app.conf" "$TMP/nginx_etc/conf.d/app.conf"; then
+        ok "the downgraded install is byte-idempotent"
+    else
+        fail "the downgraded install changed bytes on its second run"
+    fi
 
+    # 3. But a downgrade must not install certificate paths that do not exist:
+    #    nginx would reject the graph 300 lines later, with the bytes on disk.
     setup_tls_case
-    write_installed_tls renamed.example.test \
-        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
-        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
-    assert_tls_refused "a renamed host"
+    install_valid_lineage renamed.example.test
+    rm -f "$TLS_SNAKEOIL/ssl-cert-snakeoil.pem"
+    run_post_deploy > "$OUT" 2>&1
+    if [ "$?" -ne 0 ]; then ok "a missing repository certificate is refused"; else fail "a missing repository certificate deployed"; fi
+    assert_lacks "$TMP/nginx_etc/conf.d/app.conf" "ssl-cert-snakeoil" \
+        "a missing repository certificate leaves /etc untouched"
+    assert_has "$OUT" "repository-certificate-missing" \
+        "a missing repository certificate names its code"
+    assert_has "$OUT" "TLS vhost convergence refused unsafe or changed state" \
+        "a missing repository certificate reports one bounded refusal"
+    assert_lacks "$OUT" "$TLS_LIVE" "a missing repository certificate logs no certificate paths"
 
-    setup_tls_case
-    local duplicate_cert
-    duplicate_cert="$(printf '    ssl_certificate %s/fullchain.pem;\n    ssl_certificate %s/fullchain.pem;' \
-        "$TLS_LIVE" "$TLS_LIVE")"
-    write_installed_tls app.example.test \
-        "$duplicate_cert" \
-        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
-    assert_tls_refused "duplicate certificate directives"
-
-    setup_tls_case
-    write_installed_tls app.example.test \
-        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
-        "    # missing private key"
-    assert_tls_refused "an incomplete certificate pair"
-
-    setup_tls_case
-    write_installed_tls app.example.test \
-        "    ssl_certificate $TLS_LIVE/../other/fullchain.pem;" \
-        "    ssl_certificate_key $TLS_LIVE/../other/privkey.pem;"
-    assert_tls_refused "a traversal-shaped live path"
-
-    setup_tls_case
-    write_installed_tls app.example.test \
-        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
-        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
-    rm -f "$TLS_ARCHIVE/privkey7.pem"
-    assert_tls_refused "a missing archive target"
-
-    setup_tls_case
-    write_installed_tls app.example.test \
-        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
-        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
-    chmod 0640 "$TLS_ARCHIVE/privkey7.pem"
-    assert_tls_refused "a group-readable private key"
-
-    setup_tls_case
-    write_installed_tls app.example.test \
-        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
-        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
-    chmod 0664 "$TMP/nginx_etc/conf.d/app.conf"
-    assert_tls_refused "unsafe installed-vhost mode"
-
-    setup_tls_case
-    write_installed_tls app.example.test \
-        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
-        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
-    chmod 0775 "$TMP/nginx_etc/conf.d"
-    assert_tls_refused "a group-writable destination directory"
-
-    setup_tls_case
-    write_installed_tls app.example.test \
-        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
-        "    ssl_certificate_key $TLS_LIVE/privkey.pem;" \
-        'server { listen 443 ssl; server_name second.example.test; ssl_certificate /tmp/a; ssl_certificate_key /tmp/b; }'
-    assert_tls_refused "multiple TLS servers"
-
+    # 4. The destination symlink is never followed, and never replaced.
     setup_tls_case
     printf 'do-not-overwrite\n' > "$TMP/vhost-symlink-target"
     ln -s "$TMP/vhost-symlink-target" "$TMP/nginx_etc/conf.d/app.conf"
     run_post_deploy > "$OUT" 2>&1
-    rc=$?
-    if [ "$rc" -ne 0 ]; then ok "an installed-vhost symlink is refused"; else fail "an installed-vhost symlink deployed"; fi
+    if [ "$?" -ne 0 ]; then ok "an installed-vhost symlink is refused"; else fail "an installed-vhost symlink deployed"; fi
     assert_has "$TMP/vhost-symlink-target" "do-not-overwrite" \
         "the symlink target is never followed or overwritten"
     if [ -L "$TMP/nginx_etc/conf.d/app.conf" ]; then ok "the refused destination remains a symlink"; else fail "the refused destination symlink was replaced"; fi
 
+    # 5. A racing writer. Only shell can stage this — a thread-parallel unit
+    #    suite would make it a flake source.
     setup_tls_case
-    write_installed_tls app.example.test \
-        "    ssl_certificate $TLS_LIVE/fullchain.pem;" \
-        "    ssl_certificate_key $TLS_LIVE/privkey.pem;"
+    install_valid_lineage
     "$REAL_PYTHON3" - "$TMP/nginx_etc/conf.d/app.conf" \
         "$CTL/tls-race-ready" "$CTL/tls-race-stop" <<'PY' &
 import os
@@ -624,6 +597,20 @@ PY
     assert_has "$OUT" "TLS vhost convergence refused unsafe or changed state" \
         "snapshot refusal is bounded and does not disclose TLS paths"
     assert_lacks "$OUT" "$TLS_LIVE" "snapshot refusal does not log certificate paths"
+
+    # 6. Older site-packages have no vhost_install module (this script's inode
+    #    outlives the pip install). Preservation is lost; the deploy is not.
+    setup_tls_case
+    install_valid_lineage
+    touch "$CTL/vhost_install.absent"
+    run_post_deploy > "$OUT" 2>&1
+    rc=$?
+    [ "$rc" -eq 0 ] || sed -n '1,20p' "$OUT"
+    assert_eq "$rc" 0 "a framework without the vhost module still deploys"
+    assert_repo_tls "the module-absent fallback"
+    assert_in_log "deploy_warning nginx_vhost$" \
+        "the module-absent fallback files the nginx_vhost incident phase"
+    rm -f "$CTL/vhost_install.absent"
 }
 
 if [ "${POST_DEPLOY_TLS_ONLY:-0}" = "1" ]; then

@@ -382,6 +382,8 @@ def test_resize_database_guards(opts):
         with mock.patch.object(capacity, "_sleep"), \
                 mock.patch.object(capacity, "_write_operation",
                                   side_effect=lambda r: r), \
+                mock.patch.object(capacity, "_persist",
+                                  side_effect=lambda record, **kw: record), \
                 mock.patch.object(capacity, "invalidate"), \
                 mock.patch.object(capacity, "_release"), \
                 mock.patch.object(rds_helper, "modify_instance_class"), \
@@ -417,6 +419,8 @@ def test_resize_runners_settle_and_time_out(opts):
     with mock.patch.object(capacity, "_sleep"), \
             mock.patch.object(capacity, "_write_operation",
                               side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(capacity, "invalidate"), \
             mock.patch.object(capacity, "_release"), \
             mock.patch.object(elasticache_helper,
@@ -442,6 +446,8 @@ def test_resize_runners_settle_and_time_out(opts):
     with mock.patch.object(capacity, "_sleep"), \
             mock.patch.object(capacity, "_write_operation",
                               side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(capacity, "invalidate"), \
             mock.patch.object(capacity, "_release"), \
             mock.patch.object(elasticache_helper,
@@ -464,6 +470,8 @@ def test_resize_runners_settle_and_time_out(opts):
     with mock.patch.object(capacity, "time", fake_time), \
             mock.patch.object(capacity, "_write_operation",
                               side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(capacity, "invalidate"), \
             mock.patch.object(capacity, "_release"), \
             mock.patch.object(elasticache_helper,
@@ -490,6 +498,8 @@ def test_resize_runners_settle_and_time_out(opts):
     with mock.patch.object(capacity, "_sleep"), \
             mock.patch.object(capacity, "_write_operation",
                               side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(capacity, "invalidate"), \
             mock.patch.object(capacity, "_release"), \
             mock.patch.object(rds_helper, "modify_instance_class") as modified, \
@@ -517,6 +527,8 @@ def test_resize_runners_settle_and_time_out(opts):
     with mock.patch.object(capacity, "time", fake_time), \
             mock.patch.object(capacity, "_write_operation",
                               side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(capacity, "invalidate"), \
             mock.patch.object(capacity, "_release"), \
             mock.patch.object(rds_helper, "modify_instance_class"), \

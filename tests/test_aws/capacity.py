@@ -31,9 +31,15 @@ BALANCER_ARN = ("arn:aws:elasticloadbalancing:us-east-1:123456789012:"
                 "loadbalancer/net/mojo-api-nlb/0123456789abcdef")
 GROUP_ARN = ("arn:aws:elasticloadbalancing:us-east-1:123456789012:"
              "targetgroup/mojo-api/abcdef0123456789")
+SITES_BALANCER_ARN = ("arn:aws:elasticloadbalancing:us-east-1:123456789012:"
+                      "loadbalancer/net/mojo-sites-nlb/fedcba9876543210")
+SITES_GROUP_ARN = ("arn:aws:elasticloadbalancing:us-east-1:123456789012:"
+                   "targetgroup/mojo-sites/9876543210fedcba")
 NODE_A = "i-0a1b2c3d4e5f60011"
 NODE_B = "i-0a1b2c3d4e5f60022"
 NEW_NODE = "i-0a1b2c3d4e5f60044"
+SUBNET_A = "subnet-0aaa"
+SUBNET_B = "subnet-0bbb"
 PROFILE_ARN = "arn:aws:iam::123456789012:instance-profile/mojo-api"
 CLUSTER = "mojo-test-aurora"
 STANDALONE = "mojo-test-postgres"
@@ -58,6 +64,78 @@ def _ec2_client(instances=()):
     client.describe_instances.return_value = {
         "Reservations": [{"Instances": list(instances)}]}
     return client
+
+
+def _instance(instance_id, name, subnet=SUBNET_A, vpc="vpc-0aaa",
+              zone="us-east-1a", state="running"):
+    return {
+        "InstanceId": instance_id, "InstanceType": "m6i.large",
+        "ImageId": "ami-0source", "SubnetId": subnet, "VpcId": vpc,
+        "State": {"Name": state}, "Placement": {"AvailabilityZone": zone},
+        "PrivateIpAddress": "10.0.1.11",
+        "PrivateDnsName": "ip-10-0-1-11.ec2.internal",
+        "SecurityGroups": [{"GroupId": "sg-0aaa"}],
+        "IamInstanceProfile": {"Arn": PROFILE_ARN},
+        "Tags": [{"Key": "Name", "Value": name}],
+    }
+
+
+def _subnet(subnet_id, vpc="vpc-0aaa", zone="us-east-1a", free=250,
+            public=True):
+    return {
+        "SubnetId": subnet_id, "VpcId": vpc, "AvailabilityZone": zone,
+        "State": "available", "CidrBlock": "10.0.1.0/24",
+        "AvailableIpAddressCount": free, "MapPublicIpOnLaunch": public,
+        "Tags": [{"Key": "Name", "Value": subnet_id}],
+    }
+
+
+def _placement_client(instances=(), subnets=()):
+    """One EC2 mock routing describe_instances AND describe_subnets.
+
+    Routed by the subnet-id filter on purpose: the placement checks read the
+    REQUESTED subnet and the SOURCE's subnet, and a mock answering both with
+    the same first row would hide a vpc or addressing mismatch entirely.
+    """
+    rows = {row["SubnetId"]: row for row in subnets}
+    client = mock.Mock()
+    client.describe_instances.return_value = {
+        "Reservations": [{"Instances": list(instances)}]}
+    client.describe_subnets.side_effect = lambda Filters: {
+        "Subnets": [rows[key] for key in Filters[0]["Values"] if key in rows]}
+    return client
+
+
+def _placement_serving():
+    """The Maestro shape: two balancers, one healthy target each.
+
+    Which balancer's fleet an add grows is decided ENTIRELY by which node it
+    clones, so a one-group map could not show the mechanism working.
+
+    ``zones`` is what ``serving_map`` really projects and is carried for
+    fidelity only — placement no longer reads it. A named subnet must be in
+    the SOURCE's zone, and the source is a healthy target of these balancers,
+    so their enabled zones can never be the thing that decides an add.
+    """
+    return {
+        "balancers": [
+            {"arn": BALANCER_ARN, "name": "mojo-api-nlb",
+             "zones": ["us-east-1a"]},
+            {"arn": SITES_BALANCER_ARN, "name": "mojo-sites-nlb",
+             "zones": ["us-east-1a"]}],
+        "groups": [
+            {"arn": GROUP_ARN, "name": "mojo-api", "balancers": [BALANCER_ARN],
+             "targets": [{"id": NODE_A, "port": 443, "state": "healthy"}]},
+            {"arn": SITES_GROUP_ARN, "name": "mojo-sites",
+             "balancers": [SITES_BALANCER_ARN],
+             "targets": [{"id": NODE_B, "port": 8443, "state": "healthy"}]}],
+    }
+
+
+def _spec():
+    """A resolved environment. The test project declares none, so every named
+    source would otherwise be refused by the unconfigured-install guard."""
+    return SimpleNamespace(project="mojo-test", env="prod")
 
 
 def _target(instance_id, state, port=443):
@@ -153,6 +231,37 @@ def test_capture_image_never_reboots(opts):
     stubber.assert_no_pending_responses()
 
 
+@th.django_unit_test("one subnet is read by FILTER, and a missing one is None")
+def test_subnet_facts_reads_one_subnet(opts):
+    from mojo.helpers.aws import ec2
+
+    client, stubber = _stub("ec2")
+    stubber.add_response(
+        "describe_subnets", {"Subnets": [_subnet(
+            SUBNET_B, zone="us-east-1b", free=12, public=False)]},
+        {"Filters": [{"Name": "subnet-id", "Values": [SUBNET_B]}]})
+    with stubber:
+        facts = ec2.subnet_facts(SUBNET_B, client=client)
+    stubber.assert_no_pending_responses()
+    assert facts["vpc_id"] == "vpc-0aaa" \
+        and facts["availability_zone"] == "us-east-1b", \
+        f"the subnet's VPC and zone were not projected: {facts}"
+    assert facts["available_ip_count"] == 12, \
+        f"the free-address count was not projected: {facts}"
+    assert facts["map_public_ip_on_launch"] is False, \
+        f"public addressing was not projected honestly: {facts}"
+
+    # A subnet that does not exist must be a None the caller refuses on, not
+    # an exception that reads as a provider failure. This is why the describe
+    # is FILTERED and never SubnetIds=.
+    client, stubber = _stub("ec2")
+    stubber.add_response("describe_subnets", {"Subnets": []}, {
+        "Filters": [{"Name": "subnet-id", "Values": ["subnet-0nope"]}]})
+    with stubber:
+        missing = ec2.subnet_facts("subnet-0nope", client=client)
+    assert missing is None, f"a missing subnet did not read as None: {missing!r}"
+
+
 @th.django_unit_test("a clone launch is a request the EC2 service model accepts")
 def test_launch_clone_is_model_valid(opts):
     from mojo.apps.aws.services import capacity
@@ -221,6 +330,36 @@ def test_launch_clone_values(opts):
         f"a capacity-added node is not identifiable from its tags: {tags}"
     assert tags.get("Name") == "mojo-api-a-clone", f"the clone is unnamed: {tags}"
     assert tags.get("mojo:role") == "app", f"caller tags were dropped: {tags}"
+
+
+@th.django_unit_test("a clone lands in the subnet the caller named, not the source's")
+def test_launch_clone_places_in_a_named_subnet(opts):
+    from mojo.apps.aws.services import capacity
+    from mojo.helpers.aws import ec2
+
+    client, stubber = _stub("ec2")
+    user_data = capacity.node_user_data("mojo-api-a")
+    source = {"instance_type": "m6i.large", "subnet_id": SUBNET_A,
+              "security_group_ids": ["sg-0aaa"],
+              "iam_instance_profile_arn": PROFILE_ARN}
+    # expected_params is an EXACT match of the whole request, so this pins
+    # SubnetId to the named subnet while the source names a different one —
+    # the fallback silently winning is exactly the bug it would catch.
+    stubber.add_response(
+        "run_instances", {"Instances": [{"InstanceId": NEW_NODE}]}, {
+            "ImageId": "ami-0new", "InstanceType": "m6i.large",
+            "MinCount": 1, "MaxCount": 1, "SubnetId": SUBNET_B,
+            "SecurityGroupIds": ["sg-0aaa"], "UserData": user_data,
+            "MetadataOptions": dict(ec2.IMDS_V2_ONLY),
+            "IamInstanceProfile": {"Arn": PROFILE_ARN},
+            "TagSpecifications": [{"ResourceType": "instance", "Tags": [
+                {"Key": "Name", "Value": "mojo-api-a-clone"},
+                {"Key": "mojo:created-by", "Value": "admin-capacity"}]}]})
+    with stubber:
+        created = ec2.launch_clone(source, "ami-0new", SUBNET_B,
+                                   "mojo-api-a-clone", user_data, client=client)
+    assert created == NEW_NODE, f"the new instance id was not returned: {created!r}"
+    stubber.assert_no_pending_responses()
 
 
 @th.django_unit_test("the server predicts the hostname its own user-data will set")
@@ -399,6 +538,180 @@ def test_replica_count_refusals(opts):
                                            facts=failover_off, client=client)
     assert result["changed"] is True and result["replica_count"] == 0, \
         f"a failover-off group could not drop its last replica: {result}"
+
+
+# ── service: explicit placement ─────────────────────────────────────────────
+#
+# Every one of these calls _prepare_add_node DIRECTLY with injected clients and
+# an injected fleet spec — no patching, so they stay in the default tier. The
+# whole point of the feature is that a bad placement is refused in the request,
+# before a claim, an AMI, or an instance exists.
+
+@th.django_unit_test("the source picks which fleet grows, and placement is proven first")
+def test_add_node_placement_is_validated_before_anything_is_created(opts):
+    from mojo.apps.aws.services import capacity
+
+    serving = _placement_serving()
+    instances = [_instance(NODE_A, "mojo-api-a"),
+                 _instance(NODE_B, "mojo-sites-a")]
+    # Every subnet here is in the source's zone: a named subnet is a SUBNET
+    # choice, not a zone choice — see the same-zone test below.
+    subnets = [_subnet(SUBNET_A), _subnet(SUBNET_B),
+               _subnet("subnet-0zzz", vpc="vpc-0zzz")]
+
+    # (a) naming the sites node grows the SITES fleet: the groups the runner
+    # will register into are derived from the source, and only from it.
+    client = _placement_client(instances, subnets)
+    source, groups, placement = capacity._prepare_add_node(
+        serving, ec2_client=client, source_instance=NODE_B,
+        subnet_id=SUBNET_B, fleet_spec=_spec())
+    assert source["instance_id"] == NODE_B, \
+        f"the named source was not the node chosen to clone: {source}"
+    assert [group["arn"] for group in groups] == [SITES_GROUP_ARN], \
+        f"naming a source did not choose that source's fleet: {groups}"
+    assert groups[0]["port"] == 8443, \
+        f"the clone would register on the wrong port: {groups}"
+    assert placement == {"subnet_id": SUBNET_B,
+                         "availability_zone": "us-east-1a",
+                         "selected": "requested"}, \
+        f"the named subnet was not the placement decided: {placement}"
+
+    # (b) a source outside the fleet's healthy targets can never be widened in.
+    client = _placement_client(instances, subnets)
+    with th.assert_raises(capacity.CapacityError) as caught:
+        capacity._prepare_add_node(serving, ec2_client=client,
+                                   source_instance=NEW_NODE,
+                                   fleet_spec=_spec())
+    assert caught.exception.error_code == "source_not_serving" \
+        and caught.exception.status == 409, \
+        f"a foreign source was not refused: {caught.exception.error_code}"
+
+    # (c) a clone carries its source's VPC-scoped security groups, so a subnet
+    # in another VPC is a launch AWS would hard-reject.
+    client = _placement_client(instances, subnets)
+    with th.assert_raises(capacity.CapacityError) as caught:
+        capacity._prepare_add_node(serving, ec2_client=client,
+                                   source_instance=NODE_A,
+                                   subnet_id="subnet-0zzz", fleet_spec=_spec())
+    assert caught.exception.error_code == "subnet_not_usable" \
+        and caught.exception.data.get("reason") == "vpc_mismatch", \
+        f"a cross-VPC subnet was not refused: {caught.exception.data}"
+
+    # (d) omitting both is byte-identical to the old behavior AND costs no
+    # provider call — DescribeSubnets is only needed when a subnet is named.
+    client = _placement_client(instances, subnets)
+    source, groups, placement = capacity._prepare_add_node(
+        serving, ec2_client=client, fleet_spec=_spec())
+    assert placement == {"subnet_id": SUBNET_A,
+                         "availability_zone": "us-east-1a",
+                         "selected": "source"}, \
+        f"the automatic path stopped landing in the source's subnet: {placement}"
+    assert client.describe_subnets.call_count == 0, \
+        "the automatic path called DescribeSubnets, which it must never need"
+
+
+@th.django_unit_test("a subnet outside the source's availability zone is refused up front")
+def test_add_node_refuses_a_subnet_in_another_zone(opts):
+    from mojo.apps.aws.services import capacity
+
+    serving = _placement_serving()
+    instances = [_instance(NODE_A, "mojo-api-a", zone="us-east-1a")]
+    subnets = [_subnet(SUBNET_A, zone="us-east-1a"),
+               _subnet(SUBNET_B, zone="us-east-1b"),
+               _subnet("subnet-0ccc", zone="us-east-1a")]
+
+    # One availability zone, for now. A named subnet says WHICH subnet in the
+    # source's zone, never which zone — so a fleet cannot be spread across
+    # zones through this door.
+    with th.assert_raises(capacity.CapacityError) as caught:
+        capacity._prepare_add_node(
+            serving, ec2_client=_placement_client(instances, subnets),
+            source_instance=NODE_A, subnet_id=SUBNET_B, fleet_spec=_spec())
+    assert caught.exception.error_code == "subnet_not_usable" \
+        and caught.exception.status == 409, \
+        f"a cross-zone subnet was not refused: {caught.exception.error_code}"
+    assert caught.exception.data.get("reason") == "az_mismatch", \
+        f"the refusal does not name the reason: {caught.exception.data}"
+    assert caught.exception.data.get("zone") == "us-east-1b" \
+        and caught.exception.data.get("source_zone") == "us-east-1a", \
+        f"the refusal does not name both zones: {caught.exception.data}"
+
+    # A DIFFERENT subnet in the source's own zone is the placement this
+    # accepts, and it is the whole of what subnet_id buys.
+    _source, _groups, placement = capacity._prepare_add_node(
+        serving, ec2_client=_placement_client(instances, subnets),
+        source_instance=NODE_A, subnet_id="subnet-0ccc", fleet_spec=_spec())
+    assert placement == {"subnet_id": "subnet-0ccc",
+                         "availability_zone": "us-east-1a",
+                         "selected": "requested"}, \
+        f"a subnet in the source's own zone was not accepted: {placement}"
+
+
+@th.django_unit_test("a private subnet is refused when the source's subnet is public")
+def test_add_node_refuses_a_subnet_without_public_addressing(opts):
+    from mojo.apps.aws.services import capacity
+
+    serving = _placement_serving()
+    instances = [_instance(NODE_A, "mojo-api-a")]
+
+    # launch_clone sets no AssociatePublicIpAddress and uses no
+    # NetworkInterfaces block, so addressing is whatever the subnet does. A
+    # same-VPC private subnet otherwise passes every check and the node dies
+    # at RUNNER_TIMEOUT having never reached anything.
+    # Both in the source's zone — a private subnet in the SAME zone is still
+    # the trap, and it is the only shape the same-zone rule leaves reachable.
+    mixed = [_subnet(SUBNET_A, public=True),
+             _subnet(SUBNET_B, public=False)]
+    with th.assert_raises(capacity.CapacityError) as caught:
+        capacity._prepare_add_node(
+            serving, ec2_client=_placement_client(instances, mixed),
+            source_instance=NODE_A, subnet_id=SUBNET_B, fleet_spec=_spec())
+    assert caught.exception.error_code == "subnet_not_usable" \
+        and caught.exception.data.get("reason") == "no_public_addressing", \
+        f"a private subnet under a public source was not refused: " \
+        f"{caught.exception.data}"
+
+    # Compared against the SOURCE, never asserted absolutely: a fleet that
+    # lives in private subnets stays able to add nodes.
+    private = [_subnet(SUBNET_A, public=False),
+               _subnet(SUBNET_B, public=False)]
+    _source, _groups, placement = capacity._prepare_add_node(
+        serving, ec2_client=_placement_client(instances, private),
+        source_instance=NODE_A, subnet_id=SUBNET_B, fleet_spec=_spec())
+    assert placement["selected"] == "requested", \
+        f"a private→private placement was refused: {placement}"
+
+
+@th.django_unit_test("a named source is refused on an install with no environment")
+def test_add_node_refuses_a_named_source_on_an_unconfigured_install(opts):
+    from mojo.apps.aws.services import capacity
+
+    serving = _placement_serving()
+    instances = [_instance(NODE_A, "mojo-api-a"), _instance(NODE_B, "mojo-sites-a")]
+    subnets = [_subnet(SUBNET_A)]
+
+    # No environment declaration means _fleet_serving skipped its narrowing
+    # and this map is every balancer in the ACCOUNT. Naming a source would
+    # make a neighbouring installation's node clonable — and launch_clone
+    # copies the source's instance profile verbatim.
+    with th.assert_raises(capacity.CapacityError) as caught:
+        capacity._prepare_add_node(
+            serving, ec2_client=_placement_client(instances, subnets),
+            source_instance=NODE_B, fleet_spec=None)
+    assert caught.exception.error_code == "source_not_serving" \
+        and caught.exception.status == 409, \
+        f"a named source on an unconfigured install was allowed: " \
+        f"{caught.exception.error_code}"
+
+    # The automatic path is unchanged there — it picks deterministically, so
+    # exactly one instance was ever reachable.
+    source, _groups, placement = capacity._prepare_add_node(
+        serving, ec2_client=_placement_client(instances, subnets),
+        fleet_spec=None)
+    assert source["instance_id"] in (NODE_A, NODE_B), \
+        f"the automatic path stopped working without an environment: {source}"
+    assert placement["selected"] == "source", \
+        f"the automatic path did not fall back to the source's subnet: {placement}"
 
 
 # ── service: single flight ──────────────────────────────────────────────────

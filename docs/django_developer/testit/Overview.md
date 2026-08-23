@@ -249,6 +249,13 @@ feature-internal variants of one app, coverage already asserted elsewhere, and t
 cost *is* a timeout — an assertion that nothing arrives can only pass by waiting, so keep
 the positive path in the default tier and demote the negative one.
 
+Deployment applies that distinction directly: the default `test_deploy` package retains
+representative brownfield safety boundaries across inputs, discovery, identity, nodes,
+planning, policy, provider pagination/stubbing, and the CLI. Exhaustive brownfield
+orchestration variants are in the serial `test_deploy_extended_serial` package and run
+with `--all` or `--extra extended`. The wider `--all` result is coverage evidence for the
+opt-in tiers; it does not replace the ordinary default run as the baseline.
+
 **Not a reason to demote:** the app is optional. `requires_apps` already skips a module
 whole when the project has not installed that app.
 

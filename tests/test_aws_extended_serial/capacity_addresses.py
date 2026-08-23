@@ -378,6 +378,8 @@ def test_enable_adopts_reuses_and_verifies(opts):
     reads = [before, after]
     with mock.patch.object(capacity, "_serving", return_value=_serving_two()), \
             mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(capacity, "invalidate"), \
             mock.patch.object(capacity, "_release") as released, \
             mock.patch.object(ec2_helper, "instance_map",
@@ -417,6 +419,8 @@ def test_enable_leaves_foreign_attached_alone(opts):
                  tags=_stable_tags("mojo-api-b"))]
     with mock.patch.object(capacity, "_serving", return_value=_serving_two()), \
             mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(capacity, "invalidate"), \
             mock.patch.object(capacity, "_release"), \
             mock.patch.object(ec2_helper, "instance_map",
@@ -446,6 +450,8 @@ def test_enable_quota_failure_releases_claim(opts):
     rows = [_row(ALLOC_A, IP_A, instance_id=NODE_A, tags=_stable_tags())]
     with mock.patch.object(capacity, "_serving", return_value=_serving_two()), \
             mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(capacity, "invalidate"), \
             mock.patch.object(capacity, "_release") as released, \
             mock.patch.object(ec2_helper, "instance_map",
@@ -482,6 +488,8 @@ def test_enable_provider_failure_releases_claim(opts):
     rows = [_row(ALLOC_FREE, IP_FREE, tags=_stable_tags("spare"))]
     with mock.patch.object(capacity, "_serving", return_value=_serving_two()), \
             mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(capacity, "invalidate"), \
             mock.patch.object(capacity, "_release") as released, \
             mock.patch.object(ec2_helper, "instance_map",
@@ -513,6 +521,8 @@ def test_enable_verify_gates_finish(opts):
     reads = [before, after]
     with mock.patch.object(capacity, "_serving", return_value=_serving_two()), \
             mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(capacity, "invalidate"), \
             mock.patch.object(capacity, "_release"), \
             mock.patch.object(ec2_helper, "instance_map",
@@ -549,6 +559,8 @@ def test_disable_detaches_only_managed(opts):
     reads = [before, after]
     with mock.patch.object(capacity, "_serving", return_value=_serving_two()), \
             mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(capacity, "invalidate"), \
             mock.patch.object(capacity, "_release"), \
             mock.patch.object(ec2_helper, "instance_map",
@@ -581,6 +593,8 @@ def test_disable_verify_gates_finish(opts):
                    tags=_stable_tags("mojo-api-a"))
     with mock.patch.object(capacity, "_serving", return_value=_serving_two()), \
             mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(capacity, "invalidate"), \
             mock.patch.object(capacity, "_release"), \
             mock.patch.object(ec2_helper, "instance_map",
@@ -623,6 +637,8 @@ def _add_node_harness(capacity, ec2_helper, elbv2_helper, platform_deploy,
     stack = [
         mock.patch.object(capacity, "_sleep"),
         mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r),
+        mock.patch.object(capacity, "_persist",
+                          side_effect=lambda record, **kw: record),
         mock.patch.object(capacity, "invalidate"),
         mock.patch.object(capacity, "_release"),
         mock.patch.object(capacity, "_await_runner", return_value=True),
@@ -870,6 +886,8 @@ def test_disable_refuses_empty_fleet_with_expected_attachments(opts):
     empty = {"balancers": [], "groups": []}
     with mock.patch.object(capacity, "_serving", return_value=empty), \
             mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(capacity, "invalidate"), \
             mock.patch.object(capacity, "_release"), \
             mock.patch.object(ec2_helper, "address_map") as read, \

@@ -111,14 +111,89 @@ ladder and writes each phase onto the record:
 
 | Phase | What happens | Failure |
 |---|---|---|
-| `capturing` | Reuse a `mojo:fleet-image` AMI younger than `ADMIN_CAPACITY_IMAGE_MAX_AGE_DAYS` (14), else `create_image(NoReboot=True)` on a healthy **non-primary** member and poll until `available` | `image_timeout` after 30 min — **nothing was launched** |
-| `launching` | `run_instances` cloning instance type, subnet, security groups and instance profile, with `HttpTokens=required`, `mojo:created-by=admin-capacity`, and the source's identity tags (`mojo:project`/`mojo:env`/`managed-by`) so the clone is born a provable fleet member | `launch_timeout` — the instance exists and is NOT registered |
+| `capturing` | Reuse a `mojo:fleet-image` AMI younger than `ADMIN_CAPACITY_IMAGE_MAX_AGE_DAYS` (14), else `create_image(NoReboot=True)` on a healthy **non-primary** member — or on the member the request NAMED — and poll until `available` | `image_timeout` after 30 min — **nothing was launched** |
+| `launching` | `run_instances` into the **recorded** subnet (the source's, or the one the request named and proved), cloning instance type, security groups and instance profile, with `HttpTokens=required`, `mojo:created-by=admin-capacity`, and the source's identity tags (`mojo:project`/`mojo:env`/`managed-by`) so the clone is born a provable fleet member | `launch_timeout` — the instance exists and is NOT registered |
 | `booting` | Wait for `<node_id>-engine` on the `edge` channel | `runner_missing` after 20 min — running, unregistered, serving nothing |
 | `converging` | ONE targeted `_publish_deploy_node(runner_id, row.sha, row.framework_version, migrate=False, deployment_id=row.pk)` for `platform_deploy.last_converged_deployment()` | `no_converged_deployment` |
 | `proving` | Poll `readiness.local_node_proof` over `execute_on_runner` until `platform_deploy.proof_matches` accepts it | `proof_timeout` — **NOT registered** |
 | `addressing` | Only while stable outbound IPs are on: reuse a reserved `mojo:eip=stable-egress` address, else allocate one, associate it, before registration | `address_failed` / `address_quota` — **NOT registered**; `policy_unreadable` if the policy row cannot even be read |
 | `registering` | `register_target` into every group the source is in, then extend `EDGE_EXPECTED_TOPOLOGY` | topology failure is a warning, never a failure |
 | `settling` | Poll target health until healthy in every group, then trigger the combined pool convergence | `never_healthy` — the row offers Drain |
+
+### Choosing the source, and choosing the subnet
+
+Both are optional, both are new, and omitting both leaves the behaviour above
+byte-identical: the server picks a healthy non-primary member and lands the
+clone in that member's own subnet, with no extra provider call.
+
+**The source choice IS the balancer choice.** `_prepare_add_node` derives the
+target groups from `_groups_holding(serving, source["instance_id"])`, and the
+`registering` leg registers the clone into exactly those. On an installation
+with two balancers — an API fleet and a sites fleet — naming the source is the
+only way to say which of them grows. A named source **narrows** the candidate
+set and can never widen it: candidates are the healthy serving targets of the
+already-narrowed `_fleet_serving()` map, and anything outside them is
+`source_not_serving` 409.
+
+A named source is also refused outright when `_configured_spec()` is `None` —
+a project that never declared an environment. `_fleet_serving` skips its
+ownership narrowing in that case and returns every attached target group of
+every balancer **in the account**. The automatic path survives that because
+`_source_node` picks one instance deterministically; letting a caller name one
+would make a neighbouring installation's node clonable, and `launch_clone`
+copies the source's `iam_instance_profile_arn` verbatim.
+
+**A named subnet is proven before anything is created.** Every check that can
+be made without mutating is made in the request — before the fleet-wide add
+claim is taken, before the AMI. The alternative is a refusal 20–40 minutes in,
+with a running billed instance and a claim held for `CLAIM_TTL` (90 min).
+`_resolve_placement` refuses:
+
+| Refusal | Code | Why it cannot wait |
+|---|---|---|
+| No such subnet | `subnet_not_found` 404 | `run_instances` would refuse opaquely |
+| Different VPC than the source | `subnet_not_usable` 409, `data.reason = vpc_mismatch` | A clone carries its source's security groups, which are VPC-scoped — AWS hard-rejects |
+| A different availability zone than the source | `subnet_not_usable` 409, `data.reason = az_mismatch` | One zone for now — see below |
+| Source subnet public, named one not | `subnet_not_usable` 409, `data.reason = no_public_addressing` | `launch_clone` sets no `AssociatePublicIpAddress`; addressing is inherited from the subnet, so the node would boot with no route out and die at `RUNNER_TIMEOUT` |
+| Zero free addresses | `subnet_not_usable` 409, `data.reason = no_free_addresses` | Early warning only — see below |
+
+**A named subnet chooses a subnet, never a zone, and that is what makes this
+safe.** The product supports ONE availability zone for now, so
+`_resolve_placement` refuses any subnet whose `availability_zone` differs from
+the source instance's. Comparison is strict equality against
+`source["availability_zone"]`, so a zone AWS did not report on either side is
+also a refusal: same-zone that cannot be proven is not same-zone.
+
+The check this replaced asked whether the named zone was enabled on every
+balancer holding the source's target groups. Pinning to the source's zone is
+**strictly stronger**, not a relaxation: the source is a healthy serving target
+behind exactly those balancers, so every one of them provably has the source's
+zone enabled already. A subnet constrained to that zone is therefore always in
+a zone the balancer serves, and the enablement check became unreachable by
+construction — which is why it is gone rather than merely unused. The failure
+it guarded against (an ELBv2 target in an unenabled zone: `RegisterTargets`
+throws `InvalidTarget`, the `registering` leg's bare loop turns it into
+`mutation_state_unknown` with the claim HELD and "do not replay" on the record,
+or the target sits `unused` until `_await_healthy` gives up at `never_healthy`)
+cannot be reached from here.
+
+`elbv2.serving_map` still projects `zones` per balancer. Nothing in placement
+reads it any more. If the one-zone limit is ever lifted, the intersection walk
+that used it is in the history of this file, at commit `e500a94c`.
+
+The free-address count is **early warning, not a guarantee**: it is read up to
+`IMAGE_TIMEOUT` (30 min) before `run_instances` and nothing reserves an
+address in between. It catches the typo-into-a-full-subnet case for free. It
+is deliberately not re-read before the launch — that would narrow the window
+without closing it and add a call to every add.
+
+The runner does **not** re-validate the subnet. `_run_add_node` passes
+`detail["subnet_id"]` as recorded, because that is the value the request
+proved and the operator was shown; `run_instances` is the provider's own final
+authority either way.
+
+`ec2:DescribeSubnets` is needed **only when a subnet is named** —
+`_resolve_placement` returns with no provider call otherwise.
 
 ### Registration is gated on proof
 
@@ -540,6 +615,55 @@ provider; every mutation is AWS-side before its record is written. `GET
 /api/aws/capacity/status` is a pure read — a status endpoint that ADVANCED the
 work would let a `manage_aws`-only caller drive a registration.
 
+**An irreversible step is CHECKPOINTED, and a checkpoint that cannot be written
+aborts the operation.** Entering a runner's FIRST phase, or a phase whose next
+AWS call is irreversible, goes through `_checkpoint`, which writes through
+`_persist` and raises `CapacityPersistenceError` when the cache does not accept
+it. `run_operation` turns that into `persistence_unavailable` — stopped BEFORE
+the next AWS change, nothing further mutated, never rolled back. Eleven phase
+entries are checkpointed: `add_node` `capturing` (both branches),
+`enable_stable_ips` `planning`, `disable_stable_ips` `detaching`, `drain_node`
+`draining`, `terminate_node` `terminating`, `add_reader` `creating`,
+`remove_reader` `deleting`, `set_cache_replicas` `scaling`, and both resize
+runners' `resizing`.
+
+Everything else stays TOLERANT on purpose. `add_node`'s `launching`,
+`converging`, `addressing` and `registering` are additive and recoverable —
+the clone carries `mojo:created-by: admin-capacity`, so `report()` rediscovers
+it — and gating them would discard a captured, launched, booted, converged and
+PROVEN node over a Redis blip, leaving a paid, running, unregistered orphan.
+So do every in-phase repeat that FOLLOWS its mutation, every `settling` and
+`verifying` leg, warnings, terminal states, the topology extend, and
+`_write_batch`: every destructive step inside a batch runs through the same
+`apply()` a manual click does, so it is gated at that door.
+
+Detection is the **return value** of `cache.set`, compared `is False` — never a
+read-back. `MojoRedisCache.set` catches every exception itself and returns
+`False`, so a dead Redis never raises; and in cluster mode a `GET` right after
+a `SET` can hit an asynchronously replicated replica and legitimately miss,
+which would turn successful writes into aborted operations. `is False` rather
+than falsiness because some Django backends return `None` on success. The retry
+is a **wall-clock budget** (`PERSIST_RETRY_SECONDS`, 15s), not an attempt count:
+`REDIS_SOCKET_TIMEOUT` defaults to 60s, so a hung cache would spend three
+minutes on three attempts, while a fast refusal retries several times inside the
+budget and rides out a sub-second blip.
+
+**During a true outage the abort is log-only.** `_fail` reports by writing to
+the same dead cache, so `/status` will 404 or keep serving the last persisted
+record until its TTL; the `logger.error` in `run_operation` (naming the
+operation id and the phase, in `aws.log`) is the surviving channel. `_release`
+is a `cache.delete` and fails silently too, so a claim taken before the outage
+can survive to `CLAIM_TTL` — a retry may still get `capacity_in_progress` 409
+until it expires.
+
+**At request time** the same failure is a refusal, not a phantom success:
+`_new_operation` persists through `_persist`, and on failure releases the claim
+and raises `cache_unavailable` 503. Without it a request answered `200 OK` for
+an operation the runner would never find, while its claim wedged the resource
+for the full `CLAIM_TTL`. The stable-IPs actions re-word that refusal — their
+durable policy is written one line earlier, so "nothing was started" would be a
+lie there; the message says the policy IS recorded and no address moved.
+
 **Unknown mutation outcomes are reconcile-only.** A provider failure after a
 mutation was attempted records `mutation_state_unknown`, retains its
 single-flight claim, returns only the bounded `ProviderCallError.detail()`
@@ -624,6 +748,18 @@ must remain — parity with the page's `removable()`), terminate-needs-a-drain
 Every refusal names the step index in `data.step`. Full provider
 re-derivation stays at execution time.
 
+`add_node`'s optional placement splits here. Its `source_instance` IS
+checkable against the envelope — it must be a healthy row in the report, the
+same set the single-action apply narrows to — so a bad one is
+`source_not_serving` 409 at plan time. Its `subnet_id` is **shape-checked
+only** (`subnet-` prefix), not because the envelope lacks subnet data but
+because an empty subnet holds no node by definition, so no envelope built from
+node rows could ever see the subnet you would name — and naming one you are
+not already in is the whole point. The child `apply()` proves it against AWS
+— VPC, zone, addressing — before it takes a claim. Two `add_node` steps
+naming different subnets are both accepted; the duplicate-step check already
+exempts `add_node`.
+
 ### Costs
 
 `_step_cost` prices each step from provision's `COST_TABLE`
@@ -703,6 +839,7 @@ Beyond what the dashboard already needs:
 ```
 ec2:DescribeInstances       ec2:CreateImage        ec2:DescribeImages
 ec2:RunInstances            ec2:TerminateInstances
+ec2:DescribeSubnets                                 (only when add_node names a subnet)
 ec2:CreateTags              iam:PassRole            (for the cloned instance profile)
 ec2:DescribeAddresses       ec2:AllocateAddress
 ec2:AssociateAddress        ec2:DisassociateAddress (stable outbound IPs)
@@ -761,6 +898,16 @@ model. See [assistant/cloud_tools.md](../assistant/cloud_tools.md).
   from a background job, with no confirmation.
 - **Scaling policies.** Every action here is one deliberate, confirmed,
   audited change. Nothing autoscales.
+- **Availability-zone spread.** A fleet cannot be spread across availability
+  zones through this control at all. **One zone, for now** — a named subnet
+  must be in the source node's own zone, and one in any other zone is refused
+  (`subnet_not_usable`, `data.reason = az_mismatch`). So `subnet_id` chooses
+  WHICH subnet in that zone, never which zone. Nothing rebalances a fleet
+  across zones, nothing tracks how many nodes sit where, and nothing enables a
+  zone on a balancer. This is a current product limit, not a permanent design
+  position: the cross-zone placement path — including the balancer
+  zone-enablement check it required — was built and then deliberately removed,
+  and is recoverable from commit `e500a94c`.
 - **Bootstrapping.** The first node of an installation is the project's
   provisioning, not this button.
 - **The zero-downtime Aurora writer resize.** The recipe — resize a reader,

@@ -105,6 +105,96 @@ function blockedDetail(action) {
     || String(action.blocked_reason || 'this action is not available').replaceAll('_', ' ');
 }
 
+// Optional placement for every Add Node surface in the legacy portal. The
+// returned DOM node is deliberately separate from the state API: callers must
+// append `.element`, never the wrapper object itself.
+export function addNodePlacementControls(report, initial = {}, callbacks = {}) {
+  let sourceInstance = String(initial.source_instance || '');
+  let subnetId = String(initial.subnet_id || '');
+  const healthy = (report?.nodes?.instances || []).filter((row) => row.healthy);
+  if (sourceInstance && !healthy.some((row) => row.id === sourceInstance)) sourceInstance = '';
+  const groups = new Map((report?.nodes?.groups || []).map(
+    (group) => [group.arn, group.name || group.arn]));
+  const listId = `add-node-subnets-${Math.random().toString(36).slice(2)}`;
+
+  const sourceLabel = (row) => {
+    const fleets = (row.groups || []).map((arn) => groups.get(arn) || arn);
+    const node = row.name && row.name !== row.id ? `${row.name} (${row.id})` : row.id;
+    return [node, ...fleets, row.zone, row.subnet_id]
+      .filter(Boolean).join(' · ');
+  };
+  const selected = () => healthy.find((row) => row.id === sourceInstance) || null;
+  const values = () => ({
+    ...(sourceInstance ? {source_instance: sourceInstance} : {}),
+    ...(subnetId.trim() ? {subnet_id: subnetId.trim()} : {}),
+  });
+  const valid = () => !subnetId.trim() || (subnetId.trim().startsWith('subnet-')
+    && subnetId.trim().length > 'subnet-'.length);
+
+  const datalist = h('datalist', {id: listId});
+  const summary = h('span', {class: 'placement-summary'});
+  const error = h('span', {class: 'placement-error', role: 'alert'});
+  const subnet = h('input', {type: 'text', value: subnetId, list: listId,
+    'data-placement-control': 'subnet',
+    autocomplete: 'off', 'aria-describedby': `${listId}-summary ${listId}-error`});
+  summary.id = `${listId}-summary`;
+  error.id = `${listId}-error`;
+
+  const paint = () => {
+    const row = selected();
+    const zone = row?.zone || '';
+    const subnetOptions = [...new Set(healthy
+      .filter((candidate) => !zone || candidate.zone === zone)
+      .map((candidate) => candidate.subnet_id).filter(Boolean))];
+    datalist.replaceChildren(...subnetOptions.map((value) => h('option', {value})));
+    subnet.placeholder = row?.subnet_id
+      ? `Optional — source uses ${row.subnet_id}` : 'Optional subnet-…';
+    const ok = valid();
+    subnet.setAttribute('aria-invalid', ok ? 'false' : 'true');
+    error.textContent = ok ? '' : 'Subnet must start with subnet- and include an identifier.';
+    summary.textContent = sourceInstance
+      ? `Clone ${sourceLabel(row)}${subnetId.trim() ? ` into ${subnetId.trim()}` : '; choose subnet automatically'}`
+      : subnetId.trim() ? `Choose a healthy source automatically; place it in ${subnetId.trim()}`
+        : 'Choose a healthy source and subnet automatically.';
+  };
+
+  let commitTimer = null;
+  const commit = (focusControl = '') => {
+    clearTimeout(commitTimer);
+    // Subnet blur owns its commit: scheduling one from change can replace the
+    // focused input before the browser establishes its Tab destination.
+    commitTimer = setTimeout(
+      () => callbacks.onCommit?.(values(), valid(), focusControl), 0);
+  };
+  const source = h('select', {'data-placement-control': 'source',
+    onchange: (event) => {
+      sourceInstance = event.target.value;
+      paint();
+      callbacks.onInput?.(values(), valid());
+      commit(event.currentTarget.dataset.placementControl);
+    }},
+  h('option', {value: '', text: 'Automatic (healthy source)'}),
+  ...healthy.map((row) => h('option', {value: row.id, text: sourceLabel(row),
+    selected: row.id === sourceInstance ? true : null})));
+  subnet.addEventListener('input', () => {
+    subnetId = subnet.value;
+    paint();
+    callbacks.onInput?.(values(), valid());
+  });
+  subnet.addEventListener('blur', (event) => {
+    commit(event.relatedTarget?.dataset?.placementControl || '');
+  });
+
+  const element = h('div', {class: 'add-node-placement'},
+    h('label', {class: 'placement-field'},
+      h('span', {class: 'fleet-label', text: 'Clone from'}), source),
+    h('label', {class: 'placement-field'},
+      h('span', {class: 'fleet-label', text: 'Subnet'}), subnet, datalist),
+    summary, error);
+  paint();
+  return {element, values, valid};
+}
+
 // ---------------------------------------------------------------------------
 // Confirmation
 //
@@ -114,14 +204,15 @@ function blockedDetail(action) {
 // to click".
 // ---------------------------------------------------------------------------
 
-function confirm({title, subtitle, expect, verb, consequence, notes = [], extra = null}) {
+function confirm({title, subtitle, expect, verb, consequence, notes = [], extra = null,
+                  valid = () => true}) {
   return new Promise((resolve) => {
     let settled = false;
     const settle = (value) => { if (settled) return; settled = true; close(); resolve(value); };
     const typed = h('input', {autocomplete: 'off', placeholder: expect});
     const go = h('button', {class: 'button danger', type: 'button', disabled: true,
       onclick: () => settle({confirmed: true})}, verb);
-    const validate = () => { go.disabled = typed.value.trim() !== expect; };
+    const validate = () => { go.disabled = typed.value.trim() !== expect || !valid(); };
     typed.addEventListener('input', validate);
     const content = h('div', {},
       h('div', {class: 'callout warning'}, icon('alert'), h('p', {text: consequence})),
@@ -133,6 +224,8 @@ function confirm({title, subtitle, expect, verb, consequence, notes = [], extra 
         h('button', {class: 'button ghost', type: 'button',
           onclick: () => settle(null)}, 'Cancel'),
         go));
+    content.addEventListener('input', validate);
+    content.addEventListener('change', validate);
     const close = openModal({
       title, subtitle, content, danger: true,
       onClose: () => { if (!settled) { settled = true; resolve(null); } },
@@ -260,15 +353,16 @@ export async function capacityPanel(ctx, signal = null) {
   // ── actions ─────────────────────────────────────────────────────────────
 
   async function addNode() {
-    const source = (report?.nodes?.instances || []).find((row) => row.healthy);
+    const placement = addNodePlacementControls(report);
     const choice = await confirm({
       title: 'Add a node?',
-      subtitle: source ? `cloned from ${source.name || source.id}` : '',
+      subtitle: 'Automatic placement unless you choose otherwise',
       expect: ADD_NODE,
       verb: 'Add node',
       consequence:
-        'A new EC2 instance is cloned from a healthy fleet member — same instance '
-        + 'type, subnet, security groups and instance role. It is registered behind '
+        'A new EC2 instance is cloned from a healthy fleet member — keeping its '
+        + 'instance type, security groups and instance role. You may choose the '
+        + 'healthy source and a same-zone subnet, or leave either automatic. It is registered behind '
         + 'the balancer ONLY after it proves it is running the fleet\'s last '
         + 'converged commit.',
       notes: [
@@ -278,9 +372,12 @@ export async function capacityPanel(ctx, signal = null) {
         + 'running unknown code.',
         CONVERGENCE_NOTE,
       ],
+      extra: placement.element,
+      valid: placement.valid,
     });
     if (!choice) return;
-    submit(ADD_NODE, {action: ADD_NODE, confirm_resource: ADD_NODE});
+    submit(ADD_NODE, {action: ADD_NODE, confirm_resource: ADD_NODE,
+      ...placement.values()});
   }
 
   async function drainNode(row) {

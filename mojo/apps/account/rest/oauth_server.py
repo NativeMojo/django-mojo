@@ -14,13 +14,17 @@ derives the issuer and the sensitive-body labels:
     /api/account/oauth/authorize | approve | token | revoke | register
 
 Only the path-suffixed discovery forms are served. The root forms stay free for
-another product's authorization server on the same host.
+another product's authorization server on the same host, and the protected-
+resource route claims only REGISTERED resource paths — an unregistered one does
+not match at all, so a downstream app may publish its own document there.
 
 Every endpoint answers 404 while the server is unconfigured — no BASE_URL, or no
 registered resource currently enabled.
 """
 import ujson
 from django.http import HttpResponse
+from django.urls import register_converter
+from django.urls.converters import get_converters
 
 from mojo import decorators as md
 from mojo.apps.account.services.oauth_server import (
@@ -52,6 +56,37 @@ def _not_found():
     return _raw({"error": "not_found"}, 404)
 
 
+_RESOURCE_CONVERTER = "mojo_oauth_resource"
+
+
+class _RegisteredResourceConverter:
+    """Claim only the resource paths this installation has registered.
+
+    Django treats a ValueError from `to_python` as NO MATCH — not a 404 —
+    so an unclaimed path falls through to whatever urlpattern comes next
+    instead of being swallowed here. That is what lets a downstream app
+    publish its own document at this well-known URL without patching the
+    framework.
+
+    Registration is the ONLY test. The `enabled` callable is deliberately
+    not consulted: it ends in a DB-backed settings read, and resolution
+    runs before the view's rate limiter.
+    """
+    regex = ".+"
+
+    def to_python(self, value):
+        if resources.resolve("/" + value) is None:
+            raise ValueError(value)
+        return value
+
+    def to_url(self, value):
+        return value
+
+
+if _RESOURCE_CONVERTER not in get_converters():
+    register_converter(_RegisteredResourceConverter, _RESOURCE_CONVERTER)
+
+
 # --- discovery ------------------------------------------------------------
 
 @md.GET("/.well-known/oauth-authorization-server" + _ROOT)
@@ -65,7 +100,7 @@ def on_authorization_server_metadata(request):
     return _raw(document)
 
 
-@md.GET("/.well-known/oauth-protected-resource/<path:resource>")
+@md.GET("/.well-known/oauth-protected-resource/<mojo_oauth_resource:resource>")
 @md.public_endpoint("RFC 9728 protected-resource metadata")
 @md.rate_limit("oauth_discovery", ip_limit=120)
 def on_protected_resource_metadata(request, resource):

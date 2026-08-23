@@ -408,3 +408,134 @@ def test_apply_resize_rest_fields(opts):
         refused(dict(base, action="resize_nothing"), "unknown capacity action")
     finally:
         opts.client.logout()
+
+
+# ── the persistence gate: an unrecordable step never happens (item #2721) ────
+#
+# The BEHAVIORAL regressions — that a drain never deregisters and a terminate
+# never terminates when the cache refuses the write — live in
+# ``tests/test_aws_extended_serial/capacity.py``, because reaching them means
+# spying on ``elbv2_helper``/``ec2_helper``, and every such patch is a counted
+# cold site the isolation ratchet rejects.
+#
+# What is here PINS THE CONTRACT those regressions depend on, through the
+# ``store=``/``retry_seconds=`` seams, patching nothing at all: an operation
+# that cannot be recorded is refused, a checkpoint refuses both failure shapes
+# the deployed backend produces, a success that returns ``None`` is still a
+# success, and progress notes stay tolerant.
+
+# Never a key any claim uses: a refused _new_operation releases its claim, and
+# the release is a real delete against the shared cache.
+UNHELD_CLAIM = "mojo:aws:capacity:claim:capacity-gates-never-held"
+
+
+class _FakeStore:
+    """A dict-backed cache, as a healthy backend behaves.
+
+    ``result`` is what ``set`` returns: ``True`` like Redis, or ``None`` like
+    the Django backends that return nothing on success. Both are successes.
+    """
+
+    def __init__(self, result=True):
+        self.values = {}
+        self.result = result
+
+    def set(self, key, value, timeout=None):
+        self.values[key] = value
+        return self.result
+
+
+def _broken_store(error=None):
+    """A cache broken the way the deployed backend actually breaks.
+
+    ``MojoRedisCache.set`` catches every exception itself and returns
+    ``False``, so a dead Redis is a falsy RETURN, not an exception — which is
+    exactly what the discarded return value could not see. ``error`` covers
+    the other shape: a backend that lets the exception out.
+    """
+    store = mock.Mock()
+    if error is None:
+        store.set.return_value = False
+    else:
+        store.set.side_effect = error
+    return store
+
+
+def _recorded(capacity, store, action=None):
+    """One live operation record, written through a HEALTHY store."""
+    return capacity._new_operation(action or capacity.ACTION_DRAIN_NODE,
+                                   NODE_A, _actor(), UNHELD_CLAIM, store=store)
+
+
+@th.django_unit_test("a request whose operation cannot be recorded is refused, not started")
+def test_new_operation_refuses_when_the_record_cannot_be_recorded(opts):
+    from mojo.apps.aws.services import capacity
+
+    # A 200 here would promise work that can never run: the job looks the
+    # record up by id, finds nothing, and the claim wedges the resource for
+    # the full CLAIM_TTL while /status answers 404.
+    with th.assert_raises(capacity.CapacityError) as caught:
+        capacity._new_operation(capacity.ACTION_DRAIN_NODE, NODE_A, _actor(),
+                                UNHELD_CLAIM, store=_broken_store())
+    assert caught.exception.error_code == "cache_unavailable", \
+        (f"an unrecordable operation was refused as "
+         f"{caught.exception.error_code}, not cache_unavailable")
+    assert caught.exception.status == 503, \
+        f"an unrecordable operation answered {caught.exception.status}"
+
+
+@th.django_unit_test("a step that cannot record its progress refuses to enter its phase")
+def test_checkpoint_refuses_a_cache_that_refuses_the_write(opts):
+    from mojo.apps.aws.services import capacity
+
+    record = _recorded(capacity, _FakeStore())
+    with th.assert_raises(capacity.CapacityPersistenceError):
+        capacity._checkpoint(record, "draining",
+                             "taking the node out of the serving path",
+                             store=_broken_store(), retry_seconds=0)
+
+
+@th.django_unit_test("a cache that raises refuses the step too, not just a falsy one")
+def test_checkpoint_refuses_a_cache_that_raises(opts):
+    from mojo.apps.aws.services import capacity
+
+    record = _recorded(capacity, _FakeStore())
+    with th.assert_raises(capacity.CapacityPersistenceError):
+        capacity._checkpoint(record, "terminating", "terminating the node",
+                             store=_broken_store(RuntimeError("redis is gone")),
+                             retry_seconds=0)
+
+
+@th.django_unit_test("a backend that returns None on a successful write is a success")
+def test_checkpoint_accepts_a_store_that_returns_none(opts):
+    from mojo.apps.aws.services import capacity
+
+    # Guards `wrote is False` against a falsiness regression: `not None` is
+    # true, and reading it as a refusal would abort every capacity operation
+    # on a backend that simply returns nothing.
+    store = _FakeStore(result=None)
+    record = _recorded(capacity, store)
+    returned = capacity._checkpoint(record, "draining",
+                                    "taking the node out of the serving path",
+                                    store=store, retry_seconds=0)
+    assert returned is record, \
+        "a successful checkpoint did not return the record it wrote"
+    written = store.values.get(capacity._operation_key(record["id"])) or {}
+    assert written.get("phase") == "draining", \
+        f"the checkpoint did not record the phase it entered: {written!r}"
+
+
+@th.django_unit_test("progress notes stay tolerant of a cache that will not take them")
+def test_progress_notes_stay_tolerant(opts):
+    from mojo.apps.aws.services import capacity
+
+    # The whole point of the split: losing an observation loses nothing
+    # report() cannot re-derive, so a note must never abort a live operation.
+    record = _recorded(capacity, _FakeStore())
+    returned = capacity._write_operation(record, store=_broken_store())
+    assert returned is record, \
+        "a discarded progress note did not return the record"
+    returned = capacity._write_operation(
+        record, store=_broken_store(RuntimeError("redis is gone")))
+    assert returned is record, \
+        "a raising cache aborted a tolerant progress note"

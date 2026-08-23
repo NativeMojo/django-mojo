@@ -796,3 +796,66 @@ def test_capacity_provider_truth_asset_contract(opts):
     for source in (capacity, fleet):
         assert "innerHTML" not in source, \
             "a provider-truth capacity surface writes markup directly"
+
+
+@th.django_unit_test(
+    "all Add Node surfaces keep placement controlled, optional, and locally valid")
+def test_add_node_placement_asset_contract(opts):
+    legacy = (ASSETS / "features/platform/capacity.js").read_text()
+    fleet = (ASSETS / "features/platform/fleet.js").read_text()
+    v2 = (ROOT / "mojo/apps/account/admin_portal_v2/assets/features/"
+          "infrastructure/capacity.js").read_text()
+
+    assert "export function addNodePlacementControls" in legacy, \
+        "the legacy Dashboard and Fleet page do not share the placement control"
+    for source in (legacy, v2):
+        assert ".filter((row) => row.healthy)" in source, \
+            "an Add Node source picker can include an unhealthy node"
+        assert "report?.nodes?.groups" in source and "row.zone, row.subnet_id" in source, \
+            "source labels do not distinguish fleet, availability zone, and subnet"
+        assert "datalist" in source and "candidate.zone === zone" in source, \
+            "subnet guidance is not narrowed to the selected source zone"
+        assert "aria-invalid" in source and "role: 'alert'" in source, \
+            "subnet prefix validation is not exposed accessibly"
+        assert "callbacks.onInput" in source and "callbacks.onCommit" in source, \
+            "placement keystrokes and committed changes are not separate events"
+        assert "let commitTimer = null" in source \
+            and "callbacks.onCommit?.(values(), valid(), focusControl)" in source, \
+            "placement commits do not carry focus identity across a render"
+        assert "event.relatedTarget?.dataset?.placementControl" in source, \
+            "subnet blur does not retain its explicit keyboard destination"
+        assert "subnet.addEventListener('blur'" in source \
+            and "subnet.addEventListener('change'" not in source, \
+            "subnet change can replace the input before keyboard blur completes"
+        assert "data-placement-control" in source, \
+            "placement controls have no stable focus identity across renders"
+        assert "return {element, values, valid}" in source, \
+            "the placement wrapper can be appended as [object Object]"
+        assert "subnet.placeholder" in source and "source uses" in source, \
+            "the source subnet is not placeholder-only guidance"
+
+    for source in (fleet, v2):
+        assert "want.source_instance" in source and "want.subnet_id" in source, \
+            "batch placement is not controlled state that survives a render"
+        assert "steps.push({action: 'add_node', ...placement})" in source, \
+            "one placement is not copied onto every staged Add Node step"
+        assert "if (want.addNodes && !placementValid())" in source, \
+            "an invalid subnet can still request a server plan"
+        assert "disabled: plan && placementValid()" in source, \
+            "Apply can be enabled while placement is locally invalid"
+        assert "want.addNodes ? placement.element : null" in source, \
+            "the staged Add Node controls do not append their DOM element"
+        assert "root.contains(document.activeElement)" in source \
+            and "dataset?.placementControl" in source \
+            and "focus({preventScroll: true})" in source, \
+            "a plan or placement render does not restore the active placement control"
+        assert "pendingPlacementFocus = focusControl" in source \
+            and "pendingPlacementFocus ||" in source, \
+            "the batch render ignores the placement event's focus destination"
+
+    assert "confirm_resource: ADD_NODE" in legacy and "...placement.values()" in legacy, \
+        "the Dashboard changed the literal add_node echo or omitted placement"
+    assert "valid: placement.valid" in legacy, \
+        "the Dashboard confirmation ignores placement validity"
+    assert "same instance type, subnet" not in legacy, \
+        "the Dashboard modal still promises a same-subnet automatic clone"

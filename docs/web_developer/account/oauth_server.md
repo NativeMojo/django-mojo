@@ -43,6 +43,15 @@ Both answer `Access-Control-Allow-Origin: *` and raw RFC JSON — **no
 If you were sent here by a `401` carrying a `WWW-Authenticate` header, its
 `resource_metadata` parameter is the protected-resource URL to start from.
 
+> **A resource path this installation does not host answers the application's
+> ordinary `404`**, not the RFC `{"error": "not_found"}` body — the
+> protected-resource URL is not served at all for a path nobody registered, so
+> the response may be HTML and carries no `Access-Control-Allow-Origin` header.
+> A resource this installation *does* host is unchanged, whether it is currently
+> enabled or switched off: it still answers the raw RFC JSON, `200` with the
+> document or `404` with `{"error": "not_found"}`. Either way, treat any non-`200`
+> as "no metadata here" and do not parse the body.
+
 **Authorization-server metadata:**
 
 ```json
@@ -95,8 +104,9 @@ protected-resource metadata beneath it, so do not probe
 `/.well-known/oauth-protected-resource/api/account/user/me`.
 
 A **404 from either document** means this installation is not offering remote
-application access — either no public address is configured or the feature is
-switched off. It is not a transient error; stop and tell the operator.
+application access at that resource — no public address is configured, the
+feature is switched off, or the resource path is not one this installation
+hosts. It is not a transient error; stop and tell the operator.
 
 The endpoint root is configurable (`OAUTH_SERVER_PATH`, default
 `api/account/oauth`), so read the endpoints out of the metadata rather than

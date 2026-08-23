@@ -82,22 +82,6 @@ def test_fleet_dry_run_never_reaches_apply_or_managed_dag(opts):
         shutil.rmtree(root, ignore_errors=True)
 
 
-@th.django_unit_test()
-def test_fleet_preview_names_explicit_request_service_selection(opts):
-    from mojo.deploy.provision import __main__ as cli
-    from mojo.deploy.provision import brownfield_inputs
-
-    raw = raw_manifest()
-    raw["nodes"]["items"][0]["request_service"] = False
-    topology = brownfield_inputs.to_spec(brownfield_inputs.validate(raw))
-    console = _Console()
-    cli._render_fleet_preview(topology, [], [], _run(), console)
-
-    th.assert_in(f"manifest digest: {topology.manifest_digest}", console.text,
-                 "human preview must bind the exact normalized manifest")
-    th.assert_in("node request service: maestro-api-1=false", console.text,
-                 "human preview must name explicit per-node request authority")
-
 
 @th.django_unit_test()
 def test_fleet_status_json_contains_redacted_dependency_inventory(opts):

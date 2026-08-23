@@ -40,6 +40,16 @@ Progress lives in the cache, not in a table: an operation is a bounded
 observation of AWS state, and losing the observation loses nothing that
 ``report()`` cannot re-derive from the provider. Losing a MUTATION is what
 would matter, and every mutation is AWS-side before the record is written.
+
+With ONE exception, and it is the reason ``_checkpoint`` exists: entering a
+runner's FIRST phase, or a phase whose next AWS call is irreversible, requires
+a write the cache actually accepted. A terminate, a reader delete, a
+deregister or a detach that ran while nothing could be recorded is a change
+nobody can see, on a resource ``/status`` answers 404 for. Those phases abort
+with ``persistence_unavailable`` instead — stop and report, never roll back.
+Every other phase entry stays tolerant on purpose: gating an add's later legs
+would discard a captured, launched, booted, converged and PROVEN node over a
+Redis blip, leaving a paid, running, unregistered orphan.
 """
 
 import hashlib
@@ -211,6 +221,16 @@ class CapacityError(Exception):
         super().__init__(self.message)
 
 
+class CapacityPersistenceError(Exception):
+    """The operation record could not be recorded — the gate that stops an
+    irreversible AWS step from happening unobserved.
+
+    Deliberately NOT a ``CapacityError``: ``run_batch`` catches that broadly
+    and would mistake a runner's persistence abort for a wire refusal. The
+    request boundary converts it to ``cache_unavailable`` itself.
+    """
+
+
 def _provider_error(err, message):
     """The single translation from a provider failure to a wire answer."""
     if err.denied:
@@ -331,14 +351,41 @@ def _release(key):
 
 # ── operation record ────────────────────────────────────────────────────────
 
-def _write_operation(record):
+def _persist(record, store=None):
+    """Write the record and REPORT failure, instead of discarding it.
+
+    ``store`` is the seam a test hands a fake through; production never passes
+    it. Detection is the RETURN VALUE, never a read-back: ``MojoRedisCache.set``
+    catches every exception itself and returns ``False``, and in cluster mode a
+    ``GET`` right after a ``SET`` may legitimately hit an asynchronously
+    replicated replica and miss — a read-back would turn successful writes into
+    aborted capacity operations. ``is False``, not falsiness: some Django cache
+    backends return ``None`` on a successful ``set``.
+    """
+    store = store if store is not None else cache
     record["updated"] = _now()
     try:
-        cache.set(_operation_key(record["id"]), record, CLAIM_TTL)
-    except Exception:
+        wrote = store.set(_operation_key(record["id"]), record, CLAIM_TTL)
+    except Exception as err:
+        raise CapacityPersistenceError(str(err) or "cache write failed") from None
+    if wrote is False:
+        raise CapacityPersistenceError("the coordination cache refused the write")
+    return record
+
+
+def _write_operation(record, store=None):
+    """Tolerant write: progress notes, warnings, and terminal states.
+
+    Losing one of these loses an observation, and ``report()`` re-derives what
+    it observed from the provider. Entering an irreversible step is the case
+    that cannot be tolerant — that one goes through ``_checkpoint``.
+    """
+    try:
+        return _persist(record, store=store)
+    except CapacityPersistenceError:
         logger.warning("capacity: operation %s could not be recorded",
                        record.get("id"))
-    return record
+        return record
 
 
 def _read_operation(operation_id):
@@ -349,9 +396,16 @@ def _read_operation(operation_id):
     return record if isinstance(record, dict) else None
 
 
-def _new_operation(action, resource, actor, claim, detail=None):
+def _new_operation(action, resource, actor, claim, detail=None, *, store=None):
+    """Record the operation, or refuse the request outright.
+
+    A request whose record was never written would answer ``200 OK`` for work
+    that can never run — the job looks the record up by id and finds nothing —
+    while the claim it took wedges the resource for the whole ``CLAIM_TTL``.
+    So the claim is released and the caller gets the existing wire contract.
+    """
     phases = PHASES.get(action) or ()
-    return _write_operation({
+    record = {
         "schema_version": SCHEMA_VERSION,
         "id": str(uuid.uuid4()),
         "action": action,
@@ -366,7 +420,15 @@ def _new_operation(action, resource, actor, claim, detail=None):
         "warnings": [],
         "detail": dict(detail or {}),
         "claim": claim,
-    })
+    }
+    try:
+        return _persist(record, store=store)
+    except CapacityPersistenceError:
+        _release(claim)
+        raise CapacityError(
+            "The coordination cache is unavailable, so this capacity change "
+            "cannot be recorded or tracked. Nothing was started. Try again "
+            "shortly.", "cache_unavailable", 503) from None
 
 
 def _advance(record, phase, message, **detail):
@@ -375,6 +437,43 @@ def _advance(record, phase, message, **detail):
     if detail:
         record["detail"].update(detail)
     return _write_operation(record)
+
+
+# Retry is bounded by a WALL CLOCK, never an attempt count: REDIS_SOCKET_TIMEOUT
+# defaults to 60s (mojo/helpers/redis/client.py), so a HUNG cache costs a full
+# minute per attempt and three attempts would block a runner for three minutes
+# inside a job whose ceiling is _deadline_for(action) + 120. A fast refusal
+# retries several times inside the budget and rides out a sub-second blip; a
+# hung socket blows the budget on its first attempt and aborts once.
+PERSIST_RETRY_SECONDS = 15
+
+
+def _checkpoint(record, phase, message, *, store=None, retry_seconds=None,
+                **detail):
+    """Enter a phase whose next AWS step is irreversible, or do not enter it.
+
+    The one intolerant write. Everything else — progress notes, warnings,
+    terminal states — stays on ``_advance``/``_write_operation``, because
+    losing those loses only an observation.
+
+    ``store`` and ``retry_seconds`` are test seams with sentinel defaults;
+    production passes neither and behaves exactly as the constant says.
+    """
+    record["phase"] = phase
+    record["message"] = message
+    if detail:
+        record["detail"].update(detail)
+    budget = PERSIST_RETRY_SECONDS if retry_seconds is None else retry_seconds
+    deadline = time.time() + budget
+    pause = 0
+    while True:
+        try:
+            return _persist(record, store=store)
+        except CapacityPersistenceError:
+            if time.time() >= deadline:
+                raise
+            pause = 1 if not pause else min(pause * 2, 5)
+            _sleep(pause)
 
 
 def _finish(record, message, **detail):
@@ -681,6 +780,7 @@ def _node_rows(serving, facts_map, self_id, primary):
             "lifecycle_state": lifecycle,
             "instance_type": facts.get("instance_type"),
             "zone": facts.get("availability_zone"),
+            "subnet_id": facts.get("subnet_id"),
             "public_ip": facts.get("public_ip"),
             "healthy": healthy,
             "registered": registered,
@@ -1542,8 +1642,130 @@ def _prove_fleet_member(resource, serving, ec2_client=None):
             "not_fleet_member", 409)
 
 
-def _prepare_add_node(serving, ec2_client=None):
-    """Everything an add decides BEFORE anything is created."""
+def _resolve_placement(source, subnet_id, ec2_client=None):
+    """Where the clone lands — every check AWS lets us make, made up front.
+
+    An add that refuses AFTER the AMI capture has already burned 20–40
+    minutes, left a running billed instance, and wedged the fleet-wide add
+    claim for ``CLAIM_TTL``. So a named subnet is proven here, in the request,
+    before a claim is taken and before anything is created.
+
+    A named subnet chooses a SUBNET, never a zone: it must sit in the source's
+    own availability zone. The product runs one zone for now, so spreading a
+    fleet across zones is not a placement this accepts.
+
+    Omitting ``subnet_id`` costs ZERO provider calls and keeps the historical
+    behavior exactly: the clone lands in the source's own subnet.
+    """
+    wanted = str(subnet_id or "").strip()
+    if not wanted:
+        return {"subnet_id": source.get("subnet_id"),
+                "availability_zone": source.get("availability_zone"),
+                "selected": "source"}
+    if not wanted.startswith("subnet-"):
+        raise CapacityError(
+            "subnet_id must be an AWS subnet identifier (subnet-…).",
+            "invalid_request")
+    try:
+        facts = ec2_helper.subnet_facts(wanted, client=ec2_client)
+    except ProviderCallError as err:
+        raise _provider_error(
+            err, "AWS did not report the requested subnet, so no node can be "
+                 "placed in it.") from None
+    if facts is None:
+        raise CapacityError(
+            f"AWS reports no subnet called {wanted} in this region.",
+            "subnet_not_found", 404)
+
+    # A clone carries its SOURCE's security groups, and a security group is
+    # VPC-scoped. AWS hard-rejects the launch; saying so here costs one read.
+    if facts.get("vpc_id") != source.get("vpc_id"):
+        raise CapacityError(
+            f"{wanted} is in {facts.get('vpc_id')} and the node it would be "
+            f"cloned from is in {source.get('vpc_id')}. A clone carries its "
+            f"source's security groups, which are VPC-scoped, so AWS would "
+            f"refuse the launch.",
+            "subnet_not_usable", 409, {"reason": "vpc_mismatch"})
+
+    # Same zone as the source, always. The product supports ONE availability
+    # zone for now, so a named subnet moves a node sideways within the
+    # source's zone; it never puts it in a second one.
+    #
+    # This REPLACES a check that the zone was enabled on every balancer
+    # holding the source's target groups, and it is strictly stronger than
+    # that check, not a relaxation of it. The source is a healthy serving
+    # target behind exactly those balancers, so every one of them provably has
+    # the source's zone enabled already. A subnet pinned to the source's zone
+    # is therefore always in a zone the balancer serves, which makes the
+    # enablement check unreachable by construction — the InvalidTarget /
+    # never-healthy failure it guarded against cannot be reached from here.
+    #
+    # Strict equality, so an unreported zone on either side refuses: same-zone
+    # that cannot be PROVEN is not same-zone.
+    zone = facts.get("availability_zone")
+    source_zone = source.get("availability_zone")
+    if zone != source_zone:
+        raise CapacityError(
+            f"{wanted} is in {zone} and the node it would be cloned from is "
+            f"in {source_zone}. A node can only be placed in the same "
+            f"availability zone as the node it is cloned from.",
+            "subnet_not_usable", 409,
+            {"reason": "az_mismatch", "zone": zone,
+             "source_zone": source_zone})
+
+    # Public addressing is inherited from the subnet: launch_clone sets no
+    # AssociatePublicIpAddress and uses no NetworkInterfaces block. A private
+    # subnet in the same VPC passes every other check and the node dies at
+    # RUNNER_TIMEOUT with runner_missing. Compared against the SOURCE, never
+    # asserted absolutely, so a private→private fleet stays legal.
+    source_subnet = source.get("subnet_id")
+    if source_subnet and source_subnet != facts.get("subnet_id"):
+        try:
+            from_facts = ec2_helper.subnet_facts(source_subnet,
+                                                 client=ec2_client)
+        except ProviderCallError:
+            # No opinion. An unreadable source subnet is not evidence that the
+            # requested one is wrong.
+            from_facts = None
+        if (from_facts or {}).get("map_public_ip_on_launch") is True \
+                and facts.get("map_public_ip_on_launch") is not True:
+            raise CapacityError(
+                f"{wanted} does not assign public addresses on launch and "
+                f"{source_subnet} — the subnet this node would be cloned from "
+                f"— does. The clone would boot with no route out and never "
+                f"join the fleet.",
+                "subnet_not_usable", 409, {"reason": "no_public_addressing"})
+
+    # Early warning only. This count is read up to IMAGE_TIMEOUT before
+    # run_instances and nothing reserves an address in between, so it catches
+    # the typo-into-a-full-subnet case and guarantees nothing. Re-reading it
+    # later would narrow that window without closing it.
+    free = facts.get("available_ip_count")
+    if isinstance(free, int) and not isinstance(free, bool) and free < 1:
+        raise CapacityError(
+            f"{wanted} has no free addresses left, so a node launched into it "
+            f"would be refused.",
+            "subnet_not_usable", 409, {"reason": "no_free_addresses"})
+
+    return {"subnet_id": facts.get("subnet_id") or wanted,
+            "availability_zone": zone, "selected": "requested"}
+
+
+def _prepare_add_node(serving, ec2_client=None, source_instance=None,
+                      subnet_id=None, *, fleet_spec=_SPEC_UNSET):
+    """Everything an add decides BEFORE anything is created.
+
+    Naming a source is how an operator says WHICH balancer's fleet grows:
+    ``_groups_holding`` derives the target groups from the source, and the
+    runner's ``registering`` leg registers the clone into exactly those.
+
+    A named source narrows the candidate set and can never widen it — the
+    candidates are the healthy serving targets of the already-narrowed
+    ``_fleet_serving`` map, and a source outside them is refused.
+
+    ``fleet_spec`` is a test seam with a sentinel default; production passes
+    nothing and the environment is resolved here.
+    """
     if _node_id_pinned():
         raise CapacityError(
             "This fleet pins EDGE_NODE_ID, so every node reports the same "
@@ -1554,8 +1776,38 @@ def _prepare_add_node(serving, ec2_client=None):
                for target in group.get("targets") or []
                if target.get("state") == "healthy"
                and str(target.get("id") or "").startswith("i-")]
-    source = _source_node(sorted(set(healthy)), client=ec2_client)
+    candidates = sorted(set(healthy))
+    wanted = str(source_instance or "").strip()
+    if wanted:
+        if fleet_spec is _SPEC_UNSET:
+            fleet_spec = _configured_spec()
+        # No environment declaration means _fleet_serving skipped its
+        # narrowing entirely and this map is every attached target group of
+        # every balancer in the ACCOUNT. The automatic path survives that
+        # because _source_node picks one instance deterministically; letting a
+        # caller name one would make a neighbouring installation's node
+        # clonable — and launch_clone copies the source's instance profile
+        # verbatim.
+        if fleet_spec is None:
+            raise CapacityError(
+                "This installation has not declared which AWS project and "
+                "environment it runs, so a named source cannot be proven to "
+                "belong to this fleet. Add the node without naming a source, "
+                "or declare the environment first.",
+                "source_not_serving", 409)
+        if wanted not in candidates:
+            raise CapacityError(
+                f"{wanted} is not a healthy target of this fleet's load "
+                f"balancers, so it cannot be cloned.",
+                "source_not_serving", 409)
+        candidates = [wanted]
+    source = _source_node(candidates, client=ec2_client)
     if source is None:
+        if wanted:
+            raise CapacityError(
+                f"{wanted} is a healthy target, but AWS does not report it "
+                f"running, so there is nothing to clone.",
+                "source_not_serving", 409)
         raise CapacityError(
             "No healthy, running fleet member is available to clone. A node "
             "can only be added from a node that is currently serving.",
@@ -1565,7 +1817,8 @@ def _prepare_add_node(serving, ec2_client=None):
                              for target in group.get("targets") or []
                              if target.get("id") == source["instance_id"]), None)}
               for group in _groups_holding(serving, source["instance_id"])]
-    return source, groups
+    placement = _resolve_placement(source, subnet_id, ec2_client=ec2_client)
+    return source, groups, placement
 
 
 def apply(actor, action, resource="", **params):
@@ -1599,7 +1852,16 @@ def apply(actor, action, resource="", **params):
     return _apply_cache(actor, resource, **params)
 
 
-def _apply_node(actor, action, resource, elbv2_client=None, ec2_client=None, **_ignored):
+def _apply_node(actor, action, resource, elbv2_client=None, ec2_client=None,
+                source_instance=None, subnet_id=None, **_ignored):
+    # Placement is an add's decision. A drain or a terminate names the node it
+    # acts on, so a placement field there means the caller meant something
+    # else — refused, never quietly swallowed by **_ignored.
+    if (source_instance or subnet_id) and action != ACTION_ADD_NODE:
+        raise CapacityError(
+            "source_instance and subnet_id choose where a NEW node comes from "
+            "and lands; they have no meaning for a drain or a terminate.",
+            "invalid_request")
     try:
         serving = _fleet_serving(
             elbv2_client=elbv2_client, ec2_client=ec2_client)
@@ -1609,13 +1871,22 @@ def _apply_node(actor, action, resource, elbv2_client=None, ec2_client=None, **_
                  "safe to make.") from None
 
     if action == ACTION_ADD_NODE:
-        source, groups = _prepare_add_node(serving, ec2_client=ec2_client)
+        # Order matters and is load-bearing: _prepare_add_node now validates
+        # the placement too, so a bad subnet is refused BEFORE the fleet-wide
+        # add claim is taken and before any record is written.
+        source, groups, placement = _prepare_add_node(
+            serving, ec2_client=ec2_client, source_instance=source_instance,
+            subnet_id=subnet_id)
         claim = _claim(action, "fleet", getattr(actor, "pk", None))
         record = _new_operation(action, source["instance_id"], actor, claim, {
             "source_instance": source["instance_id"],
             "source_name": source.get("name"),
             "instance_type": source.get("instance_type"),
-            "subnet_id": source.get("subnet_id"),
+            "subnet_id": placement["subnet_id"],
+            "source_selected": ("requested" if str(source_instance or "").strip()
+                                else "automatic"),
+            "subnet_selected": placement["selected"],
+            "availability_zone": placement["availability_zone"],
             "target_groups": groups,
         })
         _dispatch(record)
@@ -2120,7 +2391,21 @@ def _apply_stable_ips(actor, action, assign=None, elbv2_client=None,
     except Exception:
         _release(claim)
         raise
-    record = _new_operation(action, "fleet", actor, claim, detail)
+    try:
+        record = _new_operation(action, "fleet", actor, claim, detail)
+    except CapacityError as err:
+        if err.error_code != "cache_unavailable":
+            raise
+        # The generic refusal says "Nothing was started", which is a lie on
+        # this one path: the durable policy flipped a line ago and the
+        # add_node admission gate already honors it.
+        state = ("enabled" if action == ACTION_ENABLE_STABLE_IPS
+                 else "disabled")
+        raise CapacityError(
+            f"The stable-outbound-IPs policy IS recorded ({state}), but the "
+            f"coordination cache could not record the operation, so no "
+            f"address was attached or detached. Run the action again to "
+            f"converge.", "cache_unavailable", 503) from None
     try:
         _dispatch(record)
     except CapacityError as err:
@@ -2409,6 +2694,38 @@ def _refuse_step(index, message, error_code="invalid_request", status=400):
                         {"step": index})
 
 
+def _add_node_params(index, raw, envelope):
+    """add_node's optional placement, checked as far as an envelope can.
+
+    The source IS checkable here: it must be a healthy node in the report, the
+    same set the single-action apply narrows to. The subnet is deliberately
+    SHAPE-ONLY — an empty subnet holds no node by definition, so an envelope
+    built from node rows cannot see it at all, and the whole point of naming
+    one is to land in a subnet the fleet is not already in. The child apply()
+    re-derives it against AWS — VPC, zone, addressing — before it takes a
+    claim.
+    """
+    params = {}
+    source_instance = str(raw.get("source_instance") or "").strip()
+    if source_instance:
+        row = next((candidate for candidate in _instances(envelope)
+                    if candidate.get("id") == source_instance), None)
+        if row is None or not row.get("healthy"):
+            _refuse_step(index,
+                         f"the report lists no healthy node called "
+                         f"{source_instance} to clone from.",
+                         "source_not_serving", 409)
+        params["source_instance"] = source_instance
+    subnet_id = str(raw.get("subnet_id") or "").strip()
+    if subnet_id:
+        if not subnet_id.startswith("subnet-"):
+            _refuse_step(index,
+                         "subnet_id must be an AWS subnet identifier "
+                         "(subnet-…).")
+        params["subnet_id"] = subnet_id
+    return params
+
+
 def _step_kind(step, envelope):
     action = step["action"]
     if action in (ACTION_ADD_NODE, ACTION_ADD_READER):
@@ -2476,6 +2793,7 @@ def _validate_step(index, raw, envelope, planned):
 
     if action == ACTION_ADD_NODE:
         step["resource"] = resource = ""
+        step["params"] = _add_node_params(index, raw, envelope)
     elif action == ACTION_ADD_READER:
         database = next((row for row in envelope.get("databases") or []
                          if row.get("identifier") == resource), None)
@@ -2651,7 +2969,16 @@ def _describe_step(step, envelope):
     """Plain-English ``(description, warnings)`` — the server's own words."""
     action, resource = step["action"], step["resource"]
     if action == ACTION_ADD_NODE:
-        return ("Add an app node",
+        params = step.get("params") or {}
+        described = "Add an app node"
+        named_source = params.get("source_instance")
+        if named_source:
+            row = _node_row(envelope, named_source) or {}
+            described += f" cloned from {row.get('name') or named_source}"
+        named_subnet = params.get("subnet_id")
+        if named_subnet:
+            described += f" in {named_subnet}"
+        return (described,
                 ["builds, deploys and proves itself before serving · "
                  "20–40 min"])
     if action == ACTION_ADD_READER:
@@ -2706,7 +3033,15 @@ def _step_cost(step, envelope):
         return 0.0, []
     if action == ACTION_ADD_NODE:
         healthy = [row for row in _instances(envelope) if row.get("healthy")]
-        itype = healthy[0].get("instance_type") if healthy else None
+        # A named source is the node that gets cloned, so its type is the type
+        # that gets billed. `.get()`, never `params["source_instance"]`: the
+        # assistant path builds an add step with an EMPTY params dict.
+        named = (step.get("params") or {}).get("source_instance")
+        chosen = next((candidate for candidate in healthy
+                       if candidate.get("id") == named), None) if named else None
+        if chosen is None:
+            chosen = healthy[0] if healthy else None
+        itype = (chosen or {}).get("instance_type")
         price = _price(itype)
         if price is None:
             return None, [f"no listed price for {itype or 'this node type'}"]
@@ -3156,6 +3491,22 @@ def run_operation(operation_id):
         return "invalid"
     try:
         runner(record)
+    except CapacityPersistenceError as err:
+        # During a REAL outage this log line is the surviving channel: _fail
+        # reports by writing to the same dead cache, so /status will 404 or
+        # keep serving the last persisted record until its TTL.
+        logger.error("capacity: operation %s aborted at the %s step — the "
+                     "coordination cache would not accept its progress "
+                     "record: %s", operation_id, record.get("phase"), err)
+        # hold_claim stays False: nothing was mutated at the gate. _release is
+        # a cache.delete, though, which fails silently while the cache is
+        # down — hence what the message tells the operator to check.
+        _fail(record, "persistence_unavailable",
+              f"This operation stopped at the {record.get('phase')} step, BEFORE "
+              f"its next AWS change, because its progress could not be recorded — "
+              f"the coordination cache is unavailable. Nothing further was changed "
+              f"in AWS. Restore the cache, then check this operation's claim has "
+              f"expired before running the action again.")
     except ProviderCallError as err:
         detail = err.detail()
         uncertain = err.mutation_state != "none"
@@ -3200,10 +3551,18 @@ def _run_add_node(record):
     reusable = ec2_helper.find_reusable_image(IMAGE_TAG_VALUE, _image_max_age_days())
     if reusable:
         image_id = reusable["image_id"]
-        _advance(record, "capturing", "reusing a recent fleet image",
-                 image_id=image_id, image_reused=True,
-                 image_age_days=reusable.get("age_days"))
+        # An add's FIRST step, and the only checkpoint it gets: an add is
+        # gated at its cheapest moment, never mid-flight (see `launching`).
+        _checkpoint(record, "capturing", "reusing a recent fleet image",
+                    image_id=image_id, image_reused=True,
+                    image_age_days=reusable.get("age_days"))
     else:
+        # The checkpoint comes BEFORE the capture, so an unrecordable add
+        # never leaves an orphan AMI and its snapshot behind. Losing image_id
+        # from it costs nothing — find_reusable_image rediscovers the AMI by
+        # its IMAGE_TAG_VALUE — so recording the id stays a tolerant note.
+        _checkpoint(record, "capturing",
+                    "capturing an image of the source node (no reboot)")
         stamp = _now().replace(":", "").replace("-", "")[:15]
         image_id = ec2_helper.capture_image(
             source_id, f"mojo-fleet-{stamp}", IMAGE_TAG_VALUE)
@@ -3227,7 +3586,10 @@ def _run_add_node(record):
 
     # ── launching ──────────────────────────────────────────────────────────
     base = detail.get("source_name") or source.get("name") or "mojo-node"
-    _advance(record, "launching", "launching the new node")
+    zone = detail.get("availability_zone")
+    _advance(record, "launching",
+             f"launching the new node in {zone}" if zone
+             else "launching the new node")
     # Clones carry the fleet's identity from birth: the source's
     # mojo:project/mojo:env (and managed-by, when present) ride onto the
     # launch tags beside the created-by stamp, so discovery (spec.owns) and
@@ -3236,8 +3598,14 @@ def _run_add_node(record):
     identity = {key: value
                 for key, value in (source.get("tags") or {}).items()
                 if key in FLEET_IDENTITY_TAGS + ("managed-by",) and value}
+    # The RECORDED subnet is authoritative — it is the one the request proved
+    # against AWS (same VPC, a zone the balancer serves, addressing consistent
+    # with the source) and the one the operator was shown. It is deliberately
+    # NOT re-validated here: the apply-time proof is the guarantee this feature
+    # offers, re-reading would only narrow the race it cannot close, and
+    # run_instances is the provider's own final authority either way.
     instance_id = ec2_helper.launch_clone(
-        source, image_id, source.get("subnet_id"),
+        source, image_id, detail.get("subnet_id") or source.get("subnet_id"),
         name=f"{base}-clone",
         user_data=node_user_data(base),
         tags=identity)
@@ -3565,8 +3933,10 @@ def _enable_stable_ips(record):
         return _fail(record, "no_fleet_nodes",
                      "No registered node is running, so no address was "
                      "attached.")
-    _advance(record, "planning",
-             f"planning stable addresses for {len(running)} node(s)")
+    # First step of the runner — and the only entry covering the adoption
+    # tag_resources below, which has no phase entry of its own.
+    _checkpoint(record, "planning",
+                f"planning stable addresses for {len(running)} node(s)")
     view = _address_view(running, ec2_helper.address_map())
 
     # Adoption is TAG-SCOPED: a node-attached address is claimed for this
@@ -3653,8 +4023,10 @@ def _disable_stable_ips(record):
                      f"capacity report and run the disable again.")
     view = _address_view(fleet, ec2_helper.address_map())
     managed = [row for row in view["attached"] if row.get("managed")]
-    _advance(record, "detaching",
-             f"detaching {len(managed)} stable address(es)")
+    # disassociate_address removes the fleet's allowlisted egress: irreversible
+    # from the point of view of every provider holding that address.
+    _checkpoint(record, "detaching",
+                f"detaching {len(managed)} stable address(es)")
     for row in managed:
         association = (view["by_instance"].get(row["instance"]) or {}).get(
             "association_id")
@@ -3700,7 +4072,8 @@ def _disable_stable_ips(record):
 def _run_drain_node(record):
     resource = record["resource"]
     groups = record["detail"].get("target_groups") or []
-    _advance(record, "draining", "taking the node out of the serving path")
+    # deregister_target takes a node out of the serving path.
+    _checkpoint(record, "draining", "taking the node out of the serving path")
     longest = 0
     for group in groups:
         elbv2_helper.deregister_target(group["arn"], resource, group.get("port"))
@@ -3731,7 +4104,8 @@ def _run_drain_node(record):
 
 def _run_terminate_node(record):
     resource = record["resource"]
-    _advance(record, "terminating", "terminating the node")
+    # The most irreversible call in this module.
+    _checkpoint(record, "terminating", "terminating the node")
     state = ec2_helper.terminate(resource)
     invalidate()
     _advance(record, "terminating", f"AWS reports {state or 'shutting-down'}")
@@ -3749,7 +4123,9 @@ def _run_terminate_node(record):
 def _run_add_reader(record):
     detail = record["detail"]
     reader_id = detail["reader_id"]
-    _advance(record, "creating", f"creating {reader_id}")
+    # First step of the runner, and what follows is a billable RDS instance
+    # nobody would have a record of.
+    _checkpoint(record, "creating", f"creating {reader_id}")
     if detail.get("kind") == "aurora":
         rds_helper.create_cluster_reader(
             detail["cluster"], reader_id, detail.get("instance_class"),
@@ -3783,7 +4159,8 @@ def _run_add_reader(record):
 
 def _run_remove_reader(record):
     resource = record["resource"]
-    _advance(record, "deleting", f"deleting {resource}")
+    # delete_instance runs SkipFinalSnapshot=True — permanent, no going back.
+    _checkpoint(record, "deleting", f"deleting {resource}")
     rds_helper.delete_instance(resource)
     invalidate()
     deadline = time.time() + RDS_TIMEOUT
@@ -3803,8 +4180,9 @@ def _run_set_cache_replicas(record):
     resource = record["resource"]
     detail = record["detail"]
     wanted = int(detail["to_count"])
-    _advance(record, "scaling",
-             f"moving {resource} from {detail['from_count']} to {wanted} replica(s)")
+    # First step, and a shrink removes a standby.
+    _checkpoint(record, "scaling",
+                f"moving {resource} from {detail['from_count']} to {wanted} replica(s)")
     try:
         result = elasticache_helper.set_replica_count(resource, wanted, True)
     except elasticache_helper.ReplicaCountError as err:
@@ -3862,8 +4240,9 @@ def _run_resize_cache(record):
     resource = record["resource"]
     detail = record["detail"]
     to_type = detail["to_type"]
-    _advance(record, "resizing",
-             f"moving {resource} from {detail['from_type']} to {to_type}")
+    # First step, and the modify replaces EVERY node in the group.
+    _checkpoint(record, "resizing",
+                f"moving {resource} from {detail['from_type']} to {to_type}")
     elasticache_helper.modify_replication_group_node_type(resource, to_type, True)
     invalidate()
     _advance(record, "settling", "waiting for every node to run the new type")
@@ -3895,8 +4274,9 @@ def _run_resize_database(record):
     resource = record["resource"]
     detail = record["detail"]
     to_class = detail["to_class"]
-    _advance(record, "resizing",
-             f"moving {resource} from {detail['from_class']} to {to_class}")
+    # First step, and the modify restarts the instance.
+    _checkpoint(record, "resizing",
+                f"moving {resource} from {detail['from_class']} to {to_class}")
     rds_helper.modify_instance_class(
         resource, to_class, True, promotion_tier=detail.get("promotion_tier"))
     invalidate()

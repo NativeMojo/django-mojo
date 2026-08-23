@@ -649,6 +649,170 @@ def _add_record(capacity):
     }
 
 
+# ── the persistence gate: an unrecordable step never happens (item #2721) ────
+#
+# These deliberately do NOT patch `_persist` — the gate under test IS the
+# persistence primitive, and patching it away would assert nothing.
+
+def _broken_cache(record=None):
+    """A cache broken the way the deployed backend actually breaks.
+
+    ``MojoRedisCache.set`` catches every exception itself and returns ``False``
+    (``mojo/cache/redis.py``), so a dead Redis is a falsy RETURN, never an
+    exception — which is exactly what the old swallow could not see.
+    """
+    broken = mock.Mock()
+    broken.set.return_value = False
+    broken.get.return_value = record
+    return broken
+
+
+def _gated_record(capacity, action, phase, resource=NODE_A):
+    record = _add_record(capacity)
+    record["action"] = action
+    record["resource"] = resource
+    record["phase"] = phase
+    record["phases"] = list(capacity.PHASES[action])
+    return record
+
+
+@th.django_unit_test("a drain never deregisters when its progress cannot be recorded")
+def test_drain_never_deregisters_when_progress_cannot_be_recorded(opts):
+    from mojo.apps.aws.services import capacity
+    from mojo.helpers.aws import elbv2 as elbv2_helper
+
+    record = _gated_record(capacity, capacity.ACTION_DRAIN_NODE, "draining")
+    with mock.patch.object(capacity, "cache", _broken_cache()), \
+            mock.patch.object(capacity, "PERSIST_RETRY_SECONDS", 0), \
+            mock.patch.object(capacity, "_sleep"), \
+            mock.patch.object(capacity, "invalidate"), \
+            mock.patch.object(elbv2_helper, "deregister_target") as deregistered:
+        with th.assert_raises(capacity.CapacityPersistenceError):
+            capacity._run_drain_node(record)
+    assert deregistered.call_count == 0, \
+        (f"a drain whose progress could not be recorded still deregistered the "
+         f"node {deregistered.call_count} time(s) — the fleet lost a serving "
+         f"target with no record that it happened")
+
+
+@th.django_unit_test("a terminate never terminates when its progress cannot be recorded")
+def test_terminate_never_terminates_when_progress_cannot_be_recorded(opts):
+    from mojo.apps.aws.services import capacity
+    from mojo.helpers.aws import ec2 as ec2_helper
+
+    record = _gated_record(capacity, capacity.ACTION_TERMINATE_NODE, "terminating")
+    with mock.patch.object(capacity, "cache", _broken_cache()), \
+            mock.patch.object(capacity, "PERSIST_RETRY_SECONDS", 0), \
+            mock.patch.object(capacity, "_sleep"), \
+            mock.patch.object(capacity, "invalidate"), \
+            mock.patch.object(ec2_helper, "terminate") as terminated:
+        with th.assert_raises(capacity.CapacityPersistenceError):
+            capacity._run_terminate_node(record)
+    assert terminated.call_count == 0, \
+        (f"a terminate whose progress could not be recorded still destroyed "
+         f"the instance {terminated.call_count} time(s)")
+
+
+@th.django_unit_test("a reader is never deleted when the progress cannot be recorded")
+def test_remove_reader_never_deletes_when_progress_cannot_be_recorded(opts):
+    from mojo.apps.aws.services import capacity
+    from mojo.helpers.aws import rds as rds_helper
+
+    record = _gated_record(capacity, capacity.ACTION_REMOVE_READER, "deleting",
+                           resource="mojo-test-reader-1")
+    with mock.patch.object(capacity, "cache", _broken_cache()), \
+            mock.patch.object(capacity, "PERSIST_RETRY_SECONDS", 0), \
+            mock.patch.object(capacity, "_sleep"), \
+            mock.patch.object(capacity, "invalidate"), \
+            mock.patch.object(rds_helper, "delete_instance") as deleted:
+        with th.assert_raises(capacity.CapacityPersistenceError):
+            capacity._run_remove_reader(record)
+    assert deleted.call_count == 0, \
+        (f"a reader delete whose progress could not be recorded still ran "
+         f"{deleted.call_count} time(s) — and it skips the final snapshot")
+
+
+@th.django_unit_test("an operation that cannot record its progress fails persistence_unavailable")
+def test_run_operation_reports_persistence_unavailable(opts):
+    from mojo.apps.aws.services import capacity
+    from mojo.helpers.aws import elbv2 as elbv2_helper
+
+    record = _gated_record(capacity, capacity.ACTION_DRAIN_NODE, "draining")
+    with mock.patch.object(capacity, "cache", _broken_cache(record)), \
+            mock.patch.object(capacity, "PERSIST_RETRY_SECONDS", 0), \
+            mock.patch.object(capacity, "_sleep"), \
+            mock.patch.object(capacity, "invalidate"), \
+            mock.patch.object(elbv2_helper, "deregister_target") as deregistered:
+        state = capacity.run_operation(record["id"])
+    assert deregistered.call_count == 0, \
+        "the runner mutated AWS after its progress record was refused"
+    assert record["state"] == "failed", \
+        f"an unrecordable operation did not fail: {record['state']}"
+    assert record["error_code"] == "persistence_unavailable", \
+        (f"an unrecordable operation failed with the wrong code: "
+         f"{record['error_code']}")
+    assert state == "failed", \
+        f"run_operation reported {state!r} for an unrecordable operation"
+    assert "draining" in record["message"], \
+        (f"the failure message does not name the step it stopped at: "
+         f"{record['message']!r}")
+
+
+@th.django_unit_test("the runner launches into the RECORDED subnet, not the source's")
+def test_add_node_launches_into_the_recorded_subnet(opts):
+    from mojo.apps.aws.services import capacity
+    from mojo.helpers.aws import ec2 as ec2_helper
+    from mojo.apps.edge.services import platform_deploy
+
+    record = _add_record(capacity)
+    # The placement the REQUEST proved and recorded — a different subnet from
+    # the one the source instance sits in, inside the source's own zone, which
+    # is the only cross-subnet placement the request now accepts.
+    record["detail"]["subnet_id"] = "subnet-0bbb"
+    record["detail"]["availability_zone"] = "us-east-1a"
+    record["detail"]["subnet_selected"] = "requested"
+    row = SimpleNamespace(pk="18180000-0000-4000-8000-000000000002",
+                          sha="b" * 40, framework_version="1.13.0")
+    source = {"instance_id": NODE_A, "name": "mojo-api-a", "state": "running",
+              "instance_type": "m6i.large", "subnet_id": "subnet-0aaa",
+              "security_group_ids": ["sg-0aaa"],
+              "iam_instance_profile_arn": PROFILE_ARN}
+    running = dict(source, instance_id=NEW_NODE)
+    notes = []
+
+    def _note(written):
+        notes.append((written.get("phase"), written.get("message")))
+        return written
+
+    with mock.patch.object(capacity, "_sleep"), \
+            mock.patch.object(capacity, "_write_operation", side_effect=_note), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
+            mock.patch.object(capacity, "invalidate"), \
+            mock.patch.object(capacity, "_release"), \
+            mock.patch.object(capacity, "_await_runner", return_value=True), \
+            mock.patch.object(capacity, "_await_proof", return_value=False), \
+            mock.patch.object(ec2_helper, "instance_facts",
+                              side_effect=lambda value, **kw:
+                              source if value == NODE_A else running), \
+            mock.patch.object(ec2_helper, "find_reusable_image",
+                              return_value={"image_id": "ami-0new", "age_days": 2}), \
+            mock.patch.object(ec2_helper, "launch_clone",
+                              return_value=NEW_NODE) as launched, \
+            mock.patch.object(platform_deploy, "last_converged_deployment",
+                              return_value=row), \
+            mock.patch("mojo.apps.edge.asyncjobs._publish_deploy_node"):
+        capacity._run_add_node(record)
+
+    # Third POSITIONAL argument — the runner must not fall back to the fresh
+    # instance_facts read once the request has decided where the node lands.
+    assert launched.call_args[0][2] == "subnet-0bbb", \
+        (f"the clone was launched into the source's subnet, not the recorded "
+         f"one: {launched.call_args[0]}")
+    assert ("launching", "launching the new node in us-east-1a") in notes, \
+        f"the launching note never named the zone the node lands in: {notes}"
+
+
 @th.django_unit_test("an unproven node is NEVER registered behind the balancer")
 def test_registration_is_gated_on_proof(opts):
     from mojo.apps.aws.services import capacity
@@ -666,6 +830,8 @@ def test_registration_is_gated_on_proof(opts):
     running = dict(source, instance_id=NEW_NODE)
     with mock.patch.object(capacity, "_sleep"), \
             mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(capacity, "invalidate"), \
             mock.patch.object(capacity, "_release"), \
             mock.patch.object(capacity, "_await_runner", return_value=True), \
@@ -712,6 +878,8 @@ def test_proof_registers_and_extends_topology(opts):
     running = dict(source, instance_id=NEW_NODE)
     with mock.patch.object(capacity, "_sleep"), \
             mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(capacity, "invalidate"), \
             mock.patch.object(capacity, "_release"), \
             mock.patch.object(capacity, "_await_runner", return_value=True), \
@@ -770,6 +938,8 @@ def test_topology_failure_is_a_warning(opts):
 
     record = _add_record(capacity)
     with mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(system_settings, "get_value",
                               return_value={"nodes": ["mojo-api-a"],
                                             "pools": ["default"]}), \
@@ -786,6 +956,8 @@ def test_topology_failure_is_a_warning(opts):
     # existed would newly constrain a fleet that deliberately had none.
     record = _add_record(capacity)
     with mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(system_settings, "get_value", return_value=None), \
             mock.patch.object(system_settings, "set_value") as wrote:
         capacity._extend_topology(record, "mojo-api-a-newnode")

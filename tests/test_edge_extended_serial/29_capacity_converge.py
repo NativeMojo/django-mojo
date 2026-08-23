@@ -147,6 +147,8 @@ def test_topology_extend_only(opts):
     record = {"actor": None, "detail": {}, "warnings": [], "state": "running"}
     existing = {"nodes": ["mojo-api-a", "mojo-api-b"], "pools": ["default", "www"]}
     with mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(system_settings, "get_value", return_value=existing), \
             mock.patch.object(system_settings, "set_value") as wrote:
         capacity._extend_topology(record, NEW_NODE_ID)
@@ -166,6 +168,8 @@ def test_topology_extend_only(opts):
     # A node already listed is not written again — an add that reuses a
     # hostname must not churn a protected setting.
     with mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
             mock.patch.object(system_settings, "get_value", return_value=existing), \
             mock.patch.object(system_settings, "set_value") as wrote_again:
         capacity._extend_topology({"actor": None, "detail": {}, "warnings": [],

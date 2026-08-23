@@ -16,6 +16,8 @@ PHASES = {
     "mojosec",
     "mojosec_helper",
     "nginx_security",
+    "nginx_vhost",
+    "nginx_vhost_tls",
     "retired_config",
     "timers",
 }
