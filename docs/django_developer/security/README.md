@@ -705,17 +705,39 @@ into the kernel firewall fleet-wide.
 
 ### Firewall Reconciliation (`sync_firewall`)
 
-`sync_firewall` runs hourly and is also the startup recovery path — it restores all ipsets after a server reboot (iptables/ipset state is lost on restart).
+`sync_firewall` reconciles **the kernel of the node it runs on** against DB truth. Every node needs its own run: iptables/ipset state is lost on restart, and no other node can repair it.
+
+It is reached two ways:
+
+- **Hourly, as a broadcast.** The cron dispatcher publishes `broadcast=True` on the `default` channel, which fans out one job per live runner. This is drift reconciliation.
+- **At engine start, box-direct.** `asyncjobs.on_engine_start` (registered by the incident `AppConfig`) sets a force flag and publishes a forced reconcile to its own runner's channel. This is boot recovery, and it is what makes a rebooted node recover in seconds rather than up to an hour.
+
+The hook publishes rather than reconciling inline because every firewall write goes through the root-owned broker, which refuses outside a JobEngine execution context — and a startup hook has none.
+
+**Propagation boundary — state it plainly:** a node reconciles hourly only if it runs a jobs runner consuming `default`, and recovers at boot only if that engine consumes its own box-direct channel. With `JOBS_HOSTNAME_CHANNEL = False` no engine consumes its box-direct channel, so the fan-out would strand every job; the hourly path detects this and degrades to the pre-existing single-runner reconcile, and boot recovery is disabled with a warning.
 
 **Performance:** `ipset_load()` uses `ipset restore` with an atomic swap instead of per-CIDR subprocess calls. All CIDRs are batched into a single stdin pipe to `sudo ipset restore`, regardless of set size. The live set is never empty during the swap — entries are loaded into a `<name>_tmp` set, which is then swapped with the live set and destroyed.
 
-**Skip-unchanged behavior:** To stay lightweight on subsequent runs, `sync_firewall` skips IPSets and permanent blocks that have not changed since the last sync:
+**One reconcile at a time per host.** That `<name>_tmp` name is deterministic, so two concurrent `set.replace` calls for one set interleave and can swap in a live set missing entries. A per-host Redis lock (`mojo:sync_firewall:lock:<host>`, `SET NX`, 900s) serialises them; a run that cannot take the lock skips, which is safe because the force flag outlives it.
 
-- For `mojo_blocked` (permanent IPs): checks whether any `GeoLocatedIP` with `is_blocked=True` has `modified > last_sync`. The last sync time is stored in Redis under `mojo:sync_firewall:last_sync`.
+**Redis keys are per HOST, not per runner** — two engines on one box share one kernel firewall:
+
+| Key | Purpose |
+|---|---|
+| `mojo:sync_firewall:last_sync:<host>` | Skip-unchanged marker, TTL 7200s |
+| `mojo:sync_firewall:force:<host>` | Pending forced reconcile, set by the startup hook |
+| `mojo:sync_firewall:lock:<host>` | The reconcile lock above |
+
+**Skip-unchanged behavior:** to stay lightweight on subsequent runs, `sync_firewall` skips IPSets and permanent blocks unchanged since **this host** last synced:
+
+- For `mojo_blocked` (permanent IPs): checks whether any `GeoLocatedIP` with `is_blocked=True` has `modified > last_sync`.
 - For each enabled `IPSet`: compares `ipset.modified` against the stored `last_sync` timestamp. Unchanged sets are skipped with a log message.
-- On first run (no Redis timestamp), everything is loaded — same as a full rebuild but now in one batch call per set.
+- On first run for a host (no marker), everything is loaded.
+- A **forced** run ignores the marker entirely. It must: the marker lives in shared Redis and therefore survives the very reboot boot recovery exists to repair.
 
-**Logging:** The job logs each loaded set (count/total CIDRs), skipped sets, and records the new sync timestamp in Redis on completion.
+**The marker only advances on a clean run.** If any `ipset_load` failed while there was something to load, the marker is left alone and the force flag is not cleared, so the next reconcile retries instead of recording a success this node never achieved. An empty CIDR list is not a failure — `ipset_load` returns `(False, 0)` there deliberately, refusing to wipe a live set with an empty swap.
+
+**Logging:** The job logs each loaded set (count/total CIDRs), skipped sets, any failed loads, and records the new sync timestamp in Redis on a clean completion.
 
 ### Firewall Requirements
 
@@ -858,7 +880,7 @@ Default health rules are auto-created on first health check run. They send notif
 | `sweep_mojosec_actions` | Every 5 minutes | Proposes MojoSec block recommendations from correlated cases, auto-approves within bounds, executes/retries validated targets, and expires stale proposals and applied-target TTLs |
 | `prune_events` | Daily 9:45 AM | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` days with level < 6 |
 | `sweep_expired_blocks` | Every 5 minutes | Unblocks IPs where `blocked_until` has passed |
-| `sync_firewall` | Hourly | Restores all ipsets from DB truth; skips unchanged sets; startup recovery after reboot |
+| `sync_firewall` | Hourly (broadcast — every runner) | Each node rebuilds its OWN ipsets from DB truth; skips sets unchanged since that host's last sync. Boot recovery is the separate `on_engine_start` hook |
 | `refresh_ipsets` | Weekly (Sunday 3 AM) | Re-fetches IPSet source URLs and syncs CIDRs to fleet |
 | `refresh_threat_lists` | Every 6 hours | Refreshes the cache-only `tor_exits`/`blocklist_de` IPSet rows (`refresh_from_source()` only — never synced to the firewall); see [account/geoip.md](../account/geoip.md#threat-list-caches-tor-exit-list-blocklistde) |
 | `recheck_active_threats` | Daily 4:20 AM | Re-scores up to `GEOLOCATION_RECHECK_THREATS_MAX` (500) recently-active `GeoLocatedIP` rows so a stale `threat_level` can **decay** — everything else only ratchets up. Skips `provider='mojo'` records and external blocklist lookups; see [account/geoip.md](../account/geoip.md#decay) |

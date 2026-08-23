@@ -407,21 +407,31 @@ sweep_expired_blocks
 
 ### Startup recovery and fleet reconciliation
 
-A new hourly cron job, `sync_firewall`, rebuilds all ipsets from DB truth. This:
+`sync_firewall` rebuilds ipsets from DB truth on **the node that runs it**. Because that work is node-local, it is reached two ways:
 
-- Restores permanent blocks after a server restart (iptables rules are lost on reboot; ipset state is also non-persistent without this job).
+```
+sync_firewall (hourly, minute 0) — BROADCAST on "default"
+  → fans out one job per live runner
+  → each runner, for its own kernel:
+      → take the per-host lock (mojo:sync_firewall:lock:<host>)
+      → Query all GeoLocatedIP where is_blocked=True AND blocked_until IS NULL
+      → firewall.ipset_load("mojo_blocked", permanent_ips)   — if changed
+      → Query all IPSet where is_enabled=True
+      → For each changed set: firewall.ipset_load(ipset.name, ipset.cidrs)
+      → advance mojo:sync_firewall:last_sync:<host> ONLY if nothing failed
+
+on_engine_start (this node's engine just started) — box-direct, forced
+  → set mojo:sync_firewall:force:<host>
+  → publish sync_firewall to this runner's own channel with {"force": True}
+```
+
+This:
+
+- **Restores a rebooted node's blocks within seconds**, via the startup hook. The hourly marker lives in shared Redis and survives the reboot, so an unforced reconcile would skip; the force flag is what makes recovery converge even if the queued job never runs.
 - Catches any blocks missed by failed broadcasts.
-- Catches drift between instances that joined after a block was issued.
+- Catches drift on instances that joined after a block was issued.
 
-```
-sync_firewall (hourly, minute 0)
-  → Query all GeoLocatedIP where is_blocked=True AND blocked_until IS NULL
-  → firewall.ipset_load("mojo_blocked", permanent_ips)  — full flush+reload
-  → Query all IPSet where is_enabled=True
-  → For each: firewall.ipset_load(ipset.name, ipset.cidrs)
-```
-
-Up to one hour of exposure is acceptable for permanent blocks — they target sustained threats, not short-lived TTL blocks that expire on their own.
+Up to one hour of exposure remains acceptable for a *newly issued* permanent block whose live broadcast a node missed — those target sustained threats, not short-lived TTL blocks that expire on their own. A node that **restarted** no longer waits that hour.
 
 ### firewall.py — iptables enforcement
 
@@ -448,7 +458,8 @@ All IPs are validated against a strict regex before touching iptables. Commands 
 | `broadcast_ipset_add_blocked` | Broadcast | Adds a single IP to the `mojo_blocked` ipset on the local instance (permanent blocks). Receives plain dict: `{"ip": "1.2.3.4"}` |
 | `broadcast_ipset_del_blocked` | Broadcast | Removes a single IP from the `mojo_blocked` ipset on the local instance. Receives plain dict: `{"ip": "1.2.3.4"}` |
 | `sweep_expired_blocks` | Cron (every 5 minutes) | Finds expired blocks in DB, updates DB, broadcasts fleet-wide unblock |
-| `sync_firewall` | Cron (hourly, minute 0) | Rebuilds all ipsets from DB truth. Restores permanent blocks after restart and reconciles fleet drift. |
+| `sync_firewall` | Cron (hourly, minute 0), **broadcast** | Each runner rebuilds its OWN node's ipsets from DB truth. Skips sets unchanged since that host's last sync; the marker advances only on a clean run. Also published box-direct with `{"force": True}` by `on_engine_start`. |
+| `on_engine_start` | Job-engine startup hook | Sets this host's force flag and queues a forced `sync_firewall` on its own runner, so a rebooted node recovers without waiting for the hourly broadcast. Publishes rather than touching the firewall directly — the broker refuses outside a JobEngine execution context. |
 | `prune_events` | Cron (daily 9:45) | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` with level < 6 |
 | `prune_incidents` | Cron | Deletes resolved/closed/ignored incidents older than `INCIDENT_PRUNE_DAYS`. Skips incidents with `metadata.do_not_delete = True`. |
 | `recheck_active_threats` | Cron (daily 4:20) | Re-scores up to `GEOLOCATION_RECHECK_THREATS_MAX` recently-active `GeoLocatedIP` rows so `threat_level` can decay. Skips `provider='mojo'` records and external blocklist lookups. |
