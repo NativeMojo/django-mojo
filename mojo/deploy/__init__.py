@@ -14,6 +14,8 @@ The modules:
     jobman         start/stop/status for the foreground job engine + scheduler
     node_setup     converge var/ ownership, systemd units, and the jobs cron
     mojosec_changes exact-path trusted-change lifecycle for host mutations
+    node_role      this node's sealed deploy role + the aws/node_roles.conf
+                   manifest saying which converged files each role owns
 
 Plus the package entry `python3 -m mojo.deploy` (see `__main__.py`):
 
