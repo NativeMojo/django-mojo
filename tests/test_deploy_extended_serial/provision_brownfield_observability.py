@@ -1,7 +1,7 @@
 from objict import objict
 from testit import helpers as th
 
-from .brownfield_fixture import topology
+from test_deploy.brownfield_fixture import topology
 
 
 class _Clients:
@@ -15,27 +15,6 @@ class _Clients:
 class _NoCalls:
     def __getattr__(self, name):
         raise AssertionError(f"idempotent/collision telemetry must not call {name}")
-
-
-@th.django_unit_test()
-def test_telemetry_collisions_never_mutate(opts):
-    from mojo.deploy.provision import brownfield_observability, report
-
-    spec = topology()
-    group_names = [f"/mojo/{spec.project}-{spec.fleet}/{kind}"
-                   for kind in brownfield_observability.LOG_KINDS]
-    alarm_names = [f"{spec.project}-{spec.fleet}-{role}-unhealthy"
-                   for role in ("api", "certbot")]
-    observed = {"log_groups": {}, "log_group_collisions": group_names,
-                "brownfield_alarms": [], "alarm_collisions": alarm_names}
-    findings, actions, _result = brownfield_observability.ensure_observability(
-        _Clients(logs=_NoCalls(), cloudwatch=_NoCalls()), spec, observed,
-        apply=True)
-    th.assert_true(any(row.status == report.BLIND for row in findings),
-                   f"collisions must block the telemetry step: {findings}")
-    th.assert_eq(any(action.target in group_names + alarm_names
-                     for action in actions), False,
-                 "colliding names must not receive create/modify actions")
 
 
 @th.django_unit_test()

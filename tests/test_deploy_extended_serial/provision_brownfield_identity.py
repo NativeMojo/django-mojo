@@ -1,6 +1,6 @@
 from testit import helpers as th
 
-from .brownfield_fixture import managed_topology
+from test_deploy.brownfield_fixture import managed_topology
 
 
 class _Clients:
@@ -14,23 +14,6 @@ class _Clients:
 class _NoCalls:
     def __getattr__(self, name):
         raise AssertionError(f"IAM collision/idempotency must not call {name}")
-
-
-@th.django_unit_test()
-def test_managed_iam_name_collision_performs_no_mutation(opts):
-    from mojo.deploy.provision import brownfield_identity, report
-
-    observed = {"brownfield_profiles": {"api": {
-        "role_collision": True, "profile_collision": False,
-        "role_arn": None, "profile_arn": None}}}
-    findings, actions, result = brownfield_identity.ensure_identity(
-        _Clients(_NoCalls()), managed_topology(), observed, apply=True)
-    th.assert_eq(actions, [],
-                 "an unowned collision must not advertise or attempt a mutation")
-    th.assert_true(any(row.status == report.BLIND for row in findings),
-                   f"the collision must block downstream nodes: {findings}")
-    th.assert_eq(result.as_dict()["brownfield_profiles"], {},
-                 "no colliding profile may be exposed downstream")
 
 
 @th.django_unit_test()
@@ -82,31 +65,6 @@ def test_owned_managed_identity_is_idempotent(opts):
                  f"an owned converged role/profile must produce no actions: {actions}")
     th.assert_true(result.as_dict()["brownfield_profiles"]["api"]["profile_arn"],
                    "the verified profile must remain available to node launch")
-
-
-@th.django_unit_test()
-def test_runtime_policy_authorizes_only_exact_versioned_artifacts(opts):
-    from mojo.deploy.provision import brownfield_identity
-
-    policy = brownfield_identity.policy_document(managed_topology())
-    statements = {row["Sid"]: row for row in policy["Statement"]}
-    pinned = statements["ReadPinnedFleetArtifacts"]
-    th.assert_eq(pinned["Action"], ["s3:GetObjectVersion"],
-                 f"version-pinned downloads need GetObjectVersion: {pinned}")
-    expected = {
-        "arn:aws:s3:::maestro-prod-config/bootstrap/stage1.sh",
-        "arn:aws:s3:::maestro-prod-config/config/live/django.conf",
-        "arn:aws:s3:::maestro-prod-config/bootstrap/node-role.json",
-        "arn:aws:s3:::maestro-prod-config/secrets/db.json",
-    }
-    th.assert_eq(set(pinned["Resource"]), expected,
-                 f"only exact bootstrap/credential keys may be version-read: {pinned}")
-    prefixes = statements["ReadDeclaredFleetPrefixes"]
-    th.assert_eq(prefixes["Action"], ["s3:GetObject"],
-                 f"unversioned GetObject must stay in its own prefix grant: {prefixes}")
-    th.assert_eq(any(value.endswith("bootstrap/*")
-                     for value in prefixes["Resource"]), False,
-                 f"bootstrap must not receive a broad unversioned grant: {prefixes}")
 
 
 @th.django_unit_test()

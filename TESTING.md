@@ -94,6 +94,13 @@ suite is a shortlink scheme-injection test, and it stays in the default tier.
 - tests whose cost *is* a timeout: an assertion that nothing arrives can only pass by
   waiting. Keep the positive path in the default tier and demote the negative one.
 
+Deployment follows the same selection contract. The default tier keeps the brownfield
+input, discovery, identity, node, plan, policy, stubber, and CLI safety boundaries that
+must fail on every run. Exhaustive brownfield orchestration variants live in the serial
+`test_deploy_extended_serial` package and remain available through `--all` or
+`--extra extended`. A full `--all` run is broader coverage evidence, not the baseline
+for an ordinary test run.
+
 **Not a reason to demote:** the app is optional. `requires_apps` already skips a module
 whole when a project has not installed that app, so a consumer never pays for an app it
 does not use.

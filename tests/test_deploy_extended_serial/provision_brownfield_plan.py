@@ -4,7 +4,7 @@ from unittest import mock
 from objict import objict
 from testit import helpers as th
 
-from .brownfield_fixture import topology
+from test_deploy.brownfield_fixture import topology
 
 
 def _health_path_modify_action(path):
@@ -110,28 +110,6 @@ def test_explicit_request_service_is_bound_without_changing_omitted_action(opts)
 
 
 @th.django_unit_test()
-def test_apply_reobserves_and_refuses_dependency_digest_drift(opts):
-    from mojo.deploy.provision import brownfield_plan
-
-    run = objict(observed=objict(dependency_digest="changed",
-                                action_digest="actions"), blocking=False,
-                 validated=True, steps=objict(), worst="PASS", problems=[])
-    with mock.patch.object(brownfield_plan, "_prepare",
-                           return_value=([], [], run)) as prepared:
-        raised = None
-        try:
-            brownfield_plan.apply(object(), topology(), "previewed", "actions")
-        except brownfield_plan.DependencyDriftError as err:
-            raised = err
-    th.assert_true(raised is not None,
-                   "a dependency change must abort before the first mutation")
-    th.assert_in("nothing was mutated", str(raised),
-                 f"the refusal must state the safety outcome: {raised}")
-    th.assert_eq(prepared.call_count, 1,
-                 "apply must perform one fresh exact observation")
-
-
-@th.django_unit_test()
 def test_brownfield_dag_contains_only_identity_nodes_balancer_telemetry(opts):
     from mojo.deploy.provision import brownfield_plan
 
@@ -200,26 +178,3 @@ def test_expected_digest_is_mandatory_not_optional_state(opts):
                    "apply without its immediately preceding preview must refuse")
     th.assert_in("requires", str(raised),
                  f"the error must explain the preview contract: {raised}")
-
-
-@th.django_unit_test()
-def test_apply_refuses_changed_preview_action_digest(opts):
-    from mojo.deploy.provision import brownfield_plan
-
-    run = objict(observed=objict(dependency_digest="dependencies",
-                                action_digest="new-actions"), blocking=False,
-                 validated=True, steps=objict(), worst="PASS", problems=[])
-    with mock.patch.object(brownfield_plan, "_prepare",
-                           return_value=([], [], run)):
-        raised = None
-        try:
-            brownfield_plan.apply(
-                object(), topology(), "dependencies", "confirmed-actions")
-        except brownfield_plan.DependencyDriftError as err:
-            raised = err
-    th.assert_true(raised is not None,
-                   "a new allowed action after confirmation must abort apply")
-    th.assert_in("action set changed", str(raised),
-                 f"the refusal must name action drift: {raised}")
-    th.assert_in("nothing was mutated", str(raised),
-                 f"the CAS failure must state the safety outcome: {raised}")

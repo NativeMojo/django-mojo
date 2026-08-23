@@ -2,7 +2,7 @@ import shlex
 
 from testit import helpers as th
 
-from .brownfield_fixture import preserved_raw, raw_manifest
+from test_deploy.brownfield_fixture import preserved_raw, raw_manifest
 
 
 def _error(raw):
@@ -12,41 +12,6 @@ def _error(raw):
     except inputs.EnvFileError as err:
         return str(err)
     return None
-
-
-@th.django_unit_test()
-def test_manifest_is_strict_secret_free_and_digest_stable(opts):
-    from mojo.deploy.provision import brownfield_inputs
-
-    first = brownfield_inputs.validate(raw_manifest())
-    second = brownfield_inputs.validate(raw_manifest())
-    th.assert_eq(first["manifest_digest"], second["manifest_digest"],
-                 "canonical manifests must produce a stable digest")
-
-    unknown = raw_manifest()
-    unknown["network"]["guessed_vpc"] = True
-    message = _error(unknown)
-    th.assert_in("unknown key", message,
-                 f"an unknown nested key must fail closed: {message}")
-
-    # The same allowlist is what a stale manifest hits: a field this
-    # django-mojo no longer implements is refused by name rather than
-    # silently ignored, so nobody believes a retired control is still
-    # enforced by something.
-    retired = raw_manifest()
-    retired["retired_cutover_role_arn"] = (
-        "arn:aws:iam::123456789012:role/retired")
-    message = _error(retired)
-    th.assert_in("unknown key", message,
-                 f"an unknown top-level key must fail closed: {message}")
-    th.assert_in("retired_cutover_role_arn", message,
-                 f"the refusal must name the offending field: {message}")
-
-    secret = raw_manifest()
-    secret["database"]["credential"]["password"] = "do-not-commit"
-    message = _error(secret)
-    th.assert_in("secret value", message,
-                 f"a credential value must never enter the manifest: {message}")
 
 
 @th.django_unit_test()
@@ -373,34 +338,3 @@ def test_pinned_download_shell_quotes_every_object_value(opts):
                      f"{key!r} must survive as one --key value: {tokens}")
         th.assert_eq("touch" in tokens, False,
                      f"{key!r} must not split into an executable token: {tokens}")
-
-
-@th.django_unit_test()
-def test_to_spec_is_separate_and_managed_defaults_do_not_move(opts):
-    from mojo.deploy.provision import brownfield_inputs, spec as spec_module
-
-    managed = spec_module.build("maestro", "prod", "us-west-2", preset="small")
-    before = spec_module.names(managed)
-    fleet = brownfield_inputs.to_spec(
-        brownfield_inputs.validate(raw_manifest()))
-    th.assert_eq(spec_module.names(managed), before,
-                 "building a fleet spec must not change managed topology defaults")
-    th.assert_eq(spec_module.names(fleet)["nodes"],
-                 ["maestro-api-1", "maestro-api-2"],
-                 "brownfield nodes must come from exact declarations")
-    tags = spec_module.node_tags(fleet, fleet.node_declarations[0])
-    th.assert_eq(tags["mojo:fleet"], "shadow",
-                 "fleet ownership must be present at resource creation")
-    th.assert_eq(tags["mojo:application-role"], "api",
-                 "the opaque application role must be tagged at creation")
-    th.assert_true("mojo:request-service" not in tags,
-                   "omission must preserve the pre-feature provider tag shape")
-    explicit = dict(fleet.node_declarations[0], request_service=True)
-    explicit_tags = spec_module.node_tags(fleet, explicit)
-    th.assert_eq(explicit_tags["mojo:request-service"], "true",
-                 "an explicit framework request role must be tagged at launch")
-    th.assert_eq(spec_module.validate_names(fleet), [],
-                 "a validated manifest must pass the separate fleet name seam")
-    th.assert_eq(fleet.bootstrap_objects["live_config"]["version_id"],
-                 "configversion1",
-                 "the exact live config must survive manifest-to-spec conversion")
