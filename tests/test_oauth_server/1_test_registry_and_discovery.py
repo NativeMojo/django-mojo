@@ -340,6 +340,124 @@ def test_sensitive_body_label(opts):
                 f"got {register!r}")
 
 
+def _shipped_prm_pattern():
+    """The shipped protected-resource discovery urlpattern, by IDENTITY.
+
+    Selecting it by a prefix match on ``str(p.pattern)`` would also match a
+    downstream app's own literal route at this same well-known prefix — the
+    very thing this route must now leave room for — so the pattern is found
+    through the dispatcher key that names this view, and exactly one absolute
+    pattern must carry it.
+
+    ``django_unit_test`` only runs ``django.setup()``; it never loads
+    ``ROOT_URLCONF``, and ``ABSOLUTE_URLPATTERNS`` is populated only when
+    ``mojo/urls.py`` is imported — so force the urlconf load first or the list
+    is empty and every assertion below passes vacuously.
+    """
+    from django.urls import get_resolver
+    from mojo.decorators.http import ABSOLUTE_URLPATTERNS, URLPATTERN_METHODS
+    from mojo.apps.account.rest import oauth_server as rest_oauth
+
+    get_resolver().url_patterns
+
+    found = []
+    for pattern in ABSOLUTE_URLPATTERNS:
+        root_key = (pattern.default_args or {}).get("__mojo_rest_root_key__")
+        if root_key is None:
+            continue
+        if URLPATTERN_METHODS.get(f"{root_key}__GET") is \
+                rest_oauth.on_protected_resource_metadata:
+            found.append(pattern)
+    assert_eq(len(found), 1,
+              f"exactly one absolute urlpattern must dispatch GET to "
+              f"on_protected_resource_metadata, found {len(found)}")
+    return found[0]
+
+
+@th.django_unit_test("an unregistered resource path falls through to the next route")
+def test_unclaimed_resource_falls_through(opts):
+    """The framework's discovery route must NOT swallow paths it cannot serve.
+
+    The account app loads before every downstream app, so its absolute pattern
+    is always ahead of theirs. If it merely returned 404 for an unregistered
+    resource, a downstream app could never publish its own RFC 9728 document —
+    which is exactly what broke in production. The route must genuinely not
+    match, so the resolver carries on to the next pattern.
+    """
+    from django.urls import include, path
+    from django.urls.resolvers import RegexPattern, URLResolver
+
+    catchall = _shipped_prm_pattern()
+    probe_route = ".well-known/oauth-protected-resource/testit-downstream-probe"
+
+    def _probe(request):
+        return None
+
+    probe = path(probe_route, _probe)
+
+    # Both resolver shapes matter. The flat one exercises the plain
+    # `sub_match is None` continue; the nested one — the shape the real tree
+    # uses, since the project urlconf mounts mojo.urls with
+    # path("", include("mojo.urls")) — exercises the Resolver404 continue,
+    # a different branch.
+    shapes = (
+        ("flat", [catchall, probe]),
+        ("nested",
+         [path("", include(([catchall], "probe_inner"))), probe]),
+    )
+    for shape, patterns in shapes:
+        resolver = URLResolver(RegexPattern(r"^/"), patterns)
+        match = resolver.resolve("/" + probe_route)
+        assert_true(
+            match.func is _probe,
+            f"[{shape}] a downstream app's own route at "
+            f"/{probe_route} must be reached — the framework's "
+            f"protected-resource route registered no such resource and must "
+            f"fall through rather than claim the path, got {match.func!r}")
+
+
+@th.django_unit_test("a registered resource path is still claimed by the discovery route")
+@th.requires_app("mojo.apps.assistant")
+def test_registered_resource_is_still_claimed(opts):
+    """Falling through must be limited to paths this installation never claimed.
+
+    The assistant's ready() registers its resources regardless of the
+    ASSISTANT_MCP_ENABLED switch, so this needs no settings change: the switch
+    decides what the VIEW answers, registration decides what the ROUTE matches.
+    """
+    from django.urls import Resolver404, resolve as url_resolve
+    from mojo.decorators.http import URLPATTERN_METHODS
+    from mojo.apps.account.rest import oauth_server as rest_oauth
+    from mojo.apps.account.services.oauth_server import resources
+
+    registered = resources.REGISTRY.paths()
+    assert_true(bool(registered),
+                "the assistant app registers its OAuth resources from ready(), "
+                "so the shared registry must not be empty here")
+
+    for path in registered:
+        url = "/.well-known/oauth-protected-resource" + path
+        match = url_resolve(url)
+        root_key = match.kwargs.get("__mojo_rest_root_key__")
+        assert_true(root_key is not None,
+                    f"{url} must route through the mojo dispatcher")
+        handler = URLPATTERN_METHODS.get(f"{root_key}__GET")
+        assert_true(handler is rest_oauth.on_protected_resource_metadata,
+                    f"{url} names a REGISTERED resource and must still reach "
+                    f"the protected-resource metadata handler, got {handler}")
+
+    raised = False
+    try:
+        url_resolve(
+            "/.well-known/oauth-protected-resource/testit/definitely-not-a-resource")
+    except Resolver404:
+        raised = True
+    assert_true(raised,
+                "an unregistered resource path must not resolve at all — it "
+                "falls through to the project's ordinary 404 so a downstream "
+                "app's route, wherever it is declared, gets its turn")
+
+
 @th.django_unit_test("the absolute OAuth routes resolve to the server handlers")
 def test_routes_are_not_shadowed(opts):
     from django.urls import resolve as url_resolve

@@ -140,6 +140,14 @@ def test_wire_flow(opts):
                 "/.well-known/oauth-protected-resource/api/not/a/resource")
             assert_eq(resp.status_code, 404,
                       f"an unregistered path must have no PRM, got {resp.status_code}")
+            # …and the 404 must come from the PROJECT, not from this view: the
+            # discovery route claims only registered paths, so an unregistered
+            # one never matches and the view never runs. That fall-through is
+            # what leaves the URL free for a downstream app's own document.
+            assert_true("not_found" not in str(resp.response),
+                        f"an unregistered path must fall through to the "
+                        f"application's ordinary 404, not reach the OAuth view "
+                        f"and get its RFC not_found body, got {resp.response!r}")
 
             # --- dynamic client registration -------------------------------
             resp = _register(opts)
