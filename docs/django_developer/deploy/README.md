@@ -1017,8 +1017,8 @@ Order matters, because the manifest is the thing that starts deleting files:
 
 The complement of `check_setup`: audits one node, never calls an AWS API,
 mutates nothing. Sections: `repo`, `framework`, `roles`, `cron`, `systemd`,
-`nginx`, `certs`, `config_plane`, `shims`, `legacy`, `var_ownership`, `jobs`.
-Exit 1 iff anything FAILed.
+`mojosec`, `nginx`, `certs`, `config_plane`, `shims`, `legacy`,
+`var_ownership`, `jobs`. Exit 1 iff anything FAILed.
 
 The nginx section audits the same five-path runtime contract, worker identity,
 metadata, SELinux accessibility, active `nginx -T` directives, and a real

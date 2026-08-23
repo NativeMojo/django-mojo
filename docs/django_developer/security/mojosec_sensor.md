@@ -322,7 +322,7 @@ caller needs a longer gap between the producer's completion and the tier's next
 five-minute walk. Every other tier — on every profile, including this one —
 stays at exactly 300. A change's local delivery hold follows the tier that
 produced it: the 15-minute producer TTL plus its own window, so deploy evidence
-keeps its historical 20-minute ceiling and only content evidence reaches 25.
+keeps its historical 20-minute ceiling and content evidence reaches 30.
 
 **Publishes cannot starve a deploy.** The journal caps `content-publish` at 64
 of its 128 operation slots, so a deploy always has 64 waiting for it no matter
