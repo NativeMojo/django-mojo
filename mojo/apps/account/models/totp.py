@@ -42,12 +42,19 @@ class UserTOTP(MojoSecrets, MojoModel):
         """Generate 8 recovery codes, store bcrypt hashes in mojo_secrets, return plaintext list."""
         import secrets
         import bcrypt
+        from mojo.helpers.settings import settings
+        # Cost is tunable for test projects (maestro #2789); production keeps
+        # bcrypt's default 12. Floor of 4 is bcrypt's own minimum.
+        try:
+            rounds = max(4, int(settings.get_static("TOTP_RECOVERY_BCRYPT_ROUNDS", 12)))
+        except Exception:
+            rounds = 12
         codes = []
         stored = []
         for _ in range(8):
             raw = secrets.token_hex(6)  # 12 hex chars
             code = f"{raw[:4]}-{raw[4:8]}-{raw[8:12]}"
-            hashed = bcrypt.hashpw(code.encode(), bcrypt.gensalt()).decode()
+            hashed = bcrypt.hashpw(code.encode(), bcrypt.gensalt(rounds)).decode()
             codes.append(code)
             stored.append({"hash": hashed, "hint": raw[:4]})
         self.set_secret("recovery_codes", stored)

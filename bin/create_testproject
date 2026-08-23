@@ -285,6 +285,25 @@ LOGIT_FILE_ALL = False
 LOGIT_RETURN_REAL_ERROR = True
 LOGIT_ASYNC_LOGGING = False   # synchronous in tests — no background thread surprises
 
+# Test-only speed (maestro #2789): production PBKDF2 runs 1,000,000 iterations
+# (~140ms per hash), which spends minutes of every suite run hashing throwaway
+# passwords. MD5 first so new hashes are fast; PBKDF2 second so any hash seeded
+# before this setting existed still verifies. This file is generated into the
+# gitignored testproject/ and never ships.
+PASSWORD_HASHERS = [
+    "django.contrib.auth.hashers.MD5PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2PasswordHasher",
+]
+
+# bcrypt cost for TOTP recovery codes (production default 12; 4 is bcrypt's
+# floor). Generating 8 codes at cost 12 is ~1.3s per call — pure suite tax.
+TOTP_RECOVERY_BCRYPT_ROUNDS = 4
+
+# The framework-version probe must never reach the real PyPI from a test box.
+# Port 9 (discard) refuses instantly; the service absorbs the failure and the
+# endpoint degrades to its no-upstream shape.
+EDGE_PYPI_URL = "http://127.0.0.1:9/"
+
 LOGGING = {"version": 1, "disable_existing_loggers": False}
 
 INCIDENT_EVENT_METRICS = False  # no metrics processing needed in tests
