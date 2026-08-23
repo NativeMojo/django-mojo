@@ -175,6 +175,37 @@ control the server's report does not offer is disabled with the server's
 `blocked_reason` in plain words. On an `external`-mode installation the page
 renders read-only.
 
+All three packaged Add Node surfaces expose the API's optional placement
+without changing its automatic default: v2 Infrastructure Capacity, legacy
+Fleet Scaling, and the legacy Dashboard Capacity drill-in. The source picker
+contains healthy nodes only and labels each option with node name, target-group
+fleet name, availability zone, and current subnet. The subnet field is free
+text with a datalist of distinct in-use subnets; choosing a source narrows that
+guidance to its zone but does not fill or erase what the operator typed. Empty
+controls omit both `source_instance` and `subnet_id`.
+
+The batch pages keep source and subnet in controlled `want` state and copy the
+same non-empty placement onto every staged `add_node` step. Subnet keystrokes
+update the helper's summary, `aria-invalid`, and inline alert without replacing
+the page (and losing focus). They immediately invalidate a cached plan and
+disable Apply; change/blur commits through the existing debounced plan request.
+The Dashboard appends the helper's `.element` to its typed-echo modal and
+requires both literal `add_node` and valid placement before enabling its
+button. Local validation is deliberately cheap: an empty value is automatic;
+a non-empty value must begin `subnet-` and include an identifier. AWS remains
+authoritative, so a syntactically valid but unusable subnet is shown using the
+server's human-readable refusal.
+
+`bin/admin_preview` mirrors this contract with two healthy sources in distinct
+target-group fleets, zone/subnet facts, placement-aware single and batch
+descriptions, and `subnet-0refused` as a deterministic
+`subnet_not_usable` response. The preview response writer preserves the
+production browser-wire error envelope —
+`{status:false,error,error_code,data}` for non-2xx provider dictionaries —
+while successful dictionaries remain `{status:true,data:...}`. Asset tests are
+structural guards only; desktop and 375px browser checks still prove focus,
+wrapping, validation, and refusal presentation on all three surfaces.
+
 ### Maintenance
 
 `maintenance` is the only Platform route that changes infrastructure outside

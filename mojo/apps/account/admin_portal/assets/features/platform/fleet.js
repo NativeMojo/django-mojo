@@ -18,7 +18,7 @@ import {api, apiOnce, h, icon} from '../../core.js';
 import {toast} from '../../components/actions.js';
 import {openModal} from '../../components/overlays.js';
 import {errorState, loadingState} from '../../components/views.js';
-import {BLOCKED_COPY, PHASE_COPY} from './capacity.js';
+import {addNodePlacementControls, BLOCKED_COPY, PHASE_COPY} from './capacity.js';
 
 const CAPACITY_PATH = '/api/aws/capacity';
 const STATUS_PATH = '/api/aws/capacity/status';
@@ -112,6 +112,8 @@ export async function fleetPage(ctx, signal = null) {
   function resetWant() {
     want = {
       addNodes: 0,
+      source_instance: '',
+      subnet_id: '',
       removeNodes: new Set(),
       caches: new Map((report?.caches || []).map(
         (row) => [row.identifier, Number(row.replica_count || 0)])),
@@ -146,8 +148,12 @@ export async function fleetPage(ctx, signal = null) {
   // any reader this same batch removes.
   function stagedSteps() {
     const steps = [];
+    const placement = {
+      ...(want.source_instance ? {source_instance: want.source_instance} : {}),
+      ...(want.subnet_id.trim() ? {subnet_id: want.subnet_id.trim()} : {}),
+    };
     for (let index = 0; index < want.addNodes; index += 1) {
-      steps.push({action: 'add_node'});
+      steps.push({action: 'add_node', ...placement});
     }
     for (const [identifier, addCount] of want.dbAdd) {
       for (let index = 0; index < addCount; index += 1) {
@@ -211,6 +217,14 @@ export async function fleetPage(ctx, signal = null) {
   function syncPlan() {
     if (running) return;
     const steps = stagedSteps();
+    if (want.addNodes && !placementValid()) {
+      clearTimeout(planTimer);
+      planKey = '';
+      serverPlan = null;
+      planError = null;
+      planPending = false;
+      return;
+    }
     const key = JSON.stringify(steps);
     if (key === planKey) return;
     planKey = key;
@@ -223,6 +237,7 @@ export async function fleetPage(ctx, signal = null) {
   }
 
   async function requestPlan(steps, key) {
+    if (want.addNodes && !placementValid()) return;
     let plan;
     try {
       plan = await apiOnce(PLAN_PATH, {method: 'POST', signal,
@@ -332,6 +347,36 @@ export async function fleetPage(ctx, signal = null) {
 
   // ── controls ────────────────────────────────────────────────────────────
 
+  function placementValid() {
+    const subnet = want?.subnet_id?.trim() || '';
+    const source = want?.source_instance || '';
+    return (!source || instances().some((row) => row.healthy && row.id === source))
+      && (!subnet || (subnet.startsWith('subnet-')
+        && subnet.length > 'subnet-'.length));
+  }
+
+  function placementChanged(values) {
+    want.source_instance = values.source_instance || '';
+    want.subnet_id = values.subnet_id || '';
+    clearTimeout(planTimer);
+    planKey = '';
+    serverPlan = null;
+    planError = null;
+    planPending = false;
+    const apply = root.querySelector('.fleet-bar-actions .button.primary');
+    if (apply) apply.disabled = true;
+  }
+
+  function placementControls() {
+    return addNodePlacementControls(report, want, {
+      onInput: placementChanged,
+      onCommit: (values, valid) => {
+        placementChanged(values);
+        if (valid) render();
+      },
+    });
+  }
+
   function stepper({value, canDown, canUp, downTitle, upTitle, onDown, onUp, tone}) {
     return h('div', {class: 'fleet-stepper'},
       h('button', {type: 'button', 'aria-label': downTitle || 'fewer',
@@ -414,6 +459,7 @@ export async function fleetPage(ctx, signal = null) {
       (row) => row.healthy && !want.removeNodes.has(row.id)).length;
     const total = rows.length - want.removeNodes.size + want.addNodes;
     const type = rows[0]?.instance_type || '';
+    const placement = placementControls();
 
     const removable = (row) => managed() && drain.offered && !row.self
       && row.can_drain && !want.removeNodes.has(row.id)
@@ -489,7 +535,8 @@ export async function fleetPage(ctx, signal = null) {
               ? 'A new node proves it runs the fleet\'s code before it serves. 20–40 min.'
               : blockedText(add)})),
         sizePlaceholder('Size of each', type,
-          'Changing size is a rolling replace — not offered here yet.')) : null,
+          'Changing size is a rolling replace — not offered here yet.'),
+        want.addNodes ? placement.element : null) : null,
       h('div', {class: 'fleet-rows'},
         ...rows.map(nodeRow),
         ...Array.from({length: want.addNodes}, (unused, index) => ghostRow(index))));
@@ -855,8 +902,8 @@ export async function fleetPage(ctx, signal = null) {
           // responsiveness-exempt: confirmApply awaits a human confirming the
           // server's plan; runBatch renders after every poll once it starts.
           h('button', {class: 'button primary', type: 'button',
-            disabled: plan ? null : true,
-            onclick: () => { if (serverPlan) applyPlan(serverPlan); }},
+            disabled: plan && placementValid() ? null : true,
+            onclick: () => { if (serverPlan && placementValid()) applyPlan(serverPlan); }},
           `Apply ${(plan?.steps || staged).length} change${(plan?.steps || staged).length === 1 ? '' : 's'}`))));
   }
 
@@ -882,6 +929,10 @@ export async function fleetPage(ctx, signal = null) {
     try {
       report = await api(`${CAPACITY_PATH}${refresh ? '?refresh=1' : ''}`, {signal});
       if (!want) resetWant();
+      else if (want.source_instance
+          && !instances().some((row) => row.healthy && row.id === want.source_instance)) {
+        want.source_instance = '';
+      }
       render();
     } catch (error) {
       if (error?.name === 'AbortError') return;

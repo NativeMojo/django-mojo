@@ -30,6 +30,8 @@ BALANCER_ARN = ("arn:aws:elasticloadbalancing:us-east-1:123456789012:"
                 "loadbalancer/net/mojo-api-nlb/0123456789abcdef")
 GROUP_ARN = ("arn:aws:elasticloadbalancing:us-east-1:123456789012:"
              "targetgroup/mojo-api/abcdef0123456789")
+WORKER_GROUP_ARN = ("arn:aws:elasticloadbalancing:us-east-1:123456789012:"
+                    "targetgroup/mojo-jobs/1234567890abcdef")
 
 # The phase ladder an add walks, in order. The status route steps one phase per
 # poll so the panel's progress copy is exercised without a real wait.
@@ -46,19 +48,22 @@ NODES = [
     {"id": "i-0a1b2c3d4e5f60011", "name": "mojo-api-a", "state": "healthy",
      "instance_state": "running", "lifecycle_state": "available",
      "instance_type": "m6i.large",
-     "zone": "us-east-1a", "healthy": True, "registered": True,
+     "zone": "us-east-1a", "subnet_id": "subnet-0aaa1111",
+     "healthy": True, "registered": True,
      "can_drain": True, "self": True, "primary": True,
      "added_by_capacity": False, "groups": [GROUP_ARN]},
     {"id": "i-0a1b2c3d4e5f60022", "name": "mojo-api-b", "state": "healthy",
      "instance_state": "running", "lifecycle_state": "available",
      "instance_type": "m6i.large",
-     "zone": "us-east-1b", "healthy": True, "registered": True,
+     "zone": "us-east-1b", "subnet_id": "subnet-0bbb2222",
+     "healthy": True, "registered": True,
      "can_drain": True, "self": False, "primary": False,
-     "added_by_capacity": False, "groups": [GROUP_ARN]},
+     "added_by_capacity": False, "groups": [WORKER_GROUP_ARN]},
     {"id": "i-0a1b2c3d4e5f60033", "name": "mojo-api-c", "state": "unused",
      "instance_state": "running", "lifecycle_state": "available",
      "instance_type": "m6i.large",
-     "zone": "us-east-1c", "healthy": False, "registered": True,
+     "zone": "us-east-1c", "subnet_id": "subnet-0ccc3333",
+     "healthy": False, "registered": True,
      "can_drain": False, "self": False, "primary": False,
      "added_by_capacity": True, "groups": [GROUP_ARN]},
 ]
@@ -170,7 +175,8 @@ ADDING_NODE = {
     "id": "i-0a1b2c3d4e5f60044", "name": "mojo-api-b-clone", "state": "initial",
     "instance_state": "running", "lifecycle_state": "available",
     "instance_type": "m6i.large",
-    "zone": "us-east-1b", "healthy": False, "registered": True,
+    "zone": "us-east-1b", "subnet_id": "subnet-0bbb2222",
+    "healthy": False, "registered": True,
     "can_drain": True, "self": False, "primary": False,
     "added_by_capacity": True, "groups": [GROUP_ARN],
 }
@@ -184,7 +190,8 @@ UNREGISTERED_NODE = {
     "id": "i-0a1b2c3d4e5f60055", "name": "mojo-api-b-clone-2",
     "state": "unregistered", "instance_state": "stopped",
     "lifecycle_state": "error", "instance_type": "m6i.large",
-    "zone": "us-east-1b", "healthy": False, "registered": False,
+    "zone": "us-east-1b", "subnet_id": "subnet-0bbb2222",
+    "healthy": False, "registered": False,
     "can_drain": False, "self": False, "primary": False,
     "added_by_capacity": True, "groups": [],
 }
@@ -472,6 +479,9 @@ def _report(handler):
                            "type": "network", "state": "active"}],
             "groups": [{"arn": GROUP_ARN, "name": "mojo-api",
                         "target_type": "instance", "port": 443,
+                        "protocol": "TCP"},
+                       {"arn": WORKER_GROUP_ARN, "name": "mojo-jobs",
+                        "target_type": "instance", "port": 443,
                         "protocol": "TCP"}],
             "instances": nodes,
             "self": nodes[0]["id"] if (nodes and state != "denied") else None,
@@ -642,7 +652,13 @@ def _plan_step(step):
             else "change" if action.startswith("resize_") else "remove")
     delta, warnings = None, []
     if action == "add_node":
+        source = next((row for row in NODES
+                       if row["id"] == step.get("source_instance")), None)
         description = "Add an app node"
+        if source:
+            description += f" cloned from {source['name']}"
+        if step.get("subnet_id"):
+            description += f" in {step['subnet_id']}"
         warnings = ["builds, deploys and proves itself before serving · "
                     "20–40 min"]
         delta = PLAN_PRICES["m6i.large"]
@@ -750,6 +766,17 @@ def _plan_apply(handler, payload):
                               "after 5 minutes. Request a new plan and review "
                               "it again.",
                      "error_code": "plan_not_found", "data": {}}
+    refused = next((step for step in plan["steps"]
+                    if step["action"] == "add_node"
+                    and step["params"].get("subnet_id") == "subnet-0refused"), None)
+    if refused:
+        return 409, {
+            "status": False,
+            "error": ("subnet-0refused cannot take this clone because it has "
+                      "no free addresses."),
+            "error_code": "subnet_not_usable",
+            "data": {"reason": "no_free_addresses", "subnet_id": "subnet-0refused"},
+        }
     steps = [{"index": step["index"], "action": step["action"],
               "resource": step["resource"], "params": step["params"],
               "description": step["description"], "kind": step["kind"],
@@ -777,6 +804,14 @@ def post(handler, path, payload):
     if path != "/api/aws/capacity/apply":
         return None
     action = payload.get("action") or "add_node"
+    if action == "add_node" and payload.get("subnet_id") == "subnet-0refused":
+        return 409, {
+            "status": False,
+            "error": ("subnet-0refused cannot take this clone because it has "
+                      "no free addresses."),
+            "error_code": "subnet_not_usable",
+            "data": {"reason": "no_free_addresses", "subnet_id": "subnet-0refused"},
+        }
     if action == "add_node":
         phases = list(ADD_PHASES)
     else:
@@ -787,11 +822,24 @@ def post(handler, path, payload):
         getattr(handler, "capacity_flags", {})["egress_enabled"] = (
             action == "enable_stable_ips")
     operation_id = f"op-{len(getattr(handler, 'capacity_operations', {})) + 1}"
+    detail = {}
+    if action == "add_node" and (payload.get("source_instance") or payload.get("subnet_id")):
+        source = next((row for row in NODES
+                       if row["id"] == payload.get("source_instance")), NODES[0])
+        detail = {
+            "source_instance": source["id"], "source_name": source["name"],
+            "source_selected": ("requested" if payload.get("source_instance")
+                                else "automatic"),
+            "subnet_id": payload.get("subnet_id") or source["subnet_id"],
+            "subnet_selected": ("requested" if payload.get("subnet_id") else "source"),
+            "availability_zone": source["zone"],
+            "target_groups": list(source["groups"]),
+        }
     record = {
         "schema_version": 1, "id": operation_id, "action": action,
         "resource": payload.get("resource") or "", "state": "running",
         "phase": phases[0], "phases": phases, "message": "requested",
-        "error_code": None, "warnings": [], "detail": {},
+        "error_code": None, "warnings": [], "detail": detail,
         "step": 0, "done_message": DONE_COPY.get(action, "done."),
     }
     handler.capacity_operations[operation_id] = record

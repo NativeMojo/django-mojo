@@ -286,6 +286,31 @@ source's **own availability zone**, and assign public addresses if the
 source's subnet does. Sending either field on a `drain_node` or
 `terminate_node` is `invalid_request` 400, not silently ignored.
 
+### Choosing placement in the packaged Admin
+
+The v2 Infrastructure Capacity page, legacy Fleet Scaling page, and legacy
+Dashboard Capacity drill-in all offer the same optional controls. Leave both
+empty for automatic placement. The source list includes healthy serving nodes
+only and names the node, its target-group fleet, availability zone, and subnet.
+Choosing one fixes which fleet is cloned and which target groups receive the
+new node.
+
+The subnet box remains free text so a valid `subnet-…` that is not currently
+in use can still be entered. Its suggestions are only the distinct in-use
+subnets in the selected source's zone; the source's current subnet appears as
+placeholder guidance and is never inserted automatically. Changing the source
+does not erase a typed subnet. A non-empty value without the `subnet-` prefix
+is marked invalid inline and Plan/Apply/Confirm stays disabled without making
+a request.
+
+One placement applies to every Add Node staged in a batch. Empty controls are
+omitted from every step, preserving the historical automatic request shape.
+The Dashboard confirmation still requires typing literal `add_node`. Local
+validation proves only identifier shape: AWS may still refuse a valid-looking
+subnet for VPC, availability-zone, public-addressing, or free-address
+constraints. The Admin displays that server message rather than replacing it
+with a generic failure.
+
 ### Bodies
 
 ```json
