@@ -257,11 +257,43 @@ install_vhost() {
         trusted_change rendered-host-config "$dest" -- cp -f "$src" "$dest"
         return 0
     fi
-    if ! trusted_change rendered-host-config "$dest" -- \
+    # `local out="$(...)"` would return LOCAL's status, not the substitution's,
+    # so `set -e` would never see a refusal. Declare, then assign inside the if.
+    local out=""
+    if ! out="$(trusted_change rendered-host-config "$dest" -- \
             "$VHOST_PY" "${VHOST_PY_FLAGS[@]}" -m mojo.deploy.vhost_install \
-            "$src" "$dest" "$NGINX_ETC"; then
+            "$src" "$dest" "$NGINX_ETC")"; then
         die "TLS vhost convergence refused unsafe or changed state"
     fi
+    # The child exits 0 whenever it mutated the file, so a downgrade cannot
+    # ride on the exit code (a nonzero status makes MojoSec abort the operation
+    # WITHOUT restoring, leaving a changed file unattested). One sentinel line
+    # on stdout carries it instead.
+    # Scanned with a herestring, not a pipeline: `sed ... | head -1` can take a
+    # SIGPIPE, and under `pipefail` that would abort the deploy over a warning.
+    local tag="" severity="" code="" line=""
+    while IFS= read -r line; do
+        case "$line" in
+            "MOJO-VHOST-WARN "*) tag="${line#MOJO-VHOST-WARN }"; break ;;
+        esac
+    done <<< "$out"
+    if [ -n "$tag" ]; then
+        severity="${tag%% *}"
+        code="${tag#* }"
+        case "$severity" in
+            tls)
+                record_warning nginx_vhost_tls \
+                    "vhost ${name}: could not preserve this node's issued certificate reference (${code}); the repository's certificate paths are installed and this node serves them until the certificate plane re-issues"
+                ;;
+            *)
+                record_warning nginx_vhost \
+                    "vhost ${name}: could not inspect the installed vhost (${code}); repository bytes installed verbatim, without certificate preservation"
+                ;;
+        esac
+    fi
+    # Re-emit what we captured: the MojoSec attestation JSON goes to the same
+    # stdout, and swallowing it would blind the deploy log.
+    [ -z "$out" ] || printf '%s\n' "$out"
 }
 
 install_aux_file() {

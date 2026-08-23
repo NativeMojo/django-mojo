@@ -1010,8 +1010,19 @@ certificate convergence step and remains necessary for nodes created by an
 older framework, manually repaired nodes, and interrupted runs. With current
 frameworks an ordinary repository deploy keeps a proven matching lineage, so
 the project can safely ship a snakeoil first-boot placeholder without later
-replacing the issued certificate. Anything ambiguous or unsafe is refused
-instead of silently downgrading to that placeholder.
+replacing the issued certificate.
+
+But it is best-effort, not a guarantee. A vhost the validator cannot match —
+most obviously a **renamed** `server_name`, but also an unreadable comment or
+a second TLS server — warns, downgrades to the repository's placeholder, and
+files an `nginx_vhost_tls` deploy warning. It never aborts the release: an
+outage is a worse outcome than a node briefly serving snakeoil, and this is
+also the `cp -f` behavior described above, which the whole section exists to
+work around. That downgrade is exactly why `rewrite_cert_paths` still runs on
+the skip path — it is what puts the issued lineage back. The one thing a
+downgrade will not do is install certificate paths that do not exist on the
+node; that refuses the deploy before `/etc` is touched, because nginx would
+reject the graph anyway.
 
 And the skip check is expiry **and** a SAN match, not expiry alone: an
 operator who changed `apex_domain` between runs holds a completely unexpired

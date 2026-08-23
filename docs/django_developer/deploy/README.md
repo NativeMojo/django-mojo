@@ -468,11 +468,37 @@ must be the canonical same-revision Certbot `live/<lineage>` symlinks, resolve
 to root-owned files in that lineage's `archive/` directory, and traverse
 root-owned lineage directories; none may be group- or world-writable. The
 installed vhost itself must be a safe regular file. Every other directive
-comes from the repository. Ambiguous TLS servers or certificate directives,
-mixed paths, renamed hosts, unsafe metadata, destination symlinks, and files
-that change while inspected fail the deploy without logging certificate
-paths. A fresh node, or an unambiguous absolute non-Certbot placeholder pair,
-uses the repository bytes unchanged.
+comes from the repository. A fresh node, or an unambiguous absolute
+non-Certbot placeholder pair, uses the repository bytes unchanged.
+
+**Preservation is best-effort, and failing to preserve does not fail the
+deploy.** The validator (`mojo/deploy/vhost_install.py`, run as
+`python3 -m mojo.deploy.vhost_install`) is strict on purpose, and most of what
+it rejects is a state an operator reaches by editing a vhost — a renamed
+`server_name`, `server_name _`, a second TLS server, a mode-drifted conf, a
+comment this parser cannot read. Every one of those now **warns, installs the
+repository bytes verbatim, and continues**, filing a deploy warning under
+phase `nginx_vhost_tls` (the node's issued certificate reference was dropped;
+it serves the repository's certificate paths until the certificate plane
+re-issues) or `nginx_vhost` (preservation never got far enough to matter).
+Each warning names a fixed code — `server-name-mismatch`,
+`unsafe-private-key-mode`, `invalid-utf8-config` and so on — and never a
+filesystem path.
+
+Only these still fail the deploy, all of them on the write path: a repository
+source that vanished mid-run, a destination that is a symlink or not a regular
+file, a `conf.d` that is not root-owned or is group/world-writable, a source or
+destination that changed while being inspected, a partial write, and a wrong
+argv. Plus one precondition: when preservation is skipped, the repository's own
+`ssl_certificate` and `ssl_certificate_key` must exist on the node
+(`repository-certificate-missing`) — otherwise the install would produce a conf
+`nginx -t` rejects, ~300 lines later, with the bytes already on disk. That
+check is skipped when the repository file could not be parsed at all; nginx is
+the better judge there.
+
+If the installed framework is older than the module (this script's inode
+outlives its own `pip install`), the vhost step degrades to a plain copy with a
+`nginx_vhost` warning rather than failing.
 
 The framework install is a **convergence, never a one-shot veto**. The target
 (the `--framework` pin, or on bare runs the newest version per PyPI's JSON
