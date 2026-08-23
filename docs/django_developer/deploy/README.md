@@ -11,6 +11,7 @@ run on the node itself, outside Django:
 | `mojo.deploy.check_node` | Read-only audit of ONE node against the on-node deploy contract |
 | `mojo.deploy.jobman` | Starts, stops and reports the node's **foreground** job engine and scheduler |
 | `mojo.deploy.node_setup` | Converges `var/` ownership, systemd units, and the jobs cron |
+| `mojo.deploy.node_role` | Resolves and seals which role this node plays, and reads `aws/node_roles.conf` — the manifest saying which converged files each role owns |
 | `mojo.deploy.mojosec` | Safely installs and operates the privileged, observe-only MojoSec sensor |
 | `mojo.deploy.audit` | Converges selective Linux Audit execution provenance and publishes constrained health |
 | `mojo.deploy.firewall_broker` | Root semantic firewall executor; accepts no argv and constructs closed operations |
@@ -31,6 +32,7 @@ python3 -m mojo.deploy.certbot_sync --renew
 python3 -m mojo.deploy.check_node --require-shims
 python3 -m mojo.deploy.jobman status
 python3 -m mojo.deploy.node_setup --dry-run
+python3 -m mojo.deploy.node_role resolve --project-path /opt/api --json
 (cd / && sudo /usr/bin/python3 -E -P -m mojo.deploy.mojosec converge --mode observe)
 python3 -m mojo.deploy locate update.sh
 python3 -m mojo.deploy.provision apply --env prod --dry-run
@@ -452,12 +454,14 @@ bare invocation is refused. Deploy mode publishes the installed commit and
 attempt UUID as one atomic `var/deploy_identity.json` before its v2 success
 callback; the old `deploy_sha` / `deployment_uuid` pair is read only as a
 bounded one-generation bridge. `post_deploy.sh` is the convergence pass update.sh
-sudo-runs: project deps first, framework last, `migrate_locked` only under
-`--migrate`, collectstatic, **render** (below), nginx top-level + `sec.d` +
-`conf.d` (`.example` excluded, copied count logged), `node_retired.conf`
-processing, `nginx -t` gate + reload, systemd + cron install from
-`var/deploy/`, the structural stale-cron sweep, `var/logs` ownership, restart,
-and a `PROBE_URL` health gate.
+sudo-runs: project deps first, framework last, the **node role** (below, only
+when `aws/node_roles.conf` exists), `migrate_locked` only under `--migrate`,
+collectstatic, **render** (below), nginx top-level + `sec.d` + `conf.d`
+(`.example` excluded, names another role owns skipped, copied count logged),
+`node_retired.conf` processing, foreign-vhost removal, `nginx -t` gate +
+reload, systemd + cron install from `var/deploy/`, foreign cron/unit removal,
+the structural stale-cron sweep, `var/logs` ownership, restart, and a
+`PROBE_URL` health gate.
 
 Repository vhosts remain authoritative across that convergence, with one
 narrow exception for a certificate already issued on the node. When the
@@ -668,7 +672,8 @@ was installed **before** the run, not after.
 | `APP_USER` | `post_deploy.sh` → `@APP_USER@` | `ec2-user` | Owns the tree, runs the job engines |
 | `WEB_USER` | `post_deploy.sh` → `@WEB_USER@` | `www` | Runs the asgi app behind nginx |
 | `ASGI_WORKERS` | `post_deploy.sh` → `@WORKERS@` | `4` | uvicorn worker count in `mojo-asgi.service` |
-| `NGINX_ETC` / `SYSTEMD_ETC` / `CRON_ETC` / `LOGROTATE_ETC` | `post_deploy.sh` | `/etc/nginx` / `/etc/systemd/system` / `/etc/cron.d` / `/etc/logrotate.d` | Test seams — prod defaults, overridden only by harnesses |
+| `NODE_ROLE` | `post_deploy.sh` (role resolution) | unset | Which role this node plays, for a project that ships `aws/node_roles.conf`. Only consulted when nothing is sealed yet; the next deploy promotes it into `/etc/mojo/deploy-role.conf` |
+| `NGINX_ETC` / `SYSTEMD_ETC` / `CRON_ETC` / `LOGROTATE_ETC` / `MOJO_ETC` | `post_deploy.sh` | `/etc/nginx` / `/etc/systemd/system` / `/etc/cron.d` / `/etc/logrotate.d` / `/etc/mojo` | Test seams — prod defaults, overridden only by harnesses |
 | `MOJOSEC_ETC` / `MOJOSEC_STABLE_HELPER` | `post_deploy.sh` | `/etc/mojosec` / `/usr/local/lib/mojosec/mojosec_changes.py` | Test seams for the enrollment probe and the root-owned trusted-change helper — prod defaults, overridden only by harnesses |
 | `CERTBOT_SYNC_LOCK` | `certbot_sync` | `/var/run/certbot_sync.lock` | Lock path override, exists for harnesses |
 
@@ -778,6 +783,25 @@ worker identity is read, and converge's failures now quote nginx's own
 place, so a bootstrap that newly declares the map makes the fragment yield in
 the same deploy instead of failing the final `nginx -t`.
 
+`render` also **filters by node role and prunes**. When `MOJO_NODE_ROLE` is set
+in its environment, every `cron.d` / `systemd` name that
+`aws/node_roles.conf` gives to a *different* role is skipped in both the
+framework-template loop and the project overlay — so one pass renders the right
+contract for each kind of box. The role arrives through the environment and
+**not** through a new flag on purpose: a rollback pairs a newer
+`post_deploy.sh` with an older `mojo.deploy`, where an unknown argument would
+`die` and an unread variable is simply ignored. Unset (every project that ships
+no manifest, and every node before it is labeled), not one byte changes.
+
+After every write succeeds, each rendered subdirectory is pruned to exactly the
+set that run produced — regular non-symlink files only, never directories, and
+never at all when the render failed partway. This is what makes the role filter
+effective on an already-deployed node: a leftover copy of another role's cron
+is not merely stale, post_deploy's install loop would copy it straight back
+into `/etc` and it would then shield the structural sweep. It also incidentally
+retires a framework template the package stopped shipping, which previously
+lingered in `var/deploy` until someone noticed.
+
 `var/deploy/` is the single source of truth for what the last deploy shipped:
 post_deploy installs `/etc` copies FROM it, and check_node byte-compares
 `/etc` AGAINST it. The template names deliberately match the historical
@@ -833,14 +857,142 @@ mention `PROJ_PATH`, and nginx `conf.d` (where a mentions-the-project rule
 would delete live node-managed vhosts). It lives *outside* `aws/cron.d/` so
 the convergence glob can never copy the list itself into `/etc`.
 
+## `node_roles.conf` — one repo, more than one kind of node
+
+Everything above converges **one** set of files onto every node of a project:
+the whole rendered cron/systemd contract plus every vhost in
+`aws/nginx/conf.d/`. That is right for a fleet of identical API boxes and wrong
+for a repo that describes an API node *and* a worker node — the worker gets the
+API vhost, the API box runs the worker's cron, and the only escapes were a
+second repo or a hand-managed node.
+
+`${PROJ_PATH}/aws/node_roles.conf` (optional) says which converged files belong
+to which role. One declaration per line, `#` comments, one or two
+whitespace-separated fields:
+
+```
+# <role>            <kind>/<name>
+api                 conf.d/api.example.com.conf
+api                 cron.d/5_api_reports
+worker              conf.d/worker.internal.conf
+worker              cron.d/5_worker_sweeps
+worker              systemd/worker-drain.timer
+edge
+```
+
+- `<kind>` is `conf.d` (repo vhosts), `cron.d` or `systemd` (rendered
+  contract). `<name>` is a plain file name — no slashes, no `.`/`..`.
+- A role is 1–63 characters, lowercase letters/digits/dots/dashes/underscores,
+  starting alphanumeric — the same grammar as `EDGE_NODE_ID`.
+- **A name no line mentions is SHARED**: every role keeps it. That is the
+  default, and it is why adding a manifest does not require listing the
+  framework's own crons or a health vhost every box serves.
+- A name listed under **several** roles belongs to all of them (`5_api_reports`
+  under both `api` and `worker` runs on both kinds of box).
+- A bare role line (`edge` above) declares a role that owns nothing. It is how
+  a third kind of node exists without claiming a file.
+
+Three names are **refused at parse time**, and the whole file is refused with
+them: `conf.d/00_django_mojo_runtime.conf` and `conf.d/00_mojosec.conf` are
+package-owned and converged *after* the install loop, so role removal would
+delete what the deploy just installed; `systemd/mojo-asgi.service` has its
+lifecycle decided by the sealed request-service authority (above), not by a
+role manifest.
+
+With the manifest present, `post_deploy.sh` resolves this node's role before it
+migrates and then, for the rest of the pass: renders only what the role owns,
+skips the foreign vhosts in the `conf.d` install loop, removes foreign vhosts
+**before** the `nginx -t` gate, removes foreign crons **after** the install
+loop, and disables + removes foreign units after the timer-enable loop (one
+`systemctl daemon-reload` at the end). Vhost and cron removals are fatal-path
+trusted changes; the unit pass is background operation and only warns.
+
+Fail-closed states, all of them **before** `migrate_locked` and `collectstatic`
+so a refused node has changed nothing:
+
+| State | Result |
+|---|---|
+| No `aws/node_roles.conf` | Not one subprocess runs; every node converges everything, exactly as before |
+| Manifest present, node unlabeled | `die`, naming all three places it can be labeled |
+| Role not declared in the manifest | `die`; nothing is sealed |
+| Manifest the grammar refuses | `die` naming the line |
+| Manifest present, installed framework predates the feature | `record_warning node_role` and converge everything — a rollback must never be blocked by this |
+
+That last row is the rollback shape: `update.sh` re-enters the **new** script
+body after pip has installed the **old** package, so the module is gone.
+Converging every declared name is precisely what that older framework did on
+this node, so it warns and continues.
+
+### The sealed role authority
+
+`/etc/mojo/deploy-role.conf` is the node's own answer, root-owned mode `0600`,
+containing exactly one line:
+
+```
+MOJO_NODE_ROLE=api
+```
+
+Readers validate the real parent directory (root-owned, not group/world
+writable) and then open the leaf through that descriptor with `O_NOFOLLOW`,
+requiring a regular single-link `0600` file, an ASCII body under 128 bytes, and
+a role matching the grammar. Anything else is refused, never guessed. This is
+the same discipline as the **Brownfield request-service authority** above, for
+the same reason: the node's own identity may not be decided by anything the
+application can write.
+
+Resolution order, first answer wins:
+
+1. **sealed** — `/etc/mojo/deploy-role.conf`. The only authority an application
+   on the node cannot influence.
+2. **env** — a `NODE_ROLE` export in the project's `aws/post_deploy.sh` shim.
+3. **bootstrap** — `MOJO_NODE_ROLE` in `${PROJ_PATH}/var/bootstrap.conf`, which
+   is where a fleet provision already writes each node's role.
+
+A role that resolved from **env or bootstrap is promoted into the seal once**,
+as a journaled trusted change, right after the manifest agrees the role exists
+(so a typo cannot leave a node labeled with a role nothing declares). A failed
+seal is a warning: the deploy continues on the role it already resolved,
+because the label is a fact about the node, not a step the release depends on.
+
+`var/bootstrap.conf` is **never sourced or echoed** — it holds `AWS_KEY` /
+`AWS_SECRET` on real nodes. It is read with a bounded, anchored key=value scan,
+and the only thing that can come out is a value matching the role grammar; a
+malformed one is refused without quoting the file.
+
+Labeling a node that no fleet provision placed (a hand-managed or single-node
+project) is either half of the same coin: have root write the sealed file, or
+export `NODE_ROLE` from the shim and let the next deploy seal it. **Re-labeling
+a sealed node means rewriting the sealed file** — editing `bootstrap.conf`
+alone has no effect once a seal exists, and `check_node` WARNs when the two
+disagree so that surprise surfaces in the audit rather than in production.
+
+> `/etc/mojo/node-role.json` is a *different* file: the opaque app-owned role
+> document stage 0 installs (see `provision.md`). The deploy plane's authority
+> is deliberately named `deploy-role.conf` so the two can never be confused.
+
+### Rolling a manifest out
+
+Order matters, because the manifest is the thing that starts deleting files:
+
+1. **Label every node first.** Seal it (root writes
+   `/etc/mojo/deploy-role.conf`), export `NODE_ROLE` from the shim, or confirm
+   the fleet provision already put `MOJO_NODE_ROLE` in `var/bootstrap.conf`.
+2. **Check the labels** — `python3 -m mojo.deploy.check_node --section roles`
+   on each node (or `--ssh <host>`). Before the manifest lands this reports the
+   role and its authority; nothing is enforced yet.
+3. **Commit the manifest.** The next deploy converges each node to its role and
+   sheds what belongs to another. A node you forgot in step 1 refuses to deploy
+   rather than converging the wrong set — which is the whole point of doing it
+   in this order.
+
 ---
 
 # `check_node`
 
 The complement of `check_setup`: audits one node, never calls an AWS API,
-mutates nothing. Sections: `repo`, `framework`, `cron`, `systemd`, `nginx`,
-`certs`, `config_plane`, `shims`, `legacy`, `var_ownership`, `jobs`. Exit 1
-iff anything FAILed.
+mutates nothing. Sections: `repo`, `framework`, `roles`, `cron`, `systemd`,
+`nginx`, `certs`, `config_plane`, `shims`, `legacy`, `var_ownership`, `jobs`.
+Exit 1 iff anything FAILed.
 
 The nginx section audits the same five-path runtime contract, worker identity,
 metadata, SELinux accessibility, active `nginx -T` directives, and a real
@@ -877,8 +1029,37 @@ memory and diffs them against `var/deploy/` — a difference is INFO:
 last-deploy compare against `/etc` stays the primary audit; the freshness
 diff only says the *next* deploy will change things.
 
+The **roles** section (only interesting on a project that ships
+`aws/node_roles.conf`, INFO otherwise) reports the node's role and *which*
+authority declared it, and grades:
+
+| Finding | Grade |
+|---|---|
+| No manifest | INFO — the single-role shape most projects want |
+| Role resolves, and the manifest declares it | INFO + PASS |
+| Role still declared by env or bootstrap, not sealed | WARN (the next deploy promotes it) |
+| `bootstrap.conf` disagrees with the sealed role | WARN — a re-label that edited only bootstrap has NOT taken effect |
+| Manifest present, node unlabeled | FAIL, naming all three declaration sites |
+| Role not declared in the manifest | FAIL |
+| Manifest the grammar refuses | FAIL, naming the line |
+| A file another role owns is installed here | FAIL (and says so when a foreign unit is *enabled*) |
+| A name the manifest gives this role that nothing ships | WARN — the typo detector |
+| Installed framework predates the feature | INFO |
+
+The manifest is read from `--repo-path` (like the nginx contract);
+`node_retired.conf` stays a `--project-path` read, deliberately, because
+retirement is about what is installed on the node. Role resolution goes through
+the same runner as every other probe, so `--ssh` answers about the *remote*
+node. The same foreign sets keep the rest of the audit honest: the nginx
+section does not grade another role's vhost "not installed", the systemd
+section does not grade a correctly shed timer "not enabled", and the freshness
+diff does not report a permanent false "framework templates moved".
+
 `var/django.conf` and `var/bootstrap.conf` are never read — stat + key-NAME
-presence grep only. Do not widen that.
+presence grep only, plus exactly one bounded exception: the roles section
+learns the node's role through
+`python3 -m mojo.deploy.node_role resolve --json`, whose every field is a
+validated role identifier or the empty string. Do not widen either.
 
 ---
 

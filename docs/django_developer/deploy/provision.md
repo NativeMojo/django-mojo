@@ -256,6 +256,14 @@ prefix. The role document is root-owned `0600`, and `MOJO_NODE_ROLE` plus
 inventory. Only `serving_target` nodes, plus explicit compatibility instance
 ids, enter the API target group; workers do not.
 
+That `MOJO_NODE_ROLE` line in `var/bootstrap.conf` is also the third-priority
+input to the deploy plane's own role resolution: a project that ships
+`aws/node_roles.conf` converges each node through its role and promotes the
+bootstrap value into the root-sealed `/etc/mojo/deploy-role.conf` on the next
+deploy — see "`node_roles.conf` — one repo, more than one kind of node" in
+[README.md](README.md). The opaque `/etc/mojo/node-role.json` document is a
+different, application-owned file and is never read by that machinery.
+
 `nodes.items[].request_service` is a separate optional boolean. Omission or
 `true` preserves the canonical django-mojo ASGI install, restart and request
 probe. `false` makes canonical post-deploy stop and disable
