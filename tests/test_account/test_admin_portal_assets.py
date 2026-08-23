@@ -820,8 +820,10 @@ def test_add_node_placement_asset_contract(opts):
         assert "callbacks.onInput" in source and "callbacks.onCommit" in source, \
             "placement keystrokes and committed changes are not separate events"
         assert "let commitTimer = null" in source \
-            and "setTimeout(() => callbacks.onCommit" in source, \
-            "placement commit can replace controls before focus finishes moving"
+            and "callbacks.onCommit?.(values(), valid(), focusControl)" in source, \
+            "placement commits do not carry focus identity across a render"
+        assert "event.relatedTarget?.dataset?.placementControl" in source, \
+            "subnet blur does not retain its explicit keyboard destination"
         assert "data-placement-control" in source, \
             "placement controls have no stable focus identity across renders"
         assert "return {element, values, valid}" in source, \
@@ -844,6 +846,9 @@ def test_add_node_placement_asset_contract(opts):
             and "dataset?.placementControl" in source \
             and "focus({preventScroll: true})" in source, \
             "a plan or placement render does not restore the active placement control"
+        assert "pendingPlacementFocus = focusControl" in source \
+            and "pendingPlacementFocus ||" in source, \
+            "the batch render ignores the placement event's focus destination"
 
     assert "confirm_resource: ADD_NODE" in legacy and "...placement.values()" in legacy, \
         "the Dashboard changed the literal add_node echo or omitted placement"

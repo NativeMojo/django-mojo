@@ -159,18 +159,19 @@ export function addNodePlacementControls(report, initial = {}, callbacks = {}) {
   };
 
   let commitTimer = null;
-  const commit = () => {
+  const commit = (focusControl = '') => {
     clearTimeout(commitTimer);
-    // Let Tab/Shift+Tab finish moving focus before a batch caller re-renders.
-    // Its render can then preserve the intended control, not the one blurring.
-    commitTimer = setTimeout(() => callbacks.onCommit?.(values(), valid()), 0);
+    // change precedes blur for a typed input. Queue both so blur can replace
+    // the fallback identity with its explicit Tab/Shift+Tab destination.
+    commitTimer = setTimeout(
+      () => callbacks.onCommit?.(values(), valid(), focusControl), 0);
   };
   const source = h('select', {'data-placement-control': 'source',
     onchange: (event) => {
       sourceInstance = event.target.value;
       paint();
       callbacks.onInput?.(values(), valid());
-      commit();
+      commit(event.currentTarget.dataset.placementControl);
     }},
   h('option', {value: '', text: 'Automatic (healthy source)'}),
   ...healthy.map((row) => h('option', {value: row.id, text: sourceLabel(row),
@@ -180,8 +181,12 @@ export function addNodePlacementControls(report, initial = {}, callbacks = {}) {
     paint();
     callbacks.onInput?.(values(), valid());
   });
-  subnet.addEventListener('change', commit);
-  subnet.addEventListener('blur', commit);
+  subnet.addEventListener('change', (event) => {
+    commit(event.currentTarget.dataset.placementControl);
+  });
+  subnet.addEventListener('blur', (event) => {
+    commit(event.relatedTarget?.dataset?.placementControl || '');
+  });
 
   const element = h('div', {class: 'add-node-placement'},
     h('label', {class: 'placement-field'},
