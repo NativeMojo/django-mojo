@@ -965,21 +965,10 @@ def test_invite_confinement(opts):
 # 18. Opt-in registration
 # ---------------------------------------------------------------------------
 
-@th.django_unit_test("the grouptoken scheme is opt-in per deployment")
-def test_scheme_is_opt_in(opts):
-    with th.server_settings(AUTH_BEARER_HANDLERS={}):
-        resp = opts.client.get("/api/user/me", headers=gt(opts.token_a))
-        assert_eq(resp.status_code, 401,
-                  f"with the handler unregistered the scheme must be rejected, "
-                  f"got {resp.status_code}: {resp.response}")
-        assert_true("Invalid token type" in str(resp.response.get("error", "")),
-                    f"an unregistered scheme reports 'Invalid token type', "
-                    f"got {resp.response}")
-
-    resp = opts.client.get("/api/user/me", headers=gt(opts.token_a))
-    assert_eq(resp.status_code, 200,
-              f"with the handler registered again the token must authenticate, "
-              f"got {resp.status_code}: {resp.response}")
+# test_scheme_is_opt_in moved to
+# tests/test_auth_extended_serial/group_token_opt_in.py (maestro #2791):
+# AUTH_BEARER_HANDLERS is read at module load, so unregistering the handler
+# needs a server reload — legal only in a serial/opt-in package.
 
 
 # ---------------------------------------------------------------------------

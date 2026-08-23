@@ -528,3 +528,512 @@ def test_oauth_refusal_modes(opts):
                 "a suspicious OAuth destination must fail CLOSED under enforce")
         except merrors.ValueException:
             pass
+
+
+# --- Endpoint (reload) helpers, moved from tests/test_auth/handoff_group_token.py
+# (maestro #2791). These blocks hit the real server, so they need
+# th.server_settings() reloads — legal here in the serial sibling.
+def _data(resp):
+    """The `data` dict of a response body, or {} when there isn't one."""
+    body = resp.response
+    if not isinstance(body, dict):
+        return {}
+    data = body.get("data")
+    return data if isinstance(data, dict) else {}
+
+
+def _mint(opts, destination, **kwargs):
+    """Mint a handoff code for `destination`; returns the response."""
+    return opts.client.post("/api/auth/handoff", {"redirect_uri": destination}, **kwargs)
+
+
+BLOCK1_ALLOWED = [
+    f"https://{GATED_HOST}/",
+    f"http://{GATED_HOST}/",
+    f"https://{GATED_HOST}:8443/",
+    f"https://{GATED_HOST}./",
+    f"https://deep.sub.{GATED_HOST}/",
+    f"https://{UNGATED_HOST}/",
+]
+
+
+
+
+# ==========================================================================
+# Endpoint gating (reload) blocks — moved from the parallel package
+# (maestro #2791). block1 stashes opts.flip_code (TTL 300); the
+# stamp-wins test consumes it AFTER block1's enforce window exits, so
+# these must stay in this order.
+# ==========================================================================
+@th.unit_test("enforce: a gated destination NEVER receives a platform JWT")
+def test_block1_enforce(opts):
+    from mojo.apps.account.models import User, Group
+    from mojo.apps.account.models.member import GroupMember
+    from mojo.apps.account.models.login_event import UserLoginEvent
+    from tests.test_register import _capture
+
+    source = "handoff:grouptoken"
+    gated = f"https://{GATED_HOST}/"
+
+    with th.server_settings(
+            AUTH_HANDOFF_ALLOWED_URLS=BLOCK1_ALLOWED,
+            AUTH_HANDOFF_GROUP_TOKEN_MODE="enforce",
+            AUTH_HANDOFF_GROUP_TOKEN_HOSTS={GATED_HOST: opts.group_a_uuid},
+            AUTH_HANDOFF_CODE_TTL=300,
+            # The OAuth arm below needs the gated host to CLEAR
+            # _validate_redirect_uri, or its 400 would come from the allowlist
+            # and the test would pass with the whole feature deleted. The
+            # test project's own entry is kept: tests/test_oauth runs in a
+            # parallel package and relies on it.
+            ALLOWED_REDIRECT_URLS=["https://example.com/", f"https://{GATED_HOST}/"]):
+        _clear_limits()
+
+        # --- mint every code this block needs in ONE session ----------------
+        assert_true(opts.client.login(MEMBER, PWORD), "member login should succeed")
+
+        def mint(dest, why):
+            resp = _mint(opts, dest)
+            assert_eq(resp.status_code, 200,
+                      f"minting for {dest!r} ({why}) should succeed under "
+                      f"enforcement, got {resp.status_code}: {resp.response}")
+            code = _data(resp).get("code")
+            assert_true(bool(code), f"no code minted for {dest!r}: {resp.response}")
+            return code
+
+        code_gated = mint(gated, "the gated host")
+        code_ungated = mint(UNGATED_DEST, "an ungated host")
+        code_sidefx = mint(gated, "the side-effect probe")
+        code_deact = mint(gated, "the group-deactivation probe")
+        codes_g = [(mint(dest, why), dest, why) for dest, why in BLOCK1_GATED_DESTS]
+        # Stashed UNSPENT for section F — AUTH_HANDOFF_CODE_TTL is 300s here so
+        # it survives this block's exit and the mode flipping back to off.
+        opts.flip_code = mint(gated, "the mode-flip probe")
+        opts.client.logout()
+
+        # --- the group package ----------------------------------------------
+        resp = opts.client.post("/api/auth/exchange", {"code": code_gated})
+        assert_eq(resp.status_code, 200,
+                  f"a gated exchange should succeed for a member, got "
+                  f"{resp.status_code}: {resp.response}")
+        data = _data(resp)
+        token = data.get("access_token")
+        assert_true(isinstance(token, str) and token.startswith("gt1."),
+                    f"a gated destination must receive a group-scoped token, "
+                    f"got {token!r}")
+        assert_false("refresh_token" in data,
+                     f"a group package must carry NO refresh_token key AT ALL — "
+                     f"its absence is what makes the client clear a stale one. "
+                     f"Got keys {sorted(data.keys())}")
+        assert_eq(data.get("token_type"), "grouptoken",
+                  f"the package must name its scheme, got {data.get('token_type')!r}")
+        assert_true((data.get("expires_in") or 0) > 0,
+                    f"a gt1. token carries no exp claim, so expires_in is the "
+                    f"only lifetime the client gets: {data.get('expires_in')!r}")
+        group = data.get("group") or {}
+        assert_eq(group.get("id"), opts.group_a_id, f"wrong group id: {group!r}")
+        assert_eq(group.get("uuid"), opts.group_a_uuid, f"wrong group uuid: {group!r}")
+        assert_eq(group.get("name"), "hgt_tenant_a", f"wrong group name: {group!r}")
+        assert_eq((data.get("user") or {}).get("id"), opts.member_id,
+                  f"the package must identify the signed-in visitor: {data.get('user')!r}")
+
+        # --- the token actually works, and buys nothing more ----------------
+        me = opts.client.get("/api/user/me",
+                             headers={"Authorization": f"grouptoken {token}"})
+        assert_eq(me.status_code, 200,
+                  f"the delivered group token must authenticate, got "
+                  f"{me.status_code}: {me.response}")
+        assert_eq(me.response.data.id, opts.member_id,
+                  "the group token must resolve to the visitor it was minted for")
+
+        replay = opts.client.post("/api/auth/exchange", {"code": code_gated})
+        assert_eq(replay.status_code, 401,
+                  f"a gated code is single-use like any other, got "
+                  f"{replay.status_code}: {replay.response}")
+
+        upgrade = opts.client.post("/api/refresh_token", {"refresh_token": token})
+        assert_eq(upgrade.status_code, 401,
+                  f"a gt1. string posted as a refresh_token must not buy a JWT "
+                  f"pair, got {upgrade.status_code}: {upgrade.response}")
+
+        # --- the untouched path: an ungated destination is unchanged ---------
+        resp = opts.client.post("/api/auth/exchange", {"code": code_ungated})
+        assert_eq(resp.status_code, 200,
+                  f"an ungated destination must still exchange, got "
+                  f"{resp.status_code}: {resp.response}")
+        data = _data(resp)
+        assert_true(bool(data.get("refresh_token")),
+                    f"an ungated destination must still receive a full JWT PAIR "
+                    f"— gating must not change any other destination. Got keys "
+                    f"{sorted(data.keys())}")
+        assert_false(str(data.get("access_token") or "").startswith("gt1."),
+                     "an ungated destination must receive a platform JWT")
+        assert_false("token_type" in data,
+                     f"JWT responses are frozen by login_response_contract.py "
+                     f"and must not grow a token_type key: {sorted(data.keys())}")
+
+        # --- G. every bypass shape delivers a group token, not a JWT ---------
+        _clear_limits()
+        for code, dest, why in codes_g:
+            resp = opts.client.post("/api/auth/exchange", {"code": code})
+            assert_eq(resp.status_code, 200,
+                      f"exchange for {dest!r} ({why}) should succeed, got "
+                      f"{resp.status_code}: {resp.response}")
+            data = _data(resp)
+            assert_false("refresh_token" in data,
+                         f"A JWT-BEARING RESPONSE FOR A GATED HOST IS A BUG: "
+                         f"{dest!r} ({why}) is the gated host wearing a "
+                         f"different scheme/port/case/depth, and it received a "
+                         f"refresh token. Keys: {sorted(data.keys())}")
+            assert_true(str(data.get("access_token") or "").startswith("gt1."),
+                        f"{dest!r} ({why}) must receive a gt1. token, got "
+                        f"{data.get('access_token')!r}")
+
+        # --- D10 side effects on a successful gated exchange -----------------
+        _clear_limits()
+        member = User.objects.get(pk=opts.member_id)
+        before_login = member.last_login
+        before_webapp = member.get_protected_metadata("orig_webapp_url")
+        UserLoginEvent.objects.filter(user_id=opts.member_id, source=source).delete()
+        capture_id = _capture.new_capture_id()
+        _capture.clear_capture(capture_id)
+        resp = opts.client.post(
+            "/api/auth/exchange",
+            {"code": code_sidefx, "webapp_base_url": "https://hgt-tenant.example.org"},
+            headers={
+                "X-Mojo-Test-User-Login-Handler": "tests.test_register._capture.capture_login",
+                "X-Mojo-Test-Capture-Id": capture_id,
+                "Origin": "https://hgt-tenant.example.org",
+            })
+        assert_eq(resp.status_code, 200,
+                  f"the side-effect probe should exchange, got {resp.status_code}: "
+                  f"{resp.response}")
+        member = User.objects.get(pk=opts.member_id)
+        assert_true(before_login is None or member.last_login > before_login,
+                    f"a gated exchange IS a login and must advance last_login "
+                    f"({before_login} -> {member.last_login})")
+        event = UserLoginEvent.objects.filter(
+            user_id=opts.member_id, source=source).last()
+        assert_true(event is not None,
+                    f"a gated exchange must record a UserLoginEvent with "
+                    f"source={source!r} — an auth path that leaves no event is "
+                    f"an invisible one")
+        assert_true(event.device_id is not None,
+                    "the login event must carry the device, exactly as jwt_login does")
+        calls = _capture.read_capture(capture_id).get("login", [])
+        assert_eq(len(calls), 1,
+                  f"USER_LOGIN_HANDLER must fire exactly once for a gated "
+                  f"exchange, got {calls!r}")
+        assert_eq(calls[0].get("source"), source,
+                  f"the handler must see the gated source, got {calls[0]!r}")
+        after_webapp = member.get_protected_metadata("orig_webapp_url")
+        assert_eq(after_webapp, before_webapp,
+                  f"a gated exchange must NOT write webapp_url metadata: both "
+                  f"webapp_base_url and Origin come from the GATED site's own "
+                  f"backend, so honoring them would let a tenant overwrite "
+                  f"platform-account metadata for every visitor "
+                  f"({before_webapp!r} -> {after_webapp!r})")
+        _capture.clear_capture(capture_id)
+
+        # --- the group goes dark between mint and exchange -------------------
+        Group.objects.filter(pk=opts.group_a_id).update(is_active=False)
+        try:
+            resp = opts.client.post("/api/auth/exchange", {"code": code_deact})
+            assert_eq(resp.status_code, 403,
+                      f"a group deactivated inside the code's TTL must refuse, "
+                      f"got {resp.status_code}: {resp.response}")
+            assert_false("access_token" in _data(resp),
+                         f"a refused gated exchange must never fall back to a "
+                         f"JWT: {resp.response}")
+        finally:
+            Group.objects.filter(pk=opts.group_a_id).update(is_active=True)
+
+        # --- membership removed between mint and exchange --------------------
+        _clear_limits()
+        assert_true(opts.client.login(TEMP, PWORD), "temp-user login should succeed")
+        code_temp = mint(gated, "the membership-revocation probe")
+        opts.client.logout()
+        GroupMember.objects.filter(
+            user_id=opts.temp_id, group_id=opts.group_a_id).delete()
+        resp = opts.client.post("/api/auth/exchange", {"code": code_temp})
+        assert_eq(resp.status_code, 403,
+                  f"membership removed inside the code's TTL must refuse — the "
+                  f"real mint at exchange re-runs every guard. Got "
+                  f"{resp.status_code}: {resp.response}")
+        assert_false("access_token" in _data(resp),
+                     f"a refused gated exchange must never carry a token: {resp.response}")
+
+        # --- who may not be handed a gated destination at all ----------------
+        _clear_limits()
+        for username, why in ((OUTSIDER, "a non-member"),
+                              (SUPERUSER, "a superuser, who can never hold a "
+                                          "group token")):
+            assert_true(opts.client.login(username, PWORD),
+                        f"{username} login should succeed")
+            resp = _mint(opts, gated)
+            assert_eq(resp.status_code, 403,
+                      f"{why} must be refused at MINT — a code that can never be "
+                      f"spent is worse than no code. Got {resp.status_code}: "
+                      f"{resp.response}")
+            assert_true(_data(resp).get("code") is None,
+                        f"{why} must not receive a code: {resp.response}")
+            assert_false("access_token" in _data(resp),
+                         f"{why} must not receive a token: {resp.response}")
+            opts.client.logout()
+
+        # --- H. the OAuth leg REFUSES a gated destination --------------------
+        # It cannot deliver a scoped token instead: /complete can create the
+        # account, join a group from client-supplied state and fire the
+        # registration webhook before any membership pre-flight could fail.
+        _clear_limits()
+        opts.client.logout()
+
+        resp = opts.client.get(
+            f"/api/auth/oauth/google/begin?redirect_uri=https://{GATED_HOST}/land")
+        assert_eq(resp.status_code, 400,
+                  f"/begin must refuse a gated redirect_uri — this URL CLEARS "
+                  f"ALLOWED_REDIRECT_URLS, so a 200 here means gating never ran. "
+                  f"Got {resp.status_code}: {resp.response}")
+        assert_true("allowlist" in str(resp.response),
+                    f"the refusal must reuse the string /begin already emits for "
+                    f"an unlisted URI, so gated-vs-unlisted is not an oracle: "
+                    f"{resp.response}")
+        assert_true(_data(resp).get("auth_url") is None,
+                    f"a refused /begin must return no auth_url: {resp.response}")
+
+        resp = opts.client.get(
+            "/api/auth/oauth/google/begin?redirect_uri=https://example.com/login")
+        assert_eq(resp.status_code, 200,
+                  f"an UNGATED redirect_uri must still begin normally — this is "
+                  f"what proves the 400 above came from gating and not from the "
+                  f"allowlist. Got {resp.status_code}: {resp.response}")
+        assert_true(bool(_data(resp).get("auth_url")) and bool(_data(resp).get("state")),
+                    f"an ungated /begin must be unchanged: {resp.response}")
+
+        # The no-redirect_uri branch derives the landing URL from the
+        # UNVALIDATED Origin header and never calls _validate_redirect_uri at
+        # all, so this arm cannot be vacuous.
+        resp = opts.client.get("/api/auth/oauth/google/begin",
+                               headers={"Origin": f"https://{GATED_HOST}"})
+        assert_eq(resp.status_code, 400,
+                  f"/begin must refuse a gated Origin-derived default — that "
+                  f"branch picks the destination with a request header and "
+                  f"skips the allowlist entirely. Got {resp.status_code}: "
+                  f"{resp.response}")
+
+        resp = opts.client.get("/api/auth/oauth/google/begin")
+        assert_eq(resp.status_code, 200,
+                  f"with no Origin the default lands on the AUTH ORIGIN itself, "
+                  f"which is the same-host carve-out: a zone-wide gating entry "
+                  f"must never refuse a tenant's own white-label auth page when "
+                  f"it calls its own OAuth buttons. Got {resp.status_code}: "
+                  f"{resp.response}")
+
+        # /complete cannot be driven end to end (no real provider), so seed the
+        # state directly and assert the refusal lands BEFORE any provider call.
+        # "redirect_uri is not on the allowlist" is unreachable in /complete by
+        # any other path — _validate_redirect_uri is never called there.
+        import json as _json
+        import uuid as _uuid
+        from mojo.helpers.redis import get_connection
+
+        def seed_state(frontend_uri):
+            state = _uuid.uuid4().hex
+            get_connection().setex(f"oauth:state:{state}", 600, _json.dumps({
+                "redirect_uri": "https://example.com/api/auth/oauth/google/callback",
+                "frontend_uri": frontend_uri}))
+            return state
+
+        resp = opts.client.post(
+            "/api/auth/oauth/google/complete",
+            {"code": "hgt-not-a-real-code",
+             "state": seed_state(f"https://{GATED_HOST}/land")})
+        assert_eq(resp.status_code, 400,
+                  f"/complete must refuse a state whose frontend_uri is gated — "
+                  f"this is the authoritative check and it survives a mode flip "
+                  f"inside the state's TTL. Got {resp.status_code}: {resp.response}")
+        assert_true("redirect_uri is not on the allowlist" in str(resp.response),
+                    f"the refusal must be the gating one, not a provider error: "
+                    f"{resp.response}")
+
+        resp = opts.client.post(
+            "/api/auth/oauth/google/complete",
+            {"code": "hgt-not-a-real-code",
+             "state": seed_state("https://example.com/login")},
+            headers={"Origin": f"https://{GATED_HOST}"})
+        assert_eq(resp.status_code, 400,
+                  f"/complete must also refuse when the CALLER's own origin is "
+                  f"gated — the response body physically goes there. Got "
+                  f"{resp.status_code}: {resp.response}")
+        assert_true("redirect_uri is not on the allowlist" in str(resp.response),
+                    f"the refusal must be the gating one: {resp.response}")
+
+
+@th.unit_test("monitor: predicts both outcomes in the incident feed, binds neither")
+def test_block2_monitor(opts):
+    from mojo.apps.incident.models import Event
+    from mojo.apps.account.services import handoff_group as hg
+    from mojo.helpers.redis import get_connection
+
+    category = "auth:handoff_group_token_preview"
+    gated = f"https://{GATED_HOST}/"
+
+    Event.objects.filter(category=category).delete()
+    # Suppression is per host per outcome per hour — clear it so this test is
+    # repeatable against a long-lived Redis (precedent: handoff.py).
+    for outcome in ("deliver", "refuse"):
+        try:
+            get_connection().delete(hg._notice_key("preview", GATED_HOST, outcome))
+        except Exception:
+            pass
+
+    with th.server_settings(
+            AUTH_HANDOFF_GROUP_TOKEN_MODE="monitor",
+            AUTH_HANDOFF_GROUP_TOKEN_HOSTS={GATED_HOST: opts.group_a_uuid}):
+        _clear_limits()
+        for username, why in ((MEMBER, "a member"), (OUTSIDER, "a non-member")):
+            assert_true(opts.client.login(username, PWORD),
+                        f"{username} login should succeed")
+            resp = _mint(opts, gated)
+            assert_eq(resp.status_code, 200,
+                      f"monitor must never refuse {why}, got {resp.status_code}: "
+                      f"{resp.response}")
+            code = _data(resp).get("code")
+            assert_true(bool(code), f"monitor must still mint for {why}: {resp.response}")
+            opts.client.logout()
+
+            resp = opts.client.post("/api/auth/exchange", {"code": code})
+            assert_eq(resp.status_code, 200,
+                      f"monitor must still exchange for {why}, got "
+                      f"{resp.status_code}: {resp.response}")
+            data = _data(resp)
+            assert_true(bool(data.get("refresh_token")),
+                        f"monitor must NOT bind — {why} still receives the full "
+                        f"JWT pair they receive today. Keys: {sorted(data.keys())}")
+
+        # A repeat inside the suppression window must not file a third event.
+        _clear_limits()
+        assert_true(opts.client.login(OUTSIDER, PWORD), "outsider re-login should succeed")
+        assert_eq(_mint(opts, gated).status_code, 200, "the repeat mint should succeed")
+        opts.client.logout()
+
+    events = list(Event.objects.filter(category=category))
+    assert_eq(len(events), 2,
+              f"monitor must file exactly ONE preview per outcome per host — one "
+              f"'would deliver' and one 'would refuse' — so the feed writes the "
+              f"gating map the way it already writes the allowlist. Got "
+              f"{[e.title for e in events]}")
+    titles = sorted(e.title or "" for e in events)
+    assert_true(any("(deliver)" in t for t in titles) and any("(refuse)" in t for t in titles),
+                f"the two previews must be distinguishable by outcome: {titles}")
+    for event in events:
+        assert_true(GATED_HOST in (event.details or ""),
+                    f"a preview must name the destination: {event.details!r}")
+        assert_true("hgt_tenant_a" in (event.details or ""),
+                    f"a preview must name the group it would confine to: "
+                    f"{event.details!r}")
+    Event.objects.filter(category=category).delete()
+
+
+@th.unit_test("enforce without the destination allowlist refuses EVERY handoff")
+def test_block3_missing_prerequisite(opts):
+    from mojo.apps.incident.models import Event
+    from mojo.apps.account.services import handoff_group as hg
+    from mojo.helpers.redis import get_connection
+
+    category = "auth:handoff_group_token_misconfigured"
+    Event.objects.filter(category=category).delete()
+    try:
+        get_connection().delete(hg._notice_key("misconfigured", "prerequisite", None))
+    except Exception:
+        pass
+
+    # No AUTH_HANDOFF_ALLOWED_URLS / AUTH_HANDOFF_RESOLVER: the test server's
+    # shipped state is the destination allowlist's MONITOR mode.
+    with th.server_settings(
+            AUTH_HANDOFF_GROUP_TOKEN_MODE="enforce",
+            AUTH_HANDOFF_GROUP_TOKEN_HOSTS={GATED_HOST: opts.group_a_uuid}):
+        _clear_limits()
+        assert_true(opts.client.login(MEMBER, PWORD), "member login should succeed")
+        cases = [
+            (f"https://{GATED_HOST}/", "the gated host itself"),
+            ("https://anything.example.org/x",
+             "a host that is NOT in the gating map — the exact combination that "
+             "would otherwise hand out a full JWT pair while the operator "
+             "believes gating is on"),
+            (None, "no redirect_uri at all"),
+        ]
+        for dest, why in cases:
+            body = {} if dest is None else {"redirect_uri": dest}
+            resp = opts.client.post("/api/auth/handoff", body)
+            assert_eq(resp.status_code, 400,
+                      f"gating enforce without allowlist enforcement must refuse "
+                      f"EVERY handoff, including {why}. Got {resp.status_code}: "
+                      f"{resp.response}")
+            assert_true(_data(resp).get("code") is None,
+                        f"a refused handoff must mint no code ({why}): {resp.response}")
+        opts.client.logout()
+
+    events = list(Event.objects.filter(category=category))
+    assert_eq(len(events), 1,
+              f"the misconfiguration must be reported once per hour, loudly — a "
+              f"two-line settings mistake becoming a visible handoff outage is "
+              f"the point. Got {[e.title for e in events]}")
+    assert_eq(events[0].level, 2,
+              f"a deployment that cannot deliver the property it advertises is "
+              f"a level-2 incident, got level {events[0].level}")
+    Event.objects.filter(category=category).delete()
+
+
+@th.unit_test("the stamp on the code wins a mode flip, and a corrupt gid is never a JWT")
+def test_stamp_wins_and_corrupt_gid_refuses(opts):
+    import json
+    import uuid as _uuid
+    from mojo.apps.account.models import Group
+    from mojo.helpers.redis import get_connection
+
+    _clear_limits()
+    assert_true(bool(getattr(opts, "flip_code", None)),
+                "block 1 must have stashed an unspent gated code")
+
+    resp = opts.client.post("/api/auth/exchange", {"code": opts.flip_code})
+    assert_eq(resp.status_code, 200,
+              f"the stashed code should still exchange, got {resp.status_code}: "
+              f"{resp.response}")
+    data = _data(resp)
+    assert_true(str(data.get("access_token") or "").startswith("gt1."),
+                f"gating is now OFF, and this code must STILL deliver a group "
+                f"token: the decision was taken at mint and is never re-read, "
+                f"so a resolver that breaks inside the code's TTL cannot turn a "
+                f"gated code back into a platform JWT. Got "
+                f"{data.get('access_token')!r}")
+    assert_false("refresh_token" in data,
+                 f"the honored stamp must still suppress the refresh token: "
+                 f"{sorted(data.keys())}")
+
+    # Corrupt stamps, written straight into the Redis payload.
+    highest = Group.objects.order_by("-pk").first()
+    deleted_pk = (highest.pk if highest else 0) + 100000
+
+    def seed(gid):
+        code = _uuid.uuid4().hex
+        payload = {"uid": opts.member_id, "ip": "",
+                   "dest": f"https://{GATED_HOST}/", "gid": gid}
+        get_connection().setex(f"auth:handoff:{code}", 300, json.dumps(payload))
+        return code
+
+    cases = [
+        ("abc", 401, "a non-numeric gid"),
+        (0, 401, "a zero gid"),
+        (-1, 401, "a negative gid"),
+        (True, 401, "a boolean gid (bool is an int subclass in Python)"),
+        (deleted_pk, 403, "a gid naming a group that does not exist"),
+    ]
+    for gid, expected, why in cases:
+        resp = opts.client.post("/api/auth/exchange", {"code": seed(gid)})
+        assert_eq(resp.status_code, expected,
+                  f"{why} should be {expected}, got {resp.status_code}: "
+                  f"{resp.response}")
+        assert_false("access_token" in _data(resp),
+                     f"{why} must NEVER produce a token — a corrupt stamp is a "
+                     f"corrupt code, not a licence to fall back to a JWT: "
+                     f"{resp.response}")
