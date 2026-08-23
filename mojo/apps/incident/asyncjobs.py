@@ -131,20 +131,57 @@ def broadcast_ipset_del_blocked(data):
         logit.info("broadcast_ipset_del_blocked: removed %s from %s", ip, FIREWALL_BLOCKED_IPSET_NAME)
 
 
-SYNC_FIREWALL_REDIS_KEY = "mojo:sync_firewall:last_sync"
+SYNC_FIREWALL_REDIS_PREFIX = "mojo:sync_firewall"
+# 2x the hourly interval, so a marker outlives one missed cycle but not two.
+SYNC_FIREWALL_MARKER_TTL = 7200
+# Long enough for a full reconcile of every enabled set (each set.replace has
+# its own 125s broker ceiling) without wedging the next hour if a run dies.
+SYNC_FIREWALL_LOCK_TTL = 900
+
+
+def _firewall_host():
+    """Per-HOST identity for the reconcile keys.
+
+    Two engines on one box share ONE kernel firewall, so the marker, the force
+    flag and the lock are all scoped to the host rather than the runner id —
+    otherwise the second engine would redo the first one's work and, worse,
+    the lock would not actually protect the kernel they share. host_channel()
+    is the runner id minus its '-engine' suffix and needs no execution
+    context, so this also works from a manual invocation.
+    """
+    from mojo.apps.jobs.job_engine import host_channel
+    return host_channel()
+
+
+def _sync_firewall_keys(host=None):
+    """(last_sync, force, lock) Redis keys for one host."""
+    host = host or _firewall_host()
+    return (f"{SYNC_FIREWALL_REDIS_PREFIX}:last_sync:{host}",
+            f"{SYNC_FIREWALL_REDIS_PREFIX}:force:{host}",
+            f"{SYNC_FIREWALL_REDIS_PREFIX}:lock:{host}")
 
 
 def sync_firewall(job):
     """
-    Hourly reconciliation job: restores ipsets from DB truth.
-    Doubles as startup recovery — first run after restart restores all blocks.
+    Reconcile THIS node's kernel ipsets against DB truth.
 
-    Skips ipsets that haven't changed since the last sync to stay lightweight.
-    Uses ipset restore (batch stdin) for fast bulk loading.
+    Published two ways, both landing here (item #2716):
+      * hourly by cronjobs.sync_firewall as a BROADCAST — one job per runner,
+        because each node has its own kernel and only the node running the job
+        can repair it;
+      * box-direct with {"force": True} by on_engine_start below, so a node
+        that just booted recovers immediately instead of waiting up to an hour.
+
+    Skips ipsets unchanged since THIS HOST last synced, so the steady-state
+    cost stays low. The marker only advances on a clean run — a node whose
+    loads failed must retry next cycle, not record success and suppress
+    itself forever.
 
     1. Load permanently blocked IPs into mojo_blocked (if changed)
-    2. Load enabled IPSet records that have been modified since last sync
+    2. Load enabled IPSet records modified since this host's last sync
     """
+    import uuid
+
     from mojo.apps.incident import firewall
     from mojo.apps.account.models import GeoLocatedIP
     from mojo.apps.incident.models import IPSet
@@ -153,47 +190,123 @@ def sync_firewall(job):
 
     redis_client = get_adapter()
     now = dates.utcnow()
+    last_sync_key, force_key, lock_key = _sync_firewall_keys()
 
-    # Check when we last synced permanent blocks
-    last_sync_raw = redis_client.get(SYNC_FIREWALL_REDIS_KEY)
-    last_sync = None
-    if last_sync_raw:
-        try:
-            last_sync = dates.parse(last_sync_raw)
-        except Exception:
-            pass
+    # One reconcile at a time per host. The broker builds its temp set name as
+    # "<name>_tmp" with no per-invocation suffix, so two concurrent
+    # set.replace calls for one set interleave and can swap in a live set that
+    # is missing entries. Skipping is safe because the force flag lives in
+    # Redis, not in this job: a forced run that loses the lock leaves the flag
+    # set and the next reconcile on this host honors it.
+    token = uuid.uuid4().hex
+    if not redis_client.set(lock_key, token, nx=True, ex=SYNC_FIREWALL_LOCK_TTL):
+        job.add_log("sync_firewall: another reconcile is in flight on this host, skipped")
+        return
 
-    # Permanent blocks → mojo_blocked ipset (only if changed since last sync)
-    perm_query = GeoLocatedIP.objects.filter(
-        is_blocked=True,
-        blocked_until__isnull=True,
-    )
-    if last_sync and not perm_query.filter(modified__gt=last_sync).exists():
-        job.add_log(f"sync_firewall: {FIREWALL_BLOCKED_IPSET_NAME} unchanged, skipped")
-    else:
-        permanent_ips = list(perm_query.values_list("ip_address", flat=True))
-        ok, loaded = firewall.ipset_load(FIREWALL_BLOCKED_IPSET_NAME, permanent_ips)
-        job.add_log(f"sync_firewall: loaded {loaded}/{len(permanent_ips)} permanent blocks into {FIREWALL_BLOCKED_IPSET_NAME}")
+    try:
+        forced = bool((job.payload or {}).get("force")) or bool(
+            redis_client.get(force_key))
 
-    # Enabled IPSets — skip those unchanged since last sync
-    ipsets = IPSet.objects.filter(is_enabled=True)
-    synced = 0
-    skipped = 0
-    for ipset in ipsets:
-        if last_sync and ipset.last_synced and ipset.modified <= last_sync:
-            skipped += 1
-            continue
-        cidrs = ipset.cidrs
-        ok, count = firewall.ipset_load(ipset.name, cidrs)
-        if ok:
-            synced += 1
-            job.add_log(f"sync_firewall: loaded {count}/{len(cidrs)} CIDRs into {ipset.name}")
+        # Check when THIS HOST last synced. A forced run ignores it entirely:
+        # the marker is in shared Redis and therefore survives the very reboot
+        # the startup hook exists to recover from.
+        last_sync = None
+        if not forced:
+            last_sync_raw = redis_client.get(last_sync_key)
+            if last_sync_raw:
+                try:
+                    last_sync = dates.parse(last_sync_raw)
+                except Exception:
+                    pass
 
-    if skipped:
-        job.add_log(f"sync_firewall: skipped {skipped} unchanged IPSets")
+        # A load counts as failed only when there was something to load:
+        # ipset_load also returns (False, 0) for an empty CIDR list, which is
+        # its deliberate refusal to wipe a live set with an empty swap.
+        failures = 0
 
-    # Record sync time for next run (TTL = 2x hourly interval as safety net)
-    redis_client.set(SYNC_FIREWALL_REDIS_KEY, now.isoformat(), ex=7200)
+        # Permanent blocks → mojo_blocked ipset (only if changed since last sync)
+        perm_query = GeoLocatedIP.objects.filter(
+            is_blocked=True,
+            blocked_until__isnull=True,
+        )
+        if last_sync and not perm_query.filter(modified__gt=last_sync).exists():
+            job.add_log(f"sync_firewall: {FIREWALL_BLOCKED_IPSET_NAME} unchanged, skipped")
+        else:
+            permanent_ips = list(perm_query.values_list("ip_address", flat=True))
+            ok, loaded = firewall.ipset_load(FIREWALL_BLOCKED_IPSET_NAME, permanent_ips)
+            if permanent_ips and not ok:
+                failures += 1
+            job.add_log(f"sync_firewall: loaded {loaded}/{len(permanent_ips)} permanent blocks into {FIREWALL_BLOCKED_IPSET_NAME}")
+
+        # Enabled IPSets — skip those unchanged since last sync
+        ipsets = IPSet.objects.filter(is_enabled=True)
+        synced = 0
+        skipped = 0
+        for ipset in ipsets:
+            if last_sync and ipset.last_synced and ipset.modified <= last_sync:
+                skipped += 1
+                continue
+            cidrs = ipset.cidrs
+            ok, count = firewall.ipset_load(ipset.name, cidrs)
+            if ok:
+                synced += 1
+                job.add_log(f"sync_firewall: loaded {count}/{len(cidrs)} CIDRs into {ipset.name}")
+            elif cidrs:
+                failures += 1
+
+        if skipped:
+            job.add_log(f"sync_firewall: skipped {skipped} unchanged IPSets")
+
+        if failures:
+            # Do NOT advance the marker or clear the force flag: this host is
+            # not in the state the marker would claim, and the next reconcile
+            # must reload rather than skip.
+            job.add_log(
+                f"sync_firewall: {failures} load(s) failed — marker not advanced; "
+                "the next reconcile will retry")
+        else:
+            redis_client.set(last_sync_key, now.isoformat(),
+                             ex=SYNC_FIREWALL_MARKER_TTL)
+            if forced:
+                redis_client.delete(force_key)
+    finally:
+        # Only release a lock we still hold — a lock that expired mid-run
+        # belongs to whoever took it next.
+        if redis_client.get(lock_key) == token:
+            redis_client.delete(lock_key)
+
+
+def on_engine_start(engine):
+    """Reconcile THIS node's firewall because its engine started (item #2716).
+
+    Publishes rather than reconciling inline: every firewall write goes through
+    the root-owned broker, which refuses outside a JobEngine execution context,
+    and a startup hook has none. The box-direct channel — the runner id, which
+    carries the '-engine' suffix precisely so the channel named after it is
+    publishable — puts the work on this engine's own worker pool with a real
+    Job row, its logs, and a real execution context.
+
+    The Redis force flag is set BEFORE publishing, and is what makes recovery
+    converge: the host's last-sync marker survives the reboot this hook exists
+    to recover from, and the flag outlives a job that never got to run.
+    """
+    from mojo.apps import jobs
+    from mojo.apps.jobs.adapters import get_adapter
+
+    if engine.runner_id not in (engine.channels or []):
+        logit.warning(
+            "incident: skipping startup firewall recovery — this engine does "
+            f"not consume its box-direct channel {engine.runner_id} "
+            "(JOBS_HOSTNAME_CHANNEL is False)")
+        return "skipped:no box-direct channel"
+
+    _, force_key, _ = _sync_firewall_keys()
+    get_adapter().set(force_key, "1", ex=SYNC_FIREWALL_MARKER_TTL)
+    jobs.publish(
+        func="mojo.apps.incident.asyncjobs.sync_firewall",
+        payload={"force": True},
+        channel=engine.runner_id)
+    return f"queued:sync_firewall force={engine.runner_id}"
 
 
 def sweep_expired_blocks(job):
