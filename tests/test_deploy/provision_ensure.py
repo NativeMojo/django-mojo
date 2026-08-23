@@ -1659,6 +1659,157 @@ def test_balancer_registers_only_missing_targets(opts):
                  "the balancer DNS name must be returned for the DNS step")
 
 
+@th.django_unit_test("a managed environment re-adopts both of its existing balancer EIPs")
+def test_balancer_adopts_both_managed_eips_tagged_with_the_legacy_balancer_name(opts):
+    """The shape a real pre-brownfield environment is in.
+
+    Every managed balancer EIP was tagged with the same bare `<base>-nlb`
+    Name, so a pool keyed on Name collapses the pair: one address is adopted
+    and a brand-new public IP is allocated for the other. Two addresses, not
+    one, is what makes that visible here.
+    """
+    from mojo.deploy.provision import balancer
+    from mojo.deploy.provision import spec as spec_module
+
+    spec = _spec()
+    names = spec_module.names(spec)
+    observed = _observed(addresses=[
+        {"AllocationId": "eipalloc-legacy1", "PublicIp": "203.0.113.11",
+         "Tags": _tagged(spec, "balancer", name=names["balancer"])},
+        {"AllocationId": "eipalloc-legacy2", "PublicIp": "203.0.113.12",
+         "Tags": _tagged(spec, "balancer", name=names["balancer"])}])
+
+    findings, actions = [], []
+    ec2, stubber = _stub("ec2")
+    with stubber:
+        mappings = balancer._subnet_mappings(
+            ec2, spec, observed, ["subnet-0pub1", "subnet-0pub2"],
+            findings, actions)
+
+    th.assert_eq(mappings,
+                 [{"SubnetId": "subnet-0pub1",
+                   "AllocationId": "eipalloc-legacy1"},
+                  {"SubnetId": "subnet-0pub2",
+                   "AllocationId": "eipalloc-legacy2"}],
+                 f"recreating a managed NLB must re-adopt the addresses the "
+                 f"environment already owns, or every upstream IP allowlist "
+                 f"naming them breaks: {mappings}")
+    th.assert_eq(actions, [],
+                 f"adoption plans no allocation: {[a.target for a in actions]}")
+    _assert_no_blind(findings,
+                     "no EC2 call may be made when both addresses are ours")
+    stubber.assert_no_pending_responses()
+
+
+@th.django_unit_test("a managed run adopts an owned EIP whatever its Name tag says")
+def test_balancer_adopts_a_managed_eip_left_by_a_post_span_run(opts):
+    """Adoption is by ownership tags, never by name.
+
+    An address a v1.15.27-or-later managed run allocated carries the
+    brownfield-shaped `<balancer>:<subnet>` Name. It is still ours by
+    `mojo:project`/`mojo:env`/`mojo:role`, so it is adopted with no migration
+    step and no second lookup.
+    """
+    from mojo.deploy.provision import balancer
+    from mojo.deploy.provision import spec as spec_module
+
+    spec = _spec()
+    names = spec_module.names(spec)
+    observed = _observed(addresses=[
+        {"AllocationId": "eipalloc-composite", "PublicIp": "203.0.113.21",
+         "Tags": _tagged(spec, "balancer",
+                         name=f"{names['balancer']}:subnet-0pub1")}])
+
+    findings, actions = [], []
+    ec2, stubber = _stub("ec2")
+    with stubber:
+        mappings = balancer._subnet_mappings(
+            ec2, spec, observed, ["subnet-0pub1"], findings, actions)
+
+    th.assert_eq(mappings, [{"SubnetId": "subnet-0pub1",
+                             "AllocationId": "eipalloc-composite"}],
+                 f"ownership tags decide adoption, not the Name tag: "
+                 f"{mappings}")
+    th.assert_eq(actions, [],
+                 f"adoption plans no allocation: {[a.target for a in actions]}")
+    _assert_no_blind(findings, "no EC2 call may be made")
+    stubber.assert_no_pending_responses()
+
+
+@th.django_unit_test("a managed run never steals a brownfield fleet's balancer EIP")
+def test_balancer_does_not_adopt_a_fleet_owned_address_on_the_managed_path(opts):
+    """`owns()` skips its fleet clause on a managed spec.
+
+    Project and env alone therefore match a brownfield fleet's preserved
+    balancer address, which is deliberately left unassociated for a window.
+    The managed pool has to exclude anything carrying `mojo:fleet` itself.
+    """
+    from mojo.deploy.provision import balancer
+    from mojo.deploy.provision import spec as spec_module
+
+    spec = _spec()
+    names = spec_module.names(spec)
+    observed = _observed(addresses=[
+        {"AllocationId": "eipalloc-fleet", "PublicIp": "203.0.113.31",
+         "Tags": _tagged(spec, "balancer", name=names["balancer"])
+         + [{"Key": "mojo:fleet", "Value": "westfleet"}]}])
+
+    findings, actions = [], []
+    ec2, stubber = _stub("ec2")
+    stubber.add_response(
+        "allocate_address",
+        {"AllocationId": "eipalloc-fresh", "PublicIp": "203.0.113.32"},
+        {"Domain": "vpc",
+         "TagSpecifications": spec_module.tag_specifications(
+             spec, "balancer", "elastic-ip", name=names["balancer"])})
+
+    with stubber:
+        mappings = balancer._subnet_mappings(
+            ec2, spec, observed, ["subnet-0pub1"], findings, actions)
+
+    th.assert_eq(mappings, [{"SubnetId": "subnet-0pub1",
+                             "AllocationId": "eipalloc-fresh"}],
+                 f"a preserved fleet address must not be pulled into a managed "
+                 f"NLB; a fresh one is allocated instead: {mappings}")
+    _assert_no_blind(findings, "the allocate request must be model-valid")
+    stubber.assert_no_pending_responses()
+
+
+@th.django_unit_test("a managed listener remedy explains itself without brownfield")
+def test_balancer_tells_a_managed_operator_how_to_fix_a_drifted_listener(opts):
+    """MANUAL is right; the wording was not.
+
+    A drifted listener is reported the same way in both modes — this package
+    has no `modify_listener` call in any mode — but a managed operator was
+    being handed advice about "brownfield mode", a concept their environment
+    has nothing to do with. MANUAL is not in `report.BLOCKING_STATUSES`, so
+    this never was and still is not an exit-code failure.
+    """
+    from mojo.deploy.provision import balancer, report
+
+    findings, actions = [], []
+    observed = {"listeners": [{
+        "Port": 443, "Protocol": "TCP_UDP", "DefaultActions": [{
+            "Type": "forward", "TargetGroupArn": "arn:tg-api"}]}]}
+    balancer._ensure_listeners(
+        object(), _spec(), observed, "arn:lb",
+        {"api": "arn:tg-api", "certbot": "arn:tg-certbot"},
+        findings, actions, False)
+
+    mismatch = [row for row in findings if row.code == "listener.443.mismatch"]
+    th.assert_eq(len(mismatch), 1,
+                 f"a listener that is not exactly TCP-forward to the owned "
+                 f"group must still be reported: {_codes(findings)}")
+    th.assert_eq(mismatch[0].status, report.MANUAL,
+                 f"the status stays MANUAL — apply never rewrites a listener: "
+                 f"{mismatch[0].status}")
+    th.assert_eq("brownfield" in (mismatch[0].remedy or ""), False,
+                 f"a managed operator has no brownfield mode to be told "
+                 f"about: {mismatch[0].remedy}")
+    th.assert_eq(any(row.target == "TCP:443" for row in actions), False,
+                 "a mismatched listener must not receive a create action")
+
+
 # ── observability ───────────────────────────────────────────────────────────
 
 @th.django_unit_test("the three log groups are created at 90-day retention")

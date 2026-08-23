@@ -346,24 +346,48 @@ def _subnet_mappings(ec2, spec, observed, subnet_ids, findings, actions,
     the name is fine, but anything holding an IP allowlist upstream is not.
     Existing addresses are adopted only when already tagged for this project and
     environment.
+
+    The two modes key that adoption differently and must not share one pool.
+    Managed adopts an owned unassociated balancer address BY POSITION and tags
+    a new one `<balancer>`: every managed address carries that same bare Name,
+    so a Name-keyed pool collapses the pair a two-AZ environment holds and
+    silently replaces one of its public IPs. A brownfield fleet adopts by the
+    exact `<balancer>:<subnet-id>` Name `brownfield_discover` builds, because
+    there the address-to-subnet pairing is part of the discovered contract.
+    Ownership is decided by `spec_module.owns` on tags alone in both modes and
+    never by the Name, so an address left behind by either naming generation is
+    still adoptable.
     """
     mappings = []
-    available = {}
     balancer_name = spec_module.names(spec)["balancer"]
+    owned = []
     for address in observed.get("addresses") or []:
         tags = discover.tags_of(address)
-        if spec_module.owns(tags, spec, role="balancer") and not address.get(
-                "AssociationId"):
-            available[tags.get("Name")] = address
+        if not spec_module.owns(tags, spec, role="balancer"):
+            continue
+        if address.get("AssociationId"):
+            continue
+        # `owns` only checks `mojo:fleet` when this spec has one, so a managed
+        # spec matches a brownfield fleet's balancer EIP on project and env
+        # alone — and the handoff leaves exactly those unassociated on purpose.
+        if not spec.fleet and tags.get("mojo:fleet"):
+            continue
+        owned.append(address)
 
+    available = {discover.tags_of(row).get("Name"): row
+                 for row in owned} if spec.fleet else {}
     subnet_rows = {row["id"]: row for row in spec.brownfield_manifest[
         "network"]["public_subnets"]} if spec.fleet else {}
-    for subnet_id in subnet_ids:
-        address_name = f"{balancer_name}:{subnet_id}"
-        if address_name in available:
+    for index, subnet_id in enumerate(subnet_ids):
+        if spec.fleet:
+            address_name = f"{balancer_name}:{subnet_id}"
+            adopted = available.get(address_name)
+        else:
+            address_name = balancer_name
+            adopted = owned[index] if index < len(owned) else None
+        if adopted:
             mappings.append({"SubnetId": subnet_id,
-                             "AllocationId": available[address_name].get(
-                                 "AllocationId")})
+                             "AllocationId": adopted.get("AllocationId")})
             continue
         actions.append(report.Action(STEP, "create",
                                      f"{subnet_id} elastic IP"))
@@ -371,13 +395,13 @@ def _subnet_mappings(ec2, spec, observed, subnet_ids, findings, actions,
             continue
         allocated = report.safe(
             findings, STEP, "ec2.allocate_address",
-            lambda: ec2.allocate_address(
+            lambda name=address_name: ec2.allocate_address(
                 Domain="vpc",
                 **({"NetworkBorderGroup": subnet_rows[subnet_id][
                     "network_border_group"]} if spec.fleet else {}),
                 TagSpecifications=spec_module.tag_specifications(
                     spec, "balancer", "elastic-ip",
-                    name=address_name)))
+                    name=name)))
         if allocated:
             mappings.append({"SubnetId": subnet_id,
                              "AllocationId": allocated.get("AllocationId")})
@@ -464,12 +488,21 @@ def _ensure_listeners(elbv2, spec, observed, balancer_arn, group_arns,
                     STEP, f"listener.{port}.ok",
                     f"TCP:{port} forwards to the {role} target group"))
             else:
+                # MANUAL on purpose, and not an exit-code failure: MANUAL is
+                # not in `report.BLOCKING_STATUSES`, so this reports without
+                # failing the run. No mode of this package calls
+                # modify_listener or delete_listener, so a drifted listener is
+                # exactly "it exists, it differs, and apply does not touch it".
                 findings.append(report.manual(
                     STEP, f"listener.{port}.mismatch",
                     f"listener {port} does not exactly forward TCP to the "
                     f"owned {role} target group",
                     "repair or replace the listener explicitly; brownfield "
-                    "mode does not adopt or rewrite a mismatched listener"))
+                    "mode does not adopt or rewrite a mismatched listener"
+                    if spec.fleet else
+                    "repair or replace the listener explicitly; this tool "
+                    "creates a listener on an empty port but never rewrites "
+                    "one that is already there"))
             continue
         arn = group_arns.get(role)
         findings.append(report.missing(
