@@ -353,7 +353,43 @@ A second engine started with `--runner-id heavy-engine` gets its own direct
 channel `heavy-engine`. A mistyped host channel passes the allowlist (the
 suffix is the rule) and is caught by the unconsumed-channel incident below.
 Set `JOBS_HOSTNAME_CHANNEL = False` to opt an engine out of consuming its
-direct channel.
+direct channel — note that this also disables broadcast fan-out for that
+engine, since the fan-out addresses exactly those channels.
+
+### How a broadcast resolves its roster
+
+`broadcast=True` fans out one ordinary job per live runner, so the roster
+read decides who receives fleet-wide work. It uses the **exact** reader,
+`get_runners_bounded`, which queries one dedicated per-channel index
+primary-only and raises rather than returning a short list — not
+`get_runners`, which SCANs the shared keyspace and swallows every error into
+an empty list. An empty list is indistinguishable from "no runners", and that
+is how a Redis blip used to turn fleet-wide work back into a unicast.
+
+When the roster cannot be proven, `publish()` never raises — a raising
+publish inside the cron dispatcher would skip every later scheduled function
+that minute. Instead it:
+
+- files a suppressed `jobs:degraded_broadcast` incident naming the channel,
+  the publisher, and the fault (at most one per channel per hour, and dropped
+  entirely if Redis itself is unreachable, so an outage cannot become a
+  flood);
+- falls back to `get_runners` **only** for `runner_roster_invalid` and
+  `runner_roster_overflow`, where Redis answered promptly and the cheap reader
+  is likely to return the better roster. For `runner_roster_timeout` it does
+  not fall back at all: answering "Redis is slow" with an unbounded keyspace
+  scan on the process pool, whose socket timeout defaults to 60 seconds, is
+  worse than not answering;
+- logs the two outcomes differently. "No live runners" and "roster
+  UNREADABLE" are not the same event.
+
+The bound is 512 runners per channel; past that the roster counts as
+unreadable rather than being silently truncated. The likeliest real causes of
+an unprovable roster are a node whose clock runs more than one heartbeat
+window ahead, and a runner that exited without deregistering.
+
+`edge`'s `convergence.publish_pool` hand-rolls the same fan-out for pool
+generations and shares this exact policy.
 
 ### When nobody is listening
 
