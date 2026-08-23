@@ -95,10 +95,15 @@ The fail-closed AST scanner (see [Overview](Overview.md) → *The enforced
 isolation policy*) applies a contract keyed on the bucket:
 
 - **`core`** — the strictest. No isolation violation of any kind, `serial`
-  forbidden (core runs in the parallel ring), `cold_budget` must be 0. The
-  strict scan additionally flags `Setting.set()`/`Setting.remove()` classmethod
-  writes of protected keys, `server_settings()` reloads (they freeze every
-  parallel worker), and scans `_`-prefixed helper files.
+  forbidden (core runs in the parallel ring), `cold_budget` must be 0, and
+  `requires_extra` forbidden (core is always-run, not opt-in). The strict scan
+  additionally flags `Setting.set()`/`Setting.remove()` classmethod writes of
+  protected keys, `server_settings()` reloads (they freeze every parallel
+  worker), and scans `_`-prefixed helper files. A single `@th.tier("core")`
+  test (or `TESTIT_TIER = "core"`) lifts its **whole package** to the strict
+  scan — a core test runs in the parallel core ring even inside a package that
+  declares another tier, and it may call a `_`-prefixed helper, so the whole
+  package (helpers included) is held to the core contract, fail-closed.
 - **`framework`** (and legacy `default_core`) — the parallel ring: no hot
   isolation violation; `serial` allowed only for a violation-free package that
   is serial for an execution reason. The two-sided `cold_budget` ratchet

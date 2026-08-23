@@ -1032,9 +1032,29 @@ def _iter_test_files(package_path, include_private=False):
         yield os.path.join(package_path, entry)
 
 
+def _package_has_core_tag(package_path):
+    """True if any test file tags a test/file into the core bucket
+    (@th.tier("core") or TESTIT_TIER="core"). Uses the cached, non-strict
+    facts — cheap and content-hash cached."""
+    for path in _iter_test_files(package_path, include_private=False):
+        if "core" in cached_file_facts(path).tiers:
+            return True
+    return False
+
+
 def scan_package(package_path, strict=False):
     """Scan every test file of one package directory. In strict (core) mode
-    `_`-prefixed helper files are scanned too and the stricter grammar fires."""
+    `_`-prefixed helper files are scanned too and the stricter grammar fires.
+
+    Strict is turned on for the WHOLE package when it declares tier="core" OR
+    when any file carries a `core` tag (maestro #2790): a @th.tier("core") test
+    runs in the parallel core ring even inside a package whose TESTIT declares
+    another tier, and a core test may call a `_`-prefixed helper — so the whole
+    package (helpers included) is held to the strict contract, fail-closed.
+    Latent until Phase 3 introduces the first core tag; strict stays False and
+    the scan is byte-identical to the pre-tier behavior until then."""
+    if not strict:
+        strict = _package_has_core_tag(package_path)
     violations = []
     files_scanned = 0
     for path in _iter_test_files(package_path, include_private=strict):
@@ -1086,6 +1106,11 @@ def evaluate_package_state(config, violations, *, origin, has_config):
                 "declare either tier=... or the legacy default_core, not both "
                 "— one vocabulary per package")
         if tier == "core":
+            if requires_extra:
+                problems.append(
+                    "tier='core' cannot also declare requires_extra — core is "
+                    "the always-run baseline, requires_extra is opt-in; they "
+                    "contradict")
             if serial:
                 problems.append(
                     "tier='core' packages may not be serial — core runs in the "

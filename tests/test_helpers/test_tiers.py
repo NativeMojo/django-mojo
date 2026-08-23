@@ -271,6 +271,59 @@ def test_eval_one_vocabulary(opts):
         f"tier + default_core must be rejected, got {problems}")
 
 
+@th.unit_test("tiers: a core package may not also declare requires_extra")
+def test_eval_core_forbids_requires_extra(opts):
+    from testit import isolation
+    problems = isolation.evaluate_package_state(
+        {"tier": "core", "requires_extra": ["slow"]}, [],
+        origin="django_mojo", has_config=True)
+    assert any("cannot also declare requires_extra" in p for p in problems), (
+        f"core + requires_extra is contradictory, got {problems}")
+
+
+# ---------------------------------------------------------------------------
+# Per-file core-tag lifts the whole package to strict scanning (fail-open fix)
+# ---------------------------------------------------------------------------
+@th.unit_test("tiers: a core-tagged file makes its whole package strict-scanned")
+def test_core_tag_lifts_package_to_strict(opts):
+    import os
+    import tempfile
+    from testit import isolation
+    with tempfile.TemporaryDirectory() as d:
+        # A test file tagged into core, plus a helper that mutates shared state.
+        with open(os.path.join(d, "1_core_test.py"), "w") as fh:
+            fh.write('from testit import helpers as th\n'
+                     '@th.tier("core")\n'
+                     'def test_a(opts):\n    pass\n')
+        with open(os.path.join(d, "_helper.py"), "w") as fh:
+            fh.write('from mojo.apps.account.models import Setting\n'
+                     'def prime():\n    Setting.set("SECRET_KEY", "x")\n')
+        assert isolation._package_has_core_tag(d), (
+            "the package carries a core tag and must be detected")
+        scanned = isolation.scan_package(d)   # strict NOT passed explicitly
+        codes = sorted({v.code for v in scanned.violations})
+        assert "protected_setting_write" in codes, (
+            "a core tag must lift the whole package (helpers included) to strict "
+            f"scanning so the helper's Setting.set is caught, got {codes}")
+
+
+@th.unit_test("tiers: a package with no core tag stays non-strict (byte-identical)")
+def test_no_core_tag_stays_non_strict(opts):
+    import os
+    import tempfile
+    from testit import isolation
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "1_fw_test.py"), "w") as fh:
+            fh.write('from mojo.apps.account.models import Setting\n'
+                     'def test_a(opts):\n    Setting.set("SECRET_KEY", "x")\n')
+        assert not isolation._package_has_core_tag(d), "no core tag present"
+        scanned = isolation.scan_package(d)
+        codes = sorted({v.code for v in scanned.violations})
+        assert "protected_setting_write" not in codes, (
+            "without a core tag the Setting.set classmethod grammar must not "
+            f"fire — framework scan stays byte-identical, got {codes}")
+
+
 # ---------------------------------------------------------------------------
 # Tier-aware cold-budget evaluation
 # ---------------------------------------------------------------------------
