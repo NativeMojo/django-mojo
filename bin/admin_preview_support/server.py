@@ -304,7 +304,16 @@ class PreviewHandler(BaseHTTPRequestHandler):
     def _send(self, body, content_type="application/json", status=200,
               headers=None):
         if isinstance(body, (dict, list)):
-            body = json.dumps({"status": True, "data": body}, default=str).encode()
+            if status >= 400 and isinstance(body, dict):
+                envelope = {
+                    "status": False,
+                    "error": body.get("error") or "The preview request failed.",
+                    "error_code": body.get("error_code"),
+                    "data": body.get("data") or {},
+                }
+                body = json.dumps(envelope, default=str).encode()
+            else:
+                body = json.dumps({"status": True, "data": body}, default=str).encode()
         elif isinstance(body, str):
             body = body.encode()
         self.send_response(status)

@@ -1,5 +1,7 @@
 """Live-target Admin preview and browser feedback contracts."""
 
+import io
+import json
 import socket
 import sys
 from email.message import Message
@@ -709,6 +711,115 @@ def test_preview_infrastructure_mode(opts):
         f"the external preview names the wrong block: {overview['blocked_reason']!r}"
     assert overview["installed"] and overview["latest"], \
         f"the external preview hid the version facts: {overview}"
+
+
+@th.django_unit_test("capacity preview retains Add Node placement on single and batch paths")
+def test_capacity_preview_placement(opts):
+    from urllib.parse import urlparse
+
+    feature = _server().capacity
+
+    class Handler:
+        pass
+
+    feature.reset(Handler, {})
+    status, report = feature.get(Handler, urlparse("/api/aws/capacity"))
+    assert status == 200, f"the capacity report answered {status}"
+    healthy = [row for row in report["nodes"]["instances"] if row["healthy"]]
+    assert len(healthy) == 2 and len({tuple(row["groups"]) for row in healthy}) == 2, \
+        f"the source picker fixture does not expose two distinguishable fleets: {healthy!r}"
+    assert all(row.get("zone") and row.get("subnet_id") for row in healthy), \
+        f"a healthy source lacks zone/subnet metadata: {healthy!r}"
+
+    bare_status, bare = feature.post(Handler, "/api/aws/capacity/apply", {
+        "action": "add_node", "confirm_resource": "add_node"})
+    assert bare_status == 200 and bare["detail"] == {}, \
+        f"the historical bare Add Node preview response changed: {bare!r}"
+
+    selected = {"action": "add_node", "confirm_resource": "add_node",
+                "source_instance": healthy[1]["id"], "subnet_id": "subnet-0chosen"}
+    selected_status, operation = feature.post(
+        Handler, "/api/aws/capacity/apply", selected)
+    assert selected_status == 200, f"selected placement was refused: {operation!r}"
+    assert operation["detail"]["source_instance"] == healthy[1]["id"] \
+        and operation["detail"]["source_name"] == healthy[1]["name"] \
+        and operation["detail"]["subnet_id"] == "subnet-0chosen", \
+        f"single Add Node lost its selected placement: {operation!r}"
+
+    bare_plan_status, bare_plan = feature.post(Handler, "/api/aws/capacity/plan", {
+        "steps": [{"action": "add_node"}]})
+    assert bare_plan_status == 200 \
+        and bare_plan["steps"][0]["params"] == {} \
+        and bare_plan["steps"][0]["description"] == "Add an app node", \
+        f"the historical bare batch Add Node shape changed: {bare_plan!r}"
+    bare_batch_status, bare_batch = feature.post(
+        Handler, "/api/aws/capacity/plan/apply", {"plan_id": bare_plan["id"]})
+    assert bare_batch_status == 200 and bare_batch["steps"][0]["params"] == {}, \
+        f"the bare batch record invented placement: {bare_batch!r}"
+
+    plan_status, plan = feature.post(Handler, "/api/aws/capacity/plan", {
+        "steps": [{"action": "add_node", "source_instance": healthy[1]["id"],
+                   "subnet_id": "subnet-0chosen"},
+                  {"action": "add_node", "source_instance": healthy[1]["id"],
+                   "subnet_id": "subnet-0chosen"}]})
+    assert plan_status == 200 and len(plan["steps"]) == 2, \
+        f"the selected batch plan was not created: {plan!r}"
+    assert all(step["params"]["subnet_id"] == "subnet-0chosen"
+               and "mojo-api-b" in step["description"] for step in plan["steps"]), \
+        f"the batch plan did not retain and describe placement: {plan['steps']!r}"
+    batch_status, batch = feature.post(
+        Handler, "/api/aws/capacity/plan/apply", {"plan_id": plan["id"]})
+    assert batch_status == 200 and all(
+        step["params"]["source_instance"] == healthy[1]["id"]
+        for step in batch["steps"]), \
+        f"the batch record dropped Add Node placement: {batch!r}"
+
+
+@th.django_unit_test("capacity preview sends production-shaped placement refusals over HTTP")
+def test_capacity_preview_placement_error_envelope(opts):
+    server = _server()
+    server.capacity.reset(server.PreviewHandler, {})
+
+    def request(payload):
+        handler = object.__new__(server.PreviewHandler)
+        handler.path = "/api/aws/capacity/apply"
+        handler.command = "POST"
+        handler._read_body = lambda: payload
+        handler._record_event = lambda path, body: None
+        handler.send_response = mock.Mock()
+        handler.send_header = mock.Mock()
+        handler.end_headers = mock.Mock()
+        handler.wfile = io.BytesIO()
+        handler.do_POST()
+        return handler.send_response.call_args.args[0], json.loads(
+            handler.wfile.getvalue().decode())
+
+    code, refused = request({
+        "action": "add_node", "confirm_resource": "add_node",
+        "subnet_id": "subnet-0refused"})
+    assert code == 409, f"the refused subnet answered HTTP {code}"
+    assert refused == {
+        "status": False,
+        "error": "subnet-0refused cannot take this clone because it has no free addresses.",
+        "error_code": "subnet_not_usable",
+        "data": {"reason": "no_free_addresses", "subnet_id": "subnet-0refused"},
+    }, f"the browser wire envelope hid the provider refusal: {refused!r}"
+
+    code, success = request({"action": "add_node", "confirm_resource": "add_node"})
+    assert code == 200 and success["status"] is True \
+        and success["data"]["action"] == "add_node", \
+        f"the success wire envelope changed: {success!r}"
+
+    class Handler:
+        pass
+
+    server.capacity.reset(Handler, {})
+    _, plan = server.capacity.post(Handler, "/api/aws/capacity/plan", {
+        "steps": [{"action": "add_node", "subnet_id": "subnet-0refused"}]})
+    batch_code, batch_refused = server.capacity.post(
+        Handler, "/api/aws/capacity/plan/apply", {"plan_id": plan["id"]})
+    assert batch_code == 409 and batch_refused["error_code"] == "subnet_not_usable", \
+        f"the batch apply fixture did not refuse valid-syntax unusable placement: {batch_refused!r}"
 
 
 @th.django_unit_test("preview renders every Text messages provider state deterministically")

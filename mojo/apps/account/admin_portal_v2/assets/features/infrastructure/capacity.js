@@ -128,6 +128,77 @@ function phaseLine(record) {
   return `${step}${PHASE_COPY[record.phase] || record.phase || 'working'}`;
 }
 
+function addNodePlacementControls(report, initial = {}, callbacks = {}) {
+  let sourceInstance = String(initial.source_instance || '');
+  let subnetId = String(initial.subnet_id || '');
+  const healthy = (report?.nodes?.instances || []).filter((row) => row.healthy);
+  if (sourceInstance && !healthy.some((row) => row.id === sourceInstance)) sourceInstance = '';
+  const groups = new Map((report?.nodes?.groups || []).map(
+    (group) => [group.arn, group.name || group.arn]));
+  const listId = `add-node-subnets-${Math.random().toString(36).slice(2)}`;
+  const sourceLabel = (row) => [
+    row.name && row.name !== row.id ? `${row.name} (${row.id})` : row.id,
+    ...(row.groups || []).map((arn) => groups.get(arn) || arn),
+    row.zone, row.subnet_id].filter(Boolean).join(' · ');
+  const selected = () => healthy.find((row) => row.id === sourceInstance) || null;
+  const values = () => ({
+    ...(sourceInstance ? {source_instance: sourceInstance} : {}),
+    ...(subnetId.trim() ? {subnet_id: subnetId.trim()} : {}),
+  });
+  const valid = () => !subnetId.trim() || (subnetId.trim().startsWith('subnet-')
+    && subnetId.trim().length > 'subnet-'.length);
+
+  const datalist = h('datalist', {id: listId});
+  const summary = h('span', {class: 'placement-summary'});
+  const error = h('span', {class: 'placement-error', role: 'alert'});
+  const subnet = h('input', {type: 'text', value: subnetId, list: listId,
+    autocomplete: 'off', 'aria-describedby': `${listId}-summary ${listId}-error`});
+  summary.id = `${listId}-summary`;
+  error.id = `${listId}-error`;
+  const paint = () => {
+    const row = selected();
+    const zone = row?.zone || '';
+    const subnetOptions = [...new Set(healthy
+      .filter((candidate) => !zone || candidate.zone === zone)
+      .map((candidate) => candidate.subnet_id).filter(Boolean))];
+    datalist.replaceChildren(...subnetOptions.map((value) => h('option', {value})));
+    subnet.placeholder = row?.subnet_id
+      ? `Optional — source uses ${row.subnet_id}` : 'Optional subnet-…';
+    const ok = valid();
+    subnet.setAttribute('aria-invalid', ok ? 'false' : 'true');
+    error.textContent = ok ? '' : 'Subnet must start with subnet- and include an identifier.';
+    summary.textContent = sourceInstance
+      ? `Clone ${sourceLabel(row)}${subnetId.trim() ? ` into ${subnetId.trim()}` : '; choose subnet automatically'}`
+      : subnetId.trim() ? `Choose a healthy source automatically; place it in ${subnetId.trim()}`
+        : 'Choose a healthy source and subnet automatically.';
+  };
+  const source = h('select', {onchange: (event) => {
+    sourceInstance = event.target.value;
+    paint();
+    callbacks.onInput?.(values(), valid());
+    callbacks.onCommit?.(values(), valid());
+  }},
+  h('option', {value: '', text: 'Automatic (healthy source)'}),
+  ...healthy.map((row) => h('option', {value: row.id, text: sourceLabel(row),
+    selected: row.id === sourceInstance ? true : null})));
+  subnet.addEventListener('input', () => {
+    subnetId = subnet.value;
+    paint();
+    callbacks.onInput?.(values(), valid());
+  });
+  const commit = () => callbacks.onCommit?.(values(), valid());
+  subnet.addEventListener('change', commit);
+  subnet.addEventListener('blur', commit);
+  const element = h('div', {class: 'add-node-placement'},
+    h('label', {class: 'placement-field'},
+      h('span', {class: 'fleet-label', text: 'Clone from'}), source),
+    h('label', {class: 'placement-field'},
+      h('span', {class: 'fleet-label', text: 'Subnet'}), subnet, datalist),
+    summary, error);
+  paint();
+  return {element, values, valid};
+}
+
 function wait(milliseconds) {
   return new Promise((resolve) => { setTimeout(resolve, milliseconds); });
 }
@@ -327,6 +398,8 @@ export function capacityTab(ctx, signal = null, actions = null) {
   function resetWant() {
     want = {
       addNodes: 0,
+      source_instance: '',
+      subnet_id: '',
       removeNodes: new Set(),
       caches: new Map((report?.caches || []).map(
         (row) => [row.identifier, Number(row.replica_count || 0)])),
@@ -349,8 +422,12 @@ export function capacityTab(ctx, signal = null, actions = null) {
   // any reader this same batch removes.
   function stagedSteps() {
     const steps = [];
+    const placement = {
+      ...(want.source_instance ? {source_instance: want.source_instance} : {}),
+      ...(want.subnet_id.trim() ? {subnet_id: want.subnet_id.trim()} : {}),
+    };
     for (let index = 0; index < want.addNodes; index += 1) {
-      steps.push({action: 'add_node'});
+      steps.push({action: 'add_node', ...placement});
     }
     for (const [identifier, addCount] of want.dbAdd) {
       for (let index = 0; index < addCount; index += 1) {
@@ -414,6 +491,14 @@ export function capacityTab(ctx, signal = null, actions = null) {
   function syncPlan() {
     if (running) return;
     const steps = stagedSteps();
+    if (want.addNodes && !placementValid()) {
+      clearTimeout(planTimer);
+      planKey = '';
+      serverPlan = null;
+      planError = null;
+      planPending = false;
+      return;
+    }
     const key = JSON.stringify(steps);
     if (key === planKey) return;
     planKey = key;
@@ -426,6 +511,7 @@ export function capacityTab(ctx, signal = null, actions = null) {
   }
 
   async function requestPlan(steps, key) {
+    if (want.addNodes && !placementValid()) return;
     let plan;
     try {
       plan = await apiOnce(PLAN_PATH, {method: 'POST', signal,
@@ -514,6 +600,36 @@ export function capacityTab(ctx, signal = null, actions = null) {
   }
 
   // ── controls ────────────────────────────────────────────────────────────
+
+  function placementValid() {
+    const subnet = want?.subnet_id?.trim() || '';
+    const source = want?.source_instance || '';
+    return (!source || instances().some((row) => row.healthy && row.id === source))
+      && (!subnet || (subnet.startsWith('subnet-')
+        && subnet.length > 'subnet-'.length));
+  }
+
+  function placementChanged(values) {
+    want.source_instance = values.source_instance || '';
+    want.subnet_id = values.subnet_id || '';
+    clearTimeout(planTimer);
+    planKey = '';
+    serverPlan = null;
+    planError = null;
+    planPending = false;
+    const apply = root.querySelector('.fleet-bar-actions .button.primary');
+    if (apply) apply.disabled = true;
+  }
+
+  function placementControls() {
+    return addNodePlacementControls(report, want, {
+      onInput: placementChanged,
+      onCommit: (values, valid) => {
+        placementChanged(values);
+        if (valid) render();
+      },
+    });
+  }
 
   function stepper({value, canDown, canUp, downTitle, upTitle, onDown, onUp, tone}) {
     return h('div', {class: 'fleet-stepper'},
@@ -612,6 +728,7 @@ export function capacityTab(ctx, signal = null, actions = null) {
       (row) => row.healthy && !want.removeNodes.has(row.id)).length;
     const total = rows.length - want.removeNodes.size + want.addNodes;
     const type = rows[0]?.instance_type || '';
+    const placement = placementControls();
 
     // A node the balancer has not finished checking, or one this batch is
     // already changing, carries no control: acting on it would be acting on a
@@ -700,7 +817,8 @@ export function capacityTab(ctx, signal = null, actions = null) {
               ? 'A new node proves it runs the fleet\'s code before it serves. 20–40 min.'
               : blockedText(add)})),
         sizePlaceholder('Size of each', type,
-          'Changing size is a rolling replace — not offered here yet.')) : null,
+          'Changing size is a rolling replace — not offered here yet.'),
+        want.addNodes ? placement.element : null) : null,
       members: [
         ...rows.map(nodeRow),
         ...Array.from({length: want.addNodes}, ghostRow),
@@ -1114,8 +1232,8 @@ export function capacityTab(ctx, signal = null, actions = null) {
           // responsiveness-exempt: confirmApply awaits a human confirming the
           // server's plan; the watcher renders after every poll once it starts.
           h('button', {class: 'button primary', type: 'button',
-            disabled: plan ? null : true,
-            onclick: () => { if (serverPlan) applyPlan(serverPlan); }},
+            disabled: plan && placementValid() ? null : true,
+            onclick: () => { if (serverPlan && placementValid()) applyPlan(serverPlan); }},
           `Apply ${(plan?.steps || staged).length} change${(plan?.steps || staged).length === 1 ? '' : 's'}`))));
   }
 
@@ -1148,6 +1266,10 @@ export function capacityTab(ctx, signal = null, actions = null) {
     try {
       report = await api(`${CAPACITY_PATH}${refresh ? '?refresh=1' : ''}`, {signal});
       if (!want) resetWant();
+      else if (want.source_instance
+          && !instances().some((row) => row.healthy && row.id === want.source_instance)) {
+        want.source_instance = '';
+      }
       render();
     } catch (error) {
       if (error?.name === 'AbortError') return;
