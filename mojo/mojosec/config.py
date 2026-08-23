@@ -16,6 +16,10 @@ CANONICAL_CONFIG_PATH = "/etc/mojosec/config.json"
 DEFAULTS = {
     "version": CONFIG_VERSION,
     "profile": "",
+    # Root-enrollment-declared tenant content roots. Only a profile that marks
+    # itself content_roots_required accepts them, and desired policy can never
+    # supply them (see mojo.deploy.mojosec.DESIRED_KEYS).
+    "content_roots": [],
     "policy_revision": "",
     "state_dir": "/var/lib/mojosec",
     "status_path": "/run/mojosec/status.json",
@@ -94,7 +98,7 @@ DEFAULTS = {
 
 _TOP_KEYS = set(DEFAULTS) | {"sensor_id", "endpoint"}
 _COLLECTOR_KEYS = set(DEFAULTS["collectors"])
-_TARGET_KEYS = {"path", "recursive", "exclude", "optional"}
+_TARGET_KEYS = {"path", "recursive", "exclude", "optional", "tenant_scoped"}
 _SENSOR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
 
@@ -165,12 +169,32 @@ def validate_config_target_list(targets, label):
             raise ConfigError("FIM target recursive must be a boolean")
         if "optional" in target and not isinstance(target["optional"], bool):
             raise ConfigError("FIM target optional must be a boolean")
+        if "tenant_scoped" in target and not isinstance(target["tenant_scoped"], bool):
+            raise ConfigError("FIM target tenant_scoped must be a boolean")
         excludes = target.get("exclude", [])
         if not isinstance(excludes, list) or len(excludes) > 64:
             raise ConfigError("FIM target exclude must be a list with at most 64 entries")
         for pattern in excludes:
             if not isinstance(pattern, str) or not pattern or len(pattern) > 256:
                 raise ConfigError("FIM excludes must be non-empty strings up to 256 characters")
+
+
+def validate_content_roots(roots):
+    """Bound and normalize the enrollment-declared tenant content roots."""
+    from .profiles import MAX_CONTENT_ROOTS
+
+    if not isinstance(roots, list) or len(roots) > MAX_CONTENT_ROOTS:
+        raise ConfigError(
+            f"content_roots must be a list with at most {MAX_CONTENT_ROOTS} entries")
+    seen = set()
+    for root in roots:
+        _absolute(root, "content_roots[]")
+        if os.path.normpath(root) != root or root == "/":
+            raise ConfigError(f"content_roots[] must be normalized and narrower than /: {root}")
+        if root in seen:
+            raise ConfigError(f"duplicate content root: {root}")
+        seen.add(root)
+    return list(roots)
 
 
 def validate_config(value):
@@ -180,13 +204,17 @@ def validate_config(value):
         raise ConfigError(f"config version must be {CONFIG_VERSION}")
     if not isinstance(value["profile"], str) or len(value["profile"]) > 128:
         raise ConfigError("profile must be a bounded string")
+    content_roots = validate_content_roots(value.get("content_roots", []))
+    value["content_roots"] = content_roots
     if value["profile"]:
         from .profiles import resolve_profile
-        profile = resolve_profile(value["profile"])
+        profile = resolve_profile(value["profile"], content_roots)
         if not value["collectors"]["fim"]["tiers"]:
             raise ConfigError("selected profile is missing its immutable FIM tiers")
         if value["collectors"]["rpm"]["enabled"] is not True:
             raise ConfigError("selected profile requires RPM/Python integrity")
+    elif content_roots:
+        raise ConfigError("content_roots require a content-capable profile")
     sensor_id = value.get("sensor_id")
     if not isinstance(sensor_id, str) or not _SENSOR_RE.fullmatch(sensor_id):
         raise ConfigError("sensor_id is required and may contain letters, numbers, . _ : -")
@@ -283,9 +311,15 @@ def validate_config(value):
         if not isinstance(tier, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", tier):
             raise ConfigError("collectors.fim.tiers has an invalid tier name")
         expected = {"targets", "interval_seconds", "max_entries", "max_file_bytes", "max_depth"}
-        _reject_unknown(tier_config, expected, f"collectors.fim.tiers.{tier}")
-        if set(tier_config) != expected:
+        # correlation_seconds is the one OPTIONAL tier key: absent means the
+        # shared 300s deploy window, so no existing profile's bytes move.
+        optional = {"correlation_seconds"}
+        _reject_unknown(tier_config, expected | optional, f"collectors.fim.tiers.{tier}")
+        if not expected.issubset(tier_config):
             raise ConfigError(f"collectors.fim.tiers.{tier} is incomplete")
+        if "correlation_seconds" in tier_config:
+            _integer(tier_config["correlation_seconds"],
+                     f"collectors.fim.tiers.{tier}.correlation_seconds", 300, 1800)
         validate_config_target_list(tier_config["targets"], f"collectors.fim.tiers.{tier}.targets")
         _integer(tier_config["interval_seconds"],
                  f"collectors.fim.tiers.{tier}.interval_seconds", 5, 86400)
@@ -348,7 +382,8 @@ def build_config(supplied):
     if profile_name:
         from .profiles import resolve_profile
         try:
-            profile = resolve_profile(profile_name)
+            profile = resolve_profile(
+                profile_name, validate_content_roots(expanded.get("content_roots", [])))
         except ValueError as err:
             raise ConfigError(str(err)) from err
         collectors = expanded.setdefault("collectors", {})
@@ -371,11 +406,17 @@ def build_config(supplied):
 # of refusing to start the sensor — a refusal fails the whole fleet deploy at
 # post_deploy (item 2000). Any future effective-schema key joins this tuple.
 _PREVIOUS_GENERATION_JOURNAL_KEYS = ("project_path", "app_uid", "app_gid")
+# Same one-generation rule for top-level effective keys. An artifact written by
+# the previous generation has no content_roots key at all; refusing it would
+# fail ExecStartPre on every enrolled node in the fleet.
+_PREVIOUS_GENERATION_TOP_KEYS = ("content_roots",)
 
 
 def validate_effective_config(value):
     """Validate one already-expanded, root-owned runtime artifact."""
     if isinstance(value, dict):
+        for key in _PREVIOUS_GENERATION_TOP_KEYS:
+            value.setdefault(key, _copy(DEFAULTS[key]))
         collectors = value.get("collectors")
         journal = collectors.get("journal") if isinstance(collectors, dict) else None
         if isinstance(journal, dict):
@@ -395,7 +436,9 @@ def validate_effective_config(value):
         return config
     from .profiles import resolve_profile
     try:
-        profile = resolve_profile(profile_name)
+        # Re-resolve with THIS node's enrolled roots. Resolving bare here would
+        # refuse every content node's own effective artifact at ExecStartPre.
+        profile = resolve_profile(profile_name, config["content_roots"])
     except ValueError as err:
         raise ConfigError(str(err)) from err
 
