@@ -648,7 +648,7 @@ def test_second_page_iam_policy_collision_is_rejected(opts):
 @th.django_unit_test()
 def test_missing_elb_resource_remains_an_optional_empty_collection(opts):
     from botocore.exceptions import ClientError
-    from mojo.deploy.provision import brownfield_discover
+    from mojo.deploy.provision import brownfield_discover, report
 
     class _ELB:
         def describe_load_balancers(self, **kwargs):
@@ -664,6 +664,24 @@ def test_missing_elb_resource_remains_an_optional_empty_collection(opts):
                  "an absent optional balancer must remain creatable")
     th.assert_eq(findings, [],
                  "normal ELB absence must not be reported as blind")
+
+    class _VanishingELB:
+        def describe_load_balancers(self, **kwargs):
+            if not kwargs.get("Marker"):
+                return {"LoadBalancers": [{"LoadBalancerArn": "partial"}],
+                        "NextMarker": "next"}
+            raise ClientError({"Error": {
+                "Code": "LoadBalancerNotFound", "Message": "vanished"}},
+                "DescribeLoadBalancers")
+
+    findings = []
+    answer = brownfield_discover._read_pages(
+        findings, "elbv2.describe_load_balancers", _VanishingELB(),
+        {"Names": ["vanishing"]}, not_found=True)
+    th.assert_eq(answer, {"LoadBalancers": []},
+                 "later-page absence must discard partial edge evidence")
+    th.assert_true(any(row.status == report.BLIND for row in findings),
+                   f"later-page absence must fail closed: {findings}")
 
 
 @th.django_unit_test()

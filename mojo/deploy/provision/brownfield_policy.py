@@ -23,9 +23,7 @@ ALLOWED_READS = {
         "describe_cache_clusters", "describe_cache_subnet_groups",
         "describe_replication_groups",
     )),
-    "s3": frozenset((
-        "get_bucket_location", "head_object", "list_objects_v2",
-    )),
+    "s3": frozenset(("get_bucket_location", "head_object")),
     "kms": frozenset(("describe_key", "get_key_policy", "list_grants")),
     "sns": frozenset(("get_topic_attributes",)),
     "iam": frozenset((

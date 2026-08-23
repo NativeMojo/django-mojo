@@ -1376,12 +1376,13 @@ def _read_pages(findings, name, client, params=None, not_found=False):
     request = dict(params or {})
     answer = {key: [] for key in spec["results"]}
     seen_tokens = set()
+    successful_pages = 0
     while True:
         def attempt():
             try:
                 return method(**request)
             except Exception as err:
-                if not_found and _not_found(err):
+                if not_found and successful_pages == 0 and _not_found(err):
                     return _PAGE_NOT_FOUND
                 raise
 
@@ -1393,6 +1394,7 @@ def _read_pages(findings, name, client, params=None, not_found=False):
             return {key: [] for key in spec["results"]}
         for key in spec["results"]:
             answer[key].extend(page.get(key) or [])
+        successful_pages += 1
         token = page.get(spec["response"])
         more_key = spec.get("more")
         has_more = bool(page.get(more_key)) if more_key else bool(token)
