@@ -73,6 +73,7 @@ export async function fleetPage(ctx, signal = null) {
   let planError = null;
   let planTimer = null;
   let planKey = '';
+  let pendingPlacementFocus = '';
 
   const managed = () => report?.mode !== 'external';
   const offer = (name) => report?.actions?.[name] || {offered: false, blocked_reason: null};
@@ -370,9 +371,11 @@ export async function fleetPage(ctx, signal = null) {
   function placementControls() {
     return addNodePlacementControls(report, want, {
       onInput: placementChanged,
-      onCommit: (values, valid) => {
+      onCommit: (values, valid, focusControl) => {
+        pendingPlacementFocus = focusControl;
         placementChanged(values);
         if (valid) render();
+        else pendingPlacementFocus = '';
       },
     });
   }
@@ -910,8 +913,9 @@ export async function fleetPage(ctx, signal = null) {
   // ── page ────────────────────────────────────────────────────────────────
 
   function render() {
-    const placementFocus = root.contains(document.activeElement)
-      ? document.activeElement?.dataset?.placementControl : '';
+    const placementFocus = pendingPlacementFocus || (root.contains(document.activeElement)
+      ? document.activeElement?.dataset?.placementControl : '');
+    pendingPlacementFocus = '';
     syncPlan();
     root.replaceChildren(...[
       managed() ? null : h('div', {class: 'callout warning'},
