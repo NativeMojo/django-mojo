@@ -152,6 +152,7 @@ function addNodePlacementControls(report, initial = {}, callbacks = {}) {
   const summary = h('span', {class: 'placement-summary'});
   const error = h('span', {class: 'placement-error', role: 'alert'});
   const subnet = h('input', {type: 'text', value: subnetId, list: listId,
+    'data-placement-control': 'subnet',
     autocomplete: 'off', 'aria-describedby': `${listId}-summary ${listId}-error`});
   summary.id = `${listId}-summary`;
   error.id = `${listId}-error`;
@@ -172,12 +173,19 @@ function addNodePlacementControls(report, initial = {}, callbacks = {}) {
       : subnetId.trim() ? `Choose a healthy source automatically; place it in ${subnetId.trim()}`
         : 'Choose a healthy source and subnet automatically.';
   };
-  const source = h('select', {onchange: (event) => {
-    sourceInstance = event.target.value;
-    paint();
-    callbacks.onInput?.(values(), valid());
-    callbacks.onCommit?.(values(), valid());
-  }},
+  let commitTimer = null;
+  const commit = () => {
+    clearTimeout(commitTimer);
+    // Let Tab/Shift+Tab settle before the batch page replaces its controls.
+    commitTimer = setTimeout(() => callbacks.onCommit?.(values(), valid()), 0);
+  };
+  const source = h('select', {'data-placement-control': 'source',
+    onchange: (event) => {
+      sourceInstance = event.target.value;
+      paint();
+      callbacks.onInput?.(values(), valid());
+      commit();
+    }},
   h('option', {value: '', text: 'Automatic (healthy source)'}),
   ...healthy.map((row) => h('option', {value: row.id, text: sourceLabel(row),
     selected: row.id === sourceInstance ? true : null})));
@@ -186,7 +194,6 @@ function addNodePlacementControls(report, initial = {}, callbacks = {}) {
     paint();
     callbacks.onInput?.(values(), valid());
   });
-  const commit = () => callbacks.onCommit?.(values(), valid());
   subnet.addEventListener('change', commit);
   subnet.addEventListener('blur', commit);
   const element = h('div', {class: 'add-node-placement'},
@@ -1241,6 +1248,8 @@ export function capacityTab(ctx, signal = null, actions = null) {
 
   function render() {
     if (!want) return;
+    const placementFocus = root.contains(document.activeElement)
+      ? document.activeElement?.dataset?.placementControl : '';
     syncPlan();
     root.replaceChildren(...[
       managed() ? null : h('div', {class: 'callout warning'},
@@ -1259,6 +1268,10 @@ export function capacityTab(ctx, signal = null, actions = null) {
       techDetails(),
       applyBar(),
     ].filter(Boolean));
+    if (placementFocus) {
+      root.querySelector(`[data-placement-control="${placementFocus}"]`)
+        ?.focus({preventScroll: true});
+    }
   }
 
   async function load(refresh = false) {

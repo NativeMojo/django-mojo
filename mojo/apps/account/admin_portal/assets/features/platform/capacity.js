@@ -135,6 +135,7 @@ export function addNodePlacementControls(report, initial = {}, callbacks = {}) {
   const summary = h('span', {class: 'placement-summary'});
   const error = h('span', {class: 'placement-error', role: 'alert'});
   const subnet = h('input', {type: 'text', value: subnetId, list: listId,
+    'data-placement-control': 'subnet',
     autocomplete: 'off', 'aria-describedby': `${listId}-summary ${listId}-error`});
   summary.id = `${listId}-summary`;
   error.id = `${listId}-error`;
@@ -157,12 +158,20 @@ export function addNodePlacementControls(report, initial = {}, callbacks = {}) {
         : 'Choose a healthy source and subnet automatically.';
   };
 
-  const source = h('select', {onchange: (event) => {
-    sourceInstance = event.target.value;
-    paint();
-    callbacks.onInput?.(values(), valid());
-    callbacks.onCommit?.(values(), valid());
-  }},
+  let commitTimer = null;
+  const commit = () => {
+    clearTimeout(commitTimer);
+    // Let Tab/Shift+Tab finish moving focus before a batch caller re-renders.
+    // Its render can then preserve the intended control, not the one blurring.
+    commitTimer = setTimeout(() => callbacks.onCommit?.(values(), valid()), 0);
+  };
+  const source = h('select', {'data-placement-control': 'source',
+    onchange: (event) => {
+      sourceInstance = event.target.value;
+      paint();
+      callbacks.onInput?.(values(), valid());
+      commit();
+    }},
   h('option', {value: '', text: 'Automatic (healthy source)'}),
   ...healthy.map((row) => h('option', {value: row.id, text: sourceLabel(row),
     selected: row.id === sourceInstance ? true : null})));
@@ -171,7 +180,6 @@ export function addNodePlacementControls(report, initial = {}, callbacks = {}) {
     paint();
     callbacks.onInput?.(values(), valid());
   });
-  const commit = () => callbacks.onCommit?.(values(), valid());
   subnet.addEventListener('change', commit);
   subnet.addEventListener('blur', commit);
 
