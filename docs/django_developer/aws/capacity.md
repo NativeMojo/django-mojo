@@ -540,6 +540,55 @@ provider; every mutation is AWS-side before its record is written. `GET
 /api/aws/capacity/status` is a pure read — a status endpoint that ADVANCED the
 work would let a `manage_aws`-only caller drive a registration.
 
+**An irreversible step is CHECKPOINTED, and a checkpoint that cannot be written
+aborts the operation.** Entering a runner's FIRST phase, or a phase whose next
+AWS call is irreversible, goes through `_checkpoint`, which writes through
+`_persist` and raises `CapacityPersistenceError` when the cache does not accept
+it. `run_operation` turns that into `persistence_unavailable` — stopped BEFORE
+the next AWS change, nothing further mutated, never rolled back. Eleven phase
+entries are checkpointed: `add_node` `capturing` (both branches),
+`enable_stable_ips` `planning`, `disable_stable_ips` `detaching`, `drain_node`
+`draining`, `terminate_node` `terminating`, `add_reader` `creating`,
+`remove_reader` `deleting`, `set_cache_replicas` `scaling`, and both resize
+runners' `resizing`.
+
+Everything else stays TOLERANT on purpose. `add_node`'s `launching`,
+`converging`, `addressing` and `registering` are additive and recoverable —
+the clone carries `mojo:created-by: admin-capacity`, so `report()` rediscovers
+it — and gating them would discard a captured, launched, booted, converged and
+PROVEN node over a Redis blip, leaving a paid, running, unregistered orphan.
+So do every in-phase repeat that FOLLOWS its mutation, every `settling` and
+`verifying` leg, warnings, terminal states, the topology extend, and
+`_write_batch`: every destructive step inside a batch runs through the same
+`apply()` a manual click does, so it is gated at that door.
+
+Detection is the **return value** of `cache.set`, compared `is False` — never a
+read-back. `MojoRedisCache.set` catches every exception itself and returns
+`False`, so a dead Redis never raises; and in cluster mode a `GET` right after
+a `SET` can hit an asynchronously replicated replica and legitimately miss,
+which would turn successful writes into aborted operations. `is False` rather
+than falsiness because some Django backends return `None` on success. The retry
+is a **wall-clock budget** (`PERSIST_RETRY_SECONDS`, 15s), not an attempt count:
+`REDIS_SOCKET_TIMEOUT` defaults to 60s, so a hung cache would spend three
+minutes on three attempts, while a fast refusal retries several times inside the
+budget and rides out a sub-second blip.
+
+**During a true outage the abort is log-only.** `_fail` reports by writing to
+the same dead cache, so `/status` will 404 or keep serving the last persisted
+record until its TTL; the `logger.error` in `run_operation` (naming the
+operation id and the phase, in `aws.log`) is the surviving channel. `_release`
+is a `cache.delete` and fails silently too, so a claim taken before the outage
+can survive to `CLAIM_TTL` — a retry may still get `capacity_in_progress` 409
+until it expires.
+
+**At request time** the same failure is a refusal, not a phantom success:
+`_new_operation` persists through `_persist`, and on failure releases the claim
+and raises `cache_unavailable` 503. Without it a request answered `200 OK` for
+an operation the runner would never find, while its claim wedged the resource
+for the full `CLAIM_TTL`. The stable-IPs actions re-word that refusal — their
+durable policy is written one line earlier, so "nothing was started" would be a
+lie there; the message says the policy IS recorded and no address moved.
+
 **Unknown mutation outcomes are reconcile-only.** A provider failure after a
 mutation was attempted records `mutation_state_unknown`, retains its
 single-flight claim, returns only the bounded `ProviderCallError.detail()`

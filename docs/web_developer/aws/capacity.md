@@ -573,7 +573,7 @@ operation record instead.
 | `no_fleet_nodes` | 409 | No node is registered behind a load balancer, so there is nothing to give a stable address to |
 | `address_not_eligible` | 409 | An explicitly assigned allocation is associated, unknown, or carries no django-mojo ownership tag. The remedy (tag it in the console) is in the message |
 | `capacity_in_progress` | 409 | Another capacity change holds the single-flight claim. **All adds share one claim; enable and disable of stable IPs share another; a cache resize and a replica-count change on the same group share that group's claim** |
-| `cache_unavailable` | 503 | The coordination cache cannot rule out a concurrent change. Retry shortly |
+| `cache_unavailable` | 503 | The coordination cache cannot rule out a concurrent change, **or** the operation record could not be recorded at request time. Either way **nothing was started** — an operation nobody can record is one the runner would never find. Retry shortly. The stable-IPs actions say more: their durable policy IS recorded, and no address was attached or detached |
 | `dispatch_failed` | 503 | No job runner accepted the operation. **Nothing was changed** — except for the stable-IPs actions, where the durable policy WAS recorded before dispatch; their message says so, and re-running the action converges |
 | `provider_denied` | 403 | AWS refused. `data.failure.iam_action` names the missing grant — and nothing else |
 | `provider_unavailable` | 503 | A retryable AWS failure |
@@ -612,6 +612,7 @@ of the refused step.
 | `address_failed` | An address could not be attached. On `add_node` the clone is running and **deliberately not registered** — a node whose egress nobody allowlisted must not serve |
 | `address_unverified` | The verify re-read did not show the expected associations. Run the action again — both stable-ips operations converge only what is missing |
 | `policy_unreadable` | `add_node` could not read the stable-IPs policy, so the node was **not registered** rather than admitted unaddressed |
+| `persistence_unavailable` | Progress could not be recorded, so the operation stopped **BEFORE its next irreversible AWS change**. Nothing further was changed. While the cache is down this state may not be readable — check the AWS console and the `aws.log` line naming the operation id. The claim may survive to its 90-minute TTL, so a retry can answer `capacity_in_progress` until it expires |
 | `mutation_state_unknown` | A provider write may have succeeded but its result could not be confirmed. Refresh and reconcile the provider inventory; **do not replay** |
 | `operation_failed` | An unexpected post-acceptance failure leaves the outcome uncertain. Refresh and reconcile provider state; **do not replay** |
 
