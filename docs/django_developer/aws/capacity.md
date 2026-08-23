@@ -153,23 +153,33 @@ with a running billed instance and a claim held for `CLAIM_TTL` (90 min).
 |---|---|---|
 | No such subnet | `subnet_not_found` 404 | `run_instances` would refuse opaquely |
 | Different VPC than the source | `subnet_not_usable` 409, `data.reason = vpc_mismatch` | A clone carries its source's security groups, which are VPC-scoped — AWS hard-rejects |
-| A zone the balancer does not serve | `subnet_az_not_served` 409 | The expensive one — see below |
+| A different availability zone than the source | `subnet_not_usable` 409, `data.reason = az_mismatch` | One zone for now — see below |
 | Source subnet public, named one not | `subnet_not_usable` 409, `data.reason = no_public_addressing` | `launch_clone` sets no `AssociatePublicIpAddress`; addressing is inherited from the subnet, so the node would boot with no route out and die at `RUNNER_TIMEOUT` |
 | Zero free addresses | `subnet_not_usable` 409, `data.reason = no_free_addresses` | Early warning only — see below |
 
-**The AZ-enablement check is what makes this safe, and it costs zero provider
-calls.** An ELBv2 target must sit in an availability zone enabled on the
-balancer, or `RegisterTargets` throws `InvalidTarget` and the `registering`
-leg's bare loop turns it into `mutation_state_unknown` with the claim HELD and
-"do not replay" on the record — or the target sits `unused` until
-`_await_healthy` gives up at `never_healthy`. Both burn the whole
-capture/boot/converge/prove sequence first. The data is already in hand:
-`elbv2.serving_map` projects `zones` per balancer, and `_groups_holding` names
-the groups the clone will join. The refusal fires when the subnet's zone is
-absent from the **INTERSECTION** of enabled zones across every balancer
-holding those groups — intersection, not union, because the clone is
-registered behind all of them. No balancer in the set reporting a `zones` list
-at all is absent data, and absent data is not a refusal.
+**A named subnet chooses a subnet, never a zone, and that is what makes this
+safe.** The product supports ONE availability zone for now, so
+`_resolve_placement` refuses any subnet whose `availability_zone` differs from
+the source instance's. Comparison is strict equality against
+`source["availability_zone"]`, so a zone AWS did not report on either side is
+also a refusal: same-zone that cannot be proven is not same-zone.
+
+The check this replaced asked whether the named zone was enabled on every
+balancer holding the source's target groups. Pinning to the source's zone is
+**strictly stronger**, not a relaxation: the source is a healthy serving target
+behind exactly those balancers, so every one of them provably has the source's
+zone enabled already. A subnet constrained to that zone is therefore always in
+a zone the balancer serves, and the enablement check became unreachable by
+construction — which is why it is gone rather than merely unused. The failure
+it guarded against (an ELBv2 target in an unenabled zone: `RegisterTargets`
+throws `InvalidTarget`, the `registering` leg's bare loop turns it into
+`mutation_state_unknown` with the claim HELD and "do not replay" on the record,
+or the target sits `unused` until `_await_healthy` gives up at `never_healthy`)
+cannot be reached from here.
+
+`elbv2.serving_map` still projects `zones` per balancer. Nothing in placement
+reads it any more. If the one-zone limit is ever lifted, the intersection walk
+that used it is in the history of this file, at commit `e500a94c`.
 
 The free-address count is **early warning, not a guarantee**: it is read up to
 `IMAGE_TIMEOUT` (30 min) before `run_instances` and nothing reserves an
@@ -743,12 +753,12 @@ checkable against the envelope — it must be a healthy row in the report, the
 same set the single-action apply narrows to — so a bad one is
 `source_not_serving` 409 at plan time. Its `subnet_id` is **shape-checked
 only** (`subnet-` prefix), not because the envelope lacks subnet data but
-because a new availability zone's subnet by definition holds no node, so no
-envelope built from node rows could ever validate the one placement this
-feature exists to enable. The child `apply()` proves it against AWS before it
-takes a claim. Two `add_node` steps naming different subnets are both accepted
-— the duplicate-step check already exempts `add_node`, and that is the
-two-zone case.
+because an empty subnet holds no node by definition, so no envelope built from
+node rows could ever see the subnet you would name — and naming one you are
+not already in is the whole point. The child `apply()` proves it against AWS
+— VPC, zone, addressing — before it takes a claim. Two `add_node` steps
+naming different subnets are both accepted; the duplicate-step check already
+exempts `add_node`.
 
 ### Costs
 
@@ -888,11 +898,16 @@ model. See [assistant/cloud_tools.md](../assistant/cloud_tools.md).
   from a background job, with no confirmation.
 - **Scaling policies.** Every action here is one deliberate, confirmed,
   audited change. Nothing autoscales.
-- **Availability-zone spread.** A named subnet places ONE add. Nothing
-  rebalances an existing fleet across zones, nothing tracks how many nodes sit
-  where, and nothing enables a zone on a balancer — an add into a zone the
-  balancer does not serve is refused, and enabling that zone stays a console
-  or provisioning move.
+- **Availability-zone spread.** A fleet cannot be spread across availability
+  zones through this control at all. **One zone, for now** — a named subnet
+  must be in the source node's own zone, and one in any other zone is refused
+  (`subnet_not_usable`, `data.reason = az_mismatch`). So `subnet_id` chooses
+  WHICH subnet in that zone, never which zone. Nothing rebalances a fleet
+  across zones, nothing tracks how many nodes sit where, and nothing enables a
+  zone on a balancer. This is a current product limit, not a permanent design
+  position: the cross-zone placement path — including the balancer
+  zone-enablement check it required — was built and then deliberately removed,
+  and is recoverable from commit `e500a94c`.
 - **Bootstrapping.** The first node of an installation is the project's
   provisioning, not this button.
 - **The zero-downtime Aurora writer resize.** The recipe — resize a reader,

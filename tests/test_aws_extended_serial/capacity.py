@@ -765,10 +765,11 @@ def test_add_node_launches_into_the_recorded_subnet(opts):
     from mojo.apps.edge.services import platform_deploy
 
     record = _add_record(capacity)
-    # The placement the REQUEST proved and recorded — a different subnet, in a
-    # different zone, from the one the source instance sits in.
+    # The placement the REQUEST proved and recorded — a different subnet from
+    # the one the source instance sits in, inside the source's own zone, which
+    # is the only cross-subnet placement the request now accepts.
     record["detail"]["subnet_id"] = "subnet-0bbb"
-    record["detail"]["availability_zone"] = "us-east-1b"
+    record["detail"]["availability_zone"] = "us-east-1a"
     record["detail"]["subnet_selected"] = "requested"
     row = SimpleNamespace(pk="18180000-0000-4000-8000-000000000002",
                           sha="b" * 40, framework_version="1.13.0")
@@ -808,7 +809,7 @@ def test_add_node_launches_into_the_recorded_subnet(opts):
     assert launched.call_args[0][2] == "subnet-0bbb", \
         (f"the clone was launched into the source's subnet, not the recorded "
          f"one: {launched.call_args[0]}")
-    assert ("launching", "launching the new node in us-east-1b") in notes, \
+    assert ("launching", "launching the new node in us-east-1a") in notes, \
         f"the launching note never named the zone the node lands in: {notes}"
 
 

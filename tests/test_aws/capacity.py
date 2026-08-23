@@ -106,19 +106,23 @@ def _placement_client(instances=(), subnets=()):
     return client
 
 
-def _placement_serving(api_zones=("us-east-1a", "us-east-1b"),
-                       sites_zones=("us-east-1a", "us-east-1b")):
+def _placement_serving():
     """The Maestro shape: two balancers, one healthy target each.
 
     Which balancer's fleet an add grows is decided ENTIRELY by which node it
     clones, so a one-group map could not show the mechanism working.
+
+    ``zones`` is what ``serving_map`` really projects and is carried for
+    fidelity only — placement no longer reads it. A named subnet must be in
+    the SOURCE's zone, and the source is a healthy target of these balancers,
+    so their enabled zones can never be the thing that decides an add.
     """
     return {
         "balancers": [
             {"arn": BALANCER_ARN, "name": "mojo-api-nlb",
-             "zones": list(api_zones)},
+             "zones": ["us-east-1a"]},
             {"arn": SITES_BALANCER_ARN, "name": "mojo-sites-nlb",
-             "zones": list(sites_zones)}],
+             "zones": ["us-east-1a"]}],
         "groups": [
             {"arn": GROUP_ARN, "name": "mojo-api", "balancers": [BALANCER_ARN],
              "targets": [{"id": NODE_A, "port": 443, "state": "healthy"}]},
@@ -550,7 +554,9 @@ def test_add_node_placement_is_validated_before_anything_is_created(opts):
     serving = _placement_serving()
     instances = [_instance(NODE_A, "mojo-api-a"),
                  _instance(NODE_B, "mojo-sites-a")]
-    subnets = [_subnet(SUBNET_A), _subnet(SUBNET_B, zone="us-east-1b"),
+    # Every subnet here is in the source's zone: a named subnet is a SUBNET
+    # choice, not a zone choice — see the same-zone test below.
+    subnets = [_subnet(SUBNET_A), _subnet(SUBNET_B),
                _subnet("subnet-0zzz", vpc="vpc-0zzz")]
 
     # (a) naming the sites node grows the SITES fleet: the groups the runner
@@ -566,7 +572,7 @@ def test_add_node_placement_is_validated_before_anything_is_created(opts):
     assert groups[0]["port"] == 8443, \
         f"the clone would register on the wrong port: {groups}"
     assert placement == {"subnet_id": SUBNET_B,
-                         "availability_zone": "us-east-1b",
+                         "availability_zone": "us-east-1a",
                          "selected": "requested"}, \
         f"the named subnet was not the placement decided: {placement}"
 
@@ -604,42 +610,41 @@ def test_add_node_placement_is_validated_before_anything_is_created(opts):
         "the automatic path called DescribeSubnets, which it must never need"
 
 
-@th.django_unit_test("a subnet in a zone the balancer does not serve is refused up front")
-def test_add_node_refuses_a_subnet_the_balancer_does_not_serve(opts):
+@th.django_unit_test("a subnet outside the source's availability zone is refused up front")
+def test_add_node_refuses_a_subnet_in_another_zone(opts):
     from mojo.apps.aws.services import capacity
 
-    instances = [_instance(NODE_A, "mojo-api-a")]
-    subnets = [_subnet(SUBNET_A), _subnet(SUBNET_B, zone="us-east-1b")]
+    serving = _placement_serving()
+    instances = [_instance(NODE_A, "mojo-api-a", zone="us-east-1a")]
+    subnets = [_subnet(SUBNET_A, zone="us-east-1a"),
+               _subnet(SUBNET_B, zone="us-east-1b"),
+               _subnet("subnet-0ccc", zone="us-east-1a")]
 
-    # A target in a zone the balancer has not enabled either throws
-    # InvalidTarget at RegisterTargets — held claim, "do not replay" — or
-    # never goes healthy. Both burn the AMI, the boot, the converge and the
-    # proof first. Refusing here costs one describe.
-    one_zone = _placement_serving(api_zones=("us-east-1a",))
+    # One availability zone, for now. A named subnet says WHICH subnet in the
+    # source's zone, never which zone — so a fleet cannot be spread across
+    # zones through this door.
     with th.assert_raises(capacity.CapacityError) as caught:
         capacity._prepare_add_node(
-            one_zone, ec2_client=_placement_client(instances, subnets),
+            serving, ec2_client=_placement_client(instances, subnets),
             source_instance=NODE_A, subnet_id=SUBNET_B, fleet_spec=_spec())
-    assert caught.exception.error_code == "subnet_az_not_served" \
+    assert caught.exception.error_code == "subnet_not_usable" \
         and caught.exception.status == 409, \
-        f"an unserved zone was not refused: {caught.exception.error_code}"
-    assert caught.exception.data.get("served_zones") == ["us-east-1a"], \
-        f"the refusal does not say which zones ARE served: {caught.exception.data}"
+        f"a cross-zone subnet was not refused: {caught.exception.error_code}"
+    assert caught.exception.data.get("reason") == "az_mismatch", \
+        f"the refusal does not name the reason: {caught.exception.data}"
+    assert caught.exception.data.get("zone") == "us-east-1b" \
+        and caught.exception.data.get("source_zone") == "us-east-1a", \
+        f"the refusal does not name both zones: {caught.exception.data}"
 
-    # The same balancer, the zone it does serve: accepted.
+    # A DIFFERENT subnet in the source's own zone is the placement this
+    # accepts, and it is the whole of what subnet_id buys.
     _source, _groups, placement = capacity._prepare_add_node(
-        one_zone, ec2_client=_placement_client(instances, subnets),
-        source_instance=NODE_A, subnet_id=SUBNET_A, fleet_spec=_spec())
-    assert placement["selected"] == "requested", \
-        f"a subnet in a served zone was not accepted: {placement}"
-
-    # Absent zone data is not a refusal — the check skips rather than guesses.
-    silent = _placement_serving(api_zones=())
-    _source, _groups, placement = capacity._prepare_add_node(
-        silent, ec2_client=_placement_client(instances, subnets),
-        source_instance=NODE_A, subnet_id=SUBNET_B, fleet_spec=_spec())
-    assert placement["availability_zone"] == "us-east-1b", \
-        f"a balancer reporting no zones turned into a refusal: {placement}"
+        serving, ec2_client=_placement_client(instances, subnets),
+        source_instance=NODE_A, subnet_id="subnet-0ccc", fleet_spec=_spec())
+    assert placement == {"subnet_id": "subnet-0ccc",
+                         "availability_zone": "us-east-1a",
+                         "selected": "requested"}, \
+        f"a subnet in the source's own zone was not accepted: {placement}"
 
 
 @th.django_unit_test("a private subnet is refused when the source's subnet is public")
@@ -653,8 +658,10 @@ def test_add_node_refuses_a_subnet_without_public_addressing(opts):
     # NetworkInterfaces block, so addressing is whatever the subnet does. A
     # same-VPC private subnet otherwise passes every check and the node dies
     # at RUNNER_TIMEOUT having never reached anything.
+    # Both in the source's zone — a private subnet in the SAME zone is still
+    # the trap, and it is the only shape the same-zone rule leaves reachable.
     mixed = [_subnet(SUBNET_A, public=True),
-             _subnet(SUBNET_B, zone="us-east-1b", public=False)]
+             _subnet(SUBNET_B, public=False)]
     with th.assert_raises(capacity.CapacityError) as caught:
         capacity._prepare_add_node(
             serving, ec2_client=_placement_client(instances, mixed),
@@ -667,7 +674,7 @@ def test_add_node_refuses_a_subnet_without_public_addressing(opts):
     # Compared against the SOURCE, never asserted absolutely: a fleet that
     # lives in private subnets stays able to add nodes.
     private = [_subnet(SUBNET_A, public=False),
-               _subnet(SUBNET_B, zone="us-east-1b", public=False)]
+               _subnet(SUBNET_B, public=False)]
     _source, _groups, placement = capacity._prepare_add_node(
         serving, ec2_client=_placement_client(instances, private),
         source_instance=NODE_A, subnet_id=SUBNET_B, fleet_spec=_spec())

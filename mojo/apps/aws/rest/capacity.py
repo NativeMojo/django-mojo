@@ -179,9 +179,9 @@ def on_capacity_apply(request):
     if action == capacity_service.ACTION_ADD_NODE:
         # Both optional; omitting both keeps the historical behavior exactly.
         # SHAPE ONLY here — is this a serving member of this fleet, is that
-        # subnet in the source's VPC, does the balancer serve its zone — all
-        # stay in the service, so the batch path gets the same answers from
-        # the same code. `source_instance` is a NEW field, never a reuse of
+        # subnet in the source's VPC, is it in the source's zone — all stay in
+        # the service, so the batch path gets the same answers from the same
+        # code. `source_instance` is a NEW field, never a reuse of
         # `resource`: `resource` stays forced to "" for fleet actions so the
         # caller cannot choose their own confirm echo or steer the audit
         # subject, and `confirm_resource` stays the literal action word.

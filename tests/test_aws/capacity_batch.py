@@ -458,8 +458,8 @@ def test_plan_store_ttl_and_shape(opts):
 @th.django_unit_test("an add_node step carries its placement, and prices the source it names")
 def test_add_node_step_carries_placement(opts):
     # Two adds in one batch, into DIFFERENT subnets: the duplicate-step check
-    # already exempts add_node, and this is the two-availability-zone case the
-    # feature exists for.
+    # already exempts add_node. The envelope is shape-only here, so whether
+    # each subnet is really in its source's zone is the child apply()'s call.
     envelope = _envelope(
         nodes=[_node(NODE_A, "mojo-api-a"),
                _node(NODE_B, "mojo-sites-a", itype="t3.medium")])
@@ -509,7 +509,7 @@ def test_add_node_step_refuses_a_bad_placement(opts):
         f"the refusal does not name the offending step: {caught.exception.data}"
     _refused([{"action": "add_node", "source_instance": NODE_D}], envelope,
              "source_not_serving")
-    # The subnet is shape-checked only: a new zone's subnet holds no node by
+    # The subnet is shape-checked only: an empty subnet holds no node by
     # definition, so no envelope built from node rows could validate it. The
     # child apply() proves it against AWS before it takes a claim.
     _refused([{"action": "add_node", "subnet_id": "vpc-0aaa"}], envelope,

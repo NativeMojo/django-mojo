@@ -1642,34 +1642,17 @@ def _prove_fleet_member(resource, serving, ec2_client=None):
             "not_fleet_member", 409)
 
 
-def _served_zones(groups, serving):
-    """The zones EVERY balancer holding ``groups`` has enabled, or None.
-
-    An INTERSECTION, never a union: the clone is registered behind all of
-    them, so a zone one balancer serves and another does not is a zone the
-    clone cannot be healthy in. ``None`` means no balancer in the set reported
-    a zone list at all — absent data, which is not a refusal.
-    """
-    wanted = {group.get("arn") for group in groups or [] if group.get("arn")}
-    balancer_arns = set()
-    for group in (serving or {}).get("groups") or []:
-        if group.get("arn") in wanted:
-            balancer_arns.update(group.get("balancers") or [])
-    zone_sets = [set(row.get("zones") or [])
-                 for row in (serving or {}).get("balancers") or []
-                 if row.get("arn") in balancer_arns and row.get("zones")]
-    if not zone_sets:
-        return None
-    return set.intersection(*zone_sets)
-
-
-def _resolve_placement(source, subnet_id, groups, serving, ec2_client=None):
+def _resolve_placement(source, subnet_id, ec2_client=None):
     """Where the clone lands — every check AWS lets us make, made up front.
 
     An add that refuses AFTER the AMI capture has already burned 20–40
     minutes, left a running billed instance, and wedged the fleet-wide add
     claim for ``CLAIM_TTL``. So a named subnet is proven here, in the request,
     before a claim is taken and before anything is created.
+
+    A named subnet chooses a SUBNET, never a zone: it must sit in the source's
+    own availability zone. The product runs one zone for now, so spreading a
+    fleet across zones is not a placement this accepts.
 
     Omitting ``subnet_id`` costs ZERO provider calls and keeps the historical
     behavior exactly: the clone lands in the source's own subnet.
@@ -1704,23 +1687,31 @@ def _resolve_placement(source, subnet_id, groups, serving, ec2_client=None):
             f"refuse the launch.",
             "subnet_not_usable", 409, {"reason": "vpc_mismatch"})
 
-    # The expensive one. An ELBv2 target in a zone the balancer has not
-    # enabled either throws InvalidTarget at RegisterTargets — a mutation
-    # failure that holds the claim and tells the operator not to replay — or
-    # sits `unused` until the health wait times out. Both burn the whole
-    # capture/boot/converge/prove sequence first and leave a billed,
-    # unregistered instance behind.
+    # Same zone as the source, always. The product supports ONE availability
+    # zone for now, so a named subnet moves a node sideways within the
+    # source's zone; it never puts it in a second one.
+    #
+    # This REPLACES a check that the zone was enabled on every balancer
+    # holding the source's target groups, and it is strictly stronger than
+    # that check, not a relaxation of it. The source is a healthy serving
+    # target behind exactly those balancers, so every one of them provably has
+    # the source's zone enabled already. A subnet pinned to the source's zone
+    # is therefore always in a zone the balancer serves, which makes the
+    # enablement check unreachable by construction — the InvalidTarget /
+    # never-healthy failure it guarded against cannot be reached from here.
+    #
+    # Strict equality, so an unreported zone on either side refuses: same-zone
+    # that cannot be PROVEN is not same-zone.
     zone = facts.get("availability_zone")
-    served = _served_zones(groups, serving)
-    if served is not None and zone not in served:
-        listed = ", ".join(sorted(served)) or "no zone in common"
+    source_zone = source.get("availability_zone")
+    if zone != source_zone:
         raise CapacityError(
-            f"{wanted} is in {zone}, and the load balancer(s) this node would "
-            f"be registered behind serve {listed}. Enable {zone} on the "
-            f"balancer first, then add the node.",
-            "subnet_az_not_served", 409,
-            {"reason": "az_not_enabled", "zone": zone,
-             "served_zones": sorted(served)})
+            f"{wanted} is in {zone} and the node it would be cloned from is "
+            f"in {source_zone}. A node can only be placed in the same "
+            f"availability zone as the node it is cloned from.",
+            "subnet_not_usable", 409,
+            {"reason": "az_mismatch", "zone": zone,
+             "source_zone": source_zone})
 
     # Public addressing is inherited from the subnet: launch_clone sets no
     # AssociatePublicIpAddress and uses no NetworkInterfaces block. A private
@@ -1826,8 +1817,7 @@ def _prepare_add_node(serving, ec2_client=None, source_instance=None,
                              for target in group.get("targets") or []
                              if target.get("id") == source["instance_id"]), None)}
               for group in _groups_holding(serving, source["instance_id"])]
-    placement = _resolve_placement(source, subnet_id, groups, serving,
-                                   ec2_client=ec2_client)
+    placement = _resolve_placement(source, subnet_id, ec2_client=ec2_client)
     return source, groups, placement
 
 
@@ -2709,10 +2699,11 @@ def _add_node_params(index, raw, envelope):
 
     The source IS checkable here: it must be a healthy node in the report, the
     same set the single-action apply narrows to. The subnet is deliberately
-    SHAPE-ONLY — a new availability zone's subnet by definition holds no node,
-    so no envelope built from node rows could ever validate the one placement
-    this feature exists to enable. The child apply() re-derives it against AWS
-    before it takes a claim.
+    SHAPE-ONLY — an empty subnet holds no node by definition, so an envelope
+    built from node rows cannot see it at all, and the whole point of naming
+    one is to land in a subnet the fleet is not already in. The child apply()
+    re-derives it against AWS — VPC, zone, addressing — before it takes a
+    claim.
     """
     params = {}
     source_instance = str(raw.get("source_instance") or "").strip()
