@@ -656,7 +656,13 @@ preview:
 `check_node` requires the active profile digest plus initialized `fast`, `slow`,
 and `rpm` baselines. Rollback is explicit and digest-confirmed with
 `baseline-rollback --confirm-digest <retained-prior-digest>`; retained profile
-history is never removed merely because another profile is activated.
+history is never removed merely because another profile is activated. A
+rollback target must carry an initialized baseline for `fast`, `slow` and `rpm`
+**and** for every tier its own profile configures — so a content profile is
+refused unless its content tier was baselined too. Re-enrolling a node's
+content roots retires the content baselines of the older generations along with
+the old root set, which makes those generations ineligible until they are
+re-baselined.
 
 `check` does not open the API-key credential. For an RPM-enabled profile it does
 start the same bounded isolated helper and fails unless the system binding,

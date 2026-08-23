@@ -178,7 +178,8 @@ def test_mixed_tier_pending_events_each_use_their_own_window(opts):
     from mojo.deploy.mojosec_changes import MAX_TTL_SECONDS
     from mojo.mojosec.events import observation
     from mojo.mojosec.store import (
-        ANNOTATION_MAX_GRACE_SECONDS, ANNOTATION_MAX_OPERATION_SECONDS, Store,
+        ANNOTATION_MAX_CORRELATION_SECONDS, ANNOTATION_MAX_GRACE_SECONDS,
+        ANNOTATION_MAX_OPERATION_SECONDS, Store,
     )
 
     th.assert_eq(ANNOTATION_MAX_OPERATION_SECONDS, MAX_TTL_SECONDS,
@@ -214,6 +215,54 @@ def test_mixed_tier_pending_events_each_use_their_own_window(opts):
             store._event_grace({"correlation_seconds": 99999}),
             ANNOTATION_MAX_GRACE_SECONDS,
             "an out-of-range window must fall back, never extend the hold")
+
+        # The SAME bound must decide the match window, not only the hold: the
+        # store hands this attribute straight to annotation() on the
+        # re-annotation pass, so a value _event_grace refuses may not widen the
+        # window an already-durable change can still be explained in.
+        import datetime
+
+        from mojo.mojosec.expected_changes import (
+            MAX_OPERATION_CORRELATION_SECONDS, MAX_TIER_CORRELATION_SECONDS,
+            annotation, evidence_digest,
+        )
+
+        th.assert_eq(MAX_TIER_CORRELATION_SECONDS,
+                     ANNOTATION_MAX_CORRELATION_SECONDS,
+                     "the hold ceiling and the match ceiling must be one value")
+        moment = datetime.datetime(2026, 8, 23, 12, tzinfo=datetime.timezone.utc)
+        evidence = {"kind": "file", "mode": 0o644, "uid": 0, "gid": 0, "size": 4,
+                    "mtime_ns": 1, "ctime_ns": 2, "device": 3, "inode": 4,
+                    "sha256": "c" * 64}
+        kind, digest = evidence_digest(evidence)
+        entry = {
+            "path": "/opt/content/acme/index.html", "change": "modified",
+            "sha256": digest, "evidence_kind": kind,
+            "expires_at": "2030-01-01T00:00:00Z",
+            "deployment_id": "content-publish:acme",
+            "operation_id": "content-publish-" + "a" * 32,
+            "operation_kind": "content-publish",
+            "started_at": "2026-08-23T12:00:00Z",
+            "completed_at": "2026-08-23T12:00:00Z",
+            "_expiry": datetime.datetime(2030, 1, 1, tzinfo=datetime.timezone.utc),
+            "_started": moment, "_completed": moment,
+        }
+        late = moment + datetime.timedelta(
+            seconds=MAX_OPERATION_CORRELATION_SECONDS + 300)
+
+        def explained(window):
+            return annotation([entry], entry["path"], "modified", None, evidence,
+                              now=moment, observed_at=late,
+                              correlation_seconds=window) is not None
+
+        th.assert_true(explained(900),
+                       "the content tier's own configured window must still match")
+        for window in (99999, MAX_TIER_CORRELATION_SECONDS + 1, 0, -1, True,
+                       "900", 900.0, None):
+            th.assert_true(
+                not explained(window),
+                f"an unusable window must fall back to the shared deploy "
+                f"window, never widen the match: {window!r}")
 
         # Both are held for their annotation grace on ingest; deliver them as
         # the sender would once that grace has elapsed.

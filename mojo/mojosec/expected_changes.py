@@ -15,6 +15,12 @@ _DEPLOYMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _OPERATION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _EVIDENCE_KINDS = {"file", "symlink", "directory", "other"}
 MAX_OPERATION_CORRELATION_SECONDS = 300
+# The widest post-completion window any tier may configure
+# (collectors.fim.tiers.*.correlation_seconds, validated in config.py). It is
+# the ONE ceiling: annotation() clamps to it, and store.py's
+# ANNOTATION_MAX_CORRELATION_SECONDS is this value, so the window an event is
+# HELD for and the window it is MATCHED in can never be bounded differently.
+MAX_TIER_CORRELATION_SECONDS = 1800
 # Domain separator for the relaxed content-directory digest below. Its presence
 # in the digest material makes a relaxed digest unable to collide with a full
 # one, so relaxation can never be smuggled onto an ordinary host annotation.
@@ -186,8 +192,12 @@ def annotation(entries, path, change, before, after, now=None, observed_at=None,
                correlation_seconds=None, directory_metadata_roots=()):
     """Return a bounded annotation for an exact live entry; never suppress.
 
-    correlation_seconds is the tier's post-completion match window; None keeps
-    the shared deploy window. directory_metadata_roots names the content roots
+    correlation_seconds is the tier's post-completion match window; None — and
+    anything outside 0 < value <= MAX_TIER_CORRELATION_SECONDS, which is what a
+    durable event attribute can carry — keeps the shared deploy window. That is
+    the same test store._event_grace applies before deciding how long to hold
+    the evidence, so no attribute can widen one bound without the other.
+    directory_metadata_roots names the content roots
     inside which a DIRECTORY annotation matches on ownership and mode alone
     (see relaxed_directory_digest) — outside them nothing is relaxed.
     """
@@ -201,8 +211,10 @@ def annotation(entries, path, change, before, after, now=None, observed_at=None,
     elif isinstance(observed_at, str):
         observed_at = _timestamp(observed_at)
     evidence = before if change == "deleted" else after
-    correlation = (MAX_OPERATION_CORRELATION_SECONDS if correlation_seconds is None
-                   else int(correlation_seconds))
+    correlation = correlation_seconds
+    if (not isinstance(correlation, int) or isinstance(correlation, bool) or
+            not 0 < correlation <= MAX_TIER_CORRELATION_SECONDS):
+        correlation = MAX_OPERATION_CORRELATION_SECONDS
     relaxable = any(contained(path, root) for root in directory_metadata_roots or ())
     for entry in entries:
         if entry["path"] != path or entry["change"] != change or entry["_expiry"] < now:

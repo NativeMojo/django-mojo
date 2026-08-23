@@ -158,4 +158,20 @@ def test_rollback_validates_every_tier_on_a_content_node(opts):
             store.rollback_fim_profile(partial["digest"])
         th.assert_eq(store.active_fim_profile(), IDENTITY,
                      "a generation missing host tiers must never become active")
+
+        # Every tier the NAMED profile configures must be baselined, not just
+        # the host triple: a content profile whose content tier was never
+        # checked is exactly the generation the guard exists to refuse.
+        hosts_only = {"name": "al2023-content-v1", "version": 1, "digest": "3" * 64}
+        store.set_meta("fim_profile_history", [hosts_only] + store.get_meta(
+            "fim_profile_history", []))
+        for tier in ("fast", "slow", "rpm"):
+            store.set_meta(
+                f"fim_initialized:{hosts_only['name']}:{hosts_only['digest']}:{tier}",
+                True)
+        with th.assert_raises(StoreError):
+            store.rollback_fim_profile(hosts_only["digest"])
+        th.assert_eq(store.active_fim_profile(), IDENTITY,
+                     "a content generation with no content baseline must never "
+                     "become active")
         store.close()

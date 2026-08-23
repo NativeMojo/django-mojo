@@ -18,6 +18,8 @@ from .disposition import (
     observed_timestamp,
 )
 from .evidence import build_evidence
+from .expected_changes import MAX_TIER_CORRELATION_SECONDS
+from .profiles import PROFILES
 from .protocol import canonical_json, make_event
 
 
@@ -48,8 +50,10 @@ ANNOTATION_MAX_OPERATION_SECONDS = 15 * 60
 # The default hold, for every tier on the shared 300s deploy window.
 ANNOTATION_MAX_GRACE_SECONDS = 20 * 60
 # A tier may not hold evidence longer than the producer TTL plus the widest
-# window config permits (collectors.fim.tiers.*.correlation_seconds).
-ANNOTATION_MAX_CORRELATION_SECONDS = 1800
+# window config permits (collectors.fim.tiers.*.correlation_seconds). The same
+# ceiling annotation() clamps a match window to, by construction rather than by
+# two literals agreeing.
+ANNOTATION_MAX_CORRELATION_SECONDS = MAX_TIER_CORRELATION_SECONDS
 LOCAL_ONLY_RECONCILE_LIMIT = 256
 SATURATING_COUNTER_MAX = 2 ** 63 - 1
 _BROKER_FUNCTION_OPERATIONS = {
@@ -1682,13 +1686,27 @@ class Store:
         identity = next((item for item in history if item.get("digest") == digest), None)
         if identity is None:
             raise StoreError("requested profile digest is not in intact rollback history")
-        # Derive the tier set from what was actually seeded rather than from a
-        # hard-coded fast/slow/rpm triple: a content profile carries a fourth
-        # tier, and the literal would have rolled back to a profile whose
-        # content baseline was never checked.
+        # What this generation actually has seeded, keyed by tier.
         keys = self.initialized_baseline_keys(f"{identity['name']}:{identity['digest']}:")
         tiers = {key.split(":")[2] for key in keys if len(key.split(":")) >= 3}
-        if not {"fast", "slow", "rpm"} <= tiers:
+        # What it must have. The three host tiers always, PLUS every tier the
+        # named profile configures — which is how a content profile's fourth
+        # tier is required rather than merely tolerated. A name this build does
+        # not ship falls back to the host triple; it can only ever add
+        # requirements, never drop one.
+        #
+        # Note what makes a generation lose eligibility here: initialize_fim_tier's
+        # superseded sweep deletes 4-component content baselines across EVERY
+        # digest of the same profile name, so re-enrolling a node's content
+        # roots retires the old generations' content baselines with the old
+        # root set. Rolling back to one of those is refused until it is
+        # re-baselined — the fail-closed direction, since its content baseline
+        # describes an estate the node no longer serves.
+        required = {"fast", "slow", "rpm"}
+        configured = PROFILES.get(identity.get("name"))
+        if isinstance(configured, dict) and isinstance(configured.get("tiers"), dict):
+            required |= set(configured["tiers"])
+        if not required <= tiers:
             raise StoreError("requested rollback profile has an incomplete baseline")
         if not all(self.fim_initialized(key) for key in keys):
             raise StoreError("requested rollback profile has an incomplete baseline")
