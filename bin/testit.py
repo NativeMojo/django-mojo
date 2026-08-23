@@ -109,12 +109,21 @@ else:
     from django.db import connection
     print("==> Flushing database and Redis")
     with connection.cursor() as cursor:
+        # One TRUNCATE statement, not one per table. django_migrations is
+        # excluded (maestro #2789): wiping it forced every server start down
+        # the "tracker empty" path — migrate --fake + makemigrations + migrate,
+        # three Django boots — instead of a single no-op migrate. Data tables
+        # still reset every run; the migration record is not test state.
         cursor.execute("""
-            DO $$ DECLARE r RECORD;
+            DO $$ DECLARE tables TEXT;
             BEGIN
-                FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
-                    EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' CASCADE';
-                END LOOP;
+                SELECT string_agg(quote_ident(tablename), ', ') INTO tables
+                FROM pg_tables
+                WHERE schemaname = 'public'
+                  AND tablename <> 'django_migrations';
+                IF tables IS NOT NULL THEN
+                    EXECUTE 'TRUNCATE TABLE ' || tables || ' CASCADE';
+                END IF;
             END $$;
         """)
 

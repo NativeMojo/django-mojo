@@ -26,7 +26,10 @@ fi
 STARTED_SERVER=0
 if ! "$SCRIPT_DIR/asgi_local" status | grep -q "Running"; then
     "$SCRIPT_DIR/asgi_local" start
-    sleep 3
+    # Poll for readiness instead of a fixed sleep (maestro #2789): the old
+    # `sleep 3` was both too long (app construction is ~1s) and unsafe (no
+    # check at all). `wait` fails loudly after 30s.
+    "$SCRIPT_DIR/asgi_local" wait
     STARTED_SERVER=1
 fi
 

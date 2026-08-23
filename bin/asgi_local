@@ -103,9 +103,44 @@ print(c.fetchone()[0])
         DJANGO_SETTINGS_MODULE=settings PYTHONPATH="$TESTPROJECT/config:$REPO_ROOT" \
             $PYTHON -m django migrate --settings=settings --no-input 2>&1 | tail -3
     else
-        DJANGO_SETTINGS_MODULE=settings PYTHONPATH="$TESTPROJECT/config:$REPO_ROOT" \
-            $PYTHON -m django migrate --settings=settings --no-input 2>&1 | tail -5
+        # Fast path: the tracker has rows, a plain migrate is usually a no-op.
+        # If it fails (a model edit without bin/create_testproject, or tracker
+        # rows for migration files a branch switch removed), fall back to the
+        # rebuild path instead of hard-failing — the wipe-every-run behavior
+        # this replaced healed such drift by accident (maestro #2789).
+        if ! DJANGO_SETTINGS_MODULE=settings PYTHONPATH="$TESTPROJECT/config:$REPO_ROOT" \
+            $PYTHON -m django migrate --settings=settings --no-input \
+            > "$TESTPROJECT/var/migrate.log" 2>&1; then
+            echo "    migrate failed — rebuilding (fake existing, makemigrations, migrate)"
+            tail -5 "$TESTPROJECT/var/migrate.log"
+            DJANGO_SETTINGS_MODULE=settings PYTHONPATH="$TESTPROJECT/config:$REPO_ROOT" \
+                $PYTHON -m django migrate --fake --settings=settings --no-input 2>&1 | tail -3
+            DJANGO_SETTINGS_MODULE=settings PYTHONPATH="$TESTPROJECT/config:$REPO_ROOT" \
+                $PYTHON -m django makemigrations --settings=settings --no-input 2>&1 | tail -3
+            DJANGO_SETTINGS_MODULE=settings PYTHONPATH="$TESTPROJECT/config:$REPO_ROOT" \
+                $PYTHON -m django migrate --settings=settings --no-input 2>&1 | tail -3
+        else
+            tail -5 "$TESTPROJECT/var/migrate.log"
+        fi
     fi
+}
+
+do_wait() {
+    # Poll until the server answers HTTP (maestro #2789). Reuses _read_conf so
+    # the per-machine var/dev_server.conf override wins, exactly as the server
+    # itself resolves it. Any HTTP response counts (no -f): a 404 proves the
+    # app is serving; connection-refused and a supervisor that has bound the
+    # socket but not loaded the app both keep polling. 30s cap, fail loudly.
+    _check_project
+    _read_conf
+    for i in $(seq 1 300); do
+        if curl -s -o /dev/null --max-time 2 "http://$HOST:$PORT/"; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "ERROR: server did not answer on http://$HOST:$PORT within 30s" >&2
+    return 1
 }
 
 do_start() {
@@ -188,14 +223,16 @@ case "${1:-}" in
     stop)    do_stop ;;
     restart) do_stop; do_start ;;
     status)  do_status ;;
+    wait)    do_wait ;;
     "")      do_foreground ;;
     *)
-        echo "Usage: asgi_local [start|stop|restart|status]"
+        echo "Usage: asgi_local [start|stop|restart|status|wait]"
         echo "  (no args)  Run in foreground"
         echo "  start      Run as background daemon"
         echo "  stop       Stop the daemon"
         echo "  restart    Restart the daemon"
         echo "  status     Check if running"
+        echo "  wait       Block until the server answers HTTP (30s cap)"
         exit 1
         ;;
 esac
