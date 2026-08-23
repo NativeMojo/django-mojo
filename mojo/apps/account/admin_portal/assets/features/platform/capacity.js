@@ -161,8 +161,8 @@ export function addNodePlacementControls(report, initial = {}, callbacks = {}) {
   let commitTimer = null;
   const commit = (focusControl = '') => {
     clearTimeout(commitTimer);
-    // change precedes blur for a typed input. Queue both so blur can replace
-    // the fallback identity with its explicit Tab/Shift+Tab destination.
+    // Subnet blur owns its commit: scheduling one from change can replace the
+    // focused input before the browser establishes its Tab destination.
     commitTimer = setTimeout(
       () => callbacks.onCommit?.(values(), valid(), focusControl), 0);
   };
@@ -180,9 +180,6 @@ export function addNodePlacementControls(report, initial = {}, callbacks = {}) {
     subnetId = subnet.value;
     paint();
     callbacks.onInput?.(values(), valid());
-  });
-  subnet.addEventListener('change', (event) => {
-    commit(event.currentTarget.dataset.placementControl);
   });
   subnet.addEventListener('blur', (event) => {
     commit(event.relatedTarget?.dataset?.placementControl || '');
