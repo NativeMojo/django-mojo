@@ -142,6 +142,10 @@ BROKER_WRAPPER_TEXT = """#!/bin/sh
 exec /usr/bin/python3 -E -P -m mojo.deploy.firewall_broker
 """
 
+PUBLISH_BROKER_WRAPPER_TEXT = """#!/bin/sh
+exec /usr/bin/python3 -E -P -m mojo.deploy.publish_broker
+"""
+
 AUDIT_HEALTH_SERVICE_TEXT = """[Unit]
 Description=Publish constrained MojoSec Linux Audit health
 After=auditd.service
@@ -634,11 +638,33 @@ def _normal_root(path, label):
     return path
 
 
+def _normal_content_root(path, label):
+    """A tenant content root: never a release tree, host tree, or MojoSec state.
+
+    Content roots are the third path category — trees the unprivileged
+    application legitimately rewrites. Overlapping a monitored host root would
+    hand the application an annotation window over host state, and overlapping
+    a release tree would reopen exactly what APPLICATION_TREES forbids.
+    """
+    path = _normal_path(path, label)
+    if path == "/opt/api" or path.startswith("/opt/api/") or \
+            path == "/opt/www" or path.startswith("/opt/www/"):
+        raise DeployError("application release trees cannot be content roots")
+    for private in ("/etc/mojosec", "/var/lib/mojosec", "/run/mojosec"):
+        if path == private or path.startswith(private + "/"):
+            raise DeployError("MojoSec state cannot be a content root")
+    for monitored in DEFAULT_FIM_ROOTS:
+        if _target_allowed(path, (monitored,)) or _target_allowed(monitored, (path,)):
+            raise DeployError(
+                f"content root overlaps monitored host root {monitored}: {path}")
+    return path
+
+
 def _validate_enrollment(enrollment):
     enrollment = json.loads(json.dumps(enrollment))
     allowed = {"version", "sensor_id", "endpoint", "trusted_proxy_cidrs",
-               "fim_allowed_roots", "nginx_plane", "edge_log_dir",
-               "mode", "criticality"}
+               "fim_allowed_roots", "fim_content_roots", "nginx_plane",
+               "edge_log_dir", "mode", "criticality"}
     unknown = set(enrollment) - allowed
     if unknown:
         raise DeployError("enrollment has unknown fields: " + ", ".join(sorted(unknown)))
@@ -650,6 +676,19 @@ def _validate_enrollment(enrollment):
     enrollment["fim_allowed_roots"] = [
         _normal_root(path, "enrollment fim_allowed_roots[]") for path in roots
     ]
+    content_roots = enrollment.get("fim_content_roots", [])
+    if not isinstance(content_roots, list) or len(content_roots) > 8:
+        raise DeployError("enrollment fim_content_roots must contain 0-8 paths")
+    normalized_content = []
+    for path in content_roots:
+        found = _normal_content_root(path, "enrollment fim_content_roots[]")
+        if found in normalized_content:
+            raise DeployError(f"duplicate enrollment content root: {found}")
+        for other in normalized_content:
+            if _target_allowed(found, (other,)) or _target_allowed(other, (found,)):
+                raise DeployError(f"overlapping enrollment content roots: {other}, {found}")
+        normalized_content.append(found)
+    enrollment["fim_content_roots"] = normalized_content
     enrollment["trusted_proxy_cidrs"] = trusted_proxy_cidrs(
         enrollment.get("trusted_proxy_cidrs", []))
     if enrollment.get("mode", "off") not in MODES:
@@ -737,6 +776,9 @@ def _prepare_effective_config(app_account=None, project_path="/opt/api", *,
         if not _target_allowed(path, enrollment["fim_allowed_roots"]):
             raise DeployError(f"desired FIM target is outside enrolled roots: {path}")
     supplied.update({
+        # Which tenant trees this node publishes is root enrollment's to say,
+        # never desired policy's (content_roots is not in DESIRED_KEYS).
+        "content_roots": list(enrollment.get("fim_content_roots", [])),
         "sensor_id": enrollment.get("sensor_id"),
         "endpoint": enrollment.get("endpoint"),
         "state_dir": STATE_DIR,
@@ -767,6 +809,47 @@ def _prepare_effective_config(app_account=None, project_path="/opt/api", *,
     payload = (json.dumps(config, sort_keys=True, separators=(",", ":")) + "\n").encode(
         "utf-8")
     return config, payload, enrollment
+
+
+def content_graph_digest(config):
+    """The resolved content tier's graph digest; '' on a host-only node."""
+    from mojo.mojosec.profiles import CONTENT_TIER, graph_digest
+
+    tiers = config.get("collectors", {}).get("fim", {}).get("tiers", {})
+    tier = tiers.get(CONTENT_TIER)
+    if not isinstance(tier, dict) or not tier.get("targets"):
+        return ""
+    return graph_digest(tier["targets"])
+
+
+def _rebaseline_content_tier(digest, *, runner=None):
+    """Seed the content tier for a newly enrolled root set. Never a gate.
+
+    A node whose content roots changed has a content baseline key with nothing
+    behind it; its first scan would otherwise report every file in every tenant
+    tree as a new change. The sensor refuses to overwrite a tier that has
+    already been seeded, so this can only ever create the missing baseline.
+
+    A failure here is loud but never fatal: MojoSec observes and reports, it
+    does not veto a deploy (item 2007). The digest is recorded only on success,
+    so the next converge retries by itself.
+    """
+    argv = ["/usr/bin/python3", "-E", "-P", "-m", "mojo.mojosec",
+            "--config", CONFIG_PATH, "baseline-initialize-tier", "content",
+            "--confirm-digest", digest, "--reason", "content-root-enrollment"]
+    call = _run if runner is None else runner
+    print("mojosec deploy: content roots changed; seeding the content integrity "
+          f"baseline for graph {digest[:12]}", file=sys.stderr)
+    try:
+        output = call(argv)
+    except (DeployError, OSError, ValueError) as err:
+        print(f"mojosec deploy: content baseline seeding failed ({err}); the "
+              "content tier will report its first scan as unexplained changes "
+              "until this succeeds", file=sys.stderr)
+        return False
+    print(f"mojosec deploy: content integrity baseline seeded: {output}",
+          file=sys.stderr)
+    return True
 
 
 def _systemctl(*args):
@@ -960,6 +1043,11 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
             from mojo.deploy.firewall_broker import (
                 BROKER_PATH, SUDOERS_PATH, render_sudoers,
             )
+            from mojo.deploy.publish_broker import (
+                BROKER_PATH as PUBLISH_BROKER_PATH,
+                SUDOERS_PATH as PUBLISH_SUDOERS_PATH,
+                render_sudoers as render_publish_sudoers,
+            )
             app_account = pwd.getpwnam("ec2-user")
             journal_identity = prepared[0].get("collectors", {}).get(
                 "journal", {"app_uid": app_account.pw_uid,
@@ -969,7 +1057,8 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                 raise DeployError("ec2-user identity differs from protected MojoSec config")
             app_uid = app_account.pw_uid
             audit_state_snapshot = _owned_snapshot(audit_deploy.STATE_PATH)
-            for path in (BROKER_PATH, SUDOERS_PATH, AUDIT_HEALTH_SERVICE_PATH,
+            for path in (BROKER_PATH, SUDOERS_PATH, PUBLISH_BROKER_PATH,
+                         PUBLISH_SUDOERS_PATH, AUDIT_HEALTH_SERVICE_PATH,
                          AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH):
                 broker_snapshots[path] = _owned_snapshot(path)
             try:
@@ -988,6 +1077,25 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                 capture_output=True, text=True, timeout=10)
             if process.returncode:
                 raise DeployError(process.stderr.strip() or "broker sudoers validation failed")
+            # The publish broker exists only where content is served. An
+            # unenrolled node must not carry a sudo grant it cannot use.
+            content_roots = prepared[2].get("fim_content_roots", [])
+            _require_root_install_dir(os.path.dirname(PUBLISH_SUDOERS_PATH))
+            if content_roots:
+                broker_changed |= _write_if_changed(
+                    PUBLISH_BROKER_PATH, PUBLISH_BROKER_WRAPPER_TEXT, 0o755)
+                broker_changed |= _write_if_changed(
+                    PUBLISH_SUDOERS_PATH, render_publish_sudoers(), 0o440)
+                process = subprocess.run(
+                    ["/usr/sbin/visudo", "-c", "-f", PUBLISH_SUDOERS_PATH],
+                    capture_output=True, text=True, timeout=10)
+                if process.returncode:
+                    raise DeployError(
+                        process.stderr.strip() or
+                        "publish broker sudoers validation failed")
+            else:
+                for path in (PUBLISH_BROKER_PATH, PUBLISH_SUDOERS_PATH):
+                    broker_changed |= _remove_owned(path)
             health_service = AUDIT_HEALTH_SERVICE_TEXT.format(**audit_state)
             broker_changed |= _write_if_changed(
                 AUDIT_HEALTH_SERVICE_PATH, health_service, 0o644)
@@ -1018,8 +1126,13 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
                 raise DeployError("MojoSec off convergence left service enabled or active")
             from mojo.deploy import audit as audit_deploy
             from mojo.deploy.firewall_broker import BROKER_PATH, SUDOERS_PATH
+            from mojo.deploy.publish_broker import (
+                BROKER_PATH as PUBLISH_BROKER_PATH,
+                SUDOERS_PATH as PUBLISH_SUDOERS_PATH,
+            )
             feature_paths = (
-                BROKER_PATH, SUDOERS_PATH, AUDIT_HEALTH_SERVICE_PATH,
+                BROKER_PATH, SUDOERS_PATH, PUBLISH_BROKER_PATH,
+                PUBLISH_SUDOERS_PATH, AUDIT_HEALTH_SERVICE_PATH,
                 AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH,
                 audit_deploy.HEALTH_PATH,
             )
@@ -1048,6 +1161,22 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
             if (not _systemctl_is("is-enabled", SERVICE) or
                     not _systemctl_is("is-active", SERVICE)):
                 raise DeployError("MojoSec observe convergence did not enable and start service")
+        prior_state = {}
+        if deploy_state_snapshot is not None:
+            try:
+                prior_state = json.loads(deploy_state_snapshot[0].decode("utf-8"))
+            except (UnicodeError, ValueError):
+                prior_state = {}
+        content_digest = ""
+        if prepared is not None and mode == "observe":
+            content_digest = content_graph_digest(prepared[0])
+            recorded = prior_state.get("content_graph_digest", "")
+            if content_digest and content_digest != recorded:
+                # One-tier re-baseline ceremony, idempotent by the recorded
+                # digest below. The sensor refuses to re-seed an already
+                # initialized tier, so this is seed-only by construction.
+                if not _rebaseline_content_tier(content_digest):
+                    content_digest = recorded
         state = {
             "schema": "mojosec.deploy", "version": 1,
             "mode": mode, "criticality": criticality,
@@ -1060,6 +1189,10 @@ def converge(mode, criticality, proxy_cidrs=None, log_path=DEFAULT_LOG_PATH,
             state["audit_generation"] = audit_state["generation"]
             state["audit_rules_sha256"] = audit_state["rules_sha256"]
             state["firewall_broker"] = True
+            state["content_roots"] = list(prepared[2].get("fim_content_roots", []))
+            state["publish_broker"] = bool(state["content_roots"])
+            if content_digest:
+                state["content_graph_digest"] = content_digest
         _write_if_changed(DEPLOY_STATE_PATH,
                           json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n",
                           0o600)
@@ -1216,6 +1349,10 @@ def _journalable_converge_paths():
     """
     from mojo.deploy import audit as audit_deploy
     from mojo.deploy.firewall_broker import BROKER_PATH, SUDOERS_PATH
+    from mojo.deploy.publish_broker import (
+        BROKER_PATH as PUBLISH_BROKER_PATH,
+        SUDOERS_PATH as PUBLISH_SUDOERS_PATH,
+    )
 
     return [
         SERVICE_PATH, NGINX_FRAGMENT_PATH, RECEIVER_SNIPPET_PATH,
@@ -1223,6 +1360,7 @@ def _journalable_converge_paths():
         AUDIT_HEALTH_TIMER_PATH, AUDIT_STABLE_HELPER_PATH,
         audit_deploy.MANAGED_PATH, audit_deploy.GENERATED_PATH,
         BROKER_PATH, SUDOERS_PATH,
+        PUBLISH_BROKER_PATH, PUBLISH_SUDOERS_PATH,
         "/etc/systemd/system/mojosec-agent.service",
     ]
 
