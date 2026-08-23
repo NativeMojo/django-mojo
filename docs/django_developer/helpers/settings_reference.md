@@ -1043,6 +1043,12 @@ registered resource is enabled; until then every endpoint answers 404.
 ### TOTP
 
 - `TOTP_ISSUER`
+- `TOTP_RECOVERY_BCRYPT_ROUNDS` — **file-only** (`settings.get_static`), default
+  `12`. bcrypt cost factor for hashing TOTP recovery codes
+  (`UserTOTP.generate_recovery_codes`). Floored at bcrypt's own minimum of `4`;
+  an unparsable value falls back to `12`. Production should leave this at the
+  default — it exists so a generated test project can trade hashing strength
+  for speed (test projects set it to `4`).
 
 ### TRAFFIC
 

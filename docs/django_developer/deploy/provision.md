@@ -807,8 +807,9 @@ published to the config bucket with the version pin substituted, and logged to
 | 8 | `python3 -m mojo.deploy.config_sync` | last: it installs `django.conf` and restarts `mojo-asgi` |
 
 The whole script is `set -euo pipefail` and idempotent — a resumed bootstrap
-is a plain re-execution of it. `tests/test_deploy/harness/test_stage1_sh.sh`
-asserts every one of those orderings against the real packaged script.
+is a plain re-execution of it. `tests/test_deploy_scripts/harness/test_stage1_sh.sh`
+asserts every one of those orderings against the real packaged script — opt-in
+(`--extra slow` / `--all`; maestro #2789), not part of the default run.
 
 ### The application tarball, and the version pin
 

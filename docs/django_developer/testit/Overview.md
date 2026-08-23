@@ -232,8 +232,9 @@ Two words rather than one because they are chosen on different grounds — `slow
 statement about cost, `extended` about criticality — and "why is this opt-in?" should be
 answerable from the tag alone.
 
-Currently `slow`: `test_security` (bouncer/rate-limiting, serial), `test_incident`, the
-live-assistant tests.
+Currently `slow`: `test_security` (bouncer/rate-limiting, serial), `test_incident`,
+`test_deploy_scripts` (the packaged node-script shell harnesses — not serial, each
+harness runs in its own `mktemp` project path), the live-assistant tests.
 
 #### Deciding the tier
 
@@ -288,7 +289,9 @@ A **repository** package is valid in exactly one of two states:
 
 A repository package with **no readable literal `TESTIT` dict** (missing `__init__.py`,
 no `TESTIT`, or a computed value) fails the policy outright — the permissive default is
-not inherited.
+not inherited. The one exception is a directory holding **no `.py` files at all** —
+typically a stale `__pycache__`-only leftover from a branch switch — which is not a
+test package and is skipped rather than failed.
 
 **The detected grammar** (deterministic; it proves these classes and claims nothing about
 arbitrary dynamic Python): `mock.patch`/`patch.object`/`patch.dict` through any import
@@ -438,7 +441,8 @@ When a large app has many tests, split it into domain-focused packages (`test_au
 > an opt-in serial package. Use `"serial": True` for the *other* execution
 > reasons too (signal handlers bound to the main thread, as in
 > `test_job_engine`; or a stress module that intentionally holds many sockets
-> longer than the writer's fail-open timeout, as in `test_realtime`).
+> longer than the writer's fail-open timeout, as in
+> `test_realtime_extended_serial`'s ten-socket connection cap test).
 >
 > A `WsClient` opened **inside** a `server_settings()` body is fine: the thread
 > already holding the exclusive hold is granted the shared hold immediately
@@ -737,6 +741,16 @@ are exactly the code that talks to AWS, ACME and DNS providers, so a test has
 to be able to `mock.patch` them — and a job-engine daemon runs in a *separate*
 process that would never see those patches (the same trap that makes
 `override_settings()` useless against `opts.client`).
+
+> **Belt-and-suspenders: the ambient AWS credential chain is disabled, not just
+> patched.** `bin/asgi_local` and `bin/run_tests` both point
+> `AWS_SHARED_CREDENTIALS_FILE`/`AWS_CONFIG_FILE` at `/dev/null`, disable IMDS
+> (`AWS_EC2_METADATA_DISABLED=true`), and clear any
+> `AWS_ACCESS_KEY_ID`/`AWS_PROFILE`-family variable before the server or the
+> test process starts. A test whose `mock.patch` misses a call site fails
+> loudly against a boto3 client with no credentials, instead of silently
+> reaching a developer's real AWS account. Tests seed AWS access through
+> mojo-level `Setting` rows, never this chain.
 
 | | `th.run_jobs()` | `th.run_pending_jobs()` |
 |---|---|---|

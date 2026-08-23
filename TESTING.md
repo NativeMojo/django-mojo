@@ -35,7 +35,7 @@ Use `bin/run_tests` — it starts the server, runs the suite, and stops the serv
 
 If the server is already running (e.g. during active development), `bin/run_tests` leaves it running after the tests finish.
 
-The test runner flushes the PostgreSQL database and Redis before each run for a clean state. The `--continue` flag skips the flush and resumes from the last failed test file.
+The test runner flushes the PostgreSQL database and Redis before each run for a clean state (the migration tracker itself is left alone, so a plain `migrate` stays a no-op on a run that didn't change models). The `--continue` flag skips the flush and resumes from the last failed test file.
 
 ## First-Time Workflow
 
@@ -53,10 +53,18 @@ If you need to control the server directly:
 ./bin/asgi_local stop        # stop
 ./bin/asgi_local restart     # restart
 ./bin/asgi_local status      # check if running
+./bin/asgi_local wait        # block until the server answers HTTP (30s cap)
 ./bin/asgi_local             # run in foreground (Ctrl-C to stop)
 ```
 
 Server runs on `http://127.0.0.1:5555`. Redis is started automatically if not already running.
+
+Both `bin/asgi_local` and `bin/run_tests` isolate the process from your real AWS
+account before doing anything else: shared credentials/config files are pointed at
+`/dev/null`, IMDS is disabled, and any `AWS_ACCESS_KEY_ID`/`AWS_PROFILE`-family
+variable is cleared. Tests seed AWS access through mojo-level `Setting` rows, never
+your ambient credential chain — a local `~/.aws/credentials` or `AWS_PROFILE` has no
+effect on a test run.
 
 ## Tiers — what runs by default, and what needs `--all`
 
@@ -71,8 +79,9 @@ Two opt-in tiers. `--all` turns on both.
 They are separate words on purpose: "why is this opt-in?" should be answerable from the
 tag alone. `slow` is a statement about cost, `extended` about criticality.
 
-Currently `slow`: `test_security` (bouncer/rate-limiting, serial), `test_incident`, and
-the live-assistant tests.
+Currently `slow`: `test_security` (bouncer/rate-limiting, serial), `test_incident`,
+`test_deploy_scripts` (the packaged node-script shell harnesses), and the live-assistant
+tests.
 
 ### Deciding the tier
 
