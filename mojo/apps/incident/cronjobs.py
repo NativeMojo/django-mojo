@@ -95,6 +95,16 @@ def sweep_expired_blocks(force=False, verbose=False, now=None):
 
 
 # Hourly — rebuild all ipsets from DB truth (startup recovery + drift reconciliation)
+#
+# KNOWN FLEET GAP, tracked as Security #2716 — do not "fix" it with per_node.
+# The job this publishes does node-local kernel work (firewall.ipset_load) but
+# is consumed by ONE arbitrary runner, and it skips unchanged ipsets using a
+# deployment-wide Redis marker (SYNC_FIREWALL_REDIS_KEY). So on a fleet the
+# hourly reconciliation heals whichever node happened to consume it and the
+# marker then suppresses the rest — a rebooted node's empty ipsets may never be
+# restored. per_node=True would not help: N publishes still land on arbitrary
+# runners. The fix is to broadcast the reconcile the way the live block/unblock
+# paths and IPSet.sync() already do, and to make the marker per node.
 @schedule(minutes="0")
 def sync_firewall(force=False, verbose=False, now=None):
     jobs.publish(

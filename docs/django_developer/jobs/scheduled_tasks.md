@@ -161,12 +161,83 @@ Notification failures are logged but do not affect the task result.
 
 ## Cron: dispatch_scheduled_tasks
 
+### Fleet-once: one node runs each function, not all of them
+
+Every node in a fleet installs the same per-minute cron entry, so without a
+guard each `@schedule` function would run once per node — concurrently, since
+the nodes tick within the same second.
+
+`run_now()` therefore **claims each matched function for its wall-clock
+minute** before running it:
+
+```
+SET mojo:cron:once:<module>.<function>:<YYYYMMDDHHMM> <node> NX EX 120
+```
+
+The node that wins the claim runs the function; the others skip it. This is
+the default — a function says nothing and is fleet-once.
+
+Opt out for work that is genuinely local to one machine:
+
+```python
+@schedule(minutes="*/10", per_node=True)
+def converge_this_node():
+    ...
+```
+
+**A function that only publishes a job is not per-node.** The job's own
+delivery decides its fan-out: a normal publish is consumed once by one runner,
+and `broadcast=True` reaches every runner from whichever node dispatched it.
+Marking such a dispatcher `per_node=True` gives you N dispatches instead of
+one — and with a broadcast, N² deliveries. None of the framework's own
+scheduled functions are marked per-node for this reason.
+
+Three properties worth knowing:
+
+- **Redis failure runs the function.** Every failure path — including the
+  connection being misconfigured — falls back to running it. Unreachable Redis
+  degrades to single-node behavior, never to silence: a missed certificate
+  renewal is worse than a duplicated sweep.
+- **A dead winner cannot wedge later minutes.** The claim only expires; it is
+  never released. The next minute is a different key.
+- **The 120s TTL is also the fleet's clock-skew budget.** Nodes must share a
+  timezone (the matcher uses local time) and stay well inside that skew — a
+  node lagging more than the TTL reaches a minute whose claim already expired
+  and runs it a second time. NTP keeps real fleets far inside this.
+
+Two consequences for anything that calls `run_now()` by hand:
+
+- Running it in the same minute as crond's tick **skips** the functions crond
+  already claimed. That is correct, and the heartbeat's `skipped` list shows
+  it. `aws-check`'s remediation command still works — if crond is dead, nobody
+  holds the claims.
+- A test or shell that calls `run_now()` repeatedly inside one minute against
+  a real Redis will skip on the repeat. Pin it with the seams:
+  `run_now(now=<a distinct minute>)` or `run_now(redis_client=<a stub>)`.
+
 ### Dispatcher heartbeat
 
 `mojo.helpers.cron.run_now()` records an expiring per-run Redis heartbeat at
 start and completion. Run IDs are isolated, so an older overlapping completion
 cannot hide a newer failed/incomplete invocation. Redis heartbeat failures are
 logged but never stop scheduled functions.
+
+The record is `version: 2` and names the reporting node plus what it actually
+did, so a fleet skip is never mistaken for a failure:
+
+| Field | Meaning |
+|-------|---------|
+| `node` | Hostname of the node that recorded this run |
+| `matched_count` | Functions whose schedule matched this minute |
+| `completed_count` | Functions this node actually executed |
+| `skipped_count` | Functions another node had already claimed |
+| `executed` | Qualified names this node ran |
+| `skipped` | Qualified names this node yielded to another node |
+
+On an N-node fleet each node writes its own record every minute, and only one
+of them lists a given fleet-once function under `executed`. A run whose
+functions were all claimed elsewhere still ends `state: "completed"` with
+`failed_count: 0` — it did its job by correctly doing nothing.
 
 Audit the external dispatcher, jobs runners and scheduler together with:
 

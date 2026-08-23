@@ -41,6 +41,11 @@ def converge_enabled():
 
 # The cron field values MUST be strings. `minutes=10` raises a TypeError inside
 # the matcher and the job then silently never runs — see mojo/helpers/cron.py.
+#
+# Deliberately NOT per_node=True, despite converging per-node state. The
+# fan-out lives in the publish below (broadcast=True), which reaches every
+# runner from whichever node dispatches it. Marking the dispatcher per_node
+# would have all N nodes each broadcast to all N runners — N² sweeps a cycle.
 @schedule(minutes="*/10")
 def converge_edge():
     """Queue a convergence sweep on every runner in the fleet."""

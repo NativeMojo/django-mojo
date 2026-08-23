@@ -79,6 +79,10 @@ def _unconsumed_notice_key(keys, channel):
 # Every 5 minutes: jobs are only routed as named now, so a channel nobody
 # consumes is how a misconfiguration shows up. Report it, but do not re-report an
 # unchanged backlog every cycle.
+#
+# The suppression below is keyed per channel, not per node, so on a fleet it is
+# the fleet-once cron claim that keeps this to one incident per orphan rather
+# than one per node per cycle. Do not mark this per_node.
 @schedule(minutes="*/5")
 def check_unconsumed_channels(force=False, verbose=False, now=None):
     from mojo.apps import incident

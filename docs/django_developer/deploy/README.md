@@ -789,6 +789,27 @@ Every cron template keeps a `@PROJ_PATH@` reference on its job line (the log
 redirect does this naturally), which is what lets post_deploy's structural
 sweep recognize installed copies as project-owned.
 
+## What stops a fleet running everything N times
+
+Every node gets the identical `2_mojo_cron` and `3_mojo_jobs` entries, so
+"which node does this run on?" has three different answers depending on the
+mechanism. They are easy to confuse and only two of them are about cron:
+
+| Mechanism | What it covers | How it stays single |
+|---|---|---|
+| `@schedule` cron functions | Framework/app functions matched per minute by `mojo.helpers.cron.run_now()` | **Per-function, per-minute Redis claim** (`mojo:cron:once:…`). Winner runs, others skip. Opt out with `@schedule(per_node=True)`. |
+| Jobs scheduler daemon | Promoting **delayed and retry jobs** onto channels | Redis leader lock (`SET NX PX`, renewed) in `mojo/apps/jobs/scheduler.py`. One leader fleet-wide. |
+| Job channel consumption | Executing published jobs | A normal publish is consumed by exactly one runner. `broadcast=True` is the deliberate opposite — every runner executes it. |
+
+The distinction that catches people: the scheduler's leader lock does **not**
+cover `@schedule` functions, and never did. It only promotes delayed jobs. A
+cron function that publishes a job is guarded by the cron claim on the
+*dispatch* side and by channel consumption on the *execution* side — which is
+why a dispatcher should almost never be marked `per_node`.
+
+See `../jobs/scheduled_tasks.md` for the claim key, the fail-open behavior when
+Redis is unreachable, and the clock-skew bound.
+
 ## Collision policy — fixes propagate by default
 
 A project file in `aws/cron.d/` or `aws/nginx/systemd/` whose **name**
