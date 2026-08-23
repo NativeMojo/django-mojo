@@ -500,7 +500,10 @@ def setup_parser(argv=None):
         if opts.stop or opts.verbose:
             opts.jobs = 1
         else:
-            opts.jobs = 4
+            # Derived from CPU count, capped (maestro #2789): every worker
+            # funnels its HTTP through one uvicorn process, so beyond the cap
+            # the workers mostly contend. -j overrides.
+            opts.jobs = min(8, max(2, (os.cpu_count() or 4) - 2))
     if opts.stop or opts.verbose:
         opts.jobs = 1
     if getattr(opts, "resume", False) and opts.jobs > 1:
@@ -589,18 +592,11 @@ def _sort_key(name):
 
 
 def _count_tests_in_file(file_path):
-    """Count test functions in a file via AST scan (no import)."""
-    prefix = "test_"
-    try:
-        with open(file_path, "r", encoding="utf-8") as fh:
-            tree = ast.parse(fh.read(), filename=file_path)
-    except (OSError, SyntaxError):
-        return 0
-    count = 0
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name.startswith(prefix):
-            count += 1
-    return count
+    """Count test functions in a file via the shared cached AST facts —
+    one parse serves both this count and the isolation scan, cached across
+    runs (maestro #2789)."""
+    from testit import isolation
+    return isolation.cached_file_facts(file_path).tests
 
 
 def _discover_test_files(module_name, test_root, parent_test_root=None):
@@ -1444,6 +1440,26 @@ ORIGIN_REPO = "django_mojo"
 ORIGIN_CONSUMER = "consumer"
 
 
+def _dir_has_python(path):
+    """Whether a directory holds any .py file at all (maestro #2789)."""
+    try:
+        return any(entry.endswith(".py") for entry in os.listdir(path))
+    except OSError:
+        return False
+
+
+def _previous_module_durations():
+    """Per-module durations from the last run's report, or {} (maestro #2789)."""
+    report_path = os.path.join(paths.VAR_ROOT, "test_failures.json")
+    try:
+        with open(report_path, "r", encoding="utf-8") as fh:
+            modules = (json.load(fh) or {}).get("modules") or {}
+        return {name: float(row.get("duration", 0) or 0)
+                for name, row in modules.items()}
+    except Exception:
+        return {}
+
+
 def _enforce_repository_policy(parent_test_root):
     """Fail-closed default-tier policy over django-mojo's own test tree.
 
@@ -1470,6 +1486,11 @@ def _enforce_repository_policy(parent_test_root):
     for name in sorted(os.listdir(parent_test_root)):
         package_path = os.path.join(parent_test_root, name)
         if not os.path.isdir(package_path) or name.startswith("__"):
+            continue
+        if not _dir_has_python(package_path):
+            # Not a test package — most commonly a stale __pycache__-only
+            # leftover from a branch switch (maestro #2789). Failing closed
+            # on it used to block the whole run.
             continue
         config, state = _load_module_config_ex(package_path)
         scanned = isolation.scan_package(package_path)
@@ -1572,6 +1593,7 @@ def _collect_modules(opts, test_root, parent_test_root):
             d for d in os.listdir(parent_test_root)
             if os.path.isdir(os.path.join(parent_test_root, d))
             and not d.startswith("__")
+            and _dir_has_python(os.path.join(parent_test_root, d))
         ])
         if not opts.nomojo:
             for name in parent_test_modules:
@@ -1705,6 +1727,16 @@ def main(opts):
         print_extra_flags(extras)
         return
 
+    # Cross-run AST-fact cache: one parse serves the isolation scan and the
+    # per-module test counts, and warm runs skip both (maestro #2789). Keyed
+    # on the scanner's own source hash, so a grammar change invalidates it.
+    isolation_cache_path = os.path.join(paths.VAR_ROOT, "isolation_scan_cache.json")
+    try:
+        from testit import isolation as _isolation_cache_mod
+        _isolation_cache_mod.load_scan_cache(isolation_cache_path)
+    except Exception:
+        _isolation_cache_mod = None
+
     # Fail-closed repository isolation policy — before any import or worker.
     cold_sites, cold_packages = _enforce_repository_policy(parent_test_root)
     if cold_sites:
@@ -1765,6 +1797,15 @@ def main(opts):
             serial_modules.append(record)
         else:
             parallel_modules.append(record)
+
+    # Longest-first (LPT) submission (maestro #2789): with package-granular
+    # work units, alphabetical order regularly started a large module last and
+    # let it pin the wall clock. Order by the previous run's per-module
+    # durations; modules with no history sort first (they may be large).
+    if len(parallel_modules) > 1:
+        prev_durations = _previous_module_durations()
+        parallel_modules.sort(
+            key=lambda r: -prev_durations.get(r.name, float("inf")))
 
     # --- Execute ---
     display = None
@@ -1950,6 +1991,10 @@ def main(opts):
     # Save results
     helpers.TEST_RUN.finished_at = time.time()
     helpers.save_results(os.path.join(paths.VAR_ROOT, "test_results.json"))
+
+    # Persist the AST-fact cache for the next run (maestro #2789).
+    if _isolation_cache_mod is not None:
+        _isolation_cache_mod.save_scan_cache()
 
     # Release run lock
     _release_lock()

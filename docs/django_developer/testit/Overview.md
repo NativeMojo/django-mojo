@@ -86,7 +86,7 @@ Use `bin/run_tests` — it handles starting and stopping the test server automat
   `./bin/run_tests --onlymojo` · `./bin/run_tests --nomojo`
 - See every declared `@requires_extra` flag (static scan only, no tests executed):
   `./bin/run_tests --list-extras`
-- Run modules in parallel (default 4 threads):
+- Run modules in parallel (default derives from CPU count, capped at 8):
   `./bin/run_tests -j 6`
 - Include opt-in modules (slow/pre-publish tests):
   `./bin/run_tests --all`
@@ -125,7 +125,7 @@ Resolution prefers a local override: if `var/dev_server.conf` exists it is used 
 
 ### Parallel Execution
 
-By default the runner executes up to 3 modules in parallel using `ThreadPoolExecutor`. Each parallel module gets its own `RestClient` instance. Parallelism is automatically forced to 1 when `-s` (stop on fail), `-v` (verbose), or `--continue` (resume) is active — those modes require sequential output.
+By default the runner executes modules in parallel using `ThreadPoolExecutor`, with the worker count derived from the host: `min(8, cpu_count - 2)` (floor 2). The cap exists because every worker funnels its HTTP through one uvicorn process. Parallel modules are submitted longest-first, ordered by the previous run's per-module durations (modules with no history go first), so a large module can never be the last to start and pin the wall clock. Each parallel module gets its own `RestClient` instance. Parallelism is automatically forced to 1 when `-s` (stop on fail), `-v` (verbose), or `--continue` (resume) is active — those modes require sequential output.
 
 Set a specific thread count with `-j N`:
 

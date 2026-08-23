@@ -15,10 +15,59 @@ proof that arbitrary dynamic Python cannot mutate shared state.
 Nothing in this module imports or executes the code it scans.
 """
 import ast
+import hashlib
+import json
 import os
 import re
 
 from objict import objict
+
+
+def _scanner_version():
+    """Hash of this module's own source — a cache of scan verdicts must be
+    invalidated when the GRAMMAR changes, not only when a scanned file does
+    (maestro #2789). Without this, a fail-closed scan silently goes fail-open
+    behind its own cache."""
+    try:
+        with open(__file__, "rb") as fh:
+            return hashlib.sha1(fh.read()).hexdigest()[:12]
+    except OSError:
+        return "unknown"
+
+
+SCANNER_VERSION = _scanner_version()
+
+# Cross-run cache of per-file scan facts, keyed on (mtime_ns, size) with the
+# whole cache keyed on SCANNER_VERSION. Loaded/saved by the runner; scanning
+# works identically (just slower) when no cache is loaded.
+_CACHE = {"files": {}, "dirty": False, "path": None}
+
+
+def load_scan_cache(path):
+    _CACHE["path"] = path
+    _CACHE["files"] = {}
+    _CACHE["dirty"] = False
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if data.get("scanner") == SCANNER_VERSION and isinstance(data.get("files"), dict):
+            _CACHE["files"] = data["files"]
+    except Exception:
+        pass
+
+
+def save_scan_cache():
+    if not _CACHE["path"] or not _CACHE["dirty"]:
+        return
+    try:
+        payload = {"scanner": SCANNER_VERSION, "files": _CACHE["files"]}
+        tmp = _CACHE["path"] + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, _CACHE["path"])
+        _CACHE["dirty"] = False
+    except Exception:
+        pass
 
 
 # Namespaces whose module attributes are production state shared by every
@@ -760,14 +809,59 @@ def scan_source(source, filename="<source>"):
     return scanner.violations
 
 
-def scan_file(path):
+def _count_tests_in_tree(tree):
+    count = 0
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
+            count += 1
+    return count
+
+
+def cached_file_facts(path):
+    """Violations plus top-level test count for one file, from ONE AST parse,
+    cached across runs (maestro #2789). The scan and the runner's test
+    counting both used to re-parse every file on every invocation (~1.7s)."""
+    key = os.path.abspath(str(path))
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        st = os.stat(key)
+        sig = [st.st_mtime_ns, st.st_size]
+    except OSError as error:
+        return objict(tests=0, violations=[violation(
+            "scan_error", str(path), 0, f"source could not be read: {error}")])
+
+    entry = _CACHE["files"].get(key)
+    if entry and entry.get("sig") == sig:
+        rows = [violation(*row) for row in entry.get("violations", [])]
+        return objict(tests=int(entry.get("tests", 0)), violations=rows)
+
+    try:
+        with open(key, "r", encoding="utf-8") as handle:
             source = handle.read()
     except OSError as error:
-        return [violation("scan_error", str(path), 0,
-                          f"source could not be read: {error}")]
-    return scan_source(source, filename=str(path))
+        return objict(tests=0, violations=[violation(
+            "scan_error", str(path), 0, f"source could not be read: {error}")])
+
+    tests = 0
+    try:
+        tree = ast.parse(source, filename=key)
+    except SyntaxError as error:
+        rows = [violation("scan_error", key, error.lineno or 0,
+                          f"source could not be parsed: {error.msg}")]
+    else:
+        scanner = _FileScanner(key)
+        scanner.visit(tree)
+        rows = scanner.violations
+        tests = _count_tests_in_tree(tree)
+
+    _CACHE["files"][key] = {
+        "sig": sig, "tests": tests,
+        "violations": [[r.code, r.file, r.line, r.detail] for r in rows]}
+    _CACHE["dirty"] = True
+    return objict(tests=tests, violations=rows)
+
+
+def scan_file(path):
+    return cached_file_facts(path).violations
 
 
 def _iter_test_files(package_path):
