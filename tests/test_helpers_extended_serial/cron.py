@@ -267,8 +267,10 @@ def test_run_now(opts):
             mock_datetime.datetime.now.return_value = TEST_TIME
             mock_datetime.timezone = datetime.timezone
 
-            # Run scheduled functions
-            run_now()
+            # Win every fleet-once claim explicitly. Against real Redis this
+            # pinned 2024 minute is one claim bucket, so a second run inside
+            # the 120s TTL would lose the race and skip.
+            run_now(redis_client=_ScriptedRedis())
 
             # Check which functions executed
             assert 'always' in executed, "always_run should have executed"
@@ -303,7 +305,8 @@ def test_run_now_records_failure_and_reraises(opts):
 
         with patch('mojo.helpers.cron._write_heartbeat') as heartbeat:
             try:
-                run_now()
+                # Win the claim explicitly — see test_run_now above.
+                run_now(redis_client=_ScriptedRedis())
             except RuntimeError:
                 pass
             else:
@@ -312,5 +315,239 @@ def test_run_now_records_failure_and_reraises(opts):
         assert states == ["started", "failed"], f"Expected a failed completion heartbeat, got {states}"
         failure = heartbeat.call_args_list[-1].args[1]
         assert failure["failure"] == "RuntimeError", "Heartbeat must record only the exception class"
+    finally:
+        schedule.scheduled_functions[:] = existing
+
+
+# ---------------------------------------------------------------------------
+# Fleet-once cron (maestro item #2710)
+#
+# These swap the shared schedule.scheduled_functions registry, which is why
+# they live in this serial tier rather than beside the claim-level tests in
+# tests/test_helpers/cron.py.
+# ---------------------------------------------------------------------------
+
+
+class _ScriptedRedis:
+    """A client whose SET result is scripted per call, or which raises."""
+
+    def __init__(self, results=None, error=None):
+        self.results = list(results or [])
+        self.error = error
+        self.calls = []
+
+    def set(self, key, value, nx=None, ex=None):
+        self.calls.append(key)
+        if self.error is not None:
+            raise self.error
+        return self.results.pop(0) if self.results else True
+
+
+@th.django_unit_test()
+def test_decorator_registers_per_node_flag(opts):
+    """Functions are fleet-once unless they opt out explicitly."""
+    from mojo.decorators.cron import schedule
+
+    existing = list(getattr(schedule, 'scheduled_functions', []))
+    try:
+        @schedule(minutes='0')
+        def fleet_once_job():
+            return "fleet"
+
+        @schedule(minutes='0', per_node=True)
+        def per_node_job():
+            return "node"
+
+        added = {spec['func'].__name__: spec
+                 for spec in schedule.scheduled_functions[len(existing):]}
+        assert added['fleet_once_job']['per_node'] is False, \
+            "A function that says nothing must default to fleet-once"
+        assert added['per_node_job']['per_node'] is True, \
+            "per_node=True must be recorded on the spec so run_now can honor it"
+    finally:
+        schedule.scheduled_functions[:] = existing
+
+
+@th.django_unit_test()
+def test_run_now_runs_fleet_once_once_and_per_node_everywhere(opts):
+    """The acceptance criterion: N nodes tick the same minute against one Redis.
+
+    The fleet-once function must execute exactly once across all of them; the
+    per_node function must execute on every one.
+    """
+    import threading
+    import uuid as uuid_module
+    from mojo.decorators.cron import schedule
+    from mojo.helpers import cron
+    from mojo.helpers.redis import get_connection
+
+    node_count = 6
+    # A fixed minute keeps the bucket deterministic; the uuid keeps this run's
+    # claim keys distinct from any previous run still inside the 120s TTL.
+    now = datetime.datetime(2026, 1, 2, 15, 4, 0)
+    marker = uuid_module.uuid4().hex
+    fleet_calls = []
+    node_calls = []
+    calls_lock = threading.Lock()
+
+    existing = list(getattr(schedule, 'scheduled_functions', []))
+    client = get_connection()
+    try:
+        schedule.scheduled_functions = []
+
+        @schedule(minutes='4', hours='15')
+        def fleet_once_task():
+            with calls_lock:
+                fleet_calls.append(1)
+
+        @schedule(minutes='4', hours='15', per_node=True)
+        def per_node_task():
+            with calls_lock:
+                node_calls.append(1)
+
+        # Unique qualified names so the claim keys cannot collide across runs.
+        fleet_once_task.__name__ = f"fleet_once_task_{marker}"
+        per_node_task.__name__ = f"per_node_task_{marker}"
+        keys = [
+            f"{cron.CRON_FLEET_ONCE_PREFIX}:"
+            f"{cron._qualified_name(spec['func'])}:{now.strftime('%Y%m%d%H%M')}"
+            for spec in schedule.scheduled_functions
+        ]
+        for key in keys:
+            client.delete(key)
+
+        ready = threading.Barrier(node_count, timeout=15)
+
+        def tick(index):
+            ready.wait()
+            cron.run_now(now=now, node_id=f"node-{index}")
+
+        threads = [threading.Thread(target=tick, args=(i,))
+                   for i in range(node_count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        assert len(fleet_calls) == 1, (
+            f"A fleet-once function must run exactly once across {node_count} "
+            f"nodes ticking the same minute, ran {len(fleet_calls)} times")
+        assert len(node_calls) == node_count, (
+            f"A per_node function must run on every node, ran "
+            f"{len(node_calls)} times across {node_count} nodes")
+    finally:
+        for key in keys:
+            client.delete(key)
+        schedule.scheduled_functions[:] = existing
+
+
+@th.django_unit_test()
+def test_run_now_reclaims_the_next_minute_after_a_winner_dies(opts):
+    """A winner dying mid-run must not suppress the function in later minutes."""
+    import uuid as uuid_module
+    from mojo.decorators.cron import schedule
+    from mojo.helpers import cron
+    from mojo.helpers.redis import get_connection
+
+    marker = uuid_module.uuid4().hex
+    first = datetime.datetime(2026, 1, 2, 15, 4, 0)
+    second = first + datetime.timedelta(minutes=1)
+    attempts = []
+
+    existing = list(getattr(schedule, 'scheduled_functions', []))
+    client = get_connection()
+    keys = []
+    try:
+        schedule.scheduled_functions = []
+
+        @schedule(minutes='*')
+        def dies_mid_run():
+            attempts.append(1)
+            raise RuntimeError("node died mid-run")
+
+        dies_mid_run.__name__ = f"dies_mid_run_{marker}"
+        name = cron._qualified_name(schedule.scheduled_functions[0]['func'])
+        keys = [f"{cron.CRON_FLEET_ONCE_PREFIX}:{name}:{m.strftime('%Y%m%d%H%M')}"
+                for m in (first, second)]
+        for key in keys:
+            client.delete(key)
+
+        for moment in (first, second):
+            try:
+                cron.run_now(now=moment, node_id="node-a")
+            except RuntimeError:
+                pass
+            else:
+                assert False, "run_now must preserve the scheduled task exception"
+
+        assert len(attempts) == 2, (
+            "The next minute is a fresh claim bucket, so a crashed winner must "
+            f"not suppress it — expected 2 attempts, got {len(attempts)}")
+    finally:
+        for key in keys:
+            client.delete(key)
+        schedule.scheduled_functions[:] = existing
+
+
+@th.django_unit_test()
+def test_run_now_runs_everything_when_redis_is_down(opts):
+    """Single-node behavior must survive Redis being unreachable."""
+    from mojo.decorators.cron import schedule
+    from mojo.helpers import cron
+
+    ran = []
+    existing = list(getattr(schedule, 'scheduled_functions', []))
+    try:
+        schedule.scheduled_functions = []
+
+        @schedule(minutes='*')
+        def still_runs():
+            ran.append(1)
+
+        broken = _ScriptedRedis(error=RuntimeError("redis unavailable"))
+        cron.run_now(now=datetime.datetime(2026, 1, 2, 15, 4, 0),
+                     redis_client=broken, node_id="node-a")
+
+        assert len(ran) == 1, (
+            "A failed claim must fall back to running the function, not to "
+            f"skipping it — ran {len(ran)} times")
+    finally:
+        schedule.scheduled_functions[:] = existing
+
+
+@th.django_unit_test()
+def test_run_now_heartbeat_separates_ran_from_skipped(opts):
+    """Fleet observability must not read a skip as a failure."""
+    from unittest.mock import patch as _patch
+    from mojo.decorators.cron import schedule
+    from mojo.helpers import cron
+
+    existing = list(getattr(schedule, 'scheduled_functions', []))
+    try:
+        schedule.scheduled_functions = []
+
+        @schedule(minutes='*')
+        def loses_the_race():
+            assert False, "A function whose claim was lost must not execute"
+
+        # None is what redis-py returns when NX finds the key already present.
+        lost = _ScriptedRedis(results=[None])
+        with _patch('mojo.helpers.cron._write_heartbeat') as heartbeat:
+            cron.run_now(now=datetime.datetime(2026, 1, 2, 15, 4, 0),
+                         redis_client=lost, node_id="node-b")
+
+        final = heartbeat.call_args_list[-1].args[1]
+        assert final["state"] == "completed", \
+            f"A run that only skipped is still a completed run, got {final['state']!r}"
+        assert final["failed_count"] == 0, \
+            "A skip is not a failure and must not be counted as one"
+        assert final["skipped_count"] == 1, \
+            f"The skip must be recorded, got skipped_count={final['skipped_count']}"
+        assert final["executed"] == [], \
+            f"Nothing ran on this node, got executed={final['executed']}"
+        assert len(final["skipped"]) == 1 and "loses_the_race" in final["skipped"][0], \
+            f"The skipped function must be named, got {final['skipped']}"
+        assert final["node"] == "node-b", \
+            f"The heartbeat must say which node reported it, got {final['node']!r}"
     finally:
         schedule.scheduled_functions[:] = existing

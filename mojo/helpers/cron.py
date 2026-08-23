@@ -1,6 +1,7 @@
 import datetime
 import importlib
 import json
+import socket
 import time
 import uuid
 from typing import Callable, List, Dict, Any
@@ -12,6 +13,15 @@ from mojo.helpers import logit
 CRON_HEARTBEAT_PREFIX = "mojo:cron:heartbeat"
 CRON_HEARTBEAT_INDEX = f"{CRON_HEARTBEAT_PREFIX}:runs"
 CRON_HEARTBEAT_TTL = 86400
+
+# Fleet-once claim. Every node's crond ticks run_now(), so without this each
+# matched function would execute once per node.
+CRON_FLEET_ONCE_PREFIX = "mojo:cron:once"
+# Comfortably longer than the single minute a claim covers, so a winner that
+# dies mid-run cannot wedge later minutes. It is also the fleet's clock-skew
+# budget: a node lagging more than this reaches a minute whose claim already
+# expired and runs it again.
+CRON_FLEET_ONCE_TTL = 120
 
 
 def _heartbeat_client():
@@ -58,48 +68,135 @@ def get_cron_heartbeats(limit=10, redis_client=None):
             records.append(record)
     return records
 
-def run_now() -> None:
+def _node_id():
+    """Name this node in a claim record.
+
+    Informational only — a claim is never released by comparing this value,
+    it simply expires.
+    """
+    return socket.gethostname()
+
+
+def _qualified_name(func):
+    return f"{func.__module__}.{func.__name__}"
+
+
+def claim_fleet_once(func_name, bucket, node_id=None, redis_client=None):
+    """
+    Claim one scheduled function for one wall-clock minute across the fleet.
+
+    Returns True when this process may run the function: either it won the
+    race, or the claim could not be attempted at all.
+
+    Failing open is deliberate, and the client is acquired inside the try for
+    that reason — a misconfigured or unreachable Redis must degrade to today's
+    single-node behavior (everything runs) rather than to silence (nothing
+    runs). A duplicated sweep is cheaper than a missed certificate renewal.
+    """
+    key = f"{CRON_FLEET_ONCE_PREFIX}:{func_name}:{bucket}"
+    try:
+        client = redis_client or _heartbeat_client()
+        return bool(client.set(key, node_id or _node_id(), nx=True,
+                               ex=CRON_FLEET_ONCE_TTL))
+    except Exception as exc:
+        logit.warning(
+            f"cron fleet-once claim failed for {func_name}, running anyway: {exc}")
+        return True
+
+
+def run_now(now=None, redis_client=None, node_id=None):
     """
     Execute the scheduled functions that match the current time.
 
-    Retrieves the list of functions scheduled to run at the current
-    date and time, and executes each of them.
+    Fleet-once by default: every node's crond ticks this, but each matched
+    function is claimed for its minute so exactly one node runs it. Functions
+    registered with @schedule(per_node=True) skip the claim and run on every
+    node.
+
+    The keyword arguments are test seams — the cron runner passes none.
     """
-    functions_to_run = find_scheduled_functions()
+    now = now or datetime.datetime.now()
+    bucket = now.strftime("%Y%m%d%H%M")
+    node = node_id or _node_id()
+    client = redis_client
+    if client is None:
+        # Guarded: a misconfigured REDIS_URL raises when the pool is built, and
+        # that must not stop the functions from running.
+        try:
+            client = _heartbeat_client()
+        except Exception as exc:
+            logit.warning(f"cron redis unavailable, running unguarded: {exc}")
+    specs_to_run = find_scheduled_specs(now)
     run_id = uuid.uuid4().hex
     started = datetime.datetime.now(datetime.timezone.utc)
     started_timestamp = started.timestamp()
     payload = {
-        "version": 1,
+        "version": 2,
         "run_id": run_id,
+        "node": node,
         "state": "started",
         "started_at": started.isoformat(),
-        "matched_count": len(functions_to_run),
+        "matched_count": len(specs_to_run),
         "completed_count": 0,
+        "skipped_count": 0,
         "failed_count": 0,
+        "executed": [],
+        "skipped": [],
     }
-    _write_heartbeat(run_id, dict(payload), started_timestamp)
+    _write_heartbeat(run_id, dict(payload), started_timestamp, client)
     completed = 0
+    executed = []
+    skipped = []
     try:
-        for func in functions_to_run:
+        for spec in specs_to_run:
+            func = spec['func']
+            name = _qualified_name(func)
+            if not spec.get('per_node', False) and not claim_fleet_once(
+                    name, bucket, node_id=node, redis_client=client):
+                skipped.append(name)
+                # debug, not info: on an N-node fleet this is N-1 lines a minute
+                logit.debug(f"cron: {name} already claimed for {bucket}")
+                continue
             func()
             completed += 1
+            executed.append(name)
     except Exception as exc:
         payload.update({
             "state": "failed",
             "completed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "completed_count": completed,
+            "skipped_count": len(skipped),
             "failed_count": 1,
             "failure": type(exc).__name__,
+            "executed": list(executed),
+            "skipped": list(skipped),
         })
-        _write_heartbeat(run_id, dict(payload), started_timestamp)
+        _write_heartbeat(run_id, dict(payload), started_timestamp, client)
         raise
     payload.update({
         "state": "completed",
         "completed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "completed_count": completed,
+        "skipped_count": len(skipped),
+        "executed": list(executed),
+        "skipped": list(skipped),
     })
-    _write_heartbeat(run_id, dict(payload), started_timestamp)
+    _write_heartbeat(run_id, dict(payload), started_timestamp, client)
+
+def find_scheduled_specs(now=None):
+    """
+    Find the cron specs scheduled to run at `now` (default: the current time).
+
+    Returns the spec dicts rather than bare callables because the caller needs
+    each function's per_node flag alongside it.
+    """
+    if not hasattr(schedule, 'scheduled_functions'):
+        return []
+
+    now = now or datetime.datetime.now()
+    return [spec for spec in schedule.scheduled_functions
+            if match_time(now, spec)]
+
 
 def find_scheduled_functions() -> List[Callable]:
     """
@@ -109,17 +206,7 @@ def find_scheduled_functions() -> List[Callable]:
         List[Callable]: A list of callable functions that match the
         current date and time according to their cron specifications.
     """
-    if not hasattr(schedule, 'scheduled_functions'):
-        return []
-
-    now = datetime.datetime.now()
-    matching_funcs = []
-
-    for cron_spec in schedule.scheduled_functions:
-        if match_time(now, cron_spec):
-            matching_funcs.append(cron_spec['func'])
-
-    return matching_funcs
+    return [spec['func'] for spec in find_scheduled_specs()]
 
 def match_time(current_time: datetime.datetime, cron_spec: Dict[str, Any]) -> bool:
     """

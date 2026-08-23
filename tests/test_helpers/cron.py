@@ -438,6 +438,125 @@ def test_decorator_registration(opts):
 # default tier (maestro item #1839).
 
 
+# ============================================================================
+# Fleet-once claim (maestro item #2710)
+# ============================================================================
+# These inject a client through claim_fleet_once's redis_client= seam rather
+# than patching anything under mojo.helpers — the default tier forbids
+# process-global mutation, and the seam exists so it is never needed.
+
+
+class _StubRedis:
+    """Records SET calls and returns a scripted result."""
+
+    def __init__(self, result=True, error=None):
+        self.result = result
+        self.error = error
+        self.calls = []
+
+    def set(self, key, value, nx=None, ex=None):
+        self.calls.append({"key": key, "value": value, "nx": nx, "ex": ex})
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+@th.django_unit_test()
+def test_claim_fleet_once_wins_and_shapes_the_key(opts):
+    """A won claim runs the function, and the key is per-function per-minute."""
+    from mojo.helpers import cron
+
+    client = _StubRedis(result=True)
+    won = cron.claim_fleet_once("pkg.mod.func", "202601021504",
+                                node_id="node-a", redis_client=client)
+
+    assert won is True, "A successful SET NX must let this node run the function"
+    assert len(client.calls) == 1, \
+        f"Expected exactly one SET for one claim, got {len(client.calls)}"
+    call = client.calls[0]
+    assert call["key"] == "mojo:cron:once:pkg.mod.func:202601021504", \
+        f"Claim key must scope to function and minute, got {call['key']!r}"
+    assert call["value"] == "node-a", \
+        f"The claim should record which node won, got {call['value']!r}"
+    assert call["nx"] is True, \
+        "The claim must be exclusive (nx=True), otherwise every node overwrites and runs"
+    assert call["ex"] == cron.CRON_FLEET_ONCE_TTL, \
+        f"Claim must expire so a dead winner cannot wedge later minutes, got {call['ex']}"
+
+
+@th.django_unit_test()
+def test_claim_fleet_once_loses_when_another_node_holds_it(opts):
+    """redis-py returns None (not False) when NX finds the key already set."""
+    from mojo.helpers import cron
+
+    client = _StubRedis(result=None)
+    won = cron.claim_fleet_once("pkg.mod.func", "202601021504", redis_client=client)
+
+    assert won is False, "A lost race must skip the function on this node"
+
+
+@th.django_unit_test()
+def test_claim_fleet_once_fails_open_when_redis_errors(opts):
+    """Redis down must degrade to single-node behavior, never to silence."""
+    from mojo.helpers import cron
+
+    client = _StubRedis(error=RuntimeError("redis unavailable"))
+    won = cron.claim_fleet_once("pkg.mod.func", "202601021504", redis_client=client)
+
+    assert won is True, \
+        "A failed claim must fall back to running: a missed cert renewal is " \
+        "worse than a duplicated sweep"
+
+
+@th.django_unit_test()
+def test_claim_fleet_once_has_exactly_one_winner_under_concurrency(opts):
+    """The fleet contract itself, against real Redis: N nodes race, one runs."""
+    import threading
+    import uuid as uuid_module
+    from mojo.helpers import cron
+    from mojo.helpers.redis import get_connection
+
+    # Unique per run: a re-run inside the 120s TTL must not see a stale claim.
+    func_name = f"tests.fleet_once.{uuid_module.uuid4().hex}"
+    bucket = "202601021504"
+    key = f"{cron.CRON_FLEET_ONCE_PREFIX}:{func_name}:{bucket}"
+    client = get_connection()
+    client.delete(key)
+
+    node_count = 8
+    results = []
+    results_lock = threading.Lock()
+    ready = threading.Barrier(node_count, timeout=15)
+
+    def race(index):
+        ready.wait()
+        won = cron.claim_fleet_once(func_name, bucket, node_id=f"node-{index}")
+        with results_lock:
+            results.append(won)
+
+    try:
+        threads = [threading.Thread(target=race, args=(i,))
+                   for i in range(node_count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        assert len(results) == node_count, \
+            f"Every racing node should report a result, got {len(results)}"
+        winners = [r for r in results if r]
+        assert len(winners) == 1, \
+            f"Exactly one node may win the claim, got {len(winners)} winners"
+    finally:
+        client.delete(key)
+
+
+# test_decorator_registers_per_node_flag lives in
+# tests/test_helpers_extended_serial/cron.py: asserting what @schedule records
+# means swapping the shared schedule.scheduled_functions registry, which is
+# process-global and over this package's cold_budget in the default tier.
+
+
 @th.django_unit_test()
 def test_edge_cases_and_boundaries(opts):
     """Test edge cases and boundary values"""
