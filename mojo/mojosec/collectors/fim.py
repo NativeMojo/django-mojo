@@ -11,7 +11,7 @@ from ..expected_changes import (
     MAX_OPERATION_CORRELATION_SECONDS, ExpectedChangeError, load_manifest,
     annotation,
 )
-from ..profiles import PRIVATE_TREES
+from ..profiles import PRIVATE_TREES, graph_digest
 from ..protocol import canonical_json
 
 
@@ -24,10 +24,9 @@ class FimCollector:
         self.expected_changes_path = expected_changes_path
         self.tier = tier
         self.hash_filter = hash_filter
-        graph_digest = hashlib.sha256(
-            canonical_json(config["targets"]).encode("utf-8")).hexdigest()
+        self.graph_digest = graph_digest(config["targets"])
         self.identity = dict(identity or {})
-        self.profile = self.identity.get("digest", graph_digest)
+        self.profile = self.identity.get("digest", self.graph_digest)
         # Read, never derived from interval_seconds: rpm.py builds this
         # collector with configs that carry no interval at all.
         self.correlation_seconds = self.config.get(
@@ -42,7 +41,7 @@ class FimCollector:
             # node's roots therefore retires that tier's baseline rather than
             # silently diffing new trees against an old one. Non-substituted
             # tiers keep the exact three-component key they have always had.
-            components.append(graph_digest[:16])
+            components.append(self.graph_digest[:16])
         self.baseline_key = ":".join(filter(None, components))
 
     def _excluded(self, target, path):

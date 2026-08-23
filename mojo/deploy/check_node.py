@@ -1209,18 +1209,27 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                     len(str(identity.get("digest", ""))) == 64 and
                     integrity.get("active") is True and
                     integrity.get("digest_drift") is False and
-                    isinstance(tiers, dict) and set(tiers) == {"fast", "slow", "rpm"} and
-                    all(item.get("initialized") and item.get("last_complete")
-                        for item in tiers.values())
+                    # Every profile carries the three host tiers; a content
+                    # profile carries a fourth. Requiring exact equality would
+                    # report a fully healthy content node as unhealthy, so
+                    # require the host floor and hold EVERY reported tier —
+                    # including content — to initialized and complete.
+                    isinstance(tiers, dict) and
+                    {"fast", "slow", "rpm"} <= set(tiers) and len(tiers) <= 8 and
+                    all(isinstance(item, dict) and item.get("initialized") and
+                        item.get("last_complete") for item in tiers.values())
                 )
                 if healthy:
                     report.passed(
                         "mojosec", "integrity profile",
-                        f"{identity['name']} v{identity.get('version')} {identity['digest'][:12]}")
+                        f"{identity['name']} v{identity.get('version')} "
+                        f"{identity['digest'][:12]} ({len(tiers)} tiers)")
                 else:
                     report.fail(
                         "mojosec", "integrity profile unhealthy",
-                        "profile digest, baseline, or fast/slow/RPM tier health is incomplete")
+                        "profile digest, baseline, or per-tier health is incomplete "
+                        "(fast/slow/RPM are required; every reported tier must be "
+                        "initialized and complete)")
             spooled = status.get("spooled_events")
             if isinstance(spooled, int) and 0 <= spooled <= 10000:
                 report.passed("mojosec", "spool backlog", f"{spooled} pending event(s)")

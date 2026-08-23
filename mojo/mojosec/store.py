@@ -1600,16 +1600,96 @@ class Store:
             self.db.execute("ROLLBACK")
             raise
 
+    def initialize_fim_tier(self, identity, tier, scan, reason="re-enrollment"):
+        """Seed exactly ONE tier's baseline, and only if it has never been seeded.
+
+        Re-enrolling a node's content roots produces a new content baseline key
+        with no baseline behind it. Without this the tier's first scan would
+        diff a whole tenant estate against nothing and alarm on every file;
+        with it, the new key is seeded silently and the host tiers are left
+        completely alone.
+
+        The refusal is the security property: seeding is only ever allowed to
+        CREATE a baseline, never to overwrite one. An attacker who could
+        re-seed an established tier could launder any change they had already
+        made into the new "known good" state.
+        """
+        if (not isinstance(identity, dict) or
+                set(identity) != {"name", "version", "digest"}):
+            raise StoreError("tier initialization identity is invalid")
+        if (not isinstance(tier, str) or not isinstance(scan, dict) or
+                scan.get("tier") != tier or scan.get("complete") is not True or
+                not isinstance(scan.get("snapshot"), dict) or
+                not isinstance(scan.get("baseline_key"), str) or
+                not scan["baseline_key"]):
+            raise StoreError("tier initialization refuses an incomplete tier")
+        if self.active_fim_profile() != identity:
+            raise StoreError("tier initialization requires the active profile")
+        key = scan["baseline_key"]
+        if self.fim_initialized(key):
+            raise StoreError(f"tier baseline is already initialized: {key}")
+        superseded = [
+            found for found in self.initialized_baseline_keys(f"{identity['name']}:")
+            if found != key and found.split(":")[2:3] == [tier] and
+            len(found.split(":")) > 3
+        ]
+        now = time.time()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self.db.execute("DELETE FROM fim_baseline WHERE profile = ?", (key,))
+            self.db.executemany(
+                "INSERT INTO fim_baseline(profile, path, entry) VALUES(?, ?, ?)",
+                ((key, path, canonical_json(entry))
+                 for path, entry in scan["snapshot"].items()),
+            )
+            self.set_meta(f"fim_initialized:{key}", True)
+            self.set_meta(f"fim_scan:{key}", {
+                "at": now, "complete": True, "entries": len(scan["snapshot"]),
+                "duration": scan.get("duration", 0),
+                "bounds": scan.get("bounds", {}),
+            })
+            # The old root set is gone; its baseline can never be diffed again
+            # and would otherwise retain a full copy of the retired estate.
+            for stale in superseded:
+                self.db.execute("DELETE FROM fim_baseline WHERE profile = ?", (stale,))
+                self.db.execute("DELETE FROM meta WHERE key = ?",
+                                (f"fim_initialized:{stale}",))
+                self.db.execute("DELETE FROM meta WHERE key = ?", (f"fim_scan:{stale}",))
+            self.set_meta(f"fim_tier_baseline_reason:{tier}", str(reason)[:128])
+            self.set_meta(f"fim_tier_baseline_at:{tier}", now)
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+        return {"baseline_key": key, "entries": len(scan["snapshot"]),
+                "superseded": superseded}
+
     def active_fim_profile(self):
         return self.get_meta("fim_active_profile")
+
+    def initialized_baseline_keys(self, prefix, limit=64):
+        """Bounded scan of the baseline keys already seeded under one prefix."""
+        pattern = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        rows = self.db.execute(
+            "SELECT key FROM meta WHERE key LIKE ? ESCAPE '\\' ORDER BY key LIMIT ?",
+            (f"fim_initialized:{pattern}%", limit),
+        ).fetchall()
+        keys = [row["key"][len("fim_initialized:"):] for row in rows]
+        return [key for key in keys if self.fim_initialized(key)]
 
     def rollback_fim_profile(self, digest):
         history = self.get_meta("fim_profile_history", [])
         identity = next((item for item in history if item.get("digest") == digest), None)
         if identity is None:
             raise StoreError("requested profile digest is not in intact rollback history")
-        keys = [f"{identity['name']}:{identity['digest']}:{tier}"
-                for tier in ("fast", "slow", "rpm")]
+        # Derive the tier set from what was actually seeded rather than from a
+        # hard-coded fast/slow/rpm triple: a content profile carries a fourth
+        # tier, and the literal would have rolled back to a profile whose
+        # content baseline was never checked.
+        keys = self.initialized_baseline_keys(f"{identity['name']}:{identity['digest']}:")
+        tiers = {key.split(":")[2] for key in keys if len(key.split(":")) >= 3}
+        if not {"fast", "slow", "rpm"} <= tiers:
+            raise StoreError("requested rollback profile has an incomplete baseline")
         if not all(self.fim_initialized(key) for key in keys):
             raise StoreError("requested rollback profile has an incomplete baseline")
         current = self.active_fim_profile()

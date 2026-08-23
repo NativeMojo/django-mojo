@@ -186,6 +186,18 @@ def profile_digest(profile):
     return hashlib.sha256(_canonical(material).encode("utf-8")).hexdigest()
 
 
+def graph_digest(targets):
+    """Digest one tier's resolved target graph.
+
+    This is the identity of WHICH trees a tier walks, as opposed to the profile
+    digest's "what this policy means". Only an enrollment-substituted tier has
+    a graph the profile digest does not already pin, so only that tier carries
+    this — in its baseline key, and as the confirmation token for the one-tier
+    re-baseline ceremony.
+    """
+    return hashlib.sha256(_canonical(targets).encode("utf-8")).hexdigest()
+
+
 def profile_identity(profile):
     return {
         "name": profile["name"],

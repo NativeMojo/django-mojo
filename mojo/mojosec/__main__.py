@@ -21,9 +21,13 @@ def build_parser():
     parser.add_argument("command", nargs="?", default="run",
                         choices=("run", "once", "check", "status",
                                  "baseline-preview", "baseline-initialize",
+                                 "baseline-initialize-tier",
                                  "baseline-rollback"))
+    parser.add_argument("tier", nargs="?", default="",
+                        help="tier to seed, for baseline-initialize-tier")
     parser.add_argument("--confirm-digest", default="",
-                        help="exact profile digest required for baseline mutation")
+                        help="exact profile digest required for baseline mutation "
+                             "(baseline-initialize-tier: the tier's graph digest)")
     parser.add_argument("--reason", default="operator",
                         help="bounded baseline initialization reason")
     return parser
@@ -37,6 +41,8 @@ def main(argv=None, *, stdout=None, stderr=None):
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
     args = build_parser().parse_args(argv)
+    # Deferred so `--help` and the import graph stay as light as they were.
+    from .store import StoreError
     try:
         if args.config == CANONICAL_CONFIG_PATH:
             config = load_effective_config(args.config)
@@ -80,6 +86,32 @@ def main(argv=None, *, stdout=None, stderr=None):
                 preview["initialized"] = True
             _print_json(preview, stdout)
             runtime.store.close()
+        elif args.command == "baseline-initialize-tier":
+            # Seeding ONE tier, for the re-enrollment ceremony: a node whose
+            # content roots changed has a content baseline key with nothing
+            # behind it, and its first scan would otherwise alarm on an entire
+            # tenant estate. The store refuses to overwrite an already-seeded
+            # tier, so this can only ever create a baseline, never launder one.
+            if not args.tier:
+                raise ValueError("baseline tier initialization requires a tier name")
+            scan = runtime.preview_integrity_tier(args.tier)
+            collector = runtime.integrity_collectors[args.tier]
+            if not args.confirm_digest or args.confirm_digest != collector.graph_digest:
+                raise ValueError(
+                    "tier initialization requires the exact resolved tier graph digest")
+            if not scan["complete"]:
+                raise ValueError("tier initialization refuses an incomplete tier")
+            result = runtime.initialize_integrity_tier(
+                args.tier, scan, reason=args.reason)
+            _print_json({
+                "initialized": True, "tier": args.tier,
+                "profile": runtime.profile_identity,
+                "graph_digest": collector.graph_digest,
+                "entries": result["entries"],
+                "baseline_key": result["baseline_key"],
+                "superseded": result["superseded"],
+            }, stdout)
+            runtime.store.close()
         elif args.command == "baseline-rollback":
             if not args.confirm_digest:
                 raise ValueError("baseline rollback requires an exact prior digest")
@@ -91,7 +123,10 @@ def main(argv=None, *, stdout=None, stderr=None):
         else:
             runtime.run()
         return 0
-    except (ConfigError, OSError, RpmError, ValueError) as err:
+    except (ConfigError, OSError, RpmError, StoreError, ValueError) as err:
+        # StoreError covers the baseline refusals (already-seeded tier, absent
+        # rollback history). They are operator errors with a clear message, not
+        # crashes, and the converge-driven ceremony needs a clean exit code.
         stderr.write(f"mojosec: {err}\n")
         return 2
 

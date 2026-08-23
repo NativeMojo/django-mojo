@@ -131,13 +131,29 @@ class Runtime:
         except Exception as err:
             self._collector_error("fim", err)
 
+    def integrity_roster(self):
+        """Every configured tier in scan order: fast first, rpm last.
+
+        Order is load-bearing, not cosmetic: `fast` publishes the shared
+        /usr/local traversal that `rpm` verifies against, so rpm must run after
+        it. Everything else in between is scanned in a stable sorted order.
+        Deriving this from the configured collectors is what lets a profile add
+        a tier (content) without the loops silently skipping it.
+        """
+        names = set(self.integrity_collectors)
+        roster = ["fast"] if "fast" in names else []
+        roster.extend(sorted(names - {"fast", "rpm"}))
+        if "rpm" in names:
+            roster.append("rpm")
+        return tuple(roster)
+
     def preview_integrity(self):
         """Scan every immutable tier without changing authoritative state."""
         if not self.profile:
             raise ValueError("legacy custom FIM has no profile activation ceremony")
         scans = {}
         fast_snapshot = None
-        for tier in ("fast", "slow", "rpm"):
+        for tier in self.integrity_roster():
             collector = self.integrity_collectors[tier]
             started = time.monotonic()
             previous = self.store.load_fim_baseline(collector.baseline_key)
@@ -174,6 +190,33 @@ class Runtime:
             scans[tier] = scan
         return scans
 
+    def preview_integrity_tier(self, tier):
+        """Scan exactly one enrollment-substituted tier, changing no state."""
+        if not self.profile:
+            raise ValueError("legacy custom FIM has no profile activation ceremony")
+        collector = self.integrity_collectors.get(tier)
+        if collector is None:
+            raise ValueError(f"unknown integrity tier: {tier}")
+        if not getattr(collector, "content_roots", ()):
+            raise ValueError(
+                "only an enrollment-substituted tier may be baselined on its own; "
+                "the immutable host tiers are seeded by the whole-profile ceremony")
+        started = time.monotonic()
+        scan = collector.scan(self.store.load_fim_baseline(collector.baseline_key))
+        scan["duration"] = round(time.monotonic() - started, 6)
+        scan["bounds"] = {
+            key: collector.config[key] for key in (
+                "max_entries", "max_file_bytes", "max_depth")
+            if key in collector.config
+        }
+        return scan
+
+    def initialize_integrity_tier(self, tier, scan, reason="re-enrollment"):
+        if not self.profile:
+            raise ValueError("legacy custom FIM has no profile activation ceremony")
+        return self.store.initialize_fim_tier(
+            self.profile_identity, tier, scan, reason=reason)
+
     def initialize_integrity(self, scans, reason="initialize"):
         if not self.profile:
             raise ValueError("legacy custom FIM initializes on its historical first scan")
@@ -189,7 +232,7 @@ class Runtime:
             return
         now = time.monotonic()
         fast_snapshot = None
-        for tier in ("fast", "slow", "rpm"):
+        for tier in self.integrity_roster():
             collector = self.integrity_collectors[tier]
             interval = collector.config["interval_seconds"]
             if self.last_integrity.get(tier) and now - self.last_integrity[tier] < interval:
