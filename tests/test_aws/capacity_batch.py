@@ -455,6 +455,67 @@ def test_plan_store_ttl_and_shape(opts):
         f"the response does not state its expiry: {result.get('expires_in')}"
 
 
+@th.django_unit_test("an add_node step carries its placement, and prices the source it names")
+def test_add_node_step_carries_placement(opts):
+    # Two adds in one batch, into DIFFERENT subnets: the duplicate-step check
+    # already exempts add_node, and this is the two-availability-zone case the
+    # feature exists for.
+    envelope = _envelope(
+        nodes=[_node(NODE_A, "mojo-api-a"),
+               _node(NODE_B, "mojo-sites-a", itype="t3.medium")])
+    plan = _plan([
+        {"action": "add_node", "source_instance": NODE_B,
+         "subnet_id": "subnet-0bbb"},
+        {"action": "add_node", "subnet_id": "subnet-0ccc"},
+    ], envelope)
+
+    steps = plan["steps"]
+    assert len(steps) == 2, f"two adds into two subnets did not both survive: {steps}"
+    assert steps[0]["params"] == {"source_instance": NODE_B,
+                                  "subnet_id": "subnet-0bbb"}, \
+        f"the step dropped its placement: {steps[0]['params']}"
+    assert steps[1]["params"] == {"subnet_id": "subnet-0ccc"}, \
+        f"an add naming only a subnet carried the wrong params: {steps[1]}"
+    assert steps[0]["description"] == \
+        "Add an app node cloned from mojo-sites-a in subnet-0bbb", \
+        f"the step does not say where the node comes from or lands: " \
+        f"{steps[0]['description']}"
+    assert steps[1]["description"] == "Add an app node in subnet-0ccc", \
+        f"a subnet-only add is misworded: {steps[1]['description']}"
+
+    # The NAMED source is the node that gets cloned, so its type is the type
+    # that gets billed — not healthy[0]'s.
+    assert steps[0]["monthly_delta_usd"] == 30.0, \
+        f"the named source's type was not priced: {steps[0]}"
+    assert steps[1]["monthly_delta_usd"] == 70.0, \
+        f"an unnamed source stopped pricing the first healthy node: {steps[1]}"
+    assert plan["total_monthly_delta_usd"] == 100.0, \
+        f"the batch total is wrong: {plan['total_monthly_delta_usd']}"
+
+
+@th.django_unit_test("a batch add_node refuses a source the report does not serve")
+def test_add_node_step_refuses_a_bad_placement(opts):
+    from mojo.apps.aws.services import capacity
+
+    envelope = _envelope(nodes=[_node(NODE_A, "mojo-api-a"),
+                                _node(NODE_B, "mojo-api-b", healthy=False)])
+    # The source IS checkable against the envelope — it must be a healthy row.
+    with th.assert_raises(capacity.CapacityError) as caught:
+        _plan([{"action": "add_node", "source_instance": NODE_B}], envelope)
+    assert caught.exception.error_code == "source_not_serving" \
+        and caught.exception.status == 409, \
+        f"an unhealthy source was not refused: {caught.exception.error_code}"
+    assert caught.exception.data.get("step") == 0, \
+        f"the refusal does not name the offending step: {caught.exception.data}"
+    _refused([{"action": "add_node", "source_instance": NODE_D}], envelope,
+             "source_not_serving")
+    # The subnet is shape-checked only: a new zone's subnet holds no node by
+    # definition, so no envelope built from node rows could validate it. The
+    # child apply() proves it against AWS before it takes a claim.
+    _refused([{"action": "add_node", "subnet_id": "vpc-0aaa"}], envelope,
+             "invalid_request")
+
+
 # ── apply_batch ─────────────────────────────────────────────────────────────
 
 @th.django_unit_test("an expired plan is a 404 and a drifted fleet is a 409 — never a silent re-plan")

@@ -780,6 +780,7 @@ def _node_rows(serving, facts_map, self_id, primary):
             "lifecycle_state": lifecycle,
             "instance_type": facts.get("instance_type"),
             "zone": facts.get("availability_zone"),
+            "subnet_id": facts.get("subnet_id"),
             "public_ip": facts.get("public_ip"),
             "healthy": healthy,
             "registered": registered,
@@ -1641,8 +1642,139 @@ def _prove_fleet_member(resource, serving, ec2_client=None):
             "not_fleet_member", 409)
 
 
-def _prepare_add_node(serving, ec2_client=None):
-    """Everything an add decides BEFORE anything is created."""
+def _served_zones(groups, serving):
+    """The zones EVERY balancer holding ``groups`` has enabled, or None.
+
+    An INTERSECTION, never a union: the clone is registered behind all of
+    them, so a zone one balancer serves and another does not is a zone the
+    clone cannot be healthy in. ``None`` means no balancer in the set reported
+    a zone list at all — absent data, which is not a refusal.
+    """
+    wanted = {group.get("arn") for group in groups or [] if group.get("arn")}
+    balancer_arns = set()
+    for group in (serving or {}).get("groups") or []:
+        if group.get("arn") in wanted:
+            balancer_arns.update(group.get("balancers") or [])
+    zone_sets = [set(row.get("zones") or [])
+                 for row in (serving or {}).get("balancers") or []
+                 if row.get("arn") in balancer_arns and row.get("zones")]
+    if not zone_sets:
+        return None
+    return set.intersection(*zone_sets)
+
+
+def _resolve_placement(source, subnet_id, groups, serving, ec2_client=None):
+    """Where the clone lands — every check AWS lets us make, made up front.
+
+    An add that refuses AFTER the AMI capture has already burned 20–40
+    minutes, left a running billed instance, and wedged the fleet-wide add
+    claim for ``CLAIM_TTL``. So a named subnet is proven here, in the request,
+    before a claim is taken and before anything is created.
+
+    Omitting ``subnet_id`` costs ZERO provider calls and keeps the historical
+    behavior exactly: the clone lands in the source's own subnet.
+    """
+    wanted = str(subnet_id or "").strip()
+    if not wanted:
+        return {"subnet_id": source.get("subnet_id"),
+                "availability_zone": source.get("availability_zone"),
+                "selected": "source"}
+    if not wanted.startswith("subnet-"):
+        raise CapacityError(
+            "subnet_id must be an AWS subnet identifier (subnet-…).",
+            "invalid_request")
+    try:
+        facts = ec2_helper.subnet_facts(wanted, client=ec2_client)
+    except ProviderCallError as err:
+        raise _provider_error(
+            err, "AWS did not report the requested subnet, so no node can be "
+                 "placed in it.") from None
+    if facts is None:
+        raise CapacityError(
+            f"AWS reports no subnet called {wanted} in this region.",
+            "subnet_not_found", 404)
+
+    # A clone carries its SOURCE's security groups, and a security group is
+    # VPC-scoped. AWS hard-rejects the launch; saying so here costs one read.
+    if facts.get("vpc_id") != source.get("vpc_id"):
+        raise CapacityError(
+            f"{wanted} is in {facts.get('vpc_id')} and the node it would be "
+            f"cloned from is in {source.get('vpc_id')}. A clone carries its "
+            f"source's security groups, which are VPC-scoped, so AWS would "
+            f"refuse the launch.",
+            "subnet_not_usable", 409, {"reason": "vpc_mismatch"})
+
+    # The expensive one. An ELBv2 target in a zone the balancer has not
+    # enabled either throws InvalidTarget at RegisterTargets — a mutation
+    # failure that holds the claim and tells the operator not to replay — or
+    # sits `unused` until the health wait times out. Both burn the whole
+    # capture/boot/converge/prove sequence first and leave a billed,
+    # unregistered instance behind.
+    zone = facts.get("availability_zone")
+    served = _served_zones(groups, serving)
+    if served is not None and zone not in served:
+        listed = ", ".join(sorted(served)) or "no zone in common"
+        raise CapacityError(
+            f"{wanted} is in {zone}, and the load balancer(s) this node would "
+            f"be registered behind serve {listed}. Enable {zone} on the "
+            f"balancer first, then add the node.",
+            "subnet_az_not_served", 409,
+            {"reason": "az_not_enabled", "zone": zone,
+             "served_zones": sorted(served)})
+
+    # Public addressing is inherited from the subnet: launch_clone sets no
+    # AssociatePublicIpAddress and uses no NetworkInterfaces block. A private
+    # subnet in the same VPC passes every other check and the node dies at
+    # RUNNER_TIMEOUT with runner_missing. Compared against the SOURCE, never
+    # asserted absolutely, so a private→private fleet stays legal.
+    source_subnet = source.get("subnet_id")
+    if source_subnet and source_subnet != facts.get("subnet_id"):
+        try:
+            from_facts = ec2_helper.subnet_facts(source_subnet,
+                                                 client=ec2_client)
+        except ProviderCallError:
+            # No opinion. An unreadable source subnet is not evidence that the
+            # requested one is wrong.
+            from_facts = None
+        if (from_facts or {}).get("map_public_ip_on_launch") is True \
+                and facts.get("map_public_ip_on_launch") is not True:
+            raise CapacityError(
+                f"{wanted} does not assign public addresses on launch and "
+                f"{source_subnet} — the subnet this node would be cloned from "
+                f"— does. The clone would boot with no route out and never "
+                f"join the fleet.",
+                "subnet_not_usable", 409, {"reason": "no_public_addressing"})
+
+    # Early warning only. This count is read up to IMAGE_TIMEOUT before
+    # run_instances and nothing reserves an address in between, so it catches
+    # the typo-into-a-full-subnet case and guarantees nothing. Re-reading it
+    # later would narrow that window without closing it.
+    free = facts.get("available_ip_count")
+    if isinstance(free, int) and not isinstance(free, bool) and free < 1:
+        raise CapacityError(
+            f"{wanted} has no free addresses left, so a node launched into it "
+            f"would be refused.",
+            "subnet_not_usable", 409, {"reason": "no_free_addresses"})
+
+    return {"subnet_id": facts.get("subnet_id") or wanted,
+            "availability_zone": zone, "selected": "requested"}
+
+
+def _prepare_add_node(serving, ec2_client=None, source_instance=None,
+                      subnet_id=None, *, fleet_spec=_SPEC_UNSET):
+    """Everything an add decides BEFORE anything is created.
+
+    Naming a source is how an operator says WHICH balancer's fleet grows:
+    ``_groups_holding`` derives the target groups from the source, and the
+    runner's ``registering`` leg registers the clone into exactly those.
+
+    A named source narrows the candidate set and can never widen it — the
+    candidates are the healthy serving targets of the already-narrowed
+    ``_fleet_serving`` map, and a source outside them is refused.
+
+    ``fleet_spec`` is a test seam with a sentinel default; production passes
+    nothing and the environment is resolved here.
+    """
     if _node_id_pinned():
         raise CapacityError(
             "This fleet pins EDGE_NODE_ID, so every node reports the same "
@@ -1653,8 +1785,38 @@ def _prepare_add_node(serving, ec2_client=None):
                for target in group.get("targets") or []
                if target.get("state") == "healthy"
                and str(target.get("id") or "").startswith("i-")]
-    source = _source_node(sorted(set(healthy)), client=ec2_client)
+    candidates = sorted(set(healthy))
+    wanted = str(source_instance or "").strip()
+    if wanted:
+        if fleet_spec is _SPEC_UNSET:
+            fleet_spec = _configured_spec()
+        # No environment declaration means _fleet_serving skipped its
+        # narrowing entirely and this map is every attached target group of
+        # every balancer in the ACCOUNT. The automatic path survives that
+        # because _source_node picks one instance deterministically; letting a
+        # caller name one would make a neighbouring installation's node
+        # clonable — and launch_clone copies the source's instance profile
+        # verbatim.
+        if fleet_spec is None:
+            raise CapacityError(
+                "This installation has not declared which AWS project and "
+                "environment it runs, so a named source cannot be proven to "
+                "belong to this fleet. Add the node without naming a source, "
+                "or declare the environment first.",
+                "source_not_serving", 409)
+        if wanted not in candidates:
+            raise CapacityError(
+                f"{wanted} is not a healthy target of this fleet's load "
+                f"balancers, so it cannot be cloned.",
+                "source_not_serving", 409)
+        candidates = [wanted]
+    source = _source_node(candidates, client=ec2_client)
     if source is None:
+        if wanted:
+            raise CapacityError(
+                f"{wanted} is a healthy target, but AWS does not report it "
+                f"running, so there is nothing to clone.",
+                "source_not_serving", 409)
         raise CapacityError(
             "No healthy, running fleet member is available to clone. A node "
             "can only be added from a node that is currently serving.",
@@ -1664,7 +1826,9 @@ def _prepare_add_node(serving, ec2_client=None):
                              for target in group.get("targets") or []
                              if target.get("id") == source["instance_id"]), None)}
               for group in _groups_holding(serving, source["instance_id"])]
-    return source, groups
+    placement = _resolve_placement(source, subnet_id, groups, serving,
+                                   ec2_client=ec2_client)
+    return source, groups, placement
 
 
 def apply(actor, action, resource="", **params):
@@ -1698,7 +1862,16 @@ def apply(actor, action, resource="", **params):
     return _apply_cache(actor, resource, **params)
 
 
-def _apply_node(actor, action, resource, elbv2_client=None, ec2_client=None, **_ignored):
+def _apply_node(actor, action, resource, elbv2_client=None, ec2_client=None,
+                source_instance=None, subnet_id=None, **_ignored):
+    # Placement is an add's decision. A drain or a terminate names the node it
+    # acts on, so a placement field there means the caller meant something
+    # else — refused, never quietly swallowed by **_ignored.
+    if (source_instance or subnet_id) and action != ACTION_ADD_NODE:
+        raise CapacityError(
+            "source_instance and subnet_id choose where a NEW node comes from "
+            "and lands; they have no meaning for a drain or a terminate.",
+            "invalid_request")
     try:
         serving = _fleet_serving(
             elbv2_client=elbv2_client, ec2_client=ec2_client)
@@ -1708,13 +1881,22 @@ def _apply_node(actor, action, resource, elbv2_client=None, ec2_client=None, **_
                  "safe to make.") from None
 
     if action == ACTION_ADD_NODE:
-        source, groups = _prepare_add_node(serving, ec2_client=ec2_client)
+        # Order matters and is load-bearing: _prepare_add_node now validates
+        # the placement too, so a bad subnet is refused BEFORE the fleet-wide
+        # add claim is taken and before any record is written.
+        source, groups, placement = _prepare_add_node(
+            serving, ec2_client=ec2_client, source_instance=source_instance,
+            subnet_id=subnet_id)
         claim = _claim(action, "fleet", getattr(actor, "pk", None))
         record = _new_operation(action, source["instance_id"], actor, claim, {
             "source_instance": source["instance_id"],
             "source_name": source.get("name"),
             "instance_type": source.get("instance_type"),
-            "subnet_id": source.get("subnet_id"),
+            "subnet_id": placement["subnet_id"],
+            "source_selected": ("requested" if str(source_instance or "").strip()
+                                else "automatic"),
+            "subnet_selected": placement["selected"],
+            "availability_zone": placement["availability_zone"],
             "target_groups": groups,
         })
         _dispatch(record)
@@ -2522,6 +2704,37 @@ def _refuse_step(index, message, error_code="invalid_request", status=400):
                         {"step": index})
 
 
+def _add_node_params(index, raw, envelope):
+    """add_node's optional placement, checked as far as an envelope can.
+
+    The source IS checkable here: it must be a healthy node in the report, the
+    same set the single-action apply narrows to. The subnet is deliberately
+    SHAPE-ONLY — a new availability zone's subnet by definition holds no node,
+    so no envelope built from node rows could ever validate the one placement
+    this feature exists to enable. The child apply() re-derives it against AWS
+    before it takes a claim.
+    """
+    params = {}
+    source_instance = str(raw.get("source_instance") or "").strip()
+    if source_instance:
+        row = next((candidate for candidate in _instances(envelope)
+                    if candidate.get("id") == source_instance), None)
+        if row is None or not row.get("healthy"):
+            _refuse_step(index,
+                         f"the report lists no healthy node called "
+                         f"{source_instance} to clone from.",
+                         "source_not_serving", 409)
+        params["source_instance"] = source_instance
+    subnet_id = str(raw.get("subnet_id") or "").strip()
+    if subnet_id:
+        if not subnet_id.startswith("subnet-"):
+            _refuse_step(index,
+                         "subnet_id must be an AWS subnet identifier "
+                         "(subnet-…).")
+        params["subnet_id"] = subnet_id
+    return params
+
+
 def _step_kind(step, envelope):
     action = step["action"]
     if action in (ACTION_ADD_NODE, ACTION_ADD_READER):
@@ -2589,6 +2802,7 @@ def _validate_step(index, raw, envelope, planned):
 
     if action == ACTION_ADD_NODE:
         step["resource"] = resource = ""
+        step["params"] = _add_node_params(index, raw, envelope)
     elif action == ACTION_ADD_READER:
         database = next((row for row in envelope.get("databases") or []
                          if row.get("identifier") == resource), None)
@@ -2764,7 +2978,16 @@ def _describe_step(step, envelope):
     """Plain-English ``(description, warnings)`` — the server's own words."""
     action, resource = step["action"], step["resource"]
     if action == ACTION_ADD_NODE:
-        return ("Add an app node",
+        params = step.get("params") or {}
+        described = "Add an app node"
+        named_source = params.get("source_instance")
+        if named_source:
+            row = _node_row(envelope, named_source) or {}
+            described += f" cloned from {row.get('name') or named_source}"
+        named_subnet = params.get("subnet_id")
+        if named_subnet:
+            described += f" in {named_subnet}"
+        return (described,
                 ["builds, deploys and proves itself before serving · "
                  "20–40 min"])
     if action == ACTION_ADD_READER:
@@ -2819,7 +3042,15 @@ def _step_cost(step, envelope):
         return 0.0, []
     if action == ACTION_ADD_NODE:
         healthy = [row for row in _instances(envelope) if row.get("healthy")]
-        itype = healthy[0].get("instance_type") if healthy else None
+        # A named source is the node that gets cloned, so its type is the type
+        # that gets billed. `.get()`, never `params["source_instance"]`: the
+        # assistant path builds an add step with an EMPTY params dict.
+        named = (step.get("params") or {}).get("source_instance")
+        chosen = next((candidate for candidate in healthy
+                       if candidate.get("id") == named), None) if named else None
+        if chosen is None:
+            chosen = healthy[0] if healthy else None
+        itype = (chosen or {}).get("instance_type")
         price = _price(itype)
         if price is None:
             return None, [f"no listed price for {itype or 'this node type'}"]
@@ -3364,7 +3595,10 @@ def _run_add_node(record):
 
     # ── launching ──────────────────────────────────────────────────────────
     base = detail.get("source_name") or source.get("name") or "mojo-node"
-    _advance(record, "launching", "launching the new node")
+    zone = detail.get("availability_zone")
+    _advance(record, "launching",
+             f"launching the new node in {zone}" if zone
+             else "launching the new node")
     # Clones carry the fleet's identity from birth: the source's
     # mojo:project/mojo:env (and managed-by, when present) ride onto the
     # launch tags beside the created-by stamp, so discovery (spec.owns) and
@@ -3373,8 +3607,14 @@ def _run_add_node(record):
     identity = {key: value
                 for key, value in (source.get("tags") or {}).items()
                 if key in FLEET_IDENTITY_TAGS + ("managed-by",) and value}
+    # The RECORDED subnet is authoritative — it is the one the request proved
+    # against AWS (same VPC, a zone the balancer serves, addressing consistent
+    # with the source) and the one the operator was shown. It is deliberately
+    # NOT re-validated here: the apply-time proof is the guarantee this feature
+    # offers, re-reading would only narrow the race it cannot close, and
+    # run_instances is the provider's own final authority either way.
     instance_id = ec2_helper.launch_clone(
-        source, image_id, source.get("subnet_id"),
+        source, image_id, detail.get("subnet_id") or source.get("subnet_id"),
         name=f"{base}-clone",
         user_data=node_user_data(base),
         tags=identity)

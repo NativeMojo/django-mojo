@@ -1056,14 +1056,48 @@ def find_reusable_image(tag_value, max_age_days, client=None, region=None):
             "age_days": round(_image_age_days(best.get("CreationDate")) or 0, 2)}
 
 
+def subnet_facts(subnet_id, client=None, region=None):
+    """Facts for one subnet, or None.
+
+    A FILTERED describe, never ``SubnetIds=``: AWS raises
+    ``InvalidSubnetID.NotFound`` for an id that does not exist, and "there is
+    no such subnet" is the caller's own refusal to word — not an exception
+    that reads as a provider failure. Same reason ``instance_facts`` filters.
+
+    ``available_ip_count`` is a point-in-time count, not a reservation: AWS
+    hands it out with no lock, so it is worth reading as early warning and
+    worth nothing as a guarantee.
+    """
+    ec2 = _ec2(client, region)
+    page = _caller.call(
+        "ec2.describe_subnets",
+        lambda: ec2.describe_subnets(
+            Filters=[{"Name": "subnet-id", "Values": [str(subnet_id)]}]),
+        iam_action="ec2:DescribeSubnets", mutation=False)
+    for row in (page.get("Subnets") or [])[:1]:
+        tags = _tag_map(row)
+        return {
+            "subnet_id": row.get("SubnetId"),
+            "vpc_id": row.get("VpcId"),
+            "availability_zone": row.get("AvailabilityZone"),
+            "available_ip_count": row.get("AvailableIpAddressCount"),
+            "map_public_ip_on_launch": row.get("MapPublicIpOnLaunch"),
+            "tags": tags,
+            "name": tags.get("Name"),
+        }
+    return None
+
+
 def launch_clone(source_facts, image_id, subnet_id, name, user_data, tags=None,
                  client=None, region=None):
     """Launch ONE clone of ``source_facts``. Returns the new instance id.
 
-    Everything that decides where the node lands and what it may do is copied
-    from the source instance rather than configured: instance type, subnet,
-    security groups, and the instance profile. IMDSv2 is forced regardless of
-    what the source had.
+    Everything that decides what the node may do is copied from the source
+    instance rather than configured: instance type, security groups, and the
+    instance profile. IMDSv2 is forced regardless of what the source had.
+    ``subnet_id`` is the one placement the caller may state — it falls back to
+    the source's subnet, and the caller is responsible for having proven that
+    a stated subnet is usable (same VPC, a zone the balancer serves).
     """
     ec2 = _ec2(client, region)
     facts = source_facts or {}

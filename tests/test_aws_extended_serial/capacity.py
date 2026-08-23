@@ -758,6 +758,60 @@ def test_run_operation_reports_persistence_unavailable(opts):
          f"{record['message']!r}")
 
 
+@th.django_unit_test("the runner launches into the RECORDED subnet, not the source's")
+def test_add_node_launches_into_the_recorded_subnet(opts):
+    from mojo.apps.aws.services import capacity
+    from mojo.helpers.aws import ec2 as ec2_helper
+    from mojo.apps.edge.services import platform_deploy
+
+    record = _add_record(capacity)
+    # The placement the REQUEST proved and recorded — a different subnet, in a
+    # different zone, from the one the source instance sits in.
+    record["detail"]["subnet_id"] = "subnet-0bbb"
+    record["detail"]["availability_zone"] = "us-east-1b"
+    record["detail"]["subnet_selected"] = "requested"
+    row = SimpleNamespace(pk="18180000-0000-4000-8000-000000000002",
+                          sha="b" * 40, framework_version="1.13.0")
+    source = {"instance_id": NODE_A, "name": "mojo-api-a", "state": "running",
+              "instance_type": "m6i.large", "subnet_id": "subnet-0aaa",
+              "security_group_ids": ["sg-0aaa"],
+              "iam_instance_profile_arn": PROFILE_ARN}
+    running = dict(source, instance_id=NEW_NODE)
+    notes = []
+
+    def _note(written):
+        notes.append((written.get("phase"), written.get("message")))
+        return written
+
+    with mock.patch.object(capacity, "_sleep"), \
+            mock.patch.object(capacity, "_write_operation", side_effect=_note), \
+            mock.patch.object(capacity, "_persist",
+                              side_effect=lambda record, **kw: record), \
+            mock.patch.object(capacity, "invalidate"), \
+            mock.patch.object(capacity, "_release"), \
+            mock.patch.object(capacity, "_await_runner", return_value=True), \
+            mock.patch.object(capacity, "_await_proof", return_value=False), \
+            mock.patch.object(ec2_helper, "instance_facts",
+                              side_effect=lambda value, **kw:
+                              source if value == NODE_A else running), \
+            mock.patch.object(ec2_helper, "find_reusable_image",
+                              return_value={"image_id": "ami-0new", "age_days": 2}), \
+            mock.patch.object(ec2_helper, "launch_clone",
+                              return_value=NEW_NODE) as launched, \
+            mock.patch.object(platform_deploy, "last_converged_deployment",
+                              return_value=row), \
+            mock.patch("mojo.apps.edge.asyncjobs._publish_deploy_node"):
+        capacity._run_add_node(record)
+
+    # Third POSITIONAL argument — the runner must not fall back to the fresh
+    # instance_facts read once the request has decided where the node lands.
+    assert launched.call_args[0][2] == "subnet-0bbb", \
+        (f"the clone was launched into the source's subnet, not the recorded "
+         f"one: {launched.call_args[0]}")
+    assert ("launching", "launching the new node in us-east-1b") in notes, \
+        f"the launching note never named the zone the node lands in: {notes}"
+
+
 @th.django_unit_test("an unproven node is NEVER registered behind the balancer")
 def test_registration_is_gated_on_proof(opts):
     from mojo.apps.aws.services import capacity

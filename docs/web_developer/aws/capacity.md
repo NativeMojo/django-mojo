@@ -58,7 +58,8 @@ retry.
         {"id": "i-0a1b…", "name": "mojo-api-a", "state": "healthy",
          "instance_state": "running", "lifecycle_state": "available",
          "instance_type": "m6i.large", "registered": true, "can_drain": true,
-         "zone": "us-east-1a", "public_ip": "203.0.113.10", "healthy": true,
+         "zone": "us-east-1a", "subnet_id": "subnet-0aaa",
+         "public_ip": "203.0.113.10", "healthy": true,
          "self": true, "primary": true, "added_by_capacity": false,
          "stable_ip": true, "groups": ["arn:…targetgroup/mojo-api/…"]}
       ],
@@ -260,6 +261,7 @@ Per-action fields:
 
 | Action | Extra fields |
 |---|---|
+| `add_node` | `source_instance` (optional instance id) — the node to clone, which also decides **which balancer's fleet grows**: the clone is registered into exactly the target groups its source is in. Must be a healthy serving member of this fleet. `subnet_id` (optional) — where the clone lands, including a zone that holds no node yet. Omit both for the historical behaviour: the server picks a healthy non-primary member and lands the clone in that member's own subnet |
 | `set_cache_replicas` | `count` (integer, **no default**), `apply_immediately` (boolean, **no default**, must be `true`) |
 | `resize_cache` | `size` (one of `small`/`medium`/`large`/`xlarge`, **no default**), `apply_immediately` (boolean, **no default**, must be `true`). `resource` is the replication-group id; the whole group is resized — node type is group-wide |
 | `resize_database` | `size` (same four keys, **no default**), `apply_immediately` (boolean, **no default**, must be `true`). `resource` is ONE instance identifier — an Aurora writer, an Aurora reader, a standalone primary, or a standalone replica. The writer and the readers carry independent sizes |
@@ -274,10 +276,23 @@ sets its failover `PromotionTier` in the same call (writer 0, readers 1), so
 a failover prefers the writer-class box; it never moves the writer role
 itself.
 
+`add_node`'s two placement fields do **not** change the confirmation
+contract: `resource` stays absent (the server derives the targets, and
+honouring a caller-supplied resource would let the caller choose their own
+echo) and `confirm_resource` stays the literal string `add_node`. A named
+subnet is validated against AWS **before** the claim and before the 20–40
+minute AMI capture — it must exist, sit in the source's VPC, sit in a zone the
+balancer actually serves, and assign public addresses if the source's subnet
+does. Sending either field on a `drain_node` or `terminate_node` is
+`invalid_request` 400, not silently ignored.
+
 ### Bodies
 
 ```json
 {"action": "add_node", "confirm_resource": "add_node"}
+
+{"action": "add_node", "confirm_resource": "add_node",
+ "source_instance": "i-0a1b…", "subnet_id": "subnet-0bbb"}
 
 {"action": "drain_node", "resource": "i-0a1b…", "confirm_resource": "i-0a1b…"}
 
@@ -323,12 +338,19 @@ itself.
     "message": "requested",
     "error_code": null,
     "warnings": [],
-    "detail": {"source_instance": "i-0a1b…", "source_name": "mojo-api-a"}
+    "detail": {"source_instance": "i-0a1b…", "source_name": "mojo-api-a",
+               "source_selected": "requested", "subnet_id": "subnet-0bbb",
+               "subnet_selected": "requested", "availability_zone": "us-east-1b"}
   }
 }
 ```
 
 `id` is what you poll.
+
+On an `add_node`, `detail` always states the full placement it settled on:
+`source_selected` and `subnet_selected` are `"requested"` when the caller
+named them and `"automatic"` / `"source"` when the server chose. `subnet_id`
+and `availability_zone` are where the node will actually land.
 
 ## `GET /api/aws/capacity/status?operation=<id>`
 
@@ -383,6 +405,8 @@ itself rendered.
 {
   "steps": [
     {"action": "add_node"},
+    {"action": "add_node", "source_instance": "i-0a1b…",
+     "subnet_id": "subnet-0bbb"},
     {"action": "resize_database", "resource": "mojo-prod-aurora-2",
      "size": "medium", "apply_immediately": true},
     {"action": "set_cache_replicas", "resource": "mojo-prod-redis",
@@ -398,7 +422,8 @@ Accepted actions: `add_node`, `add_reader`, `set_cache_replicas`,
 `terminate_node` — at most 20 steps. The stable-IPs pair is refused with its
 own message: it is fleet-wide, holds its own claim, and runs alone through
 the single-action apply. Per-step params match the single-action apply
-(`count`/`size`/`apply_immediately`, same no-default rules).
+(`count`/`size`/`apply_immediately`, same no-default rules; `add_node`'s
+optional `source_instance` and `subnet_id`).
 
 Validation refuses, naming the step index in `data.step`: unknown actions or
 resources, the self node, duplicates, counts under the failover floor, a
@@ -407,6 +432,13 @@ same node earlier in the batch (unless its drain already completed), drains
 that would leave no healthy node serving (only drains of currently-healthy
 nodes count against that budget), and a batch that both resizes and removes
 the same resource (`conflicting_steps`).
+
+`add_node`'s placement splits: `source_instance` is checked against the
+report's healthy rows here (`source_not_serving` 409), while `subnet_id` is
+shape-checked only — a subnet in a new availability zone by definition holds
+no node, so no report could validate it, and the step's own apply proves it
+against AWS before it takes a claim. Two `add_node` steps naming different
+subnets are both accepted; that is the two-zone case.
 
 ```json
 {
@@ -420,8 +452,9 @@ the same resource (`conflicting_steps`).
     "actor": 1,
     "steps": [
       {"index": 0, "action": "add_node", "resource": "",
-       "params": {}, "kind": "add",
-       "description": "Add an app node",
+       "params": {"source_instance": "i-0a1b…", "subnet_id": "subnet-0bbb"},
+       "kind": "add",
+       "description": "Add an app node cloned from mojo-api-a in subnet-0bbb",
        "warnings": ["builds, deploys and proves itself before serving · 20–40 min"],
        "monthly_delta_usd": 70.0},
       {"index": 1, "action": "resize_database", "resource": "mojo-prod-aurora-2",
@@ -552,10 +585,14 @@ operation record instead.
 | `error_code` | HTTP | Meaning |
 |---|---|---|
 | `infrastructure_external` | 403 | `INFRASTRUCTURE_MODE=external`. No caller may change capacity here. `data` carries `mode` and `setting` |
-| `invalid_request` | 400 | Unknown action, missing identifier, missing/ill-typed `count` or `apply_immediately` |
+| `invalid_request` | 400 | Unknown action, missing identifier, missing/ill-typed `count` or `apply_immediately`, a `subnet_id` that is not a `subnet-…` identifier, or `source_instance`/`subnet_id` sent on a `drain_node` or `terminate_node` (they are `add_node`'s placement and are refused elsewhere, never ignored) |
 | `identity_unavailable` | 503 | A selected, malformed, or ambiguous provision environment prevents exact ownership proof. Correct the declaration; capacity performs no account-wide fallback |
 | `node_id_pinned` | 409 | The fleet pins `EDGE_NODE_ID`, so a new node could never prove its own identity |
 | `no_source_node` | 409 | No healthy, running fleet member is available to clone |
+| `source_not_serving` | 409 | `add_node`'s `source_instance` is not a healthy target of this fleet's balancers; or it is a healthy target AWS does not report running; or this installation has declared no AWS environment, in which case no named source can be proven to belong to this fleet (add the node without naming one) |
+| `subnet_not_found` | 404 | AWS reports no such subnet in this region |
+| `subnet_not_usable` | 409 | The named subnet cannot take this clone. `data.reason` is `vpc_mismatch` (a clone carries its source's VPC-scoped security groups), `no_public_addressing` (the source's subnet assigns public addresses and this one does not, so the clone would never reach anything), or `no_free_addresses` |
+| `subnet_az_not_served` | 409 | The named subnet's availability zone is not enabled on every load balancer the clone would be registered behind. `data.zone` and `data.served_zones` name both sides. Enable the zone on the balancer first — the alternative is a node that registers and never goes healthy |
 | `not_registered` | 409 | A **drain** named an instance not registered behind any load balancer. (Terminate no longer refuses this shape — see `not_fleet_member`) |
 | `not_fleet_member` | 409 | A terminate named an unregistered instance that fresh EC2 facts could not prove a member of THIS fleet: missing, no admin-capacity clone stamp and no django-mojo tags, `mojo:project`/`mojo:env` not exactly matching a currently registered member's, or no registered member left to verify identity against (fail closed — use the console). A COMPLETED drain removes the target from its group, so terminate proves membership by identity, never by a generic tag |
 | `already_terminated` | 409 | The unregistered instance is already `terminated`/`shutting-down` |
