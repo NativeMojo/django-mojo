@@ -1,17 +1,249 @@
-import base64
+import hashlib
+from unittest import mock
 
 from objict import objict
 from testit import helpers as th
 
-from .brownfield_fixture import managed_topology, topology
+from .brownfield_fixture import (
+    managed_topology,
+    raw_manifest,
+    topology,
+)
 
 
 class _Clients:
-    def __init__(self, **clients):
+    def __init__(self, client=None, **clients):
+        self.client = client
         self.clients = clients
 
     def get(self, name):
-        return self.clients[name]
+        if self.clients:
+            return self.clients[name]
+        return self.client
+
+
+_ClientsForBalancer = _Clients
+
+
+class _NoCalls:
+    def __getattr__(self, name):
+        raise AssertionError(f"core safety path must not call {name}")
+
+
+def _error(raw):
+    from mojo.deploy.provision import brownfield_inputs, inputs
+
+    try:
+        brownfield_inputs.validate(raw)
+    except inputs.EnvFileError as err:
+        return str(err)
+    return None
+
+
+
+@th.django_unit_test()
+def test_manifest_is_strict_secret_free_and_digest_stable(opts):
+    from mojo.deploy.provision import brownfield_inputs
+
+    first = brownfield_inputs.validate(raw_manifest())
+    second = brownfield_inputs.validate(raw_manifest())
+    th.assert_eq(first["manifest_digest"], second["manifest_digest"],
+                 "canonical manifests must produce a stable digest")
+
+    unknown = raw_manifest()
+    unknown["network"]["guessed_vpc"] = True
+    message = _error(unknown)
+    th.assert_in("unknown key", message,
+                 f"an unknown nested key must fail closed: {message}")
+
+    # The same allowlist is what a stale manifest hits: a field this
+    # django-mojo no longer implements is refused by name rather than
+    # silently ignored, so nobody believes a retired control is still
+    # enforced by something.
+    retired = raw_manifest()
+    retired["retired_cutover_role_arn"] = (
+        "arn:aws:iam::123456789012:role/retired")
+    message = _error(retired)
+    th.assert_in("unknown key", message,
+                 f"an unknown top-level key must fail closed: {message}")
+    th.assert_in("retired_cutover_role_arn", message,
+                 f"the refusal must name the offending field: {message}")
+
+    secret = raw_manifest()
+    secret["database"]["credential"]["password"] = "do-not-commit"
+    message = _error(secret)
+    th.assert_in("secret value", message,
+                 f"a credential value must never enter the manifest: {message}")
+
+
+@th.django_unit_test()
+def test_to_spec_is_separate_and_managed_defaults_do_not_move(opts):
+    from mojo.deploy.provision import brownfield_inputs, spec as spec_module
+
+    managed = spec_module.build("maestro", "prod", "us-west-2", preset="small")
+    before = spec_module.names(managed)
+    fleet = brownfield_inputs.to_spec(
+        brownfield_inputs.validate(raw_manifest()))
+    th.assert_eq(spec_module.names(managed), before,
+                 "building a fleet spec must not change managed topology defaults")
+    th.assert_eq(spec_module.names(fleet)["nodes"],
+                 ["maestro-api-1", "maestro-api-2"],
+                 "brownfield nodes must come from exact declarations")
+    tags = spec_module.node_tags(fleet, fleet.node_declarations[0])
+    th.assert_eq(tags["mojo:fleet"], "shadow",
+                 "fleet ownership must be present at resource creation")
+    th.assert_eq(tags["mojo:application-role"], "api",
+                 "the opaque application role must be tagged at creation")
+    th.assert_true("mojo:request-service" not in tags,
+                   "omission must preserve the pre-feature provider tag shape")
+    explicit = dict(fleet.node_declarations[0], request_service=True)
+    explicit_tags = spec_module.node_tags(fleet, explicit)
+    th.assert_eq(explicit_tags["mojo:request-service"], "true",
+                 "an explicit framework request role must be tagged at launch")
+    th.assert_eq(spec_module.validate_names(fleet), [],
+                 "a validated manifest must pass the separate fleet name seam")
+    th.assert_eq(fleet.bootstrap_objects["live_config"]["version_id"],
+                 "configversion1",
+                 "the exact live config must survive manifest-to-spec conversion")
+
+
+@th.django_unit_test()
+def test_role_user_data_is_version_pinned_digest_checked_and_root_owned(opts):
+    from mojo.deploy.provision import nodes
+
+    spec = topology()
+    declaration = dict(spec.node_declarations[0], request_service=True)
+    script = nodes.stage0_user_data(spec, declaration["name"], declaration)
+    for expected in ("MOJO_NODE_ROLE=api",
+                     "--version-id=stageversion1",
+                     "--version-id=configversion1",
+                     "sha256sum -c -", "/etc/mojo/node-role.json",
+                     "/etc/mojo/request-service.conf",
+                     "MOJO_REQUEST_SERVICE=true",
+                     "/etc/mojo/request-service.enabled",
+                     "ConditionPathExists=/etc/mojo/request-service.enabled",
+                     "00-request-service.conf",
+                     "/opt/api/var/django.conf",
+                     "chown ec2-user:www /opt/api/var/django.conf",
+                     "chmod 0640 /opt/api/var/django.conf",
+                     "chown root:root /etc/mojo/node-role.json",
+                     "chmod 0600 /etc/mojo/node-role.json"):
+        th.assert_in(expected, script,
+                     f"brownfield user data is missing {expected!r}")
+    th.assert_eq("AKIA" in script, False,
+                 "no static AWS credential may enter user data")
+    stage_pos = script.index("--version-id=stageversion1")
+    config_pos = script.index("--version-id=configversion1")
+    exec_pos = script.index("exec bash /opt/api/var/stage1.sh")
+    th.assert_true(stage_pos < config_pos < exec_pos,
+                   "the exact live config must be digest-checked before stage1")
+
+
+@th.django_unit_test()
+def test_managed_stage0_does_not_gain_fleet_role_metadata(opts):
+    from mojo.deploy.provision import nodes, spec as spec_module
+
+    managed = spec_module.build("demo", "prod", "us-west-2", preset="small")
+    script = nodes.stage0_user_data(managed, "demo1")
+    th.assert_eq("MOJO_NODE_ROLE" in script, False,
+                 "fleet role metadata must not change managed stage-0 bytes")
+    th.assert_eq("MOJO_REQUEST_SERVICE" in script, False,
+                 "managed stage-0 must not gain the brownfield lifecycle key")
+    th.assert_eq("/etc/mojo/request-service" in script, False,
+                 "managed stage-0 must not gain fleet request-service authority")
+    th.assert_eq("00-request-service.conf" in script, False,
+                 "managed stage-0 must not gain the durable fleet refusal")
+    th.assert_eq("MOJOCONF\n\n\n# Stage 1" in script, False,
+                 "managed stage-0 layout must not gain a request-role blank line")
+
+
+@th.django_unit_test()
+def test_second_eip_failure_never_creates_one_az_balancer(opts):
+    from botocore.exceptions import ClientError
+    from mojo.deploy.provision import balancer, report
+
+    spec = topology()
+    observed = objict(
+        vpc_id=spec.brownfield_manifest["network"]["vpc_id"],
+        node_records=[{"instance_id": "i-serving", "serving_target": True}],
+        target_groups={}, balancer=None, addresses=[], listeners=[], targets={},
+        balancer_attributes={})
+
+    class _EC2:
+        def __init__(self):
+            self.calls = []
+
+        def allocate_address(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 2:
+                raise ClientError({"Error": {"Code": "AddressLimitExceeded",
+                                              "Message": "limit"}},
+                                  "AllocateAddress")
+            return {"AllocationId": "eipalloc-first"}
+
+    class _ELB:
+        def __init__(self):
+            self.load_balancers = 0
+
+        def create_target_group(self, Name, **kwargs):
+            return {"TargetGroups": [{"TargetGroupArn": f"tg/{Name}"}]}
+
+        def create_load_balancer(self, **kwargs):
+            self.load_balancers += 1
+            return {"LoadBalancers": [{}]}
+
+    ec2, elb = _EC2(), _ELB()
+    findings, _actions, _result = balancer.ensure_balancer(
+        _ClientsForBalancer(ec2=ec2, elbv2=elb), spec, observed, apply=True)
+    th.assert_eq(len(ec2.calls), 2,
+                 f"both exact address mappings must be attempted: {ec2.calls}")
+    th.assert_eq(elb.load_balancers, 0,
+                 "a partial address set must never create a one-AZ NLB")
+    tags = {row["Key"]: row["Value"]
+            for row in ec2.calls[0]["TagSpecifications"][0]["Tags"]}
+    th.assert_eq(tags["Name"],
+                 "maestro-shadow-nlb:subnet-0123456789abcdef0",
+                 f"the retained EIP must identify its exact subnet: {tags}")
+    th.assert_true(any(row.status == report.BLIND for row in findings),
+                   f"partial mappings must block the edge step: {findings}")
+
+
+@th.django_unit_test()
+def test_listener_wrong_target_is_not_reported_converged(opts):
+    from mojo.deploy.provision import balancer, report
+
+    findings, actions = [], []
+    observed = {"listeners": [{
+        "Port": 443, "Protocol": "TCP", "DefaultActions": [{
+            "Type": "forward", "TargetGroupArn": "tg/unowned"}]}]}
+    balancer._ensure_listeners(
+        object(), topology(), observed, "lb/owned",
+        {"api": "tg/api", "certbot": "tg/http"}, findings, actions, False)
+    th.assert_true(any(row.code == "listener.443.mismatch"
+                       and row.status == report.MANUAL for row in findings),
+                   f"wrong forwarding must be explicit drift: {findings}")
+    th.assert_eq(any(row.target == "TCP:443" for row in actions), False,
+                 "a colliding wrong listener must not receive a create action")
+
+
+@th.django_unit_test()
+def test_immutable_wrong_target_group_arn_is_withheld(opts):
+    from mojo.deploy.provision import balancer, report
+
+    spec = topology()
+    wanted = balancer.target_group_specs(
+        spec, spec.brownfield_manifest["network"]["vpc_id"])
+    wrong = dict(wanted["api"], Protocol="UDP",
+                 TargetGroupArn="tg/wrong")
+    findings, actions = [], []
+    arns = balancer._ensure_target_groups(
+        object(), spec, {"target_groups": {"api": wrong}}, wanted,
+        findings, actions, apply=False)
+    th.assert_eq(arns.get("api"), None,
+                 "an immutable-mismatch target group must not reach listeners")
+    th.assert_true(any(row.code == "target_group.api.immutable"
+                       and row.status == report.BLIND for row in findings),
+                   f"the wrong group must block fleet convergence: {findings}")
 
 
 @th.django_unit_test()
@@ -150,223 +382,6 @@ def test_node_observation_validates_vpc_subnet_profile_role_and_security_group(o
 
 
 @th.django_unit_test()
-def test_owned_node_hardware_and_root_volume_drift_are_each_withheld(opts):
-    from mojo.deploy.provision import brownfield_discover, report
-
-    spec = topology()
-    manifest = spec.brownfield_manifest
-    manifest["compatibility_instance_ids"] = []
-    declaration = manifest["nodes"]["items"][0]
-    tags = {
-        "Name": declaration["name"], "managed-by": "django-mojo",
-        "mojo:project": spec.project, "mojo:env": spec.env,
-        "mojo:fleet": spec.fleet, "mojo:role": "node",
-        "mojo:application-role": declaration["role"],
-    }
-
-    def rows(case):
-        instance = {
-            "InstanceId": "i-aaaaaaaaaaaaaaaaa",
-            "InstanceType": manifest["nodes"]["instance_type"],
-            "ImageId": manifest["nodes"]["ami_id"],
-            "VpcId": manifest["network"]["vpc_id"],
-            "SubnetId": declaration["subnet_id"],
-            "Placement": {"AvailabilityZone": declaration["availability_zone"]},
-            "State": {"Name": "running"},
-            "IamInstanceProfile": {"Arn": declaration["instance_profile_arn"]},
-            "SecurityGroups": [{"GroupId":
-                manifest["network"]["node_security_group_id"]}],
-            "RootDeviceName": "/dev/xvda",
-            "BlockDeviceMappings": [{"DeviceName": "/dev/xvda",
-                                     "Ebs": {"VolumeId": "vol-aaaaaaaa"}}],
-            "Tags": [{"Key": key, "Value": value} for key, value in tags.items()],
-        }
-        volume = {"VolumeId": "vol-aaaaaaaa",
-                  "Size": manifest["nodes"]["volume_gb"], "Encrypted": True}
-        if case == "instance type":
-            instance["InstanceType"] = "t3.large"
-        elif case == "AMI":
-            instance["ImageId"] = "ami-deadbeef"
-        elif case == "root volume size":
-            volume["Size"] += 1
-        elif case == "root volume encryption":
-            volume["Encrypted"] = False
-        return instance, volume
-
-    for case in ("instance type", "AMI", "root volume size",
-                 "root volume encryption"):
-        instance, volume = rows(case)
-
-        class _EC2:
-            def describe_instances(self, **kwargs):
-                return {"Reservations": [{"Instances": [instance]}]}
-
-            def describe_volumes(self, **kwargs):
-                return {"Volumes": [volume]}
-
-        findings, observed, inventory = [], objict(), {}
-        observed.brownfield_profiles = {
-            "api": {"profile_arn": declaration["instance_profile_arn"]}}
-        brownfield_discover._instances(
-            _Clients(ec2=_EC2()), spec, manifest, findings, observed, inventory)
-        th.assert_eq(list(observed.instances), [],
-                     f"{case} drift must never reach balancer input")
-        th.assert_true(any(case in item.message and item.status == report.BLIND
-                           for item in findings),
-                       f"{case} drift must fail closed: {findings}")
-
-
-@th.django_unit_test()
-def test_request_service_role_drift_requires_node_replacement(opts):
-    from mojo.deploy.provision import brownfield_discover, report
-
-    spec = topology()
-    manifest = spec.brownfield_manifest
-    manifest["compatibility_instance_ids"] = []
-    declaration = manifest["nodes"]["items"][0]
-    declaration["request_service"] = False
-    tags = {
-        "Name": declaration["name"], "managed-by": "django-mojo",
-        "mojo:project": spec.project, "mojo:env": spec.env,
-        "mojo:fleet": spec.fleet, "mojo:role": "node",
-        "mojo:application-role": declaration["role"],
-    }
-    instance = {
-        "InstanceId": "i-aaaaaaaaaaaaaaaaa",
-        "InstanceType": manifest["nodes"]["instance_type"],
-        "ImageId": manifest["nodes"]["ami_id"],
-        "VpcId": manifest["network"]["vpc_id"],
-        "SubnetId": declaration["subnet_id"],
-        "Placement": {"AvailabilityZone": declaration["availability_zone"]},
-        "State": {"Name": "running"},
-        "IamInstanceProfile": {"Arn": declaration["instance_profile_arn"]},
-        "SecurityGroups": [{"GroupId":
-            manifest["network"]["node_security_group_id"]}],
-        "RootDeviceName": "/dev/xvda",
-        "BlockDeviceMappings": [{"DeviceName": "/dev/xvda",
-                                 "Ebs": {"VolumeId": "vol-aaaaaaaa"}}],
-        "Tags": [{"Key": key, "Value": value} for key, value in tags.items()],
-    }
-
-    class _EC2:
-        def describe_instances(self, **kwargs):
-            return {"Reservations": [{"Instances": [instance]}]}
-
-        def describe_volumes(self, **kwargs):
-            return {"Volumes": [{"VolumeId": "vol-aaaaaaaa",
-                                  "Size": manifest["nodes"]["volume_gb"],
-                                  "Encrypted": True}]}
-
-    findings, observed, inventory = [], objict(), {}
-    observed.brownfield_profiles = {
-        "api": {"profile_arn": declaration["instance_profile_arn"]}}
-    brownfield_discover._instances(
-        _Clients(ec2=_EC2()), spec, manifest, findings, observed, inventory)
-
-    th.assert_eq(list(observed.instances), [],
-                 "a legacy request-serving node must not be reported as "
-                 "request_service=false merely because the manifest changed")
-    th.assert_true(any("request-service" in item.message
-                       and item.status == report.BLIND for item in findings),
-                   f"request-role drift must block for replacement: {findings}")
-
-
-@th.django_unit_test()
-def test_explicit_request_role_requires_exact_launch_user_data(opts):
-    from mojo.deploy.provision import brownfield_discover, report
-
-    spec = topology()
-    manifest = spec.brownfield_manifest
-    manifest["compatibility_instance_ids"] = []
-    declaration = manifest["nodes"]["items"][0]
-    declaration["request_service"] = False
-    tags = {
-        "Name": declaration["name"], "managed-by": "django-mojo",
-        "mojo:project": spec.project, "mojo:env": spec.env,
-        "mojo:fleet": spec.fleet, "mojo:role": "node",
-        "mojo:application-role": declaration["role"],
-        "mojo:request-service": "false",
-    }
-    instance = {
-        "InstanceId": "i-aaaaaaaaaaaaaaaaa",
-        "InstanceType": manifest["nodes"]["instance_type"],
-        "ImageId": manifest["nodes"]["ami_id"],
-        "VpcId": manifest["network"]["vpc_id"],
-        "SubnetId": declaration["subnet_id"],
-        "Placement": {"AvailabilityZone": declaration["availability_zone"]},
-        "State": {"Name": "running"},
-        "IamInstanceProfile": {"Arn": declaration["instance_profile_arn"]},
-        "SecurityGroups": [{"GroupId":
-            manifest["network"]["node_security_group_id"]}],
-        "RootDeviceName": "/dev/xvda",
-        "BlockDeviceMappings": [{"DeviceName": "/dev/xvda",
-                                 "Ebs": {"VolumeId": "vol-aaaaaaaa"}}],
-        "Tags": [{"Key": key, "Value": value} for key, value in tags.items()],
-    }
-
-    class _EC2:
-        def describe_instances(self, **kwargs):
-            return {"Reservations": [{"Instances": [instance]}]}
-
-        def describe_volumes(self, **kwargs):
-            return {"Volumes": [{"VolumeId": "vol-aaaaaaaa",
-                                  "Size": manifest["nodes"]["volume_gb"],
-                                  "Encrypted": True}]}
-
-        def describe_instance_attribute(self, **kwargs):
-            return {"UserData": {"Value": base64.b64encode(
-                b"#!/bin/bash\n# stale request-serving bootstrap\n").decode(
-                    "ascii")}}
-
-    findings, observed, inventory = [], objict(), {}
-    observed.brownfield_profiles = {
-        "api": {"profile_arn": declaration["instance_profile_arn"]}}
-    brownfield_discover._instances(
-        _Clients(ec2=_EC2()), spec, manifest, findings, observed, inventory)
-
-    th.assert_eq(list(observed.instances), [],
-                 "a matching mutable tag must not override wrong launch evidence")
-    th.assert_true(any("request-role user data digest" in item.message
-                       and item.status == report.BLIND for item in findings),
-                   f"wrong immutable launch evidence must block: {findings}")
-
-
-@th.django_unit_test()
-def test_cache_engine_must_be_valkey(opts):
-    from mojo.deploy.provision import brownfield_discover, report
-
-    spec = topology()
-    wanted = spec.brownfield_manifest["cache"]
-
-    class _Cache:
-        def describe_replication_groups(self, **kwargs):
-            return {"ReplicationGroups": [{
-                "ARN": wanted["replication_group_arn"],
-                "ReplicationGroupId": wanted["identifier"], "Engine": "redis",
-                "Status": "available", "TransitEncryptionEnabled": True,
-                "AuthTokenEnabled": False,
-                "NodeGroups": [{"PrimaryEndpoint": {
-                    "Address": wanted["endpoint"], "Port": wanted["port"]}}],
-                "SecurityGroups": [{"SecurityGroupId":
-                    wanted["security_group_ids"][0]}],
-                "CacheSubnetGroupName": wanted["subnet_group_name"],
-            }]}
-
-        def describe_cache_subnet_groups(self, **kwargs):
-            return {"CacheSubnetGroups": [{
-                "CacheSubnetGroupName": wanted["subnet_group_name"],
-                "VpcId": spec.brownfield_manifest["network"]["vpc_id"]}]}
-
-    findings, observed, inventory = [], objict(), {}
-    brownfield_discover._cache(
-        _Clients(elasticache=_Cache()), spec.brownfield_manifest,
-        spec.brownfield_manifest["network"], findings, observed, inventory)
-    th.assert_true(any("Valkey engine" in item.message
-                       and item.status == report.BLIND for item in findings),
-                   f"Redis must not satisfy an exact Valkey declaration: {findings}")
-
-
-@th.django_unit_test()
 def test_credential_metadata_key_and_application_user_are_enforced(opts):
     from mojo.deploy.provision import brownfield_discover, report
 
@@ -396,78 +411,6 @@ def test_credential_metadata_key_and_application_user_are_enforced(opts):
         th.assert_true(any(expected_phrase in item.message
                            and item.status == report.BLIND for item in findings),
                        f"{expected_phrase} must fail closed: {findings}")
-
-
-@th.django_unit_test()
-def test_telemetry_exact_name_collisions_are_recorded_not_adopted(opts):
-    from mojo.deploy.provision import brownfield_discover, report
-
-    spec = topology()
-    prefix = f"/mojo/{spec.project}-{spec.fleet}"
-
-    class _Logs:
-        def describe_log_groups(self, **kwargs):
-            return {"logGroups": [{"logGroupName": f"{prefix}/app"}]}
-
-        def list_tags_log_group(self, **kwargs):
-            return {"tags": {"managed-by": "someone-else"}}
-
-    class _CloudWatch:
-        def describe_alarms(self, **kwargs):
-            return {"MetricAlarms": [{
-                "AlarmName": "maestro-shadow-api-unhealthy",
-                "AlarmArn": "arn:aws:cloudwatch:us-west-2:123456789012:alarm:x"}]}
-
-        def list_tags_for_resource(self, **kwargs):
-            return {"Tags": [{"Key": "managed-by", "Value": "someone-else"}]}
-
-    findings, observed, inventory = [], objict(), {}
-    brownfield_discover._telemetry(
-        _Clients(logs=_Logs(), cloudwatch=_CloudWatch()), spec, findings,
-        observed, inventory)
-    th.assert_in(f"{prefix}/app", observed.log_group_collisions,
-                 "the colliding log group must be withheld from convergence")
-    th.assert_in("maestro-shadow-api-unhealthy", observed.alarm_collisions,
-                 "the colliding alarm must be withheld from convergence")
-    th.assert_true(any(item.status == report.BLIND for item in findings),
-                   f"telemetry collisions must block apply: {findings}")
-
-
-@th.django_unit_test()
-def test_managed_iam_role_and_profile_collisions_are_not_exposed(opts):
-    from mojo.deploy.provision import brownfield_discover, report
-
-    spec = managed_topology()
-
-    class _IAM:
-        def get_instance_profile(self, **kwargs):
-            return {"InstanceProfile": {
-                "Arn": "arn:aws:iam::123456789012:instance-profile/maestro-shadow-api",
-                "Tags": [{"Key": "managed-by", "Value": "someone-else"}],
-                "Roles": []}}
-
-        def get_role(self, **kwargs):
-            return {"Role": {
-                "Arn": "arn:aws:iam::123456789012:role/maestro-shadow-api",
-                "Tags": [{"Key": "managed-by", "Value": "someone-else"}]}}
-
-        def __getattr__(self, name):
-            raise AssertionError(
-                f"unowned role must not be inspected for dependent {name}")
-
-    findings, observed, inventory = [], objict(), {}
-    brownfield_discover._profiles(
-        _Clients(iam=_IAM()), spec.brownfield_manifest, findings, observed,
-        inventory)
-    row = observed.brownfield_profiles["api"]
-    th.assert_true(row.role_collision and row.profile_collision,
-                   f"both unowned exact-name resources must be collisions: {row}")
-    th.assert_eq(row.role_arn, None,
-                 "an unowned role ARN must never reach identity convergence")
-    th.assert_eq(row.profile_arn, None,
-                 "an unowned profile ARN must never reach node launch")
-    th.assert_true(any(item.status == report.BLIND for item in findings),
-                   f"IAM collisions must block apply: {findings}")
 
 
 @th.django_unit_test()
@@ -685,44 +628,6 @@ def test_missing_elb_resource_remains_an_optional_empty_collection(opts):
 
 
 @th.django_unit_test()
-def test_storage_inventory_uses_exact_metadata_without_prefix_occupancy(opts):
-    from mojo.deploy.provision import brownfield_discover
-
-    spec = topology()
-    manifest = spec.brownfield_manifest
-    by_key = {row["key"]: row for row in manifest["bootstrap"].values()}
-
-    class _S3:
-        def get_bucket_location(self, **kwargs):
-            return {"LocationConstraint": manifest["region"]}
-
-        def head_object(self, **kwargs):
-            reference = by_key[kwargs["Key"]]
-            return {"VersionId": reference["version_id"], "ETag": "etag",
-                    "ContentLength": 10,
-                    "Metadata": {"sha256": reference["sha256"]}}
-
-        def list_objects_v2(self, **kwargs):
-            raise AssertionError("storage prefixes must never be enumerated")
-
-    findings, observed, inventory = [], objict(), {}
-    brownfield_discover._storage(
-        _Clients(s3=_S3()), manifest, findings, observed, inventory)
-    expected = {
-        label: {"bucket": reference["bucket"],
-                "prefix": reference["prefix"],
-                "region": manifest["region"]}
-        for label, reference in manifest["storage"].items()
-    }
-    th.assert_eq(inventory["storage"], expected,
-                 "storage evidence must contain only exact stable fields")
-    th.assert_true(observed.bootstrap_payload,
-                   f"pinned bootstrap metadata must still be proven: {inventory}")
-    th.assert_eq(findings, [],
-                 f"exact storage metadata should converge: {findings}")
-
-
-@th.django_unit_test()
 def test_owned_eip_ambiguity_and_wrong_border_group_fail_closed(opts):
     from mojo.deploy.provision import brownfield_discover, report
 
@@ -746,41 +651,6 @@ def test_owned_eip_ambiguity_and_wrong_border_group_fail_closed(opts):
                  "ambiguous subnet-bound addresses must not enter NLB creation")
     th.assert_true(any(row.status == report.BLIND for row in findings),
                    f"ambiguity/border drift must block preparation: {findings}")
-
-
-@th.django_unit_test()
-def test_security_group_and_kms_reachability_helpers_are_exact(opts):
-    from mojo.deploy.provision import brownfield_discover
-
-    group = {"IpPermissions": [{
-        "IpProtocol": "tcp", "FromPort": 5432, "ToPort": 5432,
-        "UserIdGroupPairs": [{"GroupId": "sg-node"}]}]}
-    th.assert_true(brownfield_discover._allows_group_port(
-        group, 5432, "sg-node"), "the exact node-to-database path must pass")
-    th.assert_eq(brownfield_discover._allows_group_port(
-        group, 6379, "sg-node"), False,
-        "a different port must not be inferred reachable")
-    private_group = {"IpPermissions": [{
-        "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
-        "IpRanges": [{"CidrIp": "172.31.0.0/16"}]}]}
-    th.assert_true(brownfield_discover._allows_cidr_port(
-        private_group, 443, "172.31.0.0/16"),
-        "disabled client-IP preservation must accept the exact VPC source path")
-    th.assert_eq(brownfield_discover._allows_cidr_port(
-        private_group, 443, "10.0.0.0/8"), False,
-        "a broader or unrelated source CIDR must not be inferred safe")
-    th.assert_eq(brownfield_discover._allows_world_port(
-        private_group, 443), False,
-        "the private NLB path must not accidentally prove world ingress")
-    policy = {"Statement": [{
-        "Effect": "Allow", "Principal": {"AWS":
-            "arn:aws:iam::123456789012:root"}, "Action": "kms:*"}]}
-    th.assert_true(brownfield_discover._policy_allows(
-        policy, "arn:aws:iam::123456789012:root"),
-        "the exact account IAM delegation must be recognized")
-    th.assert_eq(brownfield_discover._policy_allows(
-        policy, "arn:aws:iam::999999999999:root"), False,
-        "a different account principal must not prove decrypt reachability")
 
 
 @th.django_unit_test()
@@ -911,67 +781,108 @@ def test_existing_nlb_must_carry_the_declared_create_time_security_group(opts):
 
 
 @th.django_unit_test()
-def test_omitted_client_ip_fields_add_no_attribute_provider_call(opts):
-    from mojo.deploy.provision import brownfield_discover
+def test_managed_iam_name_collision_performs_no_mutation(opts):
+    from mojo.deploy.provision import brownfield_identity, report
 
-    class _EC2:
-        def describe_addresses(self, **kwargs):
-            return {"Addresses": []}
+    observed = {"brownfield_profiles": {"api": {
+        "role_collision": True, "profile_collision": False,
+        "role_arn": None, "profile_arn": None}}}
+    findings, actions, result = brownfield_identity.ensure_identity(
+        _Clients(_NoCalls()), managed_topology(), observed, apply=True)
+    th.assert_eq(actions, [],
+                 "an unowned collision must not advertise or attempt a mutation")
+    th.assert_true(any(row.status == report.BLIND for row in findings),
+                   f"the collision must block downstream nodes: {findings}")
+    th.assert_eq(result.as_dict()["brownfield_profiles"], {},
+                 "no colliding profile may be exposed downstream")
 
-    class _ELB:
-        def __init__(self):
-            self.attribute_arns = []
 
-        def describe_load_balancers(self, **kwargs):
-            return {"LoadBalancers": []}
+@th.django_unit_test()
+def test_runtime_policy_authorizes_only_exact_versioned_artifacts(opts):
+    from mojo.deploy.provision import brownfield_identity
 
-        def describe_target_groups(self, Names):
-            return {"TargetGroups": [{
-                "TargetGroupName": Names[0],
-                "TargetGroupArn": f"arn:tg:{Names[0]}",
-                "VpcId": topology().brownfield_manifest["network"]["vpc_id"],
-            }]}
+    policy = brownfield_identity.policy_document(managed_topology())
+    statements = {row["Sid"]: row for row in policy["Statement"]}
+    pinned = statements["ReadPinnedFleetArtifacts"]
+    th.assert_eq(pinned["Action"], ["s3:GetObjectVersion"],
+                 f"version-pinned downloads need GetObjectVersion: {pinned}")
+    expected = {
+        "arn:aws:s3:::maestro-prod-config/bootstrap/stage1.sh",
+        "arn:aws:s3:::maestro-prod-config/config/live/django.conf",
+        "arn:aws:s3:::maestro-prod-config/bootstrap/node-role.json",
+        "arn:aws:s3:::maestro-prod-config/secrets/db.json",
+    }
+    th.assert_eq(set(pinned["Resource"]), expected,
+                 f"only exact bootstrap/credential keys may be version-read: {pinned}")
+    prefixes = statements["ReadDeclaredFleetPrefixes"]
+    th.assert_eq(prefixes["Action"], ["s3:GetObject"],
+                 f"unversioned GetObject must stay in its own prefix grant: {prefixes}")
+    th.assert_eq(any(value.endswith("bootstrap/*")
+                     for value in prefixes["Resource"]), False,
+                 f"bootstrap must not receive a broad unversioned grant: {prefixes}")
 
-        def describe_tags(self, ResourceArns):
-            spec = topology()
-            return {"TagDescriptions": [{
-                "ResourceArn": ResourceArns[0], "Tags": [
-                    {"Key": key, "Value": value} for key, value in {
-                        "managed-by": "django-mojo",
-                        "mojo:project": spec.project,
-                        "mojo:env": spec.env,
-                        "mojo:fleet": spec.fleet,
-                        "mojo:role": "balancer",
-                    }.items()]}]}
 
-        def describe_target_group_attributes(self, TargetGroupArn):
-            self.attribute_arns.append(TargetGroupArn)
-            return {"Attributes": [{
-                "Key": "preserve_client_ip.enabled", "Value": "true"}]}
-
-        def describe_target_health(self, **kwargs):
-            return {"TargetHealthDescriptions": []}
+@th.django_unit_test()
+def test_telemetry_collisions_never_mutate(opts):
+    from mojo.deploy.provision import brownfield_observability, report
 
     spec = topology()
-    elb = _ELB()
-    observed, inventory, findings = objict(), {}, []
-    brownfield_discover._owned_edge(
-        _Clients(ec2=_EC2(), elbv2=elb), spec,
-        spec.brownfield_manifest, findings, observed, inventory)
-    th.assert_eq(elb.attribute_arns, [],
-                 "omission must not require a new IAM read/provider call")
-    th.assert_eq("target_group_attributes" in inventory["owned_edge"], False,
-                 "omission must not change the dependency digest shape")
+    group_names = [f"/mojo/{spec.project}-{spec.fleet}/{kind}"
+                   for kind in brownfield_observability.LOG_KINDS]
+    alarm_names = [f"{spec.project}-{spec.fleet}-{role}-unhealthy"
+                   for role in ("api", "certbot")]
+    observed = {"log_groups": {}, "log_group_collisions": group_names,
+                "brownfield_alarms": [], "alarm_collisions": alarm_names}
+    findings, actions, _result = brownfield_observability.ensure_observability(
+        _Clients(logs=_NoCalls(), cloudwatch=_NoCalls()), spec, observed,
+        apply=True)
+    th.assert_true(any(row.status == report.BLIND for row in findings),
+                   f"collisions must block the telemetry step: {findings}")
+    th.assert_eq(any(action.target in group_names + alarm_names
+                     for action in actions), False,
+                 "colliding names must not receive create/modify actions")
 
-    spec.brownfield_manifest["load_balancer"][
-        "api_preserve_client_ip"] = True
-    elb = _ELB()
-    observed, inventory, findings = objict(), {}, []
-    brownfield_discover._owned_edge(
-        _Clients(ec2=_EC2(), elbv2=elb), spec,
-        spec.brownfield_manifest, findings, observed, inventory)
-    th.assert_eq(len(elb.attribute_arns), 1,
-                 "only the explicitly declared target group may be read")
-    th.assert_eq(inventory["owned_edge"]["target_group_attributes"]["api"],
-                 {"preserve_client_ip.enabled": "true"},
-                 "the exact observed value must enter the dependency digest")
+
+@th.django_unit_test()
+def test_apply_reobserves_and_refuses_dependency_digest_drift(opts):
+    from mojo.deploy.provision import brownfield_plan
+
+    run = objict(observed=objict(dependency_digest="changed",
+                                action_digest="actions"), blocking=False,
+                 validated=True, steps=objict(), worst="PASS", problems=[])
+    with mock.patch.object(brownfield_plan, "_prepare",
+                           return_value=([], [], run)) as prepared:
+        raised = None
+        try:
+            brownfield_plan.apply(object(), topology(), "previewed", "actions")
+        except brownfield_plan.DependencyDriftError as err:
+            raised = err
+    th.assert_true(raised is not None,
+                   "a dependency change must abort before the first mutation")
+    th.assert_in("nothing was mutated", str(raised),
+                 f"the refusal must state the safety outcome: {raised}")
+    th.assert_eq(prepared.call_count, 1,
+                 "apply must perform one fresh exact observation")
+
+
+@th.django_unit_test()
+def test_apply_refuses_changed_preview_action_digest(opts):
+    from mojo.deploy.provision import brownfield_plan
+
+    run = objict(observed=objict(dependency_digest="dependencies",
+                                action_digest="new-actions"), blocking=False,
+                 validated=True, steps=objict(), worst="PASS", problems=[])
+    with mock.patch.object(brownfield_plan, "_prepare",
+                           return_value=([], [], run)):
+        raised = None
+        try:
+            brownfield_plan.apply(
+                object(), topology(), "dependencies", "confirmed-actions")
+        except brownfield_plan.DependencyDriftError as err:
+            raised = err
+    th.assert_true(raised is not None,
+                   "a new allowed action after confirmation must abort apply")
+    th.assert_in("action set changed", str(raised),
+                 f"the refusal must name action drift: {raised}")
+    th.assert_in("nothing was mutated", str(raised),
+                 f"the CAS failure must state the safety outcome: {raised}")
