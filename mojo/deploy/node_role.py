@@ -358,7 +358,12 @@ def read_manifest(repo_path):
         text = body.decode("ascii")
     except UnicodeDecodeError:
         raise NodeRoleError("aws/node_roles.conf is not ASCII")
+    return parse_manifest(text)
 
+
+def parse_manifest(text):
+    """The grammar itself, split out so check_node can parse the same bytes it
+    read through its own runner (which may be an ssh connection to the node)."""
     manifest = {}
     for number, line in enumerate(text.splitlines(), 1):
         line = line.split("#", 1)[0].strip()

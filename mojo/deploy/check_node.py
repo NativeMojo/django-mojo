@@ -33,8 +33,15 @@ CONF FILES ARE NEVER READ. var/django.conf and var/bootstrap.conf hold every
 downstream secret a fleet has. This audit stats them (exists/owner/mode) and
 greps for the PRESENCE of fixed key NAMES — output is only the key name, never
 a value. Nothing here cats, prints, or copies conf contents, and nothing ever
-should. (aws/node_retired.conf and aws/node_overrides.conf are read in full —
-they are name lists, not secrets.)
+should. (aws/node_retired.conf, aws/node_overrides.conf and aws/node_roles.conf
+are read in full — they are name lists, not secrets.)
+
+There is exactly ONE bounded exception, and it is deliberately narrow: the
+roles section learns this node's role, which may be declared by
+`MOJO_NODE_ROLE` inside var/bootstrap.conf. It never reads that file itself —
+it asks `python3 -m mojo.deploy.node_role resolve --json`, whose every output
+field is a validated role identifier or the empty string. No conf byte can
+reach this report through it. Do not widen that either.
 
 A finding is one of:
 
@@ -69,7 +76,7 @@ INFO = "INFO"
 # schedules and serves it, then the trailing edges (certs, config, shims,
 # leftovers).
 SECTIONS = (
-    "repo", "framework", "cron", "systemd", "mojosec", "nginx",
+    "repo", "framework", "roles", "cron", "systemd", "mojosec", "nginx",
     "certs", "config_plane", "shims", "legacy", "var_ownership", "jobs",
 )
 
@@ -269,6 +276,197 @@ def read_retired(run, proj):
 
 
 # ---------------------------------------------------------------------------
+# roles — which kind of box is this, and does it hold only its own files
+# ---------------------------------------------------------------------------
+
+# The root-sealed authority mojo.deploy.node_role reads and post_deploy seals.
+ROLE_AUTHORITY = "/etc/mojo/deploy-role.conf"
+
+# Where an owned name of each kind is installed on the node.
+ROLE_INSTALL_DIRS = {
+    "conf.d": "/etc/nginx/conf.d",
+    "cron.d": "/etc/cron.d",
+    "systemd": "/etc/systemd/system",
+}
+
+EMPTY_ROLE_STATE = {
+    "declared": False, "manifest": {}, "manifest_error": None,
+    "role": "", "source": "none", "sealed": "", "env": "", "bootstrap": "",
+    "probe_error": None, "module_missing": False,
+    "foreign": {kind: [] for kind in ROLE_INSTALL_DIRS},
+}
+
+
+def read_role_state(run, proj, repo):
+    """Everything the roles section grades, resolved ONCE per audit.
+
+    The manifest is read from the REPO tree (that is where the deploy plane
+    reads it, and it is what shipped_confd derives from); node_retired.conf's
+    {proj} read is the deliberate divergence, because retirement is about what
+    is installed on the node rather than what the repo declares.
+
+    The role itself comes through the injected runner as
+    `python3 -m mojo.deploy.node_role resolve --json`, so over --ssh the answer
+    is about the REMOTE node, and so no conf byte is ever read here.
+    """
+    from mojo.deploy import node_role as nr
+
+    state = dict(EMPTY_ROLE_STATE)
+    state["foreign"] = {kind: [] for kind in ROLE_INSTALL_DIRS}
+    rc, out, _ = run(f"cat {q(f'{repo}/aws/node_roles.conf')} 2>/dev/null")
+    if rc != 0:
+        return state
+    state["declared"] = True
+    try:
+        state["manifest"] = nr.parse_manifest(out + "\n")
+    except nr.NodeRoleError as err:
+        state["manifest_error"] = str(err)
+        return state
+
+    rc, out, err = run(f"python3 -m mojo.deploy.node_role resolve "
+                       f"--project-path {q(proj)} --json")
+    if rc != 0:
+        combined = (err or out or "role probe failed").splitlines()
+        detail = combined[-1] if combined else "role probe failed"
+        # Only an older FRAMEWORK is "predates the feature". A python3 that
+        # cannot import mojo at all is a different (already reported) problem,
+        # and must not be excused as one.
+        if "No module named" in (err or out) and "node_role" in (err or out):
+            state["module_missing"] = True
+        state["probe_error"] = detail
+        return state
+    try:
+        payload = json.loads(out)
+        for key in ("role", "source", "sealed", "env", "bootstrap"):
+            state[key] = str(payload.get(key) or "")
+    except (ValueError, AttributeError):
+        state["probe_error"] = "the role probe did not answer with JSON"
+        return state
+
+    if state["role"] and state["role"] in state["manifest"]:
+        for kind in ROLE_INSTALL_DIRS:
+            state["foreign"][kind] = nr.foreign(state["manifest"],
+                                                state["role"], kind)
+    return state
+
+
+def check_roles(report, run, state, proj, repo):
+    if not state["declared"]:
+        report.info("roles", "no role manifest",
+                    f"{repo}/aws/node_roles.conf is absent — every converged "
+                    "name is shared by every node of this project, which is "
+                    "the single-role shape most projects want")
+        return
+    if state["manifest_error"]:
+        report.fail("roles", "role manifest is not parseable",
+                    state["manifest_error"],
+                    "post_deploy refuses this file before it migrates, so "
+                    "every node of this project is stuck until the line it "
+                    "names is fixed")
+        return
+    if state["module_missing"]:
+        report.info("roles", "framework predates node roles",
+                    "the installed django-mojo has no mojo.deploy.node_role, "
+                    "so this node converges every declared name — which is "
+                    "what that framework version always did")
+        return
+    if state["probe_error"]:
+        report.fail("roles", "this node's role could not be resolved",
+                    state["probe_error"],
+                    "post_deploy dies on the same condition — repair the "
+                    f"sealed {ROLE_AUTHORITY} authority")
+        return
+
+    role = state["role"]
+    if not role:
+        report.fail(
+            "roles", "node role is not declared anywhere",
+            "the repo declares roles but nothing on this node says which one "
+            "it plays, so post_deploy refuses to converge it",
+            "label the node in ONE of: the sealed "
+            f"{ROLE_AUTHORITY} authority (root writes it, or the "
+            "next deploy seals it), a NODE_ROLE export in aws/post_deploy.sh, "
+            f"or MOJO_NODE_ROLE in {proj}/var/bootstrap.conf")
+        return
+
+    report.info("roles", f"node role: {role}",
+                f"declared by the {state['source']} authority")
+
+    if state["source"] in ("env", "bootstrap"):
+        report.warn(
+            "roles", f"node role is not sealed yet ({state['source']})",
+            f"the role comes from {'the shim environment' if state['source'] == 'env' else 'var/bootstrap.conf'}"
+            ", which lives in the application-writable half of the node; the "
+            "sealed authority is the one an application cannot influence",
+            "the next `sudo bash aws/post_deploy.sh` promotes it into "
+            f"{ROLE_AUTHORITY} automatically")
+    if state["sealed"] and state["bootstrap"] and \
+            state["sealed"] != state["bootstrap"]:
+        report.warn(
+            "roles", "bootstrap.conf disagrees with the sealed role",
+            f"the sealed authority says {state['sealed']} and "
+            f"var/bootstrap.conf says {state['bootstrap']} — the seal wins, so "
+            "a re-labeling that only edited bootstrap.conf has not taken "
+            "effect",
+            f"re-seal the node (root writes {ROLE_AUTHORITY}) if "
+            "the new value is the intended one")
+
+    if role not in state["manifest"]:
+        report.fail(
+            "roles", f"role {role} is not declared in the manifest",
+            f"{repo}/aws/node_roles.conf never names {role}, so post_deploy "
+            "cannot decide which files this node owns and refuses the deploy",
+            f"add `{role}` to aws/node_roles.conf (a bare role line is legal "
+            "and owns nothing), or re-label the node")
+        return
+    report.passed("roles", f"{role} is declared in the manifest",
+                  f"{repo}/aws/node_roles.conf places this node")
+
+    shed = 0
+    for kind, install_dir in sorted(ROLE_INSTALL_DIRS.items()):
+        for name in state["foreign"][kind]:
+            if not exists(run, f"{install_dir}/{name}"):
+                continue
+            detail = (f"{install_dir}/{name} belongs to another role, but it "
+                      f"is installed on this {role} node — it is firing, "
+                      "serving, or claiming a name that is not this node's job")
+            if kind == "systemd":
+                enabled = run(f"systemctl is-enabled {q(name)} 2>&1")[1]
+                if enabled == "enabled":
+                    detail += " (and it is enabled)"
+            report.fail("roles", f"foreign {kind}/{name} installed", detail,
+                        "sudo bash aws/post_deploy.sh removes it — one "
+                        "surviving means no deploy has converged since this "
+                        "node was labeled")
+            shed += 1
+    if not shed:
+        report.passed("roles", "no foreign files installed",
+                      f"nothing another role owns is installed on this {role} "
+                      "node")
+
+    rendered = {kind: list_names(run, f"{proj}/var/deploy/{kind}")
+                for kind in ("cron.d", "systemd")}
+    for entry in sorted(state["manifest"][role]):
+        kind, _, name = entry.partition("/")
+        if kind == "conf.d":
+            where = f"{repo}/aws/nginx/conf.d/{name}"
+            present = exists(run, where)
+        else:
+            if rendered[kind] is None:
+                # The cron/systemd sections already report an unrendered node.
+                continue
+            where = f"{proj}/var/deploy/{kind}/{name}"
+            present = name in rendered[kind]
+        if not present:
+            report.warn(
+                "roles", f"{entry} is declared but not shipped",
+                f"the manifest gives {entry} to {role}, but {where} does not "
+                "exist — a typo in the manifest silently gives a name to a "
+                "role that has no such file",
+                "fix the name in aws/node_roles.conf, or ship the file")
+
+
+# ---------------------------------------------------------------------------
 # repo
 # ---------------------------------------------------------------------------
 
@@ -464,10 +662,15 @@ def check_cron(report, run, proj):
 # systemd
 # ---------------------------------------------------------------------------
 
-def check_systemd(report, run, proj):
+def check_systemd(report, run, proj, foreign_units=()):
     src_dir = f"{proj}/var/deploy/systemd"
+    # A unit another role owns is not rendered here, so it cannot appear in
+    # `units` — the filter matters for a node whose var/deploy predates its
+    # label, where grading the leftover enabled/active would contradict the
+    # roles section that is telling the operator to shed it.
+    foreign_units = set(foreign_units)
     units = [u for u in (list_names(run, src_dir) or [])
-             if u.endswith((".service", ".timer"))]
+             if u.endswith((".service", ".timer")) and u not in foreign_units]
     if not units:
         report.info("systemd", "no rendered contract",
                     f"no units under {src_dir} — post_deploy has not rendered "
@@ -1173,7 +1376,7 @@ def check_nginx_runtime(report, run, sudo, web_user):
 
 
 def check_nginx(report, run, repo, sudo, probe_url, retired_confd,
-                web_user="www"):
+                web_user="www", foreign_confd=()):
     check_nginx_runtime(report, run, sudo, web_user)
     # Repo-owned nginx files: the three top-level files, plus every conf.d
     # vhost the repo ships (post_deploy converges exactly that set; other
@@ -1185,8 +1388,12 @@ def check_nginx(report, run, repo, sudo, probe_url, retired_confd,
         ("asgi.inc", "/etc/nginx/asgi.inc"),
         ("django.inc", "/etc/nginx/django.inc"),
     ]
+    # A vhost aws/node_roles.conf gives to ANOTHER role is deliberately not on
+    # this node; grading it "not installed" would turn a correct multi-role
+    # convergence into a page of FAILs.
     shipped_confd = [n for n in (list_names(run, f"{repo}/aws/nginx/conf.d") or [])
-                     if n.endswith(".conf") and ".example" not in n]
+                     if n.endswith(".conf") and ".example" not in n
+                     and n not in set(foreign_confd)]
     if not shipped_confd:
         report.info("nginx", "conf.d contract missing",
                     f"cannot list {repo}/aws/nginx/conf.d")
@@ -1560,7 +1767,8 @@ def check_collisions(report, run, proj, require_shims):
                       "the framework template")
 
 
-def check_template_freshness(report, proj, app_user, web_user, workers):
+def check_template_freshness(report, proj, app_user, web_user, workers,
+                             foreign=None):
     """LOCAL MODE ONLY: render the installed package's templates in memory and
     diff against var/deploy/. A difference means the framework's templates
     moved since the last deploy rendered them — INFO, because the last-deploy
@@ -1589,10 +1797,15 @@ def check_template_freshness(report, proj, app_user, web_user, workers):
     except OSError:
         pass
     context = build_context(proj, app_user, web_user, workers)
+    foreign = foreign or {}
     moved = []
     for subdir, _ in TEMPLATE_SETS:
+        # A framework template another role owns is deliberately absent from
+        # var/deploy — without this skip every role node reports a permanent,
+        # false "framework templates moved".
+        skip = declared | set(foreign.get(subdir, ()))
         for name in list_files(template_dir(subdir)):
-            if name in declared:
+            if name in skip:
                 continue
             with open(os.path.join(template_dir(subdir), name)) as handle:
                 expected = substitute(handle.read(), context)
@@ -1893,22 +2106,27 @@ def main(argv):
     sudo = "sudo -n " if run("sudo -n true 2>/dev/null")[0] == 0 else ""
 
     retired_cron, retired_confd = read_retired(run, proj)
+    # Resolved once: the nginx, systemd and shims sections all need to know
+    # which names belong to another role, whether or not `roles` was selected.
+    roles = read_role_state(run, proj, repo)
 
     report = Report()
     if "repo" in wanted:
         check_repo(report, run, proj, args.app_user)
     if "framework" in wanted:
         check_framework(report, run, proj)
+    if "roles" in wanted:
+        check_roles(report, run, roles, proj, repo)
     if "cron" in wanted:
         check_cron(report, run, proj)
     if "systemd" in wanted:
-        check_systemd(report, run, proj)
+        check_systemd(report, run, proj, roles["foreign"]["systemd"])
     if "mojosec" in wanted:
         check_mojosec(report, run, args.mojosec_mode, sudo,
                       args.mojosec_sensor_id)
     if "nginx" in wanted:
         check_nginx(report, run, repo, sudo, args.probe_url, retired_confd,
-                    args.web_user)
+                    args.web_user, roles["foreign"]["conf.d"])
     if "certs" in wanted:
         check_certs(report, run, sudo)
     if "config_plane" in wanted:
@@ -1918,7 +2136,8 @@ def main(argv):
         check_collisions(report, run, proj, args.require_shims)
         if not args.ssh:
             check_template_freshness(report, proj, args.app_user,
-                                     args.web_user, args.asgi_workers)
+                                     args.web_user, args.asgi_workers,
+                                     roles["foreign"])
         elif VERBOSE:
             report.info("shims", "template freshness skipped",
                         "only audited locally — the local package version "
