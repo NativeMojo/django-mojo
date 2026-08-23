@@ -184,14 +184,23 @@ pre-cutover gate.
 ### The brownfield safety boundary
 
 `fleet-status` reads and validates the exact account, region, VPC, subnets and
-routes, security groups, Aurora/Valkey shape and endpoints, S3 prefixes and
-versioned object metadata, KMS key, SNS topic, IAM references, AMI, key pair,
+routes, security groups, Aurora/Valkey shape and endpoints, S3 prefix
+declarations and versioned object metadata, KMS key, SNS topic, IAM references,
+AMI, key pair,
 existing declared nodes and migration telemetry. It hashes the redacted result
 as the dependency digest and separately hashes the canonical complete action
 set `(step, verb, target, detail)`. `fleet-apply` performs that preview, asks
 for a typed confirmation, re-observes everything, and refuses before mutation
 if either digest changed. A newly needed but otherwise allowed mutation is
 therefore not smuggled in after confirmation.
+
+Every AWS collection used for collision detection, ownership, or dependency
+inventory is read through all provider pages. A denied or failed later page,
+or a provider continuation response without a usable new token, discards the
+partial collection and blocks apply. Normal absence of the optional shadow NLB
+or target groups remains an empty, creatable result. Storage-prefix declarations
+are recorded without listing their contents; only the exact versioned bootstrap
+and credential objects are read for metadata proof.
 
 ElastiCache exposes the replication-group endpoint and encryption posture on
 the replication group, but exposes its subnet group and VPC security groups on

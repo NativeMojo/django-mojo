@@ -102,7 +102,8 @@ def test_closed_policy_excludes_data_dns_certificates_cutover_and_teardown(opts)
         "acm": ("request_certificate", "import_certificate"),
         "rds": ("create_db_cluster", "modify_db_cluster"),
         "elasticache": ("create_replication_group",),
-        "s3": ("put_object", "put_bucket_policy", "put_bucket_tagging"),
+        "s3": ("list_objects_v2", "put_object", "put_bucket_policy",
+               "put_bucket_tagging"),
         "kms": ("create_key", "put_key_policy"),
     }
     policy = brownfield_policy.MutationPolicy()
