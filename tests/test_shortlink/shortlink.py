@@ -15,9 +15,14 @@ REAL_URL_B = "https://openai.com/research"
 @th.django_unit_setup()
 def setup_shortlink(opts):
     from mojo.apps.account.models import User
+    from mojo.apps.account.models.setting import Setting
     from mojo.apps.shortlink.models import ShortLink, ShortLinkClick
     from mojo.decorators.limits import clear_rate_limits
     clear_rate_limits(ip="127.0.0.1")
+    # Defensive: a crashed prior run could leave these DB-backed settings set;
+    # the "unconfigured" assertions below require them absent (maestro #2791).
+    Setting.remove("SHORTLINK_HOME_URL")
+    Setting.remove("SHORTLINK_SITE_NAME")
 
     user = User.objects.filter(username=TEST_USER).last()
     if user is None:
@@ -641,13 +646,21 @@ def test_rest_unavailable_page_settings(opts):
     assert_true("Back to" not in body,
                 "unconfigured page should not render a back-to-site button")
 
-    with th.server_settings(SHORTLINK_SITE_NAME="Acme Widgets",
-                            SHORTLINK_HOME_URL="https://acme.test"):
+    # DB/Redis-backed settings read live via settings.get() (redirect.py:19,42),
+    # so Setting.set makes the running server see them with no reload — no
+    # server_settings() freeze of the parallel workers (maestro #2791).
+    from mojo.apps.account.models.setting import Setting
+    Setting.set("SHORTLINK_SITE_NAME", "Acme Widgets")
+    Setting.set("SHORTLINK_HOME_URL", "https://acme.test")
+    try:
         configured = _dead_link_body(opts)
         assert_true("Acme Widgets" in configured,
                     "configured page should show SHORTLINK_SITE_NAME")
         assert_true("https://acme.test" in configured,
                     "configured page should link to SHORTLINK_HOME_URL")
+    finally:
+        Setting.remove("SHORTLINK_SITE_NAME")
+        Setting.remove("SHORTLINK_HOME_URL")
 
 
 @th.django_unit_test("REST: unavailable page drops unsafe SHORTLINK_HOME_URL schemes")
@@ -662,19 +675,25 @@ def test_rest_unavailable_page_rejects_unsafe_home_url(opts):
         "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
         "//evil.test/phish",
     ]
-    for value in unsafe:
-        with th.server_settings(SHORTLINK_HOME_URL=value):
+    # SHORTLINK_HOME_URL is DB-backed and read live, so Setting.set replaces the
+    # server_settings() reload here (maestro #2791).
+    from mojo.apps.account.models.setting import Setting
+    try:
+        for value in unsafe:
+            Setting.set("SHORTLINK_HOME_URL", value)
             body = _dead_link_body(opts)
             assert_true(value not in body,
                         f"unsafe SHORTLINK_HOME_URL should never reach the page: {value}")
             assert_true("class=\"btn\"" not in body,
                         f"no button should render for unsafe SHORTLINK_HOME_URL: {value}")
 
-    # A site-relative path is a legitimate target and must still work.
-    with th.server_settings(SHORTLINK_HOME_URL="/home"):
+        # A site-relative path is a legitimate target and must still work.
+        Setting.set("SHORTLINK_HOME_URL", "/home")
         body = _dead_link_body(opts)
         assert_true('href="/home"' in body,
                     "site-relative SHORTLINK_HOME_URL should render normally")
+    finally:
+        Setting.remove("SHORTLINK_HOME_URL")
 
 
 @th.django_unit_test("REST: /api/shortlink/link/create creates a short URL from request.DATA")

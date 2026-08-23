@@ -76,15 +76,20 @@ def test_config_reports_purchase_state(opts):
 
 @th.django_unit_test("config never echoes the registrant contact or any secret")
 def test_config_no_pii_or_secrets(opts):
-    from mojo.helpers.settings import settings
+    from mojo.apps.account.models.setting import Setting
+    from mojo.apps.dnsman.services.registrar import REGISTRANT_CONTACT_KEY
 
     login(opts, opts.viewer_email, opts.viewer_pw)
-    with th.server_settings(DNSMAN_REGISTRANT_CONTACT={
+    # DNSMAN_REGISTRANT_CONTACT is read live via settings.get (registrar.py:241),
+    # so Setting.set replaces the server reload (maestro #2791). Same pattern as
+    # 15_registrant.py in this package. is_secret + group=None = the house row.
+    Setting.set(REGISTRANT_CONTACT_KEY, {
         "FirstName": "Jane", "LastName": "Doe", "Email": "jane@example.com",
         "PhoneNumber": "+1.5551234567", "AddressLine1": "1 Main St",
         "City": "Springfield", "State": "IL", "CountryCode": "US", "ZipCode": "00000",
         "ContactType": "PERSON",
-    }):
+    }, is_secret=True, group=None)
+    try:
         resp = opts.client.get("/api/dnsman/config")
         assert resp.status_code == 200, f"config returned {resp.status_code}"
         assert resp.response["data"]["registrant_contact_configured"] is True, \
@@ -93,3 +98,5 @@ def test_config_no_pii_or_secrets(opts):
         blob = str(resp.response)
         assert "Jane" not in blob and "jane@example.com" not in blob, \
             "config must never echo the registrant contact -- it is PII"
+    finally:
+        Setting.remove(REGISTRANT_CONTACT_KEY, group=None)

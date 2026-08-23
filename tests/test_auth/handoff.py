@@ -175,12 +175,18 @@ def test_handoff_endpoint_enforcement(opts):
 
     Enforcement is opt-in, so the test server does not run it by default —
     setting AUTH_HANDOFF_ALLOWED_URLS is what turns it on, exactly as a
-    deployment would. Grouped into a single test because each
-    th.server_settings block costs a uvicorn reload.
+    deployment would. The setting is written with Setting.set (read live via
+    settings.get) rather than a server reload (maestro #2791).
     """
     from mojo.decorators.limits import clear_rate_limits
+    from mojo.apps.account.models.setting import Setting
 
-    with th.server_settings(AUTH_HANDOFF_ALLOWED_URLS=[ALLOWED_ENTRY, ALLOWED_WILDCARD_ENTRY]):
+    # AUTH_HANDOFF_ALLOWED_URLS is read live via settings.get (redirect_allowlist
+    # .py:260,610) and is not a protected key, so Setting.set turns enforcement
+    # on with no server reload (maestro #2791). Cleaned up in finally so the
+    # other handoff tests still see enforcement off.
+    Setting.set("AUTH_HANDOFF_ALLOWED_URLS", [ALLOWED_ENTRY, ALLOWED_WILDCARD_ENTRY])
+    try:
         clear_rate_limits(ip="127.0.0.1", key="auth_handoff")
         assert_true(opts.client.login(TEST_USER, TEST_PWORD), "login should succeed")
 
@@ -220,6 +226,8 @@ def test_handoff_endpoint_enforcement(opts):
                       f"got {resp.status_code}: {resp.response}")
             assert_true(_minted_code(resp) is None,
                         f"handoff to {dest!r} ({why}) must not return a code, got {resp.response}")
+    finally:
+        Setting.remove("AUTH_HANDOFF_ALLOWED_URLS")
 
 
 @th.django_unit_test("monitor mode files an incident naming the unlisted destination")

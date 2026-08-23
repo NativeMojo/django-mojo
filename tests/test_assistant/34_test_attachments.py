@@ -213,20 +213,11 @@ def test_strict_bounded_attachment_parsing(opts):
               "invalid attachment shapes must not create a Message")
 
 
-@th.django_unit_test("assistant attachments: REST distinguishes omitted from explicit null")
-def test_rest_explicit_null_rejected(opts):
-    with th.server_settings(LLM_ADMIN_ENABLED=True, LLM_ADMIN_API_KEY="sk-a1486"):
-        assert_true(opts.client.login(OWNER, PASSWORD), "owner REST login must succeed")
-        resp = opts.client.post("/api/assistant", {
-            "message": "a1486 REST null",
-            "attachments": None,
-        })
-        opts.client.logout()
-
-    assert_eq(resp.status_code, 400,
-              f"an explicitly null REST attachments field must return 400: {resp.json}")
-    assert_eq(resp.json.error, INVALID,
-              "REST null must use the bounded invalid-attachment response")
+# test_rest_explicit_null_rejected moved to
+# tests/test_assistant_extended_serial/34_test_rest_attachments.py (maestro
+# #2791): it is the one REST path here and needs LLM_ADMIN_ENABLED set at the
+# server, but that key is protected (Setting.set is refused) so it requires a
+# server reload — legal only in a serial/opt-in package.
 
 
 @th.django_unit_test("assistant attachments: preflight and owner lookup retain response precedence")
