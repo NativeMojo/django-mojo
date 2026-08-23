@@ -1,8 +1,12 @@
 from mojo.decorators.cron import schedule
 from mojo.apps import jobs
 from mojo.helpers.settings import settings
+from mojo.helpers import logit
 
 HEALTH_MONITORING_ENABLED = settings.get_static("HEALTH_MONITORING_ENABLED", False)
+
+FIREWALL_SYNC_JOB = "mojo.apps.incident.asyncjobs.sync_firewall"
+FIREWALL_SYNC_CHANNEL = "default"
 
 
 def _llm_triage_enabled():
@@ -94,22 +98,41 @@ def sweep_expired_blocks(force=False, verbose=False, now=None):
         payload={})
 
 
-# Hourly — rebuild all ipsets from DB truth (startup recovery + drift reconciliation)
+# Hourly — every node rebuilds ITS OWN ipsets from DB truth (drift
+# reconciliation; boot recovery is asyncjobs.on_engine_start).
 #
-# KNOWN FLEET GAP, tracked as Security #2716 — do not "fix" it with per_node.
-# The job this publishes does node-local kernel work (firewall.ipset_load) but
-# is consumed by ONE arbitrary runner, and it skips unchanged ipsets using a
-# deployment-wide Redis marker (SYNC_FIREWALL_REDIS_KEY). So on a fleet the
-# hourly reconciliation heals whichever node happened to consume it and the
-# marker then suppresses the rest — a rebooted node's empty ipsets may never be
-# restored. per_node=True would not help: N publishes still land on arbitrary
-# runners. The fix is to broadcast the reconcile the way the live block/unblock
-# paths and IPSet.sync() already do, and to make the marker per node.
+# BROADCAST, not a plain publish (item #2716): the job does node-local kernel
+# work, so a single consumer heals one arbitrary node and its marker then
+# suppresses the rest. This dispatcher stays fleet-once — the broadcast is what
+# fans out, exactly as edge's converge_edge does. Do not add per_node=True.
+#
+# The channel is load-bearing now. Under a plain publish it only decided WHICH
+# box did the work; under a broadcast it decides which boxes reconcile at all,
+# so it is "default" — the publish default, the first DEFAULT_CHANNELS entry,
+# and the channel the shipped role-split example consumes while omitting
+# "cleanup".
 @schedule(minutes="0")
 def sync_firewall(force=False, verbose=False, now=None):
-    jobs.publish(
-        func="mojo.apps.incident.asyncjobs.sync_firewall",
-        channel="cleanup", payload={})
+    # run_now() executes matched functions in one bare loop and re-raises, so
+    # an exception here would skip every LATER scheduled function this minute.
+    try:
+        if not settings.get_static("JOBS_HOSTNAME_CHANNEL", True):
+            # The fan-out addresses each runner's box-direct channel, which no
+            # engine consumes when this is off — every job would strand.
+            # Degrade to the pre-existing single-runner reconcile instead.
+            logit.warning(
+                "incident: JOBS_HOSTNAME_CHANNEL is off — the firewall "
+                "reconcile falls back to a single runner; per-node recovery "
+                "is disabled")
+            return jobs.publish(
+                func=FIREWALL_SYNC_JOB, channel=FIREWALL_SYNC_CHANNEL,
+                payload={})
+        return jobs.publish(
+            func=FIREWALL_SYNC_JOB, channel=FIREWALL_SYNC_CHANNEL,
+            payload={}, broadcast=True)
+    except Exception as err:
+        logit.error(f"incident: could not publish the firewall reconcile: {err}")
+        return "failed"
 
 
 # Weekly — refresh IPSet sources (countries, abuse lists) and sync to fleet

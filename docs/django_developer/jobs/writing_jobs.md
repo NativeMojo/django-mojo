@@ -313,3 +313,13 @@ the node's nginx generation): work addressed to "every runner" resolves the
 roster at publish time, so a broadcast sent while an engine restarts quietly
 skips it — a node that re-derives its own state on startup closes that
 window without depending on delivery.
+
+**A hook has no JobEngine execution context.** `_run_startup_hooks()` calls
+the function directly; only `_execute_job` and the broadcast-control path
+establish one. Anything that requires that context — notably
+`mojo.apps.incident.firewall`, whose every write goes through a broker that
+refuses without it — must be **published**, not called. incident's
+`on_engine_start` is the example: it sets a Redis flag (no context needed)
+and publishes a forced reconcile to its own runner's box-direct channel,
+where it runs as an ordinary job with a real context, a Job row and logs.
+Prefer that shape over widening the hook's privileges.
