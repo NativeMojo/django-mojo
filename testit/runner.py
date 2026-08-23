@@ -1441,11 +1441,12 @@ ORIGIN_CONSUMER = "consumer"
 
 
 def _dir_has_python(path):
-    """Whether a directory holds any .py file at all (maestro #2789)."""
-    try:
-        return any(entry.endswith(".py") for entry in os.listdir(path))
-    except OSError:
-        return False
+    """Whether a directory holds any .py file at all (maestro #2789).
+
+    An unreadable directory raises: swallowing the OSError would silently
+    drop a whole package from both the policy scan and collection, and the
+    run would report green over tests that never ran."""
+    return any(entry.endswith(".py") for entry in os.listdir(path))
 
 
 def _previous_module_durations():

@@ -31,6 +31,9 @@ export AWS_SHARED_CREDENTIALS_FILE=/dev/null
 export AWS_CONFIG_FILE=/dev/null
 export AWS_EC2_METADATA_DISABLED=true
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE 2>/dev/null || true
+# Container (ECS/Fargate) and web-identity (IRSA) chain legs need no config
+# file and are not IMDS — clear them too or a CI runner still resolves creds.
+unset AWS_CONTAINER_CREDENTIALS_RELATIVE_URI AWS_CONTAINER_CREDENTIALS_FULL_URI AWS_CONTAINER_AUTHORIZATION_TOKEN AWS_WEB_IDENTITY_TOKEN_FILE AWS_ROLE_ARN 2>/dev/null || true
 
 # Start server if not already running; track so we know to stop it after
 STARTED_SERVER=0
@@ -39,7 +42,11 @@ if ! "$SCRIPT_DIR/asgi_local" status | grep -q "Running"; then
     # Poll for readiness instead of a fixed sleep (maestro #2789): the old
     # `sleep 3` was both too long (app construction is ~1s) and unsafe (no
     # check at all). `wait` fails loudly after 30s.
-    "$SCRIPT_DIR/asgi_local" wait
+    if ! "$SCRIPT_DIR/asgi_local" wait; then
+        # Don't orphan the daemon we just started (set -e would exit here).
+        "$SCRIPT_DIR/asgi_local" stop
+        exit 1
+    fi
     STARTED_SERVER=1
 fi
 

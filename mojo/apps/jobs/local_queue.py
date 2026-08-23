@@ -56,13 +56,19 @@ class LocalQueue:
         self.worker_thread = None
         self.stop_event = threading.Event()
         self.started = False
+        # Serializes start()/stop() against each other WITHOUT being taken by
+        # the worker (maestro #2789): the worker takes _lock for its counters,
+        # so a lifecycle method may never hold _lock across a join — and a
+        # start() arriving mid-stop must wait for the stop to finish rather
+        # than spawn a second worker against a half-torn-down first.
+        self._lifecycle_lock = threading.Lock()
         self._lock = threading.RLock()
         self._processed_count = 0
         self._error_count = 0
 
     def start(self):
         """Start the worker thread."""
-        with self._lock:
+        with self._lifecycle_lock, self._lock:
             if self.started:
                 return
 
@@ -83,33 +89,36 @@ class LocalQueue:
         Args:
             timeout: Maximum time to wait for thread to stop
         """
-        with self._lock:
-            if not self.started:
-                return
-            # Flip inside the lock so a concurrent second stop() returns above.
-            self.started = False
+        with self._lifecycle_lock:
+            with self._lock:
+                if not self.started:
+                    return
+                # Flip inside the lock so a concurrent second stop() returns.
+                self.started = False
 
-            logit.info("Stopping local job queue worker...")
-            self.stop_event.set()
+                logit.info("Stopping local job queue worker...")
+                self.stop_event.set()
 
-            # Put a sentinel to unblock the worker if waiting
-            try:
-                self.queue.put_nowait(None)  # Sentinel value
-            except queue.Full:
-                pass
+                # Put a sentinel to unblock the worker if waiting
+                try:
+                    self.queue.put_nowait(None)  # Sentinel value
+                except queue.Full:
+                    pass
 
-            worker = self.worker_thread
+                worker = self.worker_thread
 
-        # Join OUTSIDE the lock (maestro #2789): the worker takes self._lock to
-        # record a finished job, so holding it across join() deadlocked every
-        # stop that overlapped job execution until the join timeout expired.
-        if worker and worker.is_alive():
-            worker.join(timeout)
-            if worker.is_alive():
-                logit.warn("Local job worker thread did not stop cleanly")
+            # Join outside self._lock (maestro #2789): the worker takes it to
+            # record a finished job, so holding it across join() deadlocked
+            # every stop that overlapped job execution until the join timeout
+            # expired. The lifecycle lock stays held, so a concurrent start()
+            # waits for this teardown instead of racing it.
+            if worker and worker.is_alive():
+                worker.join(timeout)
+                if worker.is_alive():
+                    logit.warn("Local job worker thread did not stop cleanly")
 
-        logit.info(f"Local job queue stopped (processed={self._processed_count}, "
-                  f"errors={self._error_count})")
+            logit.info(f"Local job queue stopped (processed={self._processed_count}, "
+                      f"errors={self._error_count})")
 
     def put(self, func: Callable, args: tuple, kwargs: dict,
             job_id: str, run_at: Optional[datetime] = None) -> bool:
@@ -193,10 +202,14 @@ class LocalQueue:
                 except queue.Empty:
                     continue
 
-                # Check for shutdown sentinel
+                # Check for shutdown sentinel — honored only while a stop is
+                # in progress (maestro #2789): a leftover sentinel from an
+                # earlier stop must not make a freshly started worker exit.
                 if job is None:
-                    logit.debug("Worker received shutdown sentinel")
-                    break
+                    if self.stop_event.is_set():
+                        logit.debug("Worker received shutdown sentinel")
+                        break
+                    continue
 
                 # Sleep if job has a delay
                 if job.delay_seconds > 0:

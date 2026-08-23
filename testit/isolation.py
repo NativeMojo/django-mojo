@@ -27,12 +27,14 @@ def _scanner_version():
     """Hash of this module's own source — a cache of scan verdicts must be
     invalidated when the GRAMMAR changes, not only when a scanned file does
     (maestro #2789). Without this, a fail-closed scan silently goes fail-open
-    behind its own cache."""
+    behind its own cache. If our own source cannot be read, return a
+    per-process random token so no cached verdict can ever match — two
+    unreadable scanners must not accept each other's caches."""
     try:
         with open(__file__, "rb") as fh:
             return hashlib.sha1(fh.read()).hexdigest()[:12]
     except OSError:
-        return "unknown"
+        return "unreadable-" + os.urandom(6).hex()
 
 
 SCANNER_VERSION = _scanner_version()
@@ -823,11 +825,17 @@ def cached_file_facts(path):
     counting both used to re-parse every file on every invocation (~1.7s)."""
     key = os.path.abspath(str(path))
     try:
-        st = os.stat(key)
-        sig = [st.st_mtime_ns, st.st_size]
+        with open(key, "rb") as handle:
+            raw = handle.read()
     except OSError as error:
         return objict(tests=0, violations=[violation(
             "scan_error", str(path), 0, f"source could not be read: {error}")])
+
+    # Content hash, not (mtime, size): content-preserving-mtime operations
+    # (cp -p, rsync -a, tar -x, coarse-mtime filesystems) would let an edited
+    # file replay its old verdict — a fail-closed scan going fail-open. The
+    # read already happens; hashing it is microseconds against the parse.
+    sig = hashlib.sha1(raw).hexdigest()
 
     entry = _CACHE["files"].get(key)
     if entry and entry.get("sig") == sig:
@@ -835,11 +843,10 @@ def cached_file_facts(path):
         return objict(tests=int(entry.get("tests", 0)), violations=rows)
 
     try:
-        with open(key, "r", encoding="utf-8") as handle:
-            source = handle.read()
-    except OSError as error:
+        source = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
         return objict(tests=0, violations=[violation(
-            "scan_error", str(path), 0, f"source could not be read: {error}")])
+            "scan_error", str(path), 0, f"source could not be decoded: {error}")])
 
     tests = 0
     try:

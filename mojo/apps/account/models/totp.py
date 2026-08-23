@@ -44,9 +44,11 @@ class UserTOTP(MojoSecrets, MojoModel):
         import bcrypt
         from mojo.helpers.settings import settings
         # Cost is tunable for test projects (maestro #2789); production keeps
-        # bcrypt's default 12. Floor of 4 is bcrypt's own minimum.
+        # bcrypt's default 12. Clamped to bcrypt's own valid range (4..31) so
+        # a typo'd value can neither raise from gensalt() nor burn minutes of
+        # CPU per enrollment.
         try:
-            rounds = max(4, int(settings.get_static("TOTP_RECOVERY_BCRYPT_ROUNDS", 12)))
+            rounds = min(31, max(4, int(settings.get_static("TOTP_RECOVERY_BCRYPT_ROUNDS", 12))))
         except Exception:
             rounds = 12
         codes = []

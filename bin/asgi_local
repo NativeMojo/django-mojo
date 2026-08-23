@@ -22,6 +22,9 @@ export AWS_SHARED_CREDENTIALS_FILE=/dev/null
 export AWS_CONFIG_FILE=/dev/null
 export AWS_EC2_METADATA_DISABLED=true
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE 2>/dev/null || true
+# Container (ECS/Fargate) and web-identity (IRSA) chain legs need no config
+# file and are not IMDS — clear them too or a CI runner still resolves creds.
+unset AWS_CONTAINER_CREDENTIALS_RELATIVE_URI AWS_CONTAINER_CREDENTIALS_FULL_URI AWS_CONTAINER_AUTHORIZATION_TOKEN AWS_WEB_IDENTITY_TOKEN_FILE AWS_ROLE_ARN 2>/dev/null || true
 
 # Use venv Python if available
 if [ -f "$REPO_ROOT/.venv/bin/python" ]; then
@@ -128,6 +131,8 @@ print(c.fetchone()[0])
                 $PYTHON -m django migrate --fake --settings=settings --no-input 2>&1 | tail -3
             DJANGO_SETTINGS_MODULE=settings PYTHONPATH="$TESTPROJECT/config:$REPO_ROOT" \
                 $PYTHON -m django makemigrations --settings=settings --no-input 2>&1 | tail -3
+            echo "    NOTE: makemigrations may have written files under mojo/*/migrations/ —"
+            echo "    review with git status before committing (see .claude/rules/git.md)."
             DJANGO_SETTINGS_MODULE=settings PYTHONPATH="$TESTPROJECT/config:$REPO_ROOT" \
                 $PYTHON -m django migrate --settings=settings --no-input 2>&1 | tail -3
         else
