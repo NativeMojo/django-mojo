@@ -17,16 +17,8 @@ def emit(level, message, stream=None, **fields):
 
 
 def emit_error(message, error, stream=None, **fields):
-    """Best-effort local error record, with optional RPM-only diagnostics."""
+    """Best-effort local error record with a bounded public classification."""
     fields["error"] = str(error)[:256]
-    diagnostic = getattr(error, "diagnostic_tail", None)
-    if callable(diagnostic):
-        try:
-            tail = diagnostic()
-        except Exception:
-            tail = ""
-        if tail:
-            fields["diagnostic_tail"] = tail
     try:
         emit("error", message, stream=stream, **fields)
     except Exception:

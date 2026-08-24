@@ -3,6 +3,8 @@
 from .fim import FimCollector
 from .journal import JournalCollector
 from .nginx import NginxCollector
-from .rpm import RpmCollector
+from .rpm import SystemPythonCollector
 
-__all__ = ["FimCollector", "JournalCollector", "NginxCollector", "RpmCollector"]
+__all__ = [
+    "FimCollector", "JournalCollector", "NginxCollector", "SystemPythonCollector",
+]

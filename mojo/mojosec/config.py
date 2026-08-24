@@ -212,7 +212,7 @@ def validate_config(value):
         if not value["collectors"]["fim"]["tiers"]:
             raise ConfigError("selected profile is missing its immutable FIM tiers")
         if value["collectors"]["rpm"]["enabled"] is not True:
-            raise ConfigError("selected profile requires RPM/Python integrity")
+            raise ConfigError("selected profile requires system-Python integrity")
     elif content_roots:
         raise ConfigError("content_roots require a content-capable profile")
     sensor_id = value.get("sensor_id")
@@ -392,7 +392,8 @@ def build_config(supplied):
             raise ConfigError("profile policies cannot override the immutable FIM graph")
         rpm = collectors.setdefault("rpm", {})
         if any(key != "enabled" for key in rpm):
-            raise ConfigError("profile policies cannot override immutable RPM bounds")
+            raise ConfigError(
+                "profile policies cannot override immutable system-Python bounds")
         fim.update({"enabled": True, "targets": [], "tiers": profile["tiers"]})
         rpm.update(profile["rpm"])
         rpm["enabled"] = True
@@ -453,7 +454,8 @@ def validate_effective_config(value):
     expected_rpm = _copy(profile["rpm"])
     expected_rpm["enabled"] = True
     if config["collectors"]["rpm"] != expected_rpm:
-        raise ConfigError("effective profile does not match its immutable RPM graph")
+        raise ConfigError(
+            "effective profile does not match its immutable system-Python graph")
     return config
 
 

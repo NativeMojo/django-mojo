@@ -1016,13 +1016,13 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
         rc, out, err = run(command)
         if rc == 0:
             report.passed(
-                "mojosec", "RPM ownership capability",
-                "bounded RPM CLI inventory, installed-file index, and database are ready")
+                "mojosec", "system-Python integrity capability",
+                "in-process approved-root discovery is ready")
         else:
             detail = (err or out or "MojoSec readiness check returned no detail").splitlines()[0]
             report.fail(
-                "mojosec", "RPM ownership capability unavailable", detail[:256],
-                "restore /usr/bin/rpm and the local RPM database, then rerun deployment")
+                "mojosec", "system-Python integrity capability unavailable", detail[:256],
+                "restore the configured system Python and rerun deployment")
 
     provenance_assets = (
         ("Audit rollback state", "/etc/mojosec/audit-state.json", "600"),
