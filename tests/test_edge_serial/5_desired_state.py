@@ -44,7 +44,7 @@ def test_node_proof_rest_no_secret_shape(opts):
         proof = resp.json.get("data") or {}
         assert set(proof) == {
             "node_id", "django_mojo_version", "platform_sha",
-            "platform_deployment", "observed_at", "pools"}, \
+            "platform_deployment", "node_type", "observed_at", "pools"}, \
             f"proof grew an unreviewed response surface: {proof}"
         blob = str(proof).lower()
         assert all(marker not in blob for marker in (
