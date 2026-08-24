@@ -1892,6 +1892,9 @@ display_ref = None
 
 ORIGIN_REPO = "django_mojo"
 ORIGIN_CONSUMER = "consumer"
+# A consumer app test root that opted into enforcement via
+# apps/tests/testit.json {"isolation": "enforce"} (maestro #2793).
+ORIGIN_CONSUMER_ENFORCED = "consumer_enforced"
 
 
 def _dir_has_python(path):
@@ -1915,31 +1918,33 @@ def _previous_module_durations():
         return {}
 
 
-def _enforce_repository_policy(parent_test_root):
-    """Fail-closed default-tier policy over django-mojo's own test tree.
+def _enforce_policy(root, origin, *, production_prefixes=None):
+    """Fail-closed isolation policy over one test tree (maestro #2793).
 
-    Runs before any import or worker, over the COMPLETE repository tree —
-    targeted and direct-file runs do not bypass it. Consumer/application
-    test roots are exempt and keep the historical selection contract.
+    Runs before any import or worker, over the COMPLETE tree — targeted and
+    direct-file runs do not bypass it. `origin` is ORIGIN_REPO for django-mojo's
+    own tests/ (always enforced) or ORIGIN_CONSUMER_ENFORCED for a consumer app
+    test root that opted in. `production_prefixes` name the consumer's own shared
+    surfaces for the scanner; mojo./django./testit. are always shared. For the
+    repository (production_prefixes=None) every scan is byte-identical to before.
 
     Blocking: hot-ring violations (see testit.isolation.HOT_CODES and
-    SHARED_PATCH_PREFIXES) inside a default package, and any repository
-    package without a readable literal TESTIT config declaring its state.
-    Cold-ring violations (app-internal provider mocks) are advisory until
-    the cold-ring migration (maestro item #1839 follow-up).
+    SHARED_PATCH_PREFIXES) inside a parallel-ring package, and any package
+    without a readable literal TESTIT config declaring its state. Cold-ring
+    violations (app-internal provider mocks) are advisory.
 
     Returns the advisory (cold) counts as (sites, packages).
     """
     from testit import isolation
 
-    if not parent_test_root or not os.path.exists(parent_test_root):
+    if not root or not os.path.exists(root):
         return 0, 0
 
     problems = []
     cold_sites = 0
     cold_packages = 0
-    for name in sorted(os.listdir(parent_test_root)):
-        package_path = os.path.join(parent_test_root, name)
+    for name in sorted(os.listdir(root)):
+        package_path = os.path.join(root, name)
         if not os.path.isdir(package_path) or name.startswith("__"):
             continue
         if not _dir_has_python(package_path):
@@ -1949,20 +1954,19 @@ def _enforce_repository_policy(parent_test_root):
             continue
         config, state = _load_module_config_ex(package_path)
         # A `core` package is scanned under the strict contract (maestro #2790):
-        # its `_`-prefixed helpers are scanned too and the stricter grammar
-        # fires. No package declares tier="core" until Phase 3, so strict stays
-        # False here and every scan is byte-identical to the pre-tier behavior.
+        # its `_`-prefixed helpers are scanned too and the stricter grammar fires.
         tier = config.get("tier")
         strict = tier == "core"
-        scanned = isolation.scan_package(package_path, strict=strict)
+        scanned = isolation.scan_package(
+            package_path, strict=strict, production_prefixes=production_prefixes)
         hot, cold = isolation.partition_violations(scanned.violations)
         if cold:
             cold_sites += len(cold)
             cold_packages += 1
         package_problems = isolation.evaluate_package_state(
-            config, hot, origin=ORIGIN_REPO, has_config=(state == "ok"))
+            config, hot, origin=origin, has_config=(state == "ok"))
         package_problems += isolation.evaluate_cold_budget(
-            config, cold, origin=ORIGIN_REPO, has_config=(state == "ok"))
+            config, cold, origin=origin, has_config=(state == "ok"))
         for problem in package_problems:
             problems.append(f"{name}: {problem}")
         # A serial opt-in package may carry mutation (its isolation is serial
@@ -1979,14 +1983,74 @@ def _enforce_repository_policy(parent_test_root):
                     for row in hot))
 
     if problems:
+        if origin == ORIGIN_REPO:
+            sys.exit(
+                "\nDEFAULT-TIER ISOLATION POLICY FAILED — no tests were run.\n"
+                "Every repository test package must declare default_core=True "
+                "(clean) or a nonempty requires_extra (opt-in, serial when it "
+                "mutates). See .claude/rules/testing.md and "
+                "docs/django_developer/testit/Overview.md.\n\n"
+                + "\n".join(problems))
         sys.exit(
-            "\nDEFAULT-TIER ISOLATION POLICY FAILED — no tests were run.\n"
-            "Every repository test package must declare default_core=True "
-            "(clean) or a nonempty requires_extra (opt-in, serial when it "
-            "mutates). See .claude/rules/testing.md and "
-            "docs/django_developer/testit/Overview.md.\n\n"
+            "\nCONSUMER ISOLATION POLICY FAILED (isolation: enforce) — no tests "
+            "were run.\nEvery package under an enforced app test root must "
+            "declare its tier (serial when it mutates). See "
+            "docs/django_developer/testit/Tiers.md.\n\n"
             + "\n".join(problems))
     return cold_sites, cold_packages
+
+
+def _enforce_repository_policy(parent_test_root):
+    """django-mojo's own tests/ — always enforced (thin wrapper, maestro #2793)."""
+    return _enforce_policy(parent_test_root, ORIGIN_REPO)
+
+
+def _installed_app_prefixes():
+    """Best-effort consumer shared-surface prefixes from INSTALLED_APPS, used
+    when a consumer opts into enforcement without naming explicit
+    production_prefixes (maestro #2793). mojo./django./testit. are always shared
+    and handled by the scanner regardless."""
+    try:
+        from django.conf import settings
+        installed = getattr(settings, "INSTALLED_APPS", None) or []
+    except Exception:
+        return ()
+    prefixes = set()
+    for app in installed:
+        if not isinstance(app, str) or not app:
+            continue
+        top = app.split(".", 1)[0]
+        if top and top not in ("django", "mojo", "testit"):
+            prefixes.add(top + ".")
+    return tuple(sorted(prefixes))
+
+
+def _enforce_consumer_policy(test_root):
+    """Opt-in isolation policy over a consumer's app test root (maestro #2793).
+
+    Off unless apps/tests/testit.json declares "isolation": "enforce" — its
+    absence, or the file's, means the historical exemption (nothing scanned).
+    production_prefixes name the consumer's own shared surfaces; absent, they
+    fall back to INSTALLED_APPS. Returns advisory (cold) counts like the repo
+    policy.
+    """
+    if not test_root or not os.path.exists(test_root):
+        return 0, 0
+    cfg_path = os.path.join(test_root, "testit.json")
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return 0, 0
+    if data.get("isolation") != "enforce":
+        return 0, 0
+    declared = data.get("production_prefixes")
+    if isinstance(declared, list) and declared:
+        prefixes = tuple(pfx for pfx in declared if isinstance(pfx, str) and pfx)
+    else:
+        prefixes = _installed_app_prefixes()
+    return _enforce_policy(
+        test_root, ORIGIN_CONSUMER_ENFORCED, production_prefixes=prefixes)
 
 
 def _make_record(kind, name, origin, path, test_file=None):
@@ -2229,6 +2293,11 @@ def main(opts):
 
     # Fail-closed repository isolation policy — before any import or worker.
     cold_sites, cold_packages = _enforce_repository_policy(parent_test_root)
+    # Consumer app test root: opt-in strict scanning when apps/tests/testit.json
+    # declares "isolation": "enforce" (maestro #2793). Absent = today's exemption.
+    consumer_sites, consumer_packages = _enforce_consumer_policy(test_root)
+    cold_sites += consumer_sites
+    cold_packages += consumer_packages
     if cold_sites:
         print(
             f"  isolation advisory: {cold_sites} app-internal patch site(s) in "

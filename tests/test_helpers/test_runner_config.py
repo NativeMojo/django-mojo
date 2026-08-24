@@ -717,3 +717,59 @@ def test_init_is_idempotent(opts):
         for path in (init_path, json_path):
             assert "# preserved marker" in open(path, encoding="utf-8").read(), (
                 f"--init must not overwrite an existing file: {path}")
+
+
+# ---------------------------------------------------------------------------
+# Consumer opt-in isolation policy (maestro #2793)
+# ---------------------------------------------------------------------------
+@th.unit_test("runner policy: consumer root exempt without opt-in, enforced with it")
+def test_consumer_policy_opt_in(opts):
+    import json
+    import os
+    import tempfile
+    from testit import runner
+
+    with tempfile.TemporaryDirectory() as d:
+        root = os.path.join(d, "apps", "tests")
+        os.makedirs(os.path.join(root, "test_thing"))
+        with open(os.path.join(root, "test_thing", "__init__.py"), "w") as fh:
+            fh.write('TESTIT = {"tier": "framework"}\n')
+        # a hot (parallel-ring) isolation violation
+        with open(os.path.join(root, "test_thing", "1_t.py"), "w") as fh:
+            fh.write("from django.conf import settings\n"
+                     "def test_x(opts):\n"
+                     "    settings.FOO = 1\n")
+
+        # no testit.json -> exempt (nothing scanned)
+        assert runner._enforce_consumer_policy(root) == (0, 0), (
+            "a consumer root without testit.json must stay exempt")
+
+        # testit.json without isolation:enforce -> still exempt
+        cfg = os.path.join(root, "testit.json")
+        with open(cfg, "w") as fh:
+            json.dump({"budgets": {"core": 30}}, fh)
+        assert runner._enforce_consumer_policy(root) == (0, 0), (
+            "isolation not set to enforce must stay exempt")
+
+        # opt in -> the hot violation must fail closed (SystemExit)
+        with open(cfg, "w") as fh:
+            json.dump({"budgets": {"core": 30}, "isolation": "enforce"}, fh)
+        raised = False
+        try:
+            runner._enforce_consumer_policy(root)
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "an opted-in consumer root with a hot isolation violation must fail closed")
+
+
+@th.django_unit_test("runner policy: _installed_app_prefixes excludes the always-shared roots")
+def test_installed_app_prefixes(opts):
+    from testit import runner
+
+    prefixes = runner._installed_app_prefixes()
+    assert isinstance(prefixes, tuple), f"must be a tuple, got {type(prefixes)}"
+    for banned in ("django.", "mojo.", "testit."):
+        assert banned not in prefixes, (
+            f"{banned} is always-shared and must never appear in consumer "
+            f"production_prefixes, got {prefixes}")

@@ -465,3 +465,35 @@ def test_budget_per_package(opts):
     result = runner._compute_budget_violations(o, report, None)
     assert any(v["scope"] == "package" and v["name"] == "test_slowpkg"
                for v in result), f"per-package time_budget must flag, got {result}"
+
+
+# ---------------------------------------------------------------------------
+# Consumer production_prefixes extend the shared-surface grammar (maestro #2793)
+# ---------------------------------------------------------------------------
+@th.unit_test("tiers: consumer production_prefixes extend the shared-surface grammar")
+def test_production_prefixes_extend_shared(opts):
+    from testit import isolation
+    src = textwrap.dedent("""
+        from unittest import mock
+        def test_x(opts):
+            with mock.patch("myapp.services.charge"):
+                pass
+    """)
+    base = {v.code for v in isolation.scan_source(src, filename="<f>")}
+    withp = {v.code for v in isolation.scan_source(
+        src, filename="<f>", production_prefixes=("myapp.",))}
+    assert "patch_shared" not in base, (
+        f"the base scan (mojo/django/testit) must not treat myapp. as shared, got {base}")
+    assert "patch_shared" in withp, (
+        f"a consumer production_prefix must flag a patch of its own shared surface, got {withp}")
+
+    always = textwrap.dedent("""
+        from unittest import mock
+        def test_y(opts):
+            with mock.patch("mojo.apps.jobs.publish"):
+                pass
+    """)
+    codes = {v.code for v in isolation.scan_source(
+        always, filename="<f>", production_prefixes=("myapp.",))}
+    assert "patch_shared" in codes, (
+        f"mojo. stays always-shared even with a consumer prefix set, got {codes}")
