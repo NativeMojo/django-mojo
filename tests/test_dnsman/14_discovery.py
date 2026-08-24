@@ -10,6 +10,8 @@ nothing here reaches AWS. The REST gate that fronts it is tested separately in
 `8_rest_permissions.py`.
 """
 
+TESTIT_TIER = "extended"
+
 from unittest.mock import patch
 
 from objict import objict

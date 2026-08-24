@@ -5,6 +5,8 @@ Everything here runs in-process against a fully scripted stand-in for
 certificate *service* (dnsman) is tested separately; this file is only about
 the protocol helpers in ``mojo/helpers/acme/``.
 """
+
+TESTIT_TIER = "extended"
 import hashlib
 import json
 

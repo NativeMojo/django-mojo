@@ -13,6 +13,8 @@ The KMS stub is not optional: ``Certificate`` and ``AcmeAccount`` extend
 ``KSMSecrets``, whose ``save_secrets()`` raises ``RuntimeError`` outright when
 ``KMS_KEY_ID`` is unset -- which it is, in the test environment.
 """
+
+TESTIT_TIER = "extended"
 import contextlib
 import json
 import threading
@@ -769,6 +771,7 @@ def test_certs_propagation_timeout_fails_cleanly(opts):
         "the CSR must never be submitted when the challenge never propagated")
 
 
+@th.tier("bug")
 @th.django_unit_test("dnsman certs: the upsert's change id reaches the propagation wait")
 def test_certs_propagation_wait_carries_the_change_id(opts):
     """Regression (maestro #1987): every dns call resolves a FRESH adapter, so the

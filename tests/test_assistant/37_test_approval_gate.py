@@ -305,6 +305,7 @@ def _refusal(fn, *args, **kwargs):
 # The gate itself
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("a mutating tool call proposes and never runs the handler")
 def test_mutating_tool_proposes_instead_of_executing(opts):
     from mojo.apps.assistant.models import PendingAction
@@ -1344,6 +1345,7 @@ def test_registry_snapshot_never_outranks_the_registry(opts):
     assert_eq(len(CALLS), 0, "neither case may reach the handler")
 
 
+@th.tier("core")
 @th.django_unit_test("a tampered record fails its fingerprint check")
 def test_tampered_record_refuses(opts):
     from mojo.apps.assistant.services import approvals
@@ -1452,6 +1454,7 @@ def test_handler_exception_is_generic(opts):
 # Live-actor re-checks
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("a permission lost between proposal and approval denies")
 def test_permission_lost_between_proposal_and_approval(opts):
     from mojo.apps.assistant.services import approvals
@@ -1591,6 +1594,7 @@ def test_secret_arguments_are_redacted(opts):
 # No bypass paths
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("a model-emitted approval fence is dropped")
 def test_model_cannot_forge_an_approval_block(opts):
     from mojo.apps.assistant.services.agent import VALID_BLOCK_TYPES, _parse_blocks
@@ -1607,6 +1611,7 @@ def test_model_cannot_forge_an_approval_block(opts):
               f"a model-emitted approval block must be dropped, got {blocks}")
 
 
+@th.tier("core")
 @th.django_unit_test("an AUTO-EXECUTE skill still stops at the approval gate")
 def test_auto_execute_skill_cannot_bypass(opts):
     from mojo.apps.assistant.models import PendingAction, Skill

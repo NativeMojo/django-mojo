@@ -5,6 +5,8 @@ Python-shape tests call the handler/parser in-process; neither path performs a
 provider operation.
 """
 
+TESTIT_TIER = "extended"
+
 from testit import helpers as th
 
 
@@ -124,6 +126,7 @@ def test_allowed_identities(opts):
             f"{response.response}")
 
 
+@th.tier("core")
 @th.django_unit_test("group-choice rejects anonymous, unprivileged, and view-only users")
 def test_basic_denials(opts):
     opts.client.logout()
@@ -140,6 +143,7 @@ def test_basic_denials(opts):
             f"{email} must not enumerate groups, got {response.status_code}")
 
 
+@th.tier("core")
 @th.django_unit_test("member-only DNS grants cannot enumerate global choices")
 def test_member_grants_denied(opts):
     _login(opts, opts.member_email, opts.member_pw)
@@ -149,6 +153,7 @@ def test_member_grants_denied(opts):
         f"got {response.status_code}: {response.response}")
 
 
+@th.tier("core")
 @th.django_unit_test("all confined bearer identities are rejected")
 def test_confined_credentials_denied(opts):
     for token in (opts.reference_key, opts.override_key):
@@ -181,6 +186,7 @@ def test_member_probe_is_uniform(opts):
         f"{responses}")
 
 
+@th.tier("core")
 @th.django_unit_test("manage_dns does not widen ordinary Group list visibility")
 def test_endpoint_does_not_widen_group_permissions(opts):
     from mojo.apps.account.models import Group

@@ -7,6 +7,8 @@ events and emails are untouched.
 """
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 def _null_reporter(*args, **kwargs):
     return None

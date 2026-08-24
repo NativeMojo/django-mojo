@@ -21,6 +21,8 @@ Security contract this file enforces:
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "extended"
+
 TEST_USER = "phone_change_user"
 TEST_PWORD = "phonechange##mojo99"
 TEST_EMAIL = "phone_change_user@example.com"

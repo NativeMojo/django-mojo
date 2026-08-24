@@ -5,6 +5,8 @@ silently skipping the assignment on denial (matching the dict-value branch).
 """
 from testit import helpers as th
 
+TESTIT_TIER = "core"  # #2792 tier curation
+
 
 TEST_PRIV_EMAIL = "fkperm_priv@test.com"
 TEST_NOPRIV_EMAIL = "fkperm_nopriv@test.com"

@@ -11,6 +11,8 @@ item #1839).
 
 from testit import helpers as th
 
+TESTIT_TIER = "admin"
+
 
 ADMIN_EMAIL = "system-setup-admin@test.com"
 ADMIN_PASSWORD = "System_setup_Admin_99"

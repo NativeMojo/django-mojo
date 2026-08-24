@@ -27,6 +27,8 @@ import time
 
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 # Loop bound — well above the configured 10/60s limit so the cap should
 # always trip within this many requests, even under load.
 MAX_ATTEMPTS = 50
@@ -92,6 +94,7 @@ def setup_throttle_smoke(opts):
 # TOTP verify — bogus mfa_token, repeated until tier trips
 # -----------------------------------------------------------------
 
+@th.tier("extended")  # per-IP rate-limit counter — cannot run in the parallel core/framework ring (#2789 -j sweep)
 @th.django_unit_test("mfa throttle: totp/verify trips per-IP rate limit")
 def test_totp_verify_rate_limit(opts):
     _clear_ip("totp_verify")
@@ -105,6 +108,7 @@ def test_totp_verify_rate_limit(opts):
 # TOTP recover — same shape
 # -----------------------------------------------------------------
 
+@th.tier("extended")  # per-IP rate-limit counter — cannot run in the parallel core/framework ring (#2789 -j sweep)
 @th.django_unit_test("mfa throttle: totp/recover trips per-IP rate limit")
 def test_totp_recover_rate_limit(opts):
     _clear_ip("totp_recover")
@@ -118,6 +122,7 @@ def test_totp_recover_rate_limit(opts):
 # Passkey login complete — bogus credential
 # -----------------------------------------------------------------
 
+@th.tier("extended")  # per-IP rate-limit counter — cannot run in the parallel core/framework ring (#2789 -j sweep)
 @th.django_unit_test("mfa throttle: passkeys/login/complete trips per-IP rate limit")
 def test_passkey_login_complete_rate_limit(opts):
     _clear_ip("passkey_login")

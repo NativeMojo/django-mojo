@@ -1,3 +1,5 @@
+
+TESTIT_TIER = "admin"
 import datetime
 import importlib
 import json

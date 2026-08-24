@@ -20,6 +20,8 @@ network, no patching of process-wide state.
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
 
+TESTIT_TIER = "core"  # #2792 tier curation
+
 
 # ---------------------------------------------------------------------------
 # Scripted transport / resolver

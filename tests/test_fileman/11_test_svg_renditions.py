@@ -9,6 +9,8 @@ Covers:
   - The rasterizer runs once per file, not once per role.
   - regenerate_renditions dedupes duplicate roles.
 """
+
+TESTIT_TIER = "extended"
 import base64
 import io
 import os
@@ -185,6 +187,7 @@ def test_svg_role_parity_with_raster(opts):
 # Security
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("SVG: XXE reads nothing and leaks no path")
 def test_svg_xxe_is_refused(opts):
     from mojo.apps.fileman.models import FileRendition
@@ -226,6 +229,7 @@ def test_svg_xxe_is_refused(opts):
         os.unlink(secret.name)
 
 
+@th.tier("core")
 @th.django_unit_test("SVG: external references are never fetched")
 def test_svg_makes_no_network_calls(opts):
     from mojo.apps.fileman.renderer import svg_raster
@@ -262,6 +266,7 @@ def test_svg_makes_no_network_calls(opts):
         server.server_close()
 
 
+@th.tier("core")
 @th.django_unit_test("SVG: script elements and event handlers never execute")
 def test_svg_runs_no_javascript(opts):
     from mojo.apps.fileman.renderer import svg_raster

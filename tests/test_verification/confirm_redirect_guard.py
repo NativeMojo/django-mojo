@@ -21,6 +21,8 @@ can never pass vacuously against a 404 or a 500.
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
 
+TESTIT_TIER = "bug"
+
 CRG_USER = "confirm_redirect_guard_user"
 CRG_PWORD = "crguard##mojo99"
 XSS_REDIRECT = "javascript:alert(1)"

@@ -12,6 +12,8 @@ module-unique `source` and only those rows are deleted — tests/test_edge owns
 this table too.
 """
 
+TESTIT_TIER = "edge"
+
 import uuid as uuid_module
 
 from testit import helpers as th

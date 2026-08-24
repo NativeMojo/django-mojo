@@ -1,5 +1,11 @@
 """WebApp onboarding durability, tenancy, and secret-boundary regressions."""
 
+# Whole-file extended bucket (maestro #2792): the exhaustive onboarding-variant
+# matrix, opt-in via `--tier extended` / `--all`. The tenancy/isolation subset
+# here is a documented follow-up to pull back to the framework tier once the
+# individual boundary tests are enumerated.
+TESTIT_TIER = "extended"
+
 import socket
 import uuid
 from concurrent.futures import ThreadPoolExecutor

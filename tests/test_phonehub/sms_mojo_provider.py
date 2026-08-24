@@ -8,6 +8,8 @@ regression path, and PhoneConfig.test_connection() for the mojo branch.
 All tests patch the `requests` module inside the provider service so no
 network calls are made.
 """
+
+TESTIT_TIER = "extended"
 from unittest import mock
 import requests as _requests
 from testit import helpers as th
@@ -331,6 +333,7 @@ def test_send_mojo_provider_test_number_short_circuit(opts):
     )
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_mojo_api_key_secret_roundtrip(opts):
     """set/get round-trips the api key; secret never appears in default/full graph output."""

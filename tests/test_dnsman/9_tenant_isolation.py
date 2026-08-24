@@ -5,6 +5,8 @@ credentials, purchases or certificates, and `?group=` must never widen what a
 caller can reach.
 """
 
+TESTIT_TIER = "core"
+
 from testit import helpers as th
 
 from tests.test_dnsman._helpers import (

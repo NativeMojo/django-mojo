@@ -11,6 +11,11 @@ collide with — and the shared `cleanup()` sweeps rows belonging to the other
 edge modules running in parallel.
 """
 
+# Whole-file extended bucket (maestro #2792): the alias state-machine and
+# fan-out matrix, opt-in via `--tier extended` / `--all`. The tenancy subset
+# here is a documented follow-up to pull back to the framework tier.
+TESTIT_TIER = "extended"
+
 import uuid
 from unittest import mock
 

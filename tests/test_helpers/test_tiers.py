@@ -128,6 +128,28 @@ def test_tier_extraction(opts):
         f"file-level and function-level (incl. in-class) tags must be found, got {tiers}")
 
 
+@th.unit_test("tiers: effective-tier precedence is func > file > package (maestro #2792)")
+def test_effective_tier_precedence(opts):
+    from testit import runner
+    # func @th.tier wins over everything
+    assert runner._effective_tier_tags("core", "extended", {"framework"}) == {"core"}, \
+        "a @th.tier decorator must win over file and package"
+    # file TESTIT_TIER wins when no func tier
+    assert runner._effective_tier_tags(None, "extended", {"framework"}) == {"extended"}, \
+        "a file TESTIT_TIER must win over the package when the test is untagged"
+    # package tags when neither func nor file tag
+    assert runner._effective_tier_tags(None, None, {"framework"}) == {"framework"}, \
+        "an untagged test in an untagged file inherits the package tags"
+    # a core-tagged test in a framework package: only core selects it
+    eff = runner._effective_tier_tags("core", None, {"framework"})
+    assert eff & {"core"} and not (eff & {"framework"}), \
+        "a core-tagged test is selected by core, not by a framework-only preset"
+    # an untagged test in an extended file is NOT run under the framework preset
+    eff = runner._effective_tier_tags(None, "extended", {"framework"})
+    assert not (eff & {"core", "framework", "bug"}), \
+        "an untagged test in a TESTIT_TIER=extended file must not run under framework"
+
+
 @th.unit_test("tiers: @th.tier marks and propagates through unit_test")
 def test_tier_decorator_propagates(opts):
     @th.tier("bug")

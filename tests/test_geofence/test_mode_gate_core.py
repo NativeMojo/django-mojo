@@ -11,6 +11,8 @@ django.conf like the exhaustive matrix in
 tests/test_geofence_extended_serial/test_mode_gate.py, which also covers the
 disarmed state and the end-to-end loopback cases.
 """
+
+TESTIT_TIER = "core"
 from testit import helpers as th
 
 

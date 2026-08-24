@@ -8,6 +8,8 @@ get_remote_ip so it fails on the old (leftmost-XFF) code and passes once fixed.
 """
 from testit import helpers as th
 
+TESTIT_TIER = "bug"  # #2792 tier curation
+
 
 class _Req:
     """Minimal request stand-in — get_remote_ip only reads request.META."""

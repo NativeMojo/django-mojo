@@ -9,6 +9,8 @@ import uuid as _uuid
 
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 PHONE_ONLY_FIELDS = [
     {"name": "first_name", "required": True},
@@ -322,6 +324,7 @@ def test_phone_existing_already_member(opts):
         Group.objects.filter(uuid=group_uuid).delete()
 
 
+@th.tier("extended")  # per-IP rate-limit assertion — cannot run in the parallel core/framework ring (#2789 -j sweep)
 @th.django_unit_test("phone/register/verify reports account_exists")
 def test_phone_register_verify_account_exists(opts):
     from mojo.apps.account.models import User

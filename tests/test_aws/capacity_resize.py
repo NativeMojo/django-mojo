@@ -9,6 +9,8 @@ attributes (``_dispatch`` and friends), live in
 tests/test_aws_extended_serial/capacity_resize.py (maestro #2558).
 """
 
+TESTIT_TIER = "edge"
+
 from unittest import mock
 
 from testit import helpers as th

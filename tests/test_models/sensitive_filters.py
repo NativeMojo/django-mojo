@@ -12,6 +12,8 @@ Every test below fails on the pre-fix code and passes after.
 """
 from testit import helpers as th
 
+TESTIT_TIER = "core"  # #2792 tier curation
+
 ADMIN = "senfilt_admin"
 ADMIN_PWORD = "senfilt##mojo99"
 T1 = "senfilt_t1"

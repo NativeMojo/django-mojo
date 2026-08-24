@@ -5,6 +5,8 @@ scanner's `clients=` dict — the same idiom as tests/test_aws/aws_check.py.
 There is no moto and no botocore.Stubber anywhere in this repo.
 """
 
+TESTIT_TIER = "edge"
+
 import datetime
 from unittest import mock
 

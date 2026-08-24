@@ -15,6 +15,8 @@ Route53's quoted/255-chunked TXT vs GoDaddy's raw text, and a PUT that replaces
 the whole record set on both.
 """
 
+TESTIT_TIER = "extended"
+
 from unittest.mock import patch, MagicMock
 
 from objict import objict

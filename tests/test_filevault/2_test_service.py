@@ -5,6 +5,8 @@ Tests VaultFile/VaultData creation, encryption/decryption via the service,
 and access token generation/validation.
 """
 
+TESTIT_TIER = "extended"
+
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
 

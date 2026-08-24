@@ -13,6 +13,8 @@ Three things are under test, all of them boundaries rather than plumbing:
   is the wrong report for "you are not a superuser".
 """
 
+TESTIT_TIER = "edge"
+
 import objict
 
 from testit import helpers as th

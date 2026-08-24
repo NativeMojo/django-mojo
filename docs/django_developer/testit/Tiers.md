@@ -5,19 +5,19 @@ named set of buckets. This replaces the old two-axis "default tier vs. `--all`"
 model, which had no middle ground between "everything critical" and "everything
 at all" and let the default tier grow to thousands of tests.
 
-> **Status.** The mechanism ships in Phase 1 (maestro #2790). Until Phase 3
-> curates tests into buckets, every package still uses the legacy
-> `default_core` / `requires_extra` keys, which map onto the buckets
-> automatically (below), and **a bare `bin/run_tests` still runs the framework
-> preset** — byte-identical to the old default tier. Phase 3 populates `core`
-> and flips the bare run to it.
+> **Status.** Live (maestro #2790–#2792). The suite is curated into buckets and
+> **a bare `bin/run_tests` runs the `core` preset** — the ≤30s baseline (~9s
+> today). `--tier framework` runs django-mojo's own critical tier; `--all` runs
+> everything. Legacy `default_core` / `requires_extra` keys still map onto
+> buckets automatically (below), so a package that predates the `tier` key keeps
+> working.
 
 ## Buckets
 
 | Bucket | What belongs here |
 |---|---|
 | `core` | The ≤30s baseline every consumer runs. Security boundaries, the handful of framework contracts whose failure means django-mojo is broken for everyone. Held to the strictest isolation contract. |
-| `framework` | django-mojo's own critical contracts — today's default tier. Parallel-safe. |
+| `framework` | django-mojo's own critical contracts (the old default tier). Parallel-safe. |
 | `bug` | One isolated regression per fixed bug. Runs in the framework preset. |
 | `extended` | Correct-but-not-critical coverage, exhaustive input matrices, deep feature-internal variants. |
 | `admin` | Admin-portal coverage most consumers do not care about. |
@@ -40,7 +40,7 @@ any other name is a literal single bucket.
 | `all` | every bucket | — |
 
 ```bash
-./bin/run_tests                          # the framework preset (the default)
+./bin/run_tests                          # the core preset (the default)
 ./bin/run_tests --tier core              # just the ≤30s baseline
 ./bin/run_tests --tier framework         # django-mojo's own critical tier
 ./bin/run_tests --tier admin --tier edge # two literal buckets
@@ -140,3 +140,33 @@ blocked on under the parallel suite.
 The agent report also carries the selected `preset`, each module's `tier`, and
 `budget_violations`. Each preset reports to maestro as its own suite identity so
 a `core` run cannot report green over a red `extended` module.
+
+## Current residents (curated in maestro #2792)
+
+Measured walls on the curated suite (`-j8`): **core ≈9s** (the bare run), **framework
+≈45s**, **all ≈375s**. The whole suite was ~313s before the epic.
+
+- **core** (~500 tests) — the security/contract boundary tests that must hold for every
+  consumer: auth/token validation, permission and tenancy gates, SSRF/redirect guards,
+  protected-key denial, model FK/graph permission contracts. Kept small and clean so the
+  bare run stays under 30s.
+- **framework** — django-mojo's own critical contracts not in the universal baseline
+  (model save/serialize, REST dispatch, jobs routing, most of the default_core packages'
+  non-core tests).
+- **bug** — one isolated regression per fixed bug, tagged in place beside its fixture.
+- **extended** — exhaustive input matrices, feature-internal variants, and the heavy
+  provider/matrix files (test_assistant, test_maestro_board, most of test_aws, the edge
+  onboarding/alias/serving matrices).
+- **admin / edge** — admin-portal (`test_account/test_admin_*`, cloud registries) and
+  edge-deployment (`test_mojosec`, `test_edge_action`, the AWS infra plane) coverage most
+  consumers do not exercise.
+- **slow** — real-internet / real-provider tests (live DNS/WHOIS in `test_helpers/domains`,
+  live LLM in `test_assistant/3_test_live_assistant`, shortlink scrapers, cloudwatch tail).
+
+Two known follow-ups from the curation: (1) `test_account` and `test_edge` could not take
+`core` tags because the whole-package strict scan flags a pre-existing protected `Setting`
+write / a `_helpers.py` settings mutation elsewhere in the package — their core-worthy tests
+stay in `framework` until those sites are relocated to serial siblings. (2) The `framework`
+preset still carries the shared-state flake class (throttle/rate-limit/token/rendition tests
+that assert on shared counters); they pass solo and belong in a serial bucket or need a
+per-test identity seam.

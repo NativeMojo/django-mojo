@@ -2,6 +2,8 @@
 
 Uses per-request X-Mojo-Test-* headers (no server reloads).
 """
+
+TESTIT_TIER = "extended"
 import uuid
 from testit import helpers as th
 from tests.test_geofence._helpers import headers, GEO_RU, GEO_US

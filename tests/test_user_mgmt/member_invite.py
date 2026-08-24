@@ -10,6 +10,8 @@ from unittest.mock import patch, MagicMock
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "bug"
+
 TEST_GROUP = "member_invite_group"
 TEST_NEW_USER = "member_invite_new_user"
 TEST_EXISTING_USER = "member_invite_existing_user"

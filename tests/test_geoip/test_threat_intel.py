@@ -23,6 +23,8 @@ file. The two geolocate_ip() end-to-end tests moved to
 tests/test_geoip_extended_serial/test_threat_intel.py (item #2558), along
 with every test that mock.patches the shared threat_intel/geoip modules.
 """
+
+TESTIT_TIER = "extended"
 from testit import helpers as th
 
 ATTACKER_IP = "203.0.113.90"
@@ -656,6 +658,7 @@ def test_rule_cannot_address_the_ip_stats_cache(opts):
 # Blocklist plumbing (#1079 regressions — unchanged by the retune)
 # ---------------------------------------------------------------------------
 
+@th.tier("bug")
 @th.django_unit_test("threat intel: perform_threat_check exposes is_blocklisted in threat_data")
 def test_perform_threat_check_exposes_blocklisted(opts):
     from mojo.apps.incident.models.event import Event
@@ -745,6 +748,7 @@ def test_escalate_threat_level_never_downgrades(opts):
 # patches the shared geoip config/PROVIDERS/detection surfaces.
 
 
+@th.tier("bug")
 @th.django_unit_test("geoip: GeoLocatedIP.check_threats raises threat_level on a blocklist hit")
 def test_check_threats_raises_threat_level_on_blocklist_hit(opts):
     """End-to-end on the path production actually uses.
@@ -788,6 +792,7 @@ def test_check_threats_raises_threat_level_on_blocklist_hit(opts):
     )
 
 
+@th.tier("bug")
 @th.django_unit_test("geoip: skipping the external check must not erase a known blocklist hit")
 def test_check_threats_skip_external_preserves_blocklist_flag(opts):
     """The daily decay pass re-scores on local evidence with skip_external=True.

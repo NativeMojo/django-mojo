@@ -14,6 +14,8 @@ import uuid as _uuid
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "extended"
+
 
 PP_GROUP_DISABLED_UUID = 'ppd1234567890abcdef01234567890ab'
 PP_GROUP_OPTIONAL_UUID = 'ppo1234567890abcdef01234567890ab'

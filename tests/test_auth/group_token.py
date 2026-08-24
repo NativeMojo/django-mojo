@@ -199,6 +199,7 @@ def test_happy_path_list_confined(opts):
 # 2. Cross-tenant reach
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("group token cannot read another tenant's row")
 def test_cross_tenant_detail_denied(opts):
     resp = opts.client.get(f"/api/docit/book/{opts.book_b_id}", headers=gt(opts.token_a))
@@ -360,6 +361,7 @@ def test_owner_scoped_credential_list_denied(opts):
 # 5. Revocation
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("epoch bump revokes outstanding tokens")
 def test_epoch_bump_revokes(opts):
     from mojo.apps.account.models import Group, User
@@ -563,6 +565,7 @@ def test_future_iat_refused(opts):
 # 7. Tampering — all clean 401s, never a 500
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("tampered / malformed tokens 401 and never 500")
 def test_tampering_never_500(opts):
     token = opts.token_a
@@ -588,6 +591,7 @@ def test_tampering_never_500(opts):
                   f"{resp.response}")
 
 
+@th.tier("core")
 @th.django_unit_test("a gt1 token is not a JWT — bearer replay 401s")
 def test_gt1_under_bearer_denied(opts):
     resp = opts.client.get("/api/user/me",
@@ -605,6 +609,7 @@ def test_gt1_as_refresh_token_denied(opts):
               f"got {resp.status_code}: {resp.response}")
 
 
+@th.tier("core")
 @th.django_unit_test("a JWT pasted under grouptoken 401s")
 def test_jwt_under_grouptoken_denied(opts):
     from mojo.apps.account.models import User
@@ -617,6 +622,7 @@ def test_jwt_under_grouptoken_denied(opts):
               f"got {resp.status_code}: {resp.response}")
 
 
+@th.tier("core")
 @th.django_unit_test("a token signed with another user's key is refused")
 def test_cross_user_forgery_refused(opts):
     from mojo.helpers import crypto, dates

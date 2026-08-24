@@ -18,6 +18,8 @@ both gaps (evaluator, list-filter, and FK-gate already honor the token) while
 keeping non-owners fail-closed. These tests exercise the full path over the REST
 client with two permissionless members and a local `file://` backend.
 """
+
+TESTIT_TIER = "bug"
 import os
 import tempfile
 from unittest import mock
@@ -166,6 +168,7 @@ def test_owner_completes_own_upload(opts):
               f"got {f.upload_status}")
 
 
+@th.tier("core")
 @th.django_unit_test("fileman owner: non-owner cannot complete another member's upload")
 def test_non_owner_cannot_complete(opts):
     from mojo.apps.fileman.models import File
@@ -209,6 +212,7 @@ def test_owner_can_fk_attach_own_file(opts):
               "save response must authoritatively serialize the attached avatar")
 
 
+@th.tier("core")
 @th.django_unit_test("fileman relation: foreign File FK-attach fails explicitly")
 def test_foreign_fk_attach_dropped(opts):
     from mojo.apps.account.models import User

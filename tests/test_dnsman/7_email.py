@@ -7,6 +7,8 @@ class for GoDaddy, and `ses_domain.onboard_domain` for the SES calls. No live
 AWS or GoDaddy request is ever made.
 """
 
+TESTIT_TIER = "extended"
+
 from unittest.mock import patch, MagicMock
 
 from testit import helpers as th
@@ -403,6 +405,7 @@ def test_onboard_email_domain_refuses_an_inactive_domain(opts):
 # EmailDomain graph — the aws_key leak
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test()
 def test_email_domain_default_graph_masks_the_aws_key(opts):
     """

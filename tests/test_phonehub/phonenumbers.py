@@ -1,3 +1,5 @@
+
+TESTIT_TIER = "extended"
 from testit import helpers as th
 from mojo.apps import phonehub
 

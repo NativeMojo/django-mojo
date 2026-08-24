@@ -90,6 +90,7 @@ def test_assume_role_arn_round_trips(opts):
                 "has_external_id must report a configured external id")
 
 
+@th.tier("core")
 @th.django_unit_test("Role settings: a non-superuser cannot repoint the platform identity")
 def test_non_superuser_cannot_set_assume_role_arn(opts):
     from mojo import errors as me
@@ -182,6 +183,7 @@ def test_fingerprint_changes_with_the_role(opts):
     fm.save()
 
 
+@th.tier("core")
 @th.django_unit_test("Role settings: _s3_client refuses a non-S3 manager readably")
 def test_s3_client_rejects_a_filesystem_manager(opts):
     fm = _fm(opts.file_fm_id)

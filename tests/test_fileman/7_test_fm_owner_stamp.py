@@ -17,6 +17,8 @@ tests/test_models/owner_stamp.py does, but binds ``ACTIVE_REQUEST`` so the
 superuser guard can resolve the actor. The ``file`` backend is used so
 ``on_rest_saved`` -> ``backend.make_path_public()`` is a no-op.
 """
+
+TESTIT_TIER = "bug"
 import objict
 from testit import helpers as th
 
@@ -153,6 +155,7 @@ def test_fm_explicit_user_is_honored(opts):
 # System scope (user=None AND group=None) — superuser-only via REST.
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("FileManager: system-scope create blocked for non-superuser")
 def test_fm_system_scope_blocked_for_regular_user(opts):
     from mojo import errors as me

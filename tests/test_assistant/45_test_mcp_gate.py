@@ -11,6 +11,8 @@ Two halves, both default-tier:
   must not touch its rate-limit bucket. Nothing here WRITES the switch — the
   enabled path is the serial wire module's job.
 """
+
+TESTIT_TIER = "core"
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
 

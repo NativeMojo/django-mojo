@@ -7,6 +7,8 @@ parallel module's settings reads cannot observe a patched get().
 import datetime
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 @th.django_unit_test("resolve_fields returns the default config when no auth config is set")
 def test_resolve_fields_default(opts):

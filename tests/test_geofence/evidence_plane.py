@@ -10,6 +10,8 @@ Reasons are chosen to avoid cross-module dedupe races: decorator.py blocks on
 country_not_allowed/tor_detected, so these tests use region_not_allowed,
 vpn_detected, rule_invalid, lookup_failed, and ip_allowlisted.
 """
+
+TESTIT_TIER = "extended"
 import uuid as _uuid
 from testit import helpers as th
 from tests.test_geofence._helpers import headers, GEO_US, GEO_RU, GEO_VPN
@@ -285,6 +287,7 @@ def test_exempt_metrics_group_account(opts):
         grp.delete()
 
 
+@th.tier("bug")
 @th.django_unit_test("evidence: expired whitelist stops suppressing firewall blocks")
 def test_expired_whitelist_block_regression(opts):
     from datetime import timedelta

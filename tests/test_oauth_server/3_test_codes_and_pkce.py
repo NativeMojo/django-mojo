@@ -136,6 +136,7 @@ def test_mint_and_consume(opts):
     assert_true(refused, "an unknown code must be refused as invalid_grant")
 
 
+@th.tier("core")
 @th.django_unit_test("a failed exchange burns the code, whatever the reason")
 def test_failed_exchange_burns_the_code(opts):
     from mojo.apps.account.models import OAuthCode
@@ -186,6 +187,7 @@ def test_failed_exchange_burns_the_code(opts):
               f"an expired code must answer invalid_grant, got {error!r}")
 
 
+@th.tier("core")
 @th.django_unit_test("replaying a consumed code revokes the grant it produced")
 def test_code_replay_revokes_the_grant(opts):
     from mojo.apps.account.models import OAuthCode, OAuthGrant

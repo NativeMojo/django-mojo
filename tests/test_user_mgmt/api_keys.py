@@ -52,6 +52,7 @@ def setup_api_key_testing(opts):
     opts.child_id = child.id
 
 
+@th.tier("core")  # prerequisite: sets opts.api_key_id/raw_token for the core tests below (#2792)
 @th.unit_test("apikey_create_for_group")
 def test_apikey_create_for_group(opts):
     """create_for_group() returns an api_key and a raw token; token_hash holds the SHA-256, and the raw token is also kept encrypted in mojo_secrets."""
@@ -72,6 +73,7 @@ def test_apikey_create_for_group(opts):
     opts.api_key_id = api_key.pk
 
 
+@th.tier("core")
 @th.unit_test("apikey_validate_token_valid")
 def test_apikey_validate_token_valid(opts):
     """validate_token() succeeds with a valid token."""
@@ -89,6 +91,7 @@ def test_apikey_validate_token_valid(opts):
     assert request.group.id == opts.parent_id, "request.group should be the api key's group"
 
 
+@th.tier("core")
 @th.unit_test("apikey_validate_token_invalid")
 def test_apikey_validate_token_invalid(opts):
     """validate_token() fails with a bogus token."""
@@ -101,6 +104,7 @@ def test_apikey_validate_token_invalid(opts):
     assert error is not None, "error should be set"
 
 
+@th.tier("core")
 @th.unit_test("apikey_validate_token_inactive")
 def test_apikey_validate_token_inactive(opts):
     """validate_token() fails when key is inactive."""
@@ -121,6 +125,7 @@ def test_apikey_validate_token_inactive(opts):
     api_key.save()
 
 
+@th.tier("core")
 @th.unit_test("apikey_validate_token_expired")
 def test_apikey_validate_token_expired(opts):
     """validate_token() fails when key is expired."""
@@ -207,6 +212,7 @@ def test_apikey_is_group_allowed(opts):
     other.delete()
 
 
+@th.tier("core")  # prerequisite: sets opts.rest_raw_token for the core tests below (#2792)
 @th.unit_test("apikey_rest_create")
 def test_apikey_rest_create(opts):
     """REST POST creates an api key and returns the token once."""
@@ -246,6 +252,7 @@ def test_apikey_rest_get(opts):
     assert "token_hash" not in data, "token_hash must not be exposed"
 
 
+@th.tier("core")
 @th.unit_test("apikey_rest_list_omits_token")
 def test_apikey_rest_list_omits_token(opts):
     """A LIST read must not carry the raw token on any row.
@@ -389,6 +396,7 @@ def test_apikey_group_scoped_perm(opts):
     api_key.save()
 
 
+@th.tier("core")
 @th.unit_test("apikey_child_group_blocked")
 def test_apikey_child_group_blocked(opts):
     """Using an api key with a group that is not a descendant returns 403."""
@@ -904,6 +912,7 @@ def test_apikey_clearing_member_clears_override(opts):
         "clearing the member must also clear override_user — 'assume nobody' is not a valid state"
 
 
+@th.tier("core")
 @th.unit_test("apikey_cannot_mutate_credentials")
 def test_apikey_cannot_mutate_credentials(opts):
     """THE guarantee: revoking a key revokes the access.
@@ -988,6 +997,7 @@ def test_apikey_override_cannot_list_owner_scoped_models(opts):
         opts.client.logout()
 
 
+@th.tier("core")
 @th.unit_test("apikey_override_global_perm_does_not_escape_group")
 def test_apikey_override_global_perm_does_not_escape_group(opts):
     """Security-review regression.

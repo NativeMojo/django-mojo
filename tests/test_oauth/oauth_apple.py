@@ -10,6 +10,8 @@ tests/test_oauth_extended_serial/oauth_apple.py (maestro item #1839).
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "extended"
+
 
 def _make_id_token(sub="apple_uid_123", email="user@example.com", extra=None):
     """Build a minimal Apple id_token (unsigned, for decode-only tests)."""

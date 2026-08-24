@@ -1,3 +1,5 @@
+
+TESTIT_TIER = "edge"
 import base64
 import json
 from datetime import timedelta

@@ -1,6 +1,8 @@
 """
 Tests for chat room CRUD, membership, join/leave, and permissions.
 """
+
+TESTIT_TIER = "extended"
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
@@ -39,6 +41,7 @@ def setup_chat_rooms(opts):
     opts.admin_user.add_permission("manage_chat")
 
 
+@th.tier("core")  # prerequisite: sets opts.group_room_id for the core tests below (#2792)
 @th.django_unit_test()
 def test_create_group_room(opts):
     """Create a group room via REST and verify owner membership is auto-created."""
@@ -94,6 +97,7 @@ def test_join_channel(opts):
     assert_eq(ms.status, "active", "expected active status")
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_join_group_room_fails(opts):
     """Cannot join a group room (invite-only)."""
@@ -104,6 +108,7 @@ def test_join_group_room_fails(opts):
     assert_eq(resp.status_code, 403, f"expected 403 for join on group room, got {resp.status_code}")
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_add_member_requires_admin(opts):
     """Non-admin cannot add members to group room."""
@@ -256,6 +261,7 @@ def test_update_room_rules(opts):
     assert_eq(room.rules.get("max_message_length"), 1000, "expected max_message_length=1000")
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_update_rules_requires_admin(opts):
     """Non-admin cannot update room rules."""

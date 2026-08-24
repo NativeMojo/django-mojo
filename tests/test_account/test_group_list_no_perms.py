@@ -11,6 +11,8 @@ See planning/issues/spurious-permission-denied-events-on-list.md
 """
 from testit import helpers as th
 
+TESTIT_TIER = "bug"
+
 
 TEST_USER = "group_list_noperm"
 TEST_USER_MEMBER = "group_list_member"

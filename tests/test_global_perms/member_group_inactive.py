@@ -17,6 +17,8 @@ file style mirrors tests/test_global_perms/apikey_group_inactive.py.
 """
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 MEMBER_USERNAME = "m56_member@example.com"
 MEMBER_PASSWORD = "m56!Member#99"
 
@@ -118,6 +120,7 @@ def setup_member_group_inactive(opts):
 # Regression: the member-side derivations (fail pre-fix)
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("get_groups excludes an inactive group (both include_children modes)")
 def test_get_groups_excludes_inactive_group(opts):
     from mojo.apps.account.models import User
@@ -181,6 +184,7 @@ def test_get_groups_is_active_none_keeps_raw(opts):
         f"is_active=None is the admin/introspection escape hatch — inactive groups stay visible, got {ids}"
 
 
+@th.tier("core")
 @th.django_unit_test("RestMeta list fallback: no rows from a deactivated tenant (THE item repro)")
 def test_list_fallback_inactive_group_denied(opts):
     _login(opts)
@@ -205,6 +209,7 @@ def test_list_fallback_inactive_group_denied(opts):
 # Pinning: surfaces DM-048 already closed (must pass before AND after)
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("detail re-bind: GET by pk on an inactive group's row is denied for a member grant")
 def test_detail_rebind_inactive_group_denied(opts):
     _login(opts)
@@ -260,6 +265,7 @@ def test_metrics_gate_inactive_group_denied(opts):
 # Item 418 — the caller's OWN membership must be the one that counts
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("get_groups drops a group where MY membership is inactive, even if others are active")
 def test_get_groups_binds_membership_to_caller(opts):
     from mojo.apps.account.models import User

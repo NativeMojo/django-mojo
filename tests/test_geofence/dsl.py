@@ -2,6 +2,8 @@
 
 No HTTP, no Redis, no server settings. Run inside the test process.
 """
+
+TESTIT_TIER = "extended"
 from testit import helpers as th
 
 

@@ -12,6 +12,8 @@ Contracts enforced:
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "extended"
+
 
 AC_GROUP_NAME = 'test-auth-config-group'
 AC_GROUP_UUID = 'ac01234567890abcdef01234567890ab'
@@ -159,6 +161,7 @@ def test_validate_bad_prompt(opts):
         pass
 
 
+@th.tier("framework")
 @th.django_unit_test("validate_auth_config rejects custom_css containing '<' (XSS breakout)")
 def test_validate_css_angle_bracket(opts):
     from mojo.apps.account.services import auth_config as ac
@@ -171,6 +174,7 @@ def test_validate_css_angle_bracket(opts):
         pass
 
 
+@th.tier("framework")
 @th.django_unit_test("validate_auth_config rejects custom_css with an external URL")
 def test_validate_css_external_url(opts):
     from mojo.apps.account.services import auth_config as ac
@@ -238,6 +242,7 @@ def test_validate_destination_copy(opts):
     ac.validate_auth_config({"login": {"supporting_copy": ""}})
 
 
+@th.tier("framework")
 @th.django_unit_test("auth back URL rejects script schemes and keeps web/relative destinations")
 def test_back_url_scheme_guard(opts):
     from mojo.apps.account.services import auth_config as ac

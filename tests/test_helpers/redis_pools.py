@@ -4,6 +4,8 @@ import time
 import threading
 from unittest.mock import Mock, patch
 
+TESTIT_TIER = "extended"  # #2792 tier curation
+
 @th.django_unit_setup()
 def setup_redis_pools(opts):
     """Setup function to ensure Redis is available and clean for pool tests"""
@@ -59,6 +61,7 @@ def setup_redis_pools(opts):
         raise Exception("Redis is not available for testing. Please ensure Redis is running and MOJO settings are configured properly.")
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_redis_base_pool_initialization(opts):
     """Test basic RedisBasePool initialization"""
@@ -72,6 +75,7 @@ def test_redis_base_pool_initialization(opts):
     assert pool.redis_client is not None, "Redis client should not be None"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_redis_base_pool_add_remove(opts):
     """Test adding and removing items from pool"""
@@ -109,6 +113,7 @@ def test_redis_base_pool_add_remove(opts):
     pool.clear()
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_redis_base_pool_checkout_checkin(opts):
     """Test checking out and checking in items"""
@@ -151,6 +156,7 @@ def test_redis_base_pool_checkout_checkin(opts):
     pool.clear()
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_redis_base_pool_get_next_available(opts):
     """Test getting next available item from pool"""
@@ -188,6 +194,7 @@ def test_redis_base_pool_get_next_available(opts):
     pool.clear()
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_redis_base_pool_clear_and_destroy(opts):
     """Test clearing and destroying the pool"""
@@ -445,6 +452,7 @@ def test_redis_pool_performance(opts):
     pool.clear()
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_redis_pool_uses_shared_connection(opts):
     """Test that Redis pools use the shared connection from client.py"""
@@ -1182,6 +1190,7 @@ def test_retry_after_model_pool_back_compat_no_predicate(opts):
     pool.clear()
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_redis_decode_responses_fix(opts):
     """Test that Redis operations return strings, not bytes (decode_responses=True fix)"""

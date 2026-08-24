@@ -5,6 +5,8 @@ Verifies the firewall KPI tile path (count by is_blocked=true).
 """
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 TEST_USER = "geoip_agg_admin"
 TEST_PWORD = "geoip##mojo99"

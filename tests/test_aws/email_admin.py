@@ -14,6 +14,8 @@ a parallel module exercising ``configure_email`` cannot flake them — the
 corrupt pair the regression manufactures lives entirely inside this domain.
 """
 
+TESTIT_TIER = "admin"
+
 import json
 from unittest import mock
 

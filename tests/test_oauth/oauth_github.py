@@ -9,6 +9,8 @@ Tests the GitHubOAuthProvider implementation:
 """
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 PROVIDER = "github"
 
 

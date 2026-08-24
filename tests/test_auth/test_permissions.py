@@ -9,6 +9,8 @@ Covers:
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "core"
+
 TEST_PWORD = "testit##mojo"
 
 

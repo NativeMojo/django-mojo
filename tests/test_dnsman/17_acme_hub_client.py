@@ -1,5 +1,7 @@
 """Downstream ACME hub transport: strict wire, config and retry contracts."""
 
+TESTIT_TIER = "extended"
+
 import json
 from contextlib import contextmanager
 from types import SimpleNamespace

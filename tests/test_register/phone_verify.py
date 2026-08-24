@@ -1,6 +1,8 @@
 """Unit tests for the Redis-backed phone_register service."""
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 @th.django_unit_test("phone_register.start writes a session and returns token+code")
 def test_start_writes_session(opts):

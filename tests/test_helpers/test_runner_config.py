@@ -98,11 +98,20 @@ def test_edge_config_is_serial(opts):
     import os
 
     test_root = os.path.dirname(os.path.dirname(__file__))
-    config = _load_module_config(os.path.join(test_root, "test_edge"))
 
+    # The edge coverage was split (#2792): the mutation-free integration cases
+    # run parallel in `test_edge` (serial dropped), and the cases that patch
+    # process-wide reporters/settings moved to the serial sibling
+    # `test_edge_serial`. The isolation contract now lives on the sibling.
+    edge = _load_module_config(os.path.join(test_root, "test_edge"))
     th.assert_true(
-        config.serial is True,
-        "test_edge patches process-wide reporters and settings, so it must be serial")
+        edge.serial is not True,
+        "test_edge no longer patches process-wide state, so it must not be serial")
+
+    edge_serial = _load_module_config(os.path.join(test_root, "test_edge_serial"))
+    th.assert_true(
+        edge_serial.serial is True,
+        "test_edge_serial patches process-wide reporters and settings, so it must be serial")
 
 
 @th.django_unit_test("TESTIT config: defaults when no TESTIT defined")

@@ -9,6 +9,8 @@ None) and passes once the fields are widened / made nullable.
 """
 from testit import helpers as th
 
+TESTIT_TIER = "bug"  # #2792 tier curation
+
 # A full IPv6 — 39 chars, longer than the old varchar(16) and varchar(32).
 IPV6 = "2001:0db8:85a3:0000:0000:8a2e:0370:7334"
 

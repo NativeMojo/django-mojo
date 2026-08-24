@@ -20,6 +20,8 @@ import os
 
 from testit import helpers as th
 
+TESTIT_TIER = "core"  # #2792 tier curation
+
 PROBE_KEY = "TESTIT_FILE_ONLY_PROBE"
 
 # Keys whose file-only read is a security boundary. Sourced from the opt-in

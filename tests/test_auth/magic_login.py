@@ -8,6 +8,8 @@ Both are now channel-aware via the magic_login_channel secret.
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "extended"
+
 TEST_USER = "magic_login_user"
 TEST_PWORD = "magic##mojo99"
 

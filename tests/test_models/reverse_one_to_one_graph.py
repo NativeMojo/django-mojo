@@ -22,6 +22,8 @@ import uuid
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "bug"  # #2792 tier curation
+
 GRAPH_O2O = "item52_reverse_o2o"
 GRAPH_FK = "item52_reverse_fk"
 

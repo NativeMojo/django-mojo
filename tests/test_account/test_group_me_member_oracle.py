@@ -223,6 +223,7 @@ def test_probes_cause_no_writes(opts):
         f"{opts.active_modified_before!r} -> {active_after.modified!r}")
 
 
+@th.tier("extended")
 @th.django_unit_test("member happy path unchanged: member of an ACTIVE group gets their record, legitimate touch preserved")
 def test_member_self_lookup_on_active_group(opts):
     from mojo.apps.account.models import Group, GroupMember
@@ -247,6 +248,7 @@ def test_member_self_lookup_on_active_group(opts):
         "the membership row must be touch()ed on a successful self-lookup")
 
 
+@th.tier("extended")
 @th.django_unit_test("inactive == nonexistent applies to members too: member of an INACTIVE group gets the uniform deny, no touch")
 def test_member_of_inactive_group_denied(opts):
     from mojo.apps.account.models import Group
@@ -270,6 +272,7 @@ def test_member_of_inactive_group_denied(opts):
         f"{modified_before!r} -> {inactive_after.modified!r}")
 
 
+@th.tier("extended")
 @th.django_unit_test("DM-048: membership in a DEACTIVATED parent no longer authorizes on an active child (THE regression), no touch")
 def test_parent_membership_denied_when_parent_inactive(opts):
     from mojo.apps.account.models import Group
@@ -292,6 +295,7 @@ def test_parent_membership_denied_when_parent_inactive(opts):
         f"{opts.child_modified_before!r} -> {child_after.modified!r}")
 
 
+@th.tier("extended")
 @th.django_unit_test("DM-048: membership in an active grandparent above a DEACTIVATED middle no longer authorizes on the leaf")
 def test_grandparent_membership_denied_across_inactive_middle(opts):
     _login(opts, CHAIN_USERNAME, CHAIN_PASSWORD)
@@ -343,6 +347,7 @@ def test_get_member_for_user_effective_active_contract(opts):
         "membership row regardless of the group chain state")
 
 
+@th.tier("extended")
 @th.django_unit_test("DM-048 no one-way door: reactivating the parent instantly restores chain and direct access")
 def test_reactivating_parent_restores_access(opts):
     from mojo.apps.account.models import Group

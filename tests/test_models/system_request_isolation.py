@@ -24,6 +24,8 @@ import uuid as _uuid
 import objict
 from testit import helpers as th
 
+TESTIT_TIER = "bug"  # #2792 tier curation
+
 
 PREFIX = "sysreq_"
 

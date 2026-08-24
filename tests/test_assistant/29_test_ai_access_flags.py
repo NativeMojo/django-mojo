@@ -4,6 +4,8 @@ Each flag is toggled via monkey-patching the target model's RestMeta
 (setattr in setup, delattr in teardown) so no migrations or test-only
 models are required.
 """
+
+TESTIT_TIER = "core"
 from testit import helpers as th
 
 

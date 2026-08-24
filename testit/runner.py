@@ -206,10 +206,11 @@ TIER_PRESETS = {
     "all": None,
 }
 
-# The preset a bare `bin/run_tests` selects. Phase 3 flips this to "core" once
-# core is populated; until then it is "framework" so the bare run is
-# byte-identical to today's default tier.
-DEFAULT_PRESET = "framework"
+# The preset a bare `bin/run_tests` selects. Flipped to "core" once the suite
+# was curated into buckets (maestro #2792): the bare run is now the ≤30s core
+# baseline. `--tier framework` runs django-mojo's own critical tier; `--all`
+# runs everything.
+DEFAULT_PRESET = "core"
 
 # Buckets whose packages run in the parallel ring and are held to the
 # isolation contract. `serial` remains an orthogonal execution attribute.
@@ -271,6 +272,18 @@ def _selected_tags(opts):
             tags.add(name)
     tags |= set(getattr(opts, "extra_list", None) or [])
     return tags, select_all
+
+
+def _effective_tier_tags(func_tier, file_tier, pkg_tags):
+    """The bucket tags that decide whether ONE test runs (maestro #2792):
+    its own @th.tier wins, else its file's module-level TESTIT_TIER, else its
+    package's resolved tags. A test runs under a preset iff these intersect the
+    selected tags."""
+    if func_tier:
+        return {func_tier}
+    if file_tier:
+        return {file_tier}
+    return set(pkg_tags or ())
 
 
 def _selected_preset_label(opts):
@@ -1027,21 +1040,36 @@ def run_module_tests(opts, module, test_name, module_name):
         key=lambda func: inspect.getsourcelines(func[1])[1]
     )
 
+    # Effective-tier gate (maestro #2790 mechanism, completed in #2792). Each
+    # test's bucket is its own @th.tier, else its file's module-level
+    # TESTIT_TIER, else its package's tier tags. A test whose effective bucket
+    # is not among the selected tier(s) is a COUNTED skip, decided here before
+    # invoking so the module pays no setup for it. Bypassed for select_all
+    # (--all / --tier all) and for -t runs ("this package regardless of tags").
+    gate_tiers = (not getattr(opts, "select_all", False)
+                  and not getattr(opts, "test_modules", None))
+    selected = getattr(opts, "selected_tags", None) or set()
+    file_tier = getattr(module, "TESTIT_TIER", None)
+    pkg_tags = None
+    if gate_tiers:
+        try:
+            pkg_tags = _resolve_tags(_load_module_config(
+                os.path.dirname(os.path.abspath(module.__file__)))) or {"framework"}
+        except Exception:
+            pkg_tags = {"framework"}
+
     for func_name, func in functions:
         if func_name.startswith(prefix):
             if _abort_event.is_set():
                 helpers.mark_aborted()
                 raise helpers.TestitAbort()
-            # Tier gate (maestro #2790): a test tagged into a bucket this run
-            # did not select is a COUNTED skip, decided here before invoking so
-            # the module still pays no setup for it. No @th.tier decorators
-            # exist until Phase 3, so this is inert today.
-            func_tier = getattr(func, "_tier", None)
-            if func_tier and not getattr(opts, "select_all", False):
-                selected = getattr(opts, "selected_tags", None) or set()
-                if func_tier not in selected:
+            if gate_tiers and selected:
+                eff = _effective_tier_tags(
+                    getattr(func, "_tier", None), file_tier, pkg_tags)
+                if not (eff & selected):
                     helpers.record_tier_skip(
-                        module_name, test_name, func_name, func_tier)
+                        module_name, test_name, func_name,
+                        ",".join(sorted(eff)) or "framework")
                     continue
             # Track current test for the running display
             dfn = helpers._get_display_fn()

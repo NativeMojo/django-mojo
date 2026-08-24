@@ -25,6 +25,8 @@ import os
 from testit import helpers as th
 from testit.helpers import assert_true
 
+TESTIT_TIER = "bug"
+
 
 def _read_static(filename):
     """Read a shipped static asset from mojo.apps.account/static/account/."""

@@ -16,6 +16,8 @@ the authenticated request already proves identity.
 """
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 USERNAME = "user_actions_self@test.com"
 PASSWORD = "user_actions_pw_99"

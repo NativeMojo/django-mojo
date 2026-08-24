@@ -9,6 +9,8 @@ content_guard's own scoring is unchanged.
 """
 from testit import helpers as th
 
+TESTIT_TIER = "bug"
+
 
 # Legitimate names that contain a high-severity profanity substring and were
 # hard-blocked at signup before the fix.

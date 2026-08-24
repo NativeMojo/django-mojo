@@ -8,6 +8,8 @@ incident modules, so parallel modules' publishes and events are untouched.
 """
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 GROUP_NAME = "wsub_disp_group"
 OTHER_GROUP_NAME = "wsub_disp_other"

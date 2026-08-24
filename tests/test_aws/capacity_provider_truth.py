@@ -6,6 +6,8 @@ the control boundary, and an uncertain mutation can only be reconciled -- it
 is never made replayable by releasing its single-flight claim.
 """
 
+TESTIT_TIER = "edge"
+
 from types import SimpleNamespace
 from unittest import mock
 

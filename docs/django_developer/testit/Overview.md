@@ -31,7 +31,7 @@ tests/
     __init__.py
     totp.py
     passkeys.py
-  test_oauth/        # OAuth flows — calls server_settings()   (parallel)
+  test_oauth/        # OAuth flows — parallel (uses Setting.set, no reloads)
     __init__.py
     oauth.py
     oauth_apple.py
@@ -69,8 +69,10 @@ Use `bin/run_tests` — it handles starting and stopping the test server automat
 > the framework suite they inherit. Targeted application modules may still use
 > `bin/run_tests -t <module>`.
 
-- Run everything:
+- Run the core baseline (≤30s, the default preset):
   `./bin/run_tests`
+- Run django-mojo's whole critical tier, or everything:
+  `./bin/run_tests --tier framework` · `./bin/run_tests --all`
 - Target a module or a specific file:
   `./bin/run_tests -t test_auth`
   `./bin/run_tests -t test_auth.accounts`
@@ -216,25 +218,23 @@ of buckets. **[Tiers.md](Tiers.md) is the canonical reference** — buckets,
 presets, the legacy mapping, the per-bucket isolation contract, and budgets.
 
 ```bash
-./bin/run_tests                        # the framework preset (the default)
-./bin/run_tests --tier core            # just the ≤30s baseline
-./bin/run_tests --tier framework       # django-mojo's own critical tier
-./bin/run_tests --all                  # everything (== --tier all)
-./bin/run_tests --extra extended       # framework preset + ad-hoc extended tag
+./bin/run_tests                        # the core preset (the default) — ≤30s baseline (~9s)
+./bin/run_tests --tier framework       # django-mojo's own critical tier (~45s)
+./bin/run_tests --all                  # everything (== --tier all), ~6min
+./bin/run_tests --extra extended       # core preset + ad-hoc extended tag
 ```
 
 `--tier` is repeatable; a name that is not a preset (`core`/`framework`/`all`)
 is a literal bucket, so `--tier admin --tier edge` selects exactly those two.
 `--extra X` still adds an ad-hoc tag on top of the preset, `--all` is an alias
 for `--tier all`, and the retired `--full` spelling remains a hidden no-op that
-runs the framework preset.
+runs the default (core) preset.
 
-> **Transition (maestro #2790).** The bucket mechanism is live, but until Phase
-> 3 curates tests into buckets, packages still use the legacy `default_core` /
-> `requires_extra` keys, which map onto buckets automatically (`default_core →
-> framework`, `requires_extra → its opt-in tags`). A bare `bin/run_tests` runs
-> the **framework** preset — byte-identical to the old default tier — until
-> Phase 3 populates `core` and flips the default to it.
+> **Live (maestro #2790–#2792).** The suite is curated into buckets and a bare
+> `bin/run_tests` runs the **`core`** preset — the ≤30s baseline. Legacy
+> `default_core` / `requires_extra` keys still map onto buckets automatically
+> (`default_core → framework`, `requires_extra → its opt-in tags`), so a package
+> that predates the `tier` key keeps working. See [Tiers.md](Tiers.md).
 
 Currently `slow`: `test_security` (bouncer/rate-limiting, serial), `test_incident`,
 `test_deploy_scripts` (the packaged node-script shell harnesses — not serial, each
@@ -441,7 +441,7 @@ TESTIT = {
     "tier": "extended",                      # the bucket this package belongs to
     "serial": True,                          # mandatory when a non-parallel bucket mutates
     "time_budget": 20,                       # optional: flag if this package exceeds 20s
-    # "file_parallel": True,                 # opt-in file-granular scheduling (Phase 3)
+    # "file_parallel": True,                 # reserved — runner execution not yet wired
 }
 ```
 

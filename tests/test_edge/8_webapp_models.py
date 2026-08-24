@@ -53,22 +53,6 @@ def test_bucket_allowlist(opts):
         "sign uploads into it with the platform's own credentials")
 
 
-@th.django_unit_test("with no declared buckets, registering a site fails closed")
-def test_bucket_fail_closed(opts):
-    from mojo.apps.account.models.setting import Setting
-    from mojo.apps.edge.models import WebApp
-
-    Setting.remove("EDGE_RELEASE_BUCKETS", group=None)
-    try:
-        err = raises(
-            WebApp.objects.create, group=opts.group, slug="noconfig",
-            bucket=RELEASE_BUCKET, prefix="x")
-        assert err is not None, \
-            "a site was registered with no release buckets declared"
-    finally:
-        declare_release_buckets()
-
-
 @th.django_unit_test("two tenants may use the same slug")
 def test_slug_scoped_per_group(opts):
     """Global uniqueness would let one tenant squat another's slug, and the

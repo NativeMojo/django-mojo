@@ -11,6 +11,8 @@ GEOFENCE_ALLOWLIST). Parallel-safety rules:
     (203.0.113.0/24) entries only;
   - every mutating test restores state in `finally`.
 """
+
+TESTIT_TIER = "extended"
 import uuid as _uuid
 from testit import helpers as th
 from tests.test_geofence._helpers import headers, GEO_RU, GEO_US

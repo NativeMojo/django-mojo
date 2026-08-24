@@ -1,5 +1,7 @@
 from testit import helpers as th
 
+TESTIT_TIER = "slow"  # #2792 tier curation
+
 
 @th.django_unit_test()
 def test_domain_convenience_functions(opts):

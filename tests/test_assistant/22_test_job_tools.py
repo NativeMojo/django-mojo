@@ -159,6 +159,7 @@ def test_run_job_rerun_with_payload_override(opts):
         f"Payload should be overridden, got: {new_job.payload}"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_run_job_blocked_stdlib_func(opts):
     """Security: stdlib functions like os.system must be rejected."""
@@ -168,6 +169,7 @@ def test_run_job_blocked_stdlib_func(opts):
         f"Error should mention installed app requirement: {result['error']}"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_run_job_blocked_run_scheduled_task(opts):
     """Security: run_scheduled_task must go through its dedicated tool."""

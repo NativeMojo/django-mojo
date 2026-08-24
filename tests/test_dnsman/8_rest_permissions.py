@@ -5,6 +5,8 @@ Every fixture refuses before the network: domains are GoDaddy-backed with no
 usable credential, and purchasing is off by its default.
 """
 
+TESTIT_TIER = "core"
+
 import time
 
 from testit import helpers as th
@@ -141,6 +143,7 @@ def test_assign_group_requires_superuser(opts):
         "a refused assignment must not have moved the domain into a group"
 
 
+@th.tier("extended")
 @th.django_unit_test("adopt refuses a group id that does not resolve")
 def test_adopt_refuses_an_unresolvable_group(opts):
     """
@@ -162,6 +165,7 @@ def test_adopt_refuses_an_unresolvable_group(opts):
         "caller did not ask for")
 
 
+@th.tier("extended")
 @th.django_unit_test("a superuser assigns an unowned house domain to a group")
 def test_assign_group_happy_path(opts):
     """No network on this path: it is a plain field write, so it is safe to
@@ -215,6 +219,7 @@ def test_material_requires_manage(opts):
         f"key (status {resp.status_code})")
 
 
+@th.tier("extended")
 @th.django_unit_test("material reports 503 when custody is unavailable, not 'no key'")
 def test_material_custody_unavailable(opts):
     login(opts, opts.manager_email, opts.manager_pw)
@@ -227,6 +232,7 @@ def test_material_custody_unavailable(opts):
     assert_no_secrets(resp.response, "certificate material (unavailable)")
 
 
+@th.tier("extended")
 @th.django_unit_test("a superuser can remove only failed certificate attempts")
 def test_remove_failed_certificate_attempt(opts):
     from mojo.apps.dnsman.models import Certificate
@@ -251,6 +257,7 @@ def test_remove_failed_certificate_attempt(opts):
 # Purchase is off, and proves it without touching AWS
 # ---------------------------------------------------------------------------
 
+@th.tier("extended")
 @th.django_unit_test("quote refuses while purchasing is disabled")
 def test_quote_disabled(opts):
     login(opts, opts.manager_email, opts.manager_pw)
@@ -308,6 +315,7 @@ def test_purchase_requires_recent_interactive_auth(opts):
 # Validation
 # ---------------------------------------------------------------------------
 
+@th.tier("extended")
 @th.django_unit_test("dns endpoints require a domain parameter")
 def test_dns_requires_domain(opts):
     login(opts, opts.manager_email, opts.manager_pw)
@@ -316,6 +324,7 @@ def test_dns_requires_domain(opts):
         f"missing domain param should be a 400, got {resp.status_code}"
 
 
+@th.tier("extended")
 @th.django_unit_test("registrar search refuses bad shapes before any AWS call")
 def test_search_shape_validation(opts):
     # Every one of these refusals happens in shape validation, pre-network —
@@ -372,6 +381,7 @@ def test_credential_masked(opts):
     assert_no_secrets(resp.response, "credential detail")
 
 
+@th.tier("extended")
 @th.django_unit_test("adopt refuses an unresolvable group_uuid, not just an unresolvable group id")
 def test_adopt_refuses_an_unresolvable_group_uuid(opts):
     """

@@ -1,3 +1,5 @@
+
+TESTIT_TIER = "extended"
 from testit import helpers as th
 from testit import faker
 from unittest.mock import patch, MagicMock
@@ -725,6 +727,7 @@ def test_render_endpoint_empty_markdown(opts):
     assert resp.status_code == 400, f"Expected 400 for empty markdown, got {resp.status_code}"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_render_endpoint_escapes_raw_html(opts):
     """Test that the render endpoint escapes raw HTML to prevent XSS."""

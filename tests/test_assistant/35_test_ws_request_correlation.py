@@ -5,6 +5,8 @@ tests/test_assistant_extended_serial/35_test_ws_request_correlation.py — it
 mock.patches the shared settings singleton and other process-wide surfaces
 (maestro item #1839).
 """
+
+TESTIT_TIER = "bug"
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
 

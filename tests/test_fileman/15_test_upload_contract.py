@@ -1,5 +1,7 @@
 """Security and lifecycle contract for maestro #1485."""
 
+TESTIT_TIER = "core"
+
 import os
 import tempfile
 
@@ -102,6 +104,7 @@ def setup_upload_contract(opts):
     File.objects.filter(user_id__in=[owner.id, other.id, admin.id]).delete()
 
 
+@th.tier("extended")
 @th.django_unit_test("upload contract: explicit owner manager is exact and response is capability-bounded")
 def test_owner_manager_and_safe_shape(opts):
     from mojo.apps.fileman.models import File
@@ -228,6 +231,7 @@ def test_policy_grammar(opts):
     }, "upload_policy graph must omit all backend and credential configuration")
 
 
+@th.tier("extended")
 @th.django_unit_test("upload contract: idempotent initiation reuses File and conflicts on fingerprint")
 def test_idempotent_initiation(opts):
     from mojo.apps.fileman.models import File, UploadInitiation
@@ -254,6 +258,7 @@ def test_idempotent_initiation(opts):
               "only keyed initiation may persist internal retry state")
 
 
+@th.tier("extended")
 @th.django_unit_test("upload contract: keyed replay exposes targets only while uploading")
 def test_idempotent_terminal_replay(opts):
     from mojo.apps.fileman.models import File
@@ -277,6 +282,7 @@ def test_idempotent_terminal_replay(opts):
                     "failed and expired retries must not mint writable targets")
 
 
+@th.tier("extended")
 @th.django_unit_test("upload contract: local transfer stays uploading, retries, then completes once")
 def test_local_transfer_then_completion(opts):
     from mojo.apps.fileman.models import File
@@ -317,6 +323,7 @@ def test_local_transfer_then_completion(opts):
     assert_eq(stale.status_code, 404, "completed local token must no longer be usable")
 
 
+@th.tier("extended")
 @th.django_unit_test("upload contract: multipart and actual-byte validation clean partial objects")
 def test_multipart_and_partial_cleanup(opts):
     from mojo.apps.fileman.models import File
@@ -359,6 +366,7 @@ def test_multipart_and_partial_cleanup(opts):
                 "MIME mismatch must remove the partial storage object")
 
 
+@th.tier("extended")
 @th.django_unit_test("upload contract: sniffed MIME may differ when both types satisfy policy")
 def test_sniffed_mime_policy_is_independent(opts):
     from mojo.apps.fileman.models import File, FileManager
@@ -392,6 +400,7 @@ def test_sniffed_mime_policy_is_independent(opts):
         manager.save(update_fields=["allowed_mime_types", "modified"])
 
 
+@th.tier("extended")
 @th.django_unit_test("upload contract: raw PUT requires length and accepts declared zero bytes")
 def test_raw_put_length_and_zero(opts):
     _login(opts, OWNER)

@@ -196,6 +196,7 @@ def test_oauth_callback_preserves_frontend_query(opts):
     )
 
 
+@th.tier("core")
 @th.django_unit_test("oauth: callback strips a smuggled code/state from frontend_uri")
 def test_oauth_callback_strips_smuggled_params(opts):
     """
@@ -254,6 +255,7 @@ def test_oauth_callback_rejects_missing_params(opts):
     )
 
 
+@th.tier("core")
 @th.django_unit_test("oauth: callback rejects invalid state")
 def test_oauth_callback_rejects_invalid_state(opts):
     resp = opts.client.get(
@@ -492,6 +494,7 @@ def test_oauth_bypasses_mfa(opts):
     opts.user.save(update_fields=["requires_mfa", "modified"])
 
 
+@th.tier("core")
 @th.django_unit_test("oauth: disabled user is rejected")
 def test_oauth_disabled_user(opts):
     from mojo.apps.account.models import User
@@ -553,6 +556,7 @@ def test_magic_login_valid_token(opts):
     assert data.user, "Missing user"
 
 
+@th.tier("core")
 @th.django_unit_test("magic login: pr: token is rejected on magic login endpoint")
 def test_magic_login_rejects_pr_token(opts):
     from mojo.apps.account.utils.tokens import generate_password_reset_token
@@ -726,6 +730,7 @@ def test_oauth_connection_list_owner(opts):
     assert conn.id in conn_ids, "Owner's connection should be in list"
 
 
+@th.tier("core")
 @th.django_unit_test("oauth: owner does not see another user's connections")
 def test_oauth_connection_list_isolation(opts):
     from mojo.apps.account.models.oauth import OAuthConnection

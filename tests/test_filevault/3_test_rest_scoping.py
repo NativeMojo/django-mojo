@@ -22,6 +22,8 @@ Also covers the hardening shipped with the same fix:
   - unlock now requires the file password up front for password-protected files
   - the download-token TTL is clamped to VAULT_TOKEN_MAX_TTL
 """
+
+TESTIT_TIER = "core"
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
 

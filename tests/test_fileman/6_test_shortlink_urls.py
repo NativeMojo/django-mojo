@@ -9,6 +9,8 @@ Covers:
   - Discrete regenerate_renditions action shape (the fix).
   - Delete cascade scoped to source="fileman"/"fileman-share".
 """
+
+TESTIT_TIER = "extended"
 import os
 import tempfile
 import shutil as _shutil
@@ -107,7 +109,8 @@ def setup_shortlink_urls(opts):
     opts.fm_pub_id = pub.pk
 
     File.objects.filter(user__in=[u1, u2]).delete()
-    FileRendition.objects.all().delete()
+    FileRendition.objects.filter(
+        original_file__file_manager__name__startswith="test_sl_fm").delete()  # scoped: never wipe other packages' renditions (#2792)
     ShortLink.objects.filter(source__in=["fileman", "fileman-share"]).delete()
 
 
@@ -456,6 +459,7 @@ def test_regenerate_discrete_roles(opts):
               f"roles filter should be in payload, got {job.payload}")
 
 
+@th.tier("bug")
 @th.django_unit_test("Action shape: {\"action\": \"regenerate_renditions\"} is no longer recognized")
 def test_regenerate_legacy_shape_dropped(opts):
     from mojo.apps.jobs.models import Job
@@ -560,6 +564,7 @@ def test_delete_scoped_cleanup(opts):
 # Security regressions (from review of f5bf944)
 # ---------------------------------------------------------------------------
 
+@th.tier("bug")
 @th.django_unit_test("Security: rendition shortlinks are cleaned up on File delete")
 def test_rendition_shortlinks_cleaned_on_file_delete(opts):
     """Before the fix, File.on_rest_pre_delete only deleted shortlinks with
@@ -603,6 +608,7 @@ def test_rendition_shortlinks_cleaned_on_file_delete(opts):
               f"got {[(s.code, s.source) for s in remaining]}")
 
 
+@th.tier("core")
 @th.django_unit_test("Security: rendition list endpoint is group-scoped via GROUP_FIELD")
 def test_rendition_list_group_scoped(opts):
     """FileRendition has no direct `group` FK. Without `GROUP_FIELD` pointing
@@ -696,7 +702,8 @@ def cleanup_shortlink_tests(opts):
     from mojo.apps.shortlink.models import ShortLink
 
     File.objects.filter(user__in=[opts.user, opts.user2]).delete()
-    FileRendition.objects.all().delete()
+    FileRendition.objects.filter(
+        original_file__file_manager__name__startswith="test_sl_fm").delete()  # scoped: never wipe other packages' renditions (#2792)
     FileManager.objects.filter(pk__in=[opts.fm_id, opts.fm_pub_id]).delete()
     ShortLink.objects.filter(source__in=["fileman", "fileman-share", "manual"]).delete()
 
