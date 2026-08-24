@@ -333,14 +333,15 @@ def start_scheduler_foreground(verbose=False, channels=None):
         return False
 
 
-def status_command(verbose=False):
-    """Check status of all running daemons."""
+def status_command(verbose=False, *, pid_root="/tmp"):
+    """Check status of jobs CLI daemon-mode processes."""
     from mojo.apps.jobs.daemon import DaemonRunner
 
     results = []
+    pid_root = Path(pid_root)
 
     # Check for engine PIDs
-    for pid_file in Path('/tmp').glob('job-engine-*.pid'):
+    for pid_file in pid_root.glob('job-engine-*.pid'):
         runner = DaemonRunner("JobEngine", lambda: None, pidfile=str(pid_file))
         if runner.status():
             results.append(f"✓ Engine running (PID file: {pid_file})")
@@ -348,7 +349,7 @@ def status_command(verbose=False):
             results.append(f"❌ Engine not running (stale PID file: {pid_file})")
 
     # Check for scheduler PIDs
-    for pid_file in Path('/tmp').glob('job-scheduler-*.pid'):
+    for pid_file in pid_root.glob('job-scheduler-*.pid'):
         runner = DaemonRunner("Scheduler", lambda: None, pidfile=str(pid_file))
         if runner.status():
             results.append(f"✓ Scheduler running (PID file: {pid_file})")
@@ -359,7 +360,10 @@ def status_command(verbose=False):
         for result in results:
             print(result)
     else:
-        print("No job system daemons running")
+        print(
+            "No jobs CLI daemon-mode processes running; check deployed foreground "
+            "processes with: python3 -m mojo.deploy.jobman status"
+        )
 
     return len(results) > 0
 
