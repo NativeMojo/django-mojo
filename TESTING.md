@@ -92,6 +92,28 @@ whole file via `TESTIT_TIER = "bug"`, one test via `@th.tier("bug")`. See Tiers.
 never demotes a security-relevant test out of a critical bucket; put exhaustive variants in
 `extended`. Tag it when you write it — auditing it back out later is far more expensive.
 
+## Continuous Integration
+
+GitHub Actions runs the tiered suite (`.github/workflows/tests.yml`, which calls
+the reusable `.github/workflows/testit.yml`). The trigger decides the preset:
+
+| Trigger | Preset | Gate |
+|---|---|---|
+| every push | `core` (~9s) | **blocking** — the fast baseline must stay green |
+| pull request | `framework` (~45s) | **advisory** (`continue-on-error`) until #2813 removes the shared-state flakes; deleting that one line makes it blocking |
+| nightly (cron) | `all` | reported, not gating |
+
+The reusable workflow stands up Postgres (with pgvector) and Redis service
+containers, installs deps with `uv`, runs `bin/create_testproject`, then
+`bin/run_tests --agent --tier <preset>`. The `core` preset's 30s budget is a
+hard exit-code gate; `TESTIT_BUDGET_SCALE` (set to `2` in the workflow) gives a
+cold CI host headroom — calibrate it down after one real run. `--all` also runs
+under `publish.py` before a release.
+
+Consumers wire their own CI the same way against their chosen `default_preset`;
+scaffold a package with `./bin/run_tests --init <package>` (see
+[testit/Tiers.md](docs/django_developer/testit/Tiers.md) → *For consumers*).
+
 ## Agent Mode
 
 `--agent` writes `testproject/var/test_failures.json` — a structured JSON report designed for LLM agents and CI pipelines. It includes:

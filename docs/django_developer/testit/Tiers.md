@@ -5,10 +5,11 @@ named set of buckets. This replaces the old two-axis "default tier vs. `--all`"
 model, which had no middle ground between "everything critical" and "everything
 at all" and let the default tier grow to thousands of tests.
 
-> **Status.** Live (maestro #2790–#2792). The suite is curated into buckets and
-> **a bare `bin/run_tests` runs the `core` preset** — the ≤30s baseline (~9s
-> today). `--tier framework` runs django-mojo's own critical tier; `--all` runs
-> everything. Legacy `default_core` / `requires_extra` keys still map onto
+> **Status.** Live (maestro #2790–#2793). The suite is curated into buckets,
+> a **bare `bin/run_tests` is the ≤30s `core` baseline** (~9s today); `--tier
+> framework` runs django-mojo's own critical tier and `--all` runs everything.
+> Consumers configure their own tiers via `apps/tests/testit.json` (see *For
+> consumers* below). Legacy `default_core` / `requires_extra` keys still map onto
 > buckets automatically (below), so a package that predates the `tier` key keeps
 > working.
 
@@ -35,8 +36,8 @@ any other name is a literal single bucket.
 
 | Preset | Selects | Budget |
 |---|---|---|
-| `core` | `core` | 30s (hard-fail) |
-| `framework` | `core` + `framework` + `bug` | 90s (warn locally, fail in CI once Phase 4 wires it) |
+| `core` | `core` | 30s (hard-fail; the blocking CI gate on every push) |
+| `framework` | `core` + `framework` + `bug` | 90s (warn locally; advisory in CI until #2813, then blocking) |
 | `all` | every bucket | — |
 
 ```bash
@@ -140,6 +141,57 @@ blocked on under the parallel suite.
 The agent report also carries the selected `preset`, each module's `tier`, and
 `budget_violations`. Each preset reports to maestro as its own suite identity so
 a `core` run cannot report green over a red `extended` module.
+
+## For consumers (apps built on django-mojo)
+
+An app that runs its own tests through testit gets the same buckets, presets and
+isolation contract. What differs from django-mojo's own suite is configured in
+**`apps/tests/testit.json`**, and the app test root is **not** flushed between
+runs.
+
+### Scaffolding a package
+
+```bash
+./bin/run_tests --init <package_name>
+```
+
+writes `apps/tests/<package_name>/__init__.py` (a `tier: "core"` example whose
+docstring teaches the buckets and the parallel-safety contract) and, if absent,
+a starter `apps/tests/testit.json`. It never overwrites an existing file and
+creates the `apps/tests` directory chain if needed. The `django-mojo-skeleton`
+ships the same example package, and `bin/create_testproject` generates it too.
+
+### `apps/tests/testit.json`
+
+| Key | Meaning |
+|---|---|
+| `budgets` | Wall-clock budgets per preset, e.g. `{"core": 30}`. |
+| `default_preset` | The preset a **bare** `bin/run_tests` selects. Set it to `"framework"`. |
+| `isolation` | `"enforce"` opts the app test root into the fail-closed isolation scan. Omit for the historical exemption. |
+| `production_prefixes` | Your app's own shared-surface import prefixes (e.g. `["myapp."]`), treated as shared when `isolation` is `"enforce"`. Falls back to `INSTALLED_APPS`. `mojo.`/`django.`/`testit.` are always shared. |
+
+**`default_preset` is not optional for a consumer.** django-mojo's bare run
+selects the `core` preset, and a consumer's packages are `framework`-bucket by
+default — so a bare `bin/run_tests` with no `default_preset` selects **nothing**
+and reads as green. Set `"default_preset": "framework"` so a bare run runs your
+tests; `--init` and the skeleton set it for you. An unknown or non-concrete
+value falls back to `core`, never to an empty selection.
+
+### Is my test core-eligible?
+
+Put a test in `core` only if ALL of these hold: it is a security or contract
+boundary worth running in every fast baseline; it mutates no process-wide shared
+state (django settings, `os.environ`, the `mojo.helpers.*` singletons, protected
+`Setting` rows); it is parallel-safe; and its package declares `cold_budget: 0`.
+Everything else is `framework` (your critical, parallel-safe tests) or an opt-in
+bucket (`extended`/`admin`/`edge`/`slow`), which must be `serial: True` whenever
+it mutates shared state.
+
+### Cleanup: consumer runners do not flush
+
+django-mojo's own runner flushes Postgres and Redis before each run; **a consumer
+runner does not.** Every setup function must delete the rows it is about to create
+before creating them, so each test is correct on a long-lived database.
 
 ## Current residents (curated in maestro #2792)
 

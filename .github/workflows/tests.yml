@@ -1,0 +1,38 @@
+# Test-tier CI (maestro #2793). See docs/django_developer/testit/Tiers.md.
+#
+#   push          -> the core preset (~9s): the BLOCKING gate on every push.
+#   pull_request  -> the framework preset (~45s): ADVISORY (continue-on-error)
+#                    until #2813 removes the shared-state flakes. To make it a
+#                    blocking gate, delete the `continue-on-error: true` line on
+#                    the framework job below — that is the whole flip.
+#   schedule      -> the all-tier run (extended/admin/edge/slow), nightly.
+name: tests
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 7 * * *"
+
+jobs:
+  core:
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/testit.yml
+    with:
+      tier: core
+
+  framework:
+    if: github.event_name == 'pull_request'
+    # Advisory until #2813: the framework preset still carries the shared-state
+    # flake class (throttle/rate-limit/token/rendition), which would make PRs
+    # intermittently, wrongly red. Delete this line once #2813 lands.
+    continue-on-error: true
+    uses: ./.github/workflows/testit.yml
+    with:
+      tier: framework
+
+  all:
+    if: github.event_name == 'schedule'
+    uses: ./.github/workflows/testit.yml
+    with:
+      tier: all

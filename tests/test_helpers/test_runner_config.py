@@ -643,3 +643,139 @@ def test_import_shadow_refused(opts):
     assert "shadow" in output.getvalue().lower(), (
         f"the refusal must explain the shadowing, got {output.getvalue()!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# `testit --init` — consumer package scaffolding (maestro #2793)
+# ---------------------------------------------------------------------------
+@th.unit_test("runner --init: parses to opts.init_package")
+def test_init_flag_parses(opts):
+    from testit.runner import setup_parser
+
+    assert setup_parser(["--init", "test_widget"]).init_package == "test_widget", (
+        "--init must carry the package name onto opts.init_package")
+    assert setup_parser([]).init_package is None, (
+        "without --init the package name must be None")
+
+
+@th.unit_test("runner --init: scaffolds a testit package and starter testit.json")
+def test_init_scaffolds_package(opts):
+    import ast
+    import json
+    import os
+    import tempfile
+    from testit import runner
+
+    with tempfile.TemporaryDirectory() as d:
+        # apps/tests does not exist yet — --init must create the chain
+        root = os.path.join(d, "apps", "tests")
+        rc = runner._scaffold_init("test_widget", root=root)
+        assert rc == 0, f"scaffold must return 0, got {rc}"
+
+        init_path = os.path.join(root, "test_widget", "__init__.py")
+        json_path = os.path.join(root, "testit.json")
+        assert os.path.exists(init_path), "the package __init__.py must be written"
+        assert os.path.exists(json_path), "the starter testit.json must be written"
+
+        # the generated package parses and declares a core-tier TESTIT
+        tree = ast.parse(open(init_path, encoding="utf-8").read())
+        cfg = None
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(
+                    getattr(t, "id", None) == "TESTIT" for t in node.targets):
+                cfg = ast.literal_eval(node.value)
+        assert cfg == {"tier": "core", "cold_budget": 0}, (
+            f"the template TESTIT must be tier=core/cold_budget=0, got {cfg}")
+
+        data = json.load(open(json_path, encoding="utf-8"))
+        assert data.get("default_preset") == "framework", (
+            f"the starter testit.json must set default_preset=framework, got {data}")
+
+        # the runner's own AST loader accepts the generated TESTIT
+        loaded = runner._load_module_config(os.path.join(root, "test_widget"))
+        assert loaded.get("tier") == "core", (
+            f"the loader must read the generated TESTIT, got {dict(loaded)}")
+
+        # a non-identifier name (path traversal, hyphen, empty) is refused
+        for bad in ("../evil", "test-widget", ""):
+            rc_bad = runner._scaffold_init(bad, root=root)
+            assert rc_bad != 0, (
+                f"--init must refuse the invalid package name {bad!r}, got {rc_bad}")
+
+
+@th.unit_test("runner --init: idempotent — never overwrites an existing file")
+def test_init_is_idempotent(opts):
+    import os
+    import tempfile
+    from testit import runner
+
+    with tempfile.TemporaryDirectory() as d:
+        root = os.path.join(d, "apps", "tests")
+        runner._scaffold_init("test_widget", root=root)
+        init_path = os.path.join(root, "test_widget", "__init__.py")
+        json_path = os.path.join(root, "testit.json")
+        for path in (init_path, json_path):
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write("\n# preserved marker\n")
+
+        rc = runner._scaffold_init("test_widget", root=root)
+        assert rc == 0, "re-running --init must succeed"
+        for path in (init_path, json_path):
+            assert "# preserved marker" in open(path, encoding="utf-8").read(), (
+                f"--init must not overwrite an existing file: {path}")
+
+
+# ---------------------------------------------------------------------------
+# Consumer opt-in isolation policy (maestro #2793)
+# ---------------------------------------------------------------------------
+@th.unit_test("runner policy: consumer root exempt without opt-in, enforced with it")
+def test_consumer_policy_opt_in(opts):
+    import json
+    import os
+    import tempfile
+    from testit import runner
+
+    with tempfile.TemporaryDirectory() as d:
+        root = os.path.join(d, "apps", "tests")
+        os.makedirs(os.path.join(root, "test_thing"))
+        with open(os.path.join(root, "test_thing", "__init__.py"), "w") as fh:
+            fh.write('TESTIT = {"tier": "framework"}\n')
+        # a hot (parallel-ring) isolation violation
+        with open(os.path.join(root, "test_thing", "1_t.py"), "w") as fh:
+            fh.write("from django.conf import settings\n"
+                     "def test_x(opts):\n"
+                     "    settings.FOO = 1\n")
+
+        # no testit.json -> exempt (nothing scanned)
+        assert runner._enforce_consumer_policy(root) == (0, 0), (
+            "a consumer root without testit.json must stay exempt")
+
+        # testit.json without isolation:enforce -> still exempt
+        cfg = os.path.join(root, "testit.json")
+        with open(cfg, "w") as fh:
+            json.dump({"budgets": {"core": 30}}, fh)
+        assert runner._enforce_consumer_policy(root) == (0, 0), (
+            "isolation not set to enforce must stay exempt")
+
+        # opt in -> the hot violation must fail closed (SystemExit)
+        with open(cfg, "w") as fh:
+            json.dump({"budgets": {"core": 30}, "isolation": "enforce"}, fh)
+        raised = False
+        try:
+            runner._enforce_consumer_policy(root)
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "an opted-in consumer root with a hot isolation violation must fail closed")
+
+
+@th.django_unit_test("runner policy: _installed_app_prefixes excludes the always-shared roots")
+def test_installed_app_prefixes(opts):
+    from testit import runner
+
+    prefixes = runner._installed_app_prefixes()
+    assert isinstance(prefixes, tuple), f"must be a tuple, got {type(prefixes)}"
+    for banned in ("django.", "mojo.", "testit."):
+        assert banned not in prefixes, (
+            f"{banned} is always-shared and must never appear in consumer "
+            f"production_prefixes, got {prefixes}")

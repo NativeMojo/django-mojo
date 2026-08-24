@@ -81,6 +81,12 @@ PARALLEL_TIERS = frozenset({"core", "framework"})
 # parallel test thread in the process.
 PRODUCTION_PREFIXES = ("mojo.", "django.", "testit.")
 
+# Origins the isolation policy actively enforces. "django_mojo" is the repo's
+# own tests/; "consumer_enforced" is a consumer app test root that opted in via
+# apps/tests/testit.json {"isolation": "enforce"} (maestro #2793). A plain
+# "consumer" origin (no opt-in) stays exempt and is deliberately NOT here.
+_ENFORCED_ORIGINS = ("django_mojo", "consumer_enforced")
+
 # The one shared settings singleton. `from mojo.helpers.settings import
 # settings` (or any alias of it) resolves here.
 SETTINGS_SINGLETON = "mojo.helpers.settings.settings"
@@ -275,8 +281,12 @@ class _Provenance:
 
 
 class _FileScanner(ast.NodeVisitor):
-    def __init__(self, filename, strict=False):
+    def __init__(self, filename, strict=False, production_prefixes=None):
         self.filename = filename
+        # Extra "shared surface" prefixes a consumer names for its own apps
+        # (maestro #2793); mojo./django./testit. are always shared. Empty for
+        # django-mojo's own scan, so _is_production stays byte-identical there.
+        self.production_prefixes = tuple(production_prefixes or ())
         # strict = the core-tier contract (maestro #2790): additional mutation
         # classes (Setting.set/remove classmethod writes, server_settings
         # reloads) become blocking. Off for framework/default so their scans
@@ -291,6 +301,16 @@ class _FileScanner(ast.NodeVisitor):
     def _flag(self, code, node, detail):
         self.violations.append(
             violation(code, self.filename, getattr(node, "lineno", 0), detail))
+
+    def _is_production(self, dotted):
+        """A dotted path naming shared production code — the always-shared base
+        prefixes plus any consumer-declared production_prefixes (maestro #2793)."""
+        if not isinstance(dotted, str):
+            return False
+        if dotted.startswith(PRODUCTION_PREFIXES):
+            return True
+        return bool(self.production_prefixes) and dotted.startswith(
+            self.production_prefixes)
 
     def _bind(self, name, kind, dotted=None, value=None):
         self.names[name] = objict(kind=kind, dotted=dotted, value=value)
@@ -431,7 +451,7 @@ class _FileScanner(ast.NodeVisitor):
                 "django_settings_mutation", node,
                 f"{verb} attribute '{node.attr}' of django.conf.settings")
             return
-        if dotted and _is_production_path(dotted):
+        if dotted and self._is_production(dotted):
             self._flag(
                 "production_attr_mutation", node,
                 f"{verb} attribute '{node.attr}' of shared production object "
@@ -501,7 +521,7 @@ class _FileScanner(ast.NodeVisitor):
                 return
             target = self._resolve_string(args[0])
             if target is not None:
-                if _is_production_path(target):
+                if self._is_production(target):
                     self._flag(
                         "patch_shared", node,
                         f"{form}('{target}') replaces a shared production "
@@ -521,7 +541,7 @@ class _FileScanner(ast.NodeVisitor):
             if dotted in ("sys.modules", "modules"):
                 self._flag("sys_modules_mutation", node, f"{form} of sys.modules")
                 return
-            if dotted and _is_production_path(dotted):
+            if dotted and self._is_production(dotted):
                 self._flag(
                     "patch_shared", node,
                     f"{form} of shared production object '{dotted}'")
@@ -545,7 +565,7 @@ class _FileScanner(ast.NodeVisitor):
                 "patch.object of the shared settings singleton "
                 f"({SETTINGS_SINGLETON})")
             return
-        if dotted and _is_production_path(dotted):
+        if dotted and self._is_production(dotted):
             self._flag(
                 "patch_shared", node,
                 f"patch.object of shared production object '{dotted}'")
@@ -568,7 +588,7 @@ class _FileScanner(ast.NodeVisitor):
                         "explicit production path")
                     return
                 if info.kind == _Provenance.IMPORTED_OBJECT and info.dotted \
-                        and not _is_production_path(info.dotted):
+                        and not self._is_production(info.dotted):
                     return
         self._flag(
             "patch_unresolved", node,
@@ -776,7 +796,7 @@ class _FileScanner(ast.NodeVisitor):
             self._flag(
                 "django_settings_mutation", node,
                 f"{func.id}() {verb} an attribute of django.conf.settings")
-        elif dotted and _is_production_path(dotted):
+        elif dotted and self._is_production(dotted):
             self._flag(
                 "production_attr_mutation", node,
                 f"{func.id}() {verb} an attribute of shared production "
@@ -867,7 +887,7 @@ class _FileScanner(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def scan_source(source, filename="<source>", strict=False):
+def scan_source(source, filename="<source>", strict=False, production_prefixes=None):
     """Scan one test source text. Returns a list of violation objicts.
 
     strict enables the core-tier contract (maestro #2790): Setting.set/remove
@@ -877,7 +897,7 @@ def scan_source(source, filename="<source>", strict=False):
     except SyntaxError as error:
         return [violation("scan_error", filename, error.lineno or 0,
                           f"source could not be parsed: {error.msg}")]
-    scanner = _FileScanner(filename, strict=strict)
+    scanner = _FileScanner(filename, strict=strict, production_prefixes=production_prefixes)
     scanner.visit(tree)
     return scanner.violations
 
@@ -994,11 +1014,14 @@ def cached_file_facts(path):
     return objict(tests=tests, violations=rows, tiers=tiers)
 
 
-def scan_file(path, strict=False):
+def scan_file(path, strict=False, production_prefixes=None):
     """Non-strict scans use the cross-run content-hash cache. Strict scans
     (core-tier only, maestro #2790) are uncached — core packages are few and a
-    strict verdict must never be served from the non-strict cache."""
-    if not strict:
+    strict verdict must never be served from the non-strict cache. Consumer
+    production_prefixes also bypass the cache (maestro #2793): the cache key is
+    the content hash alone, so a prefix-sensitive verdict must never come from
+    it."""
+    if not strict and not production_prefixes:
         return cached_file_facts(path).violations
     try:
         with open(path, "rb") as handle:
@@ -1011,7 +1034,8 @@ def scan_file(path, strict=False):
     except UnicodeDecodeError as error:
         return [violation("scan_error", str(path), 0,
                           f"source could not be decoded: {error}")]
-    return scan_source(source, filename=str(path), strict=True)
+    return scan_source(source, filename=str(path), strict=strict,
+                       production_prefixes=production_prefixes)
 
 
 def _iter_test_files(package_path, include_private=False):
@@ -1042,7 +1066,7 @@ def _package_has_core_tag(package_path):
     return False
 
 
-def scan_package(package_path, strict=False):
+def scan_package(package_path, strict=False, production_prefixes=None):
     """Scan every test file of one package directory. In strict (core) mode
     `_`-prefixed helper files are scanned too and the stricter grammar fires.
 
@@ -1059,7 +1083,8 @@ def scan_package(package_path, strict=False):
     files_scanned = 0
     for path in _iter_test_files(package_path, include_private=strict):
         files_scanned += 1
-        violations.extend(scan_file(path, strict=strict))
+        violations.extend(scan_file(path, strict=strict,
+                                    production_prefixes=production_prefixes))
     return objict(files_scanned=files_scanned, violations=violations)
 
 
@@ -1078,7 +1103,7 @@ def evaluate_package_state(config, violations, *, origin, has_config):
       opt-in: default_core absent/False with a nonempty requires_extra;
               serial=True is mandatory whenever the policy finds mutation.
     """
-    if origin != "django_mojo":
+    if origin not in _ENFORCED_ORIGINS:
         return []
     problems = []
     if not has_config:
@@ -1182,7 +1207,7 @@ def evaluate_cold_budget(config, cold_violations, *, origin, has_config):
 
     Returns a list of problem strings (empty = within budget).
     """
-    if origin != "django_mojo" or not has_config:
+    if origin not in _ENFORCED_ORIGINS or not has_config:
         return []
     config = config or {}
     tier = config.get("tier")

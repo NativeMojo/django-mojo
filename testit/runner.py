@@ -262,7 +262,8 @@ def _selected_tags(opts):
     tags = set()
     select_all = False
     if not tier_names:
-        tags |= TIER_PRESETS[DEFAULT_PRESET]
+        default_preset = getattr(opts, "default_preset", None) or DEFAULT_PRESET
+        tags |= TIER_PRESETS.get(default_preset) or TIER_PRESETS[DEFAULT_PRESET]
     for name in tier_names:
         if name == "all":
             select_all = True
@@ -294,10 +295,127 @@ def _selected_preset_label(opts):
         return "all"
     tiers = list(getattr(opts, "tiers", None) or [])
     if not tiers:
-        return DEFAULT_PRESET
+        return getattr(opts, "default_preset", None) or DEFAULT_PRESET
     if "all" in tiers:
         return "all"
     return "+".join(sorted(set(tiers)))
+
+
+def _load_default_preset(test_root):
+    """The preset a bare run (no --tier/--all) selects, from
+    <test_root>/testit.json {"default_preset": "..."} (maestro #2793).
+
+    Called with django-mojo's own tests/ when running the framework suite —
+    which declares no default_preset, so the built-in DEFAULT_PRESET (core)
+    stands — or with a consumer's apps/tests/ when django-mojo is a
+    dependency. A consumer whose packages are all framework-bucket sets
+    "default_preset": "framework" so its bare run selects its tests instead
+    of nothing (the #2792 flip to core would otherwise select none). An
+    unknown value, or a preset that resolves to no concrete buckets ("all"),
+    falls back so a bare run is never empty.
+    """
+    if not test_root:
+        return DEFAULT_PRESET
+    path = os.path.join(test_root, "testit.json")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return DEFAULT_PRESET
+    name = data.get("default_preset")
+    if isinstance(name, str) and name in TIER_PRESETS and TIER_PRESETS[name]:
+        return name
+    return DEFAULT_PRESET
+
+
+# The __init__.py a `testit --init` package starts from (maestro #2793). The
+# comment block is the whole point — it teaches the buckets and the
+# parallel-safety contract at the moment a consumer creates their first package.
+_INIT_PACKAGE_TEMPLATE = '''\
+"""Tests for <describe this package>.
+
+testit groups tests into BUCKETS and runs a named PRESET (a set of buckets):
+
+    core       - the fast baseline every consumer runs (a bare `bin/run_tests`).
+                 Strictest isolation: no shared-state mutation, parallel-safe,
+                 cold_budget 0. Keep it small and green.
+    framework  - the rest of your critical, parallel-safe tests.
+    bug        - one isolated regression per fixed bug.
+    extended / admin / edge / slow - opt-in buckets, run only when selected.
+
+A consumer's bare `bin/run_tests` selects the preset named by "default_preset"
+in apps/tests/testit.json (set to "framework" by --init, so a bare run always
+runs something). `--tier framework` and `--tier all` widen the selection.
+
+Parallel-safety contract for core/framework packages: a test may not mutate
+process-wide state shared with other packages (django settings, os.environ, the
+mojo.helpers.* singletons, protected Setting rows) while it runs in the parallel
+ring. If a test must mutate shared state, give the package its own opt-in bucket
+and mark it serial:  TESTIT = {"tier": "extended", "serial": True}
+
+Consumer test runners do NOT flush the database or Redis between runs, so every
+setup function must delete its own rows before it creates them.
+
+(Tiers arrived in django-mojo's testit with the #2783 epic. On an older
+django-mojo this dict merges harmlessly and the package runs by default.)
+"""
+
+TESTIT = {"tier": "core", "cold_budget": 0}
+'''
+
+# The starter apps/tests/testit.json --init writes when none exists. A consumer
+# whose packages are all framework-bucket needs default_preset=framework so a
+# bare run selects something after the #2792 flip to the core baseline.
+_INIT_TESTIT_JSON = {"budgets": {"core": 30}, "default_preset": "framework"}
+
+
+def _scaffold_init(package_name, root=None):
+    """Scaffold a testit package under the app test root
+    (apps/tests/<package_name>/) plus a starter apps/tests/testit.json, then
+    return 0 without running tests — the `--init` command (maestro #2793).
+
+    Idempotent: it never overwrites an existing file, only fills in what is
+    missing, and creates the apps/tests directory chain if absent. `root`
+    overrides the app test root (for tests); the CLI passes the real TEST_ROOT.
+    """
+    # The name becomes a directory AND an import name, so require a plain Python
+    # identifier — this also rejects path separators / .. in the CLI arg.
+    if not package_name or not package_name.isidentifier():
+        print(f"  --init: {package_name!r} is not a valid package name — use a "
+              "Python identifier like test_widget")
+        return 2
+    root = str(TEST_ROOT) if root is None else str(root)
+    pkg_dir = os.path.join(root, package_name)
+    init_path = os.path.join(pkg_dir, "__init__.py")
+    json_path = os.path.join(root, "testit.json")
+
+    os.makedirs(pkg_dir, exist_ok=True)
+
+    wrote, skipped = [], []
+    if os.path.exists(init_path):
+        skipped.append(init_path)
+    else:
+        with open(init_path, "w", encoding="utf-8") as fh:
+            fh.write(_INIT_PACKAGE_TEMPLATE)
+        wrote.append(init_path)
+
+    if os.path.exists(json_path):
+        skipped.append(json_path)
+    else:
+        with open(json_path, "w", encoding="utf-8") as fh:
+            json.dump(_INIT_TESTIT_JSON, fh, indent=2)
+            fh.write("\n")
+        wrote.append(json_path)
+
+    for path in wrote:
+        print(f"  created {path}")
+    for path in skipped:
+        print(f"  exists, left untouched: {path}")
+    print(
+        f"\n  Scaffolded the `{package_name}` testit package (tier=core). Add\n"
+        f"  test files named test_*.py with @th.django_unit_test() functions,\n"
+        f"  then run:  ./bin/run_tests -t {package_name}")
+    return 0
 
 
 # Whole-suite wall-clock budgets per preset (seconds), overridable in
@@ -752,9 +870,15 @@ def setup_parser(argv=None):
     parser.add_argument("--tier", action="append", dest="tiers",
                         help="Select a tier preset (core, framework, all) or a "
                              "literal bucket (bug, extended, admin, edge, slow). "
-                             "Repeatable. Default: the framework preset.")
+                             "Repeatable. Default: the core preset "
+                             "(a repo may override via testit.json "
+                             "default_preset).")
     parser.add_argument("--all", action="store_true",
                         help="Run every tier (same as --tier all)")
+    parser.add_argument("--init", dest="init_package", metavar="PACKAGE",
+                        default=None,
+                        help="Scaffold apps/tests/<PACKAGE>/ and a starter "
+                             "apps/tests/testit.json, then exit (no tests run)")
     # Compatibility only: old commands keep running the ordinary default
     # suite, but the retired spelling no longer selects opt-in tiers or appears
     # in help.
@@ -1774,6 +1898,9 @@ display_ref = None
 
 ORIGIN_REPO = "django_mojo"
 ORIGIN_CONSUMER = "consumer"
+# A consumer app test root that opted into enforcement via
+# apps/tests/testit.json {"isolation": "enforce"} (maestro #2793).
+ORIGIN_CONSUMER_ENFORCED = "consumer_enforced"
 
 
 def _dir_has_python(path):
@@ -1797,31 +1924,33 @@ def _previous_module_durations():
         return {}
 
 
-def _enforce_repository_policy(parent_test_root):
-    """Fail-closed default-tier policy over django-mojo's own test tree.
+def _enforce_policy(root, origin, *, production_prefixes=None):
+    """Fail-closed isolation policy over one test tree (maestro #2793).
 
-    Runs before any import or worker, over the COMPLETE repository tree —
-    targeted and direct-file runs do not bypass it. Consumer/application
-    test roots are exempt and keep the historical selection contract.
+    Runs before any import or worker, over the COMPLETE tree — targeted and
+    direct-file runs do not bypass it. `origin` is ORIGIN_REPO for django-mojo's
+    own tests/ (always enforced) or ORIGIN_CONSUMER_ENFORCED for a consumer app
+    test root that opted in. `production_prefixes` name the consumer's own shared
+    surfaces for the scanner; mojo./django./testit. are always shared. For the
+    repository (production_prefixes=None) every scan is byte-identical to before.
 
     Blocking: hot-ring violations (see testit.isolation.HOT_CODES and
-    SHARED_PATCH_PREFIXES) inside a default package, and any repository
-    package without a readable literal TESTIT config declaring its state.
-    Cold-ring violations (app-internal provider mocks) are advisory until
-    the cold-ring migration (maestro item #1839 follow-up).
+    SHARED_PATCH_PREFIXES) inside a parallel-ring package, and any package
+    without a readable literal TESTIT config declaring its state. Cold-ring
+    violations (app-internal provider mocks) are advisory.
 
     Returns the advisory (cold) counts as (sites, packages).
     """
     from testit import isolation
 
-    if not parent_test_root or not os.path.exists(parent_test_root):
+    if not root or not os.path.exists(root):
         return 0, 0
 
     problems = []
     cold_sites = 0
     cold_packages = 0
-    for name in sorted(os.listdir(parent_test_root)):
-        package_path = os.path.join(parent_test_root, name)
+    for name in sorted(os.listdir(root)):
+        package_path = os.path.join(root, name)
         if not os.path.isdir(package_path) or name.startswith("__"):
             continue
         if not _dir_has_python(package_path):
@@ -1831,20 +1960,19 @@ def _enforce_repository_policy(parent_test_root):
             continue
         config, state = _load_module_config_ex(package_path)
         # A `core` package is scanned under the strict contract (maestro #2790):
-        # its `_`-prefixed helpers are scanned too and the stricter grammar
-        # fires. No package declares tier="core" until Phase 3, so strict stays
-        # False here and every scan is byte-identical to the pre-tier behavior.
+        # its `_`-prefixed helpers are scanned too and the stricter grammar fires.
         tier = config.get("tier")
         strict = tier == "core"
-        scanned = isolation.scan_package(package_path, strict=strict)
+        scanned = isolation.scan_package(
+            package_path, strict=strict, production_prefixes=production_prefixes)
         hot, cold = isolation.partition_violations(scanned.violations)
         if cold:
             cold_sites += len(cold)
             cold_packages += 1
         package_problems = isolation.evaluate_package_state(
-            config, hot, origin=ORIGIN_REPO, has_config=(state == "ok"))
+            config, hot, origin=origin, has_config=(state == "ok"))
         package_problems += isolation.evaluate_cold_budget(
-            config, cold, origin=ORIGIN_REPO, has_config=(state == "ok"))
+            config, cold, origin=origin, has_config=(state == "ok"))
         for problem in package_problems:
             problems.append(f"{name}: {problem}")
         # A serial opt-in package may carry mutation (its isolation is serial
@@ -1861,14 +1989,74 @@ def _enforce_repository_policy(parent_test_root):
                     for row in hot))
 
     if problems:
+        if origin == ORIGIN_REPO:
+            sys.exit(
+                "\nDEFAULT-TIER ISOLATION POLICY FAILED — no tests were run.\n"
+                "Every repository test package must declare default_core=True "
+                "(clean) or a nonempty requires_extra (opt-in, serial when it "
+                "mutates). See .claude/rules/testing.md and "
+                "docs/django_developer/testit/Overview.md.\n\n"
+                + "\n".join(problems))
         sys.exit(
-            "\nDEFAULT-TIER ISOLATION POLICY FAILED — no tests were run.\n"
-            "Every repository test package must declare default_core=True "
-            "(clean) or a nonempty requires_extra (opt-in, serial when it "
-            "mutates). See .claude/rules/testing.md and "
-            "docs/django_developer/testit/Overview.md.\n\n"
+            "\nCONSUMER ISOLATION POLICY FAILED (isolation: enforce) — no tests "
+            "were run.\nEvery package under an enforced app test root must "
+            "declare its tier (serial when it mutates). See "
+            "docs/django_developer/testit/Tiers.md.\n\n"
             + "\n".join(problems))
     return cold_sites, cold_packages
+
+
+def _enforce_repository_policy(parent_test_root):
+    """django-mojo's own tests/ — always enforced (thin wrapper, maestro #2793)."""
+    return _enforce_policy(parent_test_root, ORIGIN_REPO)
+
+
+def _installed_app_prefixes():
+    """Best-effort consumer shared-surface prefixes from INSTALLED_APPS, used
+    when a consumer opts into enforcement without naming explicit
+    production_prefixes (maestro #2793). mojo./django./testit. are always shared
+    and handled by the scanner regardless."""
+    try:
+        from django.conf import settings
+        installed = getattr(settings, "INSTALLED_APPS", None) or []
+    except Exception:
+        return ()
+    prefixes = set()
+    for app in installed:
+        if not isinstance(app, str) or not app:
+            continue
+        top = app.split(".", 1)[0]
+        if top and top not in ("django", "mojo", "testit"):
+            prefixes.add(top + ".")
+    return tuple(sorted(prefixes))
+
+
+def _enforce_consumer_policy(test_root):
+    """Opt-in isolation policy over a consumer's app test root (maestro #2793).
+
+    Off unless apps/tests/testit.json declares "isolation": "enforce" — its
+    absence, or the file's, means the historical exemption (nothing scanned).
+    production_prefixes name the consumer's own shared surfaces; absent, they
+    fall back to INSTALLED_APPS. Returns advisory (cold) counts like the repo
+    policy.
+    """
+    if not test_root or not os.path.exists(test_root):
+        return 0, 0
+    cfg_path = os.path.join(test_root, "testit.json")
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return 0, 0
+    if data.get("isolation") != "enforce":
+        return 0, 0
+    declared = data.get("production_prefixes")
+    if isinstance(declared, list) and declared:
+        prefixes = tuple(pfx for pfx in declared if isinstance(pfx, str) and pfx)
+    else:
+        prefixes = _installed_app_prefixes()
+    return _enforce_policy(
+        test_root, ORIGIN_CONSUMER_ENFORCED, production_prefixes=prefixes)
 
 
 def _make_record(kind, name, origin, path, test_file=None):
@@ -1992,6 +2180,11 @@ def main(opts):
     """Main function to run tests."""
     global display_ref
 
+    # `--init` scaffolds a test package and exits — no lock, server or DB
+    # needed (maestro #2793).
+    if getattr(opts, "init_package", None):
+        return _scaffold_init(opts.init_package)
+
     # Acquire run lock to prevent concurrent test runs
     acquired, lock_info = _acquire_lock()
     if not acquired:
@@ -2013,6 +2206,16 @@ def main(opts):
     # should be reported now rather than ten minutes from now, and reporting a
     # run implies agent mode — without it no failure carries a file, line or
     # traceback to report.
+    # Resolve the bare-run preset before reporting is configured, so a
+    # consumer's maestro suite identity names the preset it actually runs
+    # (maestro #2793). django-mojo's own tests/ declares no default_preset,
+    # so DEFAULT_PRESET (core) stands; a consumer's apps/tests/testit.json
+    # may set "default_preset": "framework".
+    _dp_root = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tests")
+    if not os.path.exists(_dp_root):
+        _dp_root = os.path.join(paths.APPS_ROOT, "tests")
+    opts.default_preset = _load_default_preset(_dp_root)
+    opts.selected_preset = _selected_preset_label(opts)
     maestro_settings = testit.maestro.setup(opts)
     helpers.AGENT_MODE = bool(opts.agent) or bool(maestro_settings)
     helpers.TEST_RUN.started_at = time.time()
@@ -2045,6 +2248,14 @@ def main(opts):
             sys.path.insert(0, parent_test_root)
 
     test_root = os.path.join(paths.APPS_ROOT, "tests")
+    # Ensure the consumer app test root is importable. A real consumer's
+    # bootstrap (load_apps) already puts apps/tests on sys.path, so this guard
+    # is a no-op there; it matters for a project whose bootstrap does not —
+    # django-mojo's own testproject, which never carried consumer packages
+    # before the tier example landed (maestro #2793). Appended, so repo
+    # packages under parent_test_root keep resolution priority.
+    if os.path.exists(test_root) and test_root not in sys.path:
+        sys.path.append(test_root)
 
     # Handle --list-extras
     if opts.list_extras:
@@ -2088,6 +2299,11 @@ def main(opts):
 
     # Fail-closed repository isolation policy — before any import or worker.
     cold_sites, cold_packages = _enforce_repository_policy(parent_test_root)
+    # Consumer app test root: opt-in strict scanning when apps/tests/testit.json
+    # declares "isolation": "enforce" (maestro #2793). Absent = today's exemption.
+    consumer_sites, consumer_packages = _enforce_consumer_policy(test_root)
+    cold_sites += consumer_sites
+    cold_packages += consumer_packages
     if cold_sites:
         print(
             f"  isolation advisory: {cold_sites} app-internal patch site(s) in "
