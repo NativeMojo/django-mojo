@@ -266,12 +266,13 @@ These template names are used by the framework. Create matching `EmailTemplate` 
 
 | Template Name | Used By | Key Context Variables |
 |---|---|---|
-| `invite` | `User.send_invite()` | `user`, `token` |
+| `invite` | `User.send_invite()` | `user`, `token_url` |
 | `group_invite` | `GroupMember.send_invite()` | `group`, `display_name` |
 | `password_reset_code` | Forgot password (code flow) | `code`, `display_name` |
-| `password_reset_link` | Forgot password (link flow) | `token`, `display_name` |
-| `magic_login_link` | Magic login | `token`, `display_name` |
+| `password_reset_link` | Forgot password (link flow) | `token_url`, `display_name` |
+| `magic_login_link` | Magic login | `token_url`, `display_name` |
 | `email_verify` | Email verification | `token`, `display_name` |
+| `email_verify_link` | Email verification link flow | `token_url`, `display_name` |
 | `account_inactive_warning` | Auto-disable sweep (users) | `days_until_disable`, `inactive_days` |
 | `group_inactive_warning` | Auto-disable sweep (groups) | `group_name`, `group_id`, `days_until_disable`, `inactive_days` |
 

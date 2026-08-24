@@ -71,6 +71,28 @@ def test_missing_template_no_seed(opts):
 
 
 @th.django_unit_test()
+def test_shipped_token_link_templates_render_real_urls(opts):
+    """Every built-in link sender supplies token_url; seeds must use it."""
+    from mojo.apps.aws.services.email_templates import load_shipped_templates
+
+    templates = {row["name"]: row for row in load_shipped_templates()}
+    expected = {"invite", "magic_login_link", "password_reset_link",
+                "email_verify_link"}
+    th.assert_eq(expected - set(templates), set(),
+                 f"every built-in token-link flow needs a shipped seed: "
+                 f"{sorted(expected - set(templates))}")
+    for name in sorted(expected):
+        row = templates[name]
+        combined = row["text_template"] + row["html_template"]
+        th.assert_in("{{ token_url }}", combined,
+                     f"{name} must render the server-resolved frontend URL")
+        th.assert_true("YOUR_APP_HOST" not in combined,
+                       f"{name} must never ship a literal placeholder host")
+        th.assert_in("token_url", row["metadata"].get("context_keys", []),
+                     f"{name} metadata must document its token_url context")
+
+
+@th.django_unit_test()
 def test_autoloaded_template_persists(opts):
     """Second call returns same DB record — no file re-read."""
     from mojo.apps.aws.models import EmailTemplate
