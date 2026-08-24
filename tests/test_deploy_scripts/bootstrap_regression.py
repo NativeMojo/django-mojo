@@ -484,6 +484,10 @@ def test_code_node_runs_only_common_checkout_and_declared_dependencies(opts):
         with open(sentinel) as handle:
             th.assert_eq(handle.read(), "must stay intact\n",
                          "the privileged lock followed an app-writable symlink")
+        lock_mode = stat.S_IMODE(os.stat(os.path.join(
+            environment["MOJO_DEPLOY_STATE_ROOT"], "update.lock")).st_mode)
+        th.assert_eq(lock_mode, 0o600,
+                     "the app account can open and hold the privileged lock")
         th.assert_eq(git("rev-parse", "HEAD"), candidate,
                      "the common transaction did not install the candidate")
         with open(command_log) as handle:

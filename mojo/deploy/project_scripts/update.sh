@@ -301,7 +301,11 @@ fi
 cd "$PROJ_PATH"
 ensure_state_root
 run_as_app mkdir -p "$PROJ_PATH/var"
+previous_umask="$(umask)"
+umask 077
 exec 9>"$LOCK_FILE"
+umask "$previous_umask"
+chmod 0600 "$LOCK_FILE"
 if [ "$MANUAL" = "1" ]; then
     flock -n 9 || die "another update is running"
 else
