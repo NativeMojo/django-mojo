@@ -2,5 +2,5 @@
 
 TESTIT = {
     "default_core": True,
-    "cold_budget": 22,
+    "cold_budget": 21,
 }

@@ -39,7 +39,7 @@ def test_cli_uses_effective_loader_only_for_exact_canonical_path(opts):
 
 
 @th.django_unit_test()
-def test_cli_check_probes_enabled_rpm_binding_capability(opts):
+def test_cli_check_probes_enabled_rpm_cli_capability(opts):
     import mojo.mojosec.__main__ as cli
 
     config = {
@@ -52,12 +52,12 @@ def test_cli_check_probes_enabled_rpm_binding_capability(opts):
     with mock.patch.object(cli, "load_effective_config", return_value=config), \
             mock.patch.object(cli, "probe_rpm_capability") as probe:
         th.assert_eq(cli.main(["check"], stdout=io.StringIO()), 0,
-                     "a healthy installed-file binding probe must pass readiness")
+                     "a healthy RPM CLI inventory probe must pass readiness")
     probe.assert_called_once_with(config["collectors"]["rpm"])
 
     with mock.patch.object(cli, "load_effective_config", return_value=config), \
             mock.patch.object(
                 cli, "probe_rpm_capability",
-                side_effect=cli.RpmError("RPMDBI_INSTFILENAMES unavailable")):
+                side_effect=cli.RpmError("RPM command is unavailable")):
         th.assert_eq(cli.main(["check"], stderr=io.StringIO()), 2,
-                     "a missing or incompatible system RPM binding must fail check")
+                     "a missing or incompatible RPM CLI/database must fail check")

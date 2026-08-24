@@ -157,18 +157,24 @@ digest. Legacy custom FIM targets remain supported only when no profile is
 selected.
 
 RPM ownership is structural, not parsed from `rpm -qf` prose or inferred from a
-generic exit status. One `/usr/bin/python3 -I` helper and one read-only RPM
-transaction serve the complete tier. Startup proves the `rpm` binding,
-`TransactionSet`, `RPMDBI_INSTFILENAMES`, a readable package header, and a real
-installed-file index lookup, then records the RPM database cookie. Each bounded
-exact-path request returns zero, one, or at most two installed-state NEVRAs:
-zero keeps the file under ordinary SHA-256 coverage, one selects RPM
-verification, and multiple or malformed results make the tier incomplete. A
-same-path header with a removed or other non-installed file state is not an
-owner. Helper failure, timeout, protocol/output bounds, unexpected stderr,
-query exhaustion, or a changed database cookie retains the prior authoritative
-baseline. There is no BASENAMES, PROVIDENAME, localized CLI, or per-file process
-fallback.
+generic exit status. One bounded `/usr/bin/rpm -qa --queryformat` call reads all
+installed headers before the descriptor-safe walk. XML-escaped records carry
+NEVRA, SHA256HEADER, install generation, and paired FILENAMES/FILESTATES; a
+strict parser builds an exact normal-state path-owner index. The single walk
+therefore sends exactly-one-owner files to the existing bounded
+`rpm --verify --noscripts --nodeps` path, while unowned, non-normal-state, or
+late-discovered files retain SHA-256 coverage. Multiple owners or malformed
+records fail closed.
+
+After package verification, a second inventory must have the same canonical
+generation digest, including header/install identity and complete file/state
+rows. CLI/database failure, timeout, live stdout or stderr overflow, invalid
+UTF-8, unexpected stderr, queryformat incompatibility, lookup exhaustion, or
+generation drift retains the prior authoritative baseline. DNF is a repository
+and transaction manager and is not used for these local installed-database
+facts. Python RPM bindings are not a runtime dependency; the configured
+interpreter is used only to discover its approved site-package roots. There is
+no BASENAMES, PROVIDENAME, localized `rpm -qf`, or per-file process fallback.
 
 `al2023-web-v1` remains packaged for baseline identity and rollback, but must
 not be used for a new AL2023 baseline. Its cloud-init script target descends
@@ -630,7 +636,7 @@ derived from a truncated walk.
 ## Commands and health
 
 ```bash
-# Validate config and, when RPM integrity is enabled, probe the isolated binding/index.
+# Validate config and, when RPM integrity is enabled, probe the RPM CLI inventory/index.
 (cd / && sudo /usr/bin/python3 -E -P -m mojo.mojosec --config /etc/mojosec/config.json check)
 
 # One collection/delivery cycle; useful for a deployment canary.
@@ -664,12 +670,13 @@ content roots retires the content baselines of the older generations along with
 the old root set, which makes those generations ineligible until they are
 re-baselined.
 
-`check` does not open the API-key credential. For an RPM-enabled profile it does
-start the same bounded isolated helper and fails unless the system binding,
-transaction, read-only database/header access, and installed-file index are
-usable. `check_node` grades that command as deployment readiness. Nothing
-installs or falls back to a CLI binding automatically. `once` and `run` validate
-the API-key credential when there is a batch to send. A delivery failure during
+`check` does not open the API-key credential. For an RPM-enabled profile it runs
+the same bounded installed-header inventory and fails unless `/usr/bin/rpm`,
+read-only database/header access, the XML queryformat, and the exact installed-
+file index are usable. `check_node` grades that command as deployment readiness.
+Nothing installs or repairs the RPM executable or database automatically.
+`once` and `run` validate the API-key credential when there is a batch to send.
+A delivery failure during
 `once` is written to stderr and the status snapshot, but does not make the
 command exit nonzero. Treat the `delivery` object in `status` as the canary
 result rather than relying only on the process exit code.

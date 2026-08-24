@@ -1017,12 +1017,12 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
         if rc == 0:
             report.passed(
                 "mojosec", "RPM ownership capability",
-                "isolated system binding, transaction, installed-file index, and DB are ready")
+                "bounded RPM CLI inventory, installed-file index, and database are ready")
         else:
             detail = (err or out or "MojoSec readiness check returned no detail").splitlines()[0]
             report.fail(
                 "mojosec", "RPM ownership capability unavailable", detail[:256],
-                "install a compatible system python3-rpm binding and rerun deployment")
+                "restore /usr/bin/rpm and the local RPM database, then rerun deployment")
 
     provenance_assets = (
         ("Audit rollback state", "/etc/mojosec/audit-state.json", "600"),

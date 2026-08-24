@@ -1359,17 +1359,19 @@ the broker's request grammar, and the overflow remedy are in
 > This is the expected one-generation skew (item 2014); the next deploy
 > declares them.
 
-An enabled RPM tier additionally requires the AL2023 system `python3-rpm`
-binding at the configured interpreter. One `-I` helper opens one read-only
-`TransactionSet` for the scan, proves `RPMDBI_INSTFILENAMES` against an actual
-installed file, and records the RPM database cookie. Exact-path responses are
-bounded and structural: no installed owner keeps SHA-256 coverage, exactly one
-validated NEVRA selects package verification, and multiple/invalid results fail
-the tier. Non-installed file states never claim ownership. Index/header/DB
-failure, helper death or timeout, protocol/output/query bounds, unexpected
-stderr, or cookie drift keeps the prior baseline authoritative. There is no
-localized `rpm -qf`, BASENAMES/PROVIDENAME, generic-exit, or per-path helper
-fallback.
+An enabled RPM tier requires a working `/usr/bin/rpm` and readable local RPM
+database. One live-bounded `rpm -qa --queryformat` inventory supplies strict
+XML-escaped header identity, install generation, and paired filename/state rows.
+The resulting exact normal-state owner index partitions the single descriptor-
+safe walk: no installed owner or a non-normal state keeps SHA-256 coverage;
+exactly one validated owner selects the existing package verification; multiple
+or invalid owners fail the tier. A second complete inventory must have the same
+canonical generation digest after verification. CLI/database/queryformat
+failure, timeout, either output stream exceeding its live bound, invalid UTF-8,
+unexpected stderr, or generation drift keeps the prior baseline authoritative.
+DNF and Python RPM bindings are not runtime dependencies. The configured Python
+interpreter only discovers its approved site-package roots; there is no localized
+`rpm -qf`, BASENAMES/PROVIDENAME, generic-exit, or per-path process fallback.
 
 `al2023-web-v1` is retained only for existing baseline identity and rollback.
 Do not select it for a new AL2023 baseline: its
@@ -1492,10 +1494,10 @@ the credential, canonical config, SQLite spool, or FIM manifest. It audits
 status freshness, core collectors, backlog/delivery, generated and active nginx
 contracts, proxy CIDRs, log metadata, and config hashes. In observe mode it also
 runs `python -m mojo.mojosec ... check`; an RPM-enabled profile must pass the
-same isolated binding, transaction, database/header, and installed-file index
-preflight before deployment readiness is green. The check never installs a
-binding or opens the API-key credential. Default `auto` keeps legacy disabled
-nodes informational.
+same bounded RPM CLI queryformat, database/header, and installed-file index
+preflight before deployment readiness is green. The check never repairs the RPM
+executable/database or opens the API-key credential. Default `auto` keeps legacy
+disabled nodes informational.
 
 ## Pre-registering deployment identities (optional trust gate)
 
