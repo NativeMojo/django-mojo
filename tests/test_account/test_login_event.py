@@ -3,6 +3,8 @@ Tests for UserLoginEvent model — login geo tracking, anomaly flags, and metric
 """
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 @th.django_unit_setup()
 def setup_login_event(opts):

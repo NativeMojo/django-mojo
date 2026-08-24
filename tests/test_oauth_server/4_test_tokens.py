@@ -378,6 +378,7 @@ def test_concurrent_rotation_loser(opts):
                 "rather than issue a pair the row does not know about")
 
 
+@th.tier("core")
 @th.django_unit_test("a refresh token reused outside the window is replay")
 def test_refresh_replay_revokes_the_family(opts):
     from mojo.apps.account.models import OAuthGrant

@@ -119,6 +119,7 @@ def test_unit_stale_not_fresh(opts):
                 "auth_time 600s old must fail a 300s window")
 
 
+@th.tier("core")
 @th.django_unit_test("fresh_auth: missing auth_time fails closed")
 def test_unit_missing_claim_fails_closed(opts):
     from mojo.apps.account.services import fresh_auth
@@ -156,6 +157,7 @@ def test_unit_token_auth_time(opts):
 # Integration — over the wire
 # ===========================================================================
 
+@th.tier("core")
 @th.django_unit_test("login stamps auth_time into the access token")
 def test_login_stamps_auth_time(opts):
     assert opts.client.login(USER, PWORD), "login should succeed"
@@ -168,6 +170,7 @@ def test_login_stamps_auth_time(opts):
                 f"auth_time should be ~now, got {at} vs {before}")
 
 
+@th.tier("core")
 @th.django_unit_test("refresh carries auth_time forward unchanged")
 def test_refresh_preserves_auth_time(opts):
     from mojo.apps.account.models import User
@@ -202,6 +205,7 @@ def test_refresh_legacy_token_no_auth_time(opts):
                 "a legacy refresh token with no auth_time must not gain a fabricated one")
 
 
+@th.tier("core")
 @th.django_unit_test("stale token + enabled window => HTTP 440 reauth_required")
 def test_stale_token_blocked_440(opts):
     from mojo.apps.account.models import User

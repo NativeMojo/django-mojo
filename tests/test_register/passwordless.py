@@ -21,6 +21,8 @@ import uuid as _uuid
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "extended"
+
 
 # Passwordless: phone identity, SMS-verified, no password.
 PASSWORDLESS_FIELDS = [

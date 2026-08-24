@@ -10,6 +10,8 @@ from unittest import mock
 
 from testit import helpers as th
 
+TESTIT_TIER = "admin"
+
 
 ADMIN_EMAIL = "admin_portal@test.com"
 ADMIN_PASSWORD = "Admin_portal_pw_99"

@@ -10,6 +10,7 @@ stay in tests/test_account_admin_extended_serial/test_system_setup.py.
 """
 from testit import helpers as th
 
+
 SENTINEL = "TESTIT_PROTECTED_SENTINEL"
 ADMIN_USER = "prd_denial_admin"
 ADMIN_EMAIL = "prd_denial_admin@example.com"

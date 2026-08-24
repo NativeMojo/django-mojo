@@ -10,6 +10,8 @@ import time
 
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 def _wait_for_window_headroom(window, needed):
     now = time.time()

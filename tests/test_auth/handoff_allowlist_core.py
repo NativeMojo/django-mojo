@@ -12,6 +12,8 @@ tests/test_auth_extended_serial/handoff.py.
 from testit import helpers as th
 from testit.helpers import assert_true
 
+TESTIT_TIER = "core"
+
 
 def assert_false(value, msg):
     assert not value, msg

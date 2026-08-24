@@ -1,6 +1,8 @@
 """Tests for GeoLocatedIP POST_SAVE_ACTIONS dispatch (whitelist, unblock, etc.)."""
 from testit import helpers as th
 
+TESTIT_TIER = "bug"
+
 
 @th.django_unit_test()
 def test_post_save_actions_is_flat_list_of_strings(opts):

@@ -1,6 +1,8 @@
 """Tests for Group.member_count property surfaced via REST graphs."""
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 ADMIN_USERNAME = "group_count_admin@test.com"
 ADMIN_PASSWORD = "group_count_admin_99"

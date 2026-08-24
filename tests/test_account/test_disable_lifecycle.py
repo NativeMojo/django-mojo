@@ -8,6 +8,8 @@ mock.patch("mojo.apps.incident.report_event") — those patches were no-ops
 """
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 def _null_reporter(*args, **kwargs):
     return None
@@ -541,6 +543,7 @@ def test_rest_disable_invalid_reason_rejected(opts):
     assert target.is_active is True, "rejected disable should NOT flip is_active"
 
 
+@th.tier("framework")
 @th.django_unit_test()
 def test_rest_disable_requires_manage_users(opts):
     from mojo.apps.account.models import User
@@ -729,6 +732,7 @@ def test_throttle_read_unsupported_key(opts):
         f"unsupported key should be rejected, got {resp.status_code}: {opts.client.last_response.body}"
 
 
+@th.tier("framework")
 @th.django_unit_test()
 def test_throttle_read_requires_manage_users(opts):
     assert opts.client.login(NONADMIN_USERNAME, NONADMIN_PASSWORD), "nonadmin login failed"

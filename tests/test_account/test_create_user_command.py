@@ -2,6 +2,8 @@
 from io import StringIO
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 EMAIL_SUPERUSER = "cucmd_super@test.com"
 PHONE_ONLY = "+15555550100"
 EMAIL_STAFF = "cucmd_scoped@test.com"

@@ -128,6 +128,7 @@ def setup_redirect_uri(opts):
 # The named regression
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("oauth: an entry does not admit a host that merely starts with it")
 def test_redirect_uri_refuses_suffixed_host(opts):
     """THE regression. `https://app.example.com.evil.tld/` is a different host
@@ -222,6 +223,7 @@ def test_redirect_uri_query_is_not_part_of_the_match(opts):
                     "foreign host")
 
 
+@th.tier("core")
 @th.django_unit_test("oauth: a wildcard entry is inert for ALLOWED_REDIRECT_URLS")
 def test_redirect_uri_wildcard_entry_is_inert(opts):
     """`*.` is supported for the HANDOFF allowlist and deliberately not here.
@@ -296,6 +298,7 @@ def test_redirect_uri_string_valued_setting_is_not_a_bypass(opts):
                      entries=bare_form)
 
 
+@th.tier("core")
 @th.django_unit_test("oauth: no allowlist configured refuses with the unchanged message")
 def test_redirect_uri_no_allowlist_configured(opts):
     """Contract lock — #1089 shipped migration advice quoting this string."""

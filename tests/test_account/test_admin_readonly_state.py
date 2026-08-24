@@ -14,6 +14,8 @@ never its value.
 
 from testit import helpers as th
 
+TESTIT_TIER = "admin"
+
 
 @th.django_unit_test("a configured sensitive deployment setting reports configured state only")
 def test_live_secret_key_reports_configured_state(opts):

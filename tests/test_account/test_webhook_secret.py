@@ -1,6 +1,8 @@
 """Tests for the per-Group webhook signing secret accessor + REST endpoint."""
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 ADMIN_USER = "wsec_admin@test.com"
 ADMIN_PWORD = "wsec_admin_pw_99"

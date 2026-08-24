@@ -17,6 +17,8 @@ Security contract this file enforces:
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "extended"
+
 TEST_USER = "totp_recovery_user"
 TEST_PWORD = "recovery##mojo99"
 
@@ -86,6 +88,7 @@ def test_confirm_code_format(opts):
 # Recovery codes stored as bcrypt (not plaintext)
 # ===========================================================================
 
+@th.tier("framework")
 @th.django_unit_test("totp recovery: codes stored as bcrypt hashes, not plaintext")
 def test_codes_stored_as_bcrypt(opts):
     from mojo.apps.account.models.totp import UserTOTP
@@ -237,6 +240,7 @@ def test_recovery_login_invalid_mfa_token(opts):
 # Used recovery code cannot be reused
 # ===========================================================================
 
+@th.tier("framework")
 @th.django_unit_test("totp recovery: used recovery code cannot be reused")
 def test_recovery_code_single_use(opts):
     from mojo.decorators.limits import clear_rate_limits

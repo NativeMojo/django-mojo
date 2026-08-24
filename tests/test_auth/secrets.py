@@ -1,7 +1,24 @@
 from testit import helpers as th
 from testit import faker
 
-TEST_USER = "auth_user"
+# Own, uniquely-named fixture user so this module stands alone (#2792):
+# it no longer borrows accounts.py's "auth_user", whose setup deletes and
+# recreates that username and could race a concurrent read here.
+TEST_USER = "auth_secrets_user"
+TEST_PWORD = "secrets##mojo99"
+
+
+@th.django_unit_setup()
+def setup_secrets(opts):
+    from mojo.apps.account.models import User
+    # Clean up before creating — the DB is long-lived (see testing.md).
+    User.objects.filter(username=TEST_USER).delete()
+    user = User(username=TEST_USER, display_name=TEST_USER,
+                email=f"{TEST_USER}@example.com")
+    user.save()
+    user.is_email_verified = True
+    user.save_password(TEST_PWORD)
+
 
 @th.django_unit_test()
 def test_secrets_basic(opts):

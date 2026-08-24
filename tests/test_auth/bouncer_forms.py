@@ -18,6 +18,8 @@ import re
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "extended"
+
 
 BFORMS_GROUP_NAME = 'test-bouncer-forms-operator'
 # Hex-only uuid (no hyphens) — matches production `uuid.uuid4().hex` shape

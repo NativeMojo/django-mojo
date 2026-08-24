@@ -13,6 +13,8 @@ import json
 
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 BYPASS_CODE = "000000"
 

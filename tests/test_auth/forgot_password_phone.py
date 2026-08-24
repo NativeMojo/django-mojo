@@ -3,6 +3,8 @@ import uuid as _uuid
 
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 def _clear_forgot_limits():
     from mojo.decorators.limits import clear_rate_limits

@@ -18,6 +18,8 @@ is patched so the assertion is on the level the decorator chose.
 """
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 # Every ValueError string raised by TokenManager.validate() /
 # validate_and_consume(), plus page_type_mismatch which the decorator itself

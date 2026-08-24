@@ -22,6 +22,8 @@ dotted paths keep resolving.
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "extended"
+
 TEST_USER = "deactivation_user"
 TEST_PWORD = "deact##mojo99"
 TEST_EMAIL = "deactivation_user@example.com"
@@ -351,6 +353,7 @@ def test_deactivate_confirm_incident_logged(opts):
                 "Expected account:deactivated incident to be logged before anonymisation")
 
 
+@th.tier("core")
 @th.django_unit_test("deactivate confirm: JWT invalid after deactivation")
 def test_deactivate_jwt_invalid_after(opts):
     from mojo.apps.account.models import User

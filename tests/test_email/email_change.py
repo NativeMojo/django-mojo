@@ -42,6 +42,8 @@ Security contract this file enforces (code/OTP flow):
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "extended"
+
 TEST_USER = "email_change_user"
 TEST_PWORD = "change##mojo99"
 TEST_NEW_EMAIL = "email_change_new@example.com"
@@ -161,6 +163,7 @@ def test_ec_pending_email_cleared_after_verify(opts):
     assert_eq(user.get_secret("pending_email"), None, "pending_email must be cleared after verify")
 
 
+@th.tier("core")
 @th.django_unit_test("ec token: is single-use — second verify raises")
 def test_ec_token_single_use(opts):
     from mojo.apps.account.models import User
@@ -271,6 +274,7 @@ def test_ec_token_expired(opts):
         user.save(update_fields=["mojo_secrets", "modified"])
 
 
+@th.tier("core")
 @th.django_unit_test("ec token: auth_key rotation immediately invalidates outstanding token")
 def test_ec_auth_key_rotation_invalidates(opts):
     import uuid
@@ -390,6 +394,7 @@ def test_request_stores_pending_email(opts):
     user.save(update_fields=["mojo_secrets", "modified"])
 
 
+@th.tier("core")
 @th.django_unit_test("email/change/request: requires authentication — 401 without token")
 def test_request_requires_auth(opts):
     from mojo.decorators.limits import clear_rate_limits
@@ -543,6 +548,7 @@ def test_confirm_happy_path(opts):
     )
 
 
+@th.tier("core")
 @th.django_unit_test("email/change/confirm: auth_key is rotated (old sessions invalidated)")
 def test_confirm_rotates_auth_key(opts):
     from mojo.apps.account.models import User
@@ -656,6 +662,7 @@ def test_confirm_inactive_user_blocked(opts):
     user.save(update_fields=["mojo_secrets", "modified"])
 
 
+@th.tier("core")
 @th.django_unit_test("email/change/confirm: email claimed by another account in the interim is rejected")
 def test_confirm_race_email_claimed(opts):
     from mojo.apps.account.models import User

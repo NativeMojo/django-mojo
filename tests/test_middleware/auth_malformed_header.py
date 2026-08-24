@@ -12,6 +12,8 @@ test drives the real middleware chain through the test server.
 from testit import helpers as th
 from objict import objict
 
+TESTIT_TIER = "core"
+
 
 def _run(auth_value):
     """Build a fake request carrying the given raw Authorization header and run it

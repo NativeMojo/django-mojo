@@ -4,6 +4,8 @@ from pathlib import Path
 
 from testit import helpers as th
 
+TESTIT_TIER = "admin"
+
 
 ROOT = Path(__file__).resolve().parents[2]
 PEOPLE = ROOT / "mojo/apps/account/admin_portal/assets/features/people"

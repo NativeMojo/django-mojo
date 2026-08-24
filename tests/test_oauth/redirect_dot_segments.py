@@ -42,6 +42,8 @@ from urllib.parse import quote
 
 from testit import helpers as th
 
+TESTIT_TIER = "bug"
+
 PROVIDER = "google"
 
 SETTING_KEY = "ALLOWED_REDIRECT_URLS"
@@ -106,6 +108,7 @@ def setup_redirect_dot_segments(opts):
 # The named regression
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("oauth: a dot-segment candidate cannot escape the prefix")
 def test_dot_segment_candidate_cannot_escape_the_prefix(opts):
     """THE regression. The string sits under the entry prefix, but the browser

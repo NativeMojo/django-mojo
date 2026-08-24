@@ -17,6 +17,8 @@ Also covers:
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
 
+TESTIT_TIER = "bug"
+
 TEST_USER = "invite_flow_user"
 
 
@@ -360,6 +362,7 @@ def test_get_or_generate_fresh_after_expiry(opts):
 # Distinct error messages from _verify
 # ---------------------------------------------------------------------------
 
+@th.tier("extended")
 @th.django_unit_test("invite_flow: consumed token returns 'Token already used'")
 def test_consumed_token_error_message(opts):
     from mojo.apps.account.models import User
@@ -385,6 +388,7 @@ def test_consumed_token_error_message(opts):
               f"expected 'Token already used', got '{resp.response.error}'")
 
 
+@th.tier("extended")
 @th.django_unit_test("invite_flow: expired token raises 'Expired token'")
 def test_expired_token_error_message(opts):
     from mojo.apps.account.models import User
@@ -413,6 +417,7 @@ def test_expired_token_error_message(opts):
               f"expected 'Expired token', got '{error_msg}'")
 
 
+@th.tier("extended")
 @th.django_unit_test("invite_flow: tampered signature returns 'Invalid token signature'")
 def test_tampered_signature_error_message(opts):
     from mojo.apps.account.models import User
@@ -438,6 +443,7 @@ def test_tampered_signature_error_message(opts):
               f"expected 'Invalid token signature', got '{resp.response.error}'")
 
 
+@th.tier("extended")
 @th.django_unit_test("invite_flow: garbage token returns 'Invalid token format'")
 def test_garbage_token_error_message(opts):
     resp = opts.client.post("/api/auth/password/reset/token", {

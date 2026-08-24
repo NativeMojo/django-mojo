@@ -18,6 +18,8 @@ import importlib
 from unittest import mock
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 @contextlib.contextmanager
 def _capture_pushback(ip_address, side_effect=None):

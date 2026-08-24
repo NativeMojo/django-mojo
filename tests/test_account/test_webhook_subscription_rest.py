@@ -1,6 +1,8 @@
 """REST CRUD round-trip and auth tests for /api/group/webhook_subscriptions."""
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 ADMIN_USER = "wsub_rest_admin@test.com"
 ADMIN_PWORD = "wsub_rest_admin_pw_99"

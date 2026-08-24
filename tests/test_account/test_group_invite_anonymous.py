@@ -14,6 +14,8 @@ guard), still with no side effect.
 """
 from testit import helpers as th
 
+TESTIT_TIER = "bug"
+
 INVITEE_EMAIL = "item028_invitee@account.test"
 ADMIN_EMAIL = "item028_admin@account.test"
 ADMIN_PW = "Item028##Pw99"

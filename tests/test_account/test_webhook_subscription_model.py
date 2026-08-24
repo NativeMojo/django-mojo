@@ -3,6 +3,8 @@ RestMeta permission gating, exclusion of inactive rows from fan-out.
 """
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 ADMIN_USER = "wsub_admin@test.com"
 ADMIN_PWORD = "wsub_admin_pw_99"
