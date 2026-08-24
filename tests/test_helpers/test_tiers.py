@@ -55,12 +55,29 @@ def _opts(**kw):
     return objict(base)
 
 
-@th.unit_test("tiers: the default preset is framework = {core, framework, bug}")
-def test_selected_default_framework(opts):
+@th.unit_test("tiers: the bare default preset is core (maestro #2792 flip)")
+def test_selected_default_core(opts):
     from testit import runner
     tags, select_all = runner._selected_tags(_opts())
+    assert tags == {"core"} and not select_all, (
+        f"a bare run must select the core preset, got {tags} all={select_all}")
+
+
+@th.unit_test("tiers: opts.default_preset overrides the bare selection (maestro #2793)")
+def test_selected_default_preset_override(opts):
+    from testit import runner
+    tags, select_all = runner._selected_tags(_opts(default_preset="framework"))
     assert tags == {"core", "framework", "bug"} and not select_all, (
-        f"bare run must select the framework preset, got {tags} all={select_all}")
+        f"default_preset=framework must select the framework preset on a bare "
+        f"run, got {tags} all={select_all}")
+    # an explicit --tier still wins over the configured default
+    tags2, _sa = runner._selected_tags(_opts(tiers=["core"], default_preset="framework"))
+    assert tags2 == {"core"}, (
+        f"an explicit --tier must override default_preset, got {tags2}")
+    # an unusable default_preset never yields an empty selection
+    tags3, _sa = runner._selected_tags(_opts(default_preset="nonsense"))
+    assert tags3 == {"core"}, (
+        f"an unknown default_preset must fall back to core, got {tags3}")
 
 
 @th.unit_test("tiers: --tier core selects only the core bucket")
@@ -89,18 +106,50 @@ def test_selected_literal_buckets(opts):
 def test_selected_extra_additive(opts):
     from testit import runner
     tags, _sa = runner._selected_tags(_opts(extra_list=["slow"]))
-    assert tags == {"core", "framework", "bug", "slow"}, (
-        f"--extra slow must add slow to the default framework preset, got {tags}")
+    assert tags == {"core", "slow"}, (
+        f"--extra slow must add slow to the bare core preset, got {tags}")
 
 
 @th.unit_test("tiers: preset label names core/framework/all/literal")
 def test_preset_label(opts):
     from testit import runner
-    assert runner._selected_preset_label(_opts()) == "framework"
+    assert runner._selected_preset_label(_opts()) == "core", (
+        "a bare run reports the core preset since the #2792 flip")
     assert runner._selected_preset_label(_opts(tiers=["core"])) == "core"
     assert runner._selected_preset_label(_opts(all=True)) == "all"
     assert runner._selected_preset_label(_opts(tiers=["edge", "admin"])) == "admin+edge", (
         "multiple literal buckets sort into a stable label")
+    assert runner._selected_preset_label(_opts(default_preset="framework")) == "framework", (
+        "a bare run under default_preset=framework reports the framework label")
+
+
+@th.unit_test("tiers: _load_default_preset reads testit.json and falls back safely (maestro #2793)")
+def test_load_default_preset(opts):
+    import json
+    import os
+    import tempfile
+    from testit import runner
+    assert runner._load_default_preset(None) == "core", "no root must fall back to core"
+    with tempfile.TemporaryDirectory() as d:
+        assert runner._load_default_preset(d) == "core", (
+            "an absent testit.json must fall back to core")
+
+        def write(payload):
+            with open(os.path.join(d, "testit.json"), "w", encoding="utf-8") as fh:
+                json.dump(payload, fh)
+
+        write({"default_preset": "framework"})
+        assert runner._load_default_preset(d) == "framework", (
+            "a valid concrete preset must be honored")
+        write({"default_preset": "all"})
+        assert runner._load_default_preset(d) == "core", (
+            "'all' resolves to no concrete buckets and must fall back")
+        write({"default_preset": "nonsense"})
+        assert runner._load_default_preset(d) == "core", (
+            "an unknown preset name must fall back to core")
+        write({"budgets": {"core": 30}})
+        assert runner._load_default_preset(d) == "core", (
+            "a testit.json with no default_preset key must fall back to core")
 
 
 # ---------------------------------------------------------------------------

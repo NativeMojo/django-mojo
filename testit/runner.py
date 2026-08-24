@@ -262,7 +262,8 @@ def _selected_tags(opts):
     tags = set()
     select_all = False
     if not tier_names:
-        tags |= TIER_PRESETS[DEFAULT_PRESET]
+        default_preset = getattr(opts, "default_preset", None) or DEFAULT_PRESET
+        tags |= TIER_PRESETS.get(default_preset) or TIER_PRESETS[DEFAULT_PRESET]
     for name in tier_names:
         if name == "all":
             select_all = True
@@ -294,10 +295,37 @@ def _selected_preset_label(opts):
         return "all"
     tiers = list(getattr(opts, "tiers", None) or [])
     if not tiers:
-        return DEFAULT_PRESET
+        return getattr(opts, "default_preset", None) or DEFAULT_PRESET
     if "all" in tiers:
         return "all"
     return "+".join(sorted(set(tiers)))
+
+
+def _load_default_preset(test_root):
+    """The preset a bare run (no --tier/--all) selects, from
+    <test_root>/testit.json {"default_preset": "..."} (maestro #2793).
+
+    Called with django-mojo's own tests/ when running the framework suite —
+    which declares no default_preset, so the built-in DEFAULT_PRESET (core)
+    stands — or with a consumer's apps/tests/ when django-mojo is a
+    dependency. A consumer whose packages are all framework-bucket sets
+    "default_preset": "framework" so its bare run selects its tests instead
+    of nothing (the #2792 flip to core would otherwise select none). An
+    unknown value, or a preset that resolves to no concrete buckets ("all"),
+    falls back so a bare run is never empty.
+    """
+    if not test_root:
+        return DEFAULT_PRESET
+    path = os.path.join(test_root, "testit.json")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return DEFAULT_PRESET
+    name = data.get("default_preset")
+    if isinstance(name, str) and name in TIER_PRESETS and TIER_PRESETS[name]:
+        return name
+    return DEFAULT_PRESET
 
 
 # Whole-suite wall-clock budgets per preset (seconds), overridable in
@@ -752,7 +780,9 @@ def setup_parser(argv=None):
     parser.add_argument("--tier", action="append", dest="tiers",
                         help="Select a tier preset (core, framework, all) or a "
                              "literal bucket (bug, extended, admin, edge, slow). "
-                             "Repeatable. Default: the framework preset.")
+                             "Repeatable. Default: the core preset "
+                             "(a repo may override via testit.json "
+                             "default_preset).")
     parser.add_argument("--all", action="store_true",
                         help="Run every tier (same as --tier all)")
     # Compatibility only: old commands keep running the ordinary default
@@ -2013,6 +2043,16 @@ def main(opts):
     # should be reported now rather than ten minutes from now, and reporting a
     # run implies agent mode — without it no failure carries a file, line or
     # traceback to report.
+    # Resolve the bare-run preset before reporting is configured, so a
+    # consumer's maestro suite identity names the preset it actually runs
+    # (maestro #2793). django-mojo's own tests/ declares no default_preset,
+    # so DEFAULT_PRESET (core) stands; a consumer's apps/tests/testit.json
+    # may set "default_preset": "framework".
+    _dp_root = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tests")
+    if not os.path.exists(_dp_root):
+        _dp_root = os.path.join(paths.APPS_ROOT, "tests")
+    opts.default_preset = _load_default_preset(_dp_root)
+    opts.selected_preset = _selected_preset_label(opts)
     maestro_settings = testit.maestro.setup(opts)
     helpers.AGENT_MODE = bool(opts.agent) or bool(maestro_settings)
     helpers.TEST_RUN.started_at = time.time()
