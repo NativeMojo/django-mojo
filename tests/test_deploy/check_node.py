@@ -239,7 +239,7 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
 
 
 @th.django_unit_test()
-def test_mojosec_node_check_grades_rpm_binding_readiness(opts):
+def test_mojosec_node_check_grades_rpm_cli_readiness(opts):
     from mojo.deploy import check_node as cn
 
     common = [
@@ -253,17 +253,21 @@ def test_mojosec_node_check_grades_rpm_binding_readiness(opts):
     cn.check_mojosec(report, healthy_run, "observe", "sudo -n ")
     passed = _find(report, "mojosec", "RPM ownership capability")
     th.assert_true(passed is not None and passed["status"] == cn.PASS,
-                   f"an exact binding/index preflight must pass node readiness: "
+                   f"an exact RPM CLI inventory preflight must pass node readiness: "
                    f"{_findings(report, 'mojosec')}")
+    th.assert_true("RPM CLI inventory" in passed["detail"],
+                   f"readiness detail must describe the executable/database contract: {passed}")
 
     report = cn.Report()
     failed_run = FakeRunner([(
-        command, (2, "", "mojosec: RPMDBI_INSTFILENAMES unavailable"))] + common)
+        command, (2, "", "mojosec: RPM command is unavailable"))] + common)
     cn.check_mojosec(report, failed_run, "observe", "sudo -n ")
     failed = _find(report, "mojosec", "RPM ownership capability unavailable")
     th.assert_true(failed is not None and failed["status"] == cn.FAIL,
-                   f"a missing system binding must fail deployment readiness: "
+                   f"a missing RPM executable must fail deployment readiness: "
                    f"{_findings(report, 'mojosec')}")
+    th.assert_true("/usr/bin/rpm" in failed["fix"],
+                   f"remediation must name the RPM CLI rather than Python bindings: {failed}")
     th.assert_true(any(command in issued for issued in failed_run.commands),
                    "check_node must run the same bounded MojoSec check capability probe")
 
