@@ -252,7 +252,9 @@ looking at.
 On a deployed node the cron runs `bin/jobman start` every minute, so `jobman` is
 what is actually managing the engine and scheduler there. `jobman stop` will not
 touch a daemon-mode engine, and the jobs CLI will not see anything jobman
-started.
+started. An empty jobs CLI status therefore says exactly which process plane it
+checked and points at `python3 -m mojo.deploy.jobman status`; it does not claim
+that the deployed foreground engine and scheduler are stopped.
 
 MojoSec proves that deployed origin from the real CROND launch record plus its
 matching PAM/Audit `USER_START`, then follows the audited bash → jobman → engine

@@ -170,6 +170,14 @@ and HUP. An API rollback restores:
 - the restored systemd configuration, followed by `nginx -t`, a mojo-asgi
   restart, nginx reload, and an exact-200 probe of the restored API.
 
+Before rollback starts, the updater captures one fixed phase name. Its final
+diagnostic is therefore short and survives the bounded journal replay, for
+example `Deployment failed during django_check; rollback completed`. Other
+phases identify checkout, dependencies, framework installation, migration,
+static collection, configuration, nginx, restart, HTTP probe, or one of the
+three custom-profile verbs. The diagnostic never copies exception text or
+command output into deployment status.
+
 Custom rollback uses the profile protocol above; `code` restores the checkout
 and packages and leaves activation to its external supervisor. The transaction
 is removed only after a healthy candidate or healthy rollback. If SIGKILL or a
@@ -190,6 +198,71 @@ and record success after the script returns. A predecessor does not set it, so
 the verified candidate performs one legacy `deploy_status` callback and
 detaches an engine recycle. This bridge runs only after nginx and the API have
 passed; a broken candidate never needs Django to initiate rollback.
+
+## Rolling an updater release across existing fleets
+
+Do not SSH into every node. Use the fleet's remote-execution plane (for
+example, AWS Systems Manager Run Command targeted by project, environment, and
+node-type tags) and move one stage fleet, then production fleets in bounded
+waves.
+
+The one-time path depends on both the installed framework and the configured
+update endpoint:
+
+| Existing node | Upgrade path |
+|---|---|
+| django-mojo 1.18.1 or newer, using the packaged default or a `mojo.deploy locate` shim | Trigger an ordinary harmless commit through the signed GitHub webhook. No project source or SSH change is required. |
+| older than 1.18.1, using the packaged default or locator shim | Use one fleet remote command to install the target framework and restart the long-lived Python processes, then trigger the normal webhook. 1.18.1 is the first updater that can self-elevate from an app-user legacy shim. |
+| any project with a vendored full `aws/update.sh` or `aws/post_deploy.sh` body | Commit a shim-only conversion first. Install the target framework through the fleet remote command and invoke its packaged updater once to adopt that commit; future releases use the webhook path above. |
+
+The bootstrap command is deliberately just a package pin plus process reload.
+Run it as the fleet remote-execution account, substituting the project account
+and path used by that fleet:
+
+```bash
+TARGET_VERSION=1.x.y
+PROJ_PATH=/opt/api
+APP_USER=ec2-user
+
+sudo -n python3 -m pip install "django-mojo==$TARGET_VERSION"
+sudo -H -u "$APP_USER" python3 -m mojo.deploy.jobman --root "$PROJ_PATH" stop
+sudo -H -u "$APP_USER" python3 -m mojo.deploy.jobman --root "$PROJ_PATH" start
+# API nodes only; custom profiles own their serving process.
+sudo -n systemctl restart mojo-asgi.service
+```
+
+For a vendored-script project, make the prepared `origin/main` change contain
+only the permanent locator shim, then adopt it with the packaged transaction:
+
+```bash
+NODE_TYPE=api  # or the fleet's explicit code/custom type
+sudo -n bash "$(python3 -m mojo.deploy locate update.sh)" \
+    --manual --node-type "$NODE_TYPE"
+```
+
+`--manual` deliberately does not migrate, so the adoption commit must not
+contain application work that requires a migration. Restart `jobman` after the
+manual transaction, then use a new harmless commit to prove the ordinary
+webhook path. From that point forward, fleet deploys consume framework updater
+fixes without another bootstrap.
+
+### Post-release smoke test
+
+Use one disposable stage fleet before widening the rollout:
+
+1. Deploy a harmless commit through the normal webhook.
+2. Confirm the API canary alone ran migration; every API node passed
+   `manage.py check`, the real `nginx -t`, restart, and an exact HTTP 200 probe.
+3. Confirm custom nodes ran only their typed profile and that an explicit live
+   runner ID works without requiring an `-engine` suffix.
+4. Confirm the deployment unit contains no MojoSec, RPM, TLS-lineage, or
+   role-policy release gate.
+5. In the disposable stage project, deploy a commit with a deliberate Django
+   import failure. Require the fixed `django_check; rollback completed`
+   summary, the previous commit and exact framework version, and HTTP 200 from
+   the restored API.
+6. Restore the clean branch through the normal webhook before widening the
+   release to the next fleet wave.
 
 ## Pure rendering
 

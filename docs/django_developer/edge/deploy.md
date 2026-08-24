@@ -94,7 +94,10 @@ An invalid type/cohort, missing custom profile, exec error, timeout, or non-zero
 script exit is reported as node failure. Mechanical state under
 `/var/lib/django-mojo-deploy/active` restores the previous checkout, declared
 dependencies, exact framework and typed lifecycle. An interrupted transaction
-is recovered before the next candidate starts.
+is recovered before the next candidate starts. The final node diagnostic uses
+one fixed phase and rollback result, such as
+`Deployment failed during django_check; rollback completed`; it does not
+stream or parse candidate tracebacks.
 
 Redis remains short-lived coordination and `PlatformDeployment` remains the
 durable attempt record. Both the installed identity and node evidence include
