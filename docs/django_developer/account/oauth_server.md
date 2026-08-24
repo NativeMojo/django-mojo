@@ -602,7 +602,7 @@ never writes a code verifier, a refresh token or a session bearer in plaintext.
 
 ## Tests
 
-- `tests/test_oauth_server/` — default tier, in-process against private
+- `tests/test_oauth_server/` — framework tier (bare run + `--tier framework`), in-process against private
   registries: the registry and discovery, clients and CIMD, codes and PKCE,
   grants and rotation, **confinement**, and the consent render.
 - `tests/test_oauth_server_extended_serial/` — the whole flow over the wire,
