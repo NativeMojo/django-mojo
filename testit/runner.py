@@ -378,6 +378,12 @@ def _scaffold_init(package_name, root=None):
     missing, and creates the apps/tests directory chain if absent. `root`
     overrides the app test root (for tests); the CLI passes the real TEST_ROOT.
     """
+    # The name becomes a directory AND an import name, so require a plain Python
+    # identifier — this also rejects path separators / .. in the CLI arg.
+    if not package_name or not package_name.isidentifier():
+        print(f"  --init: {package_name!r} is not a valid package name — use a "
+              "Python identifier like test_widget")
+        return 2
     root = str(TEST_ROOT) if root is None else str(root)
     pkg_dir = os.path.join(root, package_name)
     init_path = os.path.join(pkg_dir, "__init__.py")

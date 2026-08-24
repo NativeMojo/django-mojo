@@ -696,6 +696,12 @@ def test_init_scaffolds_package(opts):
         assert loaded.get("tier") == "core", (
             f"the loader must read the generated TESTIT, got {dict(loaded)}")
 
+        # a non-identifier name (path traversal, hyphen, empty) is refused
+        for bad in ("../evil", "test-widget", ""):
+            rc_bad = runner._scaffold_init(bad, root=root)
+            assert rc_bad != 0, (
+                f"--init must refuse the invalid package name {bad!r}, got {rc_bad}")
+
 
 @th.unit_test("runner --init: idempotent — never overwrites an existing file")
 def test_init_is_idempotent(opts):
