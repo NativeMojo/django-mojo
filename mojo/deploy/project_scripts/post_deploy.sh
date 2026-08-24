@@ -108,13 +108,15 @@ if [ "$RECOVER_ONLY" = "1" ]; then
 fi
 
 [ ! -d "$ACTIVE" ] || die "an interrupted deployment must be recovered first"
-[ -n "${MOJO_PREVIOUS_SHA:-}" ] || die "missing previous commit"
-[ -n "${MOJO_PREVIOUS_FRAMEWORK:-}" ] || die "missing previous framework"
+PREVIOUS_SHA="${MOJO_PREVIOUS_SHA:-$(head -c 64 var/previous_sha 2>/dev/null || true)}"
+PREVIOUS_FRAMEWORK="${MOJO_PREVIOUS_FRAMEWORK:-$(head -c 64 var/previous_framework 2>/dev/null || true)}"
+[ -n "$PREVIOUS_SHA" ] || die "missing previous commit"
+[ -n "$PREVIOUS_FRAMEWORK" ] || die "missing previous framework"
 
 mkdir -p "$TRANSACTION_ROOT"
 mkdir "$ACTIVE"
-printf '%s\n' "$MOJO_PREVIOUS_SHA" > "$ACTIVE/previous_sha"
-printf '%s\n' "$MOJO_PREVIOUS_FRAMEWORK" > "$ACTIVE/previous_framework"
+printf '%s\n' "$PREVIOUS_SHA" > "$ACTIVE/previous_sha"
+printf '%s\n' "$PREVIOUS_FRAMEWORK" > "$ACTIVE/previous_framework"
 : > "$ACTIVE/files"
 
 record_file "$NGINX_ETC/nginx.conf"

@@ -98,6 +98,11 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
         for path, body in files.items():
             with open(path, "w") as handle:
                 handle.write(body)
+        os.makedirs(os.path.join(project, "var"), exist_ok=True)
+        with open(os.path.join(project, "var", "previous_sha"), "w") as handle:
+            handle.write("1" * 40 + "\n")
+        with open(os.path.join(project, "var", "previous_framework"), "w") as handle:
+            handle.write("1.16.2\n")
 
         command_log = os.path.join(root, "commands")
         _write_executable(
@@ -131,8 +136,6 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
             "NGINX_ETC": nginx_etc,
             "SYSTEMD_ETC": systemd_etc,
             "CRON_ETC": cron_etc,
-            "MOJO_PREVIOUS_SHA": "1" * 40,
-            "MOJO_PREVIOUS_FRAMEWORK": "1.16.2",
         })
         argv = ["bash", os.path.join(project, "aws", "post_deploy.sh"),
                 "--framework", "1.17.2"]
