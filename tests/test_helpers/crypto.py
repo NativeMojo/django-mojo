@@ -2,6 +2,8 @@ from testit import helpers as th
 from testit import faker
 import datetime
 
+TESTIT_TIER = "core"  # #2792 tier curation
+
 @th.django_unit_test()
 def test_crypto_encrypt_decrypt_text(opts):
     from mojo.helpers import crypto

@@ -24,6 +24,8 @@ import uuid as _uuid
 import objict
 from testit import helpers as th
 
+TESTIT_TIER = "core"  # #2792 tier curation
+
 
 def _build_request(user, group, data=None):
     req = objict.objict()

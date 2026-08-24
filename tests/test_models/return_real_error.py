@@ -22,6 +22,8 @@ import json
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "bug"  # #2792 tier curation
+
 SECRET_TEXT = "psycopg2 OperationalError: password=hunter2 host=10.0.0.7"
 
 

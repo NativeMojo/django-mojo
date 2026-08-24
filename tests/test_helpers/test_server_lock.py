@@ -23,6 +23,8 @@ import time
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "bug"  # #2792 tier curation
+
 
 @th.django_unit_test("server_lock: an open shared hold excludes an exclusive one")
 def test_reader_excludes_writer(opts):

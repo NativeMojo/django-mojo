@@ -1,5 +1,7 @@
 from testit import helpers as th
 
+TESTIT_TIER = "core"  # #2792 tier curation
+
 
 @th.unit_test("sanitize_dict strips password from flat dict")
 def test_sanitize_flat_password(opts):

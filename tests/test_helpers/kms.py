@@ -1,5 +1,7 @@
 from testit import helpers as th
 
+TESTIT_TIER = "bug"  # #2792 tier curation
+
 
 @th.django_unit_test()
 def test_kms_client_kwargs_carries_configured_credentials(opts):

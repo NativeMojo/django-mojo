@@ -76,6 +76,7 @@ def test_django_core_cache_many_operations(opts):
     assert cache.get_many([f"{opts.prefix}:a", f"{opts.prefix}:b"]) == {}, "cache.delete_many should remove keys"
 
 
+@th.tier("extended")
 @th.django_unit_test()
 def test_django_core_cache_timeout_behaviors(opts):
     from django.core.cache import cache

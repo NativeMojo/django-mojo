@@ -16,6 +16,8 @@ target.
 """
 from testit import helpers as th
 
+TESTIT_TIER = "bug"  # #2792 tier curation
+
 
 TEST_USER = "fk_blank_user"
 TEST_PWORD = "testit##mojo"

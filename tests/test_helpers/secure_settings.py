@@ -1,5 +1,7 @@
 from testit import helpers as th
 
+TESTIT_TIER = "core"  # #2792 tier curation
+
 
 # ===========================================================================
 # Setup
