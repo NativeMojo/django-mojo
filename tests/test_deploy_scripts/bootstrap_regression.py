@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 from testit import helpers as th
 
@@ -286,6 +287,113 @@ def test_custom_node_uses_only_its_typed_deploy_profile(opts):
             th.assert_eq(handle.read().splitlines()[-3:], [
                 "1:restart", "previous:1:restart", "previous:1:probe",
             ], "rollback must clean the candidate then prove the saved profile")
+
+
+@th.django_unit_test()
+def test_sites_profile_can_require_fresh_readiness_and_exact_200(opts):
+    """The project seam can reject stale Sites proof without a Sites branch."""
+    import mojo
+
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(mojo.__file__)))
+    source = os.path.join(
+        repo, "mojo", "deploy", "project_scripts", "post_deploy.sh")
+    with tempfile.TemporaryDirectory() as root:
+        project = os.path.join(root, "project")
+        profile_dir = os.path.join(project, "aws", "deploy")
+        state = os.path.join(root, "state")
+        stubs = os.path.join(root, "bin")
+        installed = os.path.join(root, "installed", "sites.conf")
+        ready = os.path.join(root, "sites-ready")
+        commands = os.path.join(root, "commands")
+        os.makedirs(profile_dir)
+        os.makedirs(state)
+        os.makedirs(stubs)
+        shutil.copyfile(source, os.path.join(project, "aws", "post_deploy.sh"))
+        with open(os.path.join(project, "aws", "sites.conf"), "w") as handle:
+            handle.write("server { listen 8080; }\n")
+        _write_executable(
+            os.path.join(profile_dir, "sites.sh"),
+            "case \"${1:-}\" in\n"
+            "  preflight) python3 bin/manage.py check ;;\n"
+            "  restart)\n"
+            "    rm -f -- \"$SITES_READY\"\n"
+            "    install -D -m 0644 \"$PROJ_PATH/aws/sites.conf\" \"$SITES_CONFIG\"\n"
+            "    systemctl restart sites-worker.service sites-ready-reaper.timer\n"
+            "    [ \"${FRESH_READY:-0}\" = 1 ] && date +%s > \"$SITES_READY\"\n"
+            "    ;;\n"
+            "  probe)\n"
+            "    observed=\"$(head -1 \"$SITES_READY\" 2>/dev/null || true)\"\n"
+            "    case \"$observed\" in *[!0-9]*|'') exit 1 ;; esac\n"
+            "    [ \"$observed\" -ge \"$MOJO_DEPLOY_STARTED_AT\" ] || exit 1\n"
+            "    code=\"$(curl -ksS --max-time 10 -o /dev/null -w '%{http_code}' \"$SITES_URL\")\"\n"
+            "    [ \"$code\" = 200 ]\n"
+            "    ;;\n"
+            "  *) exit 64 ;;\n"
+            "esac\n")
+        _write_executable(
+            os.path.join(stubs, "python3"),
+            "printf 'python3 %s\\n' \"$*\" >> \"$COMMAND_LOG\"\n"
+            "exit \"${CHECK_RC:-0}\"\n")
+        _write_executable(
+            os.path.join(stubs, "install"),
+            "printf 'install %s\\n' \"$*\" >> \"$COMMAND_LOG\"\n"
+            "mkdir -p \"$(dirname \"${@: -1}\")\"\n"
+            "cp -f \"${@: -2:1}\" \"${@: -1}\"\n")
+        _write_executable(
+            os.path.join(stubs, "systemctl"),
+            "printf 'systemctl %s\\n' \"$*\" >> \"$COMMAND_LOG\"\n")
+        _write_executable(
+            os.path.join(stubs, "curl"),
+            "printf 'curl %s\\n' \"$*\" >> \"$COMMAND_LOG\"\n"
+            "printf '%s' \"${CURL_CODE:-200}\"\n")
+
+        started = int(time.time())
+        for name, value in (
+                ("previous_sha", "1" * 40),
+                ("previous_framework", "1.16.2"),
+                ("previous_node_type", "sites"),
+                ("candidate_node_type", "sites"),
+                ("deployment", "11111111-1111-4111-8111-111111111111"),
+                ("started_at", str(started))):
+            with open(os.path.join(state, name), "w") as handle:
+                handle.write(value + "\n")
+        with open(ready, "w") as handle:
+            handle.write(str(started - 120) + "\n")
+        environment = os.environ.copy()
+        environment.update({
+            "PATH": stubs + ":/usr/bin:/bin",
+            "PROJ_PATH": project,
+            "COMMAND_LOG": commands,
+            "SITES_READY": ready,
+            "SITES_CONFIG": installed,
+            "SITES_URL": "https://127.0.0.1:8443/__node_ready",
+        })
+        argv = [
+            "bash", os.path.join(project, "aws", "post_deploy.sh"),
+            "--activate", "--node-type", "sites", "--state", state,
+        ]
+
+        stale = subprocess.run(
+            argv, env=environment, capture_output=True, text=True, timeout=30)
+        th.assert_true(stale.returncode != 0,
+                       "the predecessor's readiness marker proved the candidate")
+        th.assert_true(not os.path.exists(ready),
+                       "Sites activation did not invalidate predecessor readiness")
+
+        healthy_env = environment.copy()
+        healthy_env["FRESH_READY"] = "1"
+        healthy = subprocess.run(
+            argv, env=healthy_env, capture_output=True, text=True, timeout=30)
+        th.assert_eq(healthy.returncode, 0, healthy.stderr)
+        th.assert_true(os.path.isfile(installed),
+                       "the custom profile did not converge its own nginx file")
+
+        redirect_env = healthy_env.copy()
+        redirect_env["CURL_CODE"] = "301"
+        redirect = subprocess.run(
+            argv, env=redirect_env, capture_output=True, text=True, timeout=30)
+        th.assert_true(redirect.returncode != 0,
+                       "a Sites redirect passed as exact HTTP 200 readiness")
 
 
 @th.django_unit_test()
