@@ -138,8 +138,8 @@ def _read_deploy_identity(root=Path("var"), include_type=False):
             else (sha, deployment_id))
 
 
-def _read_deploy_outcome(root=Path("var")):
-    """Return one bounded terminal transaction outcome, or an empty dict."""
+def _read_deploy_outcome(root=Path("/var/lib/django-mojo-deploy/public")):
+    """Return one root-published terminal transaction outcome, or empty."""
     from mojo.apps.edge.services import deploy, platform_deploy
     from mojo.apps.edge.settings_validators import deploy_node_type
 
@@ -160,7 +160,8 @@ def _read_deploy_outcome(root=Path("var")):
     except ValueError:
         return {}
     if (not deployment_id or deployment_id != value.get("deployment")
-            or not isinstance(sha, str) or not deploy.is_valid_sha(sha)
+            or not isinstance(sha, str) or len(sha) != 40
+            or not deploy.is_valid_sha(sha)
             or value.get("status") not in {"completed", "failed"}):
         return {}
     return {"deployment": deployment_id, "sha": sha,

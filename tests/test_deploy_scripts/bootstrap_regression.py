@@ -447,12 +447,14 @@ def test_code_node_runs_only_common_checkout_and_declared_dependencies(opts):
         _write_executable(
             os.path.join(stubs, "python3"),
             "printf 'python3 %s\\n' \"$*\" >> \"$COMMAND_LOG\"\n"
-            "if [ \"${1:-}\" = - ]; then printf 'api\\n'; exit 0; fi\n"
+            "if [ \"${1:-}\" = - ]; then exec \"$REAL_PYTHON\" \"$@\"; fi\n"
             "if [ \"$*\" = '-m pip show django-mojo' ]; then printf 'Version: '; cat \"$VERSION_FILE\"; exit 0; fi\n"
             "case \"$*\" in\n"
             "  '-m pip install django-mojo=='*) printf '%s\\n' \"${4#django-mojo==}\" > \"$VERSION_FILE\"; exit 0 ;;\n"
             "  '-m pip install -r '*) exit 0 ;;\n"
-            "  '-m mojo.deploy locate post_deploy.sh') printf '%s\\n' \"$POST_SCRIPT\"; exit 0 ;;\n"
+            "  '-m mojo.deploy locate post_deploy.sh')\n"
+            "    if [ \"${FAIL_CANDIDATE_LOCATE:-0}\" = 1 ] && grep -q '^1.17.2$' \"$VERSION_FILE\"; then exit 1; fi\n"
+            "    printf '%s\\n' \"$POST_SCRIPT\"; exit 0 ;;\n"
             "esac\n"
             "exit 64\n")
         _write_executable(os.path.join(stubs, "flock"), "exit 0\n")
@@ -461,18 +463,27 @@ def test_code_node_runs_only_common_checkout_and_declared_dependencies(opts):
             "PATH": stubs + ":/usr/bin:/bin",
             "PROJ_PATH": project,
             "COMMAND_LOG": command_log,
+            "REAL_PYTHON": sys.executable,
             "VERSION_FILE": version_file,
             "POST_SCRIPT": post,
             "MOJO_DEPLOY_NO_SYSTEMD": "1",
             "MOJO_DEPLOY_STATE_ROOT": os.path.join(root, "state"),
             "MOJO_DEPLOY_PARENT_STATUS": "1",
         })
+        os.makedirs(os.path.join(project, "var"), exist_ok=True)
+        sentinel = os.path.join(root, "lock-symlink-sentinel")
+        with open(sentinel, "w") as handle:
+            handle.write("must stay intact\n")
+        os.symlink(sentinel, os.path.join(project, "var", "update.lock"))
         done = subprocess.run(
             ["bash", update, "--sha", candidate, "--framework", "1.17.2",
              "--deployment", "11111111-1111-4111-8111-111111111111",
              "--node-type", "code"],
             env=environment, capture_output=True, text=True, timeout=30)
         th.assert_eq(done.returncode, 0, done.stderr)
+        with open(sentinel) as handle:
+            th.assert_eq(handle.read(), "must stay intact\n",
+                         "the privileged lock followed an app-writable symlink")
         th.assert_eq(git("rev-parse", "HEAD"), candidate,
                      "the common transaction did not install the candidate")
         with open(command_log) as handle:
@@ -488,6 +499,30 @@ def test_code_node_runs_only_common_checkout_and_declared_dependencies(opts):
             identity = handle.read()
         th.assert_in('"node_type":"code"', identity,
                      "the successful identity lost the local lifecycle")
+
+        # A fatal error after candidate checkout/package installation must
+        # enter rollback immediately; explicit die() paths cannot bypass the
+        # ERR trap and leave a half-installed release serving.
+        git("checkout", "--force", previous)
+        with open(version_file, "w") as handle:
+            handle.write("1.16.2\n")
+        failed_env = environment.copy()
+        failed_env["FAIL_CANDIDATE_LOCATE"] = "1"
+        failed = subprocess.run(
+            ["bash", update, "--sha", candidate, "--framework", "1.17.2",
+             "--deployment", "22222222-2222-4222-8222-222222222222",
+             "--node-type", "code"],
+            env=failed_env, capture_output=True, text=True, timeout=30)
+        th.assert_true(failed.returncode != 0,
+                       "candidate post-body lookup failure reported success")
+        th.assert_eq(git("rev-parse", "HEAD"), previous,
+                     "fatal post-checkout lookup bypassed Git rollback")
+        with open(version_file) as handle:
+            th.assert_eq(handle.read().strip(), "1.16.2",
+                         "fatal post-checkout lookup bypassed framework rollback")
+        th.assert_true(not os.path.exists(os.path.join(
+            environment["MOJO_DEPLOY_STATE_ROOT"], "active")),
+            "successful rollback retained an active transaction")
 
 
 @th.django_unit_test()

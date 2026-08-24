@@ -5,7 +5,6 @@
 set -Eeuo pipefail
 
 PROJ_PATH="${PROJ_PATH:-/opt/api}"
-LOCK_FILE="${PROJ_PATH}/var/update.lock"
 RUNTIME_SECONDS="${MOJO_DEPLOY_RUNTIME_SECONDS:-1800}"
 ROLLBACK_SECONDS="${MOJO_DEPLOY_ROLLBACK_SECONDS:-900}"
 APP_USER="${APP_USER:-${SUDO_USER:-ec2-user}}"
@@ -15,10 +14,18 @@ if [ "$RUN_UID" != "0" ] && [ -n "${MOJO_DEPLOY_STATE_ROOT:-}" ]; then
     TRANSACTION_ROOT="$MOJO_DEPLOY_STATE_ROOT"
 fi
 ACTIVE="$TRANSACTION_ROOT/active"
+OUTCOME_ROOT="$TRANSACTION_ROOT/public"
+LOCK_FILE="$TRANSACTION_ROOT/update.lock"
 ROLLING_BACK=0
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
-die() { echo "[$(date '+%H:%M:%S')] FATAL: $*" >&2; exit 1; }
+die() {
+    echo "[$(date '+%H:%M:%S')] FATAL: $*" >&2
+    if [ "$ROLLING_BACK" = "0" ] && [ -d "$ACTIVE" ]; then
+        rollback_and_exit 1
+    fi
+    exit 1
+}
 usage() {
     echo "usage: update.sh --sha <commit> --framework <version> --deployment <uuid> [--node-type <type>] [--migrate] | --manual [--node-type <type>]" >&2
 }
@@ -35,15 +42,20 @@ installed_framework() {
         sed -n 's/^Version:[[:space:]]*//p' | head -1
 }
 
+run_as_app() {
+    if [ "$RUN_UID" = "0" ]; then
+        id "$APP_USER" >/dev/null 2>&1 || die "application account does not exist"
+        sudo -H -u "$APP_USER" -- "$@"
+    else
+        "$@"
+    fi
+}
+
 git_project() {
     # The transient unit is root so it can converge host services, but the
     # checkout stays owned by the application account. This also avoids Git's
     # root/foreign-owner safe.directory refusal on ordinary nodes.
-    if [ "$RUN_UID" = "0" ] && id "$APP_USER" >/dev/null 2>&1; then
-        sudo -H -u "$APP_USER" -- git -C "$PROJ_PATH" "$@"
-    else
-        git -C "$PROJ_PATH" "$@"
-    fi
+    run_as_app git -C "$PROJ_PATH" "$@"
 }
 
 manifest_for_tree() {
@@ -62,7 +74,7 @@ install_manifest() {
 }
 
 read_previous_type() {
-    python3 - "$PROJ_PATH/var/deploy_identity.json" <<'PY' 2>/dev/null || true
+    run_as_app python3 - "$PROJ_PATH/var/deploy_identity.json" <<'PY' 2>/dev/null || true
 import json, sys
 try:
     with open(sys.argv[1], encoding="utf-8") as handle:
@@ -78,9 +90,19 @@ PY
 ensure_state_root() {
     [ ! -L "$TRANSACTION_ROOT" ] || die "deployment state path is a symlink"
     if [ ! -d "$TRANSACTION_ROOT" ]; then
-        mkdir -m 0700 -p -- "$TRANSACTION_ROOT"
+        mkdir -m 0711 -p -- "$TRANSACTION_ROOT"
     fi
-    chmod 0700 "$TRANSACTION_ROOT"
+    local owner
+    owner="$(stat -c '%u' "$TRANSACTION_ROOT" 2>/dev/null || stat -f '%u' "$TRANSACTION_ROOT")"
+    [ "$owner" = "$RUN_UID" ] || die "deployment state path has the wrong owner"
+    chmod 0711 "$TRANSACTION_ROOT"
+    [ ! -L "$OUTCOME_ROOT" ] || die "deployment outcome path is a symlink"
+    if [ ! -d "$OUTCOME_ROOT" ]; then
+        mkdir -m 0755 -- "$OUTCOME_ROOT"
+    fi
+    owner="$(stat -c '%u' "$OUTCOME_ROOT" 2>/dev/null || stat -f '%u' "$OUTCOME_ROOT")"
+    [ "$owner" = "$RUN_UID" ] || die "deployment outcome path has the wrong owner"
+    chmod 0755 "$OUTCOME_ROOT"
 }
 
 write_outcome() {
@@ -88,12 +110,68 @@ write_outcome() {
     local outcome_deployment="${4:-${DEPLOYMENT:-}}"
     local outcome_type="${5:-${NODE_TYPE:-api}}"
     [ -n "$outcome_deployment" ] || return 0
-    mkdir -p "$PROJ_PATH/var"
-    local path="$PROJ_PATH/var/deploy_outcome.json.tmp.$$"
-    printf '{"schema":1,"sha":"%s","deployment":"%s","node_type":"%s","status":"%s","detail":"%s"}\n' \
-        "$outcome_sha" "$outcome_deployment" "$outcome_type" "$status" "$detail" > "$path"
-    chmod 0644 "$path"
-    mv -f "$path" "$PROJ_PATH/var/deploy_outcome.json"
+    python3 - "$OUTCOME_ROOT/deploy_outcome.json" \
+        "$outcome_sha" "$outcome_deployment" "$outcome_type" \
+        "$status" "$detail" <<'PY'
+import json, os, sys, tempfile
+path = sys.argv[1]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+fd, temporary = tempfile.mkstemp(prefix=".deploy-outcome-", dir=os.path.dirname(path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump({"schema": 1, "sha": sys.argv[2], "deployment": sys.argv[3],
+                   "node_type": sys.argv[4], "status": sys.argv[5],
+                   "detail": sys.argv[6]}, handle, separators=(",", ":"))
+        handle.write("\n")
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, path)
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+PY
+}
+
+write_identity() {
+    local sha="$1" deployment="$2" node_type="$3"
+    run_as_app python3 - "$PROJ_PATH/var/deploy_identity.json" \
+        "$PROJ_PATH/var/deploy_identity.invalid" "$sha" "$deployment" \
+        "$node_type" <<'PY'
+import json, os, sys, tempfile
+path, invalid = sys.argv[1:3]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+fd, temporary = tempfile.mkstemp(prefix=".deploy-identity-", dir=os.path.dirname(path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump({"schema": 3, "sha": sys.argv[3], "deployment": sys.argv[4],
+                   "node_type": sys.argv[5]}, handle, separators=(",", ":"))
+        handle.write("\n")
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, path)
+    try:
+        os.unlink(invalid)
+    except FileNotFoundError:
+        pass
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+PY
+}
+
+publish_success() {
+    local sha deployment node_type
+    sha="$(head -1 "$ACTIVE/candidate_sha" 2>/dev/null || true)"
+    deployment="$(head -1 "$ACTIVE/deployment" 2>/dev/null || true)"
+    node_type="$(head -1 "$ACTIVE/candidate_node_type" 2>/dev/null || true)"
+    [ "$deployment" != "manual" ] || return 0
+    valid_sha "$sha" || return 1
+    valid_deployment "$deployment" || return 1
+    valid_node_type "$node_type" || return 1
+    write_outcome "completed" "" "$sha" "$deployment" "$node_type" || return 1
+    write_identity "$sha" "$deployment" "$node_type"
 }
 
 rollback_transaction() {
@@ -111,9 +189,19 @@ rollback_transaction() {
     valid_node_type "$previous_type" || return 1
     valid_node_type "$candidate_type" || return 1
 
+    # Activation and its required probe completed. If the unit died while
+    # publishing its app-readable result, finish that atomic publication;
+    # rolling back a healthy candidate here would make identity and code lie.
+    if [ -f "$ACTIVE/activation_succeeded" ]; then
+        log "Finishing successful deployment publication"
+        publish_success || return 1
+        rm -rf -- "$ACTIVE"
+        return 0
+    fi
+
     if [ ! -f "$ACTIVE/mutation_started" ]; then
         write_outcome "failed" "pre_mutation" "$candidate_sha" \
-            "$candidate_deployment" "$candidate_type"
+            "$candidate_deployment" "$candidate_type" || return 1
         rm -rf -- "$ACTIVE"
         return 0
     fi
@@ -139,7 +227,7 @@ rollback_transaction() {
         return 1
     fi
     write_outcome "failed" "rolled_back" "$candidate_sha" \
-        "$candidate_deployment" "$candidate_type"
+        "$candidate_deployment" "$candidate_type" || return 1
     rm -rf -- "$ACTIVE"
     log "Rollback completed"
 }
@@ -211,7 +299,8 @@ if [ "$TRANSACTION" = "0" ] && [ "${MOJO_DEPLOY_NO_SYSTEMD:-0}" != "1" ]; then
 fi
 
 cd "$PROJ_PATH"
-mkdir -p var
+ensure_state_root
+run_as_app mkdir -p "$PROJ_PATH/var"
 exec 9>"$LOCK_FILE"
 if [ "$MANUAL" = "1" ]; then
     flock -n 9 || die "another update is running"
@@ -219,7 +308,6 @@ else
     flock 9
 fi
 
-ensure_state_root
 for preparing in "$TRANSACTION_ROOT"/preparing.*; do
     [ -d "$preparing" ] || continue
     rm -rf -- "$preparing"
@@ -312,15 +400,11 @@ fi
 bash "$candidate_entry" "${post_args[@]}"
 
 TARGET_SHA="$(git_project rev-parse HEAD)"
-if [ "$MANUAL" = "0" ]; then
-    identity="$PROJ_PATH/var/deploy_identity.json.tmp.$$"
-    printf '{"schema":3,"sha":"%s","deployment":"%s","node_type":"%s"}\n' \
-        "$TARGET_SHA" "$DEPLOYMENT" "$NODE_TYPE" > "$identity"
-    chmod 0644 "$identity"
-    mv -f "$identity" "$PROJ_PATH/var/deploy_identity.json"
-    rm -f "$PROJ_PATH/var/deploy_identity.invalid"
-    write_outcome "completed" "" "$TARGET_SHA" "$DEPLOYMENT" "$NODE_TYPE"
-fi
+printf '%s\n' "$TARGET_SHA" > "$ACTIVE/candidate_sha"
+# This root-owned marker is the commit point. Recovery after it completes
+# publication; recovery before it rolls the candidate back.
+: > "$ACTIVE/activation_succeeded"
+publish_success
 
 trap - ERR TERM INT HUP
 rm -rf -- "$ACTIVE"
