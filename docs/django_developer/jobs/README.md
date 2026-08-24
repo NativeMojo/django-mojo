@@ -256,6 +256,10 @@ started. An empty jobs CLI status therefore says exactly which process plane it
 checked and points at `python3 -m mojo.deploy.jobman status`; it does not claim
 that the deployed foreground engine and scheduler are stopped.
 
+```text
+No jobs CLI daemon-mode processes running; check deployed foreground processes with: python3 -m mojo.deploy.jobman status
+```
+
 MojoSec proves that deployed origin from the real CROND launch record plus its
 matching PAM/Audit `USER_START`, then follows the audited bash → jobman → engine
 chain. The CROND row itself retains real crond process metadata; its launch PID

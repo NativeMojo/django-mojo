@@ -172,11 +172,14 @@ and HUP. An API rollback restores:
 
 Before rollback starts, the updater captures one fixed phase name. Its final
 diagnostic is therefore short and survives the bounded journal replay, for
-example `Deployment failed during django_check; rollback completed`. Other
-phases identify checkout, dependencies, framework installation, migration,
-static collection, configuration, nginx, restart, HTTP probe, or one of the
-three custom-profile verbs. The diagnostic never copies exception text or
-command output into deployment status.
+example `Deployment failed during django_check; rollback completed`. The
+script-owned phases are `candidate_checkout`, `dependency_install`,
+`framework_install`, `candidate_activation`, `django_check`, `migration`,
+`static_collection`, `configuration`, `nginx_check`, `api_restart`,
+`api_probe`, `custom_preflight`, `custom_restart`, `custom_probe`, and
+`publication`; an absent or unrecognized value becomes `transaction`. The
+diagnostic never copies exception text or command output into deployment
+status.
 
 Custom rollback uses the profile protocol above; `code` restores the checkout
 and packages and leaves activation to its external supervisor. The transaction
@@ -206,18 +209,30 @@ example, AWS Systems Manager Run Command targeted by project, environment, and
 node-type tags) and move one stage fleet, then production fleets in bounded
 waves.
 
-The one-time path depends on both the installed framework and the configured
-update endpoint:
+Before each fleet moves, record its installed framework version, static
+`EDGE_DEPLOY_SCRIPT`, node type, process supervisor, and
+`EDGE_FRAMEWORK_VERSION` value. A held or explicitly pinned framework does not
+advance on an ordinary webhook. The built-in Admin **Framework update** action
+(`POST /api/account/admin/platform/framework/update`) is the preferred normal
+path: it clears the pin and redeploys the last converged commit with the newest
+published framework. An installation with `INFRASTRUCTURE_MODE=external` must
+instead change the version through its existing IaC pipeline; the Admin action
+is intentionally disabled in that mode.
+
+Whether a one-time bootstrap is needed depends on both the installed framework
+and how the configured update command enters the packaged script:
 
 | Existing node | Upgrade path |
 |---|---|
-| django-mojo 1.18.1 or newer, using the packaged default or a `mojo.deploy locate` shim | Trigger an ordinary harmless commit through the signed GitHub webhook. No project source or SSH change is required. |
-| older than 1.18.1, using the packaged default or locator shim | Use one fleet remote command to install the target framework and restart the long-lived Python processes, then trigger the normal webhook. 1.18.1 is the first updater that can self-elevate from an app-user legacy shim. |
+| django-mojo 1.18.1 or newer, using the packaged default or a `mojo.deploy locate` shim | Use **Framework update**. No project source change, remote command, or SSH is required. An ordinary harmless webhook is equivalent only when `EDGE_FRAMEWORK_VERSION` is unset. |
+| django-mojo 1.18.0 whose update command already enters through `sudo` | Use the same normal path. The packaged default is already sudo-wrapped. |
+| django-mojo 1.18.0 whose locator shim is launched directly as the application account | Use one fleet remote command to install the target framework and restart the long-lived Python processes. 1.18.1 is the first updater that can self-elevate this legacy entry path. Then use **Framework update** to prove the normal path. |
+| older than 1.18.0 | Use the fleet remote command rather than depending on the predecessor updater and its removed release gates, then prove **Framework update**. |
 | any project with a vendored full `aws/update.sh` or `aws/post_deploy.sh` body | Commit a shim-only conversion first. Install the target framework through the fleet remote command and invoke its packaged updater once to adopt that commit; future releases use the webhook path above. |
 
-The bootstrap command is deliberately just a package pin plus process reload.
-Run it as the fleet remote-execution account, substituting the project account
-and path used by that fleet:
+The bootstrap is deliberately just a package pin plus process reload. For a
+standard `jobman`-managed node, run this as the fleet remote-execution account,
+substituting the project account and path used by that fleet:
 
 ```bash
 TARGET_VERSION=1.x.y
@@ -231,8 +246,14 @@ sudo -H -u "$APP_USER" python3 -m mojo.deploy.jobman --root "$PROJ_PATH" start
 sudo -n systemctl restart mojo-asgi.service
 ```
 
+Do not apply the API service command to `code` or custom nodes. If a fleet uses
+another supervisor instead of `jobman`, restart that existing supervisor with
+the same remote-execution wave; this bootstrap does not introduce a new process
+manager.
+
 For a vendored-script project, make the prepared `origin/main` change contain
-only the permanent locator shim, then adopt it with the packaged transaction:
+only the permanent locator shim. After installing the target framework, adopt
+that commit directly with the packaged transaction:
 
 ```bash
 NODE_TYPE=api  # or the fleet's explicit code/custom type
@@ -241,10 +262,11 @@ sudo -n bash "$(python3 -m mojo.deploy locate update.sh)" \
 ```
 
 `--manual` deliberately does not migrate, so the adoption commit must not
-contain application work that requires a migration. Restart `jobman` after the
-manual transaction, then use a new harmless commit to prove the ordinary
-webhook path. From that point forward, fleet deploys consume framework updater
-fixes without another bootstrap.
+contain application work that requires a migration. Restart the node's existing
+long-lived processes after the manual transaction, then use **Framework
+update** (or, with no pin, a new harmless commit) to prove the ordinary path.
+From that point forward, fleet deploys consume framework updater fixes without
+another bootstrap.
 
 ### Post-release smoke test
 
