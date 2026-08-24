@@ -97,7 +97,9 @@ dependencies, exact framework and typed lifecycle. An interrupted transaction
 is recovered before the next candidate starts. The final node diagnostic uses
 one fixed phase and rollback result, such as
 `Deployment failed during django_check; rollback completed`; it does not
-stream or parse candidate tracebacks.
+stream or parse candidate tracebacks. A failure after activation has committed
+keeps the candidate live and reports the distinct fixed result `publication
+completed` or `publication recovery failed` instead of claiming a rollback.
 
 Redis remains short-lived coordination and `PlatformDeployment` remains the
 durable attempt record. Both the installed identity and node evidence include

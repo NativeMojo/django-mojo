@@ -60,7 +60,9 @@ not force it through Django or nginx.
 Operator diagnostics end with a fixed phase and rollback result, for example
 `Deployment failed during django_check; rollback completed`. This is a bounded
 classification for the Admin deployment journal, not a streamed or parsed
-Django traceback.
+Django traceback. If activation already committed, the candidate stays live
+and the fixed result is `publication completed` or `publication recovery
+failed`, not `rollback completed`.
 
 Deployment acceptance is intentionally functional. It does not wait on RPM,
 file-integrity, TLS-lineage, node-role, ownership, or similar security-policy

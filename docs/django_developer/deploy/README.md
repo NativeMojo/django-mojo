@@ -170,7 +170,7 @@ and HUP. An API rollback restores:
 - the restored systemd configuration, followed by `nginx -t`, a mojo-asgi
   restart, nginx reload, and an exact-200 probe of the restored API.
 
-Before rollback starts, the updater captures one fixed phase name. Its final
+Before recovery starts, the updater captures one fixed phase name. Its final
 diagnostic is therefore short and survives the bounded journal replay, for
 example `Deployment failed during django_check; rollback completed`. The
 script-owned phases are `candidate_checkout`, `dependency_install`,
@@ -179,7 +179,9 @@ script-owned phases are `candidate_checkout`, `dependency_install`,
 `api_probe`, `custom_preflight`, `custom_restart`, `custom_probe`, and
 `publication`; an absent or unrecognized value becomes `transaction`. The
 diagnostic never copies exception text or command output into deployment
-status.
+status. If activation already succeeded, recovery finishes publication and
+keeps the candidate live instead of rolling it back; that branch ends with the
+distinct fixed result `publication completed` or `publication recovery failed`.
 
 Custom rollback uses the profile protocol above; `code` restores the checkout
 and packages and leaves activation to its external supervisor. The transaction
@@ -235,15 +237,25 @@ standard `jobman`-managed node, run this as the fleet remote-execution account,
 substituting the project account and path used by that fleet:
 
 ```bash
+set -Eeuo pipefail
+
 TARGET_VERSION=1.x.y
 PROJ_PATH=/opt/api
 APP_USER=ec2-user
 
 sudo -n python3 -m pip install "django-mojo==$TARGET_VERSION"
+INSTALLED_VERSION="$(python3 -m pip show django-mojo | sed -n 's/^Version:[[:space:]]*//p')"
+[ "$INSTALLED_VERSION" = "$TARGET_VERSION" ]
 sudo -H -u "$APP_USER" python3 -m mojo.deploy.jobman --root "$PROJ_PATH" stop
 sudo -H -u "$APP_USER" python3 -m mojo.deploy.jobman --root "$PROJ_PATH" start
+JOB_STATUS="$(sudo -H -u "$APP_USER" python3 -m mojo.deploy.jobman \
+    --root "$PROJ_PATH" status)"
+printf '%s\n' "$JOB_STATUS"
+grep -Fq 'Engine running (PID ' <<< "$JOB_STATUS"
+grep -Fq 'Scheduler running (PID ' <<< "$JOB_STATUS"
 # API nodes only; custom profiles own their serving process.
 sudo -n systemctl restart mojo-asgi.service
+sudo -n systemctl is-active --quiet mojo-asgi.service
 ```
 
 Do not apply the API service command to `code` or custom nodes. If a fleet uses
@@ -256,17 +268,24 @@ only the permanent locator shim. After installing the target framework, adopt
 that commit directly with the packaged transaction:
 
 ```bash
+set -Eeuo pipefail
+
+TARGET_VERSION=1.x.y
 NODE_TYPE=api  # or the fleet's explicit code/custom type
 sudo -n bash "$(python3 -m mojo.deploy locate update.sh)" \
     --manual --node-type "$NODE_TYPE"
+INSTALLED_VERSION="$(python3 -m pip show django-mojo | sed -n 's/^Version:[[:space:]]*//p')"
+[ "$INSTALLED_VERSION" = "$TARGET_VERSION" ]
 ```
 
 `--manual` deliberately does not migrate, so the adoption commit must not
-contain application work that requires a migration. Restart the node's existing
-long-lived processes after the manual transaction, then use **Framework
-update** (or, with no pin, a new harmless commit) to prove the ordinary path.
-From that point forward, fleet deploys consume framework updater fixes without
-another bootstrap.
+contain application work that requires a migration. It also upgrades to the
+newest published django-mojo, so pause framework publication for the bounded
+adoption wave and require the exact post-check above; stop the wave on a
+mismatch. Restart the node's existing long-lived processes after the manual
+transaction, then use **Framework update** (or, with no pin, a new harmless
+commit) to prove the ordinary path. From that point forward, fleet deploys
+consume framework updater fixes without another bootstrap.
 
 ### Post-release smoke test
 

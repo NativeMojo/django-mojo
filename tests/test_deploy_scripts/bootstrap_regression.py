@@ -450,6 +450,11 @@ def test_code_node_runs_only_common_checkout_and_declared_dependencies(opts):
         _write_executable(
             os.path.join(stubs, "python3"),
             "printf 'python3 %s\\n' \"$*\" >> \"$COMMAND_LOG\"\n"
+            "if [ \"${FAIL_PUBLICATION_ONCE:-0}\" = 1 ] && "
+            "[ \"${2:-}\" = \"$MOJO_DEPLOY_STATE_ROOT/public/deploy_outcome.json\" ] && "
+            "[ ! -f \"$PUBLICATION_MARKER\" ]; then\n"
+            "  : > \"$PUBLICATION_MARKER\"; exit 1\n"
+            "fi\n"
             "if [ \"${1:-}\" = - ]; then exec \"$REAL_PYTHON\" \"$@\"; fi\n"
             "if [ \"$*\" = '-m pip show django-mojo' ]; then printf 'Version: '; cat \"$VERSION_FILE\"; exit 0; fi\n"
             "case \"$*\" in\n"
@@ -506,6 +511,28 @@ def test_code_node_runs_only_common_checkout_and_declared_dependencies(opts):
             identity = handle.read()
         th.assert_in('"node_type":"code"', identity,
                      "the successful identity lost the local lifecycle")
+
+        # Once activation has committed, a publication error is recovered by
+        # finishing publication, not by restoring the previous release.  Its
+        # fixed summary must not claim that rollback happened.
+        publication_env = environment.copy()
+        publication_env.update({
+            "FAIL_PUBLICATION_ONCE": "1",
+            "PUBLICATION_MARKER": os.path.join(root, "publication-failed"),
+        })
+        publication = subprocess.run(
+            ["bash", update, "--sha", candidate, "--framework", "1.17.2",
+             "--deployment", "33333333-3333-4333-8333-333333333333",
+             "--node-type", "code"],
+            env=publication_env, capture_output=True, text=True, timeout=30)
+        th.assert_true(publication.returncode != 0,
+                       "the recovered publication lost its original failure status")
+        th.assert_in(
+            "Deployment failed during publication; publication completed",
+            publication.stderr,
+            "publication recovery was mislabeled as rollback")
+        th.assert_true("rollback completed" not in publication.stderr,
+                       "publication recovery claimed to restore the old release")
 
         # A fatal error after candidate checkout/package installation must
         # enter rollback immediately; explicit die() paths cannot bypass the

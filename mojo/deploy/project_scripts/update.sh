@@ -251,15 +251,24 @@ rollback_transaction() {
 }
 
 rollback_and_exit() {
-    local status="${1:-1}" phase
+    local status="${1:-1}" phase publication_recovery=0
     [ "$ROLLING_BACK" = "0" ] || exit "$status"
     ROLLING_BACK=1
     trap - ERR TERM INT HUP
     phase="$(failure_phase)"
+    [ ! -f "$ACTIVE/activation_succeeded" ] || publication_recovery=1
     if rollback_transaction; then
-        echo "Deployment failed during $phase; rollback completed" >&2
+        if [ "$publication_recovery" = "1" ]; then
+            echo "Deployment failed during publication; publication completed" >&2
+        else
+            echo "Deployment failed during $phase; rollback completed" >&2
+        fi
     else
-        echo "Deployment failed during $phase; rollback failed" >&2
+        if [ "$publication_recovery" = "1" ]; then
+            echo "Deployment failed during publication; publication recovery failed" >&2
+        else
+            echo "Deployment failed during $phase; rollback failed" >&2
+        fi
         echo "FATAL: rollback failed; transaction retained at $ACTIVE" >&2
     fi
     exit "$status"
