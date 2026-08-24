@@ -167,7 +167,7 @@ aws.send_template_email(
 aws.send_template_email(
     to=user.email,
     template_name="password_reset_link",
-    context={"token": reset_token, "display_name": user.display_name}
+    context={"token_url": reset_url, "display_name": user.display_name}
 )
 
 # Group invite
@@ -244,6 +244,12 @@ This is the lookup used by `send_template_email()` and `User.send_template_email
 
 All fields except `name` are optional. Place the file in `mojo/apps/aws/seeds/email_templates/` and the framework auto-creates the DB record on the first send.
 
+Seed auto-load and the default `seed_email_templates` command are deliberately
+missing-only: an existing database template may be customized and is never
+silently overwritten. After upgrading to corrected framework defaults, use
+`python manage.py seed_email_templates --update-existing` only when you intend
+to replace existing rows with the shipped versions.
+
 ### Use in Application Code
 
 ```python
@@ -271,8 +277,13 @@ These template names are used by the framework. Create matching `EmailTemplate` 
 | `password_reset_code` | Forgot password (code flow) | `code`, `display_name` |
 | `password_reset_link` | Forgot password (link flow) | `token_url`, `display_name` |
 | `magic_login_link` | Magic login | `token_url`, `display_name` |
-| `email_verify` | Email verification | `token`, `display_name` |
+| `email_verify` | Authenticated email verification link | `token_url`, `display_name` |
 | `email_verify_link` | Email verification link flow | `token_url`, `display_name` |
+| `email_verify_code` | Authenticated email verification code | `code`, `display_name` |
+| `email_change_confirm` | Confirm an email change by link | `new_email`, `token_url`, `display_name` |
+| `email_change_code` | Confirm an email change by code | `new_email`, `code`, `display_name` |
+| `email_change_notify` | Notify the current address of a requested change | `new_email`, `display_name` |
+| `account_deactivate_confirm` | Confirm self-service account deactivation | `token_url`, `display_name` |
 | `account_inactive_warning` | Auto-disable sweep (users) | `days_until_disable`, `inactive_days` |
 | `group_inactive_warning` | Auto-disable sweep (groups) | `group_name`, `group_id`, `days_until_disable`, `inactive_days` |
 

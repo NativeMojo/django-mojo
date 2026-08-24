@@ -2,10 +2,12 @@
 Tests for EmailTemplate.get_or_load_from_seed() — auto-loading templates
 from seed JSON files when not found in the database.
 """
+import ast
 import json
 import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from testit import helpers as th
 
@@ -76,8 +78,15 @@ def test_shipped_token_link_templates_render_real_urls(opts):
     from mojo.apps.aws.services.email_templates import load_shipped_templates
 
     templates = {row["name"]: row for row in load_shipped_templates()}
-    expected = {"invite", "magic_login_link", "password_reset_link",
-                "email_verify_link"}
+    expected = {
+        "account_deactivate_confirm",
+        "email_change_confirm",
+        "email_verify",
+        "email_verify_link",
+        "invite",
+        "magic_login_link",
+        "password_reset_link",
+    }
     th.assert_eq(expected - set(templates), set(),
                  f"every built-in token-link flow needs a shipped seed: "
                  f"{sorted(expected - set(templates))}")
@@ -90,6 +99,94 @@ def test_shipped_token_link_templates_render_real_urls(opts):
                        f"{name} must never ship a literal placeholder host")
         th.assert_in("token_url", row["metadata"].get("context_keys", []),
                      f"{name} metadata must document its token_url context")
+
+
+@th.django_unit_test()
+def test_account_email_senders_have_shipped_templates(opts):
+    """Literal account template names must resolve to shipped seed files."""
+    import inspect
+    import mojo.apps.account as account_app
+    from mojo.apps.aws.services.email_templates import load_shipped_templates
+
+    account_dir = Path(inspect.getfile(account_app)).parent
+    referenced = set()
+    for source_path in account_dir.rglob("*.py"):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr != "send_template_email":
+                continue
+            template_node = node.args[0] if node.args else None
+            for keyword in node.keywords:
+                if keyword.arg == "template_name":
+                    template_node = keyword.value
+                    break
+            if isinstance(template_node, ast.Constant) and isinstance(
+                    template_node.value, str):
+                referenced.add(template_node.value)
+
+    shipped = {row["name"] for row in load_shipped_templates()}
+    th.assert_eq(
+        sorted(referenced - shipped),
+        [],
+        "every literal account send_template_email reference needs a shipped seed",
+    )
+
+
+@th.django_unit_test()
+def test_shipped_templates_never_contain_placeholder_hosts(opts):
+    from mojo.apps.aws.services.email_templates import load_shipped_templates
+
+    offenders = []
+    for row in load_shipped_templates():
+        combined = row["subject_template"] + row["text_template"] + row["html_template"]
+        if "YOUR_APP_HOST" in combined:
+            offenders.append(row["name"])
+    th.assert_eq(
+        offenders,
+        [],
+        "shipped templates must never expose a placeholder hostname to recipients",
+    )
+
+
+@th.django_unit_test()
+def test_account_link_senders_build_token_urls(opts):
+    """Every account link-email sender must resolve token_url server-side."""
+    import inspect
+    import mojo.apps.account as account_app
+
+    account_dir = Path(inspect.getfile(account_app)).parent
+    cases = {
+        account_dir / "rest" / "verify.py": ["on_email_verify_send"],
+        account_dir / "rest" / "user.py": [
+            "on_register",
+            "_send_email_change_confirm",
+            "on_account_deactivate",
+        ],
+    }
+    for source_path, function_names in cases.items():
+        source = source_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        functions = {
+            node.name: ast.get_source_segment(source, node) or ""
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        for function_name in function_names:
+            function_source = functions.get(function_name, "")
+            th.assert_in(
+                "build_token_url",
+                function_source,
+                f"{source_path.name}:{function_name} must resolve its frontend URL",
+            )
+            th.assert_in(
+                "token_url",
+                function_source,
+                f"{source_path.name}:{function_name} must pass token_url to its template",
+            )
 
 
 @th.django_unit_test()

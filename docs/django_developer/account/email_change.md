@@ -107,9 +107,10 @@ else:
 
 ---
 
-## Email Templates Required
+## Shipped Email Templates
 
-Three email templates must be defined in the project's email template system.
+Django-MOJO ships all three email-change templates. Projects may override the
+database rows for branding or product-specific routing.
 
 ### `email_change_confirm` (link flow)
 
@@ -117,17 +118,23 @@ Sent to the **new** address when `method: "link"`. Context variables:
 
 | Variable | Description |
 |---|---|
-| `token` | The `ec:` token string to embed in the confirmation link |
+| `token_url` | Fully resolved frontend URL containing the `ec:` token |
 | `new_email` | The new email address being confirmed |
 | `user` | Basic user dict |
 
-The template should contain a link such as:
+The shipped template renders:
 
 ```
-https://yourapp.com/email-change?token={{ token }}
+{{ token_url }}
 ```
 
-The frontend extracts the token from the URL and calls `POST /api/auth/email/change/confirm` with `{ "token": "ec:..." }`. Alternatively, point the link directly at `GET /api/auth/email/change/confirm?token={{ token }}&redirect=https://yourapp.com/login` to have the API render the result page.
+`_send_email_change_confirm` builds that URL through `build_token_url` using
+the `email_change` flow, so it respects tenant/project `WEBAPP_BASE_URL` and
+`WEBAPP_AUTH_PATH` configuration and may use a shortlink. The frontend extracts
+the token and calls `POST /api/auth/email/change/confirm` with
+`{ "token": "ec:..." }`. A project override may instead point directly at
+`GET /api/auth/email/change/confirm?token=...&redirect=https://yourapp.com/login`
+to have the API render the result page.
 
 The `&redirect=` destination must be `http`, `https`, or scheme-less — anything else (a custom app scheme such as `myapp://home`, `javascript:`, `data:`) is dropped by `mojo.helpers.urls.safe_nav_url` before it reaches the template, and the page renders with **no button at all**. The host is deliberately not restricted; scheme-relative and path-relative values pass through unchanged and may still resolve off-origin. The same rule applies to `&redirect=` on `GET /api/auth/verify/email/confirm`.
 

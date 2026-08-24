@@ -710,7 +710,12 @@ def on_register(request):
     if email_in_schema:
         token = tokens.generate_email_verify_token(user)
         try:
-            user.send_template_email("email_verify", context=dict(token=token))
+            token_url = build_token_url(
+                "email_verify", token, request=request, user=user, group=group)
+            token_url = maybe_shorten_url(
+                token_url, source="email_verify", user=user, expire_hours=24)
+            user.send_template_email(
+                "email_verify", context=dict(token=token, token_url=token_url))
         except Exception as exc:
             user.report_incident(
                 f"verify-email send failed during register: {exc}",
@@ -1347,7 +1352,7 @@ def on_email_change_request(request):
 
     # Confirmation link sent to the NEW address — resolve the mailbox the same way
     # send_template_email does internally, since that method always sends to self.email.
-    _send_email_change_confirm(user, new_email, token)
+    _send_email_change_confirm(request, user, new_email, token)
 
     # Notification to the OLD address — no cancel token (single-JTI design means issuing
     # a second ec: token would immediately invalidate the first). The user can cancel via
@@ -1358,7 +1363,7 @@ def on_email_change_request(request):
     return JsonResponse({"status": True, "message": "A confirmation link has been sent to your new email address."})
 
 
-def _send_email_change_confirm(user, new_email, token):
+def _send_email_change_confirm(request, user, new_email, token):
     """
     Send the email-change confirmation link to the NEW address.
     Uses the same mailbox-resolution logic as user.send_template_email but
@@ -1387,12 +1392,18 @@ def _send_email_change_confirm(user, new_email, token):
         )
         return
 
-    context = {
-        "user": user.to_dict("basic"),
-        "token": token,
-        "new_email": new_email,
-    }
     try:
+        group = getattr(request, "group", None)
+        token_url = build_token_url(
+            "email_change", token, request=request, user=user, group=group)
+        token_url = maybe_shorten_url(
+            token_url, source="email_change", user=user, expire_hours=1)
+        context = {
+            "user": user.to_dict("basic"),
+            "token": token,
+            "token_url": token_url,
+            "new_email": new_email,
+        }
         mailbox.send_template_email(
             to=new_email,
             template_name="email_change_confirm",
@@ -1905,7 +1916,15 @@ def on_account_deactivate(request):
     token = tokens.generate_deactivate_token(user)
 
     try:
-        user.send_template_email("account_deactivate_confirm", {"token": token})
+        group = getattr(request, "group", None)
+        token_url = build_token_url(
+            "account_deactivate", token, request=request, user=user, group=group)
+        token_url = maybe_shorten_url(
+            token_url, source="account_deactivate", user=user, expire_hours=1)
+        user.send_template_email(
+            "account_deactivate_confirm",
+            {"token": token, "token_url": token_url},
+        )
     except Exception:
         pass
 

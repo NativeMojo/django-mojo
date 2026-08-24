@@ -133,7 +133,10 @@ Codes expire after `EMAIL_CHANGE_CODE_TTL` seconds (default 10 minutes) and are 
 
 ### Option B — Link confirm via API page (simple setups)
 
-Use this when the request was made with the default `method: "link"`. The confirmation email contains a link pointing to the API. The server renders a result page — no frontend JavaScript required.
+Use this when the request was made with the default `method: "link"` and your
+deployment overrides the shipped email template to point directly to the API.
+The shipped template uses the resolved frontend `token_url` described in Option
+C; a direct API-page link remains available for simple deployments.
 
 **GET** `/api/auth/email/change/confirm?token=ec:...`
 
@@ -293,17 +296,21 @@ Two email templates must also be defined in your project's email template system
 
 ### `email_change_confirm` (link flow)
 
-Sent to the **new** address when `method: "link"`. Must contain a confirmation link embedding the `ec:` token:
+Sent to the **new** address when `method: "link"`. Django-MOJO ships a default
+template containing the resolved frontend URL:
 
 ```
-https://yourapp.com/email-change?token={{ token }}
+{{ token_url }}
 ```
 
-Context: `token`, `new_email`, `user`.
+The URL is built server-side from `WEBAPP_BASE_URL` and `WEBAPP_AUTH_PATH` as
+`?flow=email_change&token=...`, then may be shortened. Context: `token_url`,
+`new_email`, `user`.
 
 ### `email_change_code` (code flow)
 
-Sent to the **new** address when `method: "code"`. Must display the 6-digit code prominently:
+Sent to the **new** address when `method: "code"`. Django-MOJO ships a default
+template that displays the 6-digit code prominently:
 
 ```
 Your email change code is: {{ code }}

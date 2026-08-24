@@ -2,6 +2,8 @@ import mojo.decorators as md
 from mojo.helpers.response import JsonResponse
 from django.shortcuts import render
 from mojo.apps.account.utils import tokens
+from mojo.apps.account.utils.webapp_url import build_token_url
+from mojo.apps.shortlink import maybe_shorten_url
 from mojo.helpers import urls
 from mojo import errors as merrors
 
@@ -63,7 +65,13 @@ def on_email_verify_send(request):
         user.report_incident(f"{user.username} requested email verification (code)", "email_verify:sent_code")
         return JsonResponse(dict(status=True, message="Verification code sent"))
     token = tokens.generate_email_verify_token(user)
-    user.send_template_email("email_verify", context=dict(token=token))
+    group = getattr(request, "group", None)
+    token_url = build_token_url(
+        "email_verify", token, request=request, user=user, group=group)
+    token_url = maybe_shorten_url(
+        token_url, source="email_verify", user=user, expire_hours=24)
+    user.send_template_email(
+        "email_verify", context=dict(token=token, token_url=token_url))
     user.report_incident(f"{user.username} requested email verification", "email_verify:sent")
     return JsonResponse(dict(status=True, message="Verification email sent"))
 

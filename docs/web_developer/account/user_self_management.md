@@ -329,9 +329,11 @@ POST /api/auth/verify/email/send
 
 **Step 2: User clicks the link**
 
-The email contains a link to `GET /api/auth/verify/email/confirm?token=ev:...`.
-The server renders a result page. Optionally append `&redirect=<url>` to
-redirect the user to your app after 3 seconds on success.
+The shipped email template uses the server-resolved frontend URL:
+`{WEBAPP_BASE_URL}{WEBAPP_AUTH_PATH}?flow=email_verify&token=ev:...`. The
+frontend submits that token to `POST /api/auth/email/verify`. A deployment may
+instead override the template to use the server-rendered
+`GET /api/auth/verify/email/confirm?token=ev:...` page.
 
 ---
 
@@ -1214,7 +1216,8 @@ Authorization: Bearer <access_token>
 ```
 
 No request body required. Returns 200 and sends a confirmation email containing
-a `dv:` token (15-minute TTL, single-use).
+a server-resolved frontend link with a `dv:` token (15-minute TTL, single-use):
+`{WEBAPP_BASE_URL}{WEBAPP_AUTH_PATH}?flow=account_deactivate&token=dv:...`.
 
 ```json
 {
@@ -1288,9 +1291,9 @@ not "your account is in a broken state".
 | `ALLOW_SELF_DEACTIVATION` | `True` | Feature flag — set `False` to disable entirely |
 | `ACCOUNT_CLOSURE_HANDLER` | `None` | Backend-only. Dotted path to a product callable that owns closure; unset, the framework anonymises directly |
 
-**Email template:** The downstream project must provide an
-`account_deactivate_confirm` email template. Context variables: `token` (the
-raw `dv:` string), `user` (the user object).
+**Email template:** Django-MOJO ships `account_deactivate_confirm`. Its context
+variables are `token_url` (the resolved frontend link) and `user`. Override the
+database template when a deployment needs different branding or routing.
 
 ---
 
