@@ -13,19 +13,18 @@ The modules:
     check_node     read-only audit of ONE node against the deploy contract
     jobman         start/stop/status for the foreground job engine + scheduler
     node_setup     converge var/ ownership, systemd units, and the jobs cron
-    mojosec_changes exact-path trusted-change lifecycle for host mutations
-    node_role      this node's sealed deploy role + the aws/node_roles.conf
-                   manifest saying which converged files each role owns
+    mojosec_changes legacy observe-only change annotations (never a deploy gate)
+    node_role      legacy provisioning diagnostics (never a deploy gate)
 
 Plus the package entry `python3 -m mojo.deploy` (see `__main__.py`):
 
-    locate <name>  print the abs path of a packaged node script
-                   (update.sh, post_deploy.sh) for the project shims to exec
+    locate <name>  permanently resolve update.sh or post_deploy.sh without
+                   importing project Django
     render ...     materialize templates/{cron.d,systemd} into
                    ${PROJ_PATH}/var/deploy with the node's parameters, plus
-                   the project's aws/ overlays (node_overrides.conf policy)
+                   the project's aws/ overlays
 
-The non-Python payload lives in `scripts/` (the two bash node scripts) and
+The non-Python payload lives in `project_scripts/` (the two bash node scripts) and
 `templates/` (cron.d + systemd) — shipped inside the wheel, resolved relative
 to this package's `__file__`.
 

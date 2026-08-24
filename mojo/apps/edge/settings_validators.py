@@ -4,6 +4,7 @@ import re
 
 
 IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}$")
+DEPLOY_NODE_TYPE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 POOL_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 MAX_NODES = 64
 MAX_POOLS = 32
@@ -24,6 +25,16 @@ def node_id(value):
     if not IDENTIFIER_RE.fullmatch(value):
         raise ValueError(
             "EDGE_NODE_ID must be 1-63 lowercase letters, digits, dots, dashes, or underscores")
+    return value
+
+
+def deploy_node_type(value):
+    """Normalize the file-only lifecycle selector used by the shell path."""
+    value = str(value or "api").strip().lower()
+    if not DEPLOY_NODE_TYPE_RE.fullmatch(value):
+        raise ValueError(
+            "EDGE_DEPLOY_NODE_TYPE must be 1-32 lowercase letters, digits, "
+            "dashes, or underscores, beginning with a letter")
     return value
 
 

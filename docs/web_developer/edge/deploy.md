@@ -39,10 +39,33 @@ the internal deployment UUID.
 
 ## What success means
 
-A node reports success only after nginx accepts the installed configuration
-and the restarted candidate API returns exactly HTTP 200. Redirects do not
-count. A candidate that cannot load Django is rolled back without requiring
-the candidate API or management command to coordinate that rollback.
+The fleet freezes the union of live API runners (`edge`) and live specialized
+runners (`platform-deploy`). It refuses to begin without an API runner. The
+migration canary is always selected from the API cohort; non-API nodes never
+run migrations.
+
+Typed node observations include their configured type in deployment evidence:
+
+| Type | Success contract |
+|---|---|
+| `api` | Django loads, nginx accepts the installed configuration, and the restarted API returns exactly HTTP 200 |
+| `code` | The exact checkout, declared dependencies, and framework install complete; there is no host activation |
+| custom, such as `sites` | The project's typed `preflight`, `restart`, and `probe` lifecycle completes |
+
+Redirects do not count as API health. A candidate that cannot load Django is
+rolled back without requiring the candidate API or management command to
+coordinate that rollback. A custom node owns its own probe; the framework does
+not force it through Django or nginx.
+
+Deployment acceptance is intentionally functional. It does not wait on RPM,
+file-integrity, TLS-lineage, node-role, ownership, or similar security-policy
+checks. Those systems may report separately, but cannot veto a release. This
+does not change trigger authentication: the webhook signature and manual
+`manage_deploy` permission above remain required.
+
+Existing API projects do not need a source change when their update shim calls
+`python3 -m mojo.deploy locate update.sh`; that is the permanent supported
+endpoint, and the default deployment command uses it directly.
 
 The trigger itself has no polling endpoint. Platform operators can inspect the
 durable deployment journal through `GET /api/account/admin/platform` and use

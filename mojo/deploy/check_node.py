@@ -76,7 +76,7 @@ INFO = "INFO"
 # schedules and serves it, then the trailing edges (certs, config, shims,
 # leftovers).
 SECTIONS = (
-    "repo", "framework", "roles", "cron", "systemd", "mojosec", "nginx",
+    "repo", "framework", "deployment", "roles", "cron", "systemd", "mojosec", "nginx",
     "certs", "config_plane", "shims", "legacy", "var_ownership", "jobs",
 )
 
@@ -1742,11 +1742,46 @@ def check_config_plane(report, run, proj, app_user, web_user):
 
 
 # ---------------------------------------------------------------------------
+# typed deployment lifecycle
+# ---------------------------------------------------------------------------
+
+def check_deployment_type(report, run, proj, node_type):
+    """Report the local lifecycle without turning diagnostics into a gate."""
+    if node_type == "api":
+        report.passed(
+            "deployment", "node type: api",
+            "built-in Django migration, nginx, service, and HTTP lifecycle")
+        return
+    if node_type == "code":
+        report.info(
+            "deployment", "node type: code",
+            "checkout and dependencies only; activation belongs to an external supervisor")
+        return
+    profile = f"{proj}/aws/deploy/{node_type}.sh"
+    if not exists(run, profile):
+        report.fail(
+            "deployment", f"{node_type} profile missing",
+            f"{profile} is required before this custom type is activated",
+            f"stage aws/deploy/{node_type}.sh while the node is still on its previous type")
+        return
+    rc, _, err = run(f"bash -n {q(profile)}")
+    if rc == 0:
+        report.passed(
+            "deployment", f"node type: {node_type}",
+            "profile supplies preflight, restart, and probe")
+    else:
+        report.fail(
+            "deployment", f"{node_type} profile has a shell syntax error",
+            (err or "bash -n failed").strip(),
+            "repair the profile before another deployment")
+
+
+# ---------------------------------------------------------------------------
 # shims
 # ---------------------------------------------------------------------------
 
 def check_shims(report, run, proj, require_shims):
-    """Audit stable project scripts and the remaining package shims."""
+    """Audit optional project entry points and the remaining package shims."""
     for rel in PROJECT_SCRIPTS:
         path = f"{proj}/{rel}"
         if not exists(run, path):
@@ -1777,10 +1812,9 @@ def check_shims(report, run, proj, require_shims):
                 "replace it with a fresh exported copy and commit it")
         rc, _, _ = run(f"grep -qF -- 'mojo.deploy locate' {q(path)}")
         if rc == 0:
-            report.warn(
-                "shims", f"{rel} still locates installed framework code",
-                "a broken current framework can lock out its own fix",
-                "replace it with a fresh exported copy and commit it")
+            report.passed(
+                "shims", f"{rel} uses the permanent framework endpoint",
+                "the small project shim delegates to mojo.deploy locate")
 
     grade = report.fail if require_shims else report.warn
     for rel in SHIM_FILES:
@@ -2009,7 +2043,7 @@ def check_var_ownership(report, run, proj, app_user, web_user):
 # jobs
 # ---------------------------------------------------------------------------
 
-def check_jobs(report, run, proj):
+def check_jobs(report, run, proj, node_type="api"):
     rc, out, err = run(f"cd {q(proj)} && ./bin/jobman status 2>&1", timeout=30)
     if not out:
         report.info("jobs", "jobman unavailable",
@@ -2042,7 +2076,7 @@ def check_jobs(report, run, proj):
         report.info("jobs", "extra-instance lines ignored",
                     extras[0] + " — known cosmetic false positive (jobman "
                     "matches its own pid)")
-    check_job_channels(report, run, proj)
+    check_job_channels(report, run, proj, node_type=node_type)
 
 
 # `JOBS_CHANNELS` REPLACES the framework's list rather than extending it, so a
@@ -2056,12 +2090,13 @@ def check_jobs(report, run, proj):
 # perfectly and takes no deploys. That is what this check exists to catch.
 FRAMEWORK_CHANNELS = (
     "default", "priority", "cleanup", "incident_handlers", "renditions",
-    "certs", "webhooks", "webhook_fanout", "edge",
+    "certs", "webhooks", "webhook_fanout",
 )
 
 # What breaks, per channel, in the words of the person who will read this.
 CHANNEL_COST = {
     "edge": "push-to-deploy and nginx generation convergence never run",
+    "platform-deploy": "specialized webhook deployments never reach this node",
     "certs": "dnsman certificate sync never runs",
     "incident_handlers": "incident handlers never fire",
     "renditions": "media renditions are never generated",
@@ -2071,7 +2106,7 @@ CHANNEL_COST = {
 }
 
 
-def check_job_channels(report, run, proj):
+def check_job_channels(report, run, proj, node_type="api"):
     rc, out, err = run(
         f"cd {q(proj)} && python3 bin/manage.py shell -c "
         f"'from mojo.apps import jobs; print(\",\".join(jobs.JOB_CHANNELS))' "
@@ -2082,7 +2117,9 @@ def check_job_channels(report, run, proj):
                     "could not read jobs.JOB_CHANNELS from this tree")
         return
 
-    missing = [c for c in FRAMEWORK_CHANNELS if c not in consumed]
+    deploy_channel = "edge" if node_type == "api" else "platform-deploy"
+    required = FRAMEWORK_CHANNELS + (deploy_channel,)
+    missing = [c for c in required if c not in consumed]
     if not missing:
         report.passed("jobs", "consume channels",
                       f"{len(consumed)} channels, framework list complete")
@@ -2090,7 +2127,7 @@ def check_job_channels(report, run, proj):
 
     cost = "; ".join(CHANNEL_COST.get(c, f"{c} work is never consumed")
                      for c in missing)
-    say = report.fail if "edge" in missing else report.warn
+    say = report.fail if deploy_channel in missing else report.warn
     say("jobs", "consume channels incomplete",
         f"JOBS_CHANNELS omits {', '.join(missing)} — {cost}",
         "JOBS_CHANNELS replaces the framework's DEFAULT_CHANNELS rather than "
@@ -2131,6 +2168,9 @@ def main(argv):
                         help="the @WORKERS@ value the last render used — only "
                              "consulted by the template-freshness diff "
                              "(default: 4)")
+    parser.add_argument(
+        "--node-type", default="api",
+        help="deployment lifecycle: api, code, or a custom aws/deploy/<type>.sh")
     parser.add_argument("--mojosec-mode", choices=("auto", "off", "observe"),
                         default="auto",
                         help="desired MojoSec lifecycle; auto derives it from "
@@ -2149,6 +2189,12 @@ def main(argv):
                         help="extra INFO-level detail")
     args = parser.parse_args(argv)
     VERBOSE = args.verbose
+
+    from mojo.apps.edge.settings_validators import deploy_node_type
+    try:
+        node_type = deploy_node_type(args.node_type)
+    except ValueError as err:
+        parser.error(str(err))
 
     if args.section == "all":
         wanted = set(SECTIONS)
@@ -2184,26 +2230,28 @@ def main(argv):
         check_repo(report, run, proj, args.app_user)
     if "framework" in wanted:
         check_framework(report, run, proj)
+    if "deployment" in wanted:
+        check_deployment_type(report, run, proj, node_type)
     if "roles" in wanted:
         check_roles(report, run, roles, proj, repo)
-    if "cron" in wanted:
+    if "cron" in wanted and node_type == "api":
         check_cron(report, run, proj)
-    if "systemd" in wanted:
+    if "systemd" in wanted and node_type == "api":
         check_systemd(report, run, proj, roles["foreign"]["systemd"])
     if "mojosec" in wanted:
         check_mojosec(report, run, args.mojosec_mode, sudo,
                       args.mojosec_sensor_id)
-    if "nginx" in wanted:
+    if "nginx" in wanted and node_type == "api":
         check_nginx(report, run, repo, sudo, args.probe_url, retired_confd,
                     args.web_user, roles["foreign"]["conf.d"])
-    if "certs" in wanted:
+    if "certs" in wanted and node_type == "api":
         check_certs(report, run, sudo)
-    if "config_plane" in wanted:
+    if "config_plane" in wanted and node_type == "api":
         check_config_plane(report, run, proj, args.app_user, args.web_user)
     if "shims" in wanted:
         check_shims(report, run, proj, args.require_shims)
         check_collisions(report, run, proj, args.require_shims)
-        if not args.ssh:
+        if not args.ssh and node_type == "api":
             check_template_freshness(report, proj, args.app_user,
                                      args.web_user, args.asgi_workers,
                                      roles["foreign"])
@@ -2211,12 +2259,12 @@ def main(argv):
             report.info("shims", "template freshness skipped",
                         "only audited locally — the local package version "
                         "says nothing about the remote node's")
-    if "legacy" in wanted:
+    if "legacy" in wanted and node_type == "api":
         check_legacy(report, run, proj, repo, retired_cron)
     if "var_ownership" in wanted:
         check_var_ownership(report, run, proj, args.app_user, args.web_user)
     if "jobs" in wanted:
-        check_jobs(report, run, proj)
+        check_jobs(report, run, proj, node_type=node_type)
 
     if args.json:
         print(json.dumps({

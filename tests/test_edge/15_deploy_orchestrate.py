@@ -131,7 +131,7 @@ def _node_payload(opts, sha, migrate):
         frozen_roster=[opts.me], transitions=[])
     return dict(
         sha=sha, framework=FRAMEWORK, migrate=bool(migrate),
-        deployment=str(row.pk)), row
+        deployment=str(row.pk), api_cohort=True), row
 
 
 @th.django_unit_test("deploy_node: constant argv, validated inputs, success completes")
@@ -141,6 +141,7 @@ def test_node_runs_script(opts):
     from mojo.apps.jobs.models import Job
 
     payload, deployment = _node_payload(opts, SHA_A, True)
+    deploy.arm_status(SHA_A, deployment_id=deployment.pk)
     job_id = jobs.publish(
         func=deploy.DEPLOY_NODE_JOB,
         payload=payload,
@@ -157,7 +158,8 @@ def test_node_runs_script(opts):
                  f"a zero-exit script completes the job, got {row.status}")
     th.assert_eq(
         ran, [["/bin/echo", "--sha", SHA_A, "--framework", FRAMEWORK,
-               "--deployment", str(deployment.pk), "--migrate"]],
+               "--deployment", str(deployment.pk), "--node-type", "api",
+               "--migrate"]],
         f"the argv must be the configured base plus validated args, got {ran!r}")
 
 
@@ -183,4 +185,3 @@ def test_node_validates_sha(opts):
     th.assert_eq(row.status, "failed",
                  f"an invalid sha must fail the job, got {row.status}")
     th.assert_eq(ran, [], "the script must never run with an unvalidated sha")
-

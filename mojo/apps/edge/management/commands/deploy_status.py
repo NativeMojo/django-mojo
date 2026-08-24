@@ -198,9 +198,9 @@ class Command(BaseCommand):
         failure_detail = self._failure_detail(
             failure_phase,
             state == deploy.STATUS_FAILED and options.get("evidence"))
-        identity_v2 = (
-            os.environ.get("MOJO_DEPLOY_IDENTITY_READY")
-            == str(deploy.DEPLOY_IDENTITY_SCHEMA))
+        identity_v2 = os.environ.get("MOJO_DEPLOY_IDENTITY_READY") in {
+            "2", str(deploy.DEPLOY_IDENTITY_SCHEMA),
+        }
         if state == deploy.STATUS_DEPLOYING:
             if identity_v2:
                 # The v2 signal means update.sh has already atomically

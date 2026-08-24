@@ -13,6 +13,7 @@ from mojo.apps.edge.models import PlatformDeployment
 
 
 MAX_ROSTER = 128
+SPECIALIZED_DEPLOY_CHANNEL = "platform-deploy"
 MAX_TRANSITIONS = 64
 MAX_EVIDENCE = 128
 # Per KIND ("failure" and "outcome" budget separately), and the FIRST entries
@@ -113,20 +114,34 @@ def deployment_id(value):
         return None
 
 
-def edge_roster():
-    """Freeze only live runners that explicitly consume the edge channel."""
+def _channel_roster(channel):
     from mojo.apps import jobs
     rows = jobs.get_runners_bounded(
-        channel="edge", limit=MAX_ROSTER, max_scan_pages=16, timeout=1.0) or []
-    roster = sorted({
+        channel=channel, limit=MAX_ROSTER,
+        max_scan_pages=16, timeout=1.0) or []
+    return sorted({
         _text(row.get("runner_id"), 64) for row in rows
         if row.get("alive") and row.get("runner_id")
     })
+
+
+def edge_roster(with_api=False):
+    """Freeze the API edge cohort plus specialized deployment consumers.
+
+    The edge channel remains the API boundary. ``platform-deploy`` adds only
+    workers/content nodes; direct box channels still carry the actual job.
+    Duplicate consumers are classified as API.
+    """
+    api = _channel_roster("edge")
+    specialized = _channel_roster(SPECIALIZED_DEPLOY_CHANNEL)
+    roster = sorted(set(api) | set(specialized))
     if not roster:
         raise RuntimeError("runner_roster_empty")
     if len(roster) > MAX_ROSTER:
         raise RuntimeError("runner_roster_overflow")
-    return roster
+    if not api:
+        raise RuntimeError("runner_roster_no_api")
+    return (roster, api) if with_api else roster
 
 
 def request_key(source, sha, supplied=None):
@@ -146,17 +161,26 @@ def create(sha, actor="", source="external", created_by=None,
     key = request_key(source, sha, idempotency_key)
     now = _at()
     try:
-        roster = edge_roster()
+        roster_result = edge_roster(with_api=True)
+        # Test and third-party compatibility for a patched legacy roster
+        # provider that returns only the list: every such runner was API.
+        if (isinstance(roster_result, tuple) and len(roster_result) == 2):
+            roster, api_roster = roster_result
+        else:
+            roster = list(roster_result)
+            api_roster = list(roster)
         roster_available = True
     except Exception:
         # Persist the attempt before failing closed. Provider exception text is
         # deliberately discarded; a missing roster must never silently become
         # a single-runner deployment.
         roster = []
+        api_roster = []
         roster_available = False
     initial_status = (PlatformDeployment.STATUS_REQUESTED if roster_available
                       else PlatformDeployment.STATUS_FAILED)
-    initial_detail = {} if roster_available else {"reason": "roster_unavailable"}
+    initial_detail = ({"api_roster": list(api_roster)} if roster_available
+                      else {"reason": "roster_unavailable"})
     try:
         with transaction.atomic():
             row = PlatformDeployment.objects.create(
@@ -783,6 +807,90 @@ def _local_evidence(row, runner_id):
     return None
 
 
+def _finalize_local_outcome():
+    """Consume the transient unit's result after a profile restarts its engine."""
+    from mojo.apps.edge.services import deploy, readiness
+
+    outcome = readiness._read_deploy_outcome()
+    owner = deployment_id(outcome.get("deployment"))
+    if not owner:
+        return None
+    row = get(owner)
+    runner = deploy.local_runner_id()
+    outcome_sha = outcome.get("sha") or ""
+    if (row is None or runner not in set(row.frozen_roster or [])
+            or not outcome_sha.startswith(row.sha)):
+        return None
+    observed = _local_evidence(row, runner)
+    if (outcome.get("status") == "failed"
+            and observed and observed.get("state") == "failed"):
+        return None
+
+    if outcome.get("status") == "failed":
+        evidence(
+            row.pk, runner, "failed",
+            detail={"phase": "update_script",
+                    "node_type": outcome.get("node_type")})
+        close_handoff_job(row.pk, state="failed")
+        current = deploy.get_status() or {}
+        if current.get("deployment") == str(row.pk):
+            transition(row.pk, PlatformDeployment.STATUS_FAILED,
+                       {"reason": "post_restart_failed"})
+            if deploy.clear_status(row.pk):
+                deploy.resume_stranded_target()
+        return str(row.pk)
+
+    roster = list(row.frozen_roster or [])
+    raw_api = (row.detail or {}).get("api_roster")
+    api_roster = list(raw_api) if isinstance(raw_api, list) else list(roster)
+    if (observed and observed.get("state") == "proven"
+            and not (len(roster) == 1
+                     and row.status != PlatformDeployment.STATUS_CONVERGED)
+            and not (row.status == PlatformDeployment.STATUS_CANARY
+                     and api_roster == [runner])):
+        return None
+
+    try:
+        proof = readiness.local_node_proof()
+    except Exception:
+        return None
+    if not proof_matches(row, proof):
+        return None
+    if proof.get("node_type") != outcome.get("node_type"):
+        return None
+    evidence(row.pk, runner, "proven", proof=proof,
+             detail={"node_type": outcome.get("node_type")})
+    close_handoff_job(row.pk, state="completed")
+
+    current = deploy.get_status() or {}
+    if len(roster) == 1:
+        transition(
+            row.pk, PlatformDeployment.STATUS_CONVERGED,
+            {"source": "post_restart", "proven": 1, "expected": 1})
+        record_engine_restart(row.pk)
+        if current.get("deployment") == str(row.pk) and deploy.clear_status(row.pk):
+            deploy.resume_stranded_target()
+    elif (row.status == PlatformDeployment.STATUS_CANARY
+          and api_roster == [runner]
+          and current.get("deployment") == str(row.pk)):
+        # Sole API node in a mixed fleet: its orchestrator returned before
+        # queueing a job to itself. The replacement engine now has exact proof
+        # and can release the non-API cohort without inventing a role RPC.
+        from mojo.apps.edge.asyncjobs import _publish_deploy_node
+        transition(row.pk, PlatformDeployment.STATUS_FLEET,
+                   {"canary": runner, "proven": True,
+                    "verification": "pending"})
+        for peer in roster:
+            if peer == runner:
+                continue
+            _publish_deploy_node(
+                peer, row.sha, row.framework_version, migrate=False,
+                deployment_id=row.pk, api_cohort=peer in set(api_roster))
+        if deploy.clear_status(row.pk):
+            deploy.resume_stranded_target()
+    return str(row.pk)
+
+
 def finalize_post_restart():
     """Finalize one exact single-runner terminal lease after self-restart.
 
@@ -791,6 +899,10 @@ def finalize_post_restart():
     the installed identity, closes the durable row, clears only its UUID, then
     gives one queued successor a chance to claim the now-empty lease.
     """
+    completed = _finalize_local_outcome()
+    if completed:
+        return completed
+
     from mojo.apps.edge.services import deploy, readiness
 
     current = deploy.get_status() or {}
