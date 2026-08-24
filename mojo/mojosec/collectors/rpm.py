@@ -9,6 +9,8 @@ import subprocess
 import time
 import xml.etree.ElementTree as ET
 
+from mojo.helpers.safe_text import bound_utf8, sanitize_scalar
+
 from .fim import FimCollector
 
 
@@ -22,6 +24,9 @@ _VERIFY_POSITIONS = (
 _FILE_MARKERS = set("cdglra")
 _MAX_OWNER_PATH_BYTES = 4096
 _PRIVATE_STDERR_BYTES = 4096
+_DIAGNOSTIC_LINES = 3
+_DIAGNOSTIC_LINE_BYTES = 200
+_DIAGNOSTIC_TAIL_BYTES = 512
 _PROCESS_TEARDOWN_SECONDS = 1
 
 # RPM 4.16's :xml formatter emits one rpmTag element whose typed child contains
@@ -50,7 +55,40 @@ class RpmError(RuntimeError):
         super().__init__(message)
         if not isinstance(private_stderr, bytes):
             private_stderr = b""
-        self.private_stderr = private_stderr[:_PRIVATE_STDERR_BYTES]
+        self._private_stderr_truncated = len(private_stderr) > _PRIVATE_STDERR_BYTES
+        self.private_stderr = private_stderr[-_PRIVATE_STDERR_BYTES:]
+
+    def diagnostic_tail(self):
+        """Return the only subprocess detail allowed in privileged local logs."""
+        if str(self) == "RPM command output exceeded its bound":
+            return ""
+        text = self.private_stderr.decode("utf-8", errors="replace")
+        if self._private_stderr_truncated:
+            # The rolling byte tail can begin inside a UTF-8 sequence or a
+            # producer line. Only complete lines are eligible for diagnosis.
+            pieces = text.splitlines()
+            if len(pieces) <= 1:
+                return ""
+            text = "\n".join(pieces[1:])
+        lines = [line for line in text.splitlines() if line.strip()][-_DIAGNOSTIC_LINES:]
+        lines = [sanitize_scalar(
+            line, max_input_characters=_PRIVATE_STDERR_BYTES,
+            max_bytes=_DIAGNOSTIC_LINE_BYTES,
+        ) for line in lines]
+        if not lines:
+            return ""
+        while len("\n".join(lines).encode("utf-8")) > _DIAGNOSTIC_TAIL_BYTES:
+            # Preserve the newest lines in full. The oldest selected line gets
+            # the remaining aggregate budget, including its marker.
+            newer_size = len("\n".join(lines[1:]).encode("utf-8"))
+            separators = len(lines) - 1
+            remaining = _DIAGNOSTIC_TAIL_BYTES - newer_size - separators
+            if remaining <= 0:
+                lines.pop(0)
+                continue
+            lines[0] = bound_utf8(lines[0], remaining)
+            break
+        return "\n".join(lines)
 
 
 def _contained(path, root):
@@ -279,13 +317,8 @@ class RpmCollector:
                         continue
                     stream = output[key.data]
                     if len(stream) + len(chunk) > maximum:
-                        if key.data == "stderr":
-                            stream.extend(chunk[:max(0, _PRIVATE_STDERR_BYTES - len(stream))])
                         self._stop(process)
-                        raise RpmError(
-                            "RPM command output exceeded its bound",
-                            bytes(output["stderr"]),
-                        )
+                        raise RpmError("RPM command output exceeded its bound")
                     stream.extend(chunk)
             try:
                 returncode = process.wait(timeout=max(0.01, deadline - time.monotonic()))
@@ -393,16 +426,16 @@ class RpmCollector:
                 ["/usr/bin/rpm", "--verify", "--noscripts", "--nodeps", package],
                 accepted=(0, 1),
             )
+            if error:
+                private = (error.encode("utf-8", errors="replace")
+                           if isinstance(error, str) else b"")
+                raise RpmError("RPM verification wrote unclassifiable stderr", private)
             if rc == 1 and not output.strip():
                 raise RpmError("RPM verification failed without classifiable output")
             parsed = parse_verify_output(output, roots)
             for path, status in parsed.items():
                 status["package"] = package
                 result[path] = status
-            if error:
-                private = (error.encode("utf-8", errors="replace")
-                           if isinstance(error, str) else b"")
-                raise RpmError("RPM verification wrote unclassifiable stderr", private)
         return result
 
     def scan(self, previous=None, shared_snapshot=None):

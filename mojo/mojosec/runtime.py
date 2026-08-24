@@ -5,7 +5,7 @@ import threading
 import time
 
 from .collectors import FimCollector, JournalCollector, NginxCollector, RpmCollector
-from .output import emit, write_status
+from .output import emit, emit_error, write_status
 from .profiles import profile_identity, resolve_profile
 from .sender import Sender
 from .store import Store
@@ -48,6 +48,7 @@ class Runtime:
         self.integrity_scans = {}
         self.running = True
         self.stop_event = threading.Event()
+        self.diagnostic_stream = None
 
     def _collector_ok(self, name, malformed=0):
         self.collector_status[name] = {
@@ -60,7 +61,10 @@ class Runtime:
             "ok": False, "last_success": previous.get("last_success"),
             "error": str(err)[:256],
         }
-        emit("error", f"{name} collector failed", collector=name, error=str(err)[:256])
+        emit_error(
+            f"{name} collector failed", err,
+            stream=getattr(self, "diagnostic_stream", None), collector=name,
+        )
 
     def _poll_stream(self, collector):
         if collector is None:
