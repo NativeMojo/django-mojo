@@ -28,14 +28,17 @@ The `mojo/apps/jobs/settings.py` file is a reference showing example configurati
 `JOBS_CHANNELS` is a **consume** list. Publishing is gated separately: a
 channel is *declared* when it is a framework channel (`DEFAULT_CHANNELS`), a
 channel this box consumes, a declared user channel (`JOBS_ALLOWED_CHANNELS`),
-or a box-direct channel ending `-engine`. With `JOBS_ALLOWED_CHANNELS` set,
-an undeclared publish raises `ValueError`, queues nothing, and files a
-`jobs:rejected_channel` incident (one per channel per hour) naming the
-channel and the publishing function; with it unset (monitor mode — the
-default), the publish still routes as named and a `jobs:undeclared_channel`
-incident reports what to declare. A declared channel is routed **verbatim** —
-consumed here or not — which is how a box hands work to another box's
-dedicated channel. See [Publishing — Channels](publishing.md#channels).
+or a box-direct channel ending `-engine`. Enforced **immediate** publishing
+also accepts the exact id of a current runner whose positive-TTL heartbeat
+advertises that same direct channel; explicit safe runner ids do not need the
+suffix. With `JOBS_ALLOWED_CHANNELS` set, anything else raises `ValueError`,
+queues nothing, and files a `jobs:rejected_channel` incident (one per channel
+per hour) naming the channel and the publishing function; with it unset
+(monitor mode — the default), the publish still routes as named and a
+`jobs:undeclared_channel` incident reports what to declare. Delayed jobs and
+`ScheduledTask.channel` keep the static rules. A declared channel is routed
+**verbatim** — consumed here or not — which is how a box hands work to another
+box's dedicated channel. See [Publishing — Channels](publishing.md#channels).
 
 The default is `mojo.apps.jobs.DEFAULT_CHANNELS` — every channel the framework
 itself publishes to, so an unconfigured deployment runs all framework jobs:
@@ -63,7 +66,9 @@ python -m mojo.apps.jobs.cli engine start --channels heavy --runner-id heavy-eng
 
 `--channels` overrides `JOBS_CHANNELS` for that process; `--runner-id` gives a
 second engine on the same box its own identity, pidfile, and box-direct
-channel.
+channel. Any safe runner id is valid. Without `-engine`, enforced publishers
+can target it immediately only while its exact heartbeat is live and
+self-advertises that channel.
 
 ### Upgrade note — channel routing changed
 
@@ -110,7 +115,10 @@ and incident titles.
 The `-engine` suffix is reserved by convention for box-direct channels (every
 engine consumes a channel named after its runner id): any channel ending in
 `-engine` is implicitly publishable, so do not name ordinary work queues with
-that suffix.
+that suffix. It is not required for an explicit runner id: exact live runner
+ids are accepted for immediate work through their heartbeat. This dynamic
+proof does not apply to delayed jobs or `ScheduledTask.channel`; declare those
+targets statically.
 
 The allowlist also keeps the channel set bounded — each distinct channel
 creates its own `jobs.published.<channel>` metric slug, and those slugs are

@@ -62,10 +62,13 @@ JOBS_CHANNELS = [
 # named and files a jobs:undeclared_channel incident naming what to declare.
 # Setting it (any list, even []) turns enforcement on: publish(channel=X)
 # then succeeds only when X is a DEFAULT_CHANNELS entry, in this box's
-# JOBS_CHANNELS, in this list, or ends in '-engine' (box-direct); anything
-# else raises ValueError and files a jobs:rejected_channel incident. A
-# declared channel is routed verbatim, consumed here or not — that is how one
-# box hands work to another.
+# JOBS_CHANNELS, in this list, ends in '-engine' (box-direct), or — for
+# immediate work only — exactly matches a current runner heartbeat that
+# advertises the same direct channel. Anything else raises ValueError and
+# files a jobs:rejected_channel incident. Delayed and ScheduledTask channels
+# keep the static rules because a runner live now may be gone later. A declared
+# channel is routed verbatim, consumed here or not — that is how one box hands
+# work to another.
 JOBS_ALLOWED_CHANNELS = [
     'emails',
     'uploads',
@@ -75,7 +78,9 @@ JOBS_ALLOWED_CHANNELS = [
 
 # Each engine also consumes its box-direct channel, named after its runner id
 # (default "<hostname>-engine"), so a publisher can target one specific engine
-# with no configuration. Set False to opt out.
+# with no configuration. Explicit safe runner ids do not need the suffix;
+# immediate publishers prove them from the exact live heartbeat. Set False to
+# opt out.
 JOBS_HOSTNAME_CHANNEL = True
 
 # Example Full Configuration
@@ -99,7 +104,7 @@ JOBS_DEFAULT_EXPIRES_SEC = 1800  # 30 minutes
 # Channel-specific Workers
 # Run different workers for different channels:
 # python -m mojo.apps.jobs.cli engine start --channels emails,notifications
-# python -m mojo.apps.jobs.cli engine start --channels uploads --runner-id uploads-engine
+# python -m mojo.apps.jobs.cli engine start --channels uploads --runner-id uploads-worker
 # python -m mojo.apps.jobs.cli engine start --channels maintenance --runner-id maint-engine
 """
 
@@ -218,17 +223,22 @@ JOBS_ALLOWED_CHANNELS
     Unset (the default) = monitor mode: an undeclared publish still routes
     as named and files a jobs:undeclared_channel incident. Set (any list,
     even []) = enforcement: publish(channel=X) succeeds only when X is in
-    DEFAULT_CHANNELS, this box's JOBS_CHANNELS, this list, or ends in
-    '-engine'; anything else raises ValueError, queues nothing, and files a
-    jobs:rejected_channel incident (suppressed to one per channel per hour).
-    A declared channel is routed verbatim, consumed here or not.
+    DEFAULT_CHANNELS, this box's JOBS_CHANNELS, this list, ends in '-engine',
+    or (for immediate work) exactly matches a current runner heartbeat that
+    advertises X as its direct channel. Anything else raises ValueError,
+    queues nothing, and files a jobs:rejected_channel incident (suppressed to
+    one per channel per hour). Delayed jobs and ScheduledTask values use only
+    the static declarations. A declared channel is routed verbatim, consumed
+    here or not.
     Default: unset (monitor mode)
 
 JOBS_HOSTNAME_CHANNEL
     When True, each engine also consumes its box-direct channel, named after
     its runner id (default "<hostname>-engine" — hostname lowercased,
     dots/underscores to dashes), so a publisher can address one specific
-    engine with no configuration.
+    engine with no configuration. An explicit safe runner id may use another
+    suffix or none; immediate direct publishing accepts it only while its
+    exact heartbeat is live and advertises the same channel.
     Default: True
 
 Redis Keys (KISS approach)

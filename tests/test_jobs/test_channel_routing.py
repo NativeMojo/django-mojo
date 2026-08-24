@@ -7,11 +7,12 @@ rerouted anything unlisted to "default" — returning success. That made
 cross-box routing impossible: a box could not publish to a channel it does not
 itself consume, because the one setting drove both.
 
-The fix is two-layered (items 906 + 936): an allowed channel is routed
-verbatim, consumed here or not; an UNDECLARED channel — outside
-DEFAULT_CHANNELS ∪ JOBS_CHANNELS ∪ JOBS_ALLOWED_CHANNELS and not ending in
-'-engine' — is refused with ValueError and a suppressed
-jobs:rejected_channel incident, instead of queueing work nothing consumes.
+The fix is two-layered (items 906 + 936, then 2860): an allowed channel is
+routed verbatim, consumed here or not; an UNDECLARED channel — outside
+DEFAULT_CHANNELS ∪ JOBS_CHANNELS ∪ JOBS_ALLOWED_CHANNELS, not ending in
+'-engine', and not the exact current runner id for immediate work — is refused
+with ValueError and a suppressed jobs:rejected_channel incident, instead of
+queueing work nothing consumes.
 
 Channels here are prefixed `t906_`/`t936` so they cannot collide with a real
 channel or another module's queues. The t906_* names are declared in the
@@ -43,9 +44,63 @@ CH_ORPHAN = "t906_orphan"
 CH_UNDECLARED = "t936_undeclared"    # in NO list — publish must refuse it
 CH_DECLARED = "t936_allowed"         # in JOBS_ALLOWED_CHANNELS only
 CH_BOX_DIRECT = "t936-box-engine"    # implicitly allowed by the suffix
+CH_EXPLICIT_RUNNER = "t2860-explicit-runner"
 
 TEST_CHANNELS = [CH_FIREWALL, CH_A, CH_B, CH_SCHED, CH_SEED, CH_ORPHAN,
                  CH_UNDECLARED, CH_DECLARED, CH_BOX_DIRECT]
+
+
+class _HeartbeatPipeline:
+    def __init__(self, raw, ttl, error=None):
+        self.raw = raw
+        self.heartbeat_ttl = ttl
+        self.error = error
+        self.commands = []
+        self.reset_called = False
+
+    def get(self, key):
+        self.commands.append(("get", key))
+        return self
+
+    def ttl(self, key):
+        self.commands.append(("ttl", key))
+        return self
+
+    def execute(self):
+        if self.error:
+            raise self.error
+        return [self.raw, self.heartbeat_ttl]
+
+    def reset(self):
+        self.reset_called = True
+
+
+class _HeartbeatClient:
+    def __init__(self, raw, ttl, error=None):
+        self.pipe = _HeartbeatPipeline(raw, ttl, error=error)
+        self.transactions = []
+        self.entered = False
+        self.exited = False
+
+    def pipeline(self, transaction=True):
+        self.transactions.append(transaction)
+        return self.pipe
+
+    def __enter__(self):
+        self.entered = True
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.exited = True
+
+
+def _heartbeat_document(channel, observed, channels=None, runner_id=None):
+    import json
+    return json.dumps({
+        "runner_id": runner_id or channel,
+        "channels": channels if channels is not None else [channel],
+        "last_heartbeat": observed.isoformat(),
+    })
 
 
 def _clear(opts):
@@ -270,6 +325,99 @@ def test_parse_runner_id_arg(opts):
         except ValueError:
             continue
         raise AssertionError(f"parse_runner_id_arg({bad!r}) must raise ValueError")
+
+
+@th.django_unit_test("live runner proof is one bounded primary-only exact pipeline")
+def test_live_runner_channel_lookup_shape(opts):
+    from datetime import datetime, timezone as datetime_timezone
+    from mojo.apps import jobs
+    from mojo.apps.jobs.keys import JobKeys
+
+    now = datetime(2026, 8, 24, 12, 0, tzinfo=datetime_timezone.utc)
+    client = _HeartbeatClient(
+        _heartbeat_document(CH_EXPLICIT_RUNNER, now), 10)
+    connection_args = []
+
+    def connect(**kwargs):
+        connection_args.append(kwargs)
+        return client
+
+    allowed = jobs._is_live_runner_channel(
+        CH_EXPLICIT_RUNNER, connect=connect, now=now)
+
+    assert allowed, (
+        "a current positive-TTL heartbeat advertising its exact runner id "
+        "must authorize that immediate direct channel"
+    )
+    assert connection_args == [{
+        "timeout": 1.0,
+        "max_connections": 1,
+        "read_from_replicas": False,
+    }], f"live runner proof used the wrong Redis connection: {connection_args!r}"
+    assert client.transactions == [False], (
+        f"live runner proof must use one nontransactional pipeline, got "
+        f"{client.transactions!r}"
+    )
+    heartbeat_key = JobKeys().runner_hb(CH_EXPLICIT_RUNNER)
+    assert client.pipe.commands == [
+        ("get", heartbeat_key), ("ttl", heartbeat_key)
+    ], f"live runner proof must issue exact GET+TTL, got {client.pipe.commands!r}"
+    assert client.pipe.reset_called, "live runner proof did not reset its pipeline"
+    assert client.entered and client.exited, (
+        "live runner proof did not close its bounded Redis client"
+    )
+
+
+@th.django_unit_test("untrusted runner heartbeat shapes fail closed")
+def test_live_runner_channel_lookup_rejects_untrusted_heartbeats(opts):
+    import json
+    from datetime import datetime, timedelta, timezone as datetime_timezone
+    from mojo.apps import jobs
+
+    now = datetime(2026, 8, 24, 12, 0, tzinfo=datetime_timezone.utc)
+    current = _heartbeat_document(CH_EXPLICIT_RUNNER, now)
+    cases = [
+        ("missing", None, -2),
+        ("expired", current, 0),
+        ("persistent", current, -1),
+        ("extended TTL", current, 16),
+        ("malformed JSON", "{", 10),
+        ("non-object JSON", "[]", 10),
+        ("mismatched id", _heartbeat_document(
+            CH_EXPLICIT_RUNNER, now, runner_id="some-other-runner"), 10),
+        ("malformed channels", json.dumps({
+            "runner_id": CH_EXPLICIT_RUNNER,
+            "channels": CH_EXPLICIT_RUNNER,
+            "last_heartbeat": now.isoformat(),
+        }), 10),
+        ("direct channel opted out", _heartbeat_document(
+            CH_EXPLICIT_RUNNER, now, channels=[CH_DECLARED]), 10),
+        ("missing timestamp", json.dumps({
+            "runner_id": CH_EXPLICIT_RUNNER,
+            "channels": [CH_EXPLICIT_RUNNER],
+        }), 10),
+        ("stale timestamp", _heartbeat_document(
+            CH_EXPLICIT_RUNNER, now - timedelta(seconds=15)), 10),
+        ("future-skewed timestamp", _heartbeat_document(
+            CH_EXPLICIT_RUNNER, now + timedelta(seconds=15)), 10),
+    ]
+    for label, raw, ttl in cases:
+        client = _HeartbeatClient(raw, ttl)
+        allowed = jobs._is_live_runner_channel(
+            CH_EXPLICIT_RUNNER, client=client, now=now)
+        assert not allowed, f"{label} heartbeat must not authorize direct publish"
+        assert client.pipe.reset_called, (
+            f"{label} heartbeat did not reset its lookup pipeline"
+        )
+
+    unreadable = _HeartbeatClient(
+        current, 10, error=RuntimeError("redis unavailable"))
+    assert not jobs._is_live_runner_channel(
+        CH_EXPLICIT_RUNNER, client=unreadable, now=now
+    ), "a Redis read failure must not authorize direct publish"
+    assert unreadable.pipe.reset_called, (
+        "a failed heartbeat read did not reset its pipeline"
+    )
 
 
 @th.django_unit_test("an unchanged orphan channel is not re-reported every cycle")

@@ -271,7 +271,9 @@ A channel may be published to when it is any of:
 - a declared user channel (`JOBS_ALLOWED_CHANNELS` — one list, set the same
   on every box),
 - a box-direct channel ending in `-engine` (see
-  [Targeting one specific engine](#targeting-one-specific-engine)).
+  [Targeting one specific engine](#targeting-one-specific-engine)),
+- for **immediate** work, the exact id of a live runner whose current
+  heartbeat advertises that same direct channel.
 
 What happens to anything else depends on whether the deployment has opted
 into enforcement — **setting `JOBS_ALLOWED_CHANNELS` (any list, even `[]`) is
@@ -340,21 +342,38 @@ stays obvious.)
 
 Every engine also consumes a channel named after its **runner id** — by
 default the hostname (lowercased, `.`/`_` → `-`) plus `-engine`, the same id
-you see in its heartbeat, pidfile and logs. Channels ending in `-engine` are
-implicitly allowed — hostnames vary per deployment and cannot live in a
-hand-written list — so you can address a single engine with no configuration
-at all:
+you see in its heartbeat, pidfile and logs. Channels ending in `-engine`
+remain implicitly allowed for compatibility — hostnames vary per deployment
+and cannot live in a hand-written list — so you can address a single engine
+with no configuration at all:
 
 ```python
 jobs.publish("myapp.services.cache.purge", {}, channel="web-01-engine")
 ```
 
-A second engine started with `--runner-id heavy-engine` gets its own direct
-channel `heavy-engine`. A mistyped host channel passes the allowlist (the
-suffix is the rule) and is caught by the unconsumed-channel incident below.
-Set `JOBS_HOSTNAME_CHANNEL = False` to opt an engine out of consuming its
-direct channel — note that this also disables broadcast fan-out for that
-engine, since the fan-out addresses exactly those channels.
+A safe explicit id does **not** need that suffix. An engine started with
+`--runner-id heavy-worker` advertises and consumes the direct channel
+`heavy-worker`; an enforced immediate publish to that exact id is accepted
+only while its positive-TTL heartbeat is current, identifies the same runner,
+and lists the same channel:
+
+```python
+jobs.publish("myapp.services.cache.purge", {}, channel="heavy-worker")
+```
+
+Missing, expired, persistent, malformed, mismatched, stale, future-skewed, or
+unreadable heartbeat data fails closed. The heartbeat exception is deliberately
+limited to immediate work: delayed jobs and `ScheduledTask.channel` must use a
+static declaration (`JOBS_ALLOWED_CHANNELS`, `JOBS_CHANNELS`, a framework
+channel, or the compatible `-engine` namespace), because a runner live now may
+not exist when later work becomes due.
+
+A mistyped `-engine` host channel still passes the static allowlist and is
+caught by the unconsumed-channel incident below. Set
+`JOBS_HOSTNAME_CHANNEL = False` to opt an engine out of consuming its direct
+channel; an explicit id then cannot pass the live-heartbeat proof. This also
+disables broadcast fan-out for that engine, since fan-out addresses exactly
+those channels.
 
 ### How a broadcast resolves its roster
 

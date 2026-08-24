@@ -32,8 +32,10 @@ CH_SCHED = "t906_sched"
 CH_UNDECLARED = "t936_undeclared"    # in NO list — publish must refuse it
 CH_DECLARED = "t936_allowed"         # in JOBS_ALLOWED_CHANNELS only
 CH_BOX_DIRECT = "t936-box-engine"    # implicitly allowed by the suffix
+CH_EXPLICIT_RUNNER = "t2860-sites-deploy"  # live direct id, no suffix
 
-TEST_CHANNELS = [CH_SCHED, CH_UNDECLARED, CH_DECLARED, CH_BOX_DIRECT]
+TEST_CHANNELS = [CH_SCHED, CH_UNDECLARED, CH_DECLARED, CH_BOX_DIRECT,
+                 CH_EXPLICIT_RUNNER]
 
 
 def _clear(opts):
@@ -201,15 +203,66 @@ def test_publish_engine_suffix_implicitly_allowed(opts):
     list. A typo'd host channel passes the gate and is caught by the
     unconsumed-channel incident instead."""
     _clear(opts)
+    from unittest import mock
     from mojo.apps import jobs
 
-    with _enforced():  # enforcement on, nothing declared
-        job_id = jobs.publish(func=HANDLER, payload={"marker": "direct"},
-                              channel=CH_BOX_DIRECT)
+    with _enforced(), mock.patch.object(
+            jobs, "_is_live_runner_channel",
+            side_effect=AssertionError("static channel performed live lookup")):
+        job_id = jobs.publish(
+            func=HANDLER, payload={"marker": "direct"},
+            channel=CH_BOX_DIRECT)
     assert job_id in _queued_ids(opts, CH_BOX_DIRECT), (
         f"a '-engine' channel must be publishable with zero configuration, "
         f"queue holds {_queued_ids(opts, CH_BOX_DIRECT)}"
     )
+
+
+@th.django_unit_test("a live explicit runner id is an enforced direct publish target")
+def test_publish_live_explicit_runner_id(opts):
+    """An accepted --runner-id and its advertised direct channel must form one
+    usable contract even when the id does not end in ``-engine``."""
+    _clear(opts)
+    from mojo.apps import jobs
+    from mojo.apps.jobs import job_engine as je
+
+    engine = je.JobEngine(channels=[CH_DECLARED], runner_id=CH_EXPLICIT_RUNNER)
+    engine.start_time = je.dates.utcnow()
+    try:
+        engine._publish_heartbeat()
+        assert not jobs.is_channel_allowed(CH_EXPLICIT_RUNNER), (
+            "a live heartbeat must not weaken static ScheduledTask channel "
+            "validation"
+        )
+        with _enforced():
+            job_id = jobs.publish(
+                func=HANDLER,
+                payload={"marker": "explicit-runner"},
+                channel=CH_EXPLICIT_RUNNER,
+            )
+            try:
+                jobs.publish(
+                    func=HANDLER,
+                    payload={"marker": "delayed-explicit-runner"},
+                    channel=CH_EXPLICIT_RUNNER,
+                    delay=1,
+                )
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(
+                    "a live heartbeat must not authorize delayed direct work"
+                )
+        assert job_id in _queued_ids(opts, CH_EXPLICIT_RUNNER), (
+            f"a live explicit runner must accept direct work on its exact id, "
+            f"queue holds {_queued_ids(opts, CH_EXPLICIT_RUNNER)}"
+        )
+    finally:
+        engine.executor.shutdown(wait=True)
+        opts.redis.delete(opts.keys.runner_hb(CH_EXPLICIT_RUNNER))
+        for channel in engine.channels:
+            opts.redis.get_client().zrem(
+                opts.keys.runner_registry(channel), CH_EXPLICIT_RUNNER)
 
 
 @th.django_unit_test("enforced: a ScheduledTask cannot be saved with an undeclared channel")
@@ -239,8 +292,8 @@ def test_scheduled_task_undeclared_channel_rejected(opts):
 def test_runner_id_channel(opts):
     """The box-direct channel IS the runner id (default '<hostname>-engine'),
     so the name a publisher targets is the same id already visible in
-    heartbeats, pidfiles and logs — and its '-engine' suffix is what the
-    publish allowlist admits implicitly."""
+    heartbeats, pidfiles and logs. Default ids use the statically allowed
+    '-engine' suffix; other explicit ids use their exact live heartbeat."""
     _clear(opts)
     from unittest import mock
     from mojo.apps.jobs import job_engine as je

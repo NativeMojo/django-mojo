@@ -3,6 +3,7 @@ Django-MOJO Jobs System - Public API
 
 A reliable background job system for Django with Redis fast path and Postgres truth.
 """
+import json
 import re
 import uuid
 from datetime import datetime, timedelta
@@ -67,6 +68,8 @@ JOBS_DEFAULT_BACKOFF_BASE = settings.get_static('JOBS_DEFAULT_BACKOFF_BASE', 2.0
 JOBS_DEFAULT_BACKOFF_MAX = settings.get_static('JOBS_DEFAULT_BACKOFF_MAX', 3600)
 JOBS_STREAM_MAXLEN = settings.get_static('JOBS_STREAM_MAXLEN', 100000)
 JOBS_WEBHOOK_MAX_RETRIES = settings.get_static("JOBS_WEBHOOK_MAX_RETRIES", 5, kind="int")
+JOBS_RUNNER_HEARTBEAT_SEC = settings.get_static(
+    'JOBS_RUNNER_HEARTBEAT_SEC', 5)
 
 __all__ = [
     'publish',
@@ -111,12 +114,10 @@ def validate_channel_name(channel):
     return channel
 
 
-# Channels ending in this suffix are box-direct: every engine consumes a
-# channel named after its runner id (default "<hostname>-engine"), so
-# publish(channel="web-01-engine") targets exactly that box. Hostnames vary
-# per deployment and cannot live in a hand-written allowlist, so the suffix
-# IS the allow rule — a typo'd host channel passes the gate and is caught by
-# the unconsumed-channel incident instead.
+# Channels ending in this suffix remain unconditionally box-direct for
+# compatibility: every default engine consumes a channel named
+# "<hostname>-engine". Explicit runner ids need not use the suffix; enforced
+# immediate publishing proves those exact targets from their live heartbeat.
 ENGINE_CHANNEL_SUFFIX = '-engine'
 
 
@@ -134,7 +135,7 @@ def channels_enforced():
 
 def is_channel_allowed(channel):
     """
-    Whether `channel` is a declared publish target from this box.
+    Whether `channel` is a statically declared publish target from this box.
 
     Declared: the framework's DEFAULT_CHANNELS, anything this box itself
     consumes (JOBS_CHANNELS), the deployment's declared user channels
@@ -142,6 +143,8 @@ def is_channel_allowed(channel):
     channels ending in '-engine'. What happens to everything else depends on
     channels_enforced(): refused with a jobs:rejected_channel incident, or
     (monitor mode) routed anyway with a jobs:undeclared_channel incident.
+    Exact live runner ids are deliberately not part of this static predicate;
+    publish() may prove one only for immediate work.
     """
     return (
         channel in DEFAULT_CHANNELS
@@ -149,6 +152,84 @@ def is_channel_allowed(channel):
         or channel in (JOBS_ALLOWED_CHANNELS or [])
         or channel.endswith(ENGINE_CHANNEL_SUFFIX)
     )
+
+
+def _read_live_runner_channel(client, channel, now=None):
+    """Prove one exact direct runner channel from one Redis round trip."""
+    pipe = client.pipeline(transaction=False)
+    try:
+        heartbeat_key = JobKeys().runner_hb(channel)
+        pipe.get(heartbeat_key)
+        pipe.ttl(heartbeat_key)
+        result = pipe.execute()
+    finally:
+        pipe.reset()
+
+    if not isinstance(result, (list, tuple)) or len(result) != 2:
+        return False
+    raw, ttl = result
+    heartbeat_window = max(1, int(JOBS_RUNNER_HEARTBEAT_SEC)) * 3
+    try:
+        ttl = int(ttl)
+    except (TypeError, ValueError):
+        return False
+    # Missing/expired (0/-2), persistent (-1), and unexpectedly extended
+    # documents are not an engine heartbeat created by JobEngine.
+    if ttl <= 0 or ttl > heartbeat_window:
+        return False
+
+    try:
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode('utf-8')
+        row = json.loads(raw)
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return False
+    if not isinstance(row, dict) or row.get('runner_id') != channel:
+        return False
+    channels = row.get('channels')
+    if (not isinstance(channels, list)
+            or not all(isinstance(item, str) and CHANNEL_NAME_RE.match(item)
+                       for item in channels)
+            or channel not in channels):
+        return False
+
+    last_heartbeat = row.get('last_heartbeat')
+    if not isinstance(last_heartbeat, str):
+        return False
+    try:
+        observed = datetime.fromisoformat(last_heartbeat)
+    except ValueError:
+        return False
+    if timezone.is_naive(observed):
+        observed = timezone.make_aware(observed)
+    now = now or timezone.now()
+    if timezone.is_naive(now):
+        now = timezone.make_aware(now)
+    age = (now - observed).total_seconds()
+    return -heartbeat_window < age < heartbeat_window
+
+
+def _is_live_runner_channel(channel, *, client=None, connect=None, now=None):
+    """Return whether ``channel`` is one current self-advertised runner id.
+
+    The production path owns a short-lived primary-only connection so replica
+    lag cannot authorize a runner that has already disappeared. Any Redis or
+    document failure is a closed authorization decision.
+    """
+    try:
+        if client is not None:
+            return _read_live_runner_channel(client, channel, now=now)
+        if connect is None:
+            from mojo.helpers.redis import get_bounded_connection
+            connect = get_bounded_connection
+        with connect(
+                timeout=1.0, max_connections=1,
+                read_from_replicas=False) as bounded:
+            return _read_live_runner_channel(bounded, channel, now=now)
+    except Exception as e:
+        logit.warning(
+            f"jobs: live runner channel proof failed for {channel}: {e}")
+        return False
 
 
 # One undeclared/rejected-channel incident per channel per window — a code bug
@@ -177,9 +258,11 @@ def _report_undeclared_channel(channel, func_path, enforced):
         body = (
             f"jobs.publish(channel='{channel}') was refused and the job was NOT "
             f"queued: the channel is not in DEFAULT_CHANNELS, this box's "
-            f"JOBS_CHANNELS, or JOBS_ALLOWED_CHANNELS, and does not end in "
-            f"'{ENGINE_CHANNEL_SUFFIX}'. Publisher func: {func_path}. If the "
-            f"channel is real, add it to JOBS_ALLOWED_CHANNELS on every box."
+            f"JOBS_CHANNELS, or JOBS_ALLOWED_CHANNELS; does not end in "
+            f"'{ENGINE_CHANNEL_SUFFIX}'; and was not proven as an exact live "
+            f"runner id for immediate work. Publisher func: {func_path}. If "
+            f"the channel is real, add it to JOBS_ALLOWED_CHANNELS on every "
+            f"box."
         )
         title = f"Rejected job channel: {channel}"
         category = "jobs:rejected_channel"
@@ -371,10 +454,11 @@ def publish(
         channel: Channel to publish to (default: "default"). Must be an
             allowed target: a framework DEFAULT_CHANNELS entry, a channel this
             box consumes (JOBS_CHANNELS), a declared user channel
-            (JOBS_ALLOWED_CHANNELS), or a box-direct channel ending
-            '-engine'. Routed verbatim — the job lands on this channel whether
-            or not this box consumes it, which is how work is handed to
-            another box. An unlisted channel raises ValueError and files a
+            (JOBS_ALLOWED_CHANNELS), a box-direct channel ending '-engine', or
+            for immediate work the exact id of a live runner advertising that
+            direct channel. Routed verbatim — the job lands on this channel
+            whether or not this box consumes it, which is how work is handed
+            to another box. An unlisted channel raises ValueError and files a
             jobs:rejected_channel incident.
         delay: Delay in seconds from now
         run_at: Specific time to run the job (overrides delay)
@@ -433,15 +517,28 @@ def publish(
     # instead of breaking.
     if not is_channel_allowed(channel):
         enforced = channels_enforced()
-        _report_undeclared_channel(channel, func_path, enforced)
-        if enforced:
-            raise ValueError(
-                f"Job channel {channel!r} is not a declared publish target. "
-                f"Allowed: framework DEFAULT_CHANNELS, this box's JOBS_CHANNELS, "
-                f"the deployment's JOBS_ALLOWED_CHANNELS, and box-direct channels "
-                f"ending '{ENGINE_CHANNEL_SUFFIX}'. Add it to "
-                f"JOBS_ALLOWED_CHANNELS to declare it."
-            )
+        # Explicit runner ids are intentionally arbitrary safe names. For an
+        # immediate enforced publish, their exact live heartbeat is a bounded
+        # declaration that the same runner currently consumes this channel.
+        # Delayed work and ScheduledTask validation remain static: a heartbeat
+        # that is live now says nothing about who will consume work later.
+        live_runner = (
+            enforced
+            and delay is None
+            and run_at is None
+            and _is_live_runner_channel(channel)
+        )
+        if not live_runner:
+            _report_undeclared_channel(channel, func_path, enforced)
+            if enforced:
+                raise ValueError(
+                    f"Job channel {channel!r} is not a declared publish target. "
+                    f"Allowed: framework DEFAULT_CHANNELS, this box's "
+                    f"JOBS_CHANNELS, the deployment's JOBS_ALLOWED_CHANNELS, "
+                    f"box-direct channels ending '{ENGINE_CHANNEL_SUFFIX}', "
+                    f"and exact live runner ids for immediate work. Add it to "
+                    f"JOBS_ALLOWED_CHANNELS to declare it."
+                )
 
     # Validate payload
     payload = payload or {}
@@ -449,7 +546,6 @@ def publish(
         raise ValueError("Payload must be a dictionary")
 
     # Check payload size
-    import json
     payload_json = json.dumps(payload)
     max_bytes = JOBS_PAYLOAD_MAX_BYTES
     if len(payload_json.encode('utf-8')) > max_bytes:
@@ -466,11 +562,11 @@ def publish(
     # reached one box per publish and the rest drifted until some later sweep
     # happened to pick them.
     #
-    # The mechanism to do it properly already existed and was unused: every
-    # runner_id ends in ENGINE_CHANNEL_SUFFIX precisely so the box-direct
-    # channel named after it is publishable (see JobEngine._generate_runner_id),
-    # and each engine consumes that channel. So fan out into one ordinary job
-    # per live runner, addressed to that runner's own channel.
+    # The mechanism to do it properly already existed and was unused: each
+    # engine consumes the box-direct channel named after its runner id. So fan
+    # out into one ordinary job per live runner, addressed to that runner's own
+    # channel. Generated ids use ENGINE_CHANNEL_SUFFIX; explicit safe ids may
+    # use any name and are proven by the same heartbeat used for this roster.
     #
     # One job ROW per runner, not one row on N queues: the row carries status,
     # runner_id, attempt and its events, and N runners writing one row would

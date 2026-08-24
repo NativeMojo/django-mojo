@@ -833,6 +833,14 @@ GET /api/jobs/runners?channel=email
 
 `alive` is `false` when the runner's last heartbeat is older than 3× the heartbeat interval (default: 15 seconds). Dead runners remain visible until their heartbeat key expires in Redis.
 
+Runner ids may be explicit safe names; they are not required to end in
+`-engine`. When the engine's direct-channel feature is enabled, its live
+heartbeat lists a channel equal to `runner_id`. Framework code may publish
+**immediate** work to that exact id while the positive-TTL heartbeat remains
+current and self-consistent. Missing, expired, malformed, mismatched, stale,
+future-skewed, or unreadable heartbeat data is not authorization. Delayed and
+recurring work still requires a statically declared channel.
+
 ---
 
 ### Ping a Runner
