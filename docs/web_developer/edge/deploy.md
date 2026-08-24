@@ -65,7 +65,9 @@ does not change trigger authentication: the webhook signature and manual
 
 Existing API projects do not need a source change when their update shim calls
 `python3 -m mojo.deploy locate update.sh`; that is the permanent supported
-endpoint, and the default deployment command uses it directly.
+endpoint. The packaged launcher enters through passwordless `sudo` itself when
+an existing project command starts that shim as the application account; the
+default deployment command already starts it through `sudo` directly.
 
 The trigger itself has no polling endpoint. Platform operators can inspect the
 durable deployment journal through `GET /api/account/admin/platform` and use

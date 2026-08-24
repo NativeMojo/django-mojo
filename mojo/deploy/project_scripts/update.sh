@@ -9,6 +9,10 @@ RUNTIME_SECONDS="${MOJO_DEPLOY_RUNTIME_SECONDS:-1800}"
 ROLLBACK_SECONDS="${MOJO_DEPLOY_ROLLBACK_SECONDS:-900}"
 APP_USER="${APP_USER:-${SUDO_USER:-ec2-user}}"
 RUN_UID="$(id -u)"
+if [ "$RUN_UID" != "0" ] && [ "${MOJO_DEPLOY_NO_SYSTEMD:-0}" != "1" ]; then
+    self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    exec sudo -n bash "$self" "$@"
+fi
 TRANSACTION_ROOT="/var/lib/django-mojo-deploy"
 if [ "$RUN_UID" != "0" ] && [ -n "${MOJO_DEPLOY_STATE_ROOT:-}" ]; then
     TRANSACTION_ROOT="$MOJO_DEPLOY_STATE_ROOT"
