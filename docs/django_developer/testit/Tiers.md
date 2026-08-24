@@ -140,3 +140,33 @@ blocked on under the parallel suite.
 The agent report also carries the selected `preset`, each module's `tier`, and
 `budget_violations`. Each preset reports to maestro as its own suite identity so
 a `core` run cannot report green over a red `extended` module.
+
+## Current residents (curated in maestro #2792)
+
+Measured walls on the curated suite (`-j8`): **core ≈9s** (the bare run), **framework
+≈45s**, **all ≈375s**. The whole suite was ~313s before the epic.
+
+- **core** (~500 tests) — the security/contract boundary tests that must hold for every
+  consumer: auth/token validation, permission and tenancy gates, SSRF/redirect guards,
+  protected-key denial, model FK/graph permission contracts. Kept small and clean so the
+  bare run stays under 30s.
+- **framework** — django-mojo's own critical contracts not in the universal baseline
+  (model save/serialize, REST dispatch, jobs routing, most of the default_core packages'
+  non-core tests).
+- **bug** — one isolated regression per fixed bug, tagged in place beside its fixture.
+- **extended** — exhaustive input matrices, feature-internal variants, and the heavy
+  provider/matrix files (test_assistant, test_maestro_board, most of test_aws, the edge
+  onboarding/alias/serving matrices).
+- **admin / edge** — admin-portal (`test_account/test_admin_*`, cloud registries) and
+  edge-deployment (`test_mojosec`, `test_edge_action`, the AWS infra plane) coverage most
+  consumers do not exercise.
+- **slow** — real-internet / real-provider tests (live DNS/WHOIS in `test_helpers/domains`,
+  live LLM in `test_assistant/3_test_live_assistant`, shortlink scrapers, cloudwatch tail).
+
+Two known follow-ups from the curation: (1) `test_account` and `test_edge` could not take
+`core` tags because the whole-package strict scan flags a pre-existing protected `Setting`
+write / a `_helpers.py` settings mutation elsewhere in the package — their core-worthy tests
+stay in `framework` until those sites are relocated to serial siblings. (2) The `framework`
+preset still carries the shared-state flake class (throttle/rate-limit/token/rendition tests
+that assert on shared counters); they pass solo and belong in a serial bucket or need a
+per-test identity seam.
