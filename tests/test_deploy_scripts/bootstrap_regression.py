@@ -191,6 +191,9 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
             argv, env=failed_env, capture_output=True, text=True, timeout=30)
         th.assert_true(failed.returncode != 0,
                        "a candidate that cannot load Django must roll back")
+        with open(os.path.join(active, "phase")) as handle:
+            th.assert_eq(handle.read().strip(), "django_check",
+                         "the fixed failure phase did not identify Django import")
         with open(os.path.join(nginx_etc, "nginx.conf")) as handle:
             th.assert_eq(handle.read(), "old nginx\n",
                          "rollback must restore the previous nginx bytes")
@@ -527,6 +530,10 @@ def test_code_node_runs_only_common_checkout_and_declared_dependencies(opts):
         th.assert_true(not os.path.exists(os.path.join(
             environment["MOJO_DEPLOY_STATE_ROOT"], "active")),
             "successful rollback retained an active transaction")
+        th.assert_in(
+            "Deployment failed during candidate_activation; rollback completed",
+            failed.stderr,
+            "the rollback result did not retain its fixed failure phase")
 
 
 @th.django_unit_test()

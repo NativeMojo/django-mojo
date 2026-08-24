@@ -48,6 +48,8 @@ ENABLED_UNITS="$STATE/enabled_units"
 ACTIVE_UNITS="$STATE/active_units"
 touch "$FILES" "$TOUCHED_UNITS" "$ENABLED_UNITS" "$ACTIVE_UNITS"
 
+set_phase() { printf '%s\n' "$1" > "$STATE/phase"; }
+
 safe_destination() {
     local destination="$1" parent leaf
     parent="${destination%/*}"
@@ -223,14 +225,18 @@ run_previous_profile() {
 activate_api() {
     local source timer
     cd "$PROJ_PATH"
+    set_phase django_check
     log "Checking candidate Django"
     python3 bin/manage.py check
     if [ "$MIGRATE" = "1" ]; then
+        set_phase migration
         log "Running migrations"
         python3 bin/manage.py migrate_locked --noinput
     fi
+    set_phase static_collection
     python3 bin/manage.py collectstatic --noinput
 
+    set_phase configuration
     log "Rendering API configuration"
     python3 -m mojo.deploy render --dest "$PROJ_PATH/var/deploy" \
         --project-path "$PROJ_PATH" --app-user "$APP_USER" \
@@ -248,6 +254,7 @@ activate_api() {
     install_directory "$PROJ_PATH/var/deploy/cron.d" "$CRON_ETC"
     remove_retired
 
+    set_phase nginx_check
     log "Checking nginx configuration"
     nginx -t
     systemctl daemon-reload
@@ -256,9 +263,11 @@ activate_api() {
         timer="$(basename "$source")"
         systemctl enable --now "$timer"
     done
+    set_phase api_restart
     log "Restarting API"
     systemctl restart mojo-asgi.service
     systemctl reload nginx
+    set_phase api_probe
     log "Probing API"
     probe_api || die "candidate API did not return HTTP 200"
 }
@@ -303,10 +312,13 @@ case "$ACTION" in
         elif [ "$NODE_TYPE" = "code" ]; then
             log "Code-only deployment complete; no host activation requested"
         else
+            set_phase custom_preflight
             log "Preflighting $NODE_TYPE profile"
             run_candidate_profile preflight
+            set_phase custom_restart
             log "Restarting $NODE_TYPE profile"
             run_candidate_profile restart
+            set_phase custom_probe
             log "Probing $NODE_TYPE profile"
             run_candidate_profile probe
         fi

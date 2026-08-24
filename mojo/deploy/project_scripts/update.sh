@@ -34,6 +34,20 @@ usage() {
     echo "usage: update.sh --sha <commit> --framework <version> --deployment <uuid> [--node-type <type>] [--migrate] | --manual [--node-type <type>]" >&2
 }
 
+set_phase() { printf '%s\n' "$1" > "$ACTIVE/phase"; }
+failure_phase() {
+    local phase
+    phase="$(head -1 "$ACTIVE/phase" 2>/dev/null || true)"
+    case "$phase" in
+        candidate_checkout|dependency_install|framework_install|candidate_activation|publication|\
+        django_check|migration|static_collection|configuration|nginx_check|\
+        api_restart|api_probe|custom_preflight|custom_restart|custom_probe)
+            printf '%s\n' "$phase"
+            ;;
+        *) printf '%s\n' "transaction" ;;
+    esac
+}
+
 valid_sha() { [[ "$1" =~ ^[0-9a-fA-F]{7,40}$ ]]; }
 valid_version() { [[ "$1" =~ ^[0-9A-Za-z][0-9A-Za-z._!+-]{0,63}$ ]]; }
 valid_node_type() { [[ "$1" =~ ^[a-z][a-z0-9_-]{0,31}$ ]]; }
@@ -237,11 +251,15 @@ rollback_transaction() {
 }
 
 rollback_and_exit() {
-    local status="${1:-1}"
+    local status="${1:-1}" phase
     [ "$ROLLING_BACK" = "0" ] || exit "$status"
     ROLLING_BACK=1
     trap - ERR TERM INT HUP
-    if ! rollback_transaction; then
+    phase="$(failure_phase)"
+    if rollback_transaction; then
+        echo "Deployment failed during $phase; rollback completed" >&2
+    else
+        echo "Deployment failed during $phase; rollback failed" >&2
         echo "FATAL: rollback failed; transaction retained at $ACTIVE" >&2
     fi
     exit "$status"
@@ -375,6 +393,7 @@ trap 'rollback_and_exit $?' ERR
 trap 'rollback_and_exit 143' TERM HUP
 trap 'rollback_and_exit 130' INT
 
+set_phase candidate_checkout
 log "Fetching candidate"
 git_project fetch --prune origin
 if [ "$MANUAL" = "1" ]; then
@@ -387,8 +406,10 @@ printf '%s\n' "$SHA" > "$ACTIVE/candidate_sha"
 git_project clean -fd
 git_project checkout --force "$SHA"
 
+set_phase dependency_install
 candidate_manifest="$(manifest_for_tree)"
 install_manifest "$candidate_manifest"
+set_phase framework_install
 if [ -n "$FRAMEWORK" ]; then
     log "Installing django-mojo $FRAMEWORK"
     python3 -m pip install "django-mojo==$FRAMEWORK"
@@ -402,6 +423,7 @@ printf '%s\n' "$installed_candidate_framework" > "$ACTIVE/candidate_framework"
 
 # Resolve only after installing the requested framework. A release replacing
 # broken deployment code executes its own post-deploy body, not N-1's.
+set_phase candidate_activation
 candidate_post="$(python3 -m mojo.deploy locate post_deploy.sh)" ||
     die "cannot locate candidate post-deploy body"
 cp -f -- "$candidate_post" "$ACTIVE/candidate_post.sh"
@@ -420,6 +442,7 @@ printf '%s\n' "$TARGET_SHA" > "$ACTIVE/candidate_sha"
 # This root-owned marker is the commit point. Recovery after it completes
 # publication; recovery before it rolls the candidate back.
 : > "$ACTIVE/activation_succeeded"
+set_phase publication
 publish_success
 
 trap - ERR TERM INT HUP
