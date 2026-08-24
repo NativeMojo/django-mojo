@@ -7,7 +7,7 @@ import sys
 from .config import (
     CANONICAL_CONFIG_PATH, ConfigError, load_config, load_effective_config,
 )
-from .collectors.rpm import RpmError, probe_rpm_capability
+from .collectors.rpm import SystemPythonError, probe_system_python_capability
 from .output import read_status
 
 
@@ -37,21 +37,24 @@ def _print_json(value, output):
     output.write(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
 
 
-def main(argv=None, *, stdout=None, stderr=None):
+def main(argv=None, *, stdout=None, stderr=None, config_loader=None,
+         system_python_probe=None):
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
     args = build_parser().parse_args(argv)
     # Deferred so `--help` and the import graph stay as light as they were.
     from .store import StoreError
     try:
-        if args.config == CANONICAL_CONFIG_PATH:
+        if config_loader is not None:
+            config = config_loader(args.config)
+        elif args.config == CANONICAL_CONFIG_PATH:
             config = load_effective_config(args.config)
         else:
             config = load_config(args.config)
         if args.command == "check":
             rpm = config.get("collectors", {}).get("rpm", {})
             if rpm.get("enabled") is True:
-                probe_rpm_capability(rpm)
+                (system_python_probe or probe_system_python_capability)(rpm)
             _print_json({"ok": True, "sensor_id": config["sensor_id"],
                          "version": config["version"]}, stdout)
             return 0
@@ -123,7 +126,7 @@ def main(argv=None, *, stdout=None, stderr=None):
         else:
             runtime.run()
         return 0
-    except (ConfigError, OSError, RpmError, StoreError, ValueError) as err:
+    except (ConfigError, OSError, StoreError, SystemPythonError, ValueError) as err:
         # StoreError covers the baseline refusals (already-seeded tier, absent
         # rollback history). They are operator errors with a clear message, not
         # crashes, and the converge-driven ceremony needs a clean exit code.

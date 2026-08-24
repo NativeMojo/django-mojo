@@ -113,9 +113,9 @@ def test_poll_integrity_scans_every_tier_including_content(opts):
     th.assert_eq(set(roster), {"fast", "slow", "content", "rpm"},
                  "every configured tier must be scanned, not a hard-coded triple")
     th.assert_eq(roster[0], "fast",
-                 "fast must run first; rpm verifies against its shared traversal")
+                 "fast must remain first for stable legacy scan ordering")
     th.assert_eq(roster[-1], "rpm",
-                 "rpm must run last so the shared fast snapshot already exists")
+                 "the compatibility-named system-Python tier must remain last")
     host_only = Runtime.__new__(Runtime)
     host_only.integrity_collectors = dict.fromkeys(("slow", "rpm", "fast"), None)
     th.assert_eq(host_only.integrity_roster(), ("fast", "slow", "rpm"),

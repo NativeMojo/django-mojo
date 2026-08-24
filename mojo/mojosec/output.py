@@ -8,11 +8,22 @@ import tempfile
 from .protocol import canonical_json, utc_now
 
 
-def emit(level, message, **fields):
+def emit(level, message, stream=None, **fields):
+    stream = sys.stderr if stream is None else stream
     record = {"at": utc_now(), "level": level, "message": str(message)[:1024]}
     record.update(fields)
-    sys.stderr.write(canonical_json(record) + "\n")
-    sys.stderr.flush()
+    stream.write(canonical_json(record) + "\n")
+    stream.flush()
+
+
+def emit_error(message, error, stream=None, **fields):
+    """Best-effort local error record with a bounded public classification."""
+    fields["error"] = str(error)[:256]
+    try:
+        emit("error", message, stream=stream, **fields)
+    except Exception:
+        return False
+    return True
 
 
 def write_status(path, status):

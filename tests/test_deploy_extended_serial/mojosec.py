@@ -78,7 +78,7 @@ def test_named_profile_is_expanded_once_into_effective_config(opts):
     th.assert_eq(config["collectors"]["fim"]["tiers"], profile["tiers"],
                  "effective preparation must preserve every immutable profile FIM tier")
     th.assert_eq(config["collectors"]["rpm"], dict(profile["rpm"], enabled=True),
-                 "effective preparation must preserve the complete immutable RPM graph")
+                 "effective preparation must preserve the legacy system-Python graph")
     th.assert_eq(json.loads(payload), config,
                  "persisted canonical bytes must contain the validated effective config")
 
@@ -103,7 +103,7 @@ def test_named_profile_is_expanded_once_into_effective_config(opts):
             th.assert_eq(audited, config,
                          "deployment audit must validate without re-expanding the profile")
 
-            with mock.patch.object(cli, "probe_rpm_capability"):
+            with mock.patch.object(cli, "probe_system_python_capability"):
                 for argv in (["check"], ["--config", path, "check"]):
                     output = io.StringIO()
                     with mock.patch.object(cli, "CANONICAL_CONFIG_PATH", path):

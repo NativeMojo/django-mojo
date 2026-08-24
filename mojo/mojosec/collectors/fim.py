@@ -27,8 +27,8 @@ class FimCollector:
         self.graph_digest = graph_digest(config["targets"])
         self.identity = dict(identity or {})
         self.profile = self.identity.get("digest", self.graph_digest)
-        # Read, never derived from interval_seconds: rpm.py builds this
-        # collector with configs that carry no interval at all.
+        # Read, never derived from interval_seconds: compatibility integrity
+        # collectors can build this with configs that carry no interval at all.
         self.correlation_seconds = self.config.get(
             "correlation_seconds", MAX_OPERATION_CORRELATION_SECONDS)
         self.content_roots = tuple(

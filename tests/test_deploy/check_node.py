@@ -239,7 +239,7 @@ def test_mojosec_audit_reads_public_status_but_never_secret_content(opts):
 
 
 @th.django_unit_test()
-def test_mojosec_node_check_grades_rpm_binding_readiness(opts):
+def test_mojosec_node_check_grades_system_python_readiness(opts):
     from mojo.deploy import check_node as cn
 
     common = [
@@ -251,19 +251,24 @@ def test_mojosec_node_check_grades_rpm_binding_readiness(opts):
     report = cn.Report()
     healthy_run = FakeRunner([(command, (0, '{"ok":true}', ""))] + common)
     cn.check_mojosec(report, healthy_run, "observe", "sudo -n ")
-    passed = _find(report, "mojosec", "RPM ownership capability")
+    passed = _find(report, "mojosec", "system-Python integrity capability")
     th.assert_true(passed is not None and passed["status"] == cn.PASS,
-                   f"an exact binding/index preflight must pass node readiness: "
+                   f"in-process system-Python discovery must pass node readiness: "
                    f"{_findings(report, 'mojosec')}")
+    th.assert_true("in-process approved-root discovery" in passed["detail"],
+                   f"readiness detail must describe the root contract: {passed}")
 
     report = cn.Report()
     failed_run = FakeRunner([(
-        command, (2, "", "mojosec: RPMDBI_INSTFILENAMES unavailable"))] + common)
+        command, (2, "", "mojosec: system Python root discovery failed"))] + common)
     cn.check_mojosec(report, failed_run, "observe", "sudo -n ")
-    failed = _find(report, "mojosec", "RPM ownership capability unavailable")
+    failed = _find(
+        report, "mojosec", "system-Python integrity capability unavailable")
     th.assert_true(failed is not None and failed["status"] == cn.FAIL,
-                   f"a missing system binding must fail deployment readiness: "
+                   f"unavailable system-Python roots must fail deployment readiness: "
                    f"{_findings(report, 'mojosec')}")
+    th.assert_true("configured system Python" in failed["fix"],
+                   f"remediation must name the configured interpreter: {failed}")
     th.assert_true(any(command in issued for issued in failed_run.commands),
                    "check_node must run the same bounded MojoSec check capability probe")
 

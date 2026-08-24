@@ -1,7 +1,7 @@
 """Moved from tests/test_mojosec/protocol_config.py (maestro #2558).
 
 These CLI-check tests mock `mojo.mojosec.__main__` attributes
-(`load_effective_config`, `load_config`, `probe_rpm_capability`) —
+(`load_effective_config`, `load_config`, `probe_system_python_capability`) —
 process-global patches of production module attributes, unsafe under the
 parallel default tier. The protocol, config-loading, and descriptor-safety
 contracts stay in the default-tier tests/test_mojosec/protocol_config.py.
@@ -39,7 +39,7 @@ def test_cli_uses_effective_loader_only_for_exact_canonical_path(opts):
 
 
 @th.django_unit_test()
-def test_cli_check_probes_enabled_rpm_binding_capability(opts):
+def test_cli_check_probes_enabled_system_python_capability(opts):
     import mojo.mojosec.__main__ as cli
 
     config = {
@@ -50,14 +50,14 @@ def test_cli_check_probes_enabled_rpm_binding_capability(opts):
         }},
     }
     with mock.patch.object(cli, "load_effective_config", return_value=config), \
-            mock.patch.object(cli, "probe_rpm_capability") as probe:
+            mock.patch.object(cli, "probe_system_python_capability") as probe:
         th.assert_eq(cli.main(["check"], stdout=io.StringIO()), 0,
-                     "a healthy installed-file binding probe must pass readiness")
+                     "healthy in-process root discovery must pass readiness")
     probe.assert_called_once_with(config["collectors"]["rpm"])
 
     with mock.patch.object(cli, "load_effective_config", return_value=config), \
             mock.patch.object(
-                cli, "probe_rpm_capability",
-                side_effect=cli.RpmError("RPMDBI_INSTFILENAMES unavailable")):
+                cli, "probe_system_python_capability",
+                side_effect=cli.SystemPythonError("system Python root discovery failed")):
         th.assert_eq(cli.main(["check"], stderr=io.StringIO()), 2,
-                     "a missing or incompatible system RPM binding must fail check")
+                     "missing system-Python roots must fail check")

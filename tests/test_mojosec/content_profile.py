@@ -149,11 +149,11 @@ def test_correlation_is_per_tier_and_leaves_deploy_tiers_untouched(opts):
 
 
 @th.django_unit_test()
-def test_rpm_diff_helper_survives_per_tier_correlation(opts):
+def test_system_python_diff_helper_survives_per_tier_correlation(opts):
     from mojo.mojosec.collectors.fim import FimCollector
 
     identity = {"name": "al2023-content-v1", "version": 1, "digest": "d" * 64}
-    # Exactly how rpm.py builds its diff helper and its system-site walker:
+    # Exactly how the system-Python collector builds its helper and site walker:
     # neither config carries interval_seconds or correlation_seconds.
     helper = FimCollector(
         {"targets": [], "max_entries": 1, "max_file_bytes": 0, "max_depth": 1},
@@ -164,13 +164,13 @@ def test_rpm_diff_helper_survives_per_tier_correlation(opts):
         None, identity, "rpm")
     for collector in (helper, walker):
         th.assert_eq(collector.correlation_seconds, 300,
-                     "an rpm-built collector must resolve the shared window, not crash")
+                     "a compatibility collector must resolve the shared window, not crash")
         th.assert_eq(collector.content_roots, (),
-                     "an rpm-built collector must declare no tenant roots")
+                     "a compatibility collector must declare no tenant roots")
         th.assert_eq(len(collector.baseline_key.split(":")), 3,
-                     "the rpm tier must keep its exact three-component key")
+                     "the legacy rpm tier must keep its exact three-component key")
     th.assert_eq(helper.diff({}, {"snapshot": {}, "complete": True}), [],
-                 "the rpm diff helper must still difference an empty scan")
+                 "the system-Python diff helper must difference an empty scan")
 
 
 @th.django_unit_test()

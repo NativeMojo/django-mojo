@@ -20,7 +20,7 @@ package from a root-owned working directory with safe-path mode:
 |---|---|---|
 | journald | accepted SSH logins, failed SSH authentication, sudo commands/failures, non-SSH PAM session opens, systemd unit-failure declarations (PID 1), and kernel out-of-memory kills; the exact trusted `systemd-user` lifecycle tuple is local-status-only unless its root diagnostic override is active | routine PAM close chatter, ordinary and err-level daemon log lines, kernel non-OOM errors, and userspace text echoing failure/OOM phrases |
 | structured nginx log | known exploit-path probes, 401/403 denials, and 5xx responses; bounded raw request target, referrer, and user agent in root-only sensor state and the protected central receipt | ordinary 2xx/3xx/404/499 traffic, User-Agent-only suspicion, bodies, cookies, authorization, arbitrary headers, and raw log lines |
-| immutable tiered integrity | 60-second host/config FIM, six-hour boot/system-binary FIM, RPM verification, and system-Python package integrity under the packaged `al2023-web-v2` profile; on `al2023-content-v1`, a fourth five-minute tier over the enrolled tenant content roots | the two application release trees (`/opt/api`, `/opt/www`), MojoSec private state, symlink traversal, file contents, or an implicit whole-disk watch |
+| immutable tiered integrity | 60-second host/config FIM, six-hour boot/system-binary FIM, and command-free system-Python site-root FIM under the compatibility tier name `rpm` in the packaged `al2023-web-v2` profile; on `al2023-content-v1`, a fourth five-minute tier over the enrolled tenant content roots | package-manager state, the two application release trees (`/opt/api`, `/opt/www`), MojoSec private state, symlink traversal, file contents, or an implicit whole-disk watch |
 
 Sudo evidence retains bounded command context in the root-owned sensor spool,
 the protected central receipt, and the existing security-admin Event surface:
@@ -46,9 +46,10 @@ behavior hits a protected/probe path or produces denials/errors; otherwise its
 traffic stays in access analytics rather than the security feed.
 
 The v1 scope does not inventory processes, listening sockets, or kernel policy.
-Package coverage is deliberately limited to RPM verification and the isolated
-system interpreter's approved `/usr`, `/usr/lib64`, and `/usr/local`
-site-packages; project virtualenvs and application release trees are excluded.
+Package-manager coverage is deliberately omitted. The running system
+interpreter's site/dist-package roots below `/usr/lib`, `/usr/lib64`,
+`/usr/local/lib`, and `/usr/local/lib64` are covered directly; project
+virtualenvs and application release trees are excluded.
 AWS-native findings and application-level authentication signals
 continue through their existing django-mojo paths.
 
@@ -150,25 +151,28 @@ The recommended AL2023 policy selects the immutable `al2023-web-v2` profile by
 name. Its fast tier covers `/etc` (excluding `/etc/mojosec`), exact root and
 `ec2-user` persistence locations, cron/at/cloud-init scripts, local executables,
 and `/usr/local/lib` including system Python site-packages. Its slow tier covers
-`/boot`, `/usr/bin`, and `/usr/sbin`; RPM verification independently reports
-strictly parsed package drift. Profile paths and bounds cannot be overridden by
-desired policy: changing the graph requires a new packaged profile name and
-digest. Legacy custom FIM targets remain supported only when no profile is
-selected.
+`/boot`, `/usr/bin`, and `/usr/sbin`; the compatibility-named `rpm` tier performs
+an independent system-Python FIM walk. Profile paths and bounds cannot be
+overridden by desired policy: changing the graph requires a new packaged profile
+name and digest. Legacy custom FIM targets remain supported only when no profile
+is selected.
 
-RPM ownership is structural, not parsed from `rpm -qf` prose or inferred from a
-generic exit status. One `/usr/bin/python3 -I` helper and one read-only RPM
-transaction serve the complete tier. Startup proves the `rpm` binding,
-`TransactionSet`, `RPMDBI_INSTFILENAMES`, a readable package header, and a real
-installed-file index lookup, then records the RPM database cookie. Each bounded
-exact-path request returns zero, one, or at most two installed-state NEVRAs:
-zero keeps the file under ordinary SHA-256 coverage, one selects RPM
-verification, and multiple or malformed results make the tier incomplete. A
-same-path header with a removed or other non-installed file state is not an
-owner. Helper failure, timeout, protocol/output bounds, unexpected stderr,
-query exhaustion, or a changed database cookie retains the prior authoritative
-baseline. There is no BASENAMES, PROVIDENAME, localized CLI, or per-file process
-fallback.
+The compatibility-named `rpm` tier performs only one descriptor-safe FIM walk
+of roots discovered in process from the running configured system Python.
+Strict filtering admits only site/dist-package roots below `/usr/lib`,
+`/usr/lib64`, `/usr/local/lib`, and `/usr/local/lib64`. Every path retains
+descriptor-read metadata; regular files at or below `max_file_bytes` are
+SHA-256 hashed, oversized files retain `hash_skipped`, and every symlink's
+target string is SHA-256 hashed. Project environments are excluded. Readiness
+proves only interpreter identity and approved-root discovery, so `ExecStartPre`
+stays fast.
+
+This tier never invokes RPM, DNF, a shell, or another Python process. It has no
+package inventory, verification parser, ownership index, package lookup,
+generation digest, package transaction, or private command diagnostic. The
+legacy `collectors.rpm` config object, profile data, tier name, baseline key,
+and status field remain compatible so existing policy digests and stored
+baseline identity do not change.
 
 `al2023-web-v1` remains packaged for baseline identity and rollback, but must
 not be used for a new AL2023 baseline. Its cloud-init script target descends
@@ -622,15 +626,13 @@ by `max_entries` and `max_depth`. A symlink race, permission loss, unsupported
 descriptor-relative platform, or bound overflow makes the scan incomplete:
 the previous baseline remains authoritative and a critical overflow event is
 queued. There is no pathname-based fallback. An incomplete fast scan is also
-never handed to the rpm tier as its shared `/usr/local` traversal — the polling
-pass falls back to the last complete fast baseline, and a baseline preview marks
-the rpm tier incomplete (with a reason) rather than displaying package state
-derived from a truncated walk.
+independent of the compatibility-named `rpm` tier: the system-Python collector
+performs its own descriptor-safe walk of every approved site-package root.
 
 ## Commands and health
 
 ```bash
-# Validate config and, when RPM integrity is enabled, probe the isolated binding/index.
+# Validate config and discover the configured system Python's approved site roots.
 (cd / && sudo /usr/bin/python3 -E -P -m mojo.mojosec --config /etc/mojosec/config.json check)
 
 # One collection/delivery cycle; useful for a deployment canary.
@@ -664,12 +666,14 @@ content roots retires the content baselines of the older generations along with
 the old root set, which makes those generations ineligible until they are
 re-baselined.
 
-`check` does not open the API-key credential. For an RPM-enabled profile it does
-start the same bounded isolated helper and fails unless the system binding,
-transaction, read-only database/header access, and installed-file index are
-usable. `check_node` grades that command as deployment readiness. Nothing
-installs or falls back to a CLI binding automatically. `once` and `run` validate
-the API-key credential when there is a batch to send. A delivery failure during
+`check` does not open the API-key credential or invoke an external command. For
+the compatibility-named `rpm` tier it verifies that the configured interpreter
+is the running system Python and discovers at least one approved site-package
+root in process. `check_node` grades that fast discovery as deployment
+readiness. Integrity collection itself hashes every regular file and symlink in
+those roots; package-manager state is intentionally outside this profile.
+`once` and `run` validate the API-key credential when there is a batch to send.
+A delivery failure during
 `once` is written to stderr and the status snapshot, but does not make the
 command exit nonzero. Treat the `delivery` object in `status` as the canary
 result rather than relying only on the process exit code.
@@ -717,8 +721,8 @@ and investigate any unexplained gap. `maxsize 50M` is evaluated by logrotate's
 timer/command, not continuously.
 For `al2023-web-v2`, perform this on a disposable AL2023 node after its
 producer-first rollout. Confirm the initialized `fast`, `slow`, and `rpm`
-tiers, their 60-second/six-hour schedules, the system Python RPM/non-RPM
-partition, and the `ProtectHome=tmpfs` exact-bind mount probe. Also create,
+tiers, their 60-second/six-hour schedules, the system-Python site-root
+coverage, and the `ProtectHome=tmpfs` exact-bind mount probe. Also create,
 delete, and recreate one monitored home path across a service restart while
 confirming unrelated home content remains unavailable to the sensor.
 Gate on zero capacity drops, no sustained error, explainable noise, bounded
@@ -741,9 +745,9 @@ exhaustive top-level field set is `schema`, `version`, `sensor_id`, `state`,
 `local_only_diagnostic_delivered`, and `local_only_suppressed`, nullable
 `local_only_last_seen`, and fixed
 `local_only_diagnostic.{active,until,error}`.
-It contains no API key, endpoint, raw log record, database row, FIM digest, or
-file content. `check_node` reads that projection with sudo; ordinary app users
-do not receive collector/backlog timing.
+It contains no API key, endpoint, raw log record, command output, database
+row, FIM digest, or file content. `check_node` reads that projection with sudo;
+ordinary app users do not receive collector/backlog timing.
 
 ## Durability and batching
 

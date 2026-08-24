@@ -461,6 +461,15 @@ def test_setup_safety_preserves_report_detail_leaves(opts):
     assert all(isinstance(item, dict) for item in typed["rows"]), \
         f"collection truncation injected a scalar sentinel: {typed['rows']!r}"
 
+    long_unicode = "\u754c" * 1000
+    raw = long_unicode.encode("utf-8")
+    legacy_expected = (
+        raw[:setup_safety.MAX_STRING_BYTES].decode("utf-8", errors="ignore") +
+        setup_safety.TRUNCATED
+    )
+    assert setup_safety._safe_string(long_unicode) == legacy_expected, \
+        "the shared scalar extraction changed Setup's retained-prefix contract"
+
 
 @th.django_unit_test("resumed mutation is attributed to the advancing superuser")
 def test_resume_uses_current_admin_attribution(opts):
