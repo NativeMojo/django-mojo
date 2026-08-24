@@ -206,10 +206,11 @@ TIER_PRESETS = {
     "all": None,
 }
 
-# The preset a bare `bin/run_tests` selects. Phase 3 flips this to "core" once
-# core is populated; until then it is "framework" so the bare run is
-# byte-identical to today's default tier.
-DEFAULT_PRESET = "framework"
+# The preset a bare `bin/run_tests` selects. Flipped to "core" once the suite
+# was curated into buckets (maestro #2792): the bare run is now the ≤30s core
+# baseline. `--tier framework` runs django-mojo's own critical tier; `--all`
+# runs everything.
+DEFAULT_PRESET = "core"
 
 # Buckets whose packages run in the parallel ring and are held to the
 # isolation contract. `serial` remains an orthogonal execution attribute.

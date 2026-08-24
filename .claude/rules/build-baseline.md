@@ -17,18 +17,21 @@ Three different things used to all get called "the full suite". They are not the
 | Term | Command | What it runs |
 |---|---|---|
 | **scoped run** | `bin/run_tests --agent -t <module> [-t <module>]` | Only the named modules. |
-| **whole suite** | `bin/run_tests --agent` | Every module in the default tier. |
-| **all-tier run** | `bin/run_tests --agent --all` | Whole suite **plus** opt-in modules (`requires_extra`). |
+| **core run** | `bin/run_tests --agent` | The `core` preset — the ≤30s baseline (bare run since #2792). |
+| **whole suite** | `bin/run_tests --agent --tier framework` | django-mojo's own critical tier (`core`+`framework`+`bug`). |
+| **all-tier run** | `bin/run_tests --agent --all` | Everything, including opt-in `extended`/`admin`/`edge`/`slow`. |
 
 Never write "full suite" when you mean the whole-suite run — `--all` is a different,
 heavier thing. Say "whole suite" or "all-tier run".
 
-> **Tier presets (maestro #2790).** A bare `bin/run_tests --agent` now selects the
-> **framework** preset, which until Phase 3 is byte-identical to the whole default tier —
-> so "whole suite" and `--tier framework` are the same run today. `--tier core` (the future
-> ≤30s baseline) and `--tier all` (== `--all`) are also available. See
-> `docs/django_developer/testit/Tiers.md`. This vocabulary table stays accurate; the bare
-> run's selection does not change until Phase 3 populates `core` and flips the default.
+> **Tier presets (maestro #2790/#2792).** The suite is curated into buckets, and a bare
+> `bin/run_tests --agent` now runs the **`core`** preset — the ≤30s baseline every consumer
+> runs. **The `full` verification tier below therefore means `--tier framework`, not the
+> bare run.** `--tier core` (== the bare run), `--tier framework` (the whole critical tier),
+> and `--tier all` (== `--all`) are the presets; see `docs/django_developer/testit/Tiers.md`.
+> Note: the framework preset still carries the pre-existing shared-state flake class
+> (throttle/rate-limit/token tests that assert on shared counters) — a red there that passes
+> solo is a schedule-dice flake, not your change.
 
 ## The rule
 
@@ -41,8 +44,8 @@ then:
 - **`targeted`** → **no baseline.** Build, then run the modules the plan named:
   `bin/run_tests --agent -t <module> ...`. Stop there. Running the whole suite to
   feel safe spends the user's minutes on your comfort.
-- **`full`** → **baseline before the first edit**, whole suite after.
-  1. `bin/run_tests --agent` before touching anything.
+- **`full`** → **baseline before the first edit**, whole suite (`--tier framework`) after.
+  1. `bin/run_tests --agent --tier framework` before touching anything.
   2. Read `testproject/var/test_failures.json` (NOT terminal output). Record on the
      item: total / passed / failed / skipped, and the names of any pre-existing
      failures.
