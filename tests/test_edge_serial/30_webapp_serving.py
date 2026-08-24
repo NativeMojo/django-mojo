@@ -17,6 +17,11 @@ this setup creates, and the shared sweep would take rows out from under the
 other edge modules running in parallel.
 """
 
+# Whole-file extended bucket (maestro #2792): the app-scoped serving matrix,
+# opt-in via `--tier extended` / `--all`. The tenancy subset here is a
+# documented follow-up to pull back to the framework tier.
+TESTIT_TIER = "extended"
+
 import uuid
 from unittest import mock
 

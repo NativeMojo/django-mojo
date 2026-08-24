@@ -312,6 +312,7 @@ def test_runner_outside_root_is_refused(opts):
 # end to end — dispatch, order, return code, and an empty stderr
 # ---------------------------------------------------------------------------
 
+@th.tier("extended")
 @th.django_unit_test()
 def test_cli_healthy_engine_prints_exactly_one_line(opts):
     from mojo.deploy import jobman  # noqa: F401 — the module under test
@@ -339,6 +340,7 @@ def test_cli_healthy_engine_prints_exactly_one_line(opts):
         shutil.rmtree(base, ignore_errors=True)
 
 
+@th.tier("extended")
 @th.django_unit_test()
 def test_cli_stale_pidfile_names_the_absolute_path(opts):
     from mojo.deploy import jobman  # noqa: F401 — the module under test
@@ -368,6 +370,7 @@ def test_cli_stale_pidfile_names_the_absolute_path(opts):
         shutil.rmtree(base, ignore_errors=True)
 
 
+@th.tier("extended")
 @th.django_unit_test()
 def test_cli_bare_status_prints_both_components_in_order(opts):
     from mojo.deploy import jobman  # noqa: F401 — the module under test
@@ -483,6 +486,7 @@ def _reap(pid):
         pass
 
 
+@th.tier("extended")
 @th.django_unit_test()
 def test_stop_returns_only_once_the_engine_is_actually_dead(opts):
     """The defect: `stop` signalled SIGKILL and fell through without waiting,
@@ -528,6 +532,7 @@ def test_stop_returns_only_once_the_engine_is_actually_dead(opts):
         shutil.rmtree(base, ignore_errors=True)
 
 
+@th.tier("extended")
 @th.django_unit_test()
 def test_stop_then_start_actually_restarts_the_engine(opts):
     """The whole point of the fix, end to end: update.sh stops the engine and
@@ -567,6 +572,7 @@ def test_stop_then_start_actually_restarts_the_engine(opts):
         shutil.rmtree(base, ignore_errors=True)
 
 
+@th.tier("extended")
 @th.django_unit_test()
 def test_grace_shortens_the_term_wait(opts):
     """update.sh passes `--grace 2`: the deploy already proved the release, and
@@ -606,6 +612,7 @@ def test_grace_shortens_the_term_wait(opts):
         shutil.rmtree(base, ignore_errors=True)
 
 
+@th.tier("extended")
 @th.django_unit_test()
 def test_a_zombie_pid_is_dead(opts):
     """`ps -p` reports a zombie as alive. That is what kept the pidfile after a
@@ -642,6 +649,7 @@ def test_a_zombie_pid_is_dead(opts):
         proc.wait(timeout=10)
 
 
+@th.tier("extended")
 @th.django_unit_test()
 def test_start_refuses_loudly_when_the_pidfile_cannot_be_written(opts):
     """A root-started engine leaves root-owned files behind; the next start as
@@ -683,6 +691,7 @@ def test_start_refuses_loudly_when_the_pidfile_cannot_be_written(opts):
         shutil.rmtree(base, ignore_errors=True)
 
 
+@th.tier("extended")
 @th.django_unit_test()
 def test_start_refuses_loudly_when_the_logfile_cannot_be_opened(opts):
     """The same ownership trap on the log side, which was already guarded —
@@ -715,6 +724,7 @@ def test_start_refuses_loudly_when_the_logfile_cannot_be_opened(opts):
         shutil.rmtree(base, ignore_errors=True)
 
 
+@th.tier("extended")
 @th.django_unit_test()
 def test_status_output_is_unchanged_by_the_stop_and_start_work(opts):
     """check_node.check_jobs greps `jobman status` stdout and reads a non-zero
@@ -745,6 +755,7 @@ def test_status_output_is_unchanged_by_the_stop_and_start_work(opts):
         shutil.rmtree(base, ignore_errors=True)
 
 
+@th.tier("extended")
 @th.django_unit_test()
 def test_grace_is_a_stop_only_flag(opts):
     """`--grace` on anything but `stop` is a usage error, not a silently

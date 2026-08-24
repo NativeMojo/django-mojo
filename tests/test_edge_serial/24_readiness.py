@@ -1,5 +1,9 @@
 """Fleet topology/proof and WebApp deploy-key readiness contracts."""
 
+# Whole-file extended bucket (maestro #2792): correct-but-not-critical fleet
+# readiness coverage, opt-in via `--tier extended` / `--all`.
+TESTIT_TIER = "extended"
+
 import json
 import os
 import tempfile
