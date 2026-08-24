@@ -151,6 +151,18 @@ during exactly the outage the gate exists to catch. Zero discovered
 nameservers fails closed immediately, and the whole poll still runs inside the
 same budget, failing closed on timeout.
 
+**What the quorum still does not give you.** It is strictly stronger than the
+first-responder check it replaces, but it does not reproduce `INSYNC` for an
+anycast authority. Route53's four nameserver hostnames are four *anycast*
+addresses: querying each one from a single worker observes only that worker's
+nearest edge node per address, so four-of-four locally does not prove the edge
+the CA reaches has converged. The residual failure is a failed validation and
+Let's Encrypt rate-limit burn (failed authorizations are capped per account and
+hostname per hour) — **never mis-issuance**, because the CA validates
+independently from its own vantage points and simply refuses. Closing the gap
+properly needs a hub change-status endpoint the downstream can poll, so the
+`INSYNC` signal crosses the federation wire.
+
 ## Custody
 
 The private key is KMS-envelope-encrypted via `KSMSecrets`. It appears in **no

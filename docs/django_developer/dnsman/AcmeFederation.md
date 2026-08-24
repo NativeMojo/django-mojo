@@ -62,6 +62,12 @@ the authority serves this allocation's exact RRset.** It is stamped by the
 sweep on a confirmed match and by nothing else — never merely because a write
 was submitted.
 
+Read it as an internal reconciliation signal, not as a propagation guarantee.
+The sweep's probe is the ordinary first-responder `query_txt`, so it confirms
+that *an* authoritative nameserver serves the RRset, not that the authority set
+agrees. Nothing gates issuance on `reconciled_at`; the gate that does is the
+caller's majority quorum, described above.
+
 The five-minute `dnsman.cronjobs.sweep_acme_hub_leases` dispatcher queues the
 worker sweep. Every publish and every withdrawal now leaves its allocation
 unconfirmed, so the sweep is the normal path rather than a rare repair: it
