@@ -738,7 +738,7 @@ Standard mojo error envelope. Notable cases:
 | Hub endpoint called without an eligible protected ApiKey | `403` |
 | Hub input/ref conflict, unknown allocation, retired challenge ref, or failed CNAME proof | `400` |
 | Hub rate limit | `429` plus `Retry-After` |
-| Hub disabled, wrong/unavailable public zone, provider failure, or propagation timeout | `503` |
+| Hub disabled, wrong/unavailable public zone, or provider failure | `503` |
 | Tenant delegation missing/retired | `404` |
 | Tenant delegation cross-tenant or missing read/write permission | `403` |
 | Tenant initiate shape, alias proof, active-group, or domain-claim failure | `400` |
