@@ -103,7 +103,8 @@ def _read_deploy_identity(root=Path("var")):
         except (TypeError, ValueError):
             return "", ""
         if not isinstance(value, dict) or set(value) != {
-                "schema", "sha", "deployment"} or value.get("schema") != 2:
+                "schema", "sha", "deployment"} or value.get(
+                    "schema") != deploy.DEPLOY_IDENTITY_SCHEMA:
             return "", ""
         sha = value.get("sha")
         deployment_id = platform_deploy.deployment_id(value.get("deployment"))

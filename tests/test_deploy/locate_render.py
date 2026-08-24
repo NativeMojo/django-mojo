@@ -63,37 +63,29 @@ def _read(path):
         return handle.read()
 
 
-# ---------------------------------------------------------------------------
-# locate
+# export-scripts
 # ---------------------------------------------------------------------------
 
 @th.django_unit_test()
-def test_locate_resolves_both_packaged_scripts(opts):
-    for name in ("update.sh", "post_deploy.sh"):
-        done = _run(["-m", "mojo.deploy", "locate", name])
-        th.assert_eq(done.returncode, 0,
-                     f"locate {name} must exit 0: {done.stderr}")
-        path = done.stdout.strip()
-        th.assert_true(os.path.isabs(path),
-                       f"locate must print an absolute path, got {path!r}")
-        th.assert_true(os.path.isfile(path),
-                       f"locate {name} must name an existing file: {path}")
-        th.assert_true(path.endswith(os.path.join("scripts", name)),
-                       f"locate {name} must resolve inside the package's "
-                       f"scripts/ dir, got {path}")
+def test_export_scripts_writes_executable_project_copies(opts):
+    with tempfile.TemporaryDirectory() as root:
+        done = _run(["-m", "mojo.deploy", "export-scripts", "--dest", root])
+        th.assert_eq(done.returncode, 0, done.stderr)
+        for name in ("update.sh", "post_deploy.sh"):
+            path = os.path.join(root, name)
+            th.assert_true(os.path.isfile(path), path)
+            th.assert_true(stat.S_IMODE(os.stat(path).st_mode) & 0o111,
+                           f"{name} must be executable")
 
 
 @th.django_unit_test()
-def test_locate_unknown_name_exits_2_one_stderr_line(opts):
-    done = _run(["-m", "mojo.deploy", "locate", "rm_rf.sh"])
-    th.assert_eq(done.returncode, 2,
-                 "an unknown name must exit 2 — the shim's `|| fallback` "
-                 "depends on it")
-    th.assert_eq(done.stdout, "",
-                 f"nothing may reach stdout for an unknown name (the shim "
-                 f"would exec it): {done.stdout!r}")
-    th.assert_eq(len(done.stderr.strip().splitlines()), 1,
-                 f"exactly one stderr line, got: {done.stderr!r}")
+def test_export_scripts_refuses_overwrite_without_force(opts):
+    with tempfile.TemporaryDirectory() as root:
+        first = _run(["-m", "mojo.deploy", "export-scripts", "--dest", root])
+        second = _run(["-m", "mojo.deploy", "export-scripts", "--dest", root])
+        th.assert_eq(first.returncode, 0, first.stderr)
+        th.assert_true(second.returncode != 0,
+                       "an existing project copy requires explicit --force")
 
 
 # ---------------------------------------------------------------------------
@@ -201,176 +193,6 @@ def test_render_fails_loudly_on_unwritable_dest(opts):
 
 
 # ---------------------------------------------------------------------------
-# role filtering and pruning
-# ---------------------------------------------------------------------------
-
-ROLE_MANIFEST = """\
-# which converged files each role owns; unlisted names stay shared
-api      cron.d/9_api_only
-api      cron.d/9_shared_extra
-worker   cron.d/9_worker_only
-worker   cron.d/9_shared_extra
-worker   cron.d/4_certbot_sync
-worker   systemd/worker-drain.timer
-"""
-
-
-def _role_project(root):
-    """A project whose repo describes two kinds of box."""
-    proj = os.path.join(root, "proj")
-    _write(os.path.join(proj, "aws", "node_roles.conf"), ROLE_MANIFEST)
-    _write(os.path.join(proj, "aws", "cron.d", "9_api_only"),
-           f"* * * * * root {proj}/bin/api_reports.sh\n")
-    _write(os.path.join(proj, "aws", "cron.d", "9_worker_only"),
-           f"* * * * * root {proj}/bin/drain.sh\n")
-    _write(os.path.join(proj, "aws", "cron.d", "9_shared_extra"),
-           f"* * * * * root {proj}/bin/shared.sh\n")
-    _write(os.path.join(proj, "aws", "nginx", "systemd", "worker-drain.timer"),
-           "[Unit]\nDescription=drain\n[Timer]\nOnBootSec=1min\n")
-    return proj
-
-
-def _names(dest, sub):
-    return sorted(os.listdir(os.path.join(dest, sub)))
-
-
-@th.django_unit_test()
-def test_render_installs_only_the_names_this_role_owns(opts):
-    """A role renders its own names plus every unlisted (shared) one, and none
-    of the names another role owns — framework templates included."""
-    root = tempfile.mkdtemp(prefix="testit_render.")
-    try:
-        proj = _role_project(root)
-        dest = os.path.join(root, "out_api")
-        done = _render(dest, proj, role="api")
-        th.assert_eq(done.returncode, 0,
-                     f"a role render must exit 0: {done.stderr}")
-
-        crons = _names(dest, "cron.d")
-        th.assert_in("9_api_only", crons,
-                     f"the role's own extra must render: {crons}")
-        th.assert_in("9_shared_extra", crons,
-                     f"a name listed under BOTH roles is owned by both: {crons}")
-        th.assert_in("1_certbot", crons,
-                     f"an unlisted framework template stays shared: {crons}")
-        th.assert_true("9_worker_only" not in crons,
-                       f"another role's cron must not render: {crons}")
-        th.assert_true("4_certbot_sync" not in crons,
-                       f"a FRAMEWORK template another role owns must be "
-                       f"filtered too — the manifest outranks the shipped "
-                       f"set: {crons}")
-
-        units = _names(dest, "systemd")
-        th.assert_true("worker-drain.timer" not in units,
-                       f"the systemd set is filtered by the same rule: {units}")
-        th.assert_in("mojo-asgi.service", units,
-                     f"the shared ASGI unit is installed on every node: {units}")
-        th.assert_in(proj,
-                     _read(os.path.join(dest, "cron.d", "9_api_only")),
-                     "an owned project extra still copies through verbatim")
-
-        dest = os.path.join(root, "out_worker")
-        done = _render(dest, proj, role="worker")
-        th.assert_eq(done.returncode, 0,
-                     f"the other role must render too: {done.stderr}")
-        crons = _names(dest, "cron.d")
-        th.assert_in("9_worker_only", crons,
-                     f"the worker's own extra must render: {crons}")
-        th.assert_in("4_certbot_sync", crons,
-                     f"the framework template the worker owns must render for "
-                     f"it: {crons}")
-        th.assert_true("9_api_only" not in crons,
-                       f"filtering is symmetric across roles: {crons}")
-        th.assert_in("worker-drain.timer", _names(dest, "systemd"),
-                     "the worker's own timer must render for the worker")
-
-        done = _render(os.path.join(root, "out_ghost"), proj, role="ghost")
-        th.assert_true(done.returncode != 0,
-                       "a role the manifest never declares must fail the "
-                       "render closed, not silently strip the node")
-        th.assert_in("not declared", done.stderr,
-                     f"the refusal must name the cause: {done.stderr!r}")
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-@th.django_unit_test()
-def test_render_prunes_names_it_did_not_write_but_not_after_a_failure(opts):
-    """var/deploy IS the contract: a copy this render did not produce would be
-    reinstalled into /etc by post_deploy and shield the structural sweep."""
-    root = tempfile.mkdtemp(prefix="testit_render.")
-    try:
-        proj = _role_project(root)
-        dest = os.path.join(root, "out")
-        _write(os.path.join(dest, "cron.d", "9_worker_only"),
-               "* * * * * root /an/older/render/left/this\n")
-        _write(os.path.join(dest, "systemd", "worker-drain.timer"),
-               "[Unit]\nDescription=stale\n")
-        os.mkdir(os.path.join(dest, "cron.d", "a-directory"))
-
-        done = _render(dest, proj, role="api")
-        th.assert_eq(done.returncode, 0, f"render must exit 0: {done.stderr}")
-        crons = _names(dest, "cron.d")
-        th.assert_true("9_worker_only" not in crons,
-                       f"a stale copy of another role's cron must be pruned — "
-                       f"post_deploy would otherwise reinstall it: {crons}")
-        th.assert_true("worker-drain.timer" not in _names(dest, "systemd"),
-                       "the systemd set is pruned by the same rule")
-        th.assert_in("1_certbot", crons,
-                     f"pruning must not touch what this render wrote: {crons}")
-        th.assert_in("a-directory", crons,
-                     f"pruning removes regular files only, never directories: "
-                     f"{crons}")
-        th.assert_in("removed stale cron.d/9_worker_only", done.stdout,
-                     f"a removal is logged, never silent: {done.stdout!r}")
-
-        # A render that dies partway must leave the previous contract intact:
-        # a half-pruned var/deploy is a contract nobody wrote.
-        broken = os.path.join(root, "broken")
-        _write(os.path.join(broken, "cron.d", "9_worker_only"), "stale\n")
-        _write(os.path.join(broken, "systemd"), "not a directory\n")
-        done = _render(broken, proj, role="api")
-        th.assert_true(done.returncode != 0,
-                       "a render that cannot create its dest must fail")
-        th.assert_in("9_worker_only", _names(broken, "cron.d"),
-                     "nothing may be pruned when the render failed partway")
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-@th.django_unit_test()
-def test_render_without_a_role_is_byte_identical_to_the_old_behavior(opts):
-    """The compatibility assertion: with MOJO_NODE_ROLE unset, a manifest in
-    the tree changes nothing at all."""
-    root = tempfile.mkdtemp(prefix="testit_render.")
-    try:
-        proj = _role_project(root)
-        with_manifest = os.path.join(root, "with_manifest")
-        done = _render(with_manifest, proj)
-        th.assert_eq(done.returncode, 0, f"render must exit 0: {done.stderr}")
-
-        os.unlink(os.path.join(proj, "aws", "node_roles.conf"))
-        without = os.path.join(root, "without_manifest")
-        done = _render(without, proj)
-        th.assert_eq(done.returncode, 0, f"render must exit 0: {done.stderr}")
-
-        for sub in ("cron.d", "systemd"):
-            th.assert_eq(_names(with_manifest, sub), _names(without, sub),
-                         f"an unread manifest must not change the {sub} "
-                         f"inventory")
-            for name in _names(without, sub):
-                th.assert_eq(_read(os.path.join(with_manifest, sub, name)),
-                             _read(os.path.join(without, sub, name)),
-                             f"{sub}/{name} must render byte-identically with "
-                             f"the role filter unused")
-        th.assert_in("9_worker_only", _names(with_manifest, "cron.d"),
-                     "an unlabeled node still converges every name — that is "
-                     "exactly the behavior every existing project has")
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-# ---------------------------------------------------------------------------
 # shipped inventory
 # ---------------------------------------------------------------------------
 
@@ -382,7 +204,7 @@ def test_every_shipped_file_resolves_from_the_package(opts):
     base = os.path.dirname(os.path.abspath(mojo.deploy.__file__))
 
     expected = {
-        "scripts": {"update.sh", "post_deploy.sh"},
+        "project_scripts": {"update.sh", "post_deploy.sh"},
         os.path.join("templates", "cron.d"): {
             "1_certbot", "2_mojo_cron", "3_mojo_jobs", "4_certbot_sync"},
         os.path.join("templates", "systemd"): {

@@ -134,17 +134,11 @@ def webapp_onboarding_advance(job):
 # fleet code deploy (maestro item #1458)
 # ----------------------------------------------------------------------
 #
-# One structural fact drives everything here: the update script stops the job
-# engine running it (the skeleton's `bin/jobman stop`, SIGTERM then SIGKILL),
-# so on any node updating ITSELF, Python after the script call never executes.
-# Hence:
-#   - the SCRIPT reports terminal status (via the deploy_status management
-#     command), never deploy_node;
-#   - the orchestrator delegates the canary to another node, updates itself
-#     LAST and fire-and-forget;
-#   - every deploy job is published max_retries=0 with an expiry — a dead
-#     job's redelivery would re-run a whole update, possibly concurrently
-#     with the still-running orphaned script.
+# Project-owned update scripts return after nginx and the candidate API pass.
+# The parent records the result, lets its job finish normally, then detaches an
+# engine recycle. The orchestrator still uses a canary and updates itself last;
+# deploy jobs remain non-retrying because repeating a host transaction is not a
+# safe generic job retry.
 
 # Seconds between DEPLOY_STATUS polls while the canary proves the release.
 # A module constant so tests can shrink it.
@@ -392,8 +386,8 @@ def _node_deploy_failed(deployment_id, sha, job, migrate, phase, message,
                         detail=None, title="Edge deploy node failed"):
     """Report ONE node's deploy failure on every surface that has to see it.
 
-    Called for every outcome the update script could not report itself:
-    unconfigured, an unexecutable script, a timeout, a nonzero exit. Assumes
+    Called for every parent-observed failure: unconfigured, an unexecutable
+    script, a timeout, or a nonzero exit. Assumes
     nothing about how far the deploy got — in particular it does not require
     that `deploy._run` was ever reached.
 
@@ -401,8 +395,8 @@ def _node_deploy_failed(deployment_id, sha, job, migrate, phase, message,
     only when this node was migrating. A fleet node's failure must never touch
     the deploy status — the release is already proven and one node falling
     behind is not a fleet failure. When the migrating node's CAS lands, the
-    durable row is closed too, exactly as the sanctioned script-reported path
-    does (`management/commands/deploy_status.py`).
+    durable row is closed too. The legacy management command uses the same
+    state transition during the one-generation adoption bridge.
     """
     from mojo.apps.edge.services import deploy
     from mojo.apps.edge.services import platform_deploy
@@ -423,17 +417,37 @@ def _node_deploy_failed(deployment_id, sha, job, migrate, phase, message,
             deployment_id, "failed", {"phase": phase, "source": "node_report"})
 
 
+def _recycle_engine_after_return():
+    """Detach the engine recycle so the current job can finish normally."""
+    import os
+    import subprocess
+    import sys
+
+    from django.conf import settings as django_settings
+
+    # Unit-test engines must never terminate themselves. Production projects
+    # run DEBUG=False; the detached process is then adopted outside this job's
+    # process group before it stops and starts the engine.
+    if django_settings.DEBUG:
+        return
+    root = django_settings.PROJECT_ROOT
+    command = (
+        'sleep 2; "$1" -m mojo.deploy.jobman stop engine --root "$2" '
+        '--grace 2; sleep 1; "$1" -m mojo.deploy.jobman start engine '
+        '--root "$2"')
+    subprocess.Popen(
+        ["bash", "-c", command, "deploy-recycle", sys.executable, root],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, start_new_session=True,
+        env=os.environ.copy())
+
+
 def deploy_node(job):
     """Run the update script on THIS node (D4).
 
-    On a full successful run this function never returns — the script's tail
-    stops the engine executing it. Every observable outcome is therefore
-    either the script's own deploy_status report, or one of the failure paths
-    below, which ARE reachable: the script dies before its engine-stopping
-    tail whenever install, migrate or sanity fails, and it may never start at
-    all (unset setting, non-executable shim, timeout). Each of those is
-    exactly when an incident must be filed, so all four route through
-    `_node_deploy_failed`. Nothing may escape this function unreported.
+    Success returns only after the script's nginx and exact-200 checks. This
+    parent then records evidence/status and schedules the engine recycle.
+    Every failure path routes through `_node_deploy_failed`.
     """
     import errno as _errno
     import os
@@ -478,28 +492,6 @@ def deploy_node(job):
                 f"executable on {runner}: {argv_base[0]} — the update script "
                 "must ship committed 100755 (git update-index --chmod=+x)"))
         raise RuntimeError("EDGE_DEPLOY_SCRIPT is not executable")
-    # A stale FORK of the update script is the failure this catches. A shim
-    # moves with every pip install; a fork does not, and one frozen before
-    # `--deployment` existed refuses the argv (or silently drops the flag) and
-    # the deploy dies minutes later as "the canary never reported", with
-    # nothing naming the cause. Reading the script is cheap and says so now.
-    # It refuses ONLY what is provably behind — see deploy.script_contract.
-    verdict, contract, reason = deploy.script_contract(argv_base)
-    if not deploy.contract_ok(verdict, contract):
-        _node_deploy_failed(
-            deployment_id, sha, job, migrate, phase="contract_mismatch",
-            message=(
-                f"deploy {deployment_id} ({sha}): node update script speaks "
-                f"deploy contract v{contract}; this framework requires "
-                f"v{deploy.DEPLOY_CONTRACT} — the script named by "
-                "EDGE_DEPLOY_SCRIPT is a stale fork (see django-mojo "
-                "docs/django_developer/edge/deploy.md)"),
-            detail={"phase": "contract_mismatch", "contract": contract,
-                    "required": deploy.DEPLOY_CONTRACT, "missing": reason},
-            title="Edge deploy node script contract mismatch")
-        raise RuntimeError(
-            f"node update script speaks deploy contract v{contract}, "
-            f"requires v{deploy.DEPLOY_CONTRACT}")
     # Defense-in-depth before anything enters a subprocess argv. There is no
     # shell, but argv hygiene is cheap and the values crossed a webhook.
     if not deploy.is_valid_sha(sha):
@@ -554,4 +546,16 @@ def deploy_node(job):
             detail={"phase": "update_script", "exit": result.returncode,
                     "stderr_tail": deploy.stderr_tail(result.stderr)})
         raise RuntimeError(f"update script exited {result.returncode}")
+
+    # The script returns only after nginx accepted the candidate and its API
+    # answered HTTP 200. Record that terminal result here, after the process
+    # has returned, without asking candidate Django to coordinate its deploy.
+    if not platform_deploy.evidence(
+            deployment_id, runner, deploy.STATUS_DEPLOYING,
+            detail={}):
+        raise RuntimeError("local runner is not in the deployment roster")
+    if migrate and not deploy.set_status(
+            deploy.STATUS_DEPLOYING, sha, deployment_id=deployment_id):
+        raise RuntimeError("canary deploy no longer owns the armed lease")
+    _recycle_engine_after_return()
     return f"completed:{sha}"

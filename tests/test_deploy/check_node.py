@@ -714,82 +714,33 @@ def test_template_freshness_skips_a_framework_template_another_role_owns(opts):
 # shims grading matrix
 # ---------------------------------------------------------------------------
 
-def _shim_runner(state):
-    """state: rel -> 'shim' | 'fork' | 'absent'."""
+@th.django_unit_test()
+def test_project_scripts_are_advisory_and_settings_free(opts):
+    from mojo.deploy import check_node as cn
+
     rules = []
-    for rel, kind in state.items():
+    for rel in ("aws/update.sh", "aws/post_deploy.sh"):
         path = f"{PROJ}/{rel}"
-        rules.append((f"test -f {path}",
-                      (0, "", "") if kind != "absent" else (1, "", "")))
-        rules.append((f"grep -qF -- mojo.deploy {path}",
-                      (0, "", "") if kind == "shim" else (1, "", "")))
-    return FakeRunner(rules)
-
-
-@th.django_unit_test()
-def test_shims_matrix(opts):
-    from mojo.deploy import check_node as cn
-
-    state = {
-        "aws/update.sh": "shim",
-        "aws/post_deploy.sh": "fork",
-        "aws/certbot_sync.py": "absent",
-        "aws/check_node.py": "shim",
-    }
-
-    for require, fork_status in ((False, cn.WARN), (True, cn.FAIL)):
-        report = cn.Report()
-        cn.check_shims(report, _shim_runner(state), PROJ, require)
-        statuses = _statuses(report, "shims")
-        th.assert_eq(statuses.get("aws/update.sh"), cn.PASS,
-                     f"a delegating shim must PASS (require={require}): "
-                     f"{statuses}")
-        th.assert_eq(statuses.get("aws/post_deploy.sh is a fork"), fork_status,
-                     f"a fork must grade {fork_status} under "
-                     f"require_shims={require}: {statuses}")
-        th.assert_eq(statuses.get("aws/certbot_sync.py absent"), cn.INFO,
-                     f"an absent entry point is INFO either way: {statuses}")
-        th.assert_eq(statuses.get("aws/check_node.py"), cn.PASS,
-                     f"the check_node shim grades like the rest: {statuses}")
-
-
-@th.django_unit_test()
-def test_update_sh_exec_bit_is_audited(opts):
-    """`aws/update.sh` is exec'd directly by the fleet deploy plane, so a shim
-    committed 0644 refuses the deploy on every node at once. post_deploy.sh is
-    exempt — update.sh runs it as `sudo bash <path>`."""
-    from mojo.deploy import check_node as cn
-
-    def runner(update_mode, post_mode="755"):
-        rules = list(_shim_runner({
-            "aws/update.sh": "shim", "aws/post_deploy.sh": "shim",
-            "aws/certbot_sync.py": "absent", "aws/check_node.py": "absent",
-        }).rules)
-        rules.append((f"stat -Lc '%U %G %a' {PROJ}/aws/update.sh",
-                      (0, f"root root {update_mode}", "")))
-        rules.append((f"stat -Lc '%U %G %a' {PROJ}/aws/post_deploy.sh",
-                      (0, f"root root {post_mode}", "")))
-        return FakeRunner(rules)
-
-    for require, expected in ((False, cn.WARN), (True, cn.FAIL)):
-        report = cn.Report()
-        cn.check_shims(report, runner("644"), PROJ, require)
-        statuses = _statuses(report, "shims")
-        th.assert_eq(statuses.get("aws/update.sh is not executable"), expected,
-                     f"a non-executable update.sh must grade {expected} under "
-                     f"require_shims={require}: {statuses}")
-        finding = _find(report, "shims", "aws/update.sh is not executable")
-        th.assert_in("update-index --chmod=+x", finding["fix"],
-                     f"the audit must name the committed-mode cure: {finding}")
+        rules.extend([
+            (f"test -f {path}", (0, "", "")),
+            (f"stat -Lc '%U %G %a' {path}", (0, "root root 755", "")),
+            (f"bash -n {path}", (0, "", "")),
+            (f"grep -qF -- 'mojo.deploy locate' {path}", (1, "", "")),
+        ])
+    for rel in ("aws/certbot_sync.py", "aws/check_node.py"):
+        rules.append((f"test -f {PROJ}/{rel}", (1, "", "")))
 
     report = cn.Report()
-    cn.check_shims(report, runner("755", post_mode="644"), PROJ, True)
+    cn.check_shims(report, FakeRunner(rules), PROJ, True)
     statuses = _statuses(report, "shims")
-    th.assert_eq(statuses.get("aws/update.sh is executable"), cn.PASS,
-                 f"an executable update.sh must PASS: {statuses}")
-    th.assert_true(not any("post_deploy.sh is not executable" in name
-                           for name in statuses),
-                   f"post_deploy.sh is sudo bash'd and must stay exempt: {statuses}")
+    for rel in ("aws/update.sh", "aws/post_deploy.sh"):
+        th.assert_eq(statuses.get(f"{rel} is executable"), cn.PASS,
+                     f"{rel} mode must be advisory and visible: {statuses}")
+        th.assert_eq(statuses.get(f"{rel} parses"), cn.PASS,
+                     f"{rel} must be checked with bash -n: {statuses}")
+    th.assert_true(not any(value == cn.FAIL for value in statuses.values()),
+                   f"project script health is advisory, never a deploy gate: {statuses}")
+
 
 
 # ---------------------------------------------------------------------------

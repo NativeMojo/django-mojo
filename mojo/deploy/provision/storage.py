@@ -550,7 +550,7 @@ def scripts_dir():
     exactly two scripts and nothing else; stage1.sh is downloaded and run by a
     booting node, never located by a shim, so widening the allowlist for it
     would give away the guard for no benefit. The files live under the
-    provision package, not `mojo/deploy/scripts/` — that directory's inventory
+    provision package, not `mojo/deploy/project_scripts/` — that directory's inventory
     IS the shim contract, pinned by a test, and these payloads are not part
     of it.
     """
