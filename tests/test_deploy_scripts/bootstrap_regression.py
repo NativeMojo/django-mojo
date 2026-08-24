@@ -78,6 +78,7 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
         nginx_etc = os.path.join(root, "nginx")
         systemd_etc = os.path.join(root, "systemd")
         cron_etc = os.path.join(root, "cron")
+        transaction_root = os.path.join(root, "root-owned-transaction")
         for path in (
                 os.path.join(project, "aws", "nginx", "conf.d"),
                 os.path.join(project, "bin"), stubs,
@@ -99,6 +100,17 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
             with open(path, "w") as handle:
                 handle.write(body)
         os.makedirs(os.path.join(project, "var"), exist_ok=True)
+        # The application-writable legacy location must be ignored.  A broken
+        # or compromised candidate may leave arbitrary rollback metadata here;
+        # root recovery must never consume it.
+        legacy_active = os.path.join(
+            project, "var", "deploy-rollback", "active")
+        os.makedirs(legacy_active, exist_ok=True)
+        sentinel = os.path.join(root, "must-not-be-removed")
+        with open(sentinel, "w") as handle:
+            handle.write("safe\n")
+        with open(os.path.join(legacy_active, "files"), "w") as handle:
+            handle.write("attacker\t%s\n" % sentinel)
         with open(os.path.join(project, "var", "previous_sha"), "w") as handle:
             handle.write("1" * 40 + "\n")
         with open(os.path.join(project, "var", "previous_framework"), "w") as handle:
@@ -136,12 +148,15 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
             "NGINX_ETC": nginx_etc,
             "SYSTEMD_ETC": systemd_etc,
             "CRON_ETC": cron_etc,
+            "MOJO_DEPLOY_STATE_ROOT": transaction_root,
         })
         argv = ["bash", os.path.join(project, "aws", "post_deploy.sh"),
                 "--framework", "1.17.2"]
         done = subprocess.run(
             argv, env=environment, capture_output=True, text=True, timeout=30)
         th.assert_eq(done.returncode, 0, done.stderr)
+        th.assert_true(os.path.isfile(sentinel),
+                       "root recovery must ignore application-writable metadata")
         with open(command_log) as handle:
             commands = handle.read()
         th.assert_in("nginx -t", commands,
@@ -152,7 +167,24 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
             th.assert_in("server_name _;", handle.read(),
                          "ordinary nginx syntax must not be semantically refused")
 
-        shutil.rmtree(os.path.join(project, "var", "deploy-rollback", "active"),
+        active = os.path.join(transaction_root, "active")
+        os.makedirs(active, mode=0o700)
+        with open(os.path.join(active, "previous_sha"), "w") as handle:
+            handle.write("1" * 40 + "\n")
+        with open(os.path.join(active, "previous_framework"), "w") as handle:
+            handle.write("1.16.2\n")
+        with open(os.path.join(active, "files"), "w") as handle:
+            handle.write("123\t%s\n" % sentinel)
+        unsafe = subprocess.run(
+            ["bash", os.path.join(project, "aws", "post_deploy.sh"),
+             "--recover-only"], env=environment, capture_output=True,
+            text=True, timeout=30)
+        th.assert_true(unsafe.returncode != 0,
+                       "recovery must reject a destination it did not generate")
+        th.assert_true(os.path.isfile(sentinel),
+                       "rejected rollback metadata must not mutate its target")
+
+        shutil.rmtree(os.path.join(transaction_root, "active"),
                       ignore_errors=True)
         with open(os.path.join(nginx_etc, "nginx.conf"), "w") as handle:
             handle.write("old nginx\n")
@@ -166,7 +198,7 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
             th.assert_eq(handle.read(), "old nginx\n",
                          "rollback must restore the previous nginx bytes")
 
-        shutil.rmtree(os.path.join(project, "var", "deploy-rollback", "active"),
+        shutil.rmtree(os.path.join(transaction_root, "active"),
                       ignore_errors=True)
         redirect_env = environment.copy()
         redirect_env["CURL_CODE"] = "301"

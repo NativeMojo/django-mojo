@@ -575,6 +575,12 @@ def test_update_timeout_reaps_process_group(opts):
     th.assert_eq(kwargs["env"].get("MOJO_DEPLOY_PARENT_STATUS"), "1",
                  "new parents must suppress the predecessor callback bridge")
     th.assert_eq(
+        process.communicate.call_args_list[1].kwargs.get("timeout"),
+        deploy.ROLLBACK_GRACE_SECONDS,
+        "TERM-triggered rollback needs a realistic bounded recovery window")
+    th.assert_true(deploy.ROLLBACK_GRACE_SECONDS >= 600,
+                   "dependency restore and service recovery can exceed five minutes")
+    th.assert_eq(
         killed,
         [(4321, signal.SIGTERM), (4321, signal.SIGKILL)],
         "timeout must TERM, grace, KILL, then reap the same group")

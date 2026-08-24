@@ -6,7 +6,6 @@ set -euo pipefail
 
 PROJ_PATH="${PROJ_PATH:-/opt/api}"
 LOCK_FILE="${PROJ_PATH}/var/update.lock"
-ACTIVE_TRANSACTION="${PROJ_PATH}/var/deploy-rollback/active"
 
 usage() {
     echo "usage: update.sh --sha <commit> --framework <version> --deployment <uuid> [--migrate] | --manual" >&2
@@ -22,10 +21,9 @@ installed_framework() {
 }
 
 recover_if_needed() {
-    if [ -d "$ACTIVE_TRANSACTION" ]; then
-        echo "Recovering interrupted deployment before starting another..."
-        sudo bash "$PROJ_PATH/aws/post_deploy.sh" --recover-only
-    fi
+    # Root owns the transaction directory, so the application user neither
+    # reads nor interprets it. Recovery is a cheap no-op when none is active.
+    sudo -E bash "$PROJ_PATH/aws/post_deploy.sh" --recover-only
 }
 
 SHA=""

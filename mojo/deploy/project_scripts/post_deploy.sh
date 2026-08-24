@@ -15,15 +15,57 @@ ASGI_WORKERS="${ASGI_WORKERS:-4}"
 NGINX_ETC="${NGINX_ETC:-/etc/nginx}"
 SYSTEMD_ETC="${SYSTEMD_ETC:-/etc/systemd/system}"
 CRON_ETC="${CRON_ETC:-/etc/cron.d}"
-TRANSACTION_ROOT="${PROJ_PATH}/var/deploy-rollback"
+RUN_UID="$(id -u)"
+TRANSACTION_ROOT="/var/lib/django-mojo-deploy"
+# Non-root test harnesses may isolate the state directory. A real deployment
+# runs as root and therefore always uses the fixed root-owned path above.
+if [ "$RUN_UID" != "0" ] && [ -n "${MOJO_DEPLOY_STATE_ROOT:-}" ]; then
+    TRANSACTION_ROOT="$MOJO_DEPLOY_STATE_ROOT"
+fi
 ACTIVE="${TRANSACTION_ROOT}/active"
 ROLLING_BACK=0
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 die() { echo "[$(date '+%H:%M:%S')] FATAL: $*" >&2; exit 1; }
 
+stat_owner() { stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1"; }
+stat_mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
+
+secure_state_dir() {
+    local path="$1"
+    [ ! -L "$path" ] || die "deployment state path is a symlink: $path"
+    if [ -e "$path" ]; then
+        [ -d "$path" ] || die "deployment state path is not a directory: $path"
+    else
+        mkdir -m 0700 -- "$path"
+    fi
+    [ "$(stat_owner "$path")" = "$RUN_UID" ] ||
+        die "deployment state path has the wrong owner: $path"
+    chmod 0700 "$path"
+    [ "$(stat_mode "$path")" = "700" ] ||
+        die "deployment state path has unsafe permissions: $path"
+}
+
+safe_destination() {
+    local destination="$1" parent leaf
+    parent="${destination%/*}"
+    leaf="${destination##*/}"
+    case "$leaf" in ""|.|..|*[!A-Za-z0-9._@-]*) return 1 ;; esac
+    case "$destination" in
+        "$NGINX_ETC/nginx.conf"|"$NGINX_ETC/django.inc") return 0 ;;
+    esac
+    case "$parent" in
+        "$NGINX_ETC/conf.d"|"$SYSTEMD_ETC"|"$CRON_ETC") return 0 ;;
+    esac
+    return 1
+}
+
+valid_sha() { [[ "$1" =~ ^[0-9a-fA-F]{7,40}$ ]]; }
+valid_version() { [[ "$1" =~ ^[0-9A-Za-z][0-9A-Za-z._!+-]{0,63}$ ]]; }
+
 record_file() {
     local destination="$1" key
+    safe_destination "$destination" || die "unsafe rollback destination: $destination"
     key="$(printf '%s' "$destination" | cksum | awk '{print $1}')"
     printf '%s\t%s\n' "$key" "$destination" >> "$ACTIVE/files"
     if [ -e "$destination" ] || [ -L "$destination" ]; then
@@ -38,6 +80,8 @@ restore_files() {
     [ -f "$ACTIVE/files" ] || return 0
     while IFS=$'\t' read -r key destination; do
         [ -n "$key" ] && [ -n "$destination" ] || continue
+        case "$key" in *[!0-9]*|"") return 1 ;; esac
+        safe_destination "$destination" || return 1
         if [ -f "$ACTIVE/$key.absent" ]; then
             rm -f -- "$destination"
         else
@@ -59,6 +103,8 @@ restore_previous_release() {
     [ -d "$ACTIVE" ] || return 0
     previous_sha="$(cat "$ACTIVE/previous_sha")"
     previous_framework="$(cat "$ACTIVE/previous_framework")"
+    valid_sha "$previous_sha" || return 1
+    valid_version "$previous_framework" || return 1
     log "Rolling back to $previous_sha"
     cd "$PROJ_PATH"
     git checkout --force "$previous_sha" || return 1
@@ -101,8 +147,10 @@ while [ "$#" -gt 0 ]; do
 done
 
 cd "$PROJ_PATH"
+secure_state_dir "$TRANSACTION_ROOT"
 if [ "$RECOVER_ONLY" = "1" ]; then
     [ -d "$ACTIVE" ] || exit 0
+    secure_state_dir "$ACTIVE"
     restore_previous_release
     exit 0
 fi
@@ -112,9 +160,10 @@ PREVIOUS_SHA="${MOJO_PREVIOUS_SHA:-$(head -c 64 var/previous_sha 2>/dev/null || 
 PREVIOUS_FRAMEWORK="${MOJO_PREVIOUS_FRAMEWORK:-$(head -c 64 var/previous_framework 2>/dev/null || true)}"
 [ -n "$PREVIOUS_SHA" ] || die "missing previous commit"
 [ -n "$PREVIOUS_FRAMEWORK" ] || die "missing previous framework"
+valid_sha "$PREVIOUS_SHA" || die "invalid previous commit"
+valid_version "$PREVIOUS_FRAMEWORK" || die "invalid previous framework"
 
-mkdir -p "$TRANSACTION_ROOT"
-mkdir "$ACTIVE"
+mkdir -m 0700 "$ACTIVE"
 printf '%s\n' "$PREVIOUS_SHA" > "$ACTIVE/previous_sha"
 printf '%s\n' "$PREVIOUS_FRAMEWORK" > "$ACTIVE/previous_framework"
 : > "$ACTIVE/files"

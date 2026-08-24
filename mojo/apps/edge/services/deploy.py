@@ -124,6 +124,10 @@ VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._!+-]{0,63}$")
 # How long one update-script run may take before the subprocess is killed.
 # pip installs and migrations are the slow parts; 15 minutes is generous.
 SCRIPT_TIMEOUT = 900
+# TERM asks the shell transaction to roll back. Dependency restoration can
+# legitimately take minutes, so give that recovery its own bounded window
+# before the last-resort process-group kill.
+ROLLBACK_GRACE_SECONDS = 900
 
 
 def stderr_tail(raw, limit=10):
@@ -569,7 +573,7 @@ def _run(argv, popen=None, kill_group=None, timeout=None):
     except subprocess.TimeoutExpired as err:
         kill_group(process.pid, signal.SIGTERM)
         try:
-            stdout, stderr = process.communicate(timeout=5)
+            stdout, stderr = process.communicate(timeout=ROLLBACK_GRACE_SECONDS)
         except subprocess.TimeoutExpired:
             kill_group(process.pid, signal.SIGKILL)
             stdout, stderr = process.communicate()

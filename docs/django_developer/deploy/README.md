@@ -60,7 +60,7 @@ may report drift, but they cannot veto a release.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PROJ_PATH` | `/opt/api` | Project checkout and transaction root |
+| `PROJ_PATH` | `/opt/api` | Project checkout |
 | `PROBE_URL` | `https://127.0.0.1/api/version` | Candidate and rollback URL; it must answer exactly HTTP 200 |
 | `APP_USER` | `ec2-user` | Value substituted into rendered cron/systemd templates |
 | `WEB_USER` | `www` | Value substituted into rendered service templates |
@@ -73,8 +73,9 @@ them.
 ## Rollback and interrupted runs
 
 Once `post_deploy.sh` starts, it is the single rollback owner. It writes a
-mechanical transaction under `var/deploy-rollback/active`, and traps ordinary
-errors plus TERM, INT, and HUP. A rollback restores:
+mechanical transaction under root-owned
+`/var/lib/django-mojo-deploy/active`, and traps ordinary errors plus TERM,
+INT, and HUP. A rollback restores:
 
 - the previous git commit;
 - the previous exact django-mojo version and that commit's requirements;
@@ -83,8 +84,8 @@ errors plus TERM, INT, and HUP. A rollback restores:
   restart, nginx reload, and an exact-200 probe of the restored API.
 
 The transaction is removed only after a healthy candidate or healthy rollback.
-If SIGKILL or a machine loss interrupts it, the next `update.sh` detects the
-marker and recovers it before recording a new previous release.
+If SIGKILL or a machine loss interrupts it, the next `update.sh` asks the
+root-owned transaction to recover before recording a new previous release.
 
 ## Compatibility with the predecessor launcher
 
