@@ -28,16 +28,17 @@ shell code.
 
 ## Status ownership
 
-Current parents record node evidence and the canary terminal status after the
+Current parents record node evidence and advance the canary status after the
 script returns. The script no longer stops its calling engine or depends on
 `manage.py deploy_status` for normal operation. After recording the result,
 the parent detaches a short engine recycle so the completed job can be
 acknowledged before the old process exits.
 
 One predecessor-generation callback remains solely for adoption: when the
-parent does not set `MOJO_DEPLOY_PARENT_STATUS`, a healthy candidate reports
-the legacy canary status once and schedules its own recycle. It never runs
-before the candidate passes nginx and HTTP checks.
+parent does not set `MOJO_DEPLOY_PARENT_STATUS`, the healthy migrating canary
+reports the legacy status once and schedules its own recycle. Fleet nodes do
+not write that shared canary status. The bridge never runs before the candidate
+passes nginx and HTTP checks.
 
 ## Failure handling
 

@@ -7,7 +7,8 @@ documented in
 ## `POST /api/github/deploy/webhook`
 
 The public GitHub push webhook requires a valid `X-Hub-Signature-256`, using
-`GITHUB_WEBHOOK_SECRET` over the exact request body.
+HMAC-SHA256 with `GITHUB_WEBHOOK_SECRET` over the exact JSON request body.
+Unsigned or incorrectly signed requests return `403`.
 
 | Push | Response |
 |---|---|
@@ -27,9 +28,11 @@ Manually deploy a named commit:
 {"sha": "b3f2c81d9e..."}
 ```
 
-This requires the global `manage_deploy` permission and fresh interactive
-authentication. API keys and member-scoped grants do not qualify. `sha`
-accepts 7–40 hexadecimal characters.
+This requires an authenticated user with the global `manage_deploy`
+permission. API keys and member-scoped grants do not qualify. `sha` accepts
+7–40 hexadecimal characters and is normalized to lowercase; an invalid value
+returns `400`, while an unauthenticated or unauthorized request returns
+`401`/`403`.
 
 Responses use the same `202`/`503` shape as the webhook and do not expose
 the internal deployment UUID.
