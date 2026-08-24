@@ -269,7 +269,7 @@ rollback_and_exit() {
         else
             echo "Deployment failed during $phase; rollback failed" >&2
         fi
-        echo "FATAL: rollback failed; transaction retained at $ACTIVE" >&2
+        echo "FATAL: deployment recovery failed; transaction retained at $ACTIVE" >&2
     fi
     exit "$status"
 }

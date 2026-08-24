@@ -450,6 +450,10 @@ def test_code_node_runs_only_common_checkout_and_declared_dependencies(opts):
         _write_executable(
             os.path.join(stubs, "python3"),
             "printf 'python3 %s\\n' \"$*\" >> \"$COMMAND_LOG\"\n"
+            "if [ \"${FAIL_PUBLICATION_ALWAYS:-0}\" = 1 ] && "
+            "[ \"${2:-}\" = \"$MOJO_DEPLOY_STATE_ROOT/public/deploy_outcome.json\" ]; then\n"
+            "  exit 1\n"
+            "fi\n"
             "if [ \"${FAIL_PUBLICATION_ONCE:-0}\" = 1 ] && "
             "[ \"${2:-}\" = \"$MOJO_DEPLOY_STATE_ROOT/public/deploy_outcome.json\" ] && "
             "[ ! -f \"$PUBLICATION_MARKER\" ]; then\n"
@@ -561,6 +565,22 @@ def test_code_node_runs_only_common_checkout_and_declared_dependencies(opts):
             "Deployment failed during candidate_activation; rollback completed",
             failed.stderr,
             "the rollback result did not retain its fixed failure phase")
+
+        unrecovered_env = environment.copy()
+        unrecovered_env["FAIL_PUBLICATION_ALWAYS"] = "1"
+        unrecovered = subprocess.run(
+            ["bash", update, "--sha", candidate, "--framework", "1.17.2",
+             "--deployment", "44444444-4444-4444-8444-444444444444",
+             "--node-type", "code"],
+            env=unrecovered_env, capture_output=True, text=True, timeout=30)
+        th.assert_true(unrecovered.returncode != 0,
+                       "unrecoverable publication reported success")
+        th.assert_in(
+            "FATAL: deployment recovery failed; transaction retained",
+            unrecovered.stderr,
+            "the retained publication transaction was mislabeled as rollback")
+        th.assert_true("FATAL: rollback failed" not in unrecovered.stderr,
+                       "publication recovery still claimed a rollback attempt")
 
 
 @th.django_unit_test()
