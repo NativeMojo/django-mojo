@@ -12,7 +12,9 @@ that entry point. A project may keep the same permanent endpoint as an
 executable `aws/update.sh` shim, and may keep an `aws/post_deploy.sh` shim for
 project environment variables. Existing API projects whose shims call
 `mojo.deploy locate` require no source update: each release automatically uses
-the installed framework scripts.
+the installed framework scripts. When a legacy shim is launched as the
+application account, the packaged entry point re-enters itself once through
+passwordless `sudo` before it creates the transient unit or changes anything.
 
 ## The shim contract
 

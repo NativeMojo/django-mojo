@@ -530,6 +530,65 @@ def test_code_node_runs_only_common_checkout_and_declared_dependencies(opts):
 
 
 @th.django_unit_test()
+def test_update_self_elevates_for_legacy_project_shims(opts):
+    """An app-user locator shim must still enter the root transaction."""
+    import mojo
+
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(mojo.__file__)))
+    update = os.path.join(repo, "mojo", "deploy", "project_scripts", "update.sh")
+    with tempfile.TemporaryDirectory() as root:
+        stubs = os.path.join(root, "bin")
+        os.makedirs(stubs)
+        sudo_log = os.path.join(root, "sudo")
+        systemd_log = os.path.join(root, "systemd-run")
+        _write_executable(
+            os.path.join(stubs, "id"),
+            "if [ \"${FAKE_ROOT:-0}\" = 1 ] && [ \"${1:-}\" = -u ]; then\n"
+            "  printf '0\\n'\n"
+            "else\n"
+            "  exec /usr/bin/id \"$@\"\n"
+            "fi\n")
+        _write_executable(
+            os.path.join(stubs, "sudo"),
+            "printf '%s\\n' \"$*\" > \"$SUDO_LOG\"\n"
+            "[ \"${1:-}\" != -n ] || shift\n"
+            "export FAKE_ROOT=1\n"
+            "exec \"$@\"\n")
+        _write_executable(
+            os.path.join(stubs, "systemd-run"),
+            "printf '%s\\n' \"$*\" > \"$SYSTEMD_LOG\"\n"
+            "exit 0\n")
+        environment = os.environ.copy()
+        environment.update({
+            "PATH": stubs + ":/usr/bin:/bin",
+            "SUDO_LOG": sudo_log,
+            "SYSTEMD_LOG": systemd_log,
+            "PROJ_PATH": os.path.join(root, "must-not-be-touched"),
+        })
+        argv = [
+            "bash", update, "--sha", "a" * 40, "--framework", "1.18.1",
+            "--deployment", "11111111-1111-4111-8111-111111111111",
+            "--node-type", "api", "--migrate",
+        ]
+        done = subprocess.run(
+            argv, env=environment, capture_output=True, text=True, timeout=30)
+
+        th.assert_eq(done.returncode, 0, done.stderr)
+        th.assert_true(os.path.isfile(sudo_log),
+                       "the app-user launcher bypassed passwordless sudo")
+        with open(sudo_log) as handle:
+            sudo_command = handle.read()
+        th.assert_in("-n bash " + update, sudo_command,
+                     "the packaged launcher did not re-enter itself as root")
+        th.assert_in("--migrate", sudo_command,
+                     "self-elevation dropped the original deployment arguments")
+        th.assert_true(os.path.isfile(systemd_log),
+                       "the elevated launcher never entered the transient unit")
+        th.assert_true(not os.path.exists(environment["PROJ_PATH"]),
+                       "checkout state changed before root transaction isolation")
+
+
+@th.django_unit_test()
 def test_update_enters_one_bounded_transient_unit_before_mutation(opts):
     import mojo
 
@@ -539,6 +598,10 @@ def test_update_enters_one_bounded_transient_unit_before_mutation(opts):
         stubs = os.path.join(root, "bin")
         os.makedirs(stubs)
         command_log = os.path.join(root, "systemd-run")
+        _write_executable(
+            os.path.join(stubs, "id"),
+            "[ \"${1:-}\" != -u ] || { printf '0\\n'; exit 0; }\n"
+            "exec /usr/bin/id \"$@\"\n")
         _write_executable(
             os.path.join(stubs, "systemd-run"),
             "printf '%s\\n' \"$*\" > \"$COMMAND_LOG\"\nexit 0\n")
