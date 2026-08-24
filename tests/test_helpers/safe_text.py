@@ -25,6 +25,10 @@ def test_safe_text_redacts_secret_shapes_and_url_queries(opts):
         "https://user:pass@example.com:443/rpm?X-Amz-Signature=private#fragment")
     th.assert_eq(sanitized_url, "https://example.com/rpm?redacted",
                  "URL sanitization must remove userinfo, query values, and fragments")
+    embedded = sanitize_scalar(
+        "download failed: https://user:pass@example.com/rpm?X-Amz-Signature=private (7)")
+    th.assert_eq(embedded, REDACTED,
+                 "a prose-wrapped credentialed URL must redact the complete scalar")
 
 
 @th.tier("core")

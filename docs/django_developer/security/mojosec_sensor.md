@@ -177,15 +177,18 @@ interpreter is used only to discover its approved site-package roots. There is
 no BASENAMES, PROVIDENAME, localized `rpm -qf`, or per-file process fallback.
 
 RPM command failures expose only a fixed classification through the CLI,
-collector health, integrity runtime state, and the world-readable status file.
+collector health, integrity runtime state, and the bounded nonsecret status
+file.
 When stderr stayed within the command runner's capture bound, MojoSec separately
-emits a privileged-local `diagnostic_tail` record to journald: the last three
-non-empty lines, secret- and URL-query-redacted before truncation, at most 200
-UTF-8 bytes per line and 512 bytes total. Invalid UTF-8 is replaced and the
-record uses canonical JSON, so control content cannot forge another journal
-record. An output-bound failure retains no tail. This diagnostic is never added
-to events, the private spool or batches, incidents, REST responses, deployment
-state, `collector_status`, `integrity_scans`, or `/run/mojosec/status.json`.
+emits a privileged-local `diagnostic_tail` JSON record to stderr; systemd
+captures service readiness and runtime records in the `mojosec` journal. The
+tail contains the last three non-empty lines, secret- and URL-query-redacted
+before truncation, at most 200 UTF-8 bytes per line and 512 bytes total. Invalid
+UTF-8 is replaced and canonical JSON prevents control content from forging
+another record. An output-bound failure retains no tail. This diagnostic is
+never added to events, the private spool or batches, incidents, REST responses,
+deployment state, `collector_status`, `integrity_scans`, or
+`/run/mojosec/status.json`.
 
 `al2023-web-v1` remains packaged for baseline identity and rollback, but must
 not be used for a new AL2023 baseline. Its cloud-init script target descends
@@ -687,8 +690,10 @@ read-only database/header access, the XML queryformat, and the exact installed-
 file index are usable. `check_node` grades that command as deployment readiness.
 Nothing installs or repairs the RPM executable or database automatically.
 For the sanitized local diagnosis of an RPM readiness or integrity-command
-failure, inspect `journalctl -u mojosec`; the command's plain error and every
-durable health surface intentionally retain only the fixed classification.
+failure from the service, inspect `journalctl -u mojosec`. A manually invoked
+`check` writes the same structured record to its stderr. The command's plain
+error and every durable health surface intentionally retain only the fixed
+classification.
 `once` and `run` validate the API-key credential when there is a batch to send.
 A delivery failure during
 `once` is written to stderr and the status snapshot, but does not make the

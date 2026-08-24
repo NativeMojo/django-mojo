@@ -55,13 +55,21 @@ class RpmError(RuntimeError):
         super().__init__(message)
         if not isinstance(private_stderr, bytes):
             private_stderr = b""
-        self.private_stderr = private_stderr[:_PRIVATE_STDERR_BYTES]
+        self._private_stderr_truncated = len(private_stderr) > _PRIVATE_STDERR_BYTES
+        self.private_stderr = private_stderr[-_PRIVATE_STDERR_BYTES:]
 
     def diagnostic_tail(self):
         """Return the only subprocess detail allowed in privileged local logs."""
         if str(self) == "RPM command output exceeded its bound":
             return ""
         text = self.private_stderr.decode("utf-8", errors="replace")
+        if self._private_stderr_truncated:
+            # The rolling byte tail can begin inside a UTF-8 sequence or a
+            # producer line. Only complete lines are eligible for diagnosis.
+            pieces = text.splitlines()
+            if len(pieces) <= 1:
+                return ""
+            text = "\n".join(pieces[1:])
         lines = [line for line in text.splitlines() if line.strip()][-_DIAGNOSTIC_LINES:]
         lines = [sanitize_scalar(
             line, max_input_characters=_PRIVATE_STDERR_BYTES,

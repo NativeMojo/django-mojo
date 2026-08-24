@@ -48,6 +48,22 @@ def test_rpm_diagnostic_tail_is_sanitized_bounded_and_canonical(opts):
     th.assert_true(aggregate.splitlines()[0].endswith("[truncated]"),
                    f"aggregate truncation omitted its in-bound marker: {aggregate!r}")
 
+    actual_tail = RpmError(
+        "RPM command failed",
+        (b"stale-prefix-" + (b"x" * 5000) +
+         b"\nactionable one\nactionable two\nactionable three\n"),
+    ).diagnostic_tail()
+    th.assert_eq(actual_tail,
+                 "actionable one\nactionable two\nactionable three",
+                 "bounded private stderr must retain the actual last complete lines")
+
+    embedded_url = RpmError(
+        "RPM command failed",
+        b"download failed: https://user:pass@example.com/rpm?X-Amz-Signature=private",
+    ).diagnostic_tail()
+    th.assert_eq(embedded_url, "[redacted]",
+                 "a prose-wrapped signed URL must not bypass line sanitization")
+
     stream = io.StringIO()
     emit_error("RPM readiness failed", error, stream=stream)
     raw_record = stream.getvalue()

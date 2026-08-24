@@ -17,6 +17,7 @@ _LABELED_SECRET = re.compile(
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]{8,}=*")
 _OPAQUE_TOKEN = re.compile(
     r"(?<![A-Za-z0-9/+=_-])[A-Za-z0-9/+=_-]{32,8192}(?![A-Za-z0-9/+=_-])")
+_URL = re.compile(r"https?://[^\s<>'\"]+", re.I)
 
 
 def bound_utf8(value, max_bytes, marker=TRUNCATED):
@@ -52,6 +53,19 @@ def sanitize_scalar(value, max_input_characters=8192, max_bytes=1000,
             (count / len(token)) * math.log2(count / len(token))
             for count in counts.values())
         if entropy >= 4.2:
+            return redacted
+    for match in _URL.finditer(text):
+        if match.start() == 0 and match.end() == len(text):
+            continue
+        try:
+            embedded = urlsplit(match.group(0))
+        except ValueError:
+            return redacted
+        if (embedded.netloc and
+                (embedded.username is not None or embedded.password is not None or
+                 embedded.query or embedded.fragment)):
+            # A prose-wrapped URL cannot be safely reconstructed without
+            # guessing where punctuation stops. Redact the complete scalar.
             return redacted
     try:
         parsed = urlsplit(text)
