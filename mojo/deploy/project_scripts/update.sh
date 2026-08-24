@@ -306,7 +306,7 @@ if [ "$TRANSACTION" = "0" ] && [ "${MOJO_DEPLOY_NO_SYSTEMD:-0}" != "1" ]; then
     fi
     printf '%s\n' 'Deployment transaction failed; recent journal follows:' >&2
     journalctl "_SYSTEMD_UNIT=${unit}.service" --boot=0 --output=cat \
-        --no-pager --quiet --lines=9 1>&2 2>/dev/null || true
+        --no-pager --quiet --lines=9 2>/dev/null | tail -n 9 >&2 || true
     exit "$status"
 fi
 

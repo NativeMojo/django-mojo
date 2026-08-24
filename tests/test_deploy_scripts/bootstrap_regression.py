@@ -664,6 +664,7 @@ def test_update_replays_only_the_failed_transient_unit_tail(opts):
             "  printf 'journalctl unavailable\\n' >&2\n"
             "  exit \"$JOURNAL_RC\"\n"
             "fi\n"
+            "printf 'embedded detail one\\nembedded detail two\\n'\n"
             "for number in 4 5 6 7 8 9 10 11 12; do\n"
             "  printf 'transaction record %s\\n' \"$number\"\n"
             "done\n")
@@ -689,7 +690,7 @@ def test_update_replays_only_the_failed_transient_unit_tail(opts):
                      "failed transaction diagnostics leaked onto stdout")
         failed_lines = failed.stderr.splitlines()
         th.assert_eq(len(failed_lines), 10,
-                     "failure replay exceeded one summary plus nine records")
+                     "failure replay exceeded one summary plus nine lines")
         th.assert_eq(
             failed_lines[0],
             "Deployment transaction failed; recent journal follows:",
