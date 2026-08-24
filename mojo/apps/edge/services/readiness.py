@@ -83,8 +83,8 @@ def _present(path):
         return True
 
 
-def _read_deploy_identity(root=Path("var")):
-    """Read atomic v2 identity, with one bounded predecessor fallback.
+def _read_deploy_identity(root=Path("var"), include_type=False):
+    """Read atomic typed identity, with v2/legacy API compatibility.
 
     A present manifest is authoritative even when malformed. The invalidation
     marker closes the otherwise unavoidable window where an interrupted v2
@@ -94,25 +94,37 @@ def _read_deploy_identity(root=Path("var")):
 
     root = Path(root)
     manifest = root / "deploy_identity.json"
+    empty = ("", "", "") if include_type else ("", "")
     if _present(root / "deploy_identity.invalid"):
-        return "", ""
+        return empty
     if _present(manifest):
         raw = _read_bounded(manifest, IDENTITY_LIMIT)
         try:
             value = json.loads(raw) if raw is not None else None
         except (TypeError, ValueError):
-            return "", ""
-        if not isinstance(value, dict) or set(value) != {
-                "schema", "sha", "deployment"} or value.get(
-                    "schema") != deploy.DEPLOY_IDENTITY_SCHEMA:
-            return "", ""
+            return empty
+        if not isinstance(value, dict):
+            return empty
+        schema = value.get("schema")
+        if schema == 2 and set(value) == {"schema", "sha", "deployment"}:
+            node_type = "api"
+        elif (schema == deploy.DEPLOY_IDENTITY_SCHEMA and set(value) == {
+                "schema", "sha", "deployment", "node_type"}):
+            try:
+                from mojo.apps.edge.settings_validators import deploy_node_type
+                node_type = deploy_node_type(value.get("node_type"))
+            except (ValueError, TypeError):
+                return empty
+        else:
+            return empty
         sha = value.get("sha")
         deployment_id = platform_deploy.deployment_id(value.get("deployment"))
         if (not isinstance(sha, str) or len(sha) != 40
                 or not deploy.is_valid_sha(sha) or not deployment_id
                 or deployment_id != value.get("deployment")):
-            return "", ""
-        return sha, deployment_id
+            return empty
+        return ((sha, deployment_id, node_type) if include_type
+                else (sha, deployment_id))
 
     sha_raw = _read_bounded(root / "deploy_sha", LEGACY_IDENTITY_LIMIT)
     uuid_raw = _read_bounded(root / "deployment_uuid", LEGACY_IDENTITY_LIMIT)
@@ -121,8 +133,38 @@ def _read_deploy_identity(root=Path("var")):
     deployment_id = platform_deploy.deployment_id(supplied_uuid)
     if (len(sha) != 40 or not deploy.is_valid_sha(sha)
             or not deployment_id or deployment_id != supplied_uuid):
-        return "", ""
-    return sha, deployment_id
+        return empty
+    return ((sha, deployment_id, "api") if include_type
+            else (sha, deployment_id))
+
+
+def _read_deploy_outcome(root=Path("var")):
+    """Return one bounded terminal transaction outcome, or an empty dict."""
+    from mojo.apps.edge.services import deploy, platform_deploy
+    from mojo.apps.edge.settings_validators import deploy_node_type
+
+    raw = _read_bounded(Path(root) / "deploy_outcome.json", IDENTITY_LIMIT)
+    try:
+        value = json.loads(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(value, dict) or set(value) != {
+            "schema", "sha", "deployment", "node_type", "status", "detail"}:
+        return {}
+    if value.get("schema") != deploy.DEPLOY_OUTCOME_SCHEMA:
+        return {}
+    deployment_id = platform_deploy.deployment_id(value.get("deployment"))
+    sha = value.get("sha")
+    try:
+        node_type = deploy_node_type(value.get("node_type"))
+    except ValueError:
+        return {}
+    if (not deployment_id or deployment_id != value.get("deployment")
+            or not isinstance(sha, str) or not deploy.is_valid_sha(sha)
+            or value.get("status") not in {"completed", "failed"}):
+        return {}
+    return {"deployment": deployment_id, "sha": sha,
+            "node_type": node_type, "status": value["status"]}
 
 
 def _aggregate(code, label, counts, remediation, details=None):
@@ -193,12 +235,17 @@ def local_node_proof(data=None):
                 if serving else None,
             "current_generation": current_generation,
         }
-    deployed_sha, deployed_uuid = _read_deploy_identity()
+    deployed_sha, deployed_uuid, deployed_type = _read_deploy_identity(
+        include_type=True)
+    if not deployed_type:
+        from mojo.apps.edge.services import deploy
+        deployed_type = deploy.local_node_type()
     return {
         "node_id": local_node_id(),
         "django_mojo_version": mojo.__version__,
         "platform_sha": deployed_sha,
         "platform_deployment": deployed_uuid,
+        "node_type": deployed_type,
         "observed_at": dates.utcnow().isoformat(),
         "pools": evidence,
     }

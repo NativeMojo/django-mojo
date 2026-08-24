@@ -742,6 +742,26 @@ def test_project_scripts_are_advisory_and_settings_free(opts):
                    f"project script health is advisory, never a deploy gate: {statuses}")
 
 
+@th.django_unit_test()
+def test_typed_diagnostics_do_not_assume_every_node_is_an_api(opts):
+    from mojo.deploy import check_node as cn
+
+    code = cn.Report()
+    cn.check_deployment_type(code, FakeRunner([]), PROJ, "code")
+    th.assert_true(_find(code, "deployment", "node type: code") is not None,
+                   "code-only lifecycle must be reported as intentional")
+
+    profile = f"{PROJ}/aws/deploy/sites.sh"
+    sites = cn.Report()
+    cn.check_deployment_type(sites, FakeRunner([
+        (f"test -f {profile}", (0, "", "")),
+        (f"bash -n {profile}", (0, "", "")),
+    ]), PROJ, "sites")
+    finding = _find(sites, "deployment", "node type: sites")
+    th.assert_true(finding is not None and finding["status"] == cn.PASS,
+                   f"a parseable custom lifecycle was not recognized: {finding}")
+
+
 
 # ---------------------------------------------------------------------------
 # collision reporting

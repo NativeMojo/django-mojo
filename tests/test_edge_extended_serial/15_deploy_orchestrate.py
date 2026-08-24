@@ -82,12 +82,13 @@ def setup_orchestrate(opts):
     opts.me = deploy.local_runner_id()
 
 
-def _arm(sha, roster, actor="test"):
+def _arm(sha, roster, actor="test", api_roster=None):
     from mojo.apps.edge.models import PlatformDeployment
     from mojo.apps.edge.services import deploy
     row = PlatformDeployment.objects.create(
         sha=sha, actor=actor, source="test", request_key=str(uuid.uuid4()),
-        frozen_roster=list(roster), transitions=[])
+        frozen_roster=list(roster), transitions=[],
+        detail={} if api_roster is None else {"api_roster": list(api_roster)})
     deploy.set_target(sha, actor=actor, deployment_id=row.pk)
     deploy.arm_status(sha, deployment_id=row.pk)
     return row
@@ -229,6 +230,60 @@ def test_canary_success_flow(opts):
                  "canary proof was mislabeled as healthy fleet verification")
     th.assert_true(deployment.finished is None,
                    "fleet dispatch became terminal before restarted-node proof")
+
+
+@th.django_unit_test("mixed fleet migrates on API canary and types every fan-out")
+def test_mixed_fleet_uses_api_canary(opts):
+    import mojo.apps.jobs as jobs_module
+    from mojo.apps.edge.services import deploy
+
+    deployment = _arm(
+        SHA_A, [CANARY_ID, FLEET_ID, opts.me],
+        api_roster=[CANARY_ID])
+    deploy.set_status(
+        deploy.STATUS_DEPLOYING, SHA_A, deployment_id=deployment.pk)
+    _publish_orchestrate(SHA_A, deployment)
+
+    with th.capture_publishes(_deploy_publish) as calls, \
+         mock.patch.object(jobs_module, "get_runners") as live_read, \
+         mock.patch.object(deploy, "resolve_framework_version",
+                           return_value=FRAMEWORK):
+        _drain(opts)
+
+    node_calls = _node_calls(calls)
+    th.assert_eq([call["channel"] for call in node_calls],
+                 [CANARY_ID, FLEET_ID, opts.me],
+                 "the API canary must release specialized nodes before self")
+    th.assert_eq(
+        [(call["payload"]["migrate"], call["payload"]["api_cohort"])
+         for call in node_calls],
+        [(True, True), (False, False), (False, False)],
+        "routing must carry the frozen API boundary without a type RPC")
+    th.assert_eq(live_read.call_count, 0,
+                 "the frozen typed roster must not be rediscovered mid-deploy")
+
+
+@th.django_unit_test("a specialized-only roster fails before resolving or mutating")
+def test_no_api_canary_refuses_deploy(opts):
+    import mojo.apps.incident.reporter as reporter_module
+    from mojo.apps.edge.services import deploy
+
+    deployment = _arm(SHA_A, [FLEET_ID], api_roster=[])
+    _publish_orchestrate(SHA_A, deployment)
+    incidents = mock.Mock(return_value=mock.Mock(pk=2815))
+    resolve = mock.Mock(return_value=FRAMEWORK)
+    with th.capture_publishes(_deploy_publish) as calls, \
+         mock.patch.object(deploy, "resolve_framework_version", resolve), \
+         mock.patch.object(reporter_module, "report_event", incidents):
+        _drain(opts)
+
+    th.assert_eq(_node_calls(calls), [],
+                 "a migration-dependent release must not touch an API-free roster")
+    th.assert_eq(resolve.call_count, 0,
+                 "refusal must precede framework or node mutation")
+    deployment.refresh_from_db()
+    th.assert_eq(deployment.status, "failed",
+                 "the refused attempt must be durably terminal")
 
 
 @th.django_unit_test("canary timeout: failed + incident, fleet untouched")
@@ -405,7 +460,8 @@ def test_node_unconfigured(opts):
         payload=payload,
         channel=CHANNEL)
     incidents = mock.Mock()
-    with mock.patch.object(reporter_module, "report_event", incidents):
+    with mock.patch.object(reporter_module, "report_event", incidents), \
+         mock.patch.object(deploy, "deploy_script_argv", return_value=None):
         _drain(opts)
 
     row = Job.objects.get(id=job_id)
@@ -415,6 +471,28 @@ def test_node_unconfigured(opts):
                    "the refusal must be an incident, not a silent skip")
     th.assert_in("EDGE_DEPLOY_SCRIPT", incidents.call_args.args[0],
                  "the incident must name the missing setting")
+
+
+@th.django_unit_test("deploy_node refuses routing/local lifecycle disagreement")
+def test_node_type_mismatch_stops_before_shell(opts):
+    from mojo.apps import jobs
+    from mojo.apps.edge.services import deploy
+    from mojo.apps.jobs.models import Job
+
+    payload, deployment = _node_payload(opts, SHA_A, False)
+    payload["api_cohort"] = True
+    job_id = jobs.publish(
+        func=deploy.DEPLOY_NODE_JOB, payload=payload, channel=CHANNEL)
+    ran = mock.Mock(return_value=FakeProc(0))
+    with mock.patch.object(deploy, "local_node_type", return_value="sites"), \
+         mock.patch.object(deploy, "deploy_script_argv", return_value=["/bin/echo"]), \
+         mock.patch.object(deploy, "_run", ran):
+        _drain(opts)
+
+    th.assert_eq(Job.objects.get(pk=job_id).status, "failed",
+                 "an edge/API job on a Sites node must fail loudly")
+    th.assert_eq(ran.call_count, 0,
+                 "cohort mismatch must be refused before checkout or pip")
 
 
 @th.django_unit_test("deploy_node: a fleet-node failure is an incident, never a rollback")
@@ -736,4 +814,3 @@ def test_node_unconfigured_reports_failure(opts):
     th.assert_eq((status or {}).get("detail"), "unconfigured",
                  f"the lease must be released as failed, got {status!r}")
     deploy.clear_status(deployment.pk)
-

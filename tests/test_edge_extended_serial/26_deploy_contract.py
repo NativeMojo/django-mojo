@@ -174,6 +174,23 @@ def setup_contract(opts):
     opts.me = deploy.local_runner_id()
 
 
+@th.django_unit_test("ordinary nodes use the permanent packaged-script endpoint by default")
+def test_default_deploy_endpoint_and_node_type(opts):
+    from mojo.apps.edge.services import deploy
+
+    with mock.patch.object(
+            deploy.settings, "get_static",
+            side_effect=lambda key, default=None, **kwargs: default):
+        argv = deploy.deploy_script_argv()
+        node_type = deploy.local_node_type()
+    th.assert_eq(argv[:4], ["sudo", "-n", "bash", "-c"],
+                 "the default transaction must enter through passwordless sudo")
+    th.assert_in("mojo.deploy locate update.sh", argv[4],
+                 "API projects must not vendor or refresh framework shell")
+    th.assert_eq(node_type, "api",
+                 "existing nodes remain API until explicitly specialized")
+
+
 @th.django_unit_test(
     "REGRESSION: an explicit framework pin is installed verbatim, and PyPI is never asked")
 def test_pin_is_verbatim_and_never_asks_pypi(opts):
