@@ -10,6 +10,8 @@ Nothing here touches AWS. The handler takes an injected `put_metric=` writer
 what it was handed.
 """
 
+TESTIT_TIER = "extended"
+
 from datetime import timedelta
 from unittest import mock
 
@@ -106,6 +108,7 @@ def test_publisher_emits_minimum_days_remaining(opts):
         f"the job should report what it published, got {result}"
 
 
+@th.tier("bug")
 @th.django_unit_test("an expired certificate that failed renewal still counts")
 def test_publisher_counts_expired_failed_certificates(opts):
     """

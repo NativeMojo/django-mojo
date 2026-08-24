@@ -10,6 +10,8 @@ All registration sites must merge into the existing entry instead.
 In-process tests: they inspect the registry populated by importing the rest
 modules into THIS process (like post_auth.test_registry_annotates_after_auth).
 """
+
+TESTIT_TIER = "bug"
 from testit import helpers as th
 
 

@@ -6,6 +6,8 @@ that is where "some targets unhealthy" becomes amber and "no healthy target"
 becomes red; the helper itself only reports counts.
 """
 
+TESTIT_TIER = "edge"
+
 from unittest import mock
 
 from botocore.exceptions import ClientError

@@ -20,6 +20,8 @@ the bare list AND on detail; a user-level (platform) grant still sees both.
 Self-contained: own users, groups, FileManager, files, renditions — does not
 lean on the shortlink suite's fixtures.
 """
+
+TESTIT_TIER = "core"
 import os
 import tempfile
 import shutil as _shutil

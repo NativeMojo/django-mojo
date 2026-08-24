@@ -285,6 +285,7 @@ def test_rest_file_get(opts):
     assert_true(data.filename is not None, "should include filename")
 
 
+@th.tier("core")
 @th.django_unit_test("REST: unauthenticated cannot list files")
 def test_rest_file_list_unauth(opts):
     from mojo.models.rest import MOJO_REST_LIST_PERM_DENY
@@ -316,6 +317,7 @@ def test_rest_file_delete(opts):
 # Security regression: FileManager credential graphs
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("FileManager: credential masks cover empty and short values")
 def test_fm_credential_mask_boundaries(opts):
     from mojo.apps.fileman.models import FileManager
@@ -342,6 +344,7 @@ def test_fm_credential_mask_boundaries(opts):
         )
 
 
+@th.tier("core")
 @th.django_unit_test("FileManager: every direct, REST, nested, and fallback graph masks credentials")
 def test_fm_credential_graphs_never_expose_raw_values(opts):
     from mojo.apps.fileman.models import FileManager, File

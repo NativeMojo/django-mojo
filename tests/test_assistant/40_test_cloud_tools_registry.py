@@ -7,6 +7,8 @@ declares", spelled out per tool rather than derived, because a table that
 derives its expectation from the code under test proves nothing.
 """
 
+TESTIT_TIER = "admin"
+
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
 

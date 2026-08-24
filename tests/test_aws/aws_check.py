@@ -1,3 +1,5 @@
+
+TESTIT_TIER = "edge"
 import io
 from types import SimpleNamespace
 from unittest import mock

@@ -17,6 +17,8 @@ Two properties matter most here and both are security properties:
      caller can confirm a domain they already named and nothing else.
 """
 
+TESTIT_TIER = "extended"
+
 from unittest.mock import patch, MagicMock
 
 from objict import objict
@@ -103,6 +105,7 @@ def setup_credentials(opts):
 # the fail-closed credential gate — before ANY network call
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test()
 def test_missing_credential_fails_closed(opts):
     from mojo.apps.dnsman.services import dns
@@ -128,6 +131,7 @@ def test_missing_credential_fails_closed(opts):
         "Expected the credential gate to refuse BEFORE any provider call is made")
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_inactive_credential_fails_closed(opts):
     from mojo.apps.dnsman.services import dns
@@ -152,6 +156,7 @@ def test_inactive_credential_fails_closed(opts):
         "Expected an inactive credential to be refused BEFORE any provider call")
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_unverified_credential_fails_closed(opts):
     from mojo.apps.dnsman.services import dns

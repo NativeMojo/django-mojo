@@ -169,6 +169,7 @@ def test_use_reader_outside_scope_is_bounded(opts):
         f"use_reader must restore primary routing on exit, got {after!r}"
 
 
+@th.tier("core")
 @th.django_unit_test("reader router: session reads always use primary")
 def test_session_model_uses_primary(opts):
     from mojo.db import pinning, use_reader
@@ -184,6 +185,7 @@ def test_session_model_uses_primary(opts):
         pinning.deactivate(tokens)
 
 
+@th.tier("core")
 @th.django_unit_test("reader router: account models always use primary")
 def test_account_models_use_primary_even_when_reader_is_forced(opts):
     from mojo.db import pinning, use_reader
@@ -210,6 +212,7 @@ def test_account_models_use_primary_even_when_reader_is_forced(opts):
         pinning.deactivate(tokens)
 
 
+@th.tier("core")
 @th.django_unit_test("reader router: migrations are allowed only on primary")
 def test_migrations_use_primary_only(opts):
     from mojo.db.router import ReaderRouter

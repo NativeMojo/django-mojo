@@ -1,6 +1,8 @@
 """Engine tests — use per-request X-Mojo-Test-* headers so no server reloads
 are needed. Tests run fast and in parallel.
 """
+
+TESTIT_TIER = "extended"
 from testit import helpers as th
 from tests.test_geofence._helpers import (
     headers, GEO_US, GEO_US_FL, GEO_RU, GEO_TOR,

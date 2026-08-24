@@ -7,6 +7,8 @@ incident reporting. Covers:
 - Unserializable sentinel -> fallback error + assistant:error:serialize incident
 - Parallel-tool failure -> assistant:error:parallel incident
 """
+
+TESTIT_TIER = "bug"
 import json
 import decimal
 import datetime

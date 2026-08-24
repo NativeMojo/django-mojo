@@ -1,3 +1,5 @@
+
+TESTIT_TIER = "admin"
 import json
 from types import SimpleNamespace
 from unittest import mock
@@ -373,6 +375,7 @@ def test_fetch_category_wrong_account(opts):
 # Live AWS tests — skipped when AWS_KEY is not configured
 # ------------------------------------------------------------------
 
+@th.tier("slow")
 @th.unit_test("cw_resources_list")
 def test_resources_list(opts):
     """
@@ -406,6 +409,7 @@ def test_resources_list(opts):
     opts.client.logout()
 
 
+@th.tier("slow")
 @th.unit_test("cw_fetch_ec2_all_instances")
 def test_fetch_ec2_all_instances(opts):
     """
@@ -430,6 +434,7 @@ def test_fetch_ec2_all_instances(opts):
     opts.client.logout()
 
 
+@th.tier("slow")
 @th.unit_test("cw_fetch_ec2_single_slug")
 def test_fetch_ec2_single_slug(opts):
     """
@@ -457,6 +462,7 @@ def test_fetch_ec2_single_slug(opts):
     opts.client.logout()
 
 
+@th.tier("slow")
 @th.unit_test("cw_fetch_ec2_slug_is_name")
 def test_fetch_ec2_slug_is_name(opts):
     """
@@ -484,6 +490,7 @@ def test_fetch_ec2_slug_is_name(opts):
     opts.client.logout()
 
 
+@th.tier("slow")
 @th.unit_test("cw_fetch_ec2_net_in")
 def test_fetch_ec2_net_in(opts):
     """NetworkIn (net_in) should be valid for ec2."""
@@ -500,6 +507,7 @@ def test_fetch_ec2_net_in(opts):
     opts.client.logout()
 
 
+@th.tier("slow")
 @th.unit_test("cw_fetch_ec2_memory")
 def test_fetch_ec2_memory(opts):
     """
@@ -528,6 +536,7 @@ def test_fetch_ec2_memory(opts):
     opts.client.logout()
 
 
+@th.tier("slow")
 @th.unit_test("cw_fetch_ec2_disk")
 def test_fetch_ec2_disk(opts):
     """
@@ -556,6 +565,7 @@ def test_fetch_ec2_disk(opts):
     opts.client.logout()
 
 
+@th.tier("slow")
 @th.unit_test("cw_fetch_ec2_granularity_days")
 def test_fetch_ec2_granularity_days(opts):
     """granularity=days should produce fewer, wider buckets than granularity=hours."""
@@ -579,6 +589,7 @@ def test_fetch_ec2_granularity_days(opts):
     opts.client.logout()
 
 
+@th.tier("slow")
 @th.unit_test("cw_fetch_ec2_stat_max")
 def test_fetch_ec2_stat_max(opts):
     """stat=max should be accepted and return a valid response."""
@@ -595,6 +606,7 @@ def test_fetch_ec2_stat_max(opts):
     opts.client.logout()
 
 
+@th.tier("slow")
 @th.unit_test("cw_fetch_rds_all_instances")
 def test_fetch_rds_all_instances(opts):
     """account=rds&category=cpu with no slugs returns data for all RDS instances."""
@@ -612,6 +624,7 @@ def test_fetch_rds_all_instances(opts):
     opts.client.logout()
 
 
+@th.tier("slow")
 @th.unit_test("cw_fetch_rds_conns")
 def test_fetch_rds_conns(opts):
     """conns category should resolve to DatabaseConnections for rds."""
@@ -629,6 +642,7 @@ def test_fetch_rds_conns(opts):
     opts.client.logout()
 
 
+@th.tier("slow")
 @th.unit_test("cw_fetch_redis_all_clusters")
 def test_fetch_redis_all_clusters(opts):
     """account=redis&category=cpu with no slugs returns data for all ElastiCache clusters."""
@@ -645,6 +659,7 @@ def test_fetch_redis_all_clusters(opts):
     opts.client.logout()
 
 
+@th.tier("slow")
 @th.unit_test("cw_fetch_redis_conns")
 def test_fetch_redis_conns(opts):
     """conns category should resolve to CurrConnections for redis."""
@@ -662,6 +677,7 @@ def test_fetch_redis_conns(opts):
     opts.client.logout()
 
 
+@th.tier("slow")
 @th.unit_test("cw_fetch_redis_cache_hits")
 def test_fetch_redis_cache_hits(opts):
     """cache_hits is a redis-specific category and should return valid data."""

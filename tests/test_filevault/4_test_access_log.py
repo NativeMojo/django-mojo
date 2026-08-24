@@ -14,6 +14,8 @@ Also covers two defects found while scoping:
     `except ValueError` was dead code and a wrong password produced a
     truncated body under a full Content-Length instead of a 403.
 """
+
+TESTIT_TIER = "bug"
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
 
@@ -229,6 +231,7 @@ def test_access_log_rest_surface(opts):
 # The two defects found while scoping
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("IP binding fails closed when either side has no IP")
 def test_token_ip_binding_fails_closed(opts):
     """`None != None` is False, so an IP-less mint used to validate for any

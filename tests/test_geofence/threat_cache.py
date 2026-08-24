@@ -11,6 +11,8 @@ test DB — each test (re)seeds the state it needs. Seeding them is strictly
 safer for parallel modules than deleting them: a populated row PREVENTS
 detect_tor from attempting a live network fetch.
 """
+
+TESTIT_TIER = "extended"
 from testit import helpers as th
 
 LISTED_IP = "198.51.100.7"

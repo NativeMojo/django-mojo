@@ -1,5 +1,7 @@
 """Tenant-side delegated ACME lifecycle, isolation, and claim races."""
 
+TESTIT_TIER = "extended"
+
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
@@ -296,6 +298,7 @@ def setup_delegation_rest(opts):
         domain=opts.foreign_domain)
 
 
+@th.tier("core")
 @th.django_unit_test("delegation REST status is tenant-isolated and secret-minimal")
 def test_rest_tenant_isolation(opts):
     login(opts, opts.delegation_email, opts.delegation_pw)

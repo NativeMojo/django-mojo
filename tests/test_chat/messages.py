@@ -5,6 +5,8 @@ read receipts, unread counts, and DM messages.
 Note: WebSocket send is tested indirectly via the handler. HTTP endpoints are
 tested via opts.client since they hit the live server.
 """
+
+TESTIT_TIER = "extended"
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
@@ -111,6 +113,7 @@ def test_message_history_pagination(opts):
     assert_eq(len(ids1 & ids2), 0, "expected no overlap between pages")
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_message_history_requires_membership(opts):
     """Non-member cannot fetch history."""
@@ -262,6 +265,7 @@ def test_flagged_messages_endpoint(opts):
     assert_true(opts.test_message_id in flagged_ids, "expected flagged message in moderator view")
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_handler_flag_requires_permission(opts):
     """Non-moderator cannot flag messages."""
@@ -451,6 +455,7 @@ def test_handler_max_message_length(opts):
     assert_true("max length" in result["error"].lower(), "expected max length error")
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_handler_non_member_cannot_send(opts):
     """Non-member cannot send messages."""
@@ -469,6 +474,7 @@ def test_handler_non_member_cannot_send(opts):
     assert_eq(result["type"], "error", "expected error for non-member send")
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_subscription_auth(opts):
     """Test on_realtime_can_subscribe for chat topics."""

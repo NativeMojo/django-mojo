@@ -20,6 +20,8 @@ Redis entry would keep resolving. A leaked global row here would also shadow
 `12_config.py`'s conf-file fixture on the NEXT run.
 """
 
+TESTIT_TIER = "extended"
+
 from testit import helpers as th
 
 from tests.test_dnsman._helpers import (
@@ -176,6 +178,7 @@ def test_group_write_then_read(opts):
 # 3-4. fallback and override
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("a group with no contact inherits without ever seeing the house one")
 def test_group_inherits_house_contact_opaquely(opts):
     _clear(opts.group_a)
@@ -252,6 +255,7 @@ def test_group_contact_overrides_house(opts):
 # 5-8. the permission boundary
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("a tenant admin cannot reach another tenant's contact")
 def test_cross_tenant_group_denied(opts):
     _clear(opts.group_a, opts.group_b)
@@ -298,6 +302,7 @@ def test_global_perm_holder_reaches_any_group(opts):
     _clear(opts.group_b)
 
 
+@th.tier("core")
 @th.django_unit_test("the house contact requires a platform admin, not just manage_dns")
 def test_house_scope_requires_platform_admin(opts):
     _clear()
@@ -322,6 +327,7 @@ def test_house_scope_requires_platform_admin(opts):
     _clear()
 
 
+@th.tier("core")
 @th.django_unit_test("view_dns alone reads neither scope — the contact is PII")
 def test_view_dns_cannot_read_or_write(opts):
     _clear(opts.group_a)
@@ -415,6 +421,7 @@ def test_inactive_group_is_a_value_error(opts):
         f"the refusal must say the group is not active, got {resp.response}"
 
 
+@th.tier("core")
 @th.django_unit_test("an anonymous caller cannot tell a real group id from a bogus one")
 def test_anonymous_gets_no_group_oracle(opts):
     """

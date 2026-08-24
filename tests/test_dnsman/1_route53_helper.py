@@ -5,6 +5,8 @@ Everything runs in-process with the two boto client factories
 (`_domains_client` / `_dns_client`) patched, so no AWS call is ever made.
 """
 
+TESTIT_TIER = "extended"
+
 from unittest.mock import patch, MagicMock
 
 from testit import helpers as th

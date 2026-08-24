@@ -1,3 +1,5 @@
+
+TESTIT_TIER = "bug"
 from testit import helpers as th
 
 # Regression tests for maestro item 74: the realtime connect/disconnect/set_meta

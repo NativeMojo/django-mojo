@@ -152,6 +152,7 @@ def _queued_ids(opts, channel):
     return opts.redis.get_client().lrange(opts.keys.queue(channel), 0, -1)
 
 
+@th.tier("bug")
 @th.django_unit_test("publish routes to the channel it was given, configured or not")
 def test_publish_routes_as_named(opts):
     """THE regression. Fails on <=1.2.61: the job lands on 'default' instead."""

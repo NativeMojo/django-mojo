@@ -16,6 +16,8 @@ Parallel-safety:
   - evidence tests use the no_rules_strict reason — unique to this module, so
     the hourly (ip, reason) dedupe can't race other modules.
 """
+
+TESTIT_TIER = "extended"
 import uuid as _uuid
 from testit import helpers as th
 from tests.test_geofence._helpers import headers, GEO_US, GEO_RU, GEO_PRIVATE
@@ -248,6 +250,7 @@ def test_group_strict_write_validation(opts):
         grp.delete()
 
 
+@th.tier("core")
 @th.django_unit_test("strict: group-scoped admin cannot flip geofence_strict (global perm required)")
 def test_group_strict_requires_global_perm(opts):
     """SECURITY: a tenant admin who can edit the group must NOT be able to opt
@@ -340,6 +343,7 @@ def test_group_strict_flip_audited(opts):
 # REST path (maestro item #1839).
 
 
+@th.tier("extended")
 @th.django_unit_test("strict: group posture flip invalidates cached decisions")
 def test_group_strict_cache_invalidation(opts):
     from mojo.apps.account.services.geofence import cache as gf_cache

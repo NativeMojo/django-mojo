@@ -9,6 +9,8 @@ Covers:
   - Discrete regenerate_renditions action shape (the fix).
   - Delete cascade scoped to source="fileman"/"fileman-share".
 """
+
+TESTIT_TIER = "extended"
 import os
 import tempfile
 import shutil as _shutil
@@ -456,6 +458,7 @@ def test_regenerate_discrete_roles(opts):
               f"roles filter should be in payload, got {job.payload}")
 
 
+@th.tier("bug")
 @th.django_unit_test("Action shape: {\"action\": \"regenerate_renditions\"} is no longer recognized")
 def test_regenerate_legacy_shape_dropped(opts):
     from mojo.apps.jobs.models import Job
@@ -560,6 +563,7 @@ def test_delete_scoped_cleanup(opts):
 # Security regressions (from review of f5bf944)
 # ---------------------------------------------------------------------------
 
+@th.tier("bug")
 @th.django_unit_test("Security: rendition shortlinks are cleaned up on File delete")
 def test_rendition_shortlinks_cleaned_on_file_delete(opts):
     """Before the fix, File.on_rest_pre_delete only deleted shortlinks with
@@ -603,6 +607,7 @@ def test_rendition_shortlinks_cleaned_on_file_delete(opts):
               f"got {[(s.code, s.source) for s in remaining]}")
 
 
+@th.tier("core")
 @th.django_unit_test("Security: rendition list endpoint is group-scoped via GROUP_FIELD")
 def test_rendition_list_group_scoped(opts):
     """FileRendition has no direct `group` FK. Without `GROUP_FIELD` pointing

@@ -5,6 +5,8 @@ negotiation.py proves the rule; this file proves it is actually wired into
 the URLconf and the dispatcher a deployment runs — the unconfigured root, the
 Django handler404, and the dispatcher's own unknown-endpoint 404.
 """
+
+TESTIT_TIER = "extended"
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
 

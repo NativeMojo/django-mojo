@@ -4,6 +4,8 @@ test_llm_rule_thresholds moved to
 tests/test_incident_prompts_extended_serial/test_llm_rule_thresholds.py — it
 mock.patches the shared RuleSet model class in-process (maestro item #1839).
 """
+
+TESTIT_TIER = "extended"
 from testit import helpers as th
 
 

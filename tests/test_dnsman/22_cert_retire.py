@@ -9,6 +9,8 @@ Fixtures use the `certret-` name prefix — NOT `dm-` — so this module's setup
 and `8_rest_permissions.py`'s cleanup can never sweep each other's rows.
 """
 
+TESTIT_TIER = "extended"
+
 from datetime import timedelta
 
 from testit import helpers as th
@@ -285,6 +287,7 @@ def test_retire_covers_disabled_vhost_names(opts):
 # REST: guards mirror remove-failed, eligibility mirrors the dns read gate
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("retire endpoint refuses anonymous and read-only callers")
 def test_retire_endpoint_perms(opts):
     from mojo.apps.dnsman.models import Certificate
@@ -325,6 +328,7 @@ def test_retire_endpoint_perms(opts):
         "the retired certificate row must be deleted")
 
 
+@th.tier("core")
 @th.django_unit_test("retiring a house certificate requires a platform admin")
 def test_retire_house_guard(opts):
     from mojo.apps.dnsman.models import Certificate

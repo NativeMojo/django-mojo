@@ -11,6 +11,8 @@ Test order matters within this module: the anonymous tests run before any
 login so the shared client carries no session.
 """
 
+TESTIT_TIER = "core"
+
 from testit import helpers as th
 
 SLUG = "t937_pub_probe"

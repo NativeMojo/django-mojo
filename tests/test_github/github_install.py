@@ -1,6 +1,8 @@
 """
 Tests for GitHubInstall model — CRUD, secrets, REST permissions.
 """
+
+TESTIT_TIER = "extended"
 from testit import helpers as th
 
 ADMIN_USER = "gh_admin"
@@ -78,6 +80,7 @@ def test_github_install_secrets(opts):
     )
 
 
+@th.tier("core")
 @th.django_unit_test("github install: mojo_secrets excluded from REST output")
 def test_github_install_secrets_not_in_rest(opts):
     resp = opts.client.login(ADMIN_USER, ADMIN_PWORD)
@@ -101,6 +104,7 @@ def test_github_install_admin_list(opts):
     assert resp.response.count >= 1, "Should have at least one install"
 
 
+@th.tier("core")
 @th.django_unit_test("github install: user without github permission gets 403")
 def test_github_install_no_permission(opts):
     resp = opts.client.login(REGULAR_USER, REGULAR_PWORD)

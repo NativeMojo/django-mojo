@@ -22,6 +22,8 @@ locally constructed fake passed through an existing ``client=`` seam, or an
 HTTP request from a user this file created. Nothing is mocked into place.
 """
 
+TESTIT_TIER = "edge"
+
 from types import SimpleNamespace
 from unittest import mock
 
@@ -236,6 +238,7 @@ def test_infrastructure_mode_fails_closed(opts):
 
 # ── the write gate ──────────────────────────────────────────────────────────
 
+@th.tier("core")
 @th.django_unit_test("capacity apply needs a literal superuser, not just manage_aws")
 def test_apply_requires_a_superuser(opts):
     assert opts.client.login(OPERATOR_USERNAME, PASSWORD), \
@@ -272,6 +275,7 @@ def test_apply_requires_a_superuser(opts):
         opts.client.logout()
 
 
+@th.tier("core")
 @th.django_unit_test("both batch endpoints carry the same superuser gate as apply")
 def test_batch_endpoints_carry_the_apply_gate(opts):
     from mojo.apps.aws.rest import capacity as views

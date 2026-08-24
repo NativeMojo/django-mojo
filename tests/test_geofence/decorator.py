@@ -3,6 +3,8 @@
 Per-request X-Mojo-Test-* headers replace th.server_settings() so tests run
 fast and in parallel.
 """
+
+TESTIT_TIER = "core"
 import uuid as _uuid
 from testit import helpers as th
 from tests.test_geofence._helpers import headers, GEO_RU, GEO_US

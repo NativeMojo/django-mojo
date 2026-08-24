@@ -8,6 +8,8 @@ Tests that don't need a runner (permission guards, shape checks) always run.
 Run in your Django project:
     python manage.py testit test_jobs.test_sysinfo
 """
+
+TESTIT_TIER = "slow"
 from testit import helpers as th
 from testit import TestitSkip
 from mojo.helpers.settings import settings
@@ -86,6 +88,7 @@ def test_unpriv_login(opts):
 # Permission guard tests — always run, no runners needed
 # ------------------------------------------------------------------
 
+@th.tier("core")
 @th.unit_test("sysinfo_rest_unauthenticated")
 def test_rest_unauthenticated(opts):
     """Unauthenticated request must be rejected."""
@@ -95,6 +98,7 @@ def test_rest_unauthenticated(opts):
         f"Expected 401 or 403 for unauthenticated request, got {resp.status_code}"
 
 
+@th.tier("core")
 @th.unit_test("sysinfo_rest_forbidden_no_perms")
 def test_rest_forbidden_no_perms(opts):
     """Unprivileged user must be rejected."""

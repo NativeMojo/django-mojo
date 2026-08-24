@@ -8,6 +8,8 @@ occurrence is its own Event row, because flood detection counts rows
 metrics, the LLM's query_event_counts). These tests pin that the false claim
 stays out of the module source and out of the docs that carried it.
 """
+
+TESTIT_TIER = "bug"
 from testit import helpers as th
 
 # Doc files that carried the false dedup claim (repo-root relative).

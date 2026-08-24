@@ -7,6 +7,8 @@ NOT used here: it reaches a separate server process where these patches would
 have no effect, which would silently let a real registrar call through.
 """
 
+TESTIT_TIER = "extended"
+
 from decimal import Decimal
 from unittest import mock
 

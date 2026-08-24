@@ -12,6 +12,8 @@ permissions, and one book + published page + draft page + revision + asset
 per org. Org A also owns a public book (is_public=True) used by the
 public-endpoint tests.
 """
+
+TESTIT_TIER = "core"
 from testit import helpers as th
 
 

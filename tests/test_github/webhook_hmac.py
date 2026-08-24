@@ -5,6 +5,8 @@ Pulled back from tests/test_github_extended_serial/github_app.py via the
 forged-signature refusal runs on every default suite. The settings-read
 variants stay opt-in.
 """
+
+TESTIT_TIER = "core"
 import hashlib
 import hmac
 

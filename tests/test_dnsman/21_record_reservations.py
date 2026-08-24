@@ -1,5 +1,7 @@
 """Durable ACME ownership of complete DNS record-set writes."""
 
+TESTIT_TIER = "extended"
+
 from concurrent.futures import ThreadPoolExecutor, wait
 from importlib import import_module
 from threading import Barrier, Event

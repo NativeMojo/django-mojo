@@ -1,6 +1,8 @@
 """MojoSec sensor and shared-wire-contract tests."""
 
+# Edge-deployment coverage: wholesale `edge` (maestro #2792). Opt-in serial, so
+# its app-local provider mocks are exempt from the cold_budget ratchet.
 TESTIT = {
-    "default_core": True,
-    "cold_budget": 22,
+    "tier": "edge",
+    "serial": True,
 }

@@ -1,5 +1,7 @@
 """Tests for local queue functionality and publish_local function."""
 
+TESTIT_TIER = "extended"
+
 from testit import helpers as th
 import time
 import threading

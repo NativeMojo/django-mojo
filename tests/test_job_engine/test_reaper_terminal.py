@@ -17,6 +17,8 @@ The engine is driven for real here — one pass of `_reaper_loop` against the
 checkout's Redis — because the property under test is a branch inside that
 loop, and a channel nobody else consumes keeps it out of the live engine's way.
 """
+
+TESTIT_TIER = "bug"
 import threading
 import time
 import uuid

@@ -14,6 +14,8 @@ behavioral impact if a finally is missed), everything is restored in finally
 via Setting.remove + decision-cache invalidation, the DB allowlist/127.0.0.1
 are never touched, and no strict=true row is ever persisted.
 """
+
+TESTIT_TIER = "extended"
 from testit import helpers as th
 
 # default-equal valid payloads for every geofence-consumed posture key

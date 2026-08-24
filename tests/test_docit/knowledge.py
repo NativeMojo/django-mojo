@@ -1,3 +1,5 @@
+
+TESTIT_TIER = "extended"
 # The tests that mutate django.conf.settings in-process (EMBEDDINGS_PROVIDER,
 # EMBEDDINGS_DIM, DOCIT_KB_RECONCILE_ENABLED, DOCIT_KB_MAX_DISTANCE) moved to
 # tests/test_docit_extended_serial/knowledge.py (maestro item #1839):

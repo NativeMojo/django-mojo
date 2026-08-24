@@ -1,3 +1,5 @@
+
+TESTIT_TIER = "extended"
 from testit import helpers as th
 
 
@@ -187,6 +189,7 @@ def test_fanout_permission_member_succeeds(opts):
     assert sum(series) == 4, f"Expected sum 4, got {sum(series)}: {series}"
 
 
+@th.tier("core")
 @th.unit_test()
 def test_fanout_permission_outsider_denied(opts):
     from mojo.apps.account.models import User, Group
