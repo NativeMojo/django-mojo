@@ -328,6 +328,90 @@ def _load_default_preset(test_root):
     return DEFAULT_PRESET
 
 
+# The __init__.py a `testit --init` package starts from (maestro #2793). The
+# comment block is the whole point — it teaches the buckets and the
+# parallel-safety contract at the moment a consumer creates their first package.
+_INIT_PACKAGE_TEMPLATE = '''\
+"""Tests for <describe this package>.
+
+testit groups tests into BUCKETS and runs a named PRESET (a set of buckets):
+
+    core       - the fast baseline every consumer runs (a bare `bin/run_tests`).
+                 Strictest isolation: no shared-state mutation, parallel-safe,
+                 cold_budget 0. Keep it small and green.
+    framework  - the rest of your critical, parallel-safe tests.
+    bug        - one isolated regression per fixed bug.
+    extended / admin / edge / slow - opt-in buckets, run only when selected.
+
+A consumer's bare `bin/run_tests` selects the preset named by "default_preset"
+in apps/tests/testit.json (set to "framework" by --init, so a bare run always
+runs something). `--tier framework` and `--tier all` widen the selection.
+
+Parallel-safety contract for core/framework packages: a test may not mutate
+process-wide state shared with other packages (django settings, os.environ, the
+mojo.helpers.* singletons, protected Setting rows) while it runs in the parallel
+ring. If a test must mutate shared state, give the package its own opt-in bucket
+and mark it serial:  TESTIT = {"tier": "extended", "serial": True}
+
+Consumer test runners do NOT flush the database or Redis between runs, so every
+setup function must delete its own rows before it creates them.
+
+(Tiers arrived in django-mojo's testit with the #2783 epic. On an older
+django-mojo this dict merges harmlessly and the package runs by default.)
+"""
+
+TESTIT = {"tier": "core", "cold_budget": 0}
+'''
+
+# The starter apps/tests/testit.json --init writes when none exists. A consumer
+# whose packages are all framework-bucket needs default_preset=framework so a
+# bare run selects something after the #2792 flip to the core baseline.
+_INIT_TESTIT_JSON = {"budgets": {"core": 30}, "default_preset": "framework"}
+
+
+def _scaffold_init(package_name, root=None):
+    """Scaffold a testit package under the app test root
+    (apps/tests/<package_name>/) plus a starter apps/tests/testit.json, then
+    return 0 without running tests — the `--init` command (maestro #2793).
+
+    Idempotent: it never overwrites an existing file, only fills in what is
+    missing, and creates the apps/tests directory chain if absent. `root`
+    overrides the app test root (for tests); the CLI passes the real TEST_ROOT.
+    """
+    root = str(TEST_ROOT) if root is None else str(root)
+    pkg_dir = os.path.join(root, package_name)
+    init_path = os.path.join(pkg_dir, "__init__.py")
+    json_path = os.path.join(root, "testit.json")
+
+    os.makedirs(pkg_dir, exist_ok=True)
+
+    wrote, skipped = [], []
+    if os.path.exists(init_path):
+        skipped.append(init_path)
+    else:
+        with open(init_path, "w", encoding="utf-8") as fh:
+            fh.write(_INIT_PACKAGE_TEMPLATE)
+        wrote.append(init_path)
+
+    if os.path.exists(json_path):
+        skipped.append(json_path)
+    else:
+        with open(json_path, "w", encoding="utf-8") as fh:
+            json.dump(_INIT_TESTIT_JSON, fh, indent=2)
+            fh.write("\n")
+        wrote.append(json_path)
+
+    for path in wrote:
+        print(f"  created {path}")
+    for path in skipped:
+        print(f"  exists, left untouched: {path}")
+    print(
+        f"\n  Scaffolded the `{package_name}` testit package (tier=core). Add\n"
+        f"  test files named test_*.py with @th.django_unit_test() functions,\n"
+        f"  then run:  ./bin/run_tests -t {package_name}")
+    return 0
+
+
 # Whole-suite wall-clock budgets per preset (seconds), overridable in
 # tests/testit.json {"budgets": {...}} and scaled by TESTIT_BUDGET_SCALE for
 # slow machines (maestro #2790).
@@ -785,6 +869,10 @@ def setup_parser(argv=None):
                              "default_preset).")
     parser.add_argument("--all", action="store_true",
                         help="Run every tier (same as --tier all)")
+    parser.add_argument("--init", dest="init_package", metavar="PACKAGE",
+                        default=None,
+                        help="Scaffold apps/tests/<PACKAGE>/ and a starter "
+                             "apps/tests/testit.json, then exit (no tests run)")
     # Compatibility only: old commands keep running the ordinary default
     # suite, but the retired spelling no longer selects opt-in tiers or appears
     # in help.
@@ -2021,6 +2109,11 @@ def _count_record_tests(record):
 def main(opts):
     """Main function to run tests."""
     global display_ref
+
+    # `--init` scaffolds a test package and exits — no lock, server or DB
+    # needed (maestro #2793).
+    if getattr(opts, "init_package", None):
+        return _scaffold_init(opts.init_package)
 
     # Acquire run lock to prevent concurrent test runs
     acquired, lock_info = _acquire_lock()
