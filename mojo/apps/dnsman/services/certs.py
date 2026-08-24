@@ -583,6 +583,73 @@ def remove_superseded_failures(certificate):
             f"certificate {certificate.pk}: {err}")
 
 
+def _delegated_quorum_query(target_name, digests, dns_probe=None):
+    """Build a ``probe.wait_for_txt(query=...)`` seam demanding a MAJORITY.
+
+    The hub no longer blocks its HTTP reply on Route53 reporting INSYNC, and the
+    change id never crosses the federation wire, so the downstream cannot
+    reproduce that gate directly. A plain ``query_txt`` is not a replacement:
+    it pins a resolver to the authority list and dnspython answers from the
+    FIRST nameserver that responds, and ``wait_for_txt`` returns on the first
+    satisfying poll — together that proves one edge has the value, not a
+    meaningful share of them.
+
+    So every authoritative address is queried individually, and the denominator
+    is FIXED at discovery time. A nameserver that errors or times out counts
+    AGAINST the quorum: "a majority of the servers that answered" would let one
+    surviving authority satisfy the gate during exactly the outage the gate
+    exists to catch.
+
+    Returns ``(query, state)``; ``state`` carries the last observation
+    (``total``, ``serving``, ``seen``) for the caller's failure message.
+    """
+    from mojo.helpers.dns import probe
+
+    dns = dns_probe or probe
+    expected = set(digests)
+    state = objict(total=None, serving=0, seen=[], addresses=[])
+
+    def query(fqdn):
+        if not state.addresses:
+            found = dns.find_zone_nameservers(target_name)
+            addresses = []
+            if not found.error:
+                addresses = list(dns.resolve_nameserver_addresses(
+                    found.nameservers or []) or [])
+            state.total = len(addresses)
+            if not addresses:
+                # Fail closed and fast. The denominator is fixed once, so
+                # polling an empty authority set would only burn the budget.
+                raise me.ValueException(
+                    "The delegated ACME target zone published no authoritative "
+                    "nameservers to verify the challenge against")
+            state.addresses = addresses
+
+        serving = 0
+        seen = set()
+        for address in state.addresses:
+            try:
+                result = dns.query_txt(fqdn, nameservers=[address])
+            except Exception:
+                continue
+            if result.error is not None:
+                continue
+            values = set(result.txt_values or [])
+            seen.update(values)
+            if expected.issubset(values):
+                serving += 1
+        state.serving = serving
+        state.seen = sorted(seen)
+        if serving > state.total // 2:
+            return objict(txt_values=sorted(expected | seen), error=None)
+        # Short of quorum. `wait_for_txt` applies a SUBSET check, so reporting
+        # what the minority served would let 2-of-4 through; report nothing and
+        # leave the real observation on `state` for the failure message.
+        return objict(txt_values=[], error=None)
+
+    return query, state
+
+
 def _publish_delegated_challenges(row, challenges, wait_for_txt=None):
     from mojo.apps.dnsman.models import AcmeDelegation
     from mojo.apps.dnsman.services import acme_hub_client, delegation
@@ -609,12 +676,14 @@ def _publish_delegated_challenges(row, challenges, wait_for_txt=None):
     result = acme_hub_client.publish(
         str(row.client_ref), challenge_ref, digests)
     delegation.compare_challenge_result(row, result, challenge_ref)
-    ok, seen = wait_for_txt(row.target_name, digests)
+    query, quorum = _delegated_quorum_query(row.target_name, digests)
+    ok, unused = wait_for_txt(row.target_name, digests, query=query)
     if not ok:
         raise me.ValueException(
-            f"Timed out waiting for the delegated ACME target to publish "
-            f"{len(digests)} challenge value(s); saw "
-            f"{len(list(seen or []))} value(s)")
+            f"Timed out waiting for a majority of the delegated ACME target's "
+            f"{quorum.total} authoritative nameserver(s) to serve "
+            f"{len(digests)} challenge value(s); {quorum.serving} served them "
+            f"and the authority set served {len(quorum.seen)} value(s)")
     return challenge_ref
 
 
