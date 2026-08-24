@@ -530,11 +530,25 @@ reasoning: [edge README](../edge/README.md#settings),
 - `EDGE_RELEASE_FETCH_BUDGET` — **file-only** (`settings.get_static`), int
   seconds, default `300`. Wall-clock ceiling for one release's fetch; the
   remainder is left for the next converge, which resumes by hash.
-- `EDGE_DEPLOY_SCRIPT` — **file-only** (`settings.get_static`, `kind="list"`),
-  **no default**. The update-script argv, e.g.
-  `["sudo", "-n", "/opt/api/aws/update.sh"]`. This must name the executable,
-  project-owned script exported by `python3 -m mojo.deploy export-scripts`;
-  unset means this node refuses to deploy rather than guess a path.
+- `EDGE_DEPLOY_SCRIPT` — **file-only** (`settings.get_static`, `kind="list"`).
+  Its default is the permanent packaged locator:
+
+  ```python
+  ["sudo", "-n", "bash", "-c",
+   'exec bash "$(python3 -m mojo.deploy locate update.sh)" "$@"',
+   "django-mojo-update"]
+  ```
+
+  This settings-free endpoint needs no project script. Override the complete
+  argv when the project already points at a small shim, e.g.
+  `["sudo", "-n", "/opt/api/aws/update.sh"]`; a shim that uses the same
+  locator remains supported and receives framework fixes automatically.
+- `EDGE_DEPLOY_NODE_TYPE` — **file-only** (`settings.get_static`), default
+  `api`. `api` uses the built-in migration/nginx/API lifecycle; reserved `code`
+  performs only checkout and dependency installation; another valid lowercase
+  name selects `aws/deploy/<type>.sh`. Values are 1–32 lowercase letters,
+  digits, dashes or underscores and must begin with a letter. API nodes consume
+  the `edge` job channel; non-API nodes consume `platform-deploy`.
 - `EDGE_DEPLOY_BRANCH` — **file-only** (`settings.get_static`), default `main`.
   Only pushes to `refs/heads/<this>` start a deploy.
 - `EDGE_DEPLOY_CANARY_TIMEOUT` — **file-only** (`settings.get_static`), int

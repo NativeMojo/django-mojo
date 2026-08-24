@@ -110,6 +110,11 @@ converge return the same version plus the serialized `deployment`. A deployment
 contains its UUID, SHA, source, status, frozen runner roster, bounded
 transitions and latest-per-runner evidence, desired/current commits, and
 timing. It never contains a raw idempotency key or provider exception.
+The frozen roster is the union of live API (`edge`) and specialized
+(`platform-deploy`) runners; deployment is refused if that union has no API
+runner. Typed node observations carry `detail.node_type` (`api`, `code`, or a
+custom profile name), so clients should not assume every roster member runs
+Django or nginx.
 
 Each `items[]` deployment additionally carries (additive, item 2225):
 

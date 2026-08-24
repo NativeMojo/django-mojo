@@ -52,7 +52,10 @@ lease, orchestrator and node job payloads, update-script argv,
 is never attempt identity: a late callback for an older attempt is refused even
 when a newer attempt deploys the same SHA.
 
-The row freezes only live runners advertising the `edge` channel. It stores
+The row freezes the union of live API runners advertising `edge` and live
+specialized runners advertising `platform-deploy` (128 unique runners max),
+with the API subset retained in `detail.api_roster`. A runner on both channels
+is API, and an attempt with no API runner fails before deployment. It stores
 bounded transitions, one latest sanitized observation per frozen runner
 (`node_evidence`), and the append-only, bounded `diagnosis` journal (item
 2225): the terminal failure per runner with its phase, `rollback_to` target
