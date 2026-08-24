@@ -280,9 +280,12 @@ def test_ambiguous_write_is_sweep_recoverable(opts):
     assert lease.record_values == ["digest-a"], "the durable desired value must survive the crash"
 
     recovered = []
+    # The sweeper confirms before it writes, so it needs an injected probe:
+    # without one it would do a live lookup of the opaque target, and a
+    # deliberate mismatch is what keeps the recovery write on the tested path.
     with mock.patch.object(acme_hub, "_write_exact", lambda row, values, **kwargs: recovered.append(list(values))), \
             mock.patch.object(acme_hub, "_audit"):
-        result = acme_hub.sweep()
+        result = acme_hub.sweep(dns_probe=FakeProbe(txt=["digest-stale"]))
     lease.refresh_from_db()
     assert result.errors == 0 and result.reconciled == 1, f"sweeper should recover intent, got {result}"
     assert lease.state == "active", "recovered pending lease should become active"
@@ -314,12 +317,16 @@ def test_reconcile_snapshot_does_not_ack_late_lease(opts):
 
     with mock.patch.object(acme_hub, "_write_exact", side_effect=write_with_crash_window), \
             mock.patch.object(acme_hub, "_audit"):
-        acme_hub.reconcile(allocation)
+        # A deliberate mismatch: reconcile() confirms first, and a matching
+        # probe would skip the write entirely and leave this invariant untested.
+        acme_hub.reconcile(allocation, dns_probe=FakeProbe(txt=["digest-mismatch"]))
 
     original.refresh_from_db()
     late[0].refresh_from_db()
-    assert original.state == "active" and original.reconciled_at is not None, \
+    assert original.state == "active", \
         "the lease included in the exact provider write should be acknowledged"
+    assert original.reconciled_at is None, \
+        "a submitted write is not a confirmed one — reconciled_at belongs to a probe match"
     assert late[0].state == "pending" and late[0].reconciled_at is None, \
         "a lease outside the write snapshot must remain pending for the sweeper"
 
@@ -336,9 +343,13 @@ def test_sweeper_expires_stale_lease(opts):
         record_values=["digest-expired"], state="active",
         expires_at=dates.subtract(seconds=1), reconciled_at=dates.utcnow())
     writes = []
+    # The probe must report a stale NON-EMPTY value.  An empty answer is
+    # exactly what an already-cleared target returns (NXDOMAIN -> error=None,
+    # no values), which the sweeper correctly confirms as a match and skips —
+    # and this test would then assert nothing at all.
     with mock.patch.object(acme_hub, "_write_exact", lambda row, values, **kwargs: writes.append(list(values))), \
             mock.patch.object(acme_hub, "_audit"):
-        result = acme_hub.sweep()
+        result = acme_hub.sweep(dns_probe=FakeProbe(txt=["digest-expired"]))
     lease.refresh_from_db()
     assert result.expired == 1, f"expected one expired lease, got {result}"
     assert lease.state == "expired", "stale lease must be retired durably"

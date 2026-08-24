@@ -11,7 +11,6 @@ import time
 from contextlib import contextmanager
 
 from django.db import connection, transaction, IntegrityError
-from django.db.models import Q
 from objict import objict
 
 from mojo import errors as me
@@ -44,14 +43,6 @@ def ttl():
 
 def lease_seconds():
     return _bounded_static("DNSMAN_ACME_HUB_LEASE_SECONDS", 900, 60, 86400)
-
-
-def propagation_timeout():
-    return _bounded_static("DNSMAN_ACME_HUB_PROPAGATION_TIMEOUT", 300, 5, 900)
-
-
-def propagation_interval():
-    return _bounded_static("DNSMAN_ACME_HUB_PROPAGATION_INTERVAL", 5, 1, 30)
 
 
 def _reference(value, label):
@@ -236,80 +227,100 @@ def _desired_values(allocation):
     return _desired_snapshot(allocation)[0]
 
 
-def _wait_change(change_id, deadline, *, route53_client=None):
-    client = route53_client or route53
-    if not change_id:
-        return
-    while True:
-        if client.get_change(change_id).insync:
-            return
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise me.ValueException("ACME hub Route53 reconciliation timed out", code=503, status=503)
-        time.sleep(min(propagation_interval(), remaining))
+def _confirm_exact(allocation, values, *, dns_probe=None):
+    """Tri-state read of what the authority currently serves at the target.
 
-
-def _wait_exact_txt(name, expected, deadline, *, dns_probe=None):
+    Deliberately NOT a boolean.  `probe.query_txt` reports NXDOMAIN and NoAnswer
+    as `error=None` with an empty value list, so an empty desired set confirms
+    cleanly and only a genuine lookup failure sets `error`.  Folding that
+    failure into "mismatch" would make a resolver outage issue a Route53 write
+    for EVERY candidate allocation on every five-minute sweep — a self-inflicted
+    write storm against an API throttled at roughly five requests a second.
+    """
     dns = dns_probe or probe
-    expected = set(expected)
-    while True:
-        result = dns.query_txt(name)
-        if result.error is None and set(result.txt_values) == expected:
-            return
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise me.ValueException("ACME hub authoritative visibility timed out", code=503, status=503)
-        time.sleep(min(propagation_interval(), remaining))
+    try:
+        result = dns.query_txt(allocation.target_name)
+    except Exception:
+        return "unknown"
+    if result.error is not None:
+        return "unknown"
+    if set(result.txt_values or []) == set(values):
+        return "match"
+    return "mismatch"
 
 
 def _write_exact(allocation, values, *, route53_client=None, dns_probe=None):
+    """Submit the exact RRset to Route53 and return once the API accepts it.
+
+    There is deliberately no convergence wait here.  Issuance never runs on an
+    HTTP request — the downstream calls this through a 30s-read-timeout wire —
+    so a hub-side propagation wait could never be satisfied before the caller
+    gave up.  The downstream owns the propagation gate on its own job worker.
+    """
     client = route53_client or route53
     _stored_zone(allocation, route53_client=route53_client, dns_probe=dns_probe)
-    deadline = time.monotonic() + propagation_timeout()
-    change_id = None
     if values:
-        change_id = client.upsert_record(
+        client.upsert_record(
             allocation.allocation_zone_id, "TXT", allocation.target_name,
             values, ttl=ttl(), zone_name=allocation.allocation_zone_name,
             comment="django-mojo ACME delegation hub reconciliation")
-    else:
-        current = None
-        for record in client.list_records(allocation.allocation_zone_id):
-            if record.type == "TXT" and record.name == allocation.target_name:
-                current = record
-                break
-        if current is not None:
-            change_id = client.delete_record(
-                allocation.allocation_zone_id, "TXT", allocation.target_name,
-                values=current.record_values, ttl=current.ttl,
-                zone_name=allocation.allocation_zone_name,
-                comment="django-mojo ACME delegation hub reconciliation")
-    _wait_change(change_id, deadline, route53_client=route53_client)
-    _wait_exact_txt(
-        allocation.target_name, values, deadline, dns_probe=dns_probe)
+        return
+    current = None
+    for record in client.list_records(allocation.allocation_zone_id):
+        if record.type == "TXT" and record.name == allocation.target_name:
+            current = record
+            break
+    if current is not None:
+        client.delete_record(
+            allocation.allocation_zone_id, "TXT", allocation.target_name,
+            values=current.record_values, ttl=current.ttl,
+            zone_name=allocation.allocation_zone_name,
+            comment="django-mojo ACME delegation hub reconciliation")
 
 
 def _reconcile_locked(allocation, request=None, audit_kind="reconciled",
-                      *, route53_client=None, dns_probe=None):
-    """Reconcile one snapshot while the caller holds the allocation lock."""
-    values, snapshot_ids, pending_ids = _desired_snapshot(allocation)
-    try:
-        _write_exact(
-            allocation, values,
-            route53_client=route53_client, dns_probe=dns_probe)
-    except Exception as exc:
-        AcmeHubChallengeLease.objects.filter(pk__in=snapshot_ids).update(
-            last_error=type(exc).__name__, reconciled_at=None)
-        _audit(allocation, request, "provider_failure", count=len(values), level="error")
-        if isinstance(exc, me.MojoException):
-            raise
-        raise me.ValueException("ACME hub provider reconciliation failed", code=503, status=503)
+                      confirm=False, *, route53_client=None, dns_probe=None):
+    """Reconcile one snapshot while the caller holds the allocation lock.
 
-    now = dates.utcnow()
+    `confirm=True` (the sweeper) probes the authority first and writes only on a
+    real mismatch.  `confirm=False` (publish/withdraw) always writes: the caller
+    just changed durable intent and has nothing to confirm against.
+    """
+    values, snapshot_ids, pending_ids = _desired_snapshot(allocation)
+    verdict = "mismatch"
+    if confirm:
+        verdict = _confirm_exact(allocation, values, dns_probe=dns_probe)
+        if verdict == "unknown":
+            # Could not read the authority.  Leave reconciled_at NULL so the
+            # next pass retries, and write nothing.
+            _audit(allocation, request, "reconcile_deferred", count=len(values))
+            return values
+
+    if verdict == "mismatch":
+        try:
+            _write_exact(
+                allocation, values,
+                route53_client=route53_client, dns_probe=dns_probe)
+        except Exception as exc:
+            AcmeHubChallengeLease.objects.filter(pk__in=snapshot_ids).update(
+                last_error=type(exc).__name__, reconciled_at=None,
+                modified=dates.utcnow())
+            _audit(allocation, request, "provider_failure", count=len(values), level="error")
+            if isinstance(exc, me.MojoException):
+                raise
+            raise me.ValueException("ACME hub provider reconciliation failed", code=503, status=503)
+
     AcmeHubChallengeLease.objects.filter(pk__in=pending_ids).update(
-        state=STATE_ACTIVE, reconciled_at=now, last_error=None)
+        state=STATE_ACTIVE, last_error=None)
     AcmeHubChallengeLease.objects.filter(pk__in=snapshot_ids).update(
-        reconciled_at=now, last_error=None)
+        last_error=None)
+    # INVARIANT: reconciled_at is stamped ONLY on a confirmed probe match.
+    # Stamping it after a successful write would degrade the field to "a write
+    # was submitted once", which is exactly the signal the sweeper needs to
+    # distinguish from "the authority actually serves this".
+    if verdict == "match":
+        AcmeHubChallengeLease.objects.filter(pk__in=snapshot_ids).update(
+            reconciled_at=dates.utcnow())
     _audit(allocation, request, audit_kind, count=len(values))
     return values
 
@@ -319,7 +330,7 @@ def reconcile(allocation, request=None, audit_kind="reconciled",
     """Replace the target RRset with the union of all durable live leases."""
     with _allocation_lock(allocation.pk):
         return _reconcile_locked(
-            allocation, request=request, audit_kind=audit_kind,
+            allocation, request=request, audit_kind=audit_kind, confirm=True,
             route53_client=route53_client, dns_probe=dns_probe)
 
 
@@ -358,6 +369,7 @@ def _persist_publish_lease(allocation, challenge_ref, values):
 
 def publish(group, client_ref, challenge_ref, values, request=None,
             *, route53_client=None, dns_probe=None):
+    started = time.monotonic()
     dns = dns_probe or probe
     allocation = _allocation_for(group, client_ref)
     challenge_ref = _reference(challenge_ref, "challenge_ref")
@@ -371,14 +383,22 @@ def publish(group, client_ref, challenge_ref, values, request=None,
     with _allocation_lock(allocation.pk):
         lease = _persist_publish_lease(allocation, challenge_ref, values)
         desired = _reconcile_locked(
-            allocation, request=request, audit_kind="published",
+            allocation, request=request, audit_kind="published", confirm=False,
             route53_client=route53_client, dns_probe=dns_probe)
     lease.refresh_from_db()
+    # The request path no longer waits for propagation, but it is not free: a
+    # one-hop CNAME proof, a zone revalidation and one Route53 call, each probe
+    # query bounded at 5s with no total budget. Log the real number so a
+    # downstream read-timeout regression is visible from the hub side.
+    logger.info(
+        f"ACME hub publish allocation={allocation.pk} "
+        f"values={len(desired)} elapsed={time.monotonic() - started:.3f}s")
     return objict(allocation=allocation, lease=lease, active_value_count=len(desired))
 
 
 def withdraw(group, client_ref, challenge_ref, request=None,
              *, route53_client=None, dns_probe=None):
+    started = time.monotonic()
     allocation = _allocation_for(group, client_ref)
     challenge_ref = _reference(challenge_ref, "challenge_ref")
     with _allocation_lock(allocation.pk):
@@ -396,25 +416,64 @@ def withdraw(group, client_ref, challenge_ref, request=None,
 
         if changed:
             desired = _reconcile_locked(
-                allocation, request=request, audit_kind="withdrawn",
+                allocation, request=request, audit_kind="withdrawn", confirm=False,
                 route53_client=route53_client, dns_probe=dns_probe)
         else:
             desired = _desired_values(allocation)
             _audit(allocation, request, "withdrawn", count=len(desired))
+    logger.info(
+        f"ACME hub withdraw allocation={allocation.pk} "
+        f"values={len(desired)} elapsed={time.monotonic() - started:.3f}s")
     return objict(allocation=allocation, active_value_count=len(desired))
 
 
+def _sweep_candidates(limit, now):
+    """Allocation ids owed a sweep, most urgent first, bounded by `limit`.
+
+    `.order_by()` is load-bearing.  `AcmeHubChallengeLease.Meta.ordering` puts
+    `created` in the SELECT, which makes a bare `.distinct()` a no-op — the
+    limit would then bound LEASES, not allocations.  That was tolerable while
+    only rare failures reached this queue; now that every publish and every
+    withdrawal lands here unconfirmed, it is not.
+
+    Three arms, each taking only what the previous left of the budget:
+
+      1. leases past `expires_at` — still published, so they are retired first
+         and a burst of freshly published allocations can never crowd them out;
+      2. unconfirmed intent that has not failed;
+      3. unconfirmed intent whose last attempt failed — still retried, but only
+         behind every healthy allocation, so an allocation whose hosted zone has
+         been invalidated (it raises 503 on every attempt) cannot hold the head
+         of the queue forever.
+    """
+    leases = AcmeHubChallengeLease.objects.order_by()
+
+    def take(queryset, budget, seen):
+        if budget <= 0:
+            return []
+        return list(queryset.exclude(allocation_id__in=seen).values_list(
+            "allocation_id", flat=True).distinct()[:budget])
+
+    seen = set()
+    ids = take(leases.filter(
+        state__in=[STATE_PENDING, STATE_ACTIVE], expires_at__lte=now),
+        limit, seen)
+    seen.update(ids)
+    unconfirmed = leases.filter(reconciled_at__isnull=True)
+    for arm in (unconfirmed.filter(last_error__isnull=True),
+                unconfirmed.filter(last_error__isnull=False)):
+        found = take(arm, limit - len(ids), seen)
+        ids.extend(found)
+        seen.update(found)
+    return ids
+
+
 def sweep(limit=None, *, route53_client=None, dns_probe=None):
-    """Expire stale leases and retry every allocation with uncommitted intent."""
+    """Expire stale leases and confirm or repair every allocation's RRset."""
     if limit is None:
         limit = _bounded_static("DNSMAN_ACME_HUB_SWEEP_LIMIT", 100, 1, 1000)
     now = dates.utcnow()
-    allocation_ids = list(AcmeHubChallengeLease.objects.filter(
-        Q(
-            state__in=[STATE_PENDING, STATE_ACTIVE],
-            expires_at__lte=now)
-        | Q(reconciled_at__isnull=True)
-    ).values_list("allocation_id", flat=True).distinct()[:limit])
+    allocation_ids = _sweep_candidates(limit, now)
     expired = 0
     reconciled = 0
     errors = 0
@@ -431,10 +490,20 @@ def sweep(limit=None, *, route53_client=None, dns_probe=None):
                 expired += expired_here
                 kind = "expired" if expired_here else "reconciled"
                 _reconcile_locked(
-                    allocation, audit_kind=kind,
+                    allocation, audit_kind=kind, confirm=True,
                     route53_client=route53_client, dns_probe=dns_probe)
                 reconciled += 1
         except Exception:
             errors += 1
             logger.exception(f"ACME hub sweep failed for allocation {allocation.pk}")
-    return objict(expired=expired, reconciled=reconciled, errors=errors)
+    # Allocations this pass touched whose authority still does not serve their
+    # exact desired RRset.  Nothing raises for these any more, so this count is
+    # the only signal that propagation is stuck somewhere.
+    unconfirmed = AcmeHubChallengeLease.objects.filter(
+        allocation_id__in=allocation_ids,
+        state__in=[STATE_PENDING, STATE_ACTIVE],
+        reconciled_at__isnull=True).order_by().values_list(
+            "allocation_id", flat=True).distinct().count()
+    return objict(
+        expired=expired, reconciled=reconciled, errors=errors,
+        unconfirmed=unconfirmed)
