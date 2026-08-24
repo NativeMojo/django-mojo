@@ -1,13 +1,8 @@
 """The packaged node scripts, exercised by their shell harnesses.
 
-Each harness under tests/test_deploy_scripts/harness/ runs the REAL packaged
-script (mojo/deploy/scripts/*.sh, or `python3 -m mojo.deploy.certbot_sync`) in
-a throwaway PROJ_PATH with every external command stubbed onto PATH —
-orderings, absences and file placement are asserted there, in shell, where the
-subject lives. This module is the testit face: one test per harness, surfacing
-the harness's own pass/fail tail when it breaks. Opt-in `slow` since maestro
-#2789 (~100s of wall clock); the `bash -n` parse gate stayed default-tier in
-tests/test_deploy/scripts_parse.py.
+The remaining harnesses exercise certificate sync and provisioning in a
+throwaway project with external commands stubbed on PATH. The project-owned
+deployment scripts have focused coverage in `bootstrap_regression.py`.
 
 The harnesses live INSIDE this package (not a sibling tests/ directory) so
 testit never lists a phantom zero-test module for them.
@@ -40,23 +35,6 @@ def _assert_harness_green(done, name):
     th.assert_eq(done.returncode, 0,
                  f"{name} must pass — its own report tail:\n{tail}\n"
                  f"stderr: {done.stderr[-2000:]}")
-
-
-@th.django_unit_test()
-def test_update_sh_harness(opts):
-    """Orderings and absences of the packaged update.sh: report-before-
-    rollback, the engine restart last and under the engine's own user, flock
-    modes, SANITY_URL default + override."""
-    _assert_harness_green(_run_harness("test_update_sh.sh"), "test_update_sh.sh")
-
-
-@th.django_unit_test()
-def test_post_deploy_sh_harness(opts):
-    """The packaged post_deploy.sh pipeline: render into var/deploy, install
-    substituted, collision/override policy, node_retired.conf, input
-    overrides, self-snapshot, die-loudly."""
-    _assert_harness_green(_run_harness("test_post_deploy_sh.sh"),
-                          "test_post_deploy_sh.sh")
 
 
 @th.django_unit_test()

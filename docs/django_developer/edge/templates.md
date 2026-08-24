@@ -110,8 +110,9 @@ generations/<gen>/
                             includes staging/, never the real trees)
 ```
 
-`/etc/nginx/nginx.conf` on a node shrinks to a **provision-time bootstrap** —
-written once by skeleton provisioning, never by this code:
+`/etc/nginx/nginx.conf` on a node is the project's small bootstrap. The
+project-owned `aws/post_deploy.sh` reinstalls the repository copy on each
+deployment and accepts it only after the real `nginx -t`:
 
 ```nginx
 # /etc/nginx/nginx.conf — bootstrap. The app owns everything under current/.
@@ -131,7 +132,6 @@ http {
         ''      close;
     }
 
-    include /etc/nginx/conf.d/00_django_mojo_runtime[.]conf;
     include /opt/api/var/edge/current/http.d/*.conf;
     include /opt/api/var/edge/current/conf.d/*.conf;
 }
@@ -150,14 +150,6 @@ Notes that bite:
   nothing. Owned only by the rendered base, such a node could not start nginx
   until it had converged, and could not converge without serving. Owned here,
   day 0 works and a hybrid node is possible at all.
-- **The runtime include is glob-bracketed on purpose.**
-  `00_django_mojo_runtime[.]conf` is a one-file glob, so it matches when the
-  root deploy render has installed the fragment and matches *nothing* — rather
-  than `[emerg]`-ing on a missing file — before the first converged deploy.
-  Without this line `post_deploy.sh` FATALs at
-  `nginx runtime activation failed (... exactly once; got 0)`: the fragment is
-  installed and correct, the active graph simply never reads it. That error now
-  names the fragment path and this include.
 - **Day-0 is safe**: before the first converge, `current/` does not exist
   and both globs match nothing — nginx still starts. If the load balancer
   deliberately exposes HTTP and needs an answer before the first converge,
@@ -173,12 +165,8 @@ Notes that bite:
 - **A bootstrap that predates the map is healed, not required.** Exactly one
   `$connection_upgrade` declaration may exist per graph, and two mechanisms
   keep that true on nodes provisioned before this contract (their bootstrap
-  declares no map, so a map-less generation can never activate — the
-  `api-wmwx-stage` wedge). First, the deploy-owned runtime fragment
-  (`00_django_mojo_runtime.conf`) carries the map whenever nothing else in
-  the graph declares it, decided at every root deploy and re-decided after
-  the project nginx.conf installs (`mojo/deploy/nginx_runtime.py`). Second,
-  the installer probes with the REAL `nginx -t`: an
+  declares no map, so a map-less generation can never activate). The Edge
+  installer probes with the real `nginx -t`: an
   `unknown "connection_upgrade" variable` verdict re-stages the generation
   with `carry_upgrade_map` — the base declares the map, the harness yields
   it, and the variant lands in its **own** generation directory
@@ -209,13 +197,13 @@ is still the real config, real ports included, after the swap — see README's
 install sequence. In HTTPS-only mode the HTTP staged port is not resolved or
 validated, so an obsolete value cannot block a DNS-01-only generation.
 
-Those five names come from `mojo.deploy.nginx_runtime.TEMP_PATHS`, the same
-mapping that renders the persistent global production fragment. The installer
-creates every scratch leaf before the unprivileged check. Never copy the
-directive list into an Edge template: a missing leaf recreates staging-only
-validation drift, while a duplicate at HTTP context makes nginx refuse the
-generation. Production spill ownership is converged by the root deploy render,
-not by the app-owned Edge installer.
+Those five names come from `mojo.deploy.nginx_runtime.TEMP_PATHS`. The
+installer creates every scratch leaf before the unprivileged staged check.
+Never copy the directive list into an Edge template: a missing leaf recreates
+staging-only validation drift, while a duplicate at HTTP context makes nginx
+refuse the generation. Production nginx scratch paths remain the project's or
+nginx's own configuration; deploy rendering no longer creates a privileged
+runtime fragment.
 
 ## Node prerequisites (1.6.0)
 
@@ -233,12 +221,7 @@ app writes:
   `current/http.d/*.conf` then `current/conf.d/*.conf` (the ~12-line form
   above). Without them the node converges silently and serves nothing — the
   failure mode described under "Notes that bite". **Keep both globs exactly
-  this shape — non-recursive.**
-- **The framework runtime include.** The same http block must carry
-  `include /etc/nginx/conf.d/00_django_mojo_runtime[.]conf;`. This one is not
-  silent: without it every `post_deploy.sh` run FATALs at nginx runtime
-  activation, because the persistent spill fragment the root deploy render
-  installs is never read by the active config. `staging/` lives inside the directory
+  this shape — non-recursive.** `staging/` lives inside the directory
   `current` points at; a broadened glob (`current/*/*.conf`) would make the
   root nginx serve a full duplicate of every vhost on the staged ports, and
   nothing would flag it — a different addr:port raises no

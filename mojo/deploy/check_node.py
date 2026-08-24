@@ -80,11 +80,11 @@ SECTIONS = (
     "certs", "config_plane", "shims", "legacy", "var_ownership", "jobs",
 )
 
-# The project files the shim contract defines. Each is expected to be a thin
-# shim delegating to mojo.deploy; a full copy is a fork that stops receiving
-# framework fixes.
+# The two deployment scripts are project-owned, so a broken installed
+# framework cannot prevent its own replacement. The Python utilities remain
+# thin package shims.
+PROJECT_SCRIPTS = ("aws/update.sh", "aws/post_deploy.sh")
 SHIM_FILES = (
-    "aws/update.sh", "aws/post_deploy.sh",
     "aws/certbot_sync.py", "aws/check_node.py",
 )
 
@@ -1745,62 +1745,58 @@ def check_config_plane(report, run, proj, app_user, web_user):
 # shims
 # ---------------------------------------------------------------------------
 
-def _check_update_executable(report, run, path, grade):
-    """`aws/update.sh` is exec'd directly by the fleet deploy plane, so its
-    mode is a deploy contract, not a detail. A shim committed without the
-    execute bit fails on EVERY node at once, identically, and the mode has to
-    be committed — a local chmod is lost on the next clean checkout.
-
-    `aws/post_deploy.sh` is deliberately exempt: update.sh invokes it as
-    `sudo bash <path>`, which does not need the bit."""
-    st = stat_of(run, path)
-    try:
-        bits = int(st[2], 8) if st else None
-    except ValueError:
-        bits = None
-    if bits is None:
-        report.info("shims", "aws/update.sh mode unknown",
-                    "could not stat the shim as this user")
-    elif bits & 0o111:
-        report.passed("shims", "aws/update.sh is executable", f"mode {st[2]}")
-    else:
-        grade("shims", "aws/update.sh is not executable",
-              f"{path} has mode {st[2]} — the deploy plane exec()s this path "
-              "directly, so every node in the fleet refuses the deploy at the "
-              "same moment",
-              "git update-index --chmod=+x aws/update.sh && commit the mode "
-              "(a local chmod does not survive a clean checkout)")
-
-
 def check_shims(report, run, proj, require_shims):
-    """The shim contract: each project aws/ entry point is a thin shim
-    delegating to mojo.deploy. Present-with-reference is adoption; present
-    WITHOUT a reference is a fork that silently stops receiving framework
-    fixes — WARN normally, FAIL under --require-shims. Absent is INFO: not
-    every project ships every entry point."""
+    """Audit stable project scripts and the remaining package shims."""
+    for rel in PROJECT_SCRIPTS:
+        path = f"{proj}/{rel}"
+        if not exists(run, path):
+            report.warn(
+                "shims", f"{rel} absent",
+                "the stable project-owned deployment entry point is missing",
+                "run python3 -m mojo.deploy export-scripts --dest aws --force and commit it")
+            continue
+        st = stat_of(run, path)
+        try:
+            bits = int(st[2], 8) if st else None
+        except ValueError:
+            bits = None
+        if bits is not None and bits & 0o111:
+            report.passed("shims", f"{rel} is executable", f"mode {st[2]}")
+        else:
+            report.warn(
+                "shims", f"{rel} is not executable",
+                f"{path} mode is {st[2] if st else 'unknown'}",
+                f"chmod 755 {rel} and commit the executable bit")
+        rc, _, err = run(f"bash -n {q(path)}")
+        if rc == 0:
+            report.passed("shims", f"{rel} parses", "bash -n accepted it")
+        else:
+            report.warn(
+                "shims", f"{rel} has a shell syntax error",
+                (err or "bash -n failed").strip(),
+                "replace it with a fresh exported copy and commit it")
+        rc, _, _ = run(f"grep -qF -- 'mojo.deploy locate' {q(path)}")
+        if rc == 0:
+            report.warn(
+                "shims", f"{rel} still locates installed framework code",
+                "a broken current framework can lock out its own fix",
+                "replace it with a fresh exported copy and commit it")
+
     grade = report.fail if require_shims else report.warn
     for rel in SHIM_FILES:
         path = f"{proj}/{rel}"
         if not exists(run, path):
             report.info("shims", f"{rel} absent",
-                        "no project copy — either this entry point is invoked "
-                        "as `python3 -m mojo.deploy.<module>` directly, or "
-                        "the project has not adopted it")
+                        "the project has not adopted this optional utility")
             continue
-        if rel == "aws/update.sh":
-            _check_update_executable(report, run, path, grade)
         rc, _, _ = run(f"grep -qF -- mojo.deploy {q(path)}")
         if rc == 0:
             report.passed("shims", rel,
                           "delegates to the packaged mojo.deploy tooling")
         else:
             grade("shims", f"{rel} is a fork",
-                  f"{path} exists but never references mojo.deploy — a full "
-                  "copy pinned to whatever state it was forked at, cut off "
-                  "from framework fixes",
-                  "replace it with the shim from django-mojo "
-                  "docs/django_developer/deploy/README.md (project deltas "
-                  "become exported variables in the shim)")
+                  f"{path} exists but never references mojo.deploy",
+                  "replace it with the documented thin Python shim")
 
 
 def check_collisions(report, run, proj, require_shims):

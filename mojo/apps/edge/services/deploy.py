@@ -104,7 +104,6 @@ _FAILURE_PHASES = {
 # deploy_node passes the classification straight through.
 _NODE_FAILURE_PHASES = {
     "exec_failed", "script_timeout", "preflight_failed", "unconfigured",
-    "contract_mismatch",
 }
 
 DEPLOY_CHANNEL = "default"
@@ -125,6 +124,10 @@ VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._!+-]{0,63}$")
 # How long one update-script run may take before the subprocess is killed.
 # pip installs and migrations are the slow parts; 15 minutes is generous.
 SCRIPT_TIMEOUT = 900
+# TERM asks the shell transaction to roll back. Dependency restoration can
+# legitimately take minutes, so give that recovery its own bounded window
+# before the last-resort process-group kill.
+ROLLBACK_GRACE_SECONDS = 900
 
 
 def stderr_tail(raw, limit=10):
@@ -136,28 +139,9 @@ def stderr_tail(raw, limit=10):
     lines = [line for line in str(raw or "").splitlines() if line.strip()]
     return [sanitize(line, max_bytes=1024) for line in lines[-limit:]]
 
-# ---- the node-script contract -----------------------------------------
-# The argv shape this framework speaks to the node update script. Bump BOTH
-# this and the marker line in mojo/deploy/scripts/update.sh together; a test
-# fails if they ever disagree.
-#
-#   v1: UUID argv, but callback ran before two-file identity publication
-#   v2: atomic identity publication before an explicitly signalled callback
-DEPLOY_CONTRACT = 2
-# What a script writes to declare which contract it speaks, followed by the
-# integer. The packaged update.sh carries it; a fork that keeps up may too.
-CONTRACT_MARKER = "# mojo-deploy-contract:"
-# A shim delegates to the packaged body and therefore CANNOT drift — whatever
-# the installed framework ships is what runs. Same adoption predicate
-# check_node uses for the shim audit.
-SHIM_MARKER = "mojo.deploy"
-# A wrapper that forwards argv wholesale never inspects the flags, so its own
-# text says nothing about which flags it accepts.
-FORWARDER_MARKER = '"$@"'
-REQUIRED_FLAGS = ("--sha", "--framework", "--deployment")
-# Enough of any real entry point to see its argv handling, bounded because
-# this reads a path an operator configured.
-SCRIPT_READ_LIMIT = 65536
+# Version of the small on-disk deployment identity document. This is data
+# shape, not an update-script permission gate.
+DEPLOY_IDENTITY_SCHEMA = 2
 
 # Terminal status writes are compare-and-set on the stamped SHA, atomically —
 # a get-then-set in Python would leave a window where a ghost writer with a
@@ -266,80 +250,6 @@ def is_valid_version(value):
     return isinstance(value, str) and bool(VERSION_PATTERN.match(value))
 
 
-def script_contract(argv_base):
-    """Read the configured update script and decide what contract it speaks.
-
-    Returns ``(verdict, contract, reason)``. READ ONLY — it opens a file and
-    nothing else; asking the script itself (``--contract``) would mean
-    executing an unknown path before deciding whether it is safe to execute,
-    which is backwards.
-
-    The ladder, most authoritative first:
-
-    1. **declared** — the script carries ``CONTRACT_MARKER``. It said so; that
-       settles it, in both directions.
-    2. **shim** — the script references ``mojo.deploy``, so it delegates to the
-       packaged body. A shim cannot be stale by construction.
-    3. **inferred / stale / forwarder** — the script parses argv literally.
-       Every required flag present is ``inferred``; a missing one is ``stale``
-       and names the first flag it lacks. But if it also forwards ``"$@"``, the
-       flags in its text are not evidence about what it accepts — the real
-       entry point is somewhere else, so it is ``unknown``.
-    4. **unknown** — anything this function could not read confidently.
-
-    The asymmetry is the design: only 1 and 3 can refuse a deploy, and only
-    when they are provably behind. Everything else proceeds.
-    """
-    import os
-
-    path = None
-    for item in reversed(list(argv_base or [])):
-        if isinstance(item, str) and os.path.isfile(item):
-            path = item
-            break
-    if path is None:
-        return ("unknown", None, "unresolved_path")
-    try:
-        with open(path, "rb") as handle:
-            body = handle.read(SCRIPT_READ_LIMIT).decode("utf-8", errors="replace")
-    except OSError:
-        return ("unknown", None, "unreadable")
-
-    marker = body.find(CONTRACT_MARKER)
-    if marker != -1:
-        tail = body[marker + len(CONTRACT_MARKER):].splitlines()
-        token = (tail[0] if tail else "").strip().split(" ")[0]
-        try:
-            return ("declared", int(token), "")
-        except ValueError:
-            # A marker nobody can parse is not evidence of being behind.
-            return ("unknown", None, "unparsed_marker")
-    if SHIM_MARKER in body:
-        return ("shim", DEPLOY_CONTRACT, "")
-    if "--sha" in body:
-        if FORWARDER_MARKER in body:
-            return ("unknown", None, "forwarder")
-        missing = [flag for flag in REQUIRED_FLAGS if flag not in body]
-        if missing:
-            return ("stale", 0, missing[0])
-        return ("inferred", DEPLOY_CONTRACT, "")
-    return ("unknown", None, "not_argv_literal")
-
-
-def contract_ok(verdict, contract):
-    """Whether `script_contract`'s reading permits the deploy to proceed.
-
-    Refuses exactly two things: a script that DECLARES an older contract, and
-    a fork that parses argv without this contract's flags. Everything else —
-    including every `unknown` — proceeds. This guard exists to name a stale
-    fork before it wastes a deploy, not to become a new way for a deploy to
-    fail on a node whose script it simply could not read.
-    """
-    if verdict == "stale":
-        return False
-    if verdict == "declared" and contract is not None:
-        return contract >= DEPLOY_CONTRACT
-    return True
 
 
 def failure_phase(value):
@@ -645,12 +555,30 @@ def resume_stranded_target():
     return sha
 
 
-def _run(argv):
-    """Run the update script. The single seam the deploy tests replace.
+def _run(argv, popen=None, kill_group=None, timeout=None):
+    """Run one update process group and reap every child on timeout."""
+    import os
+    import signal
 
-    Deliberately dumb, exactly like the installer's: no shell, no string
-    interpolation, no cwd. The argv base comes from a get_static setting and
-    the appended values are pattern-validated before they get here.
-    """
-    return subprocess.run(
-        argv, capture_output=True, text=True, timeout=SCRIPT_TIMEOUT)
+    popen = popen or subprocess.Popen
+    kill_group = kill_group or os.killpg
+    timeout = SCRIPT_TIMEOUT if timeout is None else timeout
+    environment = os.environ.copy()
+    environment["MOJO_DEPLOY_PARENT_STATUS"] = "1"
+    process = popen(
+        argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env=environment, start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as err:
+        kill_group(process.pid, signal.SIGTERM)
+        try:
+            stdout, stderr = process.communicate(timeout=ROLLBACK_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            kill_group(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(
+            argv, timeout, output=stdout or err.output,
+            stderr=stderr or err.stderr) from None
+    return subprocess.CompletedProcess(
+        argv, process.returncode, stdout=stdout, stderr=stderr)

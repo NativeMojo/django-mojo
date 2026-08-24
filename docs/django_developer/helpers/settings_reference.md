@@ -530,8 +530,9 @@ reasoning: [edge README](../edge/README.md#settings),
   remainder is left for the next converge, which resumes by hash.
 - `EDGE_DEPLOY_SCRIPT` — **file-only** (`settings.get_static`, `kind="list"`),
   **no default**. The update-script argv, e.g.
-  `["sudo", "-n", "/opt/api/aws/update.sh"]`; unset means this node refuses to
-  deploy rather than sudo-run a path the framework guessed.
+  `["sudo", "-n", "/opt/api/aws/update.sh"]`. This must name the executable,
+  project-owned script exported by `python3 -m mojo.deploy export-scripts`;
+  unset means this node refuses to deploy rather than guess a path.
 - `EDGE_DEPLOY_BRANCH` — **file-only** (`settings.get_static`), default `main`.
   Only pushes to `refs/heads/<this>` start a deploy.
 - `EDGE_DEPLOY_CANARY_TIMEOUT` — **file-only** (`settings.get_static`), int
