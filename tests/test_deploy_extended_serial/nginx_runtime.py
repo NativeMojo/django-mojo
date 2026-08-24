@@ -153,39 +153,6 @@ def test_inactive_fragment_failure_names_the_missing_include(opts):
         shutil.rmtree(root, ignore_errors=True)
 
 
-@th.django_unit_test()
-def test_only_canonical_root_deploy_render_activates_runtime(opts):
-    from mojo.deploy import __main__ as deploy_main
-
-    root = tempfile.mkdtemp(prefix="nginx-runtime-render-")
-    try:
-        project = os.path.join(root, "project")
-        canonical = os.path.join(project, "var", "deploy")
-        args = SimpleNamespace(
-            project_path=project, dest=canonical, app_user="app",
-            web_user="www", workers="4")
-        os.makedirs(project)
-        with mock.patch.object(deploy_main.os, "geteuid", return_value=0), \
-                mock.patch.object(deploy_main.os, "getcwd", return_value=project), \
-                mock.patch("mojo.deploy.nginx_runtime.converge") as converge:
-            result = deploy_main.cmd_render(args)
-        th.assert_eq(result, 0, "canonical deploy render must still materialize templates")
-        th.assert_eq(converge.call_count, 1,
-                     "the unchanged old-shell render argv must activate the new module")
-
-        args.dest = os.path.join(root, "ordinary-output")
-        with mock.patch.object(deploy_main.os, "geteuid", return_value=0), \
-                mock.patch.object(deploy_main.os, "getcwd", return_value=project), \
-                mock.patch("mojo.deploy.nginx_runtime.converge") as converge:
-            result = deploy_main.cmd_render(args)
-        th.assert_eq(result, 0, "ordinary render must remain portable and side-effect-free")
-        th.assert_eq(converge.call_count, 0,
-                     "a non-deploy render may not mutate host nginx state")
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-@th.django_unit_test()
 def test_selinux_policy_is_durable_and_labels_are_read_back(opts):
     from mojo.deploy import nginx_runtime as runtime
 

@@ -21,8 +21,8 @@ def test_packaged_scripts_parse(opts):
     """`bash -n` on every packaged script — the cheapest possible gate against
     shipping a wheel whose deploy scripts do not even parse."""
     root = _repo_root()
-    for rel in ("mojo/deploy/scripts/update.sh",
-                "mojo/deploy/scripts/post_deploy.sh",
+    for rel in ("mojo/deploy/project_scripts/update.sh",
+                "mojo/deploy/project_scripts/post_deploy.sh",
                 "mojo/deploy/provision/scripts/stage1.sh"):
         path = os.path.join(root, rel)
         th.assert_true(os.path.isfile(path),
