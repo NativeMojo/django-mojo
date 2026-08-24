@@ -43,13 +43,33 @@ reused, including re-onboarding the same domain with a new reference.
 `AcmeHubChallengeLease` durably stores one immutable `challenge_ref`, its exact
 complete digest set, state, expiry, and reconciliation timestamps. Publish
 commits pending intent before touching Route53. A PostgreSQL advisory lock per
-allocation covers the whole reconciliation, including the provider write, and
-Route53 always receives the union of every pending/active lease. This preserves
-the apex-plus-wildcard case where two ACME authorizations share one record.
+allocation covers the lease write and the provider write, and Route53 always
+receives the union of every pending/active lease. This preserves the
+apex-plus-wildcard case where two ACME authorizations share one record.
+
+**Publish and withdraw return once the lease is durable and Route53 has
+ACCEPTED the change — they do not wait for it to propagate.** The lock no
+longer spans a propagation wait. This is not an optimization: issuance never
+runs on an HTTP request (`certs.issue` is only ever called from a job), so the
+downstream's own propagation wait already runs on a job worker with a full
+budget, while its read timeout on this call is 30 seconds. A hub-side wait
+bounded at 300 seconds could never be satisfied before the caller gave up, so
+every delegated issuance failed. The caller owns the propagation gate; see
+[Certificates](Certificates.md#propagation).
+
+`reconciled_at` therefore means one specific thing: **a probe confirmed that
+the authority serves this allocation's exact RRset.** It is stamped by the
+sweep on a confirmed match and by nothing else — never merely because a write
+was submitted.
 
 The five-minute `dnsman.cronjobs.sweep_acme_hub_leases` dispatcher queues the
-worker sweep. It expires stale leases and retries any unreconciled intent after
-worker death or an ambiguous provider response. Provider failures remain loud;
+worker sweep. Every publish and every withdrawal now leaves its allocation
+unconfirmed, so the sweep is the normal path rather than a rare repair: it
+expires stale leases, probes each candidate allocation, and writes only on a
+real mismatch. An unreadable authority is neither a match nor a mismatch — the
+allocation is left for the next pass, because rewriting on an unreadable probe
+would turn a resolver outage into a Route53 write storm. Failed passes file a
+suppressed `dnsman:acme_hub:sweep` incident. Provider failures remain loud;
 there is no fallback to another challenge or provider.
 
 ## Zone safety and observability
@@ -142,7 +162,7 @@ by the key's group), returning 429 with `Retry-After` when engaged.
 | `400` | Missing/invalid input, unknown allocation, immutable-ref conflict, retired challenge ref, or missing/mismatched/chained CNAME proof |
 | `403` | Not an ApiKey, missing protected permission, inactive key, or effectively inactive project |
 | `429` | Shared hub rate limit exceeded |
-| `503` | Hub disabled/misconfigured, exact public zone unavailable, Route53 failure, or propagation/reconciliation timeout |
+| `503` | Hub disabled/misconfigured, exact public zone unavailable, or Route53 failure |
 
 Errors use the normal `{"status": false, "code": <HTTP>, "error": "..."}`
 envelope. They never echo submitted TXT values or infrastructure identifiers.
@@ -155,12 +175,29 @@ envelope. They never echo submitted TXT values or infrastructure identifiers.
 | `DNSMAN_ACME_HUB_HOSTED_ZONE_ID` | unset | Optional exact zone id (recommended where duplicate names exist) |
 | `DNSMAN_ACME_HUB_TTL` | `60` | TXT TTL, clamped to 30–86400 seconds |
 | `DNSMAN_ACME_HUB_LEASE_SECONDS` | `900` | Lease lifetime, clamped to 60–86400 seconds |
-| `DNSMAN_ACME_HUB_PROPAGATION_TIMEOUT` | `300` | Reconciliation timeout, clamped to 5–900 seconds |
-| `DNSMAN_ACME_HUB_PROPAGATION_INTERVAL` | `5` | Poll interval, clamped to 1–30 seconds |
 | `DNSMAN_ACME_HUB_SWEEP_LIMIT` | `100` | Allocations per sweep, clamped to 1–1000 |
+
+`DNSMAN_ACME_HUB_PROPAGATION_TIMEOUT` and `DNSMAN_ACME_HUB_PROPAGATION_INTERVAL`
+are **retired** — the hub no longer waits for propagation. They are ignored if
+still present in a config file.
 
 These settings intentionally use `settings.get_static`: no tenant or DB-backed
 setting can redirect an existing or future allocation.
+
+## Version skew
+
+The fix belongs on the **hub** side, and only there.
+
+* **Old client → new hub**: works. This is exactly the deployment that is
+  broken today, and upgrading the hub alone repairs it — the reply shape is
+  byte-for-byte unchanged, so no downstream change is required to benefit.
+* **New client → old hub**: unchanged and still broken. The old hub still
+  blocks its reply for up to 300 seconds behind a 30-second read timeout; the
+  client's stronger quorum gate never gets to run because the publish call
+  itself times out first.
+
+So a mixed fleet must upgrade hubs first. A downstream running the newer
+majority-quorum gate against an upgraded hub is the intended end state.
 
 ## Downstream challenge client
 

@@ -383,8 +383,6 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
 - `DNSMAN_ACME_HUB_HOSTED_ZONE_ID`
 - `DNSMAN_ACME_HUB_TTL`
 - `DNSMAN_ACME_HUB_LEASE_SECONDS`
-- `DNSMAN_ACME_HUB_PROPAGATION_TIMEOUT`
-- `DNSMAN_ACME_HUB_PROPAGATION_INTERVAL`
 - `DNSMAN_ACME_HUB_SWEEP_LIMIT`
 - `DNSMAN_ACME_HUB_URL` — downstream challenge client's HTTPS hub origin;
   file-only, with plain HTTP allowed only for localhost/loopback development.
