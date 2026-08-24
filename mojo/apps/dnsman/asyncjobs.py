@@ -86,17 +86,54 @@ def poll_domain_operations(job):
             f"adopted={result.adopted},expired={result.expired},errors={result.errors}")
 
 
-def sweep_acme_hub_leases(job):
-    """Expire and reconcile durable ACME hub challenge leases."""
+def _report_acme_hub_sweep_errors(result, report=None):
+    """File one suppressed incident for a sweep pass that hit provider errors.
+
+    ``report`` is an injection seam for tests, replacing
+    ``incident.reporter.report_event_suppressed``.
+
+    This exists because the hub stopped blocking its HTTP reply on propagation
+    (item #2851). A stuck reconciliation used to surface as a loud 503 on the
+    tenant's own publish call; now it is a `reconciled_at IS NULL` row that
+    nothing reads. One incident per hour is the operator-facing replacement.
+    """
+    if report is None:
+        from mojo.apps.incident.reporter import report_event_suppressed
+
+        report = report_event_suppressed
+    try:
+        report(
+            f"ACME hub sweep finished with {result.errors} error(s): "
+            f"expired={result.expired} reconciled={result.reconciled} "
+            f"unconfirmed={result.get('unconfirmed', 0)}",
+            key="sweep",
+            title="dnsman ACME hub sweep errors",
+            category="dnsman:acme_hub:sweep",
+            level=3, window=3600, group=None)
+    except Exception as err:
+        # Bookkeeping must never turn a completed sweep into a failed job.
+        logit.error(f"dnsman: could not report the ACME hub sweep errors: {err}")
+
+
+def sweep_acme_hub_leases(job, report=None):
+    """Expire and reconcile durable ACME hub challenge leases.
+
+    ``report`` is an injection seam for tests, threaded to
+    ``_report_acme_hub_sweep_errors``.
+    """
     from mojo.apps.dnsman.services import acme_hub
 
     result = acme_hub.sweep()
+    unconfirmed = result.get("unconfirmed", 0)
     if result.errors:
-        logit.error(f"dnsman: ACME hub sweep finished with {result.errors} errors")
+        logit.error(
+            f"dnsman: ACME hub sweep finished with {result.errors} errors "
+            f"(unconfirmed={unconfirmed})")
+        _report_acme_hub_sweep_errors(result, report=report)
     else:
         logit.info(
             f"dnsman: ACME hub sweep expired={result.expired} "
-            f"reconciled={result.reconciled}")
+            f"reconciled={result.reconciled} unconfirmed={unconfirmed}")
     return (f"completed:expired={result.expired},"
             f"reconciled={result.reconciled},errors={result.errors}")
 

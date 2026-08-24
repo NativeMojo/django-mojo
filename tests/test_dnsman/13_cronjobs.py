@@ -87,12 +87,46 @@ def test_acme_sweep_publishes_job(opts):
     published = []
     with mock.patch.object(
             cronjobs.jobs, "publish",
-            lambda func=None, payload=None, **kwargs: published.append((func, payload)) or "job-acme"):
+            lambda func=None, payload=None, **kwargs: published.append((func, payload, kwargs)) or "job-acme"):
         result = cronjobs.sweep_acme_hub_leases()
 
-    assert published == [(cronjobs.ACME_HUB_SWEEP_JOB, {})], \
+    assert [(row[0], row[1]) for row in published] == [
+        (cronjobs.ACME_HUB_SWEEP_JOB, {})], \
         f"expected exactly the ACME sweep handler, got {published}"
     assert result == "job-acme", "cron dispatcher should return the published job id"
+    # The sweep takes a BLOCKING advisory lock per allocation, so successive
+    # ticks must not be able to stack behind a slow pass.
+    options = published[0][2]
+    assert options.get("idempotency_key"), \
+        f"the ACME sweep tick must be deduplicated, got {options}"
+    assert options.get("expires_in") == cronjobs.ACME_HUB_SWEEP_INTERVAL, \
+        f"a superseded sweep pass must expire rather than queue, got {options}"
+
+
+@th.django_unit_test("the ACME sweep files one operator incident when a pass hits errors")
+def test_acme_sweep_reports_errors(opts):
+    from mojo.apps.dnsman import asyncjobs
+
+    reports = []
+    asyncjobs._report_acme_hub_sweep_errors(
+        objict(expired=0, reconciled=3, errors=2, unconfirmed=1),
+        report=lambda details, **kwargs: reports.append((details, kwargs)))
+
+    assert len(reports) == 1, f"one suppressed incident per failing pass, got {reports}"
+    details, options = reports[0]
+    assert "2 error" in details and "unconfirmed=1" in details, \
+        f"the incident must carry the counts an operator acts on, got {details}"
+    assert options.get("category") == "dnsman:acme_hub:sweep", \
+        f"the incident needs a stable category to alert on, got {options}"
+    assert options.get("window"), \
+        "an unsuppressed per-pass incident would file every five minutes"
+
+    # Bookkeeping must never turn a completed sweep into a failed job.
+    def explode(details, **kwargs):
+        raise RuntimeError("incident backend down")
+
+    asyncjobs._report_acme_hub_sweep_errors(
+        objict(expired=0, reconciled=0, errors=1), report=explode)
 
 
 @th.django_unit_test("the ACME lease sweep job reports bounded counts")
