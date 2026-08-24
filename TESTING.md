@@ -23,10 +23,11 @@ This generates `testproject/`, creates a `mojo_test` PostgreSQL database, and ru
 Use `bin/run_tests` — it starts the server, runs the suite, and stops the server automatically:
 
 ```bash
-./bin/run_tests                        # whole suite, default tier only
-./bin/run_tests --all                  # whole suite + every opt-in tier (slow, extended)
+./bin/run_tests                        # the core preset — the ≤30s baseline (~9s)
+./bin/run_tests --tier framework       # django-mojo's own critical tier (~45s)
+./bin/run_tests --all                  # everything, incl. extended/admin/edge/slow (~6min)
 ./bin/run_tests --agent                # write structured report to testproject/var/test_failures.json
-./bin/run_tests -t test_accounts       # run one module
+./bin/run_tests -t test_accounts       # run one module (regardless of tier)
 ./bin/run_tests -t test_accounts.login # run one test file
 ./bin/run_tests -v                     # verbose output
 ./bin/run_tests -s                     # stop on first failure
@@ -66,58 +67,30 @@ variable is cleared. Tests seed AWS access through mojo-level `Setting` rows, ne
 your ambient credential chain — a local `~/.aws/credentials` or `AWS_PROFILE` has no
 effect on a test run.
 
-## Tiers — what runs by default, and what needs `--all`
+## Tiers — buckets and presets
 
-Two opt-in tiers. `--all` turns on both.
+A test declares the **bucket** it belongs to; a runner selects a **preset**, a named set
+of buckets. A bare `bin/run_tests` runs the **`core`** preset — the ≤30s baseline every
+consumer runs (~9s today). **[docs/django_developer/testit/Tiers.md](docs/django_developer/testit/Tiers.md)
+is the canonical reference** — buckets, presets, the legacy mapping, the per-bucket
+isolation contract, and budgets. In brief:
 
-| Tier | Tag | Meaning |
-|---|---|---|
-| default | *(none)* | Critical. Runs on every invocation. |
-| `slow` | `requires_extra: ["slow"]` | Expensive, or only meaningful before a release. |
-| `extended` | `@th.requires_extra("extended")` | Correct and worth keeping, but not a critical contract. |
+| Preset | Command | Runs | Wall |
+|---|---|---|---|
+| `core` | `bin/run_tests` | the ≤30s baseline | ~9s |
+| `framework` | `bin/run_tests --tier framework` | `core`+`framework`+`bug` — django-mojo's own critical tier | ~45s |
+| `all` | `bin/run_tests --all` | everything, incl. `extended`/`admin`/`edge`/`slow` | ~6min |
 
-They are separate words on purpose: "why is this opt-in?" should be answerable from the
-tag alone. `slow` is a statement about cost, `extended` about criticality.
+Buckets: `core` (the small, clean, parallel-safe security/contract baseline), `framework`
+(django-mojo's critical contracts), `bug` (one isolated regression per fixed bug),
+`extended` (exhaustive matrices, feature-internal variants), `admin`/`edge` (admin-portal
+and edge-deployment coverage most consumers skip), `slow` (real-internet / real-provider).
 
-Currently `slow`: `test_security` (bouncer/rate-limiting, serial), `test_incident`,
-`test_deploy_scripts` (the packaged node-script shell harnesses), and the live-assistant
-tests.
-
-### Deciding the tier
-
-**Default tier — a test belongs here regardless of what it costs if it covers:**
-
-- a security boundary: permissions, authentication, tenant isolation, secret handling
-- a core framework contract: model save/serialize, REST dispatch, graphs, `request.DATA`
-- a bug that has already shipped once — the regression test stays where it will be seen
-- anything whose failure means the framework is broken for *every* consumer
-
-Cost is never on its own a reason to demote one of these. The slowest single test in the
-suite is a shortlink scheme-injection test, and it stays in the default tier.
-
-**`extended` — reasonable to demote:**
-
-- exhaustive input matrices beyond the first representative case
-- deep feature-internal variants of one app
-- coverage already asserted elsewhere
-- tests whose cost *is* a timeout: an assertion that nothing arrives can only pass by
-  waiting. Keep the positive path in the default tier and demote the negative one.
-
-Deployment follows the same selection contract. The default tier keeps the brownfield
-input, discovery, identity, node, plan, policy, stubber, and CLI safety boundaries that
-must fail on every run. Exhaustive brownfield orchestration variants live in the serial
-`test_deploy_extended_serial` package and remain available through `--all` or
-`--extra extended`. A full `--all` run is broader coverage evidence, not the baseline
-for an ordinary test run.
-
-**Not a reason to demote:** the app is optional. `requires_apps` already skips a module
-whole when a project has not installed that app, so a consumer never pays for an app it
-does not use.
-
-Tag it when you write it — that is much cheaper than auditing it back out later.
-
-To move a whole module, set `"requires_extra": ["slow"]` (or `["extended"]`) in its
-`__init__.py` TESTIT config. For one test, use the `@th.requires_extra(...)` decorator.
+Declare a bucket at the cheapest correct scope — whole package via the TESTIT `tier` key,
+whole file via `TESTIT_TIER = "bug"`, one test via `@th.tier("bug")`. See Tiers.md for the
+"is my test core-eligible?" checklist and the shared-state / isolation rules. Cost alone
+never demotes a security-relevant test out of a critical bucket; put exhaustive variants in
+`extended`. Tag it when you write it — auditing it back out later is far more expensive.
 
 ## Agent Mode
 

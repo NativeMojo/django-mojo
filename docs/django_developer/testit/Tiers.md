@@ -5,19 +5,19 @@ named set of buckets. This replaces the old two-axis "default tier vs. `--all`"
 model, which had no middle ground between "everything critical" and "everything
 at all" and let the default tier grow to thousands of tests.
 
-> **Status.** The mechanism ships in Phase 1 (maestro #2790). Until Phase 3
-> curates tests into buckets, every package still uses the legacy
-> `default_core` / `requires_extra` keys, which map onto the buckets
-> automatically (below), and **a bare `bin/run_tests` still runs the framework
-> preset** — byte-identical to the old default tier. Phase 3 populates `core`
-> and flips the bare run to it.
+> **Status.** Live (maestro #2790–#2792). The suite is curated into buckets and
+> **a bare `bin/run_tests` runs the `core` preset** — the ≤30s baseline (~9s
+> today). `--tier framework` runs django-mojo's own critical tier; `--all` runs
+> everything. Legacy `default_core` / `requires_extra` keys still map onto
+> buckets automatically (below), so a package that predates the `tier` key keeps
+> working.
 
 ## Buckets
 
 | Bucket | What belongs here |
 |---|---|
 | `core` | The ≤30s baseline every consumer runs. Security boundaries, the handful of framework contracts whose failure means django-mojo is broken for everyone. Held to the strictest isolation contract. |
-| `framework` | django-mojo's own critical contracts — today's default tier. Parallel-safe. |
+| `framework` | django-mojo's own critical contracts (the old default tier). Parallel-safe. |
 | `bug` | One isolated regression per fixed bug. Runs in the framework preset. |
 | `extended` | Correct-but-not-critical coverage, exhaustive input matrices, deep feature-internal variants. |
 | `admin` | Admin-portal coverage most consumers do not care about. |
@@ -40,7 +40,7 @@ any other name is a literal single bucket.
 | `all` | every bucket | — |
 
 ```bash
-./bin/run_tests                          # the framework preset (the default)
+./bin/run_tests                          # the core preset (the default)
 ./bin/run_tests --tier core              # just the ≤30s baseline
 ./bin/run_tests --tier framework         # django-mojo's own critical tier
 ./bin/run_tests --tier admin --tier edge # two literal buckets

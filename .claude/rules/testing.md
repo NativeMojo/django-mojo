@@ -26,14 +26,16 @@ Before writing any test, read `docs/django_developer/testit/Overview.md`. This i
 - Use `--all` to include opt-in modules (`requires_extra` — `slow` and `extended`) — needed
   for pre-publish validation, or when you changed what `--all` selects
 - Tests declare a **tier bucket** and runners select a **preset** (`--tier core` ⊂
-  `framework` ⊂ `all`); a bare run selects `framework` (== today's default tier until Phase
-  3). See `docs/django_developer/testit/Tiers.md`
+  `framework` ⊂ `all`); a bare `bin/run_tests` runs the **`core`** preset — the ≤30s
+  baseline (~9s). `--tier framework` runs django-mojo's whole critical tier (~45s). See
+  `docs/django_developer/testit/Tiers.md`
 - Never use `--plain` — it disables the rich progress UI and parallel execution
 
 ## Tiers and Isolation
-- The default tier is only for critical core contracts: security boundaries, shared
-  framework behavior, and regressions whose failure means django-mojo is broken for
-  consumers. Exhaustive variants and feature-internal coverage belong in `extended`;
+- The `core` bucket is only for critical, parallel-safe contracts: security boundaries,
+  shared framework behavior, and the handful of regressions whose failure means django-mojo
+  is broken for consumers. `framework` holds the rest of django-mojo's critical tier;
+  exhaustive variants and feature-internal coverage belong in `extended`;
   expensive pre-release coverage belongs in `slow`.
 - Every test must pass by itself and under the default parallel runner. Tests may not
   depend on module order or leak state into another test.
