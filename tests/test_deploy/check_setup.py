@@ -1,11 +1,12 @@
 """mojo.deploy.check_setup — the read-only AWS account audit.
 
 Covers the reworked parts: the BLIND status and its non-zero exit, the
-universal/topology split, and that every listing call now follows pagination.
+universal/topology split, the cost-conscious data topology, and that every
+listing call now follows pagination.
 
-Deliberately NOT covered: check_lb / check_rds / check_cache beyond what the
-exit-code tests need. Mocking those out end to end would assert the shape of
-the fixtures rather than the behaviour of the code.
+Deliberately NOT covered: check_lb beyond what the exit-code tests need.
+Mocking it out end to end would assert the shape of fixtures rather than the
+behaviour of the code.
 """
 
 import io
@@ -129,15 +130,78 @@ def test_clean_account_exits_zero(opts):
 def test_a_single_fail_exits_one(opts):
     elasticache = mock.Mock()
     elasticache.describe_replication_groups.return_value = {
-        "ReplicationGroups": [_healthy_cache(MultiAZ="disabled")]}
+        "ReplicationGroups": [_healthy_cache(AtRestEncryptionEnabled=False)]}
 
     code, report = _run(["--section", "cache"],
                         _FakeSession({"elasticache": elasticache}))
 
     th.assert_eq(code, 1, "any FAIL must make the audit exit non-zero")
-    th.assert_true(_named(report, "cache-1: not Multi-AZ"),
-                   f"the Multi-AZ gap must be reported: "
+    th.assert_true(_named(report, "cache-1: no encryption at rest"),
+                   f"the encryption gap must be reported: "
                    f"{_statuses(report, 'FAIL')}")
+
+
+@th.django_unit_test()
+def test_single_node_cache_is_a_cost_choice_not_a_failure(opts):
+    elasticache = mock.Mock()
+    elasticache.describe_replication_groups.return_value = {
+        "ReplicationGroups": [_healthy_cache(
+            MemberClusters=["a"], AutomaticFailover="disabled",
+            MultiAZ="disabled")]}
+
+    code, report = _run(["--section", "cache", "--topology", "reference"],
+                        _FakeSession({"elasticache": elasticache}))
+
+    th.assert_eq(code, 0,
+                 f"a deliberate single-node cache must not gate deployment: "
+                 f"{report['findings']}")
+    th.assert_eq(_statuses(report, "FAIL"), [],
+                 f"paid cache redundancy is opt-in, not a reference-topology "
+                 f"requirement: {report['findings']}")
+    finding = _named(report, "cache-1: single node")
+    th.assert_true(finding,
+                   f"the recovery tradeoff must remain visible: "
+                   f"{report['findings']}")
+    th.assert_eq(finding[0]["status"], "INFO",
+                 "a deliberate cost choice is context, not a warning")
+
+
+@th.django_unit_test()
+def test_writer_only_aurora_is_valid_reference_topology(opts):
+    rds = mock.Mock()
+    rds.describe_db_clusters.return_value = {"DBClusters": [{
+        "DBClusterIdentifier": "db-1",
+        "Engine": "aurora-postgresql",
+        "EngineVersion": "17.7",
+        "DBClusterMembers": [{"DBInstanceIdentifier": "db-1-instance-1"}],
+        "StorageEncrypted": True,
+        "KmsKeyId": "alias/aws/rds",
+        "DeletionProtection": True,
+        "BackupRetentionPeriod": 14,
+        "EnabledCloudwatchLogsExports": ["postgresql"],
+    }]}
+    rds.describe_db_instances.return_value = {"DBInstances": [{
+        "DBInstanceIdentifier": "db-1-instance-1",
+        "DBInstanceClass": "db.r6g.large",
+        "PubliclyAccessible": False,
+        "PerformanceInsightsEnabled": True,
+    }]}
+
+    code, report = _run(["--section", "rds", "--topology", "reference"],
+                        _FakeSession({"rds": rds}))
+
+    th.assert_eq(code, 0,
+                 f"a deliberate writer-only cluster must not gate deployment: "
+                 f"{report['findings']}")
+    th.assert_eq(_statuses(report, "FAIL"), [],
+                 f"paid Aurora readers are opt-in, not a reference-topology "
+                 f"requirement: {report['findings']}")
+    finding = _named(report, "db-1: writer only")
+    th.assert_true(finding,
+                   f"the recovery tradeoff must remain visible: "
+                   f"{report['findings']}")
+    th.assert_eq(finding[0]["status"], "INFO",
+                 "a deliberate cost choice is context, not a warning")
 
 
 @th.django_unit_test()
@@ -620,7 +684,7 @@ def test_an_unknown_section_is_rejected_before_any_aws_call(opts):
 def test_json_output_carries_findings_and_counts(opts):
     elasticache = mock.Mock()
     elasticache.describe_replication_groups.return_value = {
-        "ReplicationGroups": [_healthy_cache(MultiAZ="disabled")]}
+        "ReplicationGroups": [_healthy_cache(AtRestEncryptionEnabled=False)]}
 
     code, report = _run(["--section", "cache"],
                         _FakeSession({"elasticache": elasticache}))

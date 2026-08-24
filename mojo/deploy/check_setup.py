@@ -23,12 +23,14 @@ TWO CLASSES OF FINDING, and the difference matters:
                  unencrypted volumes, world-open SSH/Postgres/Redis,
                  AdministratorAccess on the app key, key age. Always checked.
     topology     assertions about ONE deployment shape (the django-mojo
-                 reference topology: web node + N API nodes behind a load
-                 balancer, Aurora writer+reader Multi-AZ, ElastiCache with
-                 automatic failover, alarms into SNS). OFF by default, because
-                 a single-node dev account is not misconfigured — it is just a
-                 different deployment. Turn them on with `--topology reference`
-                 or MOJO_DEPLOY_TOPOLOGY=reference in django.conf.
+                 reference topology: redundant application nodes behind a load
+                 balancer, encrypted private data services, and alarms into
+                 SNS). Paid Aurora readers and cache replicas are explicit
+                 availability choices, not reference-topology requirements.
+                 OFF by default, because a single-node dev account is not
+                 misconfigured — it is just a different deployment. Turn them
+                 on with `--topology reference` or
+                 MOJO_DEPLOY_TOPOLOGY=reference in django.conf.
 
 A finding is one of:
 
@@ -625,16 +627,15 @@ def check_rds(report, session, topology):
                     f"{cluster['Engine']} {cluster.get('EngineVersion','?')}, "
                     f"{len(members)} instance(s)")
 
-        # TOPOLOGY. Plenty of deployments run a deliberately single-instance
-        # cluster; only the reference shape promises a reader.
+        # Readers are an explicit paid availability choice. The reference
+        # shape permits a cost-conscious writer-only cluster and records the
+        # recovery tradeoff without turning it into a deployment failure.
         if topology:
             if len(members) < 2:
-                report.fail(
-                    "rds", f"{name}: no reader",
-                    "a single-instance Aurora cluster has no standby: a failure "
-                    "means a full restore, and every read competes with writes",
-                    "add a reader instance in a second AZ — Aurora promotes it "
-                    "automatically, typically in under a minute")
+                report.info(
+                    "rds", f"{name}: writer only",
+                    "cost-conscious topology selected; recovery uses Aurora's "
+                    "cluster volume/backups instead of a paid standby")
             else:
                 report.passed("rds", f"{name}: instances",
                               f"{len(members)} members")
@@ -736,7 +737,8 @@ def check_cache(report, session):
                 "cache", "standalone cache nodes",
                 f"{len(standalone)} node(s) with no replication group, so "
                 "there is no failover and no reader endpoint",
-                "rebuild as a replication group with automatic failover")
+                "rebuild as a one-node replication group; add paid replicas "
+                "only when the application requires automatic failover")
         else:
             report.warn("cache", "no cache",
                         "no ElastiCache found — websockets, sessions and the "
@@ -749,19 +751,27 @@ def check_cache(report, session):
         report.info("cache", f"{name}: replication group",
                     f"{len(members)} node(s), engine {group.get('Engine','?')}")
 
-        if group.get("AutomaticFailover") == "enabled":
-            report.passed("cache", f"{name}: automatic failover", "enabled")
+        if len(members) < 2:
+            report.info(
+                "cache", f"{name}: single node",
+                "cost-conscious topology selected; the cache is rebuilt or "
+                "restored rather than kept on a paid standby")
         else:
-            report.fail("cache", f"{name}: no automatic failover",
-                        "losing the primary means manual intervention",
-                        "enable automatic failover (needs 2+ nodes)")
+            if group.get("AutomaticFailover") == "enabled":
+                report.passed("cache", f"{name}: automatic failover", "enabled")
+            else:
+                report.warn("cache", f"{name}: no automatic failover",
+                            "replicas are paid for but cannot be promoted "
+                            "automatically",
+                            "enable automatic failover or remove the replicas")
 
-        if group.get("MultiAZ") == "enabled":
-            report.passed("cache", f"{name}: Multi-AZ", "enabled")
-        else:
-            report.fail("cache", f"{name}: not Multi-AZ",
-                        "all nodes share one AZ's fate",
-                        "enable Multi-AZ and place replicas in other AZs")
+            if group.get("MultiAZ") == "enabled":
+                report.passed("cache", f"{name}: Multi-AZ", "enabled")
+            else:
+                report.warn("cache", f"{name}: not Multi-AZ",
+                            "multiple paid nodes still share one AZ's fate",
+                            "spread the existing replicas across AZs or remove "
+                            "them")
 
         if group.get("AtRestEncryptionEnabled"):
             report.passed("cache", f"{name}: encryption at rest", "enabled")
