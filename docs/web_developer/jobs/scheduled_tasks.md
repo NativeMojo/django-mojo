@@ -114,7 +114,7 @@ The `list` graph (shown above) is the default for list requests. Use `?graph=def
 | `run_days` | List of ints 0–6 (Mon=0). Omit or send `[]` for every day |
 | `notify` | Subset of `["email", "in_app", "sms", "push"]` |
 | `job_config` | Shape depends on `task_type` (see below) |
-| `channel` | Must be a statically allowed publish channel. A live explicit runner id alone is not sufficient because that runner may be gone when the task becomes due |
+| `channel` | With channel enforcement enabled, must be a statically allowed publish channel. A live explicit runner id alone is not sufficient because that runner may be gone when the task becomes due. Monitor mode accepts it; publishing later reports an undeclared channel |
 
 **job_config by task_type:**
 

@@ -835,11 +835,14 @@ GET /api/jobs/runners?channel=email
 
 Runner ids may be explicit safe names; they are not required to end in
 `-engine`. When the engine's direct-channel feature is enabled, its live
-heartbeat lists a channel equal to `runner_id`. Framework code may publish
-**immediate** work to that exact id while the positive-TTL heartbeat remains
-current and self-consistent. Missing, expired, malformed, mismatched, stale,
-future-skewed, or unreadable heartbeat data is not authorization. Delayed and
-recurring work still requires a statically declared channel.
+heartbeat lists a channel equal to `runner_id`. With channel enforcement
+enabled, framework code may publish work to that exact id when both `delay`
+and `run_at` are omitted and the positive-TTL heartbeat remains current and
+self-consistent. Missing, expired, persistent, malformed, mismatched, stale,
+future-skewed, or unreadable heartbeat data is not authorization for this
+exception. Delayed and recurring work still requires a statically declared
+channel. Channels ending in `-engine` remain statically allowed for backward
+compatibility.
 
 ---
 

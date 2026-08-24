@@ -264,7 +264,8 @@ That is the whole point: it is how one box gives work to another.
 jobs.publish("myapp.services.deploy.run", {"site_id": 7}, channel="sites")
 ```
 
-A channel may be published to when it is any of:
+With channel enforcement enabled, a channel may be published to when it is
+any of:
 
 - a framework channel (`mojo.apps.jobs.DEFAULT_CHANNELS`) — always allowed,
 - a channel **this box consumes** (`JOBS_CHANNELS`),
@@ -272,8 +273,8 @@ A channel may be published to when it is any of:
   on every box),
 - a box-direct channel ending in `-engine` (see
   [Targeting one specific engine](#targeting-one-specific-engine)),
-- for **immediate** work, the exact id of a live runner whose current
-  heartbeat advertises that same direct channel.
+- for **immediate** work (both `delay` and `run_at` omitted), the exact id of
+  a live runner whose current heartbeat advertises that same direct channel.
 
 What happens to anything else depends on whether the deployment has opted
 into enforcement — **setting `JOBS_ALLOWED_CHANNELS` (any list, even `[]`) is
@@ -353,20 +354,22 @@ jobs.publish("myapp.services.cache.purge", {}, channel="web-01-engine")
 
 A safe explicit id does **not** need that suffix. An engine started with
 `--runner-id heavy-worker` advertises and consumes the direct channel
-`heavy-worker`; an enforced immediate publish to that exact id is accepted
-only while its positive-TTL heartbeat is current, identifies the same runner,
-and lists the same channel:
+`heavy-worker`; an enforced publish with `delay` and `run_at` omitted is
+accepted to that exact id only while its positive-TTL heartbeat is current,
+identifies the same runner, and lists the same channel:
 
 ```python
 jobs.publish("myapp.services.cache.purge", {}, channel="heavy-worker")
 ```
 
-Missing, expired, persistent, malformed, mismatched, stale, future-skewed, or
-unreadable heartbeat data fails closed. The heartbeat exception is deliberately
-limited to immediate work: delayed jobs and `ScheduledTask.channel` must use a
-static declaration (`JOBS_ALLOWED_CHANNELS`, `JOBS_CHANNELS`, a framework
-channel, or the compatible `-engine` namespace), because a runner live now may
-not exist when later work becomes due.
+Under enforcement, missing, expired, persistent, malformed, mismatched, stale,
+future-skewed, or unreadable heartbeat data fails this live-runner proof
+closed. The heartbeat exception is deliberately limited to immediate work:
+delayed jobs and `ScheduledTask.channel` must use a static declaration
+(`JOBS_ALLOWED_CHANNELS`, `JOBS_CHANNELS`, a framework channel, or the
+compatible `-engine` namespace), because a runner live now may not exist when
+later work becomes due. Monitor mode keeps its existing route-as-named
+behavior and reports an undeclared channel instead of enforcing this gate.
 
 A mistyped `-engine` host channel still passes the static allowlist and is
 caught by the unconsumed-channel incident below. Set
