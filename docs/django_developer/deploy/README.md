@@ -1,68 +1,148 @@
 # Project deployment scripts
 
-Every project owns two small executable files:
-
-```
-aws/update.sh
-aws/post_deploy.sh
-```
-
-Create or refresh them explicitly:
+django-mojo owns the deployment transaction. The normal entry point is the
+packaged `update.sh`, resolved without importing project Django:
 
 ```bash
-python3 -m mojo.deploy export-scripts --dest aws --force
-git add aws/update.sh aws/post_deploy.sh
-git update-index --chmod=+x aws/update.sh aws/post_deploy.sh
+python3 -m mojo.deploy locate update.sh
 ```
 
-These are copies, not shims. They never locate or execute deployment code from
-the currently installed django-mojo package. This is the recovery boundary: a
-release that cannot import Django can still be replaced by the next checkout.
-`--force` replaces both destination files, so review and commit the exported
-bytes instead of keeping local deployment changes only on a node.
+`EDGE_DEPLOY_SCRIPT` defaults to a small `sudo` command that resolves and runs
+that entry point. A project may keep the same permanent endpoint as an
+executable `aws/update.sh` shim, and may keep an `aws/post_deploy.sh` shim for
+project environment variables. Existing API projects whose shims call
+`mojo.deploy locate` require no source update: each release automatically uses
+the installed framework scripts.
+
+## The shim contract
+
+A shim contains project setup only, then delegates:
+
+```bash
+#!/bin/bash
+export PROBE_URL="https://127.0.0.1/api/version"  # optional project delta
+target="$(python3 -m mojo.deploy locate update.sh)" || exit 1
+exec bash "$target" "$@"
+```
+
+The post-deploy equivalent locates `post_deploy.sh`. `update.sh` installs the
+requested candidate framework *before* resolving the post-deploy body, so a
+candidate that repairs activation code supplies its own post-deploy logic. None
+of these helpers imports project Django; a release that cannot load Django can
+therefore still be replaced and rolled back.
+
+`python3 -m mojo.deploy export-scripts --dest aws --force` remains available
+for debugging or an intentional full-script override. It copies the current
+framework bodies; ordinary projects should keep the small locator shim instead
+of vendoring deployment mechanics. A project that intentionally keeps a full
+`aws/post_deploy.sh` copy owns that override and must keep its action arguments
+current; replace an obsolete copy with the locator shim or remove it.
 
 ## What a deployment does
 
 `update.sh` accepts:
 
 ```text
---sha <commit> --framework <version> --deployment <uuid> [--migrate]
---manual
+--sha <commit> --framework <version> --deployment <uuid>
+    [--node-type <type>] [--migrate]
+--manual [--node-type <type>]
 ```
 
-It takes the project lock, records the previous commit and installed framework
-version without importing Django, fetches the named commit, checks it out, and
-hands the transaction to that commit's `aws/post_deploy.sh`.
+`api` is the default node type. Before any checkout or package mutation, the
+script moves the complete transaction into a bounded transient systemd unit.
+It then takes the project lock, recovers any interrupted transaction, records
+the previous commit/framework/type without importing Django, fetches the named
+commit, checks it out as `APP_USER`, installs its declared dependencies and
+the requested framework, and invokes the candidate activation body.
 
 `--manual` is the operator path: it deploys `origin/main`, upgrades to the
 newest available django-mojo, and does not run migrations. It refuses deploy
-arguments in the same invocation.
+arguments in the same invocation. `--migrate` is valid only for `api`.
 
-`post_deploy.sh` then:
+Dependency selection is deliberately small and deterministic:
 
-1. records the previous host-file bytes and release identity;
-2. installs project requirements and the requested django-mojo version;
-3. runs the locked migration on the canary, then `collectstatic`;
-4. renders and copies the project's nginx, cron, and systemd files;
+- use `aws/deploy/requirements.txt` when it exists;
+- otherwise use the root `requirements.txt`;
+- otherwise install no project manifest.
+
+Only one manifest is installed. Rollback retains a copy of the previous
+release's selected manifest and reinstalls it with the previous exact
+django-mojo version.
+
+## Typed activation
+
+Every node runs the same checkout/dependency/framework transaction, followed
+by exactly one activation path:
+
+| `EDGE_DEPLOY_NODE_TYPE` | Activation |
+|---|---|
+| `api` (default) | Built-in Django, nginx, systemd and exact-HTTP-200 lifecycle |
+| `code` | Checkout and dependencies only; no migration, Django command, nginx, systemd or HTTP probe |
+| any other valid name | Project profile `aws/deploy/<type>.sh` |
+
+The built-in `api` path:
+
+1. runs `manage.py check` before changing host configuration;
+2. runs `migrate_locked --noinput` only on the API canary when `--migrate` is
+   present, then runs `collectstatic`;
+3. renders and installs the project's nginx, cron, and systemd files;
+4. applies explicit removals from `aws/node_retired.conf`;
 5. runs the real `nginx -t`;
-6. restarts `mojo-asgi`, reloads nginx, and requires the probe URL to return
+6. restarts `mojo-asgi`, reloads nginx, and requires `PROBE_URL` to answer
    exactly HTTP 200.
 
 Those last two checks are the final acceptance gates. A failed required command
 earlier in the transaction, such as dependency installation, migration, static
 collection, rendering, or service restart, also rolls the candidate back.
 There is no TLS semantic parser, certificate-lineage preservation, node-role
-authority, file-integrity gate, trusted-change journal, ownership policy, or
-request-service policy in the deployment path. Independent observability tools
-may report drift, but they cannot veto a release.
+authority, RPM verification, file-integrity gate, trusted-change journal,
+ownership policy, or request-service policy in the deployment path.
+Independent observability tools may report drift, but they cannot veto a
+release.
+
+### Custom profiles
+
+A custom type is for a node such as a Maestro Sites worker whose service and
+health check are not the API's. The profile must already exist in the serving
+checkout before `EDGE_DEPLOY_NODE_TYPE` is changed; this staged adoption keeps
+the first typed deploy rollbackable. The candidate profile must parse as shell
+and accept three verbs:
+
+```text
+aws/deploy/sites.sh preflight
+aws/deploy/sites.sh restart
+aws/deploy/sites.sh probe
+```
+
+`preflight` must make no host mutation. `restart` activates the already
+installed checkout and may restart the job engine that launched the deploy.
+`probe` returns zero only when that node's candidate is usable. The framework
+does not run Django, nginx, systemd or curl on behalf of a custom profile.
+
+Profiles receive this fixed environment:
+
+| Variable | Meaning |
+|---|---|
+| `PROJ_PATH` | Project checkout |
+| `MOJO_DEPLOY_CANDIDATE_SHA` / `MOJO_DEPLOY_PREVIOUS_SHA` | Candidate and previous commits |
+| `MOJO_DEPLOY_CANDIDATE_FRAMEWORK` / `MOJO_DEPLOY_PREVIOUS_FRAMEWORK` | Candidate and previous framework versions |
+| `MOJO_DEPLOY_NODE_TYPE` | Selected custom type |
+| `MOJO_DEPLOY_DEPLOYMENT` | Deployment UUID |
+| `MOJO_DEPLOY_STARTED_AT` | Transaction start, Unix seconds |
+| `MOJO_DEPLOY_ROLLBACK` | `0` during activation; `1` during recovery |
+
+On recovery, the candidate profile receives `restart` with
+`MOJO_DEPLOY_ROLLBACK=1`, then the saved previous profile receives `restart`
+and `probe` with the same flag. A profile should make those operations
+idempotent.
 
 ## Project inputs
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `PROJ_PATH` | `/opt/api` | Project checkout |
-| `PROBE_URL` | `https://127.0.0.1/api/version` | Candidate and rollback URL; it must answer exactly HTTP 200 |
-| `APP_USER` | `ec2-user` | Value substituted into rendered cron/systemd templates |
+| `PROBE_URL` | `https://127.0.0.1/api/version` | API candidate and rollback URL; it must answer exactly HTTP 200 |
+| `APP_USER` | `ec2-user` | Account that owns Git operations; also substituted into rendered cron/systemd templates |
 | `WEB_USER` | `www` | Value substituted into rendered service templates |
 | `ASGI_WORKERS` | `4` | Worker count substituted into rendered service templates |
 
@@ -72,10 +152,14 @@ them.
 
 ## Rollback and interrupted runs
 
-Once `post_deploy.sh` starts, it is the single rollback owner. It writes a
-mechanical transaction under root-owned
-`/var/lib/django-mojo-deploy/active`, and traps ordinary errors plus TERM,
-INT, and HUP. A rollback restores:
+The complete update runs as a transient oneshot unit with a 30-minute runtime
+and a separate 15-minute stop/rollback window. This boundary is established
+before mutation, so a custom profile may restart its own job engine without
+killing the transaction.
+
+The shell writes a mechanical transaction under root-owned
+`/var/lib/django-mojo-deploy/active`, and traps ordinary errors plus TERM, INT,
+and HUP. An API rollback restores:
 
 - the previous git commit;
 - the previous exact django-mojo version and that commit's requirements;
@@ -83,9 +167,17 @@ INT, and HUP. A rollback restores:
 - the restored systemd configuration, followed by `nginx -t`, a mojo-asgi
   restart, nginx reload, and an exact-200 probe of the restored API.
 
-The transaction is removed only after a healthy candidate or healthy rollback.
-If SIGKILL or a machine loss interrupts it, the next `update.sh` asks the
-root-owned transaction to recover before recording a new previous release.
+Custom rollback uses the profile protocol above; `code` restores the checkout
+and packages and leaves activation to its external supervisor. The transaction
+is removed only after a healthy candidate or healthy rollback. If SIGKILL or a
+machine loss interrupts it, the next `update.sh` recovers the root-owned
+transaction before recording a new previous release.
+
+Python packages are installed into the existing environment. Rollback
+reinstalls the previous declared requirements and exact framework version, but
+does not promise to uninstall every transitive package introduced only by the
+failed candidate. Projects that require byte-for-byte dependency rollback need
+an external immutable environment strategy.
 
 ## Compatibility with the predecessor launcher
 
@@ -104,16 +196,20 @@ mutate live nginx, invoke an integrity sensor, or enforce a node role.
 
 ## Node diagnostics
 
-`python3 -m mojo.deploy.check_node --section shims` reports whether the two
-project scripts exist, are executable, pass `bash -n`, or still contain the
-obsolete `mojo.deploy locate` pattern. These findings are advisory. They are
-not deployment gates.
+`python3 -m mojo.deploy.check_node --node-type <type>` makes diagnostics match
+the node lifecycle. Non-API types skip API-only cron, systemd, nginx,
+certificate, config-plane and legacy checks; a custom type also verifies that
+`aws/deploy/<type>.sh` exists and parses. The jobs check expects `edge` on API
+nodes and `platform-deploy` on non-API nodes.
+
+`--section shims` reports whether optional project scripts exist, are
+executable, and pass `bash -n`. A `mojo.deploy locate` shim is the valid
+permanent endpoint. These findings are advisory and are not deployment gates.
 
 ## Other pre-Django node tools
 
-Only the two shell deployment scripts moved into the project. The remaining
-`python3 -m mojo.deploy.*` utilities are still framework-owned and run without
-loading project Django settings.
+The shell deployment bodies and the remaining `python3 -m mojo.deploy.*`
+utilities are framework-owned and run without loading project Django settings.
 
 ### `config_sync`
 
@@ -146,9 +242,10 @@ nginx reload.
 
 ### `check_node`
 
-`python3 -m mojo.deploy.check_node` audits one node. Its project-script checks
-are advisory diagnostics, including under `--require-shims`; deployment itself
-does not call this tool.
+`python3 -m mojo.deploy.check_node` audits one node. Pass the same type as the
+node's static setting, for example `--node-type sites`. Its project-script and
+profile checks are advisory diagnostics, including under `--require-shims`;
+deployment itself does not call this tool.
 
 ### `jobman`
 

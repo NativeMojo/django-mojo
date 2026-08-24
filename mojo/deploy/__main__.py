@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Small, pre-Django deployment helpers.
 
-``export-scripts`` copies stable project-owned shell entry points. ``render``
-does plain placeholder substitution for cron and systemd files. Neither
-command imports Django or changes privileged host state.
+``locate`` is the permanent settings-free endpoint for packaged deployment
+scripts. ``export-scripts`` is an optional debugging/customization aid.
+``render`` does plain placeholder substitution for cron and systemd files.
+None imports Django or changes privileged host state.
 """
 
 import argparse
@@ -114,7 +115,7 @@ def cmd_export_scripts(args):
 
 
 def cmd_locate(args):
-    """One-generation compatibility for projects that still carry shims."""
+    """Resolve one allowlisted packaged script for a permanent small shim."""
     if args.name not in SCRIPT_NAMES:
         print("mojo.deploy locate: unknown project script", file=sys.stderr)
         return 2
@@ -214,7 +215,7 @@ def main(argv):
     export.add_argument("--force", action="store_true")
 
     locate = commands.add_parser(
-        "locate", help="deprecated compatibility for old project shims")
+        "locate", help="resolve a packaged deployment script")
     locate.add_argument("name")
 
     render = commands.add_parser("render", help="render cron/systemd templates")

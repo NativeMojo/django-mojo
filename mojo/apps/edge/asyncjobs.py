@@ -145,7 +145,8 @@ def webapp_onboarding_advance(job):
 DEPLOY_POLL_INTERVAL = 3.0
 
 
-def _publish_deploy_node(runner_id, sha, framework, migrate, deployment_id):
+def _publish_deploy_node(runner_id, sha, framework, migrate, deployment_id,
+                         api_cohort=True):
     from mojo.apps import jobs
     from mojo.apps.edge.services import deploy
     from mojo.apps.edge.services import platform_deploy
@@ -162,7 +163,8 @@ def _publish_deploy_node(runner_id, sha, framework, migrate, deployment_id):
             # row and never a fleet peer's.
             payload=dict(
                 sha=sha, framework=framework, migrate=bool(migrate),
-                deployment=str(deployment_id), runner=str(runner_id)),
+                deployment=str(deployment_id), runner=str(runner_id),
+                api_cohort=bool(api_cohort)),
             channel=runner_id,
             max_retries=0,
             expires_in=deploy.canary_timeout())
@@ -201,6 +203,9 @@ def deploy_orchestrate(job):
     sha = record.sha
     me = job.runner_id or deploy.local_runner_id()
     runners = list(record.frozen_roster or [])
+    raw_api = (record.detail or {}).get("api_roster")
+    api_runners = list(raw_api) if isinstance(raw_api, list) else list(runners)
+    api_runners = [runner for runner in api_runners if runner in set(runners)]
 
     target = deploy.get_target()
     status = deploy.get_status()
@@ -218,6 +223,16 @@ def deploy_orchestrate(job):
         event = reporter.report_event(
             f"deploy {sha}: frozen edge runner roster was empty",
             title="Edge deploy has no proven runner roster",
+            category="edge_deploy", level=7)
+        platform_deploy.add_link(deployment_id, "incident_events", event.pk)
+        return _deploy_terminal(
+            sha, me, framework=None, released=False,
+            deployment_id=deployment_id)
+
+    if not api_runners:
+        event = reporter.report_event(
+            f"deploy {sha}: frozen deployment roster has no API runner",
+            title="Edge deploy has no API migration canary",
             category="edge_deploy", level=7)
         platform_deploy.add_link(deployment_id, "incident_events", event.pk)
         return _deploy_terminal(
@@ -266,13 +281,26 @@ def deploy_orchestrate(job):
         # Single-runner fleet: this node IS the canary. Fire-and-forget — the
         # script records terminal intent, this engine dies with the update,
         # and the replacement engine proves/finalizes the exact UUID lease.
-        _publish_deploy_node(me, sha, framework, migrate=True, deployment_id=deployment_id)
+        _publish_deploy_node(
+            me, sha, framework, migrate=True, deployment_id=deployment_id,
+            api_cohort=True)
         logit.info(f"edge deploy {sha}: single runner, updating locally")
         return f"single:{sha}"
 
-    canary = deploy.pick_canary(runners, me)
+    canary = deploy.pick_canary(api_runners, me)
+    if canary is None:
+        # This orchestrator is the only API node in a mixed fleet. It cannot
+        # block waiting on a job addressed to its own engine. Return, let that
+        # job run, and let the replacement engine release the specialized
+        # cohort from durable proof.
+        _publish_deploy_node(
+            me, sha, framework, migrate=True, deployment_id=deployment_id,
+            api_cohort=True)
+        logit.info(f"edge deploy {sha}: sole API canary queued locally")
+        return f"single-api:{sha}"
     _publish_deploy_node(
-        canary, sha, framework, migrate=True, deployment_id=deployment_id)
+        canary, sha, framework, migrate=True, deployment_id=deployment_id,
+        api_cohort=True)
     logit.info(f"edge deploy {sha}: canary {canary} told to migrate")
 
     deadline = _time.time() + deploy.canary_timeout()
@@ -309,7 +337,8 @@ def deploy_orchestrate(job):
                 continue
             _publish_deploy_node(
                 runner_id, sha, framework, migrate=False,
-                deployment_id=deployment_id)
+                deployment_id=deployment_id,
+                api_cohort=runner_id in set(api_runners))
         logit.info(f"edge deploy {sha}: released to {len(runners) - 2} fleet node(s)")
     else:
         detail = deploy.failure_phase((outcome or {}).get("detail")) if outcome else (
@@ -373,9 +402,15 @@ def _deploy_terminal(sha, me, framework, released, deployment_id):
         platform_deploy.transition(
             deployment_id, "fleet", {"canary_proven": True,
                                       "verification": "pending"})
-        _publish_deploy_node(
-            me, sha, framework, migrate=False,
-            deployment_id=deployment_id)
+        record = platform_deploy.get(deployment_id)
+        roster = list(record.frozen_roster or []) if record else []
+        raw_api = (record.detail or {}).get("api_roster") if record else None
+        api_roster = list(raw_api) if isinstance(raw_api, list) else list(roster)
+        if me in set(roster):
+            _publish_deploy_node(
+                me, sha, framework, migrate=False,
+                deployment_id=deployment_id,
+                api_cohort=me in set(api_roster))
         return f"released:{sha}"
     platform_deploy.transition(
         deployment_id, "failed", {"reason": "canary_not_proven"})
@@ -460,6 +495,7 @@ def deploy_node(job):
     sha = payload.get("sha") or ""
     framework = payload.get("framework") or ""
     migrate = bool(payload.get("migrate"))
+    api_cohort = bool(payload.get("api_cohort", True))
     deployment_id = payload.get("deployment") or ""
     deployment_id = platform_deploy.deployment_id(deployment_id)
     if not deployment_id:
@@ -469,6 +505,25 @@ def deploy_node(job):
         raise RuntimeError("refusing platform deploy with mismatched deployment UUID")
 
     runner = job.runner_id or deploy.local_runner_id()
+    try:
+        node_type = deploy.local_node_type()
+    except ValueError:
+        _node_deploy_failed(
+            deployment_id, sha, job, migrate, phase="preflight_failed",
+            message=f"deploy {deployment_id} ({sha}): local node type is invalid")
+        raise RuntimeError("EDGE_DEPLOY_NODE_TYPE is invalid") from None
+    if api_cohort != (node_type == "api"):
+        _node_deploy_failed(
+            deployment_id, sha, job, migrate, phase="preflight_failed",
+            message=(
+                f"deploy {deployment_id} ({sha}): routing cohort does not "
+                f"match local node type {node_type} on {runner}"))
+        raise RuntimeError("deployment cohort does not match local node type")
+    if migrate and node_type != "api":
+        _node_deploy_failed(
+            deployment_id, sha, job, migrate, phase="preflight_failed",
+            message=f"deploy {deployment_id} ({sha}): non-API node refused migration")
+        raise RuntimeError("only API nodes may migrate")
     argv_base = deploy.deploy_script_argv()
     if not argv_base:
         _node_deploy_failed(
@@ -501,12 +556,12 @@ def deploy_node(job):
 
     argv = list(argv_base) + [
         "--sha", sha, "--framework", framework,
-        "--deployment", deployment_id]
+        "--deployment", deployment_id, "--node-type", node_type]
     if migrate:
         argv.append("--migrate")
     logit.info(
         f"edge deploy {deployment_id} ({sha}): running update script "
-        f"(migrate={migrate})")
+        f"(migrate={migrate}, node_type={node_type})")
     try:
         result = deploy._run(argv)
     except OSError as err:
@@ -552,10 +607,11 @@ def deploy_node(job):
     # has returned, without asking candidate Django to coordinate its deploy.
     if not platform_deploy.evidence(
             deployment_id, runner, deploy.STATUS_DEPLOYING,
-            detail={}):
+            detail={"node_type": node_type}):
         raise RuntimeError("local runner is not in the deployment roster")
     if migrate and not deploy.set_status(
             deploy.STATUS_DEPLOYING, sha, deployment_id=deployment_id):
         raise RuntimeError("canary deploy no longer owns the armed lease")
-    _recycle_engine_after_return()
+    if node_type == "api":
+        _recycle_engine_after_return()
     return f"completed:{sha}"

@@ -110,8 +110,9 @@ generations/<gen>/
                             includes staging/, never the real trees)
 ```
 
-`/etc/nginx/nginx.conf` on a node is the project's small bootstrap. The
-project-owned `aws/post_deploy.sh` reinstalls the repository copy on each
+`/etc/nginx/nginx.conf` on an API node is the project's small bootstrap. The
+packaged API activation (optionally entered through the project's permanent
+`aws/post_deploy.sh` locator shim) reinstalls the repository copy on each
 deployment and accepts it only after the real `nginx -t`:
 
 ```nginx

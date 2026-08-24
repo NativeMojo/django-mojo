@@ -578,8 +578,12 @@ def test_update_timeout_reaps_process_group(opts):
         process.communicate.call_args_list[1].kwargs.get("timeout"),
         deploy.ROLLBACK_GRACE_SECONDS,
         "TERM-triggered rollback needs a realistic bounded recovery window")
-    th.assert_true(deploy.ROLLBACK_GRACE_SECONDS >= 600,
-                   "dependency restore and service recovery can exceed five minutes")
+    th.assert_true(
+        deploy.SCRIPT_TIMEOUT > (
+            deploy.TRANSIENT_RUNTIME_SECONDS + deploy.TRANSIENT_ROLLBACK_SECONDS),
+        "the parent must outwait systemd's runtime plus rollback window")
+    th.assert_true(0 < deploy.ROLLBACK_GRACE_SECONDS <= 120,
+                   "after systemd's recovery window, process-group reap is short")
     th.assert_eq(
         killed,
         [(4321, signal.SIGTERM), (4321, signal.SIGKILL)],

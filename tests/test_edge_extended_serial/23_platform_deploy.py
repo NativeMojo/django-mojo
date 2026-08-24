@@ -81,20 +81,30 @@ def _clean_node_jobs():
     Job.objects.filter(func=deploy.DEPLOY_NODE_JOB).delete()
 
 
-@th.django_unit_test("only the edge-channel roster is frozen")
+@th.django_unit_test("API and specialized deploy channels freeze one typed roster")
 def test_exact_edge_roster(opts):
     from mojo.apps.edge.services import platform_deploy
-    rows = [
+    api_rows = [
         {"runner_id": "edge-b-engine", "alive": True},
         {"runner_id": "edge-a-engine", "alive": True},
         {"runner_id": "dead-engine", "alive": False},
     ]
+    specialized_rows = [
+        {"runner_id": "sites-engine", "alive": True},
+        {"runner_id": "edge-b-engine", "alive": True},
+    ]
     with mock.patch(
             "mojo.apps.jobs.get_runners_bounded",
-            return_value=rows) as get_runners:
-        assert platform_deploy.edge_roster() == ["edge-a-engine", "edge-b-engine"]
-    get_runners.assert_called_once_with(
-        channel="edge", limit=128, max_scan_pages=16, timeout=1.0)
+            side_effect=lambda **kw: api_rows if kw["channel"] == "edge"
+            else specialized_rows) as get_runners:
+        roster, api = platform_deploy.edge_roster(with_api=True)
+    th.assert_eq(roster, ["edge-a-engine", "edge-b-engine", "sites-engine"],
+                 "the webhook must freeze both deployment cohorts")
+    th.assert_eq(api, ["edge-a-engine", "edge-b-engine"],
+                 "a duplicate specialized consumer remains classified API")
+    th.assert_eq([call.kwargs["channel"] for call in get_runners.call_args_list],
+                 ["edge", "platform-deploy"],
+                 "roster discovery must use only the two fixed channels")
 
 
 @th.django_unit_test("edge roster overflow fails closed instead of omitting nodes")
@@ -105,6 +115,24 @@ def test_edge_roster_overflow(opts):
             side_effect=RuntimeError("runner_roster_overflow")):
         with th.assert_raises(RuntimeError):
             platform_deploy.edge_roster()
+
+
+@th.django_unit_test("creation preserves a 33-of-128 API cohort without sanitizer truncation")
+def test_full_api_cohort_is_persisted(opts):
+    from mojo.apps.edge.services import platform_deploy
+
+    api = [f"api-{index:03d}-engine" for index in range(33)]
+    specialized = [f"sites-{index:03d}-engine" for index in range(95)]
+    roster = api + specialized
+    with mock.patch.object(
+            platform_deploy, "edge_roster", return_value=(roster, api)):
+        row, replayed = platform_deploy.create(
+            "e" * 40, actor="typed-roster-test", source="test")
+    th.assert_true(not replayed, "a fresh typed roster unexpectedly replayed")
+    th.assert_eq(len(row.frozen_roster), 128,
+                 "the bounded union lost specialized runners")
+    th.assert_eq(row.detail.get("api_roster"), api,
+                 "the generic detail sanitizer truncated the migration cohort")
 
 
 @th.django_unit_test("resume_stranded_target republishes exactly one wedged deploy")

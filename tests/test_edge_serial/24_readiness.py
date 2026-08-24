@@ -178,7 +178,7 @@ def test_local_node_proof_no_secret_shape(opts):
             lambda: readiness.local_node_proof({"pools": ["default"]}))
     assert set(proof) == {
         "node_id", "django_mojo_version", "platform_sha",
-        "platform_deployment", "observed_at", "pools"}, \
+        "platform_deployment", "node_type", "observed_at", "pools"}, \
         f"proof grew an unreviewed top-level surface: {proof}"
     assert set(proof["pools"]["default"]) == {
         "generation", "excluded", "www_pending", "cert_pending",
@@ -233,6 +233,19 @@ def test_atomic_deploy_identity_manifest_and_legacy_fallback(opts):
         }), encoding="utf-8")
         th.assert_eq(readiness._read_deploy_identity(var), (sha, deployment),
                      "a valid v2 manifest must be the live identity")
+        th.assert_eq(
+            readiness._read_deploy_identity(var, include_type=True),
+            (sha, deployment, "api"),
+            "a predecessor identity is the backward-compatible API type")
+
+        (var / "deploy_identity.json").write_text(json.dumps({
+            "schema": 3, "sha": sha, "deployment": deployment,
+            "node_type": "sites",
+        }), encoding="utf-8")
+        th.assert_eq(
+            readiness._read_deploy_identity(var, include_type=True),
+            (sha, deployment, "sites"),
+            "the current identity must preserve its deployed lifecycle type")
 
         manifest = var / "deploy_identity.json"
         metadata = manifest.stat()
@@ -500,4 +513,3 @@ def test_apps_domain_readiness(opts):
     assert "converging will create it" in pending["explanation"], \
         f"the pending row did not say converging creates it: {pending}"
     assert pending["remediation"], "the pending apps-domain row had no remediation"
-

@@ -123,11 +123,13 @@ VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._!+-]{0,63}$")
 
 # How long one update-script run may take before the subprocess is killed.
 # pip installs and migrations are the slow parts; 15 minutes is generous.
-SCRIPT_TIMEOUT = 900
-# TERM asks the shell transaction to roll back. Dependency restoration can
-# legitimately take minutes, so give that recovery its own bounded window
-# before the last-resort process-group kill.
-ROLLBACK_GRACE_SECONDS = 900
+TRANSIENT_RUNTIME_SECONDS = 1800
+TRANSIENT_ROLLBACK_SECONDS = 900
+# systemd owns the transaction timeout and rollback window. The parent waits
+# longer than both so it never kills the systemd-run client while recovery is
+# still legitimately in progress.
+SCRIPT_TIMEOUT = TRANSIENT_RUNTIME_SECONDS + TRANSIENT_ROLLBACK_SECONDS + 60
+ROLLBACK_GRACE_SECONDS = 60
 
 
 def stderr_tail(raw, limit=10):
@@ -141,7 +143,8 @@ def stderr_tail(raw, limit=10):
 
 # Version of the small on-disk deployment identity document. This is data
 # shape, not an update-script permission gate.
-DEPLOY_IDENTITY_SCHEMA = 2
+DEPLOY_IDENTITY_SCHEMA = 3
+DEPLOY_OUTCOME_SCHEMA = 1
 
 # Terminal status writes are compare-and-set on the stamped SHA, atomically —
 # a get-then-set in Python would leave a window where a ghost writer with a
@@ -226,17 +229,27 @@ def framework_version_pin():
 
 
 def deploy_script_argv():
-    """The update-script argv, or None when this node is not deploy-configured.
+    """The update argv, defaulting to the permanent packaged-script locator.
 
-    There is deliberately NO default: a box that has not set
-    ``EDGE_DEPLOY_SCRIPT`` in its settings file (dev laptops, test
-    environments) must refuse to run a deploy rather than sudo-execute a
-    script path guessed by the framework.
+    Projects may still override the entire argv. Ordinary API projects keep a
+    tiny stable endpoint and automatically execute the script from the
+    framework version being installed; they do not vendor framework shell.
     """
-    argv = settings.get_static("EDGE_DEPLOY_SCRIPT", None, kind="list")
+    default = [
+        "sudo", "-n", "bash", "-c",
+        'exec bash "$(python3 -m mojo.deploy locate update.sh)" "$@"',
+        "django-mojo-update",
+    ]
+    argv = settings.get_static("EDGE_DEPLOY_SCRIPT", default, kind="list")
     if not argv:
         return None
     return list(argv)
+
+
+def local_node_type():
+    """This node's static deployment lifecycle (never DB-overridable)."""
+    from mojo.apps.edge.settings_validators import deploy_node_type
+    return deploy_node_type(settings.get_static("EDGE_DEPLOY_NODE_TYPE", "api"))
 
 
 def is_valid_sha(value):
