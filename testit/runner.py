@@ -2178,6 +2178,14 @@ def main(opts):
             sys.path.insert(0, parent_test_root)
 
     test_root = os.path.join(paths.APPS_ROOT, "tests")
+    # Ensure the consumer app test root is importable. A real consumer's
+    # bootstrap (load_apps) already puts apps/tests on sys.path, so this guard
+    # is a no-op there; it matters for a project whose bootstrap does not —
+    # django-mojo's own testproject, which never carried consumer packages
+    # before the tier example landed (maestro #2793). Appended, so repo
+    # packages under parent_test_root keep resolution priority.
+    if os.path.exists(test_root) and test_root not in sys.path:
+        sys.path.append(test_root)
 
     # Handle --list-extras
     if opts.list_extras:
