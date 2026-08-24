@@ -70,8 +70,9 @@ a deploy.
 ## Transaction and status ownership
 
 The update immediately re-enters a transient systemd oneshot before checkout
-or package mutation. The unit owns the 30-minute transaction timeout and
-15-minute rollback window, so restarting the job engine cannot orphan an
+or package mutation. The unit owns a 30-minute activation limit, followed by
+up to 15 further minutes for TERM-triggered rollback if systemd stops a
+timed-out transaction. Restarting the job engine therefore cannot orphan an
 update. The parent process waits beyond both windows instead of killing a
 legitimate rollback.
 

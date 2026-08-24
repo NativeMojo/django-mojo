@@ -604,7 +604,7 @@ def test_update_enters_one_bounded_transient_unit_before_mutation(opts):
             "exec /usr/bin/id \"$@\"\n")
         _write_executable(
             os.path.join(stubs, "systemd-run"),
-            "printf '%s\\n' \"$*\" > \"$COMMAND_LOG\"\nexit 0\n")
+            "printf '%s\\n' \"$*\" >> \"$COMMAND_LOG\"\nexit 0\n")
         environment = os.environ.copy()
         environment.update({
             "PATH": stubs + ":/usr/bin:/bin",
@@ -620,10 +620,17 @@ def test_update_enters_one_bounded_transient_unit_before_mutation(opts):
         th.assert_true(not os.path.exists(environment["PROJ_PATH"]),
                        "checkout state changed before entering the transient unit")
         with open(command_log) as handle:
-            command = handle.read()
-        th.assert_in("RuntimeMaxSec=1800", command,
-                     "the transient transaction needs a hard runtime bound")
+            commands = handle.read().splitlines()
+        th.assert_eq(len(commands), 1,
+                     "the launcher entered more than one transient unit")
+        command = commands[0]
+        th.assert_in("Type=oneshot", command,
+                     "the transient transaction must remain a oneshot unit")
+        th.assert_in("TimeoutStartSec=1800", command,
+                     "the oneshot activation needs a hard runtime bound")
         th.assert_in("TimeoutStopSec=900", command,
                      "systemd must leave a realistic rollback window")
         th.assert_in("--transaction", command,
                      "the transient unit did not enter the internal transaction")
+        th.assert_true("RuntimeMaxSec" not in command,
+                       "the oneshot unit retained systemd's ignored runtime property")

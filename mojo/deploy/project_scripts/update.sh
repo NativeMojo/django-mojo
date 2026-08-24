@@ -290,7 +290,7 @@ if [ "$TRANSACTION" = "0" ] && [ "${MOJO_DEPLOY_NO_SYSTEMD:-0}" != "1" ]; then
     unit="${unit//[^A-Za-z0-9_.@-]/-}"
     exec systemd-run --quiet --wait --collect --unit "$unit" \
         --property Type=oneshot \
-        --property "RuntimeMaxSec=$RUNTIME_SECONDS" \
+        --property "TimeoutStartSec=$RUNTIME_SECONDS" \
         --property "TimeoutStopSec=$ROLLBACK_SECONDS" \
         --setenv="MOJO_DEPLOY_IN_TRANSIENT_UNIT=1" \
         --setenv="MOJO_DEPLOY_PARENT_STATUS=${MOJO_DEPLOY_PARENT_STATUS:-}" \

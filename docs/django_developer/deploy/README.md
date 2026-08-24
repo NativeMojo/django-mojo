@@ -154,10 +154,11 @@ them.
 
 ## Rollback and interrupted runs
 
-The complete update runs as a transient oneshot unit with a 30-minute runtime
-and a separate 15-minute stop/rollback window. This boundary is established
-before mutation, so a custom profile may restart its own job engine without
-killing the transaction.
+The complete update runs as a transient oneshot unit with a 30-minute
+activation limit. If systemd stops a timed-out transaction, it allows up to a
+further 15 minutes for the TERM-triggered rollback before forcing the unit
+down. This boundary is established before mutation, so a custom profile may
+restart its own job engine without killing the transaction.
 
 The shell writes a mechanical transaction under root-owned
 `/var/lib/django-mojo-deploy/active`, and traps ordinary errors plus TERM, INT,
