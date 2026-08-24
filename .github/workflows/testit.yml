@@ -10,6 +10,11 @@ on:
         description: "Preset to run: core | framework | all"
         required: true
         type: string
+      advisory:
+        description: "If true, a red test does not fail the job (non-blocking)."
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   run:
@@ -59,6 +64,9 @@ jobs:
       - name: Generate the test project
         run: ./bin/create_testproject
       - name: Run the ${{ inputs.tier }} preset
+        # Advisory callers (framework-on-PR until #2813) do not fail the job on
+        # a red test; blocking callers (core-on-push) leave advisory=false.
+        continue-on-error: ${{ inputs.advisory }}
         run: ./bin/run_tests --agent --tier ${{ inputs.tier }}
       - name: Upload agent report
         if: always()

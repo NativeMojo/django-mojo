@@ -100,7 +100,7 @@ the reusable `.github/workflows/testit.yml`). The trigger decides the preset:
 | Trigger | Preset | Gate |
 |---|---|---|
 | every push | `core` (~9s) | **blocking** — the fast baseline must stay green |
-| pull request | `framework` (~45s) | **advisory** (`continue-on-error`) until #2813 removes the shared-state flakes; deleting that one line makes it blocking |
+| pull request | `framework` (~45s) | **advisory** (`advisory: true`) until #2813 removes the shared-state flakes; set `advisory: false` on the framework job to make it blocking |
 | nightly (cron) | `all` | reported, not gating |
 
 The reusable workflow stands up Postgres (with pgvector) and Redis service
