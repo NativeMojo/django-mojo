@@ -634,3 +634,104 @@ def test_update_enters_one_bounded_transient_unit_before_mutation(opts):
                      "the transient unit did not enter the internal transaction")
         th.assert_true("RuntimeMaxSec" not in command,
                        "the oneshot unit retained systemd's ignored runtime property")
+
+
+@th.django_unit_test()
+def test_update_replays_only_the_failed_transient_unit_tail(opts):
+    import mojo
+
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(mojo.__file__)))
+    update = os.path.join(repo, "mojo", "deploy", "project_scripts", "update.sh")
+    deployment = "11111111-1111-4111-8111-111111111111"
+    unit = "django-mojo-deploy-%s.service" % deployment
+    with tempfile.TemporaryDirectory() as root:
+        stubs = os.path.join(root, "bin")
+        os.makedirs(stubs)
+        systemd_log = os.path.join(root, "systemd-run")
+        journal_log = os.path.join(root, "journalctl")
+        _write_executable(
+            os.path.join(stubs, "id"),
+            "[ \"${1:-}\" != -u ] || { printf '0\\n'; exit 0; }\n"
+            "exec /usr/bin/id \"$@\"\n")
+        _write_executable(
+            os.path.join(stubs, "systemd-run"),
+            "printf '%s\\n' \"$*\" >> \"$SYSTEMD_LOG\"\n"
+            "exit \"${SYSTEMD_RC:-0}\"\n")
+        _write_executable(
+            os.path.join(stubs, "journalctl"),
+            "printf '%s\\n' \"$*\" >> \"$JOURNAL_LOG\"\n"
+            "if [ \"${JOURNAL_RC:-0}\" != 0 ]; then\n"
+            "  printf 'journalctl unavailable\\n' >&2\n"
+            "  exit \"$JOURNAL_RC\"\n"
+            "fi\n"
+            "for number in 4 5 6 7 8 9 10 11 12; do\n"
+            "  printf 'transaction record %s\\n' \"$number\"\n"
+            "done\n")
+        environment = os.environ.copy()
+        environment.update({
+            "PATH": stubs + ":/usr/bin:/bin",
+            "SYSTEMD_LOG": systemd_log,
+            "JOURNAL_LOG": journal_log,
+            "PROJ_PATH": os.path.join(root, "must-not-be-touched"),
+            "SYSTEMD_RC": "23",
+        })
+        argv = [
+            "bash", update, "--sha", "a" * 40, "--framework", "1.17.2",
+            "--deployment", deployment, "--node-type", "sites",
+        ]
+
+        failed = subprocess.run(
+            argv, env=environment, capture_output=True, text=True, timeout=30)
+
+        th.assert_eq(failed.returncode, 23,
+                     "journal replay replaced the systemd-run failure status")
+        th.assert_eq(failed.stdout, "",
+                     "failed transaction diagnostics leaked onto stdout")
+        failed_lines = failed.stderr.splitlines()
+        th.assert_eq(len(failed_lines), 10,
+                     "failure replay exceeded one summary plus nine records")
+        th.assert_eq(
+            failed_lines[0],
+            "Deployment transaction failed; recent journal follows:",
+            "the fixed failure summary changed")
+        th.assert_eq(
+            failed_lines[1:],
+            ["transaction record %s" % number for number in range(4, 13)],
+            "the launcher did not replay the bounded recent journal tail")
+        with open(journal_log) as handle:
+            journal_command = handle.read().strip()
+        th.assert_in("_SYSTEMD_UNIT=%s" % unit, journal_command,
+                     "journal replay was not restricted to the failed unit")
+        th.assert_in("--boot=0", journal_command,
+                     "journal replay was not restricted to the current boot")
+        th.assert_in("--output=cat", journal_command,
+                     "journal replay retained journal metadata")
+        th.assert_in("--no-pager", journal_command,
+                     "journal replay may invoke an interactive pager")
+        th.assert_in("--quiet", journal_command,
+                     "journal replay may emit journalctl notices")
+        th.assert_in("--lines=9", journal_command,
+                     "journal replay was not bounded to nine records")
+
+        os.unlink(journal_log)
+        unavailable_environment = environment.copy()
+        unavailable_environment["JOURNAL_RC"] = "1"
+        unavailable = subprocess.run(
+            argv, env=unavailable_environment, capture_output=True,
+            text=True, timeout=30)
+        th.assert_eq(unavailable.returncode, 23,
+                     "missing journald replaced the transaction failure status")
+        th.assert_eq(
+            unavailable.stderr,
+            "Deployment transaction failed; recent journal follows:\n",
+            "journalctl's own diagnostic escaped the fixed safe summary")
+
+        os.unlink(journal_log)
+        successful_environment = environment.copy()
+        successful_environment["SYSTEMD_RC"] = "0"
+        successful = subprocess.run(
+            argv, env=successful_environment, capture_output=True,
+            text=True, timeout=30)
+        th.assert_eq(successful.returncode, 0, successful.stderr)
+        th.assert_true(not os.path.exists(journal_log),
+                       "successful transaction queried journald")

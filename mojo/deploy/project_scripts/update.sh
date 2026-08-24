@@ -288,18 +288,26 @@ if [ "$TRANSACTION" = "0" ] && [ "${MOJO_DEPLOY_NO_SYSTEMD:-0}" != "1" ]; then
     self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
     unit="django-mojo-deploy-${DEPLOYMENT:-manual}"
     unit="${unit//[^A-Za-z0-9_.@-]/-}"
-    exec systemd-run --quiet --wait --collect --unit "$unit" \
-        --property Type=oneshot \
-        --property "TimeoutStartSec=$RUNTIME_SECONDS" \
-        --property "TimeoutStopSec=$ROLLBACK_SECONDS" \
-        --setenv="MOJO_DEPLOY_IN_TRANSIENT_UNIT=1" \
-        --setenv="MOJO_DEPLOY_PARENT_STATUS=${MOJO_DEPLOY_PARENT_STATUS:-}" \
-        --setenv="PROJ_PATH=$PROJ_PATH" \
-        --setenv="APP_USER=$APP_USER" \
-        --setenv="PROBE_URL=${PROBE_URL:-https://127.0.0.1/api/version}" \
-        --setenv="WEB_USER=${WEB_USER:-www}" \
-        --setenv="ASGI_WORKERS=${ASGI_WORKERS:-4}" \
-        bash "$self" --transaction "${ORIGINAL_ARGS[@]}"
+    if systemd-run --quiet --wait --collect --unit "$unit" \
+            --property Type=oneshot \
+            --property "TimeoutStartSec=$RUNTIME_SECONDS" \
+            --property "TimeoutStopSec=$ROLLBACK_SECONDS" \
+            --setenv="MOJO_DEPLOY_IN_TRANSIENT_UNIT=1" \
+            --setenv="MOJO_DEPLOY_PARENT_STATUS=${MOJO_DEPLOY_PARENT_STATUS:-}" \
+            --setenv="PROJ_PATH=$PROJ_PATH" \
+            --setenv="APP_USER=$APP_USER" \
+            --setenv="PROBE_URL=${PROBE_URL:-https://127.0.0.1/api/version}" \
+            --setenv="WEB_USER=${WEB_USER:-www}" \
+            --setenv="ASGI_WORKERS=${ASGI_WORKERS:-4}" \
+            bash "$self" --transaction "${ORIGINAL_ARGS[@]}"; then
+        exit 0
+    else
+        status=$?
+    fi
+    printf '%s\n' 'Deployment transaction failed; recent journal follows:' >&2
+    journalctl "_SYSTEMD_UNIT=${unit}.service" --boot=0 --output=cat \
+        --no-pager --quiet --lines=9 1>&2 2>/dev/null || true
+    exit "$status"
 fi
 
 cd "$PROJ_PATH"
