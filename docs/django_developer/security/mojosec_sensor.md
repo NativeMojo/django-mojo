@@ -47,8 +47,9 @@ traffic stays in access analytics rather than the security feed.
 
 The v1 scope does not inventory processes, listening sockets, or kernel policy.
 Package-manager coverage is deliberately omitted. The running system
-interpreter's approved `/usr`, `/usr/lib64`, and `/usr/local` site-packages are
-covered directly; project virtualenvs and application release trees are excluded.
+interpreter's site/dist-package roots below `/usr/lib`, `/usr/lib64`,
+`/usr/local/lib`, and `/usr/local/lib64` are covered directly; project
+virtualenvs and application release trees are excluded.
 AWS-native findings and application-level authentication signals
 continue through their existing django-mojo paths.
 
@@ -151,25 +152,27 @@ name. Its fast tier covers `/etc` (excluding `/etc/mojosec`), exact root and
 `ec2-user` persistence locations, cron/at/cloud-init scripts, local executables,
 and `/usr/local/lib` including system Python site-packages. Its slow tier covers
 `/boot`, `/usr/bin`, and `/usr/sbin`; the compatibility-named `rpm` tier performs
-an independent system-Python FIM walk. Profile paths and bounds cannot be overridden by
-desired policy: changing the graph requires a new packaged profile name and
-digest. Legacy custom FIM targets remain supported only when no profile is
-selected.
+an independent system-Python FIM walk. Profile paths and bounds cannot be
+overridden by desired policy: changing the graph requires a new packaged profile
+name and digest. Legacy custom FIM targets remain supported only when no profile
+is selected.
 
 The compatibility-named `rpm` tier performs only one descriptor-safe FIM walk
 of roots discovered in process from the running configured system Python.
-Strict filtering admits only `/usr`, `/usr/lib64`, `/usr/local/lib`, and
-`/usr/local/lib64` site/dist-package roots. Every regular file is SHA-256 hashed
-and every symlink retains its target hash; project environments are excluded.
-Readiness proves only interpreter identity and approved-root discovery, so
-`ExecStartPre` stays fast.
+Strict filtering admits only site/dist-package roots below `/usr/lib`,
+`/usr/lib64`, `/usr/local/lib`, and `/usr/local/lib64`. Every path retains
+descriptor-read metadata; regular files at or below `max_file_bytes` are
+SHA-256 hashed, oversized files retain `hash_skipped`, and every symlink's
+target string is SHA-256 hashed. Project environments are excluded. Readiness
+proves only interpreter identity and approved-root discovery, so `ExecStartPre`
+stays fast.
 
 This tier never invokes RPM, DNF, a shell, or another Python process. It has no
 package inventory, verification parser, ownership index, package lookup,
 generation digest, package transaction, or private command diagnostic. The
 legacy `collectors.rpm` config object, profile data, tier name, baseline key,
 and status field remain compatible so existing policy digests and stored
-baselines do not change shape.
+baseline identity do not change.
 
 `al2023-web-v1` remains packaged for baseline identity and rollback, but must
 not be used for a new AL2023 baseline. Its cloud-init script target descends

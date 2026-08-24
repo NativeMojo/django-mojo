@@ -94,7 +94,7 @@ class SystemPythonCollector:
                     for root in roots
                 ],
                 "max_entries": self.config["max_entries"],
-                "max_file_bytes": sys.maxsize,
+                "max_file_bytes": self.config["max_file_bytes"],
                 "max_depth": self.config["max_depth"],
             },
             self.expected_changes_path,

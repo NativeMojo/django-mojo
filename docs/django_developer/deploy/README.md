@@ -1326,13 +1326,14 @@ The recommended desired policy sets `"profile":"al2023-web-v2"`. The profile
 is packaged and immutable: fast host/config/home/cloud-init/local-library
 coverage runs each minute, slow boot and system-binary coverage runs every six
 hours, and the compatibility-named `rpm` tier descriptor-safely hashes every
-file and symlink in the running system Python's approved site-package roots. It
-excludes `/opt/api`, `/opt/www`, and MojoSec's own
-private/control state. Profile activation is an explicit
+regular file within the configured size bound and every symlink's target string
+in the running system Python's approved site/dist-package roots. Oversized files
+retain metadata plus `hash_skipped`. It excludes `/opt/api`, `/opt/www`, and
+MojoSec's own private/control state. Profile activation is an explicit
 `baseline-preview` → `baseline-initialize --confirm-digest <digest>` ceremony;
 ordinary service startup never blesses the first scan. `check_node` requires
-initialized fast, slow, and RPM baselines, and holds every other tier a node
-reports to the same standard.
+initialized `fast`, `slow`, and compatibility-named `rpm` baselines, and holds
+every other tier a node reports to the same standard.
 
 A node that serves tenant content selects `"profile":"al2023-content-v1"`
 instead — the same host graph plus a five-minute `content` tier over the roots
@@ -1363,10 +1364,11 @@ the broker's request grammar, and the overflow remedy are in
 The compatibility-named `rpm` tier has no package-manager dependency. It checks
 that the configured interpreter is the running system Python, discovers only
 site/dist-package roots below approved system library prefixes in process, and
-uses the same descriptor-safe FIM walker to hash every regular file and symlink
-there. It invokes no RPM, DNF, shell, or subprocess command and uses no Python
-RPM binding. Missing roots, traversal races, permission loss, or configured
-bounds keep the prior complete baseline authoritative.
+uses the same descriptor-safe FIM walker. Regular files within `max_file_bytes`
+and every symlink's target string are hashed; oversized files retain metadata
+plus `hash_skipped`. It invokes no RPM, DNF, shell, or subprocess command and
+uses no Python RPM binding. Missing roots, traversal races, permission loss, or
+traversal-bound exhaustion keep the prior complete baseline authoritative.
 
 `al2023-web-v1` is retained only for existing baseline identity and rollback.
 Do not select it for a new AL2023 baseline: its

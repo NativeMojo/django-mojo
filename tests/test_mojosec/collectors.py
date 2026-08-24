@@ -902,8 +902,8 @@ def test_system_python_collector_preserves_complete_and_incomplete_fim(opts):
                      hash_filter=None):
             th.assert_eq(hash_filter, None,
                          "the system-Python walk must not suppress any file hashes")
-            th.assert_eq(config["max_file_bytes"], sys.maxsize,
-                         "the legacy file-size bound must not skip Python files")
+            th.assert_eq(config["max_file_bytes"], 1024,
+                         "the system-Python walk must retain its file-size bound")
             th.assert_eq(config["targets"], [
                 {"path": root, "recursive": True, "optional": False},
             ], "the descriptor walk must contain only approved site roots")

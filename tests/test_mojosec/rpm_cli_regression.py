@@ -67,10 +67,10 @@ def test_legacy_rpm_tier_is_command_free_system_python_fim(opts):
                  "readiness and the scan must each discover roots in process")
     th.assert_eq(walk_configs[0][1], None,
                  "the system-Python walk must not suppress any file hash")
-    th.assert_eq(walk_configs[0][0]["max_file_bytes"], sys.maxsize,
-                 "the compatibility file-size bound must not skip system-Python files")
+    th.assert_eq(walk_configs[0][0]["max_file_bytes"], config["max_file_bytes"],
+                 "the system-Python walk must retain its per-file safety bound")
     th.assert_eq(scan["snapshot"][regular]["sha256"], "c" * 64,
-                 "every regular system-Python file must retain its hash")
+                 "an in-bound regular system-Python file must retain its hash")
     th.assert_eq(scan["snapshot"][link]["target_sha256"], "d" * 64,
                  "every system-Python symlink must retain its target hash")
     th.assert_eq(scan["tier"], "rpm",
