@@ -1,72 +1,77 @@
-"""Regression for RPM CLI ownership without Python RPM bindings."""
+"""Regression for command-free system-Python integrity collection."""
 
-import json
+import inspect
+import sys
 
 from testit import helpers as th
 
 
-def _inventory(root, path):
-    return (
-        "<mojosec-rpm-package>"
-        '<rpmTag name="Nevra"><string>rpm-4.16.1-1.amzn2023.x86_64</string></rpmTag>'
-        '<rpmTag name="Sha256header"><string>' + "a" * 64 + "</string></rpmTag>"
-        '<rpmTag name="Installtid"><integer>42</integer></rpmTag>'
-        '<rpmTag name="Installtime"><integer>1720000000</integer></rpmTag>'
-        "<mojosec-rpm-files>"
-        '<mojosec-rpm-file><rpmTag name="Filenames"><string>/usr/bin/rpm</string>'
-        '</rpmTag><rpmTag name="Filestates"><integer>0</integer></rpmTag>'
-        '</mojosec-rpm-file>'
-        '<mojosec-rpm-file><rpmTag name="Filenames"><string>' + path + "</string>"
-        '</rpmTag><rpmTag name="Filestates"><integer>0</integer></rpmTag>'
-        '</mojosec-rpm-file>'
-        "</mojosec-rpm-files>"
-        "</mojosec-rpm-package>\n"
-    )
-
-
 @th.tier("bug")
 @th.django_unit_test()
-def test_rpm_cli_probe_and_scan_do_not_import_python_rpm(opts):
-    from mojo.mojosec.collectors.rpm import RpmCollector, probe_rpm_capability
+def test_legacy_rpm_tier_is_command_free_system_python_fim(opts):
+    from mojo.mojosec.collectors import rpm as system_python
 
-    root = "/usr/local/lib/python3.12/site-packages"
-    path = root + "/example.py"
+    source = inspect.getsource(system_python)
+    for forbidden in ("subprocess", "/usr/bin/rpm", "-Va", "-qa", "import rpm"):
+        th.assert_true(
+            forbidden not in source,
+            f"the compatibility-named rpm tier must not retain command boundary {forbidden!r}",
+        )
+
+    root = "/usr/lib/python3.12/site-packages"
+    regular = root + "/module.py"
+    link = root + "/module-link.py"
     config = {
-        "interpreter": "/usr/bin/python-without-rpm", "interval_seconds": 21600,
+        "interpreter": sys.executable, "interval_seconds": 21600,
         "max_entries": 100, "max_packages": 10, "max_owner_queries": 100,
         "max_output_bytes": 65536, "timeout_seconds": 5,
         "max_file_bytes": 1024, "max_depth": 16,
     }
-    calls = []
+    roots_calls = []
 
-    def runner(argv, accepted=(0,)):
-        calls.append(list(argv))
-        if argv[0] == config["interpreter"]:
-            th.assert_true("import rpm" not in argv[-1],
-                           "site-root discovery must never import the Python rpm module")
-            return 0, json.dumps([root]), ""
-        if argv[:2] == ["/usr/bin/rpm", "-qa"]:
-            return 0, _inventory(root, path), ""
-        if argv[:2] == ["/usr/bin/rpm", "--verify"]:
-            return 0, "", ""
-        raise AssertionError(f"unexpected RPM regression command: {argv!r}")
+    def roots_provider():
+        roots_calls.append(True)
+        return [root, "/tmp/attacker/site-packages"]
 
-    th.assert_true(probe_rpm_capability(config, runner=runner),
-                   "the RPM CLI inventory must prove readiness without Python bindings")
-    collector = RpmCollector(
-        config, {"name": "al2023-web-v2", "version": 2, "digest": "b" * 64},
-        runner=runner,
+    walk_configs = []
+
+    class Walker:
+        def __init__(self, config, expected_changes_path, identity, tier,
+                     hash_filter=None):
+            walk_configs.append((config, hash_filter))
+
+        def scan(self, previous):
+            return {
+                "complete": True,
+                "snapshot": {
+                    regular: {"kind": "file", "sha256": "c" * 64},
+                    link: {"kind": "symlink", "target_sha256": "d" * 64},
+                },
+            }
+
+    th.assert_true(
+        system_python.probe_system_python_capability(
+            config, roots_provider=roots_provider),
+        "readiness must prove approved in-process roots without scanning or commands",
     )
-    scan = collector.scan(shared_snapshot={
-        path: {"kind": "file", "mode": 0o644, "uid": 0, "gid": 0,
-               "size": 4, "sha256": "c" * 64},
-    })
+    th.assert_eq(walk_configs, [],
+                 "readiness must not run the descriptor walk")
+    collector = system_python.SystemPythonCollector(
+        config, {"name": "al2023-web-v2", "version": 2, "digest": "b" * 64},
+        roots_provider=roots_provider, fim_factory=Walker,
+    )
+    scan = collector.scan(previous={})
     th.assert_true(scan["complete"],
-                   "a stable injected RPM CLI inventory must complete the scan")
-    th.assert_eq(scan["snapshot"][path]["rpm_owner"],
-                 "rpm-4.16.1-1.amzn2023.x86_64",
-                 "the exact normal-state inventory owner must select RPM verification")
-    th.assert_true("sha256" not in scan["snapshot"][path],
-                   "an RPM-owned file must not retain duplicate SHA-256 coverage")
-    th.assert_eq(sum(argv[:2] == ["/usr/bin/rpm", "-qa"] for argv in calls), 3,
-                 "the probe and scan must use one inventory each, with a stable rescan")
+                   "the descriptor-safe system-Python walk must complete")
+    th.assert_eq(len(roots_calls), 2,
+                 "readiness and the scan must each discover roots in process")
+    th.assert_eq(walk_configs[0][1], None,
+                 "the system-Python walk must not suppress any file hash")
+    th.assert_eq(walk_configs[0][0]["max_file_bytes"], config["max_file_bytes"],
+                 "the system-Python walk must retain its per-file safety bound")
+    th.assert_eq(scan["snapshot"][regular]["sha256"], "c" * 64,
+                 "an in-bound regular system-Python file must retain its hash")
+    th.assert_eq(scan["snapshot"][link]["target_sha256"], "d" * 64,
+                 "every system-Python symlink must retain its target hash")
+    th.assert_eq(scan["tier"], "rpm",
+                 "the persisted legacy tier identity must remain compatible")

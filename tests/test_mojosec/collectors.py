@@ -858,183 +858,68 @@ def test_fim_reuses_strict_metadata_and_retains_alias_anomalies(opts):
 
 
 @th.django_unit_test()
-def test_rpm_parser_is_strict_and_system_site_roots_are_constrained(opts):
-    from mojo.mojosec.collectors.rpm import RpmCollector, RpmError, parse_verify_output
-
-    parsed = parse_verify_output(
-        "S.5....T.  c /usr/lib/python3.11/site-packages/mojo/__init__.py\n",
-        ["/usr/lib/python3.11/site-packages"],
+def test_system_python_roots_are_strict_and_fim_remains_legacy_rpm_tier(opts):
+    from mojo.mojosec.collectors.rpm import (
+        SystemPythonCollector, SystemPythonError, discover_system_python_roots,
     )
-    th.assert_eq(parsed["/usr/lib/python3.11/site-packages/mojo/__init__.py"]["status"],
-                 "S.5....T.",
-                 "all nine documented RPM verification columns must be retained")
-    with th.assert_raises(RpmError):
-        parse_verify_output(
-            "X........ /usr/lib/python3.11/site-packages/mojo/__init__.py\n",
-            ["/usr/lib/python3.11/site-packages"],
-        )
 
-    calls = []
-
-    def runner(argv, accepted=(0,)):
-        calls.append(argv)
-        return 0, json.dumps([
-            "/usr/lib/python3.11/site-packages",
-            "/usr/lib64/python3.11/site-packages",
-            "/usr/local/lib/python3.11/site-packages",
-            "/opt/api/.venv/lib/python3.11/site-packages",
-            "/tmp/attacker/site-packages",
-        ]), ""
-
-    collector = RpmCollector({
+    candidates = [
+        "/usr/lib/python3.11/site-packages",
+        "/usr/lib64/python3.11/site-packages",
+        "/usr/local/lib/python3.11/site-packages",
+        "/opt/api/.venv/lib/python3.11/site-packages",
+        "/tmp/attacker/site-packages",
+    ]
+    config = {
         "interpreter": "/usr/bin/python3", "interval_seconds": 21600,
         "max_entries": 100, "max_packages": 10, "max_owner_queries": 100,
         "max_output_bytes": 65536, "timeout_seconds": 5,
         "max_file_bytes": 1024, "max_depth": 16,
-    }, {"name": "al2023-web-v1", "version": 1, "digest": "a" * 64}, runner=runner)
-    roots = collector.discover_site_roots()
+    }
+    roots = discover_system_python_roots(config, roots_provider=lambda: candidates)
     th.assert_eq(roots, [
         "/usr/lib/python3.11/site-packages",
         "/usr/lib64/python3.11/site-packages",
         "/usr/local/lib/python3.11/site-packages",
-    ], "system interpreter discovery must reject project and temporary environments")
-    th.assert_eq(calls[0][:2], ["/usr/bin/python3", "-I"],
-                 "site discovery must use the trusted isolated system interpreter")
-
-
-def _rpm_inventory_record(nevra, header, install_tid, install_time, files):
-    import html
-
-    rows = "".join(
-        '<mojosec-rpm-file><rpmTag name="Filenames"><string>'
-        + html.escape(path)
-        + '</string></rpmTag><rpmTag name="Filestates"><integer>'
-        + str(state)
-        + '</integer></rpmTag></mojosec-rpm-file>'
-        for path, state in files
-    )
-    return (
-        '<mojosec-rpm-package>'
-        '<rpmTag name="Nevra"><string>' + html.escape(nevra) + '</string></rpmTag>'
-        '<rpmTag name="Sha256header"><string>' + header + '</string></rpmTag>'
-        '<rpmTag name="Installtid"><integer>' + str(install_tid) + '</integer></rpmTag>'
-        '<rpmTag name="Installtime"><integer>' + str(install_time) + '</integer></rpmTag>'
-        '<mojosec-rpm-files>' + rows + '</mojosec-rpm-files>'
-        '</mojosec-rpm-package>\n'
-    )
+    ], "in-process discovery must reject project and temporary environments")
+    for invalid in (lambda: [], lambda: ["/tmp/site-packages"], lambda: [None] * 129):
+        with th.assert_raises(SystemPythonError):
+            discover_system_python_roots(config, roots_provider=invalid)
 
 
 @th.django_unit_test()
-def test_rpm_inventory_parser_is_exact_and_generation_sensitive(opts):
-    from mojo.mojosec.collectors.rpm import RpmCollector, RpmError, parse_inventory
-
-    first = _rpm_inventory_record(
-        "example-1-1.x86_64", "a" * 64, 41, 1720000000,
-        [("/usr/lib/a&b.py", 0), ("/usr/lib/removed.py", 1)],
-    )
-    second = _rpm_inventory_record(
-        "example-1-1.x86_64", "b" * 64, 42, 1720000001,
-        [("/usr/lib/shared.py", 0)],
-    )
-    parsed = parse_inventory(first + second)
-    th.assert_eq(parsed["owners"]["/usr/lib/a&b.py"], ["example-1-1.x86_64"],
-                 "XML escaping must round-trip an exact normal-state owner path")
-    th.assert_true("/usr/lib/removed.py" not in parsed["owners"],
-                   "a non-normal RPM file state must remain outside the owner index")
-    th.assert_eq(parsed["owners"]["/usr/lib/shared.py"], ["example-1-1.x86_64"],
-                 "same-NEVRA records with distinct header identities must retain multiplicity")
-    reordered = parse_inventory(second + first)
-    th.assert_eq(parsed["digest"], reordered["digest"],
-                 "inventory generation must be canonical across package query order")
-    changed = parse_inventory(first + second.replace("b" * 64, "c" * 64))
-    th.assert_true(parsed["digest"] != changed["digest"],
-                   "header identity changes must alter generation with stable NEVRA")
-
-    additional = _rpm_inventory_record(
-        "other-1-1.x86_64", "d" * 64, 43, 1720000002,
-        [("/usr/lib/a&b.py", 0)],
-    )
-    multiple = parse_inventory(first + additional)
-    th.assert_eq(multiple["owners"]["/usr/lib/a&b.py"],
-                 ["example-1-1.x86_64", "other-1-1.x86_64"],
-                 "the exact owner index must preserve multiple installed owners")
-    owner_config = {"max_owner_queries": 1}
-    owner_collector = RpmCollector(
-        owner_config, {"name": "probe", "digest": "0" * 64},
-        runner=lambda argv, accepted=(0,): (0, "", ""),
-    )
-    owner_collector.owner_index = multiple["owners"]
-    with th.assert_raises(RpmError):
-        owner_collector._owner("/usr/lib/a&b.py")
-    owner_collector.owner_index = {}
-    owner_collector.owner_queries = 0
-    owner_collector._owner("/usr/lib/one.py")
-    with th.assert_raises(RpmError):
-        owner_collector._owner("/usr/lib/two.py")
-
-    malformed = (
-        "",
-        first[:-10],
-        first.replace('name="Nevra"', 'name="Unexpected"'),
-        first.replace("a" * 64, "short"),
-        first.replace("example-1-1.x86_64", "bad owner"),
-        first.replace("a&amp;b.py", "a&bogus;b.py"),
-        first.replace("/usr/lib/a&amp;b.py", "relative.py"),
-        first.replace(
-            '<rpmTag name="Filestates"><integer>0</integer></rpmTag>', "", 1),
-        first + first,
-        "<!DOCTYPE x>" + first,
-    )
-    for payload in malformed:
-        with th.assert_raises(RpmError):
-            parse_inventory(payload)
-
-
-@th.django_unit_test()
-def test_rpm_inventory_ownership_partitions_one_authoritative_walk(opts):
-    from mojo.mojosec.collectors.rpm import RpmCollector, RpmError
+def test_system_python_collector_preserves_complete_and_incomplete_fim(opts):
+    from mojo.mojosec.collectors.rpm import SystemPythonCollector
 
     root = "/usr/lib/python3.12/site-packages"
-    owned_path = root + "/owned.py"
-    non_normal_path = root + "/removed.py"
-    late_path = root + "/late.py"
-    rpm_path = "/usr/bin/rpm"
-    base = (
-        _rpm_inventory_record(
-            "rpm-4.16.1-1.amzn2023.x86_64", "a" * 64, 1, 100,
-            [(rpm_path, 0)])
-        + _rpm_inventory_record(
-            "example-1-1.x86_64", "b" * 64, 2, 101,
-            [(owned_path, 0), (non_normal_path, 1)])
-    )
-    inventories = [base, base]
-    commands = []
-
-    def runner(argv, accepted=(0,)):
-        commands.append(list(argv))
-        if argv[0] == "/usr/bin/python3":
-            return 0, json.dumps([root]), ""
-        if argv[:2] == ["/usr/bin/rpm", "-qa"]:
-            return 0, inventories.pop(0), ""
-        if argv[:2] == ["/usr/bin/rpm", "--verify"]:
-            return 0, "", ""
-        raise AssertionError(f"unexpected RPM unit command: {argv!r}")
-
+    module_path = root + "/module.py"
+    link_path = root + "/module-link.py"
     walk_calls = []
+    complete = [True, False]
 
     class Walker:
-        def __init__(self, config, expected_changes_path, identity, tier, hash_filter):
-            self.hash_filter = hash_filter
+        def __init__(self, config, expected_changes_path, identity, tier,
+                     hash_filter=None):
+            th.assert_eq(hash_filter, None,
+                         "the system-Python walk must not suppress any file hashes")
+            th.assert_eq(config["max_file_bytes"], 1024,
+                         "the system-Python walk must retain its file-size bound")
+            th.assert_eq(config["targets"], [
+                {"path": root, "recursive": True, "optional": False},
+            ], "the descriptor walk must contain only approved site roots")
 
         def scan(self, previous):
             walk_calls.append(previous)
-            snapshot = {}
-            for path in (owned_path, non_normal_path, late_path):
-                entry = {"kind": "file"}
-                if self.hash_filter(path):
-                    entry["sha256"] = "d" * 64
-                snapshot[path] = entry
-            return {"complete": True, "snapshot": snapshot}
+            return {
+                "complete": complete.pop(0),
+                "snapshot": {
+                    module_path: {"kind": "file", "sha256": "c" * 64},
+                    link_path: {
+                        "kind": "symlink", "target_sha256": "d" * 64,
+                        "anomaly": "symlink_escape",
+                    },
+                },
+            }
 
     config = {
         "interpreter": "/usr/bin/python3", "interval_seconds": 21600,
@@ -1042,81 +927,30 @@ def test_rpm_inventory_ownership_partitions_one_authoritative_walk(opts):
         "max_output_bytes": 65536, "timeout_seconds": 5,
         "max_file_bytes": 1024, "max_depth": 16,
     }
-    collector = RpmCollector(
+    collector = SystemPythonCollector(
         config, {"name": "al2023-web-v2", "version": 2, "digest": "e" * 64},
-        runner=runner, fim_factory=Walker,
+        roots_provider=lambda: [root], fim_factory=Walker,
     )
-    scan = collector.scan(previous={"prior": {"kind": "file"}})
-    th.assert_eq(len(walk_calls), 1,
-                 "the RPM tier must perform exactly one authoritative descriptor walk")
-    th.assert_eq(scan["snapshot"][owned_path]["rpm_owner"], "example-1-1.x86_64",
-                 "one exact normal-state owner must select package verification")
-    th.assert_true("sha256" not in scan["snapshot"][owned_path],
-                   "an RPM-owned file must skip duplicate SHA-256 work")
-    th.assert_eq(scan["snapshot"][non_normal_path]["sha256"], "d" * 64,
-                 "a non-normal-state path must retain SHA-256 coverage")
-    th.assert_eq(scan["snapshot"][late_path]["sha256"], "d" * 64,
-                 "an unowned path discovered during the walk must retain SHA-256 coverage")
-    th.assert_eq(sum(argv[:2] == ["/usr/bin/rpm", "-qa"] for argv in commands), 2,
-                 "one before and one after inventory must bracket the walk and verification")
+    retained = {"prior": {"kind": "file", "sha256": "f" * 64}}
+    scan = collector.scan(previous=retained)
+    th.assert_eq(walk_calls, [retained],
+                 "the descriptor walk must receive the prior complete baseline")
+    th.assert_eq(scan["snapshot"][module_path]["sha256"], "c" * 64,
+                 "a regular Python file must retain its descriptor-safe hash")
+    th.assert_eq(scan["snapshot"][link_path]["target_sha256"], "d" * 64,
+                 "a Python symlink must retain its target hash")
+    th.assert_eq(scan["anomalies"], 1,
+                 "FIM anomalies must remain visible on the compatibility tier")
+    th.assert_eq(scan["packages"], 0,
+                 "the stable preview field must not imply package inspection")
+    th.assert_eq(scan["tier"], "rpm",
+                 "the stored tier identity must remain backward compatible")
 
-    changed = base.replace("b" * 64, "c" * 64)
-    inventories[:] = [base, changed]
-    retained = {"sentinel": {"kind": "file", "sha256": "f" * 64}}
-    try:
-        collector.scan(previous=retained)
-    except RpmError as err:
-        th.assert_eq(str(err), "RPM inventory changed during the integrity scan",
-                     "generation drift must use a fixed fail-closed classification")
-    else:
-        th.assert_true(False, "a changed RPM generation must abort the scan")
-    th.assert_eq(retained, {"sentinel": {"kind": "file", "sha256": "f" * 64}},
-                 "an aborted generation must leave the prior baseline untouched")
-
-
-@th.django_unit_test()
-def test_rpm_live_command_reader_bounds_both_streams(opts):
-    from mojo.mojosec.collectors.rpm import RpmCollector, RpmError
-
-    config = {
-        "interpreter": "/usr/bin/python3", "max_output_bytes": 4096,
-        "timeout_seconds": 1,
-    }
-    collector = RpmCollector(
-        config, {"name": "probe", "digest": "0" * 64},
-    )
-
-    cases = (
-        ("import sys;sys.stdout.buffer.write(b'x'*8192)",
-         "RPM command output exceeded its bound"),
-        ("import sys;sys.stderr.buffer.write(b'x'*8192)",
-         "RPM command output exceeded its bound"),
-        ("import sys;sys.stdout.buffer.write(b'\\xff')",
-         "RPM command output is not valid UTF-8"),
-        ("import time;time.sleep(2)", "RPM command timed out"),
-    )
-    for script, expected in cases:
-        try:
-            collector._run([sys.executable, "-c", script])
-        except RpmError as err:
-            th.assert_eq(str(err), expected,
-                         "bounded runner failures must expose only fixed classifications")
-        else:
-            th.assert_true(False, f"bounded runner case must fail: {script}")
-
-    private = "private package database diagnostic"
-    try:
-        collector._run([
-            sys.executable, "-c",
-            "import sys;sys.stderr.write(" + repr(private) + ");raise SystemExit(7)",
-        ])
-    except RpmError as err:
-        th.assert_eq(str(err), "RPM command failed",
-                     "a nonzero command must not expose stderr in exception text")
-        th.assert_eq(err.private_stderr, private.encode(),
-                     "bounded private stderr must remain available to the local diagnostics item")
-    else:
-        th.assert_true(False, "a nonzero command must fail closed")
+    incomplete = collector.scan(previous=retained)
+    th.assert_true(not incomplete["complete"],
+                   "an incomplete descriptor walk must stay incomplete")
+    th.assert_eq(retained, {"prior": {"kind": "file", "sha256": "f" * 64}},
+                 "an incomplete scan must leave the prior baseline untouched")
 
 
 @th.django_unit_test()

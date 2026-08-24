@@ -4,7 +4,9 @@ import signal
 import threading
 import time
 
-from .collectors import FimCollector, JournalCollector, NginxCollector, RpmCollector
+from .collectors import (
+    FimCollector, JournalCollector, NginxCollector, SystemPythonCollector,
+)
 from .output import emit, emit_error, write_status
 from .profiles import profile_identity, resolve_profile
 from .sender import Sender
@@ -28,7 +30,7 @@ class Runtime:
             for tier, tier_config in collectors["fim"]["tiers"].items():
                 self.integrity_collectors[tier] = FimCollector(
                     tier_config, config["expected_changes_path"], self.profile_identity, tier)
-            self.integrity_collectors["rpm"] = RpmCollector(
+            self.integrity_collectors["rpm"] = SystemPythonCollector(
                 collectors["rpm"], self.profile_identity, config["expected_changes_path"])
             self.fim = None
         else:
@@ -136,14 +138,7 @@ class Runtime:
             self._collector_error("fim", err)
 
     def integrity_roster(self):
-        """Every configured tier in scan order: fast first, rpm last.
-
-        Order is load-bearing, not cosmetic: `fast` publishes the shared
-        /usr/local traversal that `rpm` verifies against, so rpm must run after
-        it. Everything else in between is scanned in a stable sorted order.
-        Deriving this from the configured collectors is what lets a profile add
-        a tier (content) without the loops silently skipping it.
-        """
+        """Every configured tier in stable scan order, preserving legacy order."""
         names = set(self.integrity_collectors)
         roster = ["fast"] if "fast" in names else []
         roster.extend(sorted(names - {"fast", "rpm"}))
@@ -156,35 +151,11 @@ class Runtime:
         if not self.profile:
             raise ValueError("legacy custom FIM has no profile activation ceremony")
         scans = {}
-        fast_snapshot = None
         for tier in self.integrity_roster():
             collector = self.integrity_collectors[tier]
             started = time.monotonic()
             previous = self.store.load_fim_baseline(collector.baseline_key)
-            if tier == "rpm":
-                if fast_snapshot is None:
-                    # The fast preview walk was incomplete, so there is no
-                    # trustworthy shared /usr/local traversal to verify against.
-                    # Report the rpm tier as honestly incomplete instead of
-                    # previewing package state derived from a truncated walk.
-                    config = collector.config
-                    scans[tier] = {
-                        "tier": "rpm", "baseline_key": collector.baseline_key,
-                        "snapshot": {}, "complete": False, "entries": 0,
-                        "duration": 0.0,
-                        "bounds": {
-                            key: config[key] for key in (
-                                "max_entries", "max_file_bytes", "max_depth")
-                            if key in config
-                        },
-                        "reason": "shared fast-tier traversal was incomplete",
-                    }
-                    continue
-                scan = collector.scan(previous, shared_snapshot=fast_snapshot)
-            else:
-                scan = collector.scan(previous)
-                if tier == "fast":
-                    fast_snapshot = scan["snapshot"] if scan["complete"] else None
+            scan = collector.scan(previous)
             scan["duration"] = round(time.monotonic() - started, 6)
             config = collector.config
             scan["bounds"] = {
@@ -235,7 +206,6 @@ class Runtime:
                 "integrity", "profile baseline is not explicitly initialized or digest drifted")
             return
         now = time.monotonic()
-        fast_snapshot = None
         for tier in self.integrity_roster():
             collector = self.integrity_collectors[tier]
             interval = collector.config["interval_seconds"]
@@ -245,18 +215,7 @@ class Runtime:
             try:
                 baseline = self.store.load_fim_baseline(collector.baseline_key)
                 started = time.monotonic()
-                if tier == "rpm":
-                    if fast_snapshot is None:
-                        fast = self.integrity_collectors["fast"]
-                        fast_snapshot = self.store.load_fim_baseline(fast.baseline_key)
-                    scan = collector.scan(baseline, shared_snapshot=fast_snapshot)
-                else:
-                    scan = collector.scan(baseline)
-                    if tier == "fast":
-                        # An incomplete traversal must never become the rpm
-                        # tier's shared /usr/local view; leaving None routes
-                        # rpm to the last complete fast baseline above.
-                        fast_snapshot = scan["snapshot"] if scan["complete"] else None
+                scan = collector.scan(baseline)
                 scan["duration"] = round(time.monotonic() - started, 6)
                 observations = collector.diff(baseline, scan)
                 self.store.record_fim_scan(
