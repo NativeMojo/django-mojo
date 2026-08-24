@@ -46,6 +46,98 @@ def _allocation(opts, client_ref="client-a", domain="example.com"):
     )
 
 
+HUB_NAMESERVERS = ["ns-1.awsdns.example", "ns-2.awsdns.example"]
+
+
+class FakeRoute53:
+    """Route53 stand-in threaded through the hub's real write path.
+
+    Injected with ``route53_client=`` rather than patched, so the whole
+    ``_stored_zone`` -> ``_validate_zone`` -> write chain runs for real.
+    ``get_change`` deliberately raises: the hub must never block an HTTP reply
+    on Route53 convergence.
+    """
+
+    def __init__(self, zone_id="ZONE-HUB", zone_name="hub.example.net"):
+        self.zone_id = zone_id
+        self.zone_name = zone_name
+        self.calls = []
+        self.records = {}
+
+    def find_zone_id(self, name):
+        self.calls.append(("find_zone_id", name, []))
+        return self.zone_id
+
+    def get_zone(self, zone_id):
+        self.calls.append(("get_zone", zone_id, []))
+        return objict(
+            id=self.zone_id, name=self.zone_name, private=False,
+            name_servers=list(HUB_NAMESERVERS))
+
+    def upsert_record(self, zone_id, rtype, name, values, ttl=None,
+                      zone_name=None, comment=None):
+        self.calls.append(("upsert", name, sorted(values)))
+        self.records[(rtype, name)] = objict(
+            type=rtype, name=name, record_values=list(values), ttl=ttl or 60)
+        return "CHANGE-UPSERT"
+
+    def list_records(self, zone_id):
+        self.calls.append(("list_records", zone_id, []))
+        return list(self.records.values())
+
+    def delete_record(self, zone_id, rtype, name, values=None, ttl=None,
+                      zone_name=None, comment=None):
+        self.calls.append(("delete", name, sorted(values or [])))
+        self.records.pop((rtype, name), None)
+        return "CHANGE-DELETE"
+
+    def get_change(self, change_id):
+        raise AssertionError(
+            f"the hub must not poll Route53 for change {change_id}")
+
+    @property
+    def writes(self):
+        return [call for call in self.calls if call[0] in ("upsert", "delete")]
+
+
+class FakeProbe:
+    """`probe` stand-in injected with ``dns_probe=``.
+
+    ``txt``/``error`` drive ``query_txt``; ``raises=True`` makes any TXT lookup
+    an assertion failure, which is how the write path proves it no longer waits
+    on authoritative visibility.
+    """
+
+    def __init__(self, txt=None, error=None, raises=False,
+                 zone_name="hub.example.net"):
+        self.txt = list(txt or [])
+        self.error = error
+        self.raises = raises
+        self.zone_name = zone_name
+        self.txt_queries = []
+
+    def normalize_name(self, value):
+        from mojo.helpers.dns import probe
+
+        return probe.normalize_name(value)
+
+    def find_zone_nameservers(self, name, **kwargs):
+        return objict(
+            zone=self.zone_name, nameservers=list(HUB_NAMESERVERS), error=None)
+
+    def verify_one_hop_cname(self, source, target, **kwargs):
+        return objict(ok=True, error=None)
+
+    def query_txt(self, name, **kwargs):
+        self.txt_queries.append(name)
+        if self.raises:
+            raise AssertionError(
+                f"the hub write path must not poll authoritative DNS for {name}")
+        return objict(
+            txt_values=list(self.txt), zone=self.zone_name,
+            nameservers=list(HUB_NAMESERVERS), error=self.error)
+
+
 @th.django_unit_test("ACME hub allocations are idempotent tombstones and targets never reuse")
 def test_allocation_idempotency_and_target_non_reuse(opts):
     from mojo.apps.dnsman.models import AcmeHubDelegation
@@ -134,7 +226,7 @@ def test_publish_union_and_withdraw_without_cname(opts):
     allocation = _allocation(opts)
     writes = []
 
-    def fake_write(row, values):
+    def fake_write(row, values, **kwargs):
         writes.append((row.pk, list(values)))
 
     proof = objict(ok=True, error=None)
@@ -188,9 +280,12 @@ def test_ambiguous_write_is_sweep_recoverable(opts):
     assert lease.record_values == ["digest-a"], "the durable desired value must survive the crash"
 
     recovered = []
-    with mock.patch.object(acme_hub, "_write_exact", lambda row, values: recovered.append(list(values))), \
+    # The sweeper confirms before it writes, so it needs an injected probe:
+    # without one it would do a live lookup of the opaque target, and a
+    # deliberate mismatch is what keeps the recovery write on the tested path.
+    with mock.patch.object(acme_hub, "_write_exact", lambda row, values, **kwargs: recovered.append(list(values))), \
             mock.patch.object(acme_hub, "_audit"):
-        result = acme_hub.sweep()
+        result = acme_hub.sweep(dns_probe=FakeProbe(txt=["digest-stale"]))
     lease.refresh_from_db()
     assert result.errors == 0 and result.reconciled == 1, f"sweeper should recover intent, got {result}"
     assert lease.state == "active", "recovered pending lease should become active"
@@ -210,7 +305,7 @@ def test_reconcile_snapshot_does_not_ack_late_lease(opts):
         expires_at=dates.add(seconds=300))
     late = []
 
-    def write_with_crash_window(row, values):
+    def write_with_crash_window(row, values, **kwargs):
         assert values == ["digest-a"], f"unexpected snapshot values: {values}"
         # Simulate state becoming durable after the snapshot but before the
         # provider acknowledgement. Public persist paths hold the same lock;
@@ -222,12 +317,16 @@ def test_reconcile_snapshot_does_not_ack_late_lease(opts):
 
     with mock.patch.object(acme_hub, "_write_exact", side_effect=write_with_crash_window), \
             mock.patch.object(acme_hub, "_audit"):
-        acme_hub.reconcile(allocation)
+        # A deliberate mismatch: reconcile() confirms first, and a matching
+        # probe would skip the write entirely and leave this invariant untested.
+        acme_hub.reconcile(allocation, dns_probe=FakeProbe(txt=["digest-mismatch"]))
 
     original.refresh_from_db()
     late[0].refresh_from_db()
-    assert original.state == "active" and original.reconciled_at is not None, \
+    assert original.state == "active", \
         "the lease included in the exact provider write should be acknowledged"
+    assert original.reconciled_at is None, \
+        "a submitted write is not a confirmed one — reconciled_at belongs to a probe match"
     assert late[0].state == "pending" and late[0].reconciled_at is None, \
         "a lease outside the write snapshot must remain pending for the sweeper"
 
@@ -244,13 +343,150 @@ def test_sweeper_expires_stale_lease(opts):
         record_values=["digest-expired"], state="active",
         expires_at=dates.subtract(seconds=1), reconciled_at=dates.utcnow())
     writes = []
-    with mock.patch.object(acme_hub, "_write_exact", lambda row, values: writes.append(list(values))), \
+    # The probe must report a stale NON-EMPTY value.  An empty answer is
+    # exactly what an already-cleared target returns (NXDOMAIN -> error=None,
+    # no values), which the sweeper correctly confirms as a match and skips —
+    # and this test would then assert nothing at all.
+    with mock.patch.object(acme_hub, "_write_exact", lambda row, values, **kwargs: writes.append(list(values))), \
             mock.patch.object(acme_hub, "_audit"):
-        result = acme_hub.sweep()
+        result = acme_hub.sweep(dns_probe=FakeProbe(txt=["digest-expired"]))
     lease.refresh_from_db()
     assert result.expired == 1, f"expected one expired lease, got {result}"
     assert lease.state == "expired", "stale lease must be retired durably"
     assert writes == [[]], f"an allocation with no live leases must clear its exact RRset, got {writes}"
+
+
+@th.tier("bug")
+@th.django_unit_test("ACME hub publish replies without waiting for Route53 propagation")
+def test_publish_replies_without_waiting_for_propagation(opts):
+    from mojo.apps.dnsman.models import AcmeHubChallengeLease
+    from mojo.apps.dnsman.services import acme_hub
+
+    allocation = _allocation(opts)
+    r53 = FakeRoute53()
+    dns = FakeProbe(raises=True)
+
+    result = acme_hub.publish(
+        opts.acme_group, "client-a", "challenge-apex", ["digest-b", "digest-a"],
+        route53_client=r53, dns_probe=dns)
+
+    assert result.active_value_count == 2, \
+        f"the complete digest set must be reported active, got {result.active_value_count}"
+    assert r53.writes == [
+        ("upsert", allocation.target_name, ["digest-a", "digest-b"])], \
+        f"expected exactly one exact-union upsert at the target, got {r53.writes}"
+    lease = AcmeHubChallengeLease.objects.get(
+        allocation=allocation, challenge_ref="challenge-apex")
+    assert lease.state == "active", \
+        f"an accepted challenge write must leave the lease active, got {lease.state}"
+    assert lease.reconciled_at is None, \
+        "reconciled_at means a probe confirmed the RRset, not that a write was submitted"
+
+
+@th.tier("bug")
+@th.django_unit_test("ACME hub withdraw replies without waiting for Route53 propagation")
+def test_withdraw_replies_without_waiting_for_propagation(opts):
+    from mojo.apps.dnsman.models import AcmeHubChallengeLease
+    from mojo.apps.dnsman.services import acme_hub
+
+    allocation = _allocation(opts)
+    r53 = FakeRoute53()
+    dns = FakeProbe(raises=True)
+
+    acme_hub.publish(
+        opts.acme_group, "client-a", "challenge-apex", ["digest-b", "digest-a"],
+        route53_client=r53, dns_probe=dns)
+    result = acme_hub.withdraw(
+        opts.acme_group, "client-a", "challenge-apex",
+        route53_client=r53, dns_probe=dns)
+
+    assert result.active_value_count == 0, \
+        f"the last lease's withdrawal must empty the RRset, got {result.active_value_count}"
+    assert ("delete", allocation.target_name, ["digest-a", "digest-b"]) in r53.writes, \
+        f"withdraw must issue the exact delete, got {r53.writes}"
+    lease = AcmeHubChallengeLease.objects.get(
+        allocation=allocation, challenge_ref="challenge-apex")
+    assert lease.state == "withdrawn", \
+        f"the named lease must be durably retired, got {lease.state}"
+    assert lease.reconciled_at is None, \
+        "a submitted delete is not a confirmed one; the sweeper owns reconciled_at"
+
+
+@th.django_unit_test("ACME hub sweep confirms an already-visible RRset without rewriting it")
+def test_sweep_confirms_without_writing_when_already_visible(opts):
+    from mojo.helpers import dates
+    from mojo.apps.dnsman.models import AcmeHubChallengeLease
+    from mojo.apps.dnsman.services import acme_hub
+
+    allocation = _allocation(opts)
+    lease = AcmeHubChallengeLease.objects.create(
+        allocation=allocation, challenge_ref="challenge-visible",
+        record_values=["digest-a"], state="pending",
+        expires_at=dates.add(seconds=300))
+    r53 = FakeRoute53()
+    dns = FakeProbe(txt=["digest-a"])
+
+    result = acme_hub.sweep(route53_client=r53, dns_probe=dns)
+
+    lease.refresh_from_db()
+    assert result.errors == 0, f"a confirming sweep must not error, got {result}"
+    assert lease.state == "active", \
+        f"a confirmed pending lease should become active, got {lease.state}"
+    assert lease.reconciled_at is not None, \
+        "an exact probe match is what stamps reconciled_at"
+    assert r53.calls == [], \
+        f"a confirmed RRset must cost no Route53 call at all, got {r53.calls}"
+
+
+@th.django_unit_test("ACME hub sweep rewrites a mismatched RRset and stays unconfirmed")
+def test_sweep_rewrites_and_stays_unconfirmed_on_mismatch(opts):
+    from mojo.helpers import dates
+    from mojo.apps.dnsman.models import AcmeHubChallengeLease
+    from mojo.apps.dnsman.services import acme_hub
+
+    allocation = _allocation(opts)
+    lease = AcmeHubChallengeLease.objects.create(
+        allocation=allocation, challenge_ref="challenge-stale",
+        record_values=["digest-a"], state="pending",
+        expires_at=dates.add(seconds=300))
+    r53 = FakeRoute53()
+    dns = FakeProbe(txt=["digest-stale"])
+
+    result = acme_hub.sweep(route53_client=r53, dns_probe=dns)
+
+    lease.refresh_from_db()
+    assert result.errors == 0, f"a rewriting sweep must not error, got {result}"
+    assert r53.writes == [
+        ("upsert", allocation.target_name, ["digest-a"])], \
+        f"a mismatch must rewrite the exact desired union, got {r53.writes}"
+    assert lease.reconciled_at is None, \
+        "a rewrite is not a confirmation; the next sweep must probe again"
+
+
+@th.django_unit_test("ACME hub sweep never writes on an unreadable probe")
+def test_sweep_probe_error_does_not_write(opts):
+    from mojo.helpers import dates
+    from mojo.apps.dnsman.models import AcmeHubChallengeLease
+    from mojo.apps.dnsman.services import acme_hub
+
+    allocation = _allocation(opts)
+    lease = AcmeHubChallengeLease.objects.create(
+        allocation=allocation, challenge_ref="challenge-unknown",
+        record_values=["digest-a"], state="pending",
+        expires_at=dates.add(seconds=300))
+    r53 = FakeRoute53()
+    dns = FakeProbe(txt=[], error="all nameservers failed to answer")
+
+    result = acme_hub.sweep(route53_client=r53, dns_probe=dns)
+
+    lease.refresh_from_db()
+    assert result.errors == 0, f"an unreadable probe is not a sweep error, got {result}"
+    assert r53.calls == [], \
+        f"an unknown verdict must not write — that is a fleet-wide write storm, got {r53.calls}"
+    assert lease.state == "pending", \
+        f"nothing was written, so nothing may be acknowledged, got {lease.state}"
+    assert lease.reconciled_at is None, \
+        "an unreadable probe must leave the allocation for the next pass"
 
 
 @th.tier("core")

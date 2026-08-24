@@ -543,3 +543,48 @@ def test_deploy_status_phases(opts):
     finally:
         deploy.clear_status(third.pk)
 
+
+@th.django_unit_test("a timed-out update terminates and reaps its process group")
+def test_update_timeout_reaps_process_group(opts):
+    import signal
+    import subprocess
+
+    from mojo.apps.edge.services import deploy
+
+    process = mock.Mock(pid=4321, returncode=-signal.SIGKILL)
+    process.communicate.side_effect = [
+        subprocess.TimeoutExpired(["update"], 1, stderr="first"),
+        subprocess.TimeoutExpired(["update"], 1, stderr="second"),
+        ("out", "err"),
+    ]
+    called = {}
+    killed = []
+
+    def popen(argv, **kwargs):
+        called.update(kwargs)
+        return process
+
+    with th.assert_raises(subprocess.TimeoutExpired):
+        deploy._run(
+            ["update"], popen=popen,
+            kill_group=lambda pid, sig: killed.append((pid, sig)), timeout=1)
+
+    kwargs = called
+    th.assert_eq(kwargs.get("start_new_session"), True,
+                 "the update must own a process group")
+    th.assert_eq(kwargs["env"].get("MOJO_DEPLOY_PARENT_STATUS"), "1",
+                 "new parents must suppress the predecessor callback bridge")
+    th.assert_eq(
+        process.communicate.call_args_list[1].kwargs.get("timeout"),
+        deploy.ROLLBACK_GRACE_SECONDS,
+        "TERM-triggered rollback needs a realistic bounded recovery window")
+    th.assert_true(
+        deploy.SCRIPT_TIMEOUT > (
+            deploy.TRANSIENT_RUNTIME_SECONDS + deploy.TRANSIENT_ROLLBACK_SECONDS),
+        "the parent must outwait systemd's runtime plus rollback window")
+    th.assert_true(0 < deploy.ROLLBACK_GRACE_SECONDS <= 120,
+                   "after systemd's recovery window, process-group reap is short")
+    th.assert_eq(
+        killed,
+        [(4321, signal.SIGTERM), (4321, signal.SIGKILL)],
+        "timeout must TERM, grace, KILL, then reap the same group")

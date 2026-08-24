@@ -3,9 +3,9 @@
 Stage 1 installs `/opt/api` from `git archive HEAD` — a tarball, deliberately,
 because a node has no deploy key until after it exists and the operator's
 commit is the only thing that should ever land on it. The cost is that the
-tree arrives with no history, and django-mojo's deploy plane is exactly
-`git fetch origin && git reset --hard <sha>` (see `mojo/deploy/scripts/
-update.sh`). A node without `.git` therefore accepts no deploy at all —
+tree arrives with no history, and the project-owned deploy plane fetches and
+checks out the named commit (see `mojo/deploy/project_scripts/update.sh`). A
+node without `.git` therefore accepts no deploy at all —
 `check_node.check_repo` reports it as an outright FAIL: *"the deploy plane is
 git + post_deploy.sh — a node without the repo cannot converge at all."*
 

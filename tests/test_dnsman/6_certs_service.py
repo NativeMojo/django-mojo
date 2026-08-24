@@ -799,6 +799,77 @@ def test_certs_propagation_wait_carries_the_change_id(opts):
         f"is silently skipped; got {wait.change_id!r}")
 
 
+@th.tier("bug")
+@th.django_unit_test("dnsman certs: delegated publish requires a majority of authoritative nameservers")
+def test_delegated_publish_requires_nameserver_quorum(opts):
+    from mojo.apps.dnsman.services import certs
+    from mojo.helpers.dns import probe
+
+    digests = ["digest-a", "digest-b"]
+    addresses = ["192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4"]
+    nameservers = [f"ns-{index}.awsdns.example" for index in range(1, 5)]
+
+    class QuorumProbe:
+        """probe stand-in injected through the quorum builder's dns_probe seam.
+
+        `serving` names the addresses that answer with both digests; every
+        other address behaves like a nameserver that failed to answer.
+        """
+
+        def __init__(self, serving):
+            self.serving = set(serving)
+            self.queried = []
+
+        def find_zone_nameservers(self, name, **kwargs):
+            return objict(
+                zone="hub.example.net", nameservers=list(nameservers), error=None)
+
+        def resolve_nameserver_addresses(self, names, **kwargs):
+            return list(addresses)
+
+        def query_txt(self, fqdn, nameservers=None, **kwargs):
+            address = (nameservers or [None])[0]
+            self.queried.append(address)
+            if address in self.serving:
+                return objict(txt_values=list(digests), error=None)
+            return objict(txt_values=[], error="all nameservers failed to answer")
+
+    def run(serving_count):
+        dns = QuorumProbe(addresses[:serving_count])
+        query, state = certs._delegated_quorum_query(
+            "opaque.hub.example.net", digests, dns_probe=dns)
+        # timeout=0 makes this exactly one poll: the gate's verdict, not a wait.
+        ok, unused = probe.wait_for_txt(
+            "opaque.hub.example.net", digests, timeout=0, interval=0,
+            query=query, sleep=lambda seconds: None)
+        return ok, state, dns
+
+    ok, state, dns = run(4)
+    assert ok, "every authoritative nameserver serving the digests must pass the gate"
+    assert state.total == 4, \
+        f"the denominator must be the discovered authority count, got {state.total}"
+    assert sorted(dns.queried) == sorted(addresses), \
+        f"each authority must be queried individually, got {dns.queried}"
+
+    ok, state, unused = run(3)
+    assert ok, \
+        f"3 of 4 is a majority and must proceed to the CA, got serving={state.serving}"
+
+    ok, state, unused = run(2)
+    assert not ok, \
+        f"2 of 4 is not a strict majority and must not proceed, got serving={state.serving}"
+
+    ok, state, unused = run(1)
+    assert not ok, \
+        ("1 of 4 must not proceed — a first-answer probe would pass here, "
+         f"which is the whole bug this gate replaces; got serving={state.serving}")
+
+    ok, state, unused = run(0)
+    assert not ok, "no authority serving the digests must never proceed"
+    assert state.total == 4, \
+        "a silent nameserver counts AGAINST the quorum, it does not shrink the denominator"
+
+
 @th.django_unit_test("dnsman certs: failed delegated renewal preserves valid material with bounded retry")
 def test_delegated_renewal_failure_preserves_material(opts):
     from unittest import mock

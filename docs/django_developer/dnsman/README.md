@@ -291,8 +291,6 @@ order, no rate-limit exposure, and hosts stay disposable.
 | `DNSMAN_ACME_HUB_HOSTED_ZONE_ID` | unset | Optional exact public Route53 zone id; file-only |
 | `DNSMAN_ACME_HUB_TTL` | `60` | Hub TXT TTL (bounded); file-only |
 | `DNSMAN_ACME_HUB_LEASE_SECONDS` | `900` | Hub challenge lease lifetime (bounded); file-only |
-| `DNSMAN_ACME_HUB_PROPAGATION_TIMEOUT` | `300` | Hub Route53/authority timeout (bounded); file-only |
-| `DNSMAN_ACME_HUB_PROPAGATION_INTERVAL` | `5` | Hub propagation polling interval (bounded); file-only |
 | `DNSMAN_ACME_HUB_SWEEP_LIMIT` | `100` | Max allocations reconciled per sweep; file-only |
 | `DNSMAN_ACME_HUB_URL` | unset | Downstream hub HTTPS origin; file-only |
 | `DNSMAN_ACME_HUB_API_KEY` | unset | Downstream protected project ApiKey; file-only |

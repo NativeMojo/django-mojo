@@ -1,12 +1,8 @@
-"""
-The update script's one sanctioned way to read and report deploy state
-(maestro item #1458, D4).
+"""Legacy deploy status bridge and operator state reader.
 
-The self-stop trap is why this exists: the skeleton's update script stops the
-job engine that is running the ``deploy_node`` job which shelled it, so Python
-after the script call never executes on a node updating itself. The SCRIPT
-must therefore report the terminal status — and it must never reimplement the
-Redis key, TTL or compare-and-set conventions in bash. It calls this instead:
+Current project-owned deployment scripts return to ``deploy_node`` and the
+parent records status directly. This command remains for one predecessor
+generation and for operators while fleets adopt those scripts:
 
     manage.py deploy_status get
     manage.py deploy_status set deploying --sha <target-sha> --deployment <uuid>
@@ -17,12 +13,8 @@ Redis key, TTL or compare-and-set conventions in bash. It calls this instead:
 write was ignored because the deploy was superseded (distinct from argparse's
 2, so the script can tell "stale, fine" from "I called this wrong").
 
-``handoff`` is the other half of the same structural fact: the script is about
-to stop the engine running this deployment's ``deploy_node`` job, so that job
-would otherwise sit ``running`` behind a lease nobody will ever release. It
-closes the job row and drops the in-flight entry, and does nothing else — no
-lease, no evidence. Every successful update calls it, including the fleet runs
-that deliberately report no status at all.
+``handoff`` likewise exists only for predecessor scripts that stop their own
+engine. New scripts never call it.
 """
 import json
 import os
@@ -206,9 +198,9 @@ class Command(BaseCommand):
         failure_detail = self._failure_detail(
             failure_phase,
             state == deploy.STATUS_FAILED and options.get("evidence"))
-        identity_v2 = (
-            os.environ.get("MOJO_DEPLOY_IDENTITY_READY")
-            == str(deploy.DEPLOY_CONTRACT))
+        identity_v2 = os.environ.get("MOJO_DEPLOY_IDENTITY_READY") in {
+            "2", str(deploy.DEPLOY_IDENTITY_SCHEMA),
+        }
         if state == deploy.STATUS_DEPLOYING:
             if identity_v2:
                 # The v2 signal means update.sh has already atomically

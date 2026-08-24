@@ -8,6 +8,8 @@ cron matcher fires on, so anything slow or network-bound occupies that process
 for its whole duration. Same shape as every other app's cronjobs module.
 """
 
+import time
+
 from mojo.decorators.cron import schedule
 from mojo.apps import jobs
 from mojo.helpers import logit
@@ -16,6 +18,10 @@ from mojo.helpers import logit
 POLL_JOB = "mojo.apps.dnsman.asyncjobs.poll_domain_operations"
 ACME_HUB_SWEEP_JOB = "mojo.apps.dnsman.asyncjobs.sweep_acme_hub_leases"
 CERT_EXPIRY_METRIC_JOB = "mojo.apps.dnsman.asyncjobs.publish_certificate_expiry_metric"
+
+# The ACME hub sweep's own tick interval, in seconds. Doubles as its
+# idempotency bucket width and its job expiry.
+ACME_HUB_SWEEP_INTERVAL = 300
 
 
 # The cron field values MUST be strings. `minutes=5` raises a TypeError inside
@@ -36,8 +42,20 @@ def poll_domain_operations():
 
 @schedule(minutes="*/5")
 def sweep_acme_hub_leases():
-    """Queue durable ACME lease expiry/reconciliation work."""
-    return jobs.publish(func=ACME_HUB_SWEEP_JOB, payload={})
+    """Queue durable ACME lease expiry/reconciliation work.
+
+    Keyed and expiring, unlike the other dispatchers here. The sweep takes a
+    BLOCKING per-allocation advisory lock, so ticks stacked behind a slow pass
+    would each sit on that lock rather than fail fast. The wall-clock bucket key
+    drops a duplicate tick, and `expires_in` drops a queued pass that a later
+    tick has already superseded — a sweep is a full reconciliation, so the
+    newest one subsumes every older one.
+    """
+    bucket = int(time.time()) // ACME_HUB_SWEEP_INTERVAL
+    return jobs.publish(
+        func=ACME_HUB_SWEEP_JOB, payload={},
+        idempotency_key=f"dnsman.acme_hub.sweep:{bucket}",
+        expires_in=ACME_HUB_SWEEP_INTERVAL)
 
 
 @schedule(minutes="0", hours="*")

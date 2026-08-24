@@ -122,6 +122,47 @@ still `NXDOMAIN` from Let's Encrypt's vantage. A `wait_for_propagation` call
 with no change id at all now logs a warning from `Route53Provider` naming the
 gate as skipped.
 
+#### The delegated path has no INSYNC gate
+
+Everything above describes the **direct** provider path, where this deployment
+owns the Route53 zone and therefore holds the change id. On the **delegated**
+path the write happens inside another deployment's ACME hub, and the change id
+never crosses the federation wire — so there is no INSYNC gate to thread, and
+the hub deliberately does not wait for one itself (see
+[ACME federation](AcmeFederation.md#persistence-and-reconciliation): a hub-side
+wait sits behind our own 30-second read timeout and can never complete).
+
+A plain authoritative probe is not a substitute. `probe.query_txt` pins a
+resolver to the whole authority list and dnspython answers from the FIRST
+nameserver that responds, and `wait_for_txt` returns on the first satisfying
+poll — together that proves one edge has the value, not a meaningful share of
+them, which is the exact failure the INSYNC gate existed to prevent.
+
+`_publish_delegated_challenges` therefore replaces it with a **majority
+quorum**. The target zone's authoritative nameserver addresses are discovered
+once, and that count is the fixed denominator for the whole poll. Each poll
+queries every address individually and counts how many serve the complete
+expected digest set; the gate passes only when **more than half** of them do.
+
+**A nameserver that errors or times out counts AGAINST the quorum.** Fixing the
+denominator at discovery time is what makes that safe — "a majority of the
+servers that answered" would let one surviving nameserver satisfy the gate
+during exactly the outage the gate exists to catch. Zero discovered
+nameservers fails closed immediately, and the whole poll still runs inside the
+same budget, failing closed on timeout.
+
+**What the quorum still does not give you.** It is strictly stronger than the
+first-responder check it replaces, but it does not reproduce `INSYNC` for an
+anycast authority. Route53's four nameserver hostnames are four *anycast*
+addresses: querying each one from a single worker observes only that worker's
+nearest edge node per address, so four-of-four locally does not prove the edge
+the CA reaches has converged. The residual failure is a failed validation and
+Let's Encrypt rate-limit burn (failed authorizations are capped per account and
+hostname per hour) — **never mis-issuance**, because the CA validates
+independently from its own vantage points and simply refuses. Closing the gap
+properly needs a hub change-status endpoint the downstream can poll, so the
+`INSYNC` signal crosses the federation wire.
+
 ## Custody
 
 The private key is KMS-envelope-encrypted via `KSMSecrets`. It appears in **no

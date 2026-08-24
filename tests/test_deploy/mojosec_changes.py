@@ -322,28 +322,6 @@ def test_expected_change_reader_accepts_large_bounded_manifests(opts):
                      "the sensor must read every entry the producer can write")
 
 
-@th.django_unit_test()
-def test_post_deploy_producers_use_stable_child_lifecycle(opts):
-    """Every packaged host producer must enter through the helper's `run`
-    lifecycle, whose nonzero child path aborts instead of annotating."""
-    import mojo
-
-    root = os.path.dirname(os.path.dirname(os.path.abspath(mojo.__file__)))
-    with open(os.path.join(
-            root, "mojo", "deploy", "scripts", "post_deploy.sh"),
-            encoding="utf-8") as handle:
-        script = handle.read()
-    th.assert_true("MOJOSEC_STABLE_HELPER" in script and
-                   "run_change_helper run" in script,
-                   "post_deploy must use the root-owned stable helper around each child")
-    th.assert_true("run_change_helper pip-run" in script,
-                   "pip must use bounded wheel RECORD paths before package mutation")
-    for kind in ("rendered-host-config", "rendered-nginx",
-                 "mojosec-converge", "retired-node-config",
-                 "retired-project-cron"):
-        th.assert_true(kind in script,
-                       f"post_deploy must journal exact {kind} destinations")
-
 
 @th.django_unit_test()
 def test_wheel_record_maps_packages_metadata_pyc_and_entry_points(opts):
@@ -487,4 +465,3 @@ def test_derived_parents_respect_denied_scopes(opts):
         all(item in ("/etc/mojosec/config.json", "/opt/api/current/app.py")
             for item in hostile),
         f"control-state and release-tree parents must never derive: {hostile}")
-

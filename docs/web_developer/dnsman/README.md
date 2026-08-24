@@ -94,8 +94,15 @@ Publish the returned source as one CNAME to the returned target.
 `values` is the complete digest set for that challenge. The hub first verifies
 the stored source is exactly one CNAME hop to its stored target, then durably
 leases the set and replaces the target RRset with the union of all active
-leases. Success waits for the exact union to be authoritatively visible. A
-retry must use the same `challenge_ref` and values.
+leases. A retry must use the same `challenge_ref` and values.
+
+**A `200` means the challenge write was ACCEPTED, not that it is visible.** The
+hub returns as soon as the lease is durable and Route53 has accepted the
+change; it does not wait for propagation, because your read timeout on this
+call is far shorter than DNS convergence takes. Before you ask the CA to
+validate, probe the target yourself and require a **majority of its
+authoritative nameservers** to serve your digests — one nameserver answering is
+not propagation. The response shape is unchanged.
 
 ```json
 {
@@ -731,7 +738,7 @@ Standard mojo error envelope. Notable cases:
 | Hub endpoint called without an eligible protected ApiKey | `403` |
 | Hub input/ref conflict, unknown allocation, retired challenge ref, or failed CNAME proof | `400` |
 | Hub rate limit | `429` plus `Retry-After` |
-| Hub disabled, wrong/unavailable public zone, provider failure, or propagation timeout | `503` |
+| Hub disabled, wrong/unavailable public zone, or provider failure | `503` |
 | Tenant delegation missing/retired | `404` |
 | Tenant delegation cross-tenant or missing read/write permission | `403` |
 | Tenant initiate shape, alias proof, active-group, or domain-claim failure | `400` |
