@@ -6,6 +6,8 @@ parallel modules swallowed unrelated reports. This contract proves the real
 pipeline end to end — no mocks anywhere near it — using a category no other
 module can collide with, and cleans up only its own rows.
 """
+
+TESTIT_TIER = "core"
 import uuid
 
 from testit import helpers as th

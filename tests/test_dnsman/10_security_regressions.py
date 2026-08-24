@@ -18,6 +18,8 @@ so it is obvious what they defend and why they must not be relaxed.
    access to every domain the credential can reach.
 """
 
+TESTIT_TIER = "core"
+
 from testit import helpers as th
 
 from tests.test_dnsman._helpers import (

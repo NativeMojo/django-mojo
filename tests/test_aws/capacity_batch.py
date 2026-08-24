@@ -10,6 +10,8 @@ attributes, live in tests/test_aws_extended_serial/capacity_batch.py
 (maestro #2558).
 """
 
+TESTIT_TIER = "edge"
+
 from types import SimpleNamespace
 from unittest import mock
 

@@ -197,6 +197,7 @@ def test_download_token_rotation(opts):
 # DB-override regression: Setting row named SECRET_KEY must be ignored
 # ---------------------------------------------------------------------------
 
+@th.tier("bug")
 @th.django_unit_test("a DB Setting row named SECRET_KEY cannot re-key filevault")
 def test_db_setting_row_ignored(opts):
     from mojo.apps.account.models.setting import Setting

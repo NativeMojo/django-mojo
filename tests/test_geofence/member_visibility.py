@@ -13,6 +13,8 @@ Assertions avoid global-state values other modules may legitimately change
 mid-run (e.g. GEOFENCE_SYSTEM_RULES content); group-owned state is asserted
 exactly.
 """
+
+TESTIT_TIER = "core"
 import uuid as _uuid
 from testit import helpers as th
 
@@ -169,6 +171,7 @@ def test_policy_group_required(opts):
         f"global holder without a group param must get 400 'group required', got {resp.status_code}: {resp.body}"
 
 
+@th.tier("extended")
 @th.django_unit_test("member: global view_security reads any group via geo/policy, same narrow shape")
 def test_policy_global_grant_ok(opts):
     _login(opts, opts.global_viewer_email, opts.global_viewer_password)
@@ -183,6 +186,7 @@ def test_policy_global_grant_ok(opts):
             "narrow payload applies to global holders too — no config-plane detail"
 
 
+@th.tier("extended")
 @th.django_unit_test("member: the config plane stays global-only (member grant gets 403 on geo/rules)")
 def test_config_plane_still_global_only(opts):
     _login(opts, opts.member_a_email, opts.member_a_password)
@@ -191,6 +195,7 @@ def test_config_plane_still_global_only(opts):
         f"member view_security must NOT open the config plane, got {resp.status_code}: {resp.body}"
 
 
+@th.tier("extended")
 @th.django_unit_test("member: incident event feed is scoped to the member's own group")
 def test_events_member_scoped(opts):
     # Member sees exactly their group's geofence_block events.

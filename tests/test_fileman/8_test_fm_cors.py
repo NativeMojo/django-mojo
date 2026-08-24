@@ -13,6 +13,8 @@ capability, while the presigned URL remains the authorization boundary.
 
 These tests exercise the resolver directly — no S3 connectivity required.
 """
+
+TESTIT_TIER = "bug"
 from unittest import mock
 
 from testit import helpers as th

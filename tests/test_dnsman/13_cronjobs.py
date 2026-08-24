@@ -10,6 +10,8 @@ logit, shortlink) follows the publish-and-return shape. These tests pin dnsman
 to it.
 """
 
+TESTIT_TIER = "extended"
+
 from unittest import mock
 
 from objict import objict

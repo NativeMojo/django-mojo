@@ -2,6 +2,8 @@
 Tests for job execution functionality aligned with actual implementation.
 Tests real execution patterns: Job model handlers, dynamic imports, thread pools.
 """
+
+TESTIT_TIER = "extended"
 from testit import helpers as th
 import time
 import traceback

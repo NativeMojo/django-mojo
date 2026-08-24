@@ -8,6 +8,8 @@ order and passes once fixed.
 The resolver methods only read `scope` / `self.websocket`, so we exercise them on a bare
 handler built with `object.__new__` (the real `__init__` needs Redis).
 """
+
+TESTIT_TIER = "core"
 from testit import helpers as th
 
 

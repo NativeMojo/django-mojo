@@ -11,6 +11,8 @@ mock clients (which also means `report()` does NOT write the shared cache), and
 the remaining envelopes are real-shaped fixtures.
 """
 
+TESTIT_TIER = "edge"
+
 import json
 from unittest import mock
 

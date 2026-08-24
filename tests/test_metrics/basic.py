@@ -245,6 +245,7 @@ def test_fetch_with_labels(opts):
     #         assert data[-1] == 0, f"{gran} check failed (now)\n{data}"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_account_permissions(opts):
     from mojo.apps import metrics
@@ -430,6 +431,7 @@ def test_fetch_and_series_accept_singular_slug(opts):
         f"series with no slug/slugs should error, got {resp.status_code}: {resp.body}"
 
 
+@th.tier("core")
 @th.unit_test()
 def test_metrics_user_account_permissions(opts):
     from mojo.apps.account.models import User
@@ -476,6 +478,7 @@ def test_metrics_user_account_permissions(opts):
     assert resp.status_code == 403, f"expected 403 for other user account read, got {resp.status_code}"
 
 
+@th.tier("core")
 @th.unit_test()
 def test_metrics_group_account_permissions(opts):
     from mojo.apps.account.models import User, Group

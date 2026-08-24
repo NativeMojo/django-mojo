@@ -20,6 +20,8 @@ Everything runs in-process with `mojo.helpers.dns.godaddy.requests` patched. No
 GoDaddy call is ever made.
 """
 
+TESTIT_TIER = "bug"
+
 from unittest.mock import patch
 
 from testit import helpers as th

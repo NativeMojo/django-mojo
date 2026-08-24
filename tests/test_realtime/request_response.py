@@ -1,3 +1,5 @@
+
+TESTIT_TIER = "extended"
 from testit import helpers as th
 from testit.ws_client import WsClient
 import threading

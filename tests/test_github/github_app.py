@@ -3,6 +3,8 @@ Tests for GitHub App service — JWT, token caching, webhook signature verificat
 
 These tests use test RSA keys and do not hit real GitHub APIs.
 """
+
+TESTIT_TIER = "extended"
 import time
 
 from testit import helpers as th

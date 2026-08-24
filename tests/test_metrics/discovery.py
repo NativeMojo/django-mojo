@@ -1,5 +1,7 @@
 """Permission-equivalent metrics account/category/slug discovery."""
 
+TESTIT_TIER = "extended"
+
 from testit import helpers as th
 
 
@@ -327,6 +329,7 @@ def test_account_catalog_permissions_and_count(opts):
             f"account filters shape drifted: {response.response.filters}")
 
 
+@th.tier("core")
 @th.django_unit_test("reference key catalog is tenant-filtered; assumed identities cannot enumerate")
 def test_restricted_account_catalog(opts):
     _use_apikey(opts, opts.reference_key)
@@ -466,6 +469,7 @@ def test_slug_discovery_and_series_fidelity(opts):
         f"series must preserve distinct full slug keys: {series.response}")
 
 
+@th.tier("core")
 @th.django_unit_test("reference, override, and group tokens keep direct tenant bounds")
 def test_restricted_direct_discovery(opts):
     for token in (opts.reference_key, opts.override_key):
@@ -531,6 +535,7 @@ def test_reserved_account_semantics(opts):
         f"probe: {confined_missing.response}")
 
 
+@th.tier("core")
 @th.django_unit_test("authorization and grammar complete before registry reads")
 def test_authorization_precedes_registry_reads(opts):
     from unittest.mock import patch

@@ -266,6 +266,7 @@ def test_query_permission_denied_creates_event(opts):
 # query_model — sensitive field rejection
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test()
 def test_query_rejects_sensitive_filter(opts):
     """Sensitive field names should be rejected even if the model is accessible."""
@@ -394,6 +395,7 @@ def test_query_model_registered(opts):
 # Security hardening — relational traversal, ordering, error sanitization
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test()
 def test_query_blocks_relational_sensitive_traversal(opts):
     """user__password__icontains should be blocked even though 'user' is a valid field."""
@@ -405,6 +407,7 @@ def test_query_blocks_relational_sensitive_traversal(opts):
     assert "not allowed" in result["error"], f"Error should mention not allowed: {result['error']}"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_query_blocks_deep_traversal_to_token(opts):
     """Multi-hop traversal to token fields should be blocked."""
@@ -416,6 +419,7 @@ def test_query_blocks_deep_traversal_to_token(opts):
     assert "not allowed" in result["error"], f"Error should mention not allowed: {result['error']}"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_query_blocks_relational_secret_traversal(opts):
     """Traversal containing 'secret' in any segment should be blocked."""
@@ -427,6 +431,7 @@ def test_query_blocks_relational_secret_traversal(opts):
     assert "not allowed" in result["error"], f"Error should mention not allowed: {result['error']}"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_query_ordering_rejects_sensitive_field(opts):
     """Ordering by a sensitive field name should be rejected."""
@@ -438,6 +443,7 @@ def test_query_ordering_rejects_sensitive_field(opts):
     assert "not allowed" in result["error"], f"Error should mention not allowed: {result['error']}"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_query_ordering_rejects_relational_traversal(opts):
     """Ordering with __ traversal should be rejected."""

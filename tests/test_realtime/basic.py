@@ -21,6 +21,7 @@ def setup_realtime_user(opts):
     opts.ws_user_id = user.id
 
 
+@th.tier("core")
 @th.unit_test("quick_ws_available")
 def test_quick_ws_available(opts):
     ws_url = WsClient.build_url_from_host(opts.host, path="ws/realtime/")
@@ -32,6 +33,7 @@ def test_quick_ws_available(opts):
     finally:
         ws.close()
 
+@th.tier("core")
 @th.unit_test("ws_auth_subscribe_ping")
 def test_ws_auth_subscribe_ping(opts):
 

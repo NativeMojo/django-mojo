@@ -8,6 +8,8 @@ tests/test_realtime_extended_serial/connection_limits.py (maestro #2789),
 alongside the pre-accept per-IP connect-rate gate tests that were already
 there (maestro item #1839).
 """
+
+TESTIT_TIER = "core"
 from testit import helpers as th
 from testit.ws_client import WsClient
 

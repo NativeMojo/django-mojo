@@ -1,5 +1,7 @@
 """Optional ACME delegation hub: isolation, leases, reconciliation and auth."""
 
+TESTIT_TIER = "extended"
+
 import uuid
 from types import SimpleNamespace
 from unittest import mock
@@ -74,6 +76,7 @@ def test_allocation_idempotency_and_target_non_reuse(opts):
         assert False, "same client_ref with a different domain must be refused"
 
 
+@th.tier("core")
 @th.django_unit_test("ACME hub allocation ownership is isolated by project UUID")
 def test_cross_project_isolation(opts):
     from mojo.apps.dnsman.services import acme_hub
@@ -250,6 +253,7 @@ def test_sweeper_expires_stale_lease(opts):
     assert writes == [[]], f"an allocation with no live leases must clear its exact RRset, got {writes}"
 
 
+@th.tier("core")
 @th.django_unit_test("ACME hub auth floor reads only the underlying active project ApiKey")
 def test_auth_floor(opts):
     from mojo import errors as me

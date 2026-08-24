@@ -16,6 +16,8 @@ the datacenter_detected reason — unused by decorator.py (country/tor) and
 evidence_plane.py (region/vpn/rule_invalid/lookup/allowlist), so parallel
 modules can't steal our dedupe slot.
 """
+
+TESTIT_TIER = "core"
 import uuid as _uuid
 from testit import helpers as th
 from tests.test_geofence._helpers import headers, GEO_RU, GEO_DATACENTER
@@ -120,6 +122,7 @@ def test_blocked_geo_valid_creds_403_no_side_effects(opts):
     assert ev.source_ip == IP, f"event must keep source_ip, got {ev.source_ip!r}"
 
 
+@th.tier("extended")
 @th.django_unit_test("post-auth: bypass_geofence user logs in from a blocked geo")
 def test_bypass_user_logs_in_from_blocked_geo(opts):
     """The point of DM-043 — per-user whitelisting works at login."""
@@ -142,6 +145,7 @@ def test_blocked_mfa_user_gets_no_challenge(opts):
         f"blocked MFA user must NOT receive an mfa_token: {opts.client.last_response.body}"
 
 
+@th.tier("extended")
 @th.django_unit_test("post-auth: MFA finish (sms verify) from blocked geo is blocked at jwt_login")
 def test_mfa_finish_blocked_geo(opts):
     """An mfa_token minted from an allowed geo cannot be redeemed from a
@@ -165,6 +169,7 @@ def test_mfa_finish_blocked_geo(opts):
         f"must be the geofence 403 body, got: {opts.client.last_response.body}"
 
 
+@th.tier("extended")
 @th.django_unit_test("post-auth: sessions_revoke is an exempt source and works from a blocked geo")
 def test_sessions_revoke_exempt_from_blocked_geo(opts):
     """A user already holding a session must be able to revoke their sessions
@@ -179,6 +184,7 @@ def test_sessions_revoke_exempt_from_blocked_geo(opts):
     opts.client.logout()
 
 
+@th.tier("extended")
 @th.django_unit_test("post-auth: password reset from blocked geo applies the reset but withholds the session")
 def test_password_reset_blocked_geo_no_session(opts):
     """Accepted DM-043 behavior: the emailed code proves the reset; only the
@@ -208,6 +214,7 @@ def test_password_reset_blocked_geo_no_session(opts):
         "the password reset itself must have been applied (token-proven action)"
 
 
+@th.tier("extended")
 @th.django_unit_test("post-auth: deferred endpoints stay in the audit registry, annotated after_auth")
 def test_registry_annotates_after_auth(opts):
     """GET /api/geo/rules enforced_endpoints must keep deferred endpoints and

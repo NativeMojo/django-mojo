@@ -20,6 +20,8 @@ default tier.
 Every provider contact is either short-circuited (clear_api_key, test_mode,
 +1555 test numbers) or mocked — no network calls are made.
 """
+
+TESTIT_TIER = "admin"
 from unittest import mock
 
 from testit import helpers as th
@@ -140,6 +142,7 @@ def test_connection_action_reports_test_mode(opts):
     opts.client.logout()
 
 
+@th.tier("core")
 @th.django_unit_test("system-row writes require a literal superuser and refuse untouched")
 def test_system_row_write_requires_superuser(opts):
     from mojo.apps.phonehub.models import PhoneConfig

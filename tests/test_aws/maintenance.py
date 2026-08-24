@@ -8,6 +8,8 @@ an API error against a live cache. Stubber validates every request against the
 real service model, which is the only thing that can catch that.
 """
 
+TESTIT_TIER = "edge"
+
 import json
 from contextlib import contextmanager
 from types import SimpleNamespace

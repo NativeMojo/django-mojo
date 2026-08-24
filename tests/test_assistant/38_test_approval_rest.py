@@ -220,6 +220,7 @@ def test_unresolvable_cases_return_one_body(opts):
 # Step-up
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("a stale token gets 440 on a step-up action and executes nothing")
 def test_stale_token_gets_440(opts):
     import uuid as uuid_module
@@ -330,6 +331,7 @@ def test_context_endpoint_refuses_pending_action(opts):
                 "the refused response must not leak the action's summary or args")
 
 
+@th.tier("core")
 @th.django_unit_test("a key-backed session cannot resolve an approval")
 def test_key_backed_session_refused(opts):
     import uuid as uuid_module

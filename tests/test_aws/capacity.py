@@ -20,6 +20,8 @@ patching shared module attributes (``_dispatch``, ``_local_hostname``,
 because those patches are not parallel-safe (maestro #2558).
 """
 
+TESTIT_TIER = "edge"
+
 from types import SimpleNamespace
 from unittest import mock
 

@@ -1,5 +1,7 @@
 """dnsman config endpoint — capability discovery without probing a gated action."""
 
+TESTIT_TIER = "extended"
+
 from testit import helpers as th
 
 from tests.test_dnsman._helpers import make_user, login, assert_no_secrets
@@ -74,6 +76,7 @@ def test_config_reports_purchase_state(opts):
     }, f"delegated ACME capability shape is incomplete or unsafe: {delegated}"
 
 
+@th.tier("core")
 @th.django_unit_test("config never echoes the registrant contact or any secret")
 def test_config_no_pii_or_secrets(opts):
     from mojo.apps.account.models.setting import Setting

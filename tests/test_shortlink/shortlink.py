@@ -1,6 +1,8 @@
 """
 Tests for the shortlink app — URL shortening, resolution, OG preview, click tracking.
 """
+
+TESTIT_TIER = "extended"
 from datetime import timedelta
 from unittest.mock import patch
 from testit import helpers as th
@@ -75,6 +77,7 @@ def test_different_codes(opts):
 # Unit: Expiry
 # ---------------------------------------------------------------------------
 
+@th.tier("bug")
 @th.django_unit_test("ShortLink: expire_days and expire_hours compute correctly")
 def test_expiry_combined(opts):
     from mojo.apps.shortlink.models import ShortLink
@@ -89,6 +92,7 @@ def test_expiry_combined(opts):
                 f"should expire in ~26 hours, got {total_seconds / 3600:.1f}h")
 
 
+@th.tier("bug")
 @th.django_unit_test("ShortLink: expire_days=0 and expire_hours=0 means no expiry")
 def test_no_expiry(opts):
     from mojo.apps.shortlink.models import ShortLink
@@ -99,6 +103,7 @@ def test_no_expiry(opts):
     assert_true(not link.is_expired, "should not be expired")
 
 
+@th.tier("bug")
 @th.django_unit_test("ShortLink: expired link returns None from resolve")
 def test_resolve_expired(opts):
     from mojo.apps.shortlink.models import ShortLink
@@ -238,6 +243,7 @@ def test_resolve_no_destination_no_metric(opts):
                   f"a resolve that serves nothing must record no metric, got {record_mock.call_count} call(s)")
 
 
+@th.tier("bug")
 @th.django_unit_test("ShortLink: expired resolve counts no hit")
 def test_resolve_expired_no_hit(opts):
     from mojo.apps.shortlink.models import ShortLink
@@ -398,6 +404,7 @@ def test_bot_passthrough_true(opts):
 # Unit: scraper helpers
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("Scraper: private IP detection blocks internal URLs")
 def test_scraper_private_ip(opts):
     from mojo.apps.shortlink.services.scraper import _is_private_url
@@ -425,6 +432,7 @@ def test_og_parser(opts):
     assert_eq(parser.og_tags.get("twitter:card"), "summary", "should extract twitter:card")
 
 
+@th.tier("slow")
 @th.django_unit_test("Scraper: fetch OG tags from GitHub (real HTTP)")
 def test_scraper_fetch_github(opts):
     from mojo.apps.shortlink.services.scraper import _fetch_og_tags
@@ -435,6 +443,7 @@ def test_scraper_fetch_github(opts):
     assert_true("og:description" in tags, f"GitHub should have og:description, got keys: {list(tags.keys())}")
 
 
+@th.tier("slow")
 @th.django_unit_test("Scraper: fetch OG tags from YouTube video (real HTTP)")
 def test_scraper_fetch_youtube(opts):
     from mojo.apps.shortlink.services.scraper import _fetch_og_tags
@@ -445,6 +454,7 @@ def test_scraper_fetch_youtube(opts):
     assert_true("og:title" in tags, f"YouTube should have og:title, got keys: {list(tags.keys())}")
 
 
+@th.tier("slow")
 @th.django_unit_test("Scraper: non-HTML URL returns empty tags")
 def test_scraper_fetch_non_html(opts):
     from mojo.apps.shortlink.services.scraper import _fetch_og_tags
@@ -663,6 +673,7 @@ def test_rest_unavailable_page_settings(opts):
         Setting.remove("SHORTLINK_HOME_URL")
 
 
+@th.tier("core")
 @th.django_unit_test("REST: unavailable page drops unsafe SHORTLINK_HOME_URL schemes")
 def test_rest_unavailable_page_rejects_unsafe_home_url(opts):
     # SHORTLINK_HOME_URL is DB/Redis-writable at runtime and lands in an href on
@@ -1011,6 +1022,7 @@ def cleanup_shortlink(opts):
 # Expiry bounds (maestro item 296)
 # ---------------------------------------------------------------------------
 
+@th.tier("bug")
 @th.django_unit_test("ShortLink.create rejects an absurd expire_days with 400, not a 500")
 def test_create_absurd_expire_days_rejected(opts):
     from mojo.apps.shortlink.models import ShortLink
@@ -1027,6 +1039,7 @@ def test_create_absurd_expire_days_rejected(opts):
         assert False, "expire_days overflowed timedelta — should be a clean 400, not a 500"
 
 
+@th.tier("bug")
 @th.django_unit_test("ShortLink.create rejects a negative expire_days")
 def test_create_negative_expire_days_rejected(opts):
     from mojo.apps.shortlink.models import ShortLink
@@ -1044,6 +1057,7 @@ def test_create_negative_expire_days_rejected(opts):
                     f"the error should explain the negative value, got {e}")
 
 
+@th.tier("bug")
 @th.django_unit_test("ShortLink.create rejects days+hours that only overflow in sum")
 def test_create_components_overflow_in_sum(opts):
     from mojo.apps.shortlink.models import ShortLink
@@ -1061,6 +1075,7 @@ def test_create_components_overflow_in_sum(opts):
                     f"the error should explain the combined overflow, got {e}")
 
 
+@th.tier("bug")
 @th.django_unit_test("ShortLink.create accepts a value exactly at the ceiling")
 def test_create_at_ceiling_accepted(opts):
     from mojo.apps.shortlink.models import ShortLink, MAX_EXPIRE_TOTAL_HOURS
@@ -1071,6 +1086,7 @@ def test_create_at_ceiling_accepted(opts):
                 "a value exactly at the ceiling must be accepted and set an expiry")
 
 
+@th.tier("bug")
 @th.django_unit_test("ShortLink.create still treats 0/0 as never-expires")
 def test_create_zero_zero_never_expires(opts):
     from mojo.apps.shortlink.models import ShortLink
@@ -1081,6 +1097,7 @@ def test_create_zero_zero_never_expires(opts):
               f"0/0 must still mean never-expires, got expires_at={link.expires_at!r}")
 
 
+@th.tier("bug")
 @th.django_unit_test("ShortLink.create still honors a normal expiry")
 def test_create_normal_expiry_unchanged(opts):
     from mojo.apps.shortlink.models import ShortLink
@@ -1091,6 +1108,7 @@ def test_create_normal_expiry_unchanged(opts):
                 "a normal 3-day expiry must still set expires_at")
 
 
+@th.tier("bug")
 @th.django_unit_test("REST create: absurd expire_days returns 400, not 500")
 def test_rest_create_absurd_expire_days(opts):
     opts.client.login(TEST_USER, TEST_PWORD)
@@ -1106,6 +1124,7 @@ def test_rest_create_absurd_expire_days(opts):
               f"an absurd expire_days should be a 400, got {resp.status_code}: {resp.body}")
 
 
+@th.tier("bug")
 @th.django_unit_test("REST create: negative expire_days returns 400")
 def test_rest_create_negative_expire_days(opts):
     opts.client.login(TEST_USER, TEST_PWORD)
@@ -1119,6 +1138,7 @@ def test_rest_create_negative_expire_days(opts):
               f"a negative expire_days should be a 400, got {resp.status_code}: {resp.body}")
 
 
+@th.tier("bug")
 @th.django_unit_test("the REST setters reject a non-finite value with 400, not 500")
 def test_rest_setters_reject_non_finite(opts):
     """ujson — the request.DATA parser — accepts the non-standard `Infinity`
@@ -1149,6 +1169,7 @@ def test_rest_setters_reject_non_finite(opts):
                 pass
 
 
+@th.tier("bug")
 @th.django_unit_test("non-finite expire values are rejected at the model layer too")
 def test_validator_rejects_non_finite(opts):
     from mojo.apps.shortlink.models.shortlink import _validated_total_hours

@@ -17,6 +17,8 @@ as threads in ONE process, so patching `mojo.helpers.aws.elbv2.serving_map`
 would reach into every other module running at the same time.
 """
 
+TESTIT_TIER = "edge"
+
 from types import SimpleNamespace
 from unittest import mock
 

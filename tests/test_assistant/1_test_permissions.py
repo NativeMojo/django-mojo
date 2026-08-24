@@ -123,6 +123,7 @@ def test_get_tools_for_noperms_user(opts):
                     f"No permission='all' tool may mutate data — {name} does")
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_permission_gate_direct(opts):
     """Permission gate should block unauthorized tool execution."""
@@ -228,6 +229,7 @@ More text."""
     assert_eq(len(blocks), 0, "Invalid block types should be rejected")
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_user_tool_excludes_sensitive_fields(opts):
     """User tools should never include password, auth_key, or onetime_code."""
@@ -344,6 +346,7 @@ def test_list_permissions(opts):
         assert_true(p not in perms, f"'{p}' should NOT be in permissions list")
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_assistant_endpoint_requires_auth(opts):
     """POST /api/assistant should require view_admin permission."""
@@ -354,6 +357,7 @@ def test_assistant_endpoint_requires_auth(opts):
                 f"Expected 401/403 without auth, got {resp.status_code}")
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_assistant_endpoint_requires_perms(opts):
     """POST /api/assistant should require view_admin permission."""

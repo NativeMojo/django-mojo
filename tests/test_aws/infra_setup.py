@@ -16,6 +16,8 @@ negative: on an installation with no environment file the factory must never be
 called at all, and a factory that raises is the only way to prove that.
 """
 
+TESTIT_TIER = "admin"
+
 import json
 import os
 import shutil

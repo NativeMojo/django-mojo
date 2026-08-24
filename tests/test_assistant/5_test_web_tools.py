@@ -29,6 +29,7 @@ def _browse(params, user):
 # Scheme validation
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test()
 def test_rejects_file_scheme(opts):
     result = _browse({"url": "file:///etc/passwd"}, opts.admin)
@@ -36,6 +37,7 @@ def test_rejects_file_scheme(opts):
     assert "Unsupported scheme" in result["error"], f"Wrong error: {result['error']}"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_rejects_ftp_scheme(opts):
     result = _browse({"url": "ftp://example.com/file.txt"}, opts.admin)
@@ -43,6 +45,7 @@ def test_rejects_ftp_scheme(opts):
     assert "Unsupported scheme" in result["error"], f"Wrong error: {result['error']}"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_rejects_javascript_scheme(opts):
     result = _browse({"url": "javascript:alert(1)"}, opts.admin)
@@ -66,6 +69,7 @@ def test_rejects_no_url(opts):
 # SSRF protection
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test()
 def test_rejects_localhost(opts):
     result = _browse({"url": "http://127.0.0.1/"}, opts.admin)
@@ -73,6 +77,7 @@ def test_rejects_localhost(opts):
     assert "private" in result["error"].lower(), f"Wrong error: {result['error']}"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_rejects_private_10(opts):
     result = _browse({"url": "http://10.0.0.1/"}, opts.admin)
@@ -80,6 +85,7 @@ def test_rejects_private_10(opts):
     assert "private" in result["error"].lower(), f"Wrong error: {result['error']}"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_rejects_private_192(opts):
     result = _browse({"url": "http://192.168.1.1/"}, opts.admin)
@@ -87,6 +93,7 @@ def test_rejects_private_192(opts):
     assert "private" in result["error"].lower(), f"Wrong error: {result['error']}"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_rejects_private_172(opts):
     result = _browse({"url": "http://172.16.0.1/"}, opts.admin)
@@ -94,6 +101,7 @@ def test_rejects_private_172(opts):
     assert "private" in result["error"].lower(), f"Wrong error: {result['error']}"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_rejects_metadata_ip(opts):
     result = _browse({"url": "http://169.254.169.254/latest/meta-data/"}, opts.admin)
@@ -266,6 +274,7 @@ def test_browse_url_registered(opts):
 # SSRF hardening — IPv4-mapped IPv6 and ip.is_private
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test()
 def test_blocks_ipv4_mapped_ipv6_localhost(opts):
     from mojo.apps.assistant.services.tools.web import _is_blocked_ip
@@ -275,6 +284,7 @@ def test_blocks_ipv4_mapped_ipv6_localhost(opts):
     assert _is_blocked_ip(ip), "IPv4-mapped ::ffff:127.0.0.1 should be blocked"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_blocks_ipv4_mapped_ipv6_private(opts):
     from mojo.apps.assistant.services.tools.web import _is_blocked_ip
@@ -284,6 +294,7 @@ def test_blocks_ipv4_mapped_ipv6_private(opts):
     assert _is_blocked_ip(ip), "IPv4-mapped ::ffff:10.0.0.1 should be blocked"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_blocks_ipv4_mapped_ipv6_metadata(opts):
     from mojo.apps.assistant.services.tools.web import _is_blocked_ip
@@ -293,6 +304,7 @@ def test_blocks_ipv4_mapped_ipv6_metadata(opts):
     assert _is_blocked_ip(ip), "IPv4-mapped ::ffff:169.254.169.254 should be blocked"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_blocks_zero_network(opts):
     from mojo.apps.assistant.services.tools.web import _is_blocked_ip
@@ -311,6 +323,7 @@ def test_allows_public_ip(opts):
     assert not _is_blocked_ip(ip), "8.8.8.8 (Google DNS) should not be blocked"
 
 
+@th.tier("core")
 @th.django_unit_test()
 def test_error_message_no_internal_leak(opts):
     """Catch-all RequestException should not leak internal details."""

@@ -2,6 +2,8 @@
 Tests for user-scheduled tasks: model CRUD, dispatch logic, job execution,
 owner scoping, timezone conversion, run_once, and notifications.
 """
+
+TESTIT_TIER = "extended"
 from testit import helpers as th
 import uuid
 from datetime import datetime, timedelta
@@ -467,6 +469,7 @@ def test_dispatch_idempotency(opts):
     task.delete()
 
 
+@th.tier("framework")
 @th.django_unit_test()
 def test_crud_rest_create(opts):
     """Test creating a scheduled task via REST."""
@@ -483,6 +486,7 @@ def test_crud_rest_create(opts):
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.json}"
 
 
+@th.tier("framework")
 @th.django_unit_test()
 def test_crud_rest_list(opts):
     """Test listing scheduled tasks via REST."""
@@ -491,6 +495,7 @@ def test_crud_rest_list(opts):
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.json}"
 
 
+@th.tier("framework")
 @th.django_unit_test()
 def test_task_result_read_only(opts):
     """Test that TaskResult cannot be created via REST."""
@@ -502,6 +507,7 @@ def test_task_result_read_only(opts):
     assert resp.status_code != 200, f"TaskResult should not be writable via REST, got {resp.status_code}"
 
 
+@th.tier("bug")
 @th.django_unit_test("dispatch anchor never targets a minute the dispatcher would skip")
 def test_dispatch_anchor_is_minute_independent(opts):
     """Regression for maestro item 53.

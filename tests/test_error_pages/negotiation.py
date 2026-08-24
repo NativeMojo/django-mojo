@@ -135,6 +135,7 @@ def test_missing_accept_header_is_json(opts):
 # The API contract — unchanged bytes
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("JSON: the unknown-endpoint 404 body is byte-for-byte what it was")
 def test_json_404_bytes_unchanged(opts):
     from mojo.helpers import error_pages
@@ -151,6 +152,7 @@ def test_json_404_bytes_unchanged(opts):
         f"404 JSON content type changed, got {got['Content-Type']!r}"
 
 
+@th.tier("core")
 @th.django_unit_test("JSON: the 403 body is byte-for-byte what it was")
 def test_json_403_bytes_unchanged(opts):
     import mojo.errors
@@ -166,6 +168,7 @@ def test_json_403_bytes_unchanged(opts):
     assert got.status_code == 403, f"403 JSON status changed, got {got.status_code}"
 
 
+@th.tier("core")
 @th.django_unit_test("JSON: a 500 still carries its error envelope for API callers")
 def test_json_500_envelope_unchanged(opts):
     got = _dispatch(RuntimeError("kaboom-2262-json"), _request(accept="application/json"))
