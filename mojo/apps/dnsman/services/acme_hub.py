@@ -83,41 +83,46 @@ def _configured_zone():
     return normalize_domain(raw_name)
 
 
-def _validate_zone(expected_name, expected_id=None):
+def _validate_zone(expected_name, expected_id=None, *, route53_client=None, dns_probe=None):
     """Resolve one exact public Route53 zone and prove its public DNS cut."""
+    client = route53_client or route53
+    dns = dns_probe or probe
     try:
         expected_name = normalize_domain(expected_name)
-        zone_id = expected_id or route53.find_zone_id(expected_name)
+        zone_id = expected_id or client.find_zone_id(expected_name)
     except Exception:
         raise me.ValueException("The configured ACME hub zone is invalid", code=503, status=503)
     if not zone_id:
         raise me.ValueException("The configured ACME hub zone is unavailable", code=503, status=503)
     try:
-        zone = route53.get_zone(zone_id)
-        public = probe.find_zone_nameservers(expected_name)
+        zone = client.get_zone(zone_id)
+        public = dns.find_zone_nameservers(expected_name)
     except Exception:
         raise me.ValueException("The configured ACME hub zone is unavailable", code=503, status=503)
     normalized_id = str(zone_id).split("/")[-1]
     if zone.id != normalized_id or zone.name != expected_name or zone.private:
         raise me.ValueException("The configured ACME hub zone is not the exact public zone", code=503, status=503)
 
-    expected_ns = {probe.normalize_name(value) for value in (zone.name_servers or []) if value}
-    public_ns = {probe.normalize_name(value) for value in (public.nameservers or []) if value}
+    expected_ns = {dns.normalize_name(value) for value in (zone.name_servers or []) if value}
+    public_ns = {dns.normalize_name(value) for value in (public.nameservers or []) if value}
     if public.error or public.zone != expected_name or not expected_ns or public_ns != expected_ns:
         raise me.ValueException("The configured ACME hub zone has no matching public DNS cut", code=503, status=503)
     return objict(name=zone.name, id=zone.id)
 
 
-def _new_zone():
+def _new_zone(*, route53_client=None, dns_probe=None):
     name = _configured_zone()
     configured_id = settings.get_static("DNSMAN_ACME_HUB_HOSTED_ZONE_ID", None)
-    return _validate_zone(name, configured_id)
+    return _validate_zone(
+        name, configured_id, route53_client=route53_client, dns_probe=dns_probe)
 
 
-def _stored_zone(allocation):
+def _stored_zone(allocation, *, route53_client=None, dns_probe=None):
     # Rotation applies only to new allocations.  Existing rows always use the
     # exact name/id captured when their target was minted.
-    return _validate_zone(allocation.allocation_zone_name, allocation.allocation_zone_id)
+    return _validate_zone(
+        allocation.allocation_zone_name, allocation.allocation_zone_id,
+        route53_client=route53_client, dns_probe=dns_probe)
 
 
 def _project_uuid(group):
@@ -231,11 +236,12 @@ def _desired_values(allocation):
     return _desired_snapshot(allocation)[0]
 
 
-def _wait_change(change_id, deadline):
+def _wait_change(change_id, deadline, *, route53_client=None):
+    client = route53_client or route53
     if not change_id:
         return
     while True:
-        if route53.get_change(change_id).insync:
+        if client.get_change(change_id).insync:
             return
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -243,10 +249,11 @@ def _wait_change(change_id, deadline):
         time.sleep(min(propagation_interval(), remaining))
 
 
-def _wait_exact_txt(name, expected, deadline):
+def _wait_exact_txt(name, expected, deadline, *, dns_probe=None):
+    dns = dns_probe or probe
     expected = set(expected)
     while True:
-        result = probe.query_txt(name)
+        result = dns.query_txt(name)
         if result.error is None and set(result.txt_values) == expected:
             return
         remaining = deadline - time.monotonic()
@@ -255,36 +262,41 @@ def _wait_exact_txt(name, expected, deadline):
         time.sleep(min(propagation_interval(), remaining))
 
 
-def _write_exact(allocation, values):
-    _stored_zone(allocation)
+def _write_exact(allocation, values, *, route53_client=None, dns_probe=None):
+    client = route53_client or route53
+    _stored_zone(allocation, route53_client=route53_client, dns_probe=dns_probe)
     deadline = time.monotonic() + propagation_timeout()
     change_id = None
     if values:
-        change_id = route53.upsert_record(
+        change_id = client.upsert_record(
             allocation.allocation_zone_id, "TXT", allocation.target_name,
             values, ttl=ttl(), zone_name=allocation.allocation_zone_name,
             comment="django-mojo ACME delegation hub reconciliation")
     else:
         current = None
-        for record in route53.list_records(allocation.allocation_zone_id):
+        for record in client.list_records(allocation.allocation_zone_id):
             if record.type == "TXT" and record.name == allocation.target_name:
                 current = record
                 break
         if current is not None:
-            change_id = route53.delete_record(
+            change_id = client.delete_record(
                 allocation.allocation_zone_id, "TXT", allocation.target_name,
                 values=current.record_values, ttl=current.ttl,
                 zone_name=allocation.allocation_zone_name,
                 comment="django-mojo ACME delegation hub reconciliation")
-    _wait_change(change_id, deadline)
-    _wait_exact_txt(allocation.target_name, values, deadline)
+    _wait_change(change_id, deadline, route53_client=route53_client)
+    _wait_exact_txt(
+        allocation.target_name, values, deadline, dns_probe=dns_probe)
 
 
-def _reconcile_locked(allocation, request=None, audit_kind="reconciled"):
+def _reconcile_locked(allocation, request=None, audit_kind="reconciled",
+                      *, route53_client=None, dns_probe=None):
     """Reconcile one snapshot while the caller holds the allocation lock."""
     values, snapshot_ids, pending_ids = _desired_snapshot(allocation)
     try:
-        _write_exact(allocation, values)
+        _write_exact(
+            allocation, values,
+            route53_client=route53_client, dns_probe=dns_probe)
     except Exception as exc:
         AcmeHubChallengeLease.objects.filter(pk__in=snapshot_ids).update(
             last_error=type(exc).__name__, reconciled_at=None)
@@ -302,11 +314,13 @@ def _reconcile_locked(allocation, request=None, audit_kind="reconciled"):
     return values
 
 
-def reconcile(allocation, request=None, audit_kind="reconciled"):
+def reconcile(allocation, request=None, audit_kind="reconciled",
+              *, route53_client=None, dns_probe=None):
     """Replace the target RRset with the union of all durable live leases."""
     with _allocation_lock(allocation.pk):
         return _reconcile_locked(
-            allocation, request=request, audit_kind=audit_kind)
+            allocation, request=request, audit_kind=audit_kind,
+            route53_client=route53_client, dns_probe=dns_probe)
 
 
 def _persist_publish_lease(allocation, challenge_ref, values):
@@ -342,12 +356,14 @@ def _persist_publish_lease(allocation, challenge_ref, values):
                     "Could not persist the ACME challenge lease", code=503, status=503)
 
 
-def publish(group, client_ref, challenge_ref, values, request=None):
+def publish(group, client_ref, challenge_ref, values, request=None,
+            *, route53_client=None, dns_probe=None):
+    dns = dns_probe or probe
     allocation = _allocation_for(group, client_ref)
     challenge_ref = _reference(challenge_ref, "challenge_ref")
     values = _digest_values(values)
 
-    proof = probe.verify_one_hop_cname(allocation.source_name, allocation.target_name)
+    proof = dns.verify_one_hop_cname(allocation.source_name, allocation.target_name)
     if not proof.ok:
         _audit(allocation, request, "publish_refused", count=len(values))
         raise me.ValueException(proof.error or "CNAME delegation proof failed")
@@ -355,12 +371,14 @@ def publish(group, client_ref, challenge_ref, values, request=None):
     with _allocation_lock(allocation.pk):
         lease = _persist_publish_lease(allocation, challenge_ref, values)
         desired = _reconcile_locked(
-            allocation, request=request, audit_kind="published")
+            allocation, request=request, audit_kind="published",
+            route53_client=route53_client, dns_probe=dns_probe)
     lease.refresh_from_db()
     return objict(allocation=allocation, lease=lease, active_value_count=len(desired))
 
 
-def withdraw(group, client_ref, challenge_ref, request=None):
+def withdraw(group, client_ref, challenge_ref, request=None,
+             *, route53_client=None, dns_probe=None):
     allocation = _allocation_for(group, client_ref)
     challenge_ref = _reference(challenge_ref, "challenge_ref")
     with _allocation_lock(allocation.pk):
@@ -378,14 +396,15 @@ def withdraw(group, client_ref, challenge_ref, request=None):
 
         if changed:
             desired = _reconcile_locked(
-                allocation, request=request, audit_kind="withdrawn")
+                allocation, request=request, audit_kind="withdrawn",
+                route53_client=route53_client, dns_probe=dns_probe)
         else:
             desired = _desired_values(allocation)
             _audit(allocation, request, "withdrawn", count=len(desired))
     return objict(allocation=allocation, active_value_count=len(desired))
 
 
-def sweep(limit=None):
+def sweep(limit=None, *, route53_client=None, dns_probe=None):
     """Expire stale leases and retry every allocation with uncommitted intent."""
     if limit is None:
         limit = _bounded_static("DNSMAN_ACME_HUB_SWEEP_LIMIT", 100, 1, 1000)
@@ -411,7 +430,9 @@ def sweep(limit=None):
                         last_error=None)
                 expired += expired_here
                 kind = "expired" if expired_here else "reconciled"
-                _reconcile_locked(allocation, audit_kind=kind)
+                _reconcile_locked(
+                    allocation, audit_kind=kind,
+                    route53_client=route53_client, dns_probe=dns_probe)
                 reconciled += 1
         except Exception:
             errors += 1

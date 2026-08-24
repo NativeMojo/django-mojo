@@ -134,7 +134,7 @@ def test_publish_union_and_withdraw_without_cname(opts):
     allocation = _allocation(opts)
     writes = []
 
-    def fake_write(row, values):
+    def fake_write(row, values, **kwargs):
         writes.append((row.pk, list(values)))
 
     proof = objict(ok=True, error=None)
@@ -188,7 +188,7 @@ def test_ambiguous_write_is_sweep_recoverable(opts):
     assert lease.record_values == ["digest-a"], "the durable desired value must survive the crash"
 
     recovered = []
-    with mock.patch.object(acme_hub, "_write_exact", lambda row, values: recovered.append(list(values))), \
+    with mock.patch.object(acme_hub, "_write_exact", lambda row, values, **kwargs: recovered.append(list(values))), \
             mock.patch.object(acme_hub, "_audit"):
         result = acme_hub.sweep()
     lease.refresh_from_db()
@@ -210,7 +210,7 @@ def test_reconcile_snapshot_does_not_ack_late_lease(opts):
         expires_at=dates.add(seconds=300))
     late = []
 
-    def write_with_crash_window(row, values):
+    def write_with_crash_window(row, values, **kwargs):
         assert values == ["digest-a"], f"unexpected snapshot values: {values}"
         # Simulate state becoming durable after the snapshot but before the
         # provider acknowledgement. Public persist paths hold the same lock;
@@ -244,7 +244,7 @@ def test_sweeper_expires_stale_lease(opts):
         record_values=["digest-expired"], state="active",
         expires_at=dates.subtract(seconds=1), reconciled_at=dates.utcnow())
     writes = []
-    with mock.patch.object(acme_hub, "_write_exact", lambda row, values: writes.append(list(values))), \
+    with mock.patch.object(acme_hub, "_write_exact", lambda row, values, **kwargs: writes.append(list(values))), \
             mock.patch.object(acme_hub, "_audit"):
         result = acme_hub.sweep()
     lease.refresh_from_db()
