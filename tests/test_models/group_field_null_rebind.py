@@ -27,6 +27,8 @@ import shutil as _shutil
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "core"  # #2792 tier curation
+
 MEMBER_USER = "gfnull_member@example.com"
 GLOBAL_USER = "gfnull_global@example.com"
 PWORD = "gfnull##mojo99"

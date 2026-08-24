@@ -10,6 +10,8 @@ race them. Rotation behavior is exercised in tests/test_secret_rotation/
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
 
+TESTIT_TIER = "core"  # #2792 tier curation
+
 
 @th.unit_test("build_key_list: no fallbacks -> [primary]")
 def test_no_fallbacks(opts):

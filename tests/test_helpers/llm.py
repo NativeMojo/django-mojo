@@ -418,6 +418,7 @@ def test_ask_raises_without_api_key(opts):
 # Real LLM tests — only run when LLM_HANDLER_API_KEY is in the environment
 # ---------------------------------------------------------------------------
 
+@th.tier("slow")
 @th.django_unit_test()
 def test_real_verify_api_key(opts):
     """verify_api_key returns True with a valid key"""
@@ -432,6 +433,7 @@ def test_real_verify_api_key(opts):
     assert error is None, f"Expected no error, got: {error}"
 
 
+@th.tier("slow")
 @th.django_unit_test()
 def test_real_verify_bad_key(opts):
     """verify_api_key returns False with an invalid key"""
@@ -442,6 +444,7 @@ def test_real_verify_bad_key(opts):
     assert error is not None, "Expected error message for invalid key"
 
 
+@th.tier("slow")
 @th.django_unit_test()
 def test_real_get_models(opts):
     """get_models fetches real model list from Anthropic API"""
@@ -461,6 +464,7 @@ def test_real_get_models(opts):
     assert "claude" in first["id"], f"Expected Claude model, got: {first['id']}"
 
 
+@th.tier("slow")
 @th.django_unit_test()
 def test_real_get_model_auto_detect(opts):
     """get_model auto-detects latest models from API"""
@@ -487,6 +491,7 @@ def test_real_get_model_auto_detect(opts):
         llm._mem_cache["fetched_at"] = 0
 
 
+@th.tier("slow")
 @th.django_unit_test()
 def test_real_ask(opts):
     """ask() returns a real LLM response"""

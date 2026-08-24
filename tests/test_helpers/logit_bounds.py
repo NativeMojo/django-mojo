@@ -2,6 +2,8 @@
 
 from testit import helpers as th
 
+TESTIT_TIER = "bug"  # #2792 tier curation
+
 
 class _FakeElapsed:
     def total_seconds(self):

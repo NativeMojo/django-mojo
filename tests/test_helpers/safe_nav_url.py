@@ -14,6 +14,8 @@ Contract this file enforces:
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
 
+TESTIT_TIER = "core"  # #2792 tier curation
+
 
 @th.django_unit_test("safe_nav_url: refuses javascript: and every other non-web scheme")
 def test_refuses_script_and_non_web_schemes(opts):

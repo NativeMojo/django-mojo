@@ -9,6 +9,8 @@ See planning/issues/spurious-permission-denied-events-on-list.md
 """
 from testit import helpers as th
 
+TESTIT_TIER = "core"  # #2792 tier curation
+
 
 TEST_NOPERM = "perm_events_noperm"
 TEST_PWORD = "testit##mojo"

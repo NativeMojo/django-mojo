@@ -13,6 +13,8 @@ Setting.remove, which keep the Redis settings hash coherent.
 """
 from testit import helpers as th
 
+TESTIT_TIER = "bug"  # #2792 tier curation
+
 BOOL_KEY = "ITEM023_COERCE_BOOL"
 DICT_KEY = "ITEM023_COERCE_DICT"
 LIST_KEY = "ITEM023_COERCE_LIST"

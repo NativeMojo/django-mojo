@@ -17,6 +17,8 @@ See planning/issues/spurious-permission-denied-events-on-list.md
 """
 from testit import helpers as th
 
+TESTIT_TIER = "core"  # #2792 tier curation
+
 
 TEST_USER = "fk_attach_user"
 TEST_PWORD = "testit##mojo"
