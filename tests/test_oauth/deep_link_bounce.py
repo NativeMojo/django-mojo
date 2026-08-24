@@ -43,6 +43,8 @@ from urllib.parse import quote, urlsplit, parse_qs
 
 from testit import helpers as th
 
+TESTIT_TIER = "bug"
+
 PROVIDER = "google"
 SETTING_KEY = "ALLOWED_REDIRECT_URLS"
 

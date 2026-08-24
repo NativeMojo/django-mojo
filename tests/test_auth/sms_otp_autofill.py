@@ -16,6 +16,8 @@ Contracts enforced:
 from testit import helpers as th
 from testit.helpers import assert_true
 
+TESTIT_TIER = "extended"
+
 
 # ---------------------------------------------------------------------------
 # Server — plain OTP SMS body

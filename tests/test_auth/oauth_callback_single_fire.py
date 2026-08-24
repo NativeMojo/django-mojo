@@ -17,6 +17,8 @@ import os
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
 
+TESTIT_TIER = "bug"
+
 
 def _render(template_name, group=None):
     from django.test import RequestFactory

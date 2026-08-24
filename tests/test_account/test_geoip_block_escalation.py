@@ -6,6 +6,8 @@ with the block — never downgrades.
 """
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 @th.django_unit_test()
 def test_block_escalates_threat_level_from_none(opts):

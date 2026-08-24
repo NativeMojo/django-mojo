@@ -353,6 +353,7 @@ def test_full_round_trip(opts):
     assert_eq(me.response.data.id, opts.user_id, "JWT should resolve to the original user")
 
 
+@th.tier("extended")  # per-IP rate-limit counter — cannot run in the parallel core/framework ring (#2789 -j sweep)
 @th.unit_test("auth/exchange is rate-limited (20/min/IP)")
 def test_exchange_rate_limit(opts):
     from mojo.decorators.limits import clear_rate_limits

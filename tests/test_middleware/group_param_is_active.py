@@ -18,6 +18,8 @@ After the fix an inactive id behaves identically to a nonexistent one:
 from testit import helpers as th
 from objict import objict
 
+TESTIT_TIER = "extended"
+
 
 SELF_USERNAME = "item025_self@test.com"
 SELF_PASSWORD = "item025_self_pw_99"
@@ -99,6 +101,7 @@ def setup_group_param_is_active(opts):
     opts.active_child_id = active_child.pk
 
 
+@th.tier("core")
 @th.django_unit_test("dispatcher: numeric group= with an INACTIVE id resolves nothing — no touch, no modified bump (THE regression)")
 def test_inactive_group_id_not_resolved_not_touched(opts):
     from mojo.apps.account.models import Group
@@ -184,6 +187,7 @@ def test_child_of_inactive_parent_not_resolved_not_touched(opts):
         f"an effectively-inactive child's modified must not bump (existence oracle): {modified_before!r} -> {after.modified!r}"
 
 
+@th.tier("core")
 @th.django_unit_test("requires_perms fallback: a member grant in an INACTIVE group must not authorize (403), an ACTIVE one must (200)")
 def test_member_grant_in_inactive_group_denied(opts):
     _login(opts, MEMBER_USERNAME, MEMBER_PASSWORD)

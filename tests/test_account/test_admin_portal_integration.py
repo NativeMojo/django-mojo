@@ -9,6 +9,8 @@ from unittest import mock
 
 from testit import helpers as th
 
+TESTIT_TIER = "admin"
+
 
 ROOT = Path(__file__).resolve().parents[2]
 ADMIN_EMAIL = "admin_portal_integration@test.com"

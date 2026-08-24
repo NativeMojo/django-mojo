@@ -9,6 +9,8 @@ import uuid as _uuid
 
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 BUCKET = 300
 
 

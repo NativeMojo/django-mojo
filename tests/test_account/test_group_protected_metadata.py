@@ -20,6 +20,7 @@ Style mirrors tests/test_account/test_group_save_perms.py.
 import uuid as _uuid
 from testit import helpers as th
 
+
 PROTECTED = {"payments": {"allowed_origins": ["https://real.example"]}}
 EVIL = {"payments": {"allowed_origins": ["https://evil.example"]}}
 

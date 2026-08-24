@@ -14,6 +14,8 @@ docs/web_developer/core/authentication.md and docs/web_developer/account/*.md.
 """
 from testit import helpers as th
 
+TESTIT_TIER = "core"
+
 CONTRACT_USER = "login_contract_user"
 CONTRACT_PWORD = "contract##mojo99"
 

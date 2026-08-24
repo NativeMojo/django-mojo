@@ -26,6 +26,8 @@ from contextlib import contextmanager
 from testit import helpers as th
 from testit.helpers import assert_eq, assert_true
 
+TESTIT_TIER = "core"
+
 TEST_USER = "oauth_confine_user"
 SPARE_USER = "oauth_confine_spare"
 TEST_PWORD = "confine##mojo99"

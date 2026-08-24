@@ -14,6 +14,8 @@ from urllib.parse import quote
 
 from testit import helpers as th
 
+TESTIT_TIER = "core"
+
 PROVIDER = "google"
 REFUSAL = "redirect_uri is not on the allowlist"
 

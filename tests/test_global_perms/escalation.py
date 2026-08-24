@@ -17,6 +17,8 @@ from tests.test_global_perms._helpers import (
     ALL_ENDPOINT_PERMS, make_group_member, make_user, login,
 )
 
+TESTIT_TIER = "core"
+
 
 # (method, path) — every one reads/writes PLATFORM-GLOBAL state. Path params are
 # arbitrary: the decorator runs first, so the value is never dereferenced.

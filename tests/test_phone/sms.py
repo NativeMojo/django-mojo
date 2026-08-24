@@ -112,6 +112,7 @@ def test_sms_verify_expired_code(opts):
     assert resp.status_code in [401, 403], f"Should reject expired code, got {resp.status_code}"
 
 
+@th.tier("core")
 @th.django_unit_test("sms: invalid mfa_token is rejected")
 def test_sms_verify_invalid_token(opts):
     code = _seed_otp(opts.user)
@@ -123,6 +124,7 @@ def test_sms_verify_invalid_token(opts):
 # Standalone SMS login (username -> send -> verify)
 # -----------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("sms: standalone login send returns success without leaking user existence")
 def test_sms_standalone_send(opts):
     # Known user

@@ -17,6 +17,8 @@ not the muid tier on the decorator.
 """
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 THROTTLE_USER = "throttle_user"
 THROTTLE_PWORD = "throttle##mojo99"
 WRONG_PWORD = "definitely-not-the-right-password"
@@ -84,6 +86,7 @@ def setup_throttle_users(opts):
 # Per-account cap: bypass-resistant 429
 # -----------------------------------------------------------------
 
+@th.tier("framework")
 @th.django_unit_test("login throttle: account cap blocks at threshold")
 def test_per_account_cap_blocks_at_threshold(opts):
     _clear_login_state(opts.throttle_user_id)
@@ -300,6 +303,7 @@ def test_admin_clear_per_account_counter(opts):
     )
 
 
+@th.tier("framework")
 @th.django_unit_test("login throttle: admin clear requires manage_users")
 def test_admin_clear_requires_manage_users(opts):
     _clear_login_state(opts.throttle_user_id)

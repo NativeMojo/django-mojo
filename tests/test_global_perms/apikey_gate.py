@@ -9,6 +9,8 @@ import uuid as _uuid
 from testit import helpers as th
 from tests.test_global_perms._helpers import use_apikey
 
+TESTIT_TIER = "core"
+
 
 @th.django_unit_setup()
 def setup_apikey_gate(opts):

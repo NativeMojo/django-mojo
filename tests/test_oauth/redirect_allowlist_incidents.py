@@ -29,6 +29,8 @@ from urllib.parse import quote
 
 from testit import helpers as th
 
+TESTIT_TIER = "bug"
+
 PROVIDER = "google"
 GROUP_PREFIX = "oauthinc_"
 

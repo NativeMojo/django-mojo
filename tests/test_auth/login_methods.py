@@ -15,6 +15,8 @@ import os
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 
+TESTIT_TIER = "extended"
+
 
 LM_USER = 'lm_login_user'
 LM_PWORD = 'lm##login99'

@@ -8,6 +8,8 @@ loop-prevention (the endpoint applies via raw save, never re-pushes).
 """
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 @th.django_unit_setup()
 def setup_sync_endpoint(opts):

@@ -10,6 +10,8 @@ exactly what the buggy nested-list form got wrong — a flat list can be set()'d
 """
 from testit import helpers as th
 
+TESTIT_TIER = "bug"
+
 
 @th.unit_test("model_permissions: decorators use flat varargs perms, not a nested list")
 def test_flat_perm_metadata(opts):

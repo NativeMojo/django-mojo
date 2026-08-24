@@ -14,6 +14,8 @@ import uuid as _uuid
 from testit import helpers as th
 from tests.test_global_perms._helpers import use_apikey
 
+TESTIT_TIER = "extended"
+
 
 # Broad perm set covering every groupless endpoint's VIEW/SAVE perms.
 BROAD_PERMS = {
@@ -71,6 +73,7 @@ def setup_apikey_groupless(opts):
     opts.group_id = group.pk
 
 
+@th.tier("core")
 @th.django_unit_test("groupless: apikey with broad perms is denied on every groupless model")
 def test_apikey_denied_on_groupless_models(opts):
     use_apikey(opts, opts.token)
@@ -92,6 +95,7 @@ def test_apikey_denied_on_groupless_models(opts):
     assert tested >= 6, f"too few groupless endpoints exercised ({tested}) — routing regression?"
 
 
+@th.tier("core")
 @th.django_unit_test("groupless: apikey /api/user leaks NO other-tenant user data")
 def test_apikey_user_body_no_leak(opts):
     """The decisive check — status AND body. A denied request must not contain
@@ -333,6 +337,7 @@ def test_geoip_sync_floor_survives_deployment_map(opts):
         User.objects.filter(pk=user.pk).delete()
 
 
+@th.tier("core")
 @th.django_unit_test("groupless: framework ApiKey floor keys cannot be relaxed by deployment config")
 def test_framework_apikey_floors_are_unrelaxable(opts):
     """Framework floor entries win while deployment-specific entries survive."""

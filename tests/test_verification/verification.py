@@ -37,6 +37,8 @@ from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
 from mojo.helpers import dates, crypto
 
+TESTIT_TIER = "extended"
+
 TEST_USER = "verify_test_user"
 TEST_PWORD = "verify##mojo99"
 TEST_PHONE = "+15550007788"
@@ -127,6 +129,7 @@ def test_iv_token_prefix(opts):
     tokens.verify_invite_token(tok)
 
 
+@th.tier("core")
 @th.django_unit_test("token: email verify token is single-use — second verify raises")
 def test_ev_token_single_use(opts):
     from mojo.apps.account.models import User
@@ -275,6 +278,7 @@ def test_iv_token_expired(opts):
         user.save(update_fields=["mojo_secrets", "modified"])
 
 
+@th.tier("core")
 @th.django_unit_test("token: auth_key rotation immediately invalidates outstanding tokens")
 def test_auth_key_rotation_invalidates_token(opts):
     """
@@ -337,6 +341,7 @@ def test_resend_invalidates_previous_token(opts):
         pass
 
 
+@th.tier("core")
 @th.django_unit_test("token: user A's token cannot be redirected to verify user B")
 def test_cross_user_token_cannot_verify_different_account(opts):
     """
@@ -1186,6 +1191,7 @@ def setup_write_protection(opts):
     _setup_write_protection_users(opts)
 
 
+@th.tier("core")
 @th.django_unit_test("write-protect: owner cannot set is_email_verified=True on own account")
 def test_owner_cannot_set_is_email_verified(opts):
     from mojo.apps.account.models import User
@@ -1205,6 +1211,7 @@ def test_owner_cannot_set_is_email_verified(opts):
                 "is_email_verified must remain False after rejected owner write")
 
 
+@th.tier("core")
 @th.django_unit_test("write-protect: owner cannot set is_phone_verified=True on own account")
 def test_owner_cannot_set_is_phone_verified(opts):
     from mojo.apps.account.models import User
@@ -1224,6 +1231,7 @@ def test_owner_cannot_set_is_phone_verified(opts):
                 "is_phone_verified must remain False after rejected owner write")
 
 
+@th.tier("core")
 @th.django_unit_test("write-protect: manage_users admin can set is_email_verified")
 def test_manager_can_set_is_email_verified(opts):
     from mojo.apps.account.models import User
@@ -1246,6 +1254,7 @@ def test_manager_can_set_is_email_verified(opts):
     User.objects.filter(pk=opts.wp_target_id).update(is_email_verified=False)
 
 
+@th.tier("core")
 @th.django_unit_test("write-protect: manage_users admin can set is_phone_verified")
 def test_manager_can_set_is_phone_verified(opts):
     from mojo.apps.account.models import User
@@ -1268,6 +1277,7 @@ def test_manager_can_set_is_phone_verified(opts):
     User.objects.filter(pk=opts.wp_target_id).update(is_phone_verified=False)
 
 
+@th.tier("core")
 @th.django_unit_test("write-protect: superuser can set is_email_verified=True")
 def test_superuser_can_set_is_email_verified(opts):
     from mojo.apps.account.models import User
@@ -1290,6 +1300,7 @@ def test_superuser_can_set_is_email_verified(opts):
     User.objects.filter(pk=opts.wp_target_id).update(is_email_verified=False)
 
 
+@th.tier("core")
 @th.django_unit_test("write-protect: superuser can set is_phone_verified=True")
 def test_superuser_can_set_is_phone_verified(opts):
     from mojo.apps.account.models import User
@@ -1312,6 +1323,7 @@ def test_superuser_can_set_is_phone_verified(opts):
     User.objects.filter(pk=opts.wp_target_id).update(is_phone_verified=False)
 
 
+@th.tier("core")
 @th.django_unit_test("write-protect: superuser can set is_email_verified=False (revoke)")
 def test_superuser_can_revoke_is_email_verified(opts):
     """Superuser must be able to revoke verification — e.g. after a suspected account takeover."""
@@ -1332,6 +1344,7 @@ def test_superuser_can_revoke_is_email_verified(opts):
                 "is_email_verified must be False after superuser revoke")
 
 
+@th.tier("core")
 @th.django_unit_test("write-protect: owner cannot set is_email_verified during user creation")
 def test_owner_cannot_set_verified_on_create(opts):
     """
@@ -1364,6 +1377,7 @@ def test_owner_cannot_set_verified_on_create(opts):
         created.delete()
 
 
+@th.tier("core")
 @th.django_unit_test("write-protect: superuser can set is_email_verified=True on a new user")
 def test_superuser_can_create_verified_user(opts):
     """
@@ -1398,6 +1412,7 @@ def test_superuser_can_create_verified_user(opts):
     new_user.delete()
 
 
+@th.tier("core")
 @th.django_unit_test("write-protect: omitting the field entirely is always allowed")
 def test_omitting_verified_fields_is_allowed(opts):
     """
@@ -1447,6 +1462,7 @@ def cleanup_write_protection(opts):
 # requires_mfa
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("field-protect: owner cannot disable requires_mfa on own account")
 def test_owner_cannot_disable_requires_mfa(opts):
     from mojo.apps.account.models import User
@@ -1467,6 +1483,7 @@ def test_owner_cannot_disable_requires_mfa(opts):
     User.objects.filter(pk=opts.wp_target_id).update(requires_mfa=False)
 
 
+@th.tier("core")
 @th.django_unit_test("field-protect: owner cannot enable requires_mfa on own account")
 def test_owner_cannot_enable_requires_mfa(opts):
     from mojo.apps.account.models import User
@@ -1486,6 +1503,7 @@ def test_owner_cannot_enable_requires_mfa(opts):
                 "requires_mfa must remain False after rejected owner write")
 
 
+@th.tier("core")
 @th.django_unit_test("field-protect: manage_users admin can change requires_mfa")
 def test_manager_can_change_requires_mfa(opts):
     from mojo.apps.account.models import User
@@ -1506,6 +1524,7 @@ def test_manager_can_change_requires_mfa(opts):
     User.objects.filter(pk=opts.wp_target_id).update(requires_mfa=False)
 
 
+@th.tier("core")
 @th.django_unit_test("field-protect: superuser can change requires_mfa")
 def test_superuser_can_change_requires_mfa(opts):
     from mojo.apps.account.models import User
@@ -1530,6 +1549,7 @@ def test_superuser_can_change_requires_mfa(opts):
 # is_active
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("field-protect: owner cannot deactivate own account")
 def test_owner_cannot_deactivate_self(opts):
     from mojo.apps.account.models import User
@@ -1549,6 +1569,7 @@ def test_owner_cannot_deactivate_self(opts):
                 "is_active must remain True after rejected owner write")
 
 
+@th.tier("core")
 @th.django_unit_test("field-protect: owner cannot reactivate a banned account")
 def test_owner_cannot_reactivate_banned_account(opts):
     """
@@ -1582,6 +1603,7 @@ def test_owner_cannot_reactivate_banned_account(opts):
     User.objects.filter(pk=opts.wp_target_id).update(is_active=True)
 
 
+@th.tier("core")
 @th.django_unit_test("field-protect: manage_users admin can deactivate a user")
 def test_manager_can_deactivate_user(opts):
     from mojo.apps.account.models import User
@@ -1606,6 +1628,7 @@ def test_manager_can_deactivate_user(opts):
 # org
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("field-protect: owner cannot reassign own org")
 def test_owner_cannot_reassign_org(opts):
     """
@@ -1636,6 +1659,7 @@ def test_owner_cannot_reassign_org(opts):
                 "org must remain None after rejected owner write")
 
 
+@th.tier("core")
 @th.django_unit_test("field-protect: manage_users admin can assign org")
 def test_manager_can_assign_org(opts):
     from mojo.apps.account.models import User, Group
@@ -1665,6 +1689,7 @@ def test_manager_can_assign_org(opts):
 # last_activity
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("field-protect: last_activity is silently ignored by REST for all actors")
 def test_last_activity_is_not_writable_via_rest(opts):
     """
@@ -1705,6 +1730,7 @@ def test_last_activity_is_not_writable_via_rest(opts):
 # auth_key
 # ---------------------------------------------------------------------------
 
+@th.tier("core")
 @th.django_unit_test("field-protect: auth_key is silently ignored by REST for all actors")
 def test_auth_key_is_not_writable_via_rest(opts):
     """

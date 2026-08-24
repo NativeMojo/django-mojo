@@ -10,6 +10,8 @@ mock.patch on the shared mojo.helpers.geoip.config module.
 from unittest import mock
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 class _FakeJob:
     """Minimal stand-in for jobs.models.Job — only `payload` is used."""

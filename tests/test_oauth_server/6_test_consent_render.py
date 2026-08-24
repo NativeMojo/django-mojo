@@ -163,6 +163,7 @@ def test_consent_page_scripts_are_nonced(opts):
                     "the header nonce and the markup nonce must be the same value")
 
 
+@th.tier("core")
 @th.django_unit_test("a bad client or redirect renders an error and never redirects")
 def test_client_failures_never_redirect(opts):
     from mojo.apps.account.services.oauth_server import consent
@@ -344,6 +345,7 @@ def test_approve_requires_an_interactive_session(opts):
         assert_true(refused, f"approve must refuse {why}")
 
 
+@th.tier("core")
 @th.django_unit_test("approve re-validates the posted values from scratch")
 def test_approve_does_not_trust_the_page(opts):
     from mojo import errors as merrors

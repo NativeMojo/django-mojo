@@ -19,6 +19,8 @@ import uuid as _uuid
 from testit import helpers as th
 from tests.test_register import _capture
 
+TESTIT_TIER = "extended"
+
 
 HANDLER_REGISTER_OK = "tests.test_register._capture.capture_register"
 

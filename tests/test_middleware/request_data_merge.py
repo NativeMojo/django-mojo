@@ -18,6 +18,8 @@ dispatcher chain through the test server.
 from testit import helpers as th
 from objict import objict
 
+TESTIT_TIER = "core"
+
 
 USERNAME = "dup_key_merge@test.com"
 PASSWORD = "dup_key_merge_pw_99"

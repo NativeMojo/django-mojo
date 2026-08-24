@@ -10,6 +10,8 @@ mock.patch on the shared geoip modules.
 from unittest import mock
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 def _upstream_payload(ip="203.0.113.10", overrides=None):
     """Build a representative upstream `detailed` graph payload."""

@@ -19,6 +19,8 @@ import uuid as _uuid
 from testit import helpers as th
 from tests.test_global_perms._helpers import use_apikey
 
+TESTIT_TIER = "extended"
+
 
 def _mk_group(parent=None):
     from mojo.apps.account.models import Group
@@ -36,6 +38,7 @@ def setup_apikey_group_inactive(opts):
     Group.objects.filter(name__startswith="ak_ia_").delete()
 
 
+@th.tier("core")
 @th.django_unit_test("validate_token: active group sets context, inactive strips it (still authenticates)")
 def test_validate_token_strips_inactive_group(opts):
     from mojo.apps.account.models import ApiKey
@@ -72,6 +75,7 @@ def test_validate_token_strips_inactive_group(opts):
         group.delete()
 
 
+@th.tier("core")
 @th.django_unit_test("list: no-group= request against a deactivated tenant is denied")
 def test_apikey_list_denied_when_group_inactive(opts):
     from mojo.apps.account.models import ApiKey
@@ -326,6 +330,7 @@ def test_group_self_access_denied_when_inactive(opts):
         group.delete()
 
 
+@th.tier("core")
 @th.django_unit_test("requires_perms: a key is trusted only within an ACTIVE group context")
 def test_requires_perms_denies_key_without_active_group(opts):
     """Post-build review gap B (in-process — the decorator short-circuits on

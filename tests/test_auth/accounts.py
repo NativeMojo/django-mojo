@@ -41,6 +41,7 @@ def setup_users(opts):
     superuser.add_permission(["manage_groups", "manage_users", "view_global", "view_admin"])
 
 
+@th.tier("core")
 @th.unit_test("user_jwt_login")
 def test_user_jwt_login(opts):
     resp = opts.client.login(TEST_USER, TEST_PWORD)
@@ -52,6 +53,7 @@ def test_user_jwt_login(opts):
     assert resp.response.data.username == TEST_USER, f"username: {resp.response.data.username }"
     opts.user_id = opts.client.jwt_data.uid
 
+@th.tier("core")
 @th.unit_test("admin_jwt_login")
 def test_admin_jwt_login(opts):
     resp = opts.client.login(ADMIN_USER, ADMIN_PWORD)
@@ -63,6 +65,7 @@ def test_admin_jwt_login(opts):
     assert resp.response.data.username == ADMIN_USER, f"username: {resp.response.data.username }"
     opts.admin_id = opts.client.jwt_data.uid
 
+@th.tier("core")
 @th.unit_test("user_access_admin")
 def test_user_access_admin(opts):
     resp = opts.client.login(TEST_USER, TEST_PWORD)
@@ -72,6 +75,7 @@ def test_user_access_admin(opts):
     assert resp.status_code == 403, f"Expected status_code is 403 but got {resp.status_code}"
 
 
+@th.tier("core")
 @th.unit_test("user_save_self")
 def test_user_save_self(opts):
     resp = opts.client.login(TEST_USER, TEST_PWORD)
@@ -84,6 +88,7 @@ def test_user_save_self(opts):
 
 
 
+@th.tier("core")
 @th.unit_test("user_add_perm")
 def test_user_add_perm(opts):
     resp = opts.client.login(TEST_USER, TEST_PWORD)
@@ -93,6 +98,7 @@ def test_user_add_perm(opts):
     assert resp.status_code == 403, f"Expected status_code is 403 but got {resp.status_code}"
 
 
+@th.tier("core")
 @th.unit_test("admin_access_user")
 def test_admin_access_user(opts):
     resp = opts.client.login(ADMIN_USER, ADMIN_PWORD)
@@ -103,6 +109,7 @@ def test_admin_access_user(opts):
     assert resp.response.data.username == TEST_USER, f"username: {resp.response.data.username }"
 
 
+@th.tier("core")
 @th.unit_test("admin_add_perm")
 def test_admin_add_perm(opts):
     # resp = opts.client.login(ADMIN_USER, ADMIN_PWORD)
@@ -120,6 +127,7 @@ def test_admin_add_perm(opts):
     assert resp.response.data.permissions.invite_users is True, f"missing invite_users permissions: {resp.response.data.permissions}"
 
 
+@th.tier("core")
 @th.unit_test("admin_remove_perm")
 def test_admin_remove_perm(opts):
     # resp = opts.client.login(ADMIN_USER, ADMIN_PWORD)
@@ -131,6 +139,7 @@ def test_admin_remove_perm(opts):
     assert resp.response.data.permissions.view_users is None, f"permissions: {resp.response.data.permissions}"
 
 
+@th.tier("core")
 @th.unit_test("admin_add_group")
 def test_admin_add_group(opts):
     # resp = opts.client.login(ADMIN_USER, ADMIN_PWORD)
@@ -148,6 +157,7 @@ def test_admin_add_group(opts):
     opts.group_id = resp.response.data.id
 
 
+@th.tier("core")
 @th.unit_test("user_cannot_list_group")
 def test_user_cannot_list_group(opts):
     resp = opts.client.login(TEST_USER, TEST_PWORD)
@@ -165,6 +175,7 @@ def test_user_cannot_list_group(opts):
 
 
 
+@th.tier("core")
 @th.unit_test("add_group_member")
 def test_add_group_member(opts):
     resp = opts.client.login(ADMIN_USER, ADMIN_PWORD)
@@ -176,6 +187,7 @@ def test_add_group_member(opts):
     opts.member_id = resp.response.data.id
 
 
+@th.tier("core")
 @th.unit_test("user_can_list_group")
 def test_user_can_list_group(opts):
     resp = opts.client.login(TEST_USER, TEST_PWORD)
@@ -185,6 +197,7 @@ def test_user_can_list_group(opts):
     assert resp.response.count == 1, f"size is not 1: {resp.response.count}"
 
 
+@th.tier("core")
 @th.unit_test("user_can_get_group")
 def test_user_can_get_group(opts):
     resp = opts.client.login(TEST_USER, TEST_PWORD)
@@ -193,6 +206,7 @@ def test_user_can_get_group(opts):
     assert resp.status_code == 200, f"Expected status_code is 200 but got {resp.status_code}"
     assert resp.response.data.id == opts.group_id, "id does not match"
 
+@th.tier("core")
 @th.unit_test("edit_group_member")
 def test_edit_group_member(opts):
     resp = opts.client.login(ADMIN_USER, ADMIN_PWORD)
@@ -209,6 +223,7 @@ def test_edit_group_member(opts):
 # Hierarchical Permission Tests
 # ============================================================================
 
+@th.tier("framework")
 @th.unit_test("create_parent_child_groups")
 def test_create_parent_child_groups(opts):
     """Create a hierarchy: Organization > Department > Team"""
@@ -243,6 +258,7 @@ def test_create_parent_child_groups(opts):
     opts.team_group_id = resp.response.data.id
 
 
+@th.tier("framework")
 @th.unit_test("add_user_to_parent_group_only")
 def test_add_user_to_parent_group_only(opts):
     """Add user to parent organization with view_groups permission"""
@@ -261,6 +277,7 @@ def test_add_user_to_parent_group_only(opts):
     opts.org_member_id = resp.response.data.id
 
 
+@th.tier("framework")
 @th.unit_test("get_member_for_user_finds_parent_membership")
 def test_get_member_for_user_finds_parent_membership(opts):
     """Test that get_member_for_user finds parent membership for child group"""
@@ -275,6 +292,7 @@ def test_get_member_for_user_finds_parent_membership(opts):
     assert resp.response.data.permissions.view_groups is True, f"Should have view_groups permission"
 
 
+@th.tier("framework")
 @th.unit_test("user_can_list_child_groups_via_parent")
 def test_user_can_list_child_groups_via_parent(opts):
     """Test that user with parent membership can list child groups"""
@@ -292,6 +310,7 @@ def test_user_can_list_child_groups_via_parent(opts):
     assert opts.team_group_id in group_ids, f"Should see team group {opts.team_group_id}"
 
 
+@th.tier("framework")
 @th.unit_test("user_can_access_child_group_via_parent")
 def test_user_can_access_child_group_via_parent(opts):
     """Test that user with parent membership can access child group"""
@@ -309,6 +328,7 @@ def test_user_can_access_child_group_via_parent(opts):
     assert resp.response.data.id == opts.team_group_id, "id does not match"
 
 
+@th.tier("framework")
 @th.django_unit_test("test_get_groups_with_permission")
 def test_get_groups_with_permission(opts):
     """Test User.get_groups_with_permission() includes child groups"""
@@ -331,6 +351,7 @@ def test_get_groups_with_permission(opts):
     assert groups_without_perm.count() == 0, "Should not have any groups with manage_users permission"
 
 
+@th.tier("framework")
 @th.unit_test("test_max_depth_protection")
 def test_max_depth_protection(opts):
     """Test that max_depth prevents infinite loops"""
@@ -377,6 +398,7 @@ def test_max_depth_protection(opts):
     assert member is not None, "Should find member at depth 7"
 
 
+@th.tier("framework")
 @th.unit_test("user_without_parent_membership_cannot_access_child")
 def test_user_without_parent_membership_cannot_access_child(opts):
     """Test that user without any membership cannot access groups"""
@@ -432,6 +454,7 @@ TEST_PHONE_USER = "phone_test_user"
 TEST_PHONE_PWORD = "testit##mojo"
 
 
+@th.tier("extended")
 @th.unit_test("phone_number_set_normalizes")
 def test_phone_number_set_normalizes(opts):
     from mojo.apps.account.models import User
@@ -451,6 +474,7 @@ def test_phone_number_set_normalizes(opts):
     assert user.phone_number == TEST_PHONE, f"Expected {TEST_PHONE} but got {user.phone_number}"
 
 
+@th.tier("extended")
 @th.unit_test("phone_number_set_via_rest")
 def test_phone_number_set_via_rest(opts):
     resp = opts.client.login(TEST_PHONE_USER, TEST_PHONE_PWORD)
@@ -463,6 +487,7 @@ def test_phone_number_set_via_rest(opts):
     opts.phone_user_id = uid
 
 
+@th.tier("extended")
 @th.unit_test("login_with_phone_e164")
 def test_login_with_phone_e164(opts):
     from testit import TestitSkip
@@ -474,6 +499,7 @@ def test_login_with_phone_e164(opts):
     assert opts.client.jwt_data.uid == opts.phone_user_id, "logged in as wrong user"
 
 
+@th.tier("extended")
 @th.unit_test("login_with_phone_unformatted")
 def test_login_with_phone_unformatted(opts):
     from testit import TestitSkip
@@ -486,6 +512,7 @@ def test_login_with_phone_unformatted(opts):
     assert opts.client.jwt_data.uid == opts.phone_user_id, "logged in as wrong user"
 
 
+@th.tier("extended")
 @th.unit_test("login_with_phone_wrong_password")
 def test_login_with_phone_wrong_password(opts):
     from testit import TestitSkip
@@ -496,6 +523,7 @@ def test_login_with_phone_wrong_password(opts):
     assert not opts.client.is_authenticated, "login should have failed with wrong password"
 
 
+@th.tier("extended")
 @th.unit_test("phone_number_invalid_rejected")
 def test_phone_number_invalid_rejected(opts):
     resp = opts.client.login(TEST_PHONE_USER, TEST_PHONE_PWORD)
@@ -505,6 +533,7 @@ def test_phone_number_invalid_rejected(opts):
     assert resp.status_code == 400, f"Expected 400 for invalid phone but got {resp.status_code}"
 
 
+@th.tier("extended")
 @th.unit_test("phone_number_cleared")
 def test_phone_number_cleared(opts):
     resp = opts.client.login(TEST_PHONE_USER, TEST_PHONE_PWORD)
@@ -515,6 +544,7 @@ def test_phone_number_cleared(opts):
     assert resp.response.data.phone_number is None, f"Expected None after clearing but got {resp.response.data.phone_number}"
 
 
+@th.tier("core")
 @th.unit_test("mfa_login_returns_challenge_not_jwt")
 def test_mfa_login_returns_challenge(opts):
     from mojo.apps.account.models import User
@@ -543,6 +573,7 @@ def test_mfa_login_returns_challenge(opts):
     opts.mfa_user = mfa_user
 
 
+@th.tier("core")
 @th.unit_test("mfa_challenge_no_jwt_until_verified")
 def test_mfa_no_jwt_until_verified(opts):
     assert opts.mfa_token, "No mfa_token from previous test"
@@ -554,6 +585,7 @@ def test_mfa_no_jwt_until_verified(opts):
     assert resp.status_code in [401, 403], f"mfa_token should not grant access, got {resp.status_code}"
 
 
+@th.tier("extended")
 @th.unit_test("phone_number_duplicate_rejected")
 def test_phone_number_duplicate_rejected(opts):
     from mojo.apps.account.models import User

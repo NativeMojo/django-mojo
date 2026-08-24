@@ -3,6 +3,8 @@ from unittest.mock import patch
 
 from testit import helpers as th
 
+TESTIT_TIER = "extended"
+
 
 def _clear_register_limits():
     from mojo.decorators.limits import clear_rate_limits

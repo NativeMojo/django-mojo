@@ -6,6 +6,8 @@ from unittest import mock
 
 from testit import helpers as th
 
+TESTIT_TIER = "admin"
+
 
 ADMIN_EMAIL = "admin_portal_webapps@test.com"
 ADMIN_PASSWORD = "Admin_portal_webapps_pw_99"
