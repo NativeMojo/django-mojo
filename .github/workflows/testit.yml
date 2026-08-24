@@ -1,0 +1,69 @@
+# Reusable test job (maestro #2793). Callers pass the tier preset to run.
+# Holds the Postgres (with pgvector) + Redis services and the setup once, so
+# the event->tier mapping in tests.yml stays a few lines.
+name: testit
+
+on:
+  workflow_call:
+    inputs:
+      tier:
+        description: "Preset to run: core | framework | all"
+        required: true
+        type: string
+
+jobs:
+  run:
+    name: ${{ inputs.tier }} preset
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # pgvector image: create_testproject runs CREATE EXTENSION vector.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    env:
+      # create_testproject connects to Postgres as the superuser to create the
+      # mojo_test role/db and the vector extension.
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      # Cold CI hosts run slower than a warm laptop. The core budget (30s) is a
+      # hard gate, so give it headroom; calibrate down after one real run
+      # (maestro #2793 / #2790).
+      TESTIT_BUDGET_SCALE: "2"
+    steps:
+      - uses: actions/checkout@v4
+      # redis-tools so asgi_local's `redis-cli ping` finds the service and does
+      # not try to spawn its own redis-server; postgresql-client for psql.
+      - name: Install client tools
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client redis-tools
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Sync dependencies
+        run: uv sync --frozen
+      - name: Generate the test project
+        run: ./bin/create_testproject
+      - name: Run the ${{ inputs.tier }} preset
+        run: ./bin/run_tests --agent --tier ${{ inputs.tier }}
+      - name: Upload agent report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ inputs.tier }}
+          path: testproject/var/test_failures.json
+          if-no-files-found: ignore
