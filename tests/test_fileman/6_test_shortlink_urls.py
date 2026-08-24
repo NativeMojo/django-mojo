@@ -109,7 +109,8 @@ def setup_shortlink_urls(opts):
     opts.fm_pub_id = pub.pk
 
     File.objects.filter(user__in=[u1, u2]).delete()
-    FileRendition.objects.all().delete()
+    FileRendition.objects.filter(
+        original_file__file_manager__name__startswith="test_sl_fm").delete()  # scoped: never wipe other packages' renditions (#2792)
     ShortLink.objects.filter(source__in=["fileman", "fileman-share"]).delete()
 
 
@@ -701,7 +702,8 @@ def cleanup_shortlink_tests(opts):
     from mojo.apps.shortlink.models import ShortLink
 
     File.objects.filter(user__in=[opts.user, opts.user2]).delete()
-    FileRendition.objects.all().delete()
+    FileRendition.objects.filter(
+        original_file__file_manager__name__startswith="test_sl_fm").delete()  # scoped: never wipe other packages' renditions (#2792)
     FileManager.objects.filter(pk__in=[opts.fm_id, opts.fm_pub_id]).delete()
     ShortLink.objects.filter(source__in=["fileman", "fileman-share", "manual"]).delete()
 

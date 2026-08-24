@@ -41,6 +41,7 @@ def setup_chat_rooms(opts):
     opts.admin_user.add_permission("manage_chat")
 
 
+@th.tier("core")  # prerequisite: sets opts.group_room_id for the core tests below (#2792)
 @th.django_unit_test()
 def test_create_group_room(opts):
     """Create a group room via REST and verify owner membership is auto-created."""

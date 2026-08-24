@@ -240,7 +240,6 @@ def test_recovery_login_invalid_mfa_token(opts):
 # Used recovery code cannot be reused
 # ===========================================================================
 
-@th.tier("framework")
 @th.django_unit_test("totp recovery: used recovery code cannot be reused")
 def test_recovery_code_single_use(opts):
     from mojo.decorators.limits import clear_rate_limits

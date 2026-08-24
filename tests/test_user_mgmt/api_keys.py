@@ -52,6 +52,7 @@ def setup_api_key_testing(opts):
     opts.child_id = child.id
 
 
+@th.tier("core")  # prerequisite: sets opts.api_key_id/raw_token for the core tests below (#2792)
 @th.unit_test("apikey_create_for_group")
 def test_apikey_create_for_group(opts):
     """create_for_group() returns an api_key and a raw token; token_hash holds the SHA-256, and the raw token is also kept encrypted in mojo_secrets."""
@@ -211,6 +212,7 @@ def test_apikey_is_group_allowed(opts):
     other.delete()
 
 
+@th.tier("core")  # prerequisite: sets opts.rest_raw_token for the core tests below (#2792)
 @th.unit_test("apikey_rest_create")
 def test_apikey_rest_create(opts):
     """REST POST creates an api key and returns the token once."""
