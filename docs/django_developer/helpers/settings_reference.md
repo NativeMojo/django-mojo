@@ -6,15 +6,22 @@ This reference lists framework-recognized setting keys (names only, no values).
 
 These are read while URL/module bootstrap happens, so changes require a process restart.
 
-- `DATABASE_CONN_MAX_AGE` — **file-only** default `CONN_MAX_AGE` (seconds)
-  applied to every server-backed `DATABASES` alias that does not set its own,
-  default `300`. Set `0` to restore Django's per-request connections — required
-  behind a transaction-mode pooler (pgbouncer). Aliases using the native
-  psycopg pool (`OPTIONS["pool"]`) are skipped. A database-backed `Setting`
-  row is ignored.
+- `DATABASE_POOL_OPTIONS` — **file-only** psycopg 3 pool dictionary applied to
+  PostgreSQL aliases that declare neither `CONN_MAX_AGE` nor
+  `OPTIONS["pool"]`. Defaults to `{"min_size": 1, "max_size": 4, "timeout": 5,
+  "max_idle": 300, "max_lifetime": 1800}`. Each Uvicorn worker owns an
+  independent pool; set this to `False` to disable automatic pooling, or set
+  `OPTIONS["pool"]` on an alias for per-alias control. A database-backed
+  `Setting` row is ignored.
+- `DATABASE_CONN_MAX_AGE` — **file-only** compatibility default for
+  `CONN_MAX_AGE` (seconds), default `0`. Defining this key opts otherwise
+  unconfigured aliases out of automatic psycopg pooling; an explicit
+  per-alias `CONN_MAX_AGE` does the same. Native psycopg pooling always uses
+  `CONN_MAX_AGE = 0`. A database-backed `Setting` row is ignored.
 - `DATABASE_CONN_HEALTH_CHECKS` — **file-only** default `CONN_HEALTH_CHECKS`
-  for the same aliases, default `True` (a connection killed by an idle timeout
-  or database restart is replaced instead of surfacing as a 500).
+  for server-backed aliases, default `True`. With a native pool, Django checks
+  a connection when it is checked out so an idle-timeout or restart casualty
+  is replaced instead of surfacing as a 500.
 - `DATABASE_READER_HOST` — **file-only** reader database hostname. When set,
   django-mojo derives a `reader` alias from `DATABASES["default"]` (unless one
   is explicitly declared) and installs the database router and request
@@ -25,8 +32,10 @@ These are read while URL/module bootstrap happens, so changes require a process 
   primary port is retained. Ignored when the application explicitly declares
   `DATABASES["reader"]`.
 - `DATABASE_READER_CONN_MAX_AGE` — **file-only** connection lifetime in seconds
-  for a django-mojo-derived `reader` alias, default `60`. Ignored when the
-  application explicitly declares `DATABASES["reader"]`.
+  for a django-mojo-derived `reader` alias. Unset, the reader receives the same
+  automatic bounded pool as other PostgreSQL aliases. Setting this legacy key
+  opts the derived reader out of pooling. Ignored when the application
+  explicitly declares `DATABASES["reader"]`.
 - `MOJO_API_MODULE`
 - `MOJO_APPEND_SLASH`
 - `MOJO_PREFIX`

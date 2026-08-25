@@ -1,13 +1,13 @@
 # Database Reader Routing
 
-> **Connection-reuse defaults.** Independently of reader routing, django-mojo
-> defaults `CONN_MAX_AGE` to `300` and `CONN_HEALTH_CHECKS` to `True` on every
-> server-backed `DATABASES` alias at settings-load time, so projects no longer
-> inherit Django's connection-per-request behavior by omission. Explicit
-> per-alias values always win; `DATABASE_CONN_MAX_AGE = 0` restores
-> per-request connections (required behind a transaction-mode pgbouncer). See
-> `DATABASE_CONN_MAX_AGE` / `DATABASE_CONN_HEALTH_CHECKS` in the
-> [settings reference](../helpers/settings_reference.md).
+> **ASGI connection pooling.** Independently of reader routing, django-mojo
+> gives every otherwise-unconfigured PostgreSQL alias a bounded psycopg 3 pool:
+> `min_size=1`, `max_size=4`, `timeout=5`, `max_idle=300`, and
+> `max_lifetime=1800`. `CONN_MAX_AGE` stays `0`, as Django requires for native
+> pooling and recommends under ASGI. Explicit per-alias connection settings
+> always win; use `DATABASE_POOL_OPTIONS` to replace or disable the global
+> default. See `DATABASE_POOL_OPTIONS`, `DATABASE_CONN_MAX_AGE`, and
+> `DATABASE_CONN_HEALTH_CHECKS` in the [settings reference](../helpers/settings_reference.md).
 
 django-mojo can route safe reads to a database replica without application
 changes. Add the reader endpoint to the file-backed startup configuration:
@@ -31,11 +31,19 @@ the setting is removed.
 ## What is injected
 
 At settings-load time, django-mojo copies `DATABASES["default"]` to a `reader`
-alias, changes its `HOST`, and adds:
+alias, changes its `HOST`, and adds the test mirror. The later connection
+defaults pass gives both writer and reader independent pool dictionaries:
 
 ```python
-DATABASES["reader"]["CONN_MAX_AGE"] = 60
 DATABASES["reader"]["TEST"]["MIRROR"] = "default"
+DATABASES["reader"]["CONN_MAX_AGE"] = 0
+DATABASES["reader"]["OPTIONS"]["pool"] = {
+    "min_size": 1,
+    "max_size": 4,
+    "timeout": 5,
+    "max_idle": 300,
+    "max_lifetime": 1800,
+}
 ```
 
 It then appends `"mojo.db.router.ReaderRouter"` to `DATABASE_ROUTERS` and
@@ -48,12 +56,50 @@ Optional file-backed settings customize the derived connection:
 
 ```python
 DATABASE_READER_PORT = 5432
-DATABASE_READER_CONN_MAX_AGE = 60
+DATABASE_POOL_OPTIONS = {
+    "min_size": 1,
+    "max_size": 2,
+    "timeout": 5,
+    "max_idle": 300,
+    "max_lifetime": 1800,
+}
 ```
 
-The modest default connection age lets long-running application processes
-periodically reconnect and redistribute across the Aurora reader endpoint's
-DNS answers.
+`DATABASE_POOL_OPTIONS` applies to both writer and reader. Declare an explicit
+`DATABASES["reader"]` alias when the reader needs different pool sizing. The
+30-minute default maximum lifetime periodically replaces connections so an
+Aurora reader endpoint can redistribute them. The legacy
+`DATABASE_READER_CONN_MAX_AGE` remains available, but setting it opts the
+derived reader out of native pooling.
+
+### Pool sizing
+
+The pool is per process and per alias. django-mojo deploys four Uvicorn workers
+by default, so the shipped maximum is 16 writer connections per node and, when
+reader routing is enabled, another 16 reader connections. Size the fleet with:
+
+```text
+nodes × Uvicorn workers × sum(each alias's max_size)
+```
+
+Leave database capacity for migrations, background processes, operators, and
+failover. Psycopg exposes `pool_size`, `pool_available`, and
+`requests_waiting`; tune the defaults from those measurements rather than
+raising the cap speculatively.
+
+### External poolers
+
+The native pool connects directly to the configured RDS or Aurora endpoint.
+RDS Proxy or PgBouncer can be added later for fleet-wide multiplexing, but they
+are a separate layer rather than a replacement for ASGI-safe application
+pooling. Transaction-mode poolers require
+`DISABLE_SERVER_SIDE_CURSORS = True` and a session-state audit.
+
+django-mojo's DNS and certificate services use session advisory locks across
+network operations. PgBouncer transaction mode cannot safely carry those
+locks. RDS Proxy preserves correctness by pinning such a client to one database
+connection, which reduces multiplexing until that client disconnects. Isolate
+or redesign those lock paths before putting them behind a transaction pooler.
 
 An explicitly declared `DATABASES["reader"]` alias is preserved as-is; the
 host setting remains the switch that installs routing. You can also declare

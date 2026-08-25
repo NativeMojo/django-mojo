@@ -42,8 +42,8 @@ def test_host_derives_reader_alias(opts):
 
     assert reader["HOST"] == "reader.internal", \
         f"the reader host override was not applied: {reader!r}"
-    assert reader["CONN_MAX_AGE"] == 60, \
-        f"the default reader connection age must be 60 seconds: {reader!r}"
+    assert "CONN_MAX_AGE" not in reader, \
+        f"reader injection must leave connection policy to the defaults pass: {reader!r}"
     assert reader["TEST"]["MIRROR"] == "default", \
         f"reader tests must mirror the default database: {reader!r}"
     reader["OPTIONS"]["sslmode"] = "changed"
@@ -67,6 +67,27 @@ def test_reader_overrides_are_honored(opts):
         f"DATABASE_READER_PORT must replace the copied port, got {reader['PORT']!r}"
     assert reader["CONN_MAX_AGE"] == 15, \
         f"DATABASE_READER_CONN_MAX_AGE must be honored, got {reader['CONN_MAX_AGE']!r}"
+
+
+@th.unit_test("reader config: legacy connection age removes an inherited pool")
+def test_reader_connection_age_opts_out_of_pool(opts):
+    from mojo.db.config import apply_reader_database
+
+    context = _context(
+        DATABASE_READER_HOST="reader.internal",
+        DATABASE_READER_CONN_MAX_AGE=15,
+    )
+    context["DATABASES"]["default"]["OPTIONS"]["pool"] = {
+        "min_size": 1,
+        "max_size": 4,
+    }
+    apply_reader_database(context)
+    reader = context["DATABASES"]["reader"]
+
+    assert reader["CONN_MAX_AGE"] == 15, \
+        f"the explicit reader lifetime must survive, got {reader!r}"
+    assert "pool" not in reader["OPTIONS"], \
+        f"persistent reader connections cannot also inherit a native pool, got {reader!r}"
 
 
 @th.unit_test("reader config: malformed copied TEST config is replaced safely")
