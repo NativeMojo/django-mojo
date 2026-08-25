@@ -138,6 +138,16 @@ Set a specific thread count with `-j N`:
 
 Modules marked `serial` in their `TESTIT` config always run sequentially after all parallel modules complete, regardless of `-j`.
 
+`@th.django_unit_setup` and `@th.django_unit_test` return the current worker
+thread's Django database connections after each decorated function. This
+matches Django's request/test boundary and prevents persistent TestIt worker
+threads from holding every lease in a bounded psycopg pool. Tests must not
+carry cursors, transactions, or connection-local state across decorated
+functions. The generated test project keeps the real pool enabled and sets its
+per-process maximum to eight, matching TestIt's default module concurrency and
+its single Uvicorn worker; this does not change django-mojo's production pool
+default of four connections per Uvicorn worker.
+
 ### Rich Progress UI
 
 When `rich` is installed and `-j` is greater than 1, the runner shows a live per-module progress table. Use `--plain` to disable it (useful in CI environments that do not handle ANSI codes, or when piping output):

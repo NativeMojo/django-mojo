@@ -195,8 +195,9 @@ def test_django_pool_is_available(opts):
         "the generated ASGI test project must expose Django's native psycopg pool"
     assert pool.min_size == 1, \
         f"the live pool must use min_size=1, got {pool.min_size!r}"
-    assert pool.max_size == 4, \
-        f"the live pool must use max_size=4, got {pool.max_size!r}"
+    assert pool.max_size == 8, \
+        ("the single-process test environment must cover all eight parallel "
+         f"TestIt workers, got max_size={pool.max_size!r}")
     with connection.cursor() as cursor:
         cursor.execute("SELECT 1")
         value = cursor.fetchone()[0]
