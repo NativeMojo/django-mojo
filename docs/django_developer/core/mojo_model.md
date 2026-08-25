@@ -62,13 +62,24 @@ class Book(models.Model, MojoModel):
 | `LIST_DEFAULT_FILTERS` | dict | `{}` | Baseline filters applied to **list** requests only, overridable per field by the caller (see [Default list filters](#default-list-filters)) |
 | `GRAPHS` | dict | `{}` | Serialization shapes (see [Graphs](graphs.md)) |
 | `GRAPH_PERMISSIONS` | dict | `{}` | Per-graph required permissions, additive to `VIEW_PERMS` (see [Per-graph permissions](graphs.md#per-graph-permissions-graph_permissions)) |
-| `NO_SAVE_FIELDS` | list | `["id","pk","created","uuid"]` | Fields ignored on save |
+| `NO_SAVE_FIELDS` | list | `["id","pk","created","uuid"]` | Fields the REST body can never set (see note below) |
 | `NO_SHOW_FIELDS` | list | `[]` | Fields never included in responses |
 | `SENSITIVE_FIELDS` | list | `[]` | Columns that may never be filtered, searched, sorted or aggregated on (see [Sensitive fields](#sensitive-fields)) |
 | `LOG_CHANGES` | bool | `False` | Auto-log field changes via logit |
 | `LOG_META_CHANGES` | bool | `False` | Auto-log key-level changes to all JSONFields via logit |
 | `PROTECTED_JSON_PERMS` | list | `[]` | Permissions required to modify the `"protected"` root key in any JSONField |
 | `OWNER_FIELD` | str | `"user"` | Field name for owner permission check |
+
+> **`NO_SAVE_FIELDS` does not disable the create-time auto-stamps.** It only
+> filters the request-body field loop. On create, the framework still stamps
+> the group-scoping FK from `request.group` and the `CREATED_BY_OWNER_FIELD`
+> from the acting user — and `request.group` can arrive from the caller's
+> `group` param via the permission fallback. A model whose group/owner must be
+> **system-derived** (never taken from request context) must enforce that
+> itself: derive the field unconditionally in `save()`, or opt out
+> (`CREATED_BY_OWNER_FIELD = None`) and re-stamp in `on_rest_pre_save`.
+> Assuming `NO_SAVE_FIELDS` alone protects a tenant field is how a real
+> cross-tenant write happened (mverify WalletSession, maestro item 2956).
 | `GROUP_FIELD` | str | `"group"` | Field name (or related path, e.g. `"agent__project"`) for group scoping — governs detail, list, and `?group=` permission checks |
 | `CREATED_BY_OWNER_FIELD` | str or None | `"user"` | Auto-stamped with `request.user` on create **only when the body omits it**, and only when there is a real user to attribute to. `None` disables. See [REST Permissions — Create-time owner stamping](../rest/permissions.md#create-time-owner-stamping). |
 | `UPDATED_BY_OWNER_FIELD` | str or None | `"modified_by"` | Set to `request.user` on every update (who last modified). Left unchanged when there is no real user — e.g. a system-context save. See [REST Permissions](../rest/permissions.md). |
