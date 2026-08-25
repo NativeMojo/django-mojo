@@ -1,6 +1,7 @@
 from testit import helpers as th
 from testit import faker
 import datetime
+import uuid
 
 TESTIT_TIER = "core"  # #2792 tier curation
 
@@ -22,6 +23,40 @@ def test_crypto_encrypt_decrypt_dict(opts):
     enc_dict = crypto.encrypt(raw_dict, pword)
     dec_dict = crypto.decrypt(enc_dict, pword)
     assert dec_dict == raw_dict, f"Expected {raw_dict}, got {dec_dict}"
+
+
+@th.django_unit_test()
+def test_derive_key_input_compatibility_and_separation(opts):
+    from mojo.helpers.crypto import aes
+
+    marker = uuid.uuid4().hex
+    password = f"cache-smoke-{marker}"
+    salt = f"salt-{marker}".encode("latin-1")
+
+    key = aes.derive_key(password, salt)
+    assert len(key) == 32, f"Expected a 32-byte derived key, got {len(key)}"
+    assert aes.derive_key(password.encode("latin-1"), bytearray(salt)) == key, \
+        "Equivalent bytes and bytearray inputs must derive the same key"
+    assert aes.derive_key(password, memoryview(salt)) == key, \
+        "Equivalent string and memoryview inputs must derive the same key"
+
+    other_password_key = aes.derive_key(f"{password}-other", salt)
+    assert other_password_key != key, \
+        "Changing the password must derive a different key"
+
+    short_key = aes.derive_key(password, salt, key_length=16)
+    assert len(short_key) == 16, \
+        f"Expected a 16-byte derived key, got {len(short_key)}"
+    assert short_key == key[:16], \
+        "PBKDF2's shorter output must match the prefix of the longer output"
+
+    try:
+        aes.derive_key(password, salt, key_length=32.0)
+    except TypeError:
+        pass
+    else:
+        assert False, \
+            "A float key length must not reuse the cached integer key length"
 
 @th.django_unit_test()
 def test_crypto_hashing(opts):

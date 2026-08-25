@@ -22,6 +22,19 @@ plaintext = aes.decrypt(encrypted, password="my-secret-key")
 
 Use for encrypting data at rest when you need to retrieve it later (two-way). For passwords, use hashing instead.
 
+AES-GCM decryption memoizes derived PBKDF2 keys in a per-process LRU containing
+up to 512 normalized `(password, salt, key length)` tuples. A worker restart is
+a cold cache; the first decrypt of a ciphertext derives normally and repeated
+decrypts in that worker reuse the derived key. Encryption always derives
+uncached because it generates a fresh salt, so writes and secret rotations do
+not displace hot decrypt entries. The first decrypt after a rotation misses
+automatically because the new ciphertext carries a new salt.
+
+The bounded cache retains normalized password and salt bytes plus derived keys
+until eviction or process exit. It never contains ciphertext payloads or
+decrypted application data. Applications that require old derived keys to
+leave memory immediately after rotation must restart their workers.
+
 ## Hashing
 
 ```python

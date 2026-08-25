@@ -1,13 +1,28 @@
+"""AES encryption helpers.
+
+Decrypt key derivations are memoized in a 512-entry, per-process LRU keyed by
+the normalized PBKDF2 inputs. The cache retains password bytes, salts, and
+derived keys until eviction or process exit; it never receives ciphertext
+payloads or decrypted application data. Encryption derives uncached because
+its fresh salt makes every write key a one-use value.
+
+The LRU is thread-safe, but simultaneous first misses may compute the same
+pure PBKDF2 result more than once before one result is cached.
+"""
+
 import json
+from functools import lru_cache
 from base64 import b64encode, b64decode
 from Crypto.Cipher import AES
 from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Random import get_random_bytes
+from Crypto.Util.py3compat import tobytes
 from objict import objict
 import mojo.errors
 import hashlib
 
 PBKDF2_ITERATIONS = 100_000
+DERIVED_KEY_CACHE_SIZE = 512
 SALT_LENGTH = 16
 NONCE_LENGTH = 12
 TAG_LENGTH = 16
@@ -21,7 +36,7 @@ def encrypt(data, password):
 
     data_bytes = data.encode('utf-8')
     salt = get_random_bytes(SALT_LENGTH)
-    key = derive_key(password, salt)
+    key = _derive_key_uncached(tobytes(password), tobytes(salt), 32)
     cipher = AES.new(key, AES.MODE_GCM, nonce=get_random_bytes(NONCE_LENGTH))
 
     ciphertext, tag = cipher.encrypt_and_digest(data_bytes)
@@ -57,8 +72,22 @@ def decrypt(enc_data_b64, password, ignore_errors=True):
         return decrypted_str
 
 
+def _derive_key_uncached(password_bytes, salt_bytes, key_length):
+    return PBKDF2(
+        password_bytes,
+        salt_bytes,
+        dkLen=key_length,
+        count=PBKDF2_ITERATIONS,
+    )
+
+
+@lru_cache(maxsize=DERIVED_KEY_CACHE_SIZE, typed=True)
+def _derive_key_cached(password_bytes, salt_bytes, key_length):
+    return _derive_key_uncached(password_bytes, salt_bytes, key_length)
+
+
 def derive_key(password, salt, key_length=32):
-    return PBKDF2(password, salt, dkLen=key_length, count=PBKDF2_ITERATIONS)
+    return _derive_key_cached(tobytes(password), tobytes(salt), key_length)
 
 
 def decrypt_ecb(edata, key_str):
