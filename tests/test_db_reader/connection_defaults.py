@@ -31,10 +31,36 @@ def test_non_postgresql_server_stays_per_request(opts):
     assert "OPTIONS" not in default, \
         f"the PostgreSQL-only pool must not be applied to MySQL, got {default!r}"
     assert default["CONN_HEALTH_CHECKS"] is True, \
-        f"a server-backed alias must default to health checks on, got {default!r}"
+        f"health checks must still default on, got {default!r}"
 
 
-@th.unit_test("conn defaults: legacy psycopg2 engine alias qualifies")
+@th.unit_test("conn defaults: explicit DATABASE_CONN_MAX_AGE opts persistence in")
+def test_explicit_config_opts_in(opts):
+    from mojo.db.config import apply_connection_defaults
+
+    context = _context(DATABASE_CONN_MAX_AGE=300)
+    apply_connection_defaults(context)
+    default = context["DATABASES"]["default"]
+
+    assert default["CONN_MAX_AGE"] == 300, \
+        f"a configured DATABASE_CONN_MAX_AGE must be applied, got {default!r}"
+
+
+@th.unit_test("conn defaults: configured zero is applied, not treated as absent")
+def test_explicit_zero_applied(opts):
+    from mojo.db.config import apply_connection_defaults
+
+    context = _context(DATABASE_CONN_MAX_AGE=0)
+    apply_connection_defaults(context)
+    default = context["DATABASES"]["default"]
+
+    assert default["CONN_MAX_AGE"] == 0, (
+        f"DATABASE_CONN_MAX_AGE=0 must be written through (pgbouncer "
+        f"transaction mode relies on it), got {default!r}"
+    )
+
+
+@th.unit_test("conn defaults: legacy psycopg2 engine alias gets health checks")
 def test_legacy_engine_name_qualifies(opts):
     from mojo.db.config import apply_connection_defaults
 
@@ -54,14 +80,14 @@ def test_legacy_engine_name_qualifies(opts):
 def test_explicit_values_win(opts):
     from mojo.db.config import apply_connection_defaults
 
-    context = _context()
+    context = _context(DATABASE_CONN_MAX_AGE=300)
     context["DATABASES"]["default"]["CONN_MAX_AGE"] = 0
     context["DATABASES"]["default"]["CONN_HEALTH_CHECKS"] = False
     apply_connection_defaults(context)
     default = context["DATABASES"]["default"]
 
     assert default["CONN_MAX_AGE"] == 0, \
-        f"an explicit CONN_MAX_AGE must survive the defaults pass, got {default!r}"
+        f"an explicit per-alias CONN_MAX_AGE must survive, got {default!r}"
     assert default["CONN_HEALTH_CHECKS"] is False, \
         f"an explicit CONN_HEALTH_CHECKS must survive, got {default!r}"
     assert "pool" not in default.get("OPTIONS", {}), \
@@ -91,7 +117,7 @@ def test_project_override_keys(opts):
 def test_sqlite_untouched(opts):
     from mojo.db.config import apply_connection_defaults
 
-    context = _context()
+    context = _context(DATABASE_CONN_MAX_AGE=300)
     context["DATABASES"]["local"] = {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": "/tmp/db.sqlite3",
@@ -109,7 +135,7 @@ def test_sqlite_untouched(opts):
 def test_explicit_pool_is_preserved(opts):
     from mojo.db.config import apply_connection_defaults
 
-    context = _context()
+    context = _context(DATABASE_CONN_MAX_AGE=300)
     context["DATABASES"]["default"]["OPTIONS"] = {"pool": True}
     apply_connection_defaults(context)
     default = context["DATABASES"]["default"]
