@@ -71,9 +71,11 @@ def test_legacy_engine_name_qualifies(opts):
     default = context["DATABASES"]["default"]
 
     assert default["CONN_MAX_AGE"] == 0, \
-        f"the legacy engine alias must use pool-compatible connection age, got {default!r}"
-    assert default["OPTIONS"]["pool"]["max_size"] == 4, \
-        f"the postgresql_psycopg2 alias must receive the native pool, got {default!r}"
+        f"the legacy engine alias must retain per-request connections, got {default!r}"
+    assert "pool" not in default.get("OPTIONS", {}), \
+        f"the legacy engine alias must not receive an implicit pool, got {default!r}"
+    assert default["CONN_HEALTH_CHECKS"] is True, \
+        f"the legacy engine alias must receive health checks, got {default!r}"
 
 
 @th.unit_test("conn defaults: explicit per-alias values are never overridden")
@@ -152,7 +154,11 @@ def test_explicit_pool_is_preserved(opts):
 def test_reader_alias_gets_pool(opts):
     from mojo.db.config import apply_connection_defaults, apply_reader_database
 
-    context = _context(DATABASE_READER_HOST="reader.internal")
+    pool_options = {"min_size": 1, "max_size": 4, "timeout": 5}
+    context = _context(
+        DATABASE_READER_HOST="reader.internal",
+        DATABASE_POOL_OPTIONS=pool_options,
+    )
     context["MIDDLEWARE"] = ["project.middleware.Existing"]
     apply_reader_database(context)
     apply_connection_defaults(context)
@@ -165,13 +171,13 @@ def test_reader_alias_gets_pool(opts):
     assert databases["default"]["CONN_MAX_AGE"] == 0, \
         f"the default alias must use a pool-compatible age: {databases['default']!r}"
     assert databases["reader"]["OPTIONS"]["pool"] == databases["default"]["OPTIONS"]["pool"], \
-        f"writer and reader must receive the same bounded defaults: {databases!r}"
+        f"writer and reader must receive the same explicit pool options: {databases!r}"
     assert databases["reader"]["OPTIONS"]["pool"] is not databases["default"]["OPTIONS"]["pool"], \
         "writer and reader pool dictionaries must be independent copies"
 
 
-@th.unit_test("conn defaults: ASGI PostgreSQL uses a bounded native pool")
-def test_postgresql_defaults_to_bounded_pool(opts):
+@th.unit_test("conn defaults: PostgreSQL pooling requires explicit opt-in")
+def test_postgresql_pooling_requires_explicit_opt_in(opts):
     from mojo.db.config import apply_connection_defaults
 
     context = _context()
@@ -179,14 +185,9 @@ def test_postgresql_defaults_to_bounded_pool(opts):
     default = context["DATABASES"]["default"]
 
     assert default["CONN_MAX_AGE"] == 0, \
-        f"native pooling requires CONN_MAX_AGE=0, got {default!r}"
-    assert default["OPTIONS"]["pool"] == {
-        "min_size": 1,
-        "max_size": 4,
-        "timeout": 5,
-        "max_idle": 300,
-        "max_lifetime": 1800,
-    }, f"PostgreSQL must receive the bounded ASGI pool defaults, got {default!r}"
+        f"PostgreSQL must retain per-request connections by default, got {default!r}"
+    assert "pool" not in default.get("OPTIONS", {}), \
+        f"native pooling must require an explicit project opt-in, got {default!r}"
 
 
 @th.unit_test("conn defaults: project can replace or disable pool defaults")

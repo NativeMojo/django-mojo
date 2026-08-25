@@ -11,27 +11,21 @@ _SERVER_ENGINES = ("postgresql", "mysql", "oracle")
 
 CONN_MAX_AGE_DEFAULT = 0
 CONN_HEALTH_CHECKS_DEFAULT = True
-POOL_OPTIONS_DEFAULT = {
-    "min_size": 1,
-    "max_size": 4,
-    "timeout": 5,
-    "max_idle": 300,
-    "max_lifetime": 1800,
-}
+POOL_OPTIONS_DEFAULT = False
 
 
 def apply_connection_defaults(context):
-    """Apply bounded psycopg pools and safe connection defaults.
+    """Apply explicit psycopg pools and safe connection defaults.
 
     Django advises disabling persistent connections under ASGI. PostgreSQL
-    aliases therefore receive a bounded native psycopg pool and
-    ``CONN_MAX_AGE = 0`` by default. ``DATABASE_POOL_OPTIONS`` replaces the
-    pool dictionary globally; a false value disables automatic pooling.
+    aliases therefore retain per-request connections and ``CONN_MAX_AGE = 0``
+    by default. ``DATABASE_POOL_OPTIONS`` explicitly enables a native psycopg
+    pool for otherwise unconfigured PostgreSQL aliases.
 
     Explicit alias ``CONN_MAX_AGE`` / ``OPTIONS["pool"]`` values always win.
-    Setting the legacy ``DATABASE_CONN_MAX_AGE`` key also opts every otherwise
-    unconfigured alias out of the automatic pool. MySQL and Oracle retain
-    Django's per-request default because Django's native pool is PostgreSQL-only.
+    Setting the legacy ``DATABASE_CONN_MAX_AGE`` key selects persistent
+    connections instead. MySQL and Oracle retain Django's per-request default
+    because Django's native pool is PostgreSQL-only.
     """
     databases = context.get("DATABASES")
     if not isinstance(databases, dict):
