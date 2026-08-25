@@ -1,5 +1,14 @@
 # Database Reader Routing
 
+> **Connection-reuse defaults.** Independently of reader routing, django-mojo
+> defaults `CONN_MAX_AGE` to `300` and `CONN_HEALTH_CHECKS` to `True` on every
+> server-backed `DATABASES` alias at settings-load time, so projects no longer
+> inherit Django's connection-per-request behavior by omission. Explicit
+> per-alias values always win; `DATABASE_CONN_MAX_AGE = 0` restores
+> per-request connections (required behind a transaction-mode pgbouncer). See
+> `DATABASE_CONN_MAX_AGE` / `DATABASE_CONN_HEALTH_CHECKS` in the
+> [settings reference](../helpers/settings_reference.md).
+
 django-mojo can route safe reads to a database replica without application
 changes. Add the reader endpoint to the file-backed startup configuration:
 
