@@ -434,8 +434,8 @@ DATABASES = {
 
 # TestIt runs up to eight module threads in one process and funnels their HTTP
 # traffic through one Uvicorn worker. Keep the real psycopg pool enabled, but
-# size each test process for that deliberate concurrency. Production keeps the
-# framework default (four connections per each of four Uvicorn workers).
+# size each test process for that deliberate concurrency. Production pooling
+# is opt-in and must be sized for every ASGI and long-running worker process.
 DATABASE_POOL_OPTIONS = {
     "min_size": 1,
     "max_size": 8,

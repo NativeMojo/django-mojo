@@ -1,12 +1,11 @@
 # Database Reader Routing
 
 > **ASGI connection pooling.** Independently of reader routing, django-mojo
-> gives every otherwise-unconfigured PostgreSQL alias a bounded psycopg 3 pool:
-> `min_size=1`, `max_size=4`, `timeout=5`, `max_idle=300`, and
-> `max_lifetime=1800`. `CONN_MAX_AGE` stays `0`, as Django requires for native
+> leaves PostgreSQL connections per-request by default. Native psycopg 3
+> pooling is opt-in through `DATABASE_POOL_OPTIONS` or an alias's
+> `OPTIONS["pool"]`; `CONN_MAX_AGE` stays `0`, as Django requires for native
 > pooling and recommends under ASGI. Explicit per-alias connection settings
-> always win; use `DATABASE_POOL_OPTIONS` to replace or disable the global
-> default. See `DATABASE_POOL_OPTIONS`, `DATABASE_CONN_MAX_AGE`, and
+> always win. See `DATABASE_POOL_OPTIONS`, `DATABASE_CONN_MAX_AGE`, and
 > `DATABASE_CONN_HEALTH_CHECKS` in the [settings reference](../helpers/settings_reference.md).
 
 django-mojo can route safe reads to a database replica without application
@@ -31,19 +30,12 @@ the setting is removed.
 ## What is injected
 
 At settings-load time, django-mojo copies `DATABASES["default"]` to a `reader`
-alias, changes its `HOST`, and adds the test mirror. The later connection
-defaults pass gives both writer and reader independent pool dictionaries:
+alias, changes its `HOST`, and adds the test mirror. Without an explicit pool,
+both writer and reader retain per-request connections:
 
 ```python
 DATABASES["reader"]["TEST"]["MIRROR"] = "default"
 DATABASES["reader"]["CONN_MAX_AGE"] = 0
-DATABASES["reader"]["OPTIONS"]["pool"] = {
-    "min_size": 1,
-    "max_size": 4,
-    "timeout": 5,
-    "max_idle": 300,
-    "max_lifetime": 1800,
-}
 ```
 
 It then appends `"mojo.db.router.ReaderRouter"` to `DATABASE_ROUTERS` and
@@ -67,7 +59,7 @@ DATABASE_POOL_OPTIONS = {
 
 `DATABASE_POOL_OPTIONS` applies to both writer and reader. Declare an explicit
 `DATABASES["reader"]` alias when the reader needs different pool sizing. The
-30-minute default maximum lifetime periodically replaces connections so an
+example's 30-minute maximum lifetime periodically replaces connections so an
 Aurora reader endpoint can redistribute them. The legacy
 `DATABASE_READER_CONN_MAX_AGE` remains available, but setting it opts the
 derived reader out of native pooling.
@@ -75,17 +67,18 @@ derived reader out of native pooling.
 ### Pool sizing
 
 The pool is per process and per alias. django-mojo deploys four Uvicorn workers
-by default, so the shipped maximum is 16 writer connections per node and, when
-reader routing is enabled, another 16 reader connections. Size the fleet with:
+by default, and applications may also run job, scheduler, MCP, or custom worker
+processes. Size the fleet with:
 
 ```text
-nodes × Uvicorn workers × sum(each alias's max_size)
+nodes × database-using processes per node × sum(each alias's max_size)
 ```
 
 Leave database capacity for migrations, background processes, operators, and
-failover. Psycopg exposes `pool_size`, `pool_available`, and
-`requests_waiting`; tune the defaults from those measurements rather than
-raising the cap speculatively.
+failover. The pool size must cover each process's concurrent database users,
+and every non-request execution path must close or return its connection.
+Psycopg exposes `pool_size`, `pool_available`, and `requests_waiting`; tune from
+those measurements rather than raising the cap speculatively.
 
 ### External poolers
 
