@@ -6,15 +6,19 @@ This reference lists framework-recognized setting keys (names only, no values).
 
 These are read while URL/module bootstrap happens, so changes require a process restart.
 
-- `DATABASE_CONN_MAX_AGE` — **file-only** default `CONN_MAX_AGE` (seconds)
-  applied to every server-backed `DATABASES` alias that does not set its own,
-  default `300`. Set `0` to restore Django's per-request connections — required
-  behind a transaction-mode pooler (pgbouncer). Aliases using the native
-  psycopg pool (`OPTIONS["pool"]`) are skipped. A database-backed `Setting`
-  row is ignored.
+- `DATABASE_CONN_MAX_AGE` — **file-only** opt-in `CONN_MAX_AGE` (seconds)
+  applied to every server-backed `DATABASES` alias that does not set its own.
+  **No framework default**: Django's guidance is that persistent connections
+  must stay disabled under ASGI (per-request threads orphan them), and
+  django-mojo serves HTTP over ASGI — connection reuse belongs at the driver
+  or pooler layer (native psycopg 3 pool via `OPTIONS["pool"]`, or pgbouncer).
+  Opt in only for WSGI-style deployments; `0` is written through (pgbouncer
+  transaction mode). Pool-enabled aliases are always skipped. A
+  database-backed `Setting` row is ignored.
 - `DATABASE_CONN_HEALTH_CHECKS` — **file-only** default `CONN_HEALTH_CHECKS`
-  for the same aliases, default `True` (a connection killed by an idle timeout
-  or database restart is replaced instead of surfacing as a 500).
+  for the same aliases, default `True` (a no-op at age 0; wherever persistence
+  is explicitly enabled, a connection killed by an idle timeout or database
+  restart is replaced instead of surfacing as a 500).
 - `DATABASE_READER_HOST` — **file-only** reader database hostname. When set,
   django-mojo derives a `reader` alias from `DATABASES["default"]` (unless one
   is explicitly declared) and installs the database router and request
