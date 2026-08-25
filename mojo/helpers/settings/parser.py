@@ -188,5 +188,8 @@ def load_settings_config(context):
     # This runs while the settings module is still importing, before Django
     # can cache DATABASES or construct the middleware stack. The local import
     # keeps the parser's normal import path independent of the routing feature.
-    from mojo.db.config import apply_reader_database
+    # Connection defaults run after the reader so a derived reader alias is
+    # covered too (its own explicit CONN_MAX_AGE still wins via setdefault).
+    from mojo.db.config import apply_connection_defaults, apply_reader_database
     apply_reader_database(context)
+    apply_connection_defaults(context)
