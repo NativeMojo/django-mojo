@@ -77,11 +77,13 @@ provide exact values and prove rendered and live topology agree. Size with:
 nodes × API workers per node × default.max_size
 ```
 
-Preflight reads `SHOW max_connections` through the same ordinary `default`
-connection and permits at most `floor(max_connections × 0.60)`. It fails before
-migrations, host mutation or restart when topology, destination, ordinary
-connection status or capacity cannot be proved. The remaining 40 percent is
-reserved for migrations, background processes, operators and failover.
+Preflight reads PostgreSQL capacity through the same ordinary `default`
+connection and permits at most `floor(max_connections × 0.60)`. It also
+subtracts PostgreSQL's superuser and ordinary reserved slots, the current
+server-wide connection count, and an explicit observer reserve. The allowed
+candidate is the smaller of the 60-percent ceiling and real remaining
+headroom. It fails before migrations, host mutation or restart when topology,
+destination, ordinary connection status or capacity cannot be proved.
 Psycopg exposes `pool_size`, `pool_available`, and `requests_waiting`; tune from
 those measurements rather than raising the cap speculatively.
 
@@ -92,6 +94,52 @@ hard connection ceiling. If the pool is smaller, excess realtime DB work waits
 for a lease. If it is larger, idle allocated connections still count against
 the fleet budget. Checked-out leases are `pool_size - pool_available`; a quiet
 process has every allocated connection available and `requests_waiting == 0`.
+
+### Identity, telemetry, and bounded failure
+
+An enabled candidate must provide `DATABASE_POOL_IDENTITY` with exact
+`project`, `node`, `application`, and `deployment` values. django-mojo derives
+a stable PostgreSQL `application_name` containing that identity, process role,
+alias, and PID. It is ASCII-only and hash-suffixed when needed to fit
+PostgreSQL's 63-byte limit. Missing or ambiguous identity fails API startup;
+disabled and non-API processes need none.
+
+The observed PostgreSQL backend times only actual `get_new_connection()` pool
+acquisitions. Before ASGI startup completes, the lifespan owner requires the
+configured pool and synchronously publishes one valid public-stat snapshot;
+startup fails if that evidence cannot be produced. Its sampler then reads
+psycopg-pool's public `get_stats()` counters without opening the lazy pool or
+acquiring a lease. It atomically writes one mode-0640 JSON snapshot per worker
+beneath `MOJO_POOL_TELEMETRY_ROOT`, readable only by the API group and a local
+observer identity. Counter deltas tolerate a pool reset. States are:
+
+| State | Meaning |
+|---|---|
+| `cold` | The lazy pool has allocated no connections. |
+| `healthy` / `healthy_idle` | Capacity is available; a full-sized pool with every lease idle is healthy, not exhausted. |
+| `busy` | Some allocated leases are in use and some remain available. |
+| `saturated` | No lease is available, but no waiter or interval error proves exhaustion. |
+| `exhausted` | No lease is available and a waiter, pool error, or observed acquisition timeout exists. |
+| `recovering` | The prior sample was exhausted and capacity is available again. |
+
+An acquisition timeout is detected through Django's exception cause chain,
+emitted once to the local atomic error file (or stderr), then re-raised
+unchanged. HTTP boundaries return bounded `503`; WebSockets close with `1013`.
+Those paths never attempt ORM logging, so exhaustion cannot recursively need a
+second lease to report the first failure.
+
+Raw ORM-capable threads must use `database_thread_target()` or
+`submit_database_work()`. Both enter and leave with
+`close_old_connections()`, including exception exits. This rule applies to
+threads living inside an API process: process-role gating alone cannot return
+their thread-local Django wrappers.
+
+`DATABASE_POOL_LAB_PROBE_ENABLED` is absent/false by default. When an approved
+lab candidate enables it, each API process exposes only a mode-0600 Unix socket
+under the telemetry root. It can hold a bounded number of that exact worker's
+leases, can accept a concurrent cancel command, always returns leases in a
+`finally` block, and proves a fresh `SELECT 1` succeeds without restart. It has
+no HTTP route and must not be enabled as ordinary production configuration.
 
 ### External poolers
 

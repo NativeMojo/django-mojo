@@ -6,6 +6,8 @@ from types import MappingProxyType
 
 from django.core.exceptions import ImproperlyConfigured
 
+from mojo.db.pool_identity import PoolIdentityError, application_name, validate_identity
+
 
 LAST_SKIP_REASON = None
 LAST_POOL_PLAN = None
@@ -14,6 +16,7 @@ LAST_POOL_DIAGNOSTIC = None
 _SERVER_ENGINES = ("postgresql", "mysql", "oracle")
 _POOL_OPTION_KEYS = {
     "min_size", "max_size", "timeout", "max_idle", "max_lifetime",
+    "max_waiting", "reconnect_timeout",
 }
 
 CONN_MAX_AGE_DEFAULT = 0
@@ -87,6 +90,11 @@ def _candidate_plan(context, databases, environ):
             for name in ("max_idle", "max_lifetime"):
                 if name in clean_options and not _positive_number(clean_options[name]):
                     errors.append(f"DATABASE_POOL_OPTIONS.{name} must be a positive number")
+            if "max_waiting" in clean_options and not _positive_int(clean_options["max_waiting"]):
+                errors.append("DATABASE_POOL_OPTIONS.max_waiting must be a positive integer")
+            if ("reconnect_timeout" in clean_options
+                    and not _positive_number(clean_options["reconnect_timeout"])):
+                errors.append("DATABASE_POOL_OPTIONS.reconnect_timeout must be a positive number")
 
         if context.get("DATABASE_POOL_ALIASES") != ["default"]:
             errors.append('DATABASE_POOL_ALIASES must be exactly ["default"]')
@@ -102,14 +110,24 @@ def _candidate_plan(context, databases, environ):
             errors.append("DATABASE_CONN_MAX_AGE must be 0 when pooling")
         api_workers = context.get("DATABASE_POOL_API_WORKERS")
         node_count = context.get("DATABASE_POOL_NODE_COUNT")
+        observer_reserve = context.get("DATABASE_POOL_OBSERVER_RESERVE", 2)
         if not _positive_int(api_workers):
             errors.append("DATABASE_POOL_API_WORKERS must be a positive integer")
         if not _positive_int(node_count):
             errors.append("DATABASE_POOL_NODE_COUNT must be a positive integer")
+        if not _positive_int(observer_reserve):
+            errors.append("DATABASE_POOL_OBSERVER_RESERVE must be a positive integer")
+        try:
+            identity = validate_identity(context.get("DATABASE_POOL_IDENTITY"))
+        except PoolIdentityError as error:
+            errors.append(str(error))
+            identity = {}
     else:
         clean_options = {}
         api_workers = None
         node_count = None
+        observer_reserve = None
+        identity = {}
 
     destination = {
         "engine": default.get("ENGINE", ""),
@@ -127,6 +145,8 @@ def _candidate_plan(context, databases, environ):
         "options": clean_options,
         "api_workers": api_workers,
         "node_count": node_count,
+        "observer_reserve": observer_reserve,
+        "identity": identity,
         "destination": destination,
     })
 
@@ -140,7 +160,8 @@ def apply_connection_defaults(context, environ=None):
         LAST_POOL_PLAN = _immutable({
             "enabled": False, "valid": True, "errors": (), "role": "",
             "launcher": "", "aliases": (), "options": {},
-            "api_workers": None, "node_count": None, "destination": {},
+            "api_workers": None, "node_count": None, "observer_reserve": None,
+            "identity": {}, "destination": {},
         })
         LAST_POOL_DIAGNOSTIC = "pool disabled: DATABASES is not a dictionary"
         return
@@ -160,6 +181,9 @@ def apply_connection_defaults(context, environ=None):
             options = {}
             default["OPTIONS"] = options
         options["pool"] = copy.deepcopy(dict(plan["options"]))
+        options["application_name"] = application_name(
+            dict(plan["identity"]), plan["role"], "default")
+        default["ENGINE"] = "mojo.db.backends.postgresql"
         default["CONN_MAX_AGE"] = 0
         LAST_POOL_DIAGNOSTIC = "pool enabled for role=api launcher=asgi alias=default"
     elif plan["enabled"]:

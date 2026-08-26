@@ -1,9 +1,35 @@
-"""ASGI-safe execution boundary for synchronous Django database work."""
+"""Thread and ASGI boundaries for synchronous Django database work."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from functools import wraps
 
 from asgiref.sync import SyncToAsync
 from django.db import close_old_connections
+
+
+@contextmanager
+def database_connection_boundary():
+    """Return every connection owned by the current thread on every exit."""
+    close_old_connections()
+    try:
+        yield
+    finally:
+        close_old_connections()
+
+
+def database_thread_target(func):
+    """Wrap a raw thread/executor callable in Django connection hygiene."""
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        with database_connection_boundary():
+            return func(*args, **kwargs)
+    return wrapped
+
+
+def submit_database_work(executor, func, *args, **kwargs):
+    """Submit one ORM-capable unit without leaking its worker-thread wrapper."""
+    return executor.submit(database_thread_target(func), *args, **kwargs)
 
 
 class DatabaseSyncToAsync(SyncToAsync):
@@ -19,12 +45,9 @@ class DatabaseSyncToAsync(SyncToAsync):
         super().__init__(func, thread_sensitive=False, executor=executor)
 
     def thread_handler(self, loop, exc_info, task_context, func, *args, **kwargs):
-        close_old_connections()
-        try:
+        with database_connection_boundary():
             return super().thread_handler(
                 loop, exc_info, task_context, func, *args, **kwargs)
-        finally:
-            close_old_connections()
 
 
 class DatabaseExecutor:

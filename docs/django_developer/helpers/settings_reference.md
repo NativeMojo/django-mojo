@@ -8,8 +8,9 @@ These are read while URL/module bootstrap happens, so changes require a process 
 
 - `DATABASE_POOL_OPTIONS` — **file-only**, disabled unless it is a strict
   psycopg 3 dictionary with positive `max_size` and `timeout`, non-negative
-  `min_size` no greater than `max_size`, and optional positive `max_idle` /
-  `max_lifetime`. `True`, unknown keys and alias-embedded pool intent are
+  `min_size` no greater than `max_size`, and optional positive `max_idle`,
+  `max_lifetime`, `max_waiting`, and `reconnect_timeout`. `True`, unknown keys
+  and alias-embedded pool intent are
   rejected. Even a valid candidate is injected only into `default` when the
   process proves exact `MOJO_PROCESS_ROLE=api` and
   `MOJO_PROCESS_LAUNCHER=asgi`; every other role strips it and keeps an
@@ -22,6 +23,21 @@ These are read while URL/module bootstrap happens, so changes require a process 
   workers per API node. No default; enabling without an explicit value fails.
 - `DATABASE_POOL_NODE_COUNT` — **file-only** positive integer count of API
   nodes. No default; enabling without an explicit value fails.
+- `DATABASE_POOL_OBSERVER_RESERVE` — **file-only** positive integer number of database
+  connections reserved from pool headroom for independent observation;
+  default `2`. Required capacity is constrained by both the 60-percent ceiling
+  and actual headroom after server-reserved, live, and observer connections.
+- `DATABASE_POOL_IDENTITY` — **file-only** exact dictionary containing only
+  `project`, `node`, `application`, and `deployment`. Every value is a bounded
+  printable identifier. Required only for an enabled candidate and used to
+  produce a stable, PostgreSQL-bounded `application_name` per worker.
+- `DATABASE_POOL_LAB_PROBE_ENABLED` — **file-only**, default false/absent.
+  Enables the local, per-worker Unix-socket exhaustion probe only after the
+  ordinary pool candidate is valid and active. It adds no HTTP route.
+- `MOJO_POOL_TELEMETRY_ROOT` / `MOJO_POOL_ERROR_FILE` /
+  `MOJO_POOL_PROBE_SOCKET` — launcher-owned local output paths for atomic
+  worker snapshots, the DB-independent acquisition-error signal, and an
+  optional exact probe socket. They do not activate pooling.
 - `MOJO_PROCESS_ROLE` / `MOJO_PROCESS_LAUNCHER` — launcher-owned environment
   identity. Applications must overwrite inherited values before importing
   Django. Only `api` / `asgi` can receive the pool; management, jobs, cron,

@@ -18,6 +18,12 @@ def _context(**overrides):
         "DATABASE_POOL_ALIASES": ["default"],
         "DATABASE_POOL_API_WORKERS": 4,
         "DATABASE_POOL_NODE_COUNT": 2,
+        "DATABASE_POOL_IDENTITY": {
+            "project": "mojoland",
+            "node": "node-a",
+            "application": "abc123",
+            "deployment": "lab-1",
+        },
     }
     context.update(overrides)
     return context
@@ -45,6 +51,10 @@ def test_only_exact_api_asgi_injects(opts):
     default = context["DATABASES"]["default"]
     assert default["OPTIONS"]["pool"] == {"min_size": 1, "max_size": 4, "timeout": 5}, \
         f"the proven API launcher must receive the strict pool, got {default!r}"
+    assert default["ENGINE"] == "mojo.db.backends.postgresql", \
+        f"the enabled alias must use the observed Django backend, got {default!r}"
+    assert default["OPTIONS"]["application_name"].startswith("mojo|mojoland|node-a|api|default|"), \
+        f"the pooled session must carry bounded operator identity, got {default!r}"
     assert default["CONN_MAX_AGE"] == 0, \
         f"the pooled alias must force CONN_MAX_AGE=0, got {default!r}"
 
@@ -114,6 +124,11 @@ def test_invalid_candidates_fail_closed(opts):
     invalid.append(_context(DATABASE_POOL_ALIASES=["default", "reader"]))
     invalid.append(_context(DATABASE_POOL_API_WORKERS=True))
     invalid.append(_context(DATABASE_POOL_NODE_COUNT=0))
+    invalid.append(_context(DATABASE_POOL_IDENTITY=None))
+    invalid.append(_context(DATABASE_POOL_IDENTITY={
+        "project": "mojoland", "node": "node a", "application": "abc", "deployment": "lab"}))
+    invalid.append(_context(DATABASE_POOL_OPTIONS={
+        "min_size": 1, "max_size": 4, "timeout": 5, "max_waiting": 0}))
     nonzero_age = _context()
     nonzero_age["DATABASES"]["default"]["CONN_MAX_AGE"] = 30
     invalid.append(nonzero_age)

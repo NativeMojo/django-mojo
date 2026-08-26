@@ -56,15 +56,21 @@ class ASGIApplication:
 
         # Handle the connection
         handler = WebSocketHandler(websocket, path)
+        close_code = 1000
         try:
             await handler.handle_connection()
         except Exception as e:
-            from mojo.helpers import logit
-            logit.exception(f"Error in WebSocket handler: {e}")
+            from mojo.db.errors import emit_pool_error, is_pool_acquisition_error
+            if is_pool_acquisition_error(e):
+                close_code = 1013
+                emit_pool_error(e, path=path)
+            else:
+                from mojo.helpers import logit
+                logit.exception(f"Error in WebSocket handler: {e}")
         finally:
             # Ensure connection is closed
             try:
-                await send({"type": "websocket.close", "code": 1000})
+                await send({"type": "websocket.close", "code": close_code})
             except:
                 pass
 

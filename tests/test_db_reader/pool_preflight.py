@@ -14,6 +14,7 @@ def _plan(max_size=7):
         "options": {"min_size": 1, "max_size": max_size, "timeout": 5},
         "api_workers": 4,
         "node_count": 2,
+        "observer_reserve": 2,
         "destination": {
             "engine": "django.db.backends.postgresql",
             "host": "writer.internal",
@@ -31,6 +32,9 @@ def _observed(**overrides):
         "rendered_workers": 4,
         "live_workers": 4,
         "max_connections": 100,
+        "superuser_reserved_connections": 3,
+        "reserved_connections": 0,
+        "current_connections": 5,
         "database_name": "mojoland",
         "database_port": 5432,
         "destination": dict(_plan()["destination"]),
@@ -73,6 +77,10 @@ def test_capacity_boundary(opts):
         _plan(max_size=8), _observed(),
         "64 requested connections must fail a 60-connection budget",
     )
+    _expect_error(
+        _plan(), _observed(current_connections=40),
+        "current ordinary sessions and reserved observer capacity must reduce headroom",
+    )
 
 
 @th.unit_test("pool preflight: topology and destination drift fail closed")
@@ -105,6 +113,12 @@ class _Cursor:
     def fetchone(self):
         if self.query == "SHOW max_connections":
             return (100,)
+        if self.query == "SHOW superuser_reserved_connections":
+            return (3,)
+        if "reserved_connections" in self.query:
+            return (None,)
+        if "count(*)" in self.query:
+            return (5,)
         return ("mojoland", 5432)
 
 
@@ -133,3 +147,5 @@ def test_default_connection_inspection(opts):
     result = run_default_preflight(_plan(), _Connection(), topology)
     assert result.enabled is True and result.max_connections == 100, \
         f"ordinary default inspection must feed the capacity proof, got {result!r}"
+    assert result.reserved_connections == 3 and result.current_connections == 5, \
+        f"preflight must subtract real reserved and occupied sessions, got {result!r}"

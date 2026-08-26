@@ -24,6 +24,7 @@ import ujson
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from mojo.helpers.settings import settings
 from mojo.helpers import logit, llm
+from mojo.helpers.async_db import submit_database_work
 from mojo.apps.assistant.services import approvals
 
 logger = logit.get_logger(__name__, "assistant.log")
@@ -1087,7 +1088,8 @@ def _execute_tools(tool_blocks, registry, user, conversation, tools, on_event,
         with ThreadPoolExecutor(max_workers=min(max_workers, len(regular_blocks))) as pool:
             futures = {}
             for block in regular_blocks:
-                future = pool.submit(
+                future = submit_database_work(
+                    pool,
                     _execute_tool, block, registry, user, conversation,
                     tools, on_event, tool_calls_made, request_meta,
                     pending_actions=pending_actions,
@@ -1194,7 +1196,8 @@ def _execute_parallel_plan_steps(plan, registry, user, conversation, tools, on_e
         with ThreadPoolExecutor(max_workers=min(max_workers, len(step_blocks))) as pool:
             future_to_step = {}
             for step, block in step_blocks:
-                future = pool.submit(
+                future = submit_database_work(
+                    pool,
                     _execute_tool, block, registry, user, conversation,
                     tools, on_event, tool_calls_made, request_meta,
                 )

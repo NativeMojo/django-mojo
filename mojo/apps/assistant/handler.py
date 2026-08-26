@@ -36,6 +36,7 @@ Reliability guarantees:
 from uuid import UUID
 
 from mojo.helpers import logit
+from mojo.helpers.async_db import database_thread_target
 
 logger = logit.get_logger("assistant", "assistant.log")
 
@@ -272,7 +273,7 @@ def _handle_message(user, data, request_id=None, _reporter=None):
 
     import threading
     thread = threading.Thread(
-        target=_run_agent_thread,
+        target=database_thread_target(_run_agent_thread),
         args=(user.pk, conversation.pk, message, request_id, request_meta),
         daemon=True,
     )
@@ -344,7 +345,7 @@ def _handle_approval(user, data, request_id=None):
 
     import threading
     thread = threading.Thread(
-        target=_run_approval_thread,
+        target=database_thread_target(_run_approval_thread),
         args=(user.pk, conversation_id, str(action_id), decision, request_id),
         daemon=True,
     )
