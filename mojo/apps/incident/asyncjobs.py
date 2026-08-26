@@ -663,8 +663,8 @@ def run_concentration_check(now=None):
     """Detect traffic concentration by a single authenticated identity (DM-042).
 
     Reads the traffic:top:{bucket} zsets and traffic:total:{bucket} counters
-    that check_api_throttle maintains (5-minute buckets, exact per-window
-    counts for identities above API_THROTTLE_REPORT_FLOOR). Alerts when an
+    that check_api_throttle maintains (5-minute buckets, incremented directly
+    on every authenticated request). Alerts when an
     identity is over TRAFFIC_CONCENTRATION_RPM for
     TRAFFIC_CONCENTRATION_SUSTAIN_WINDOWS consecutive complete buckets, or
     holds more than TRAFFIC_CONCENTRATION_SHARE of a bucket's total when the

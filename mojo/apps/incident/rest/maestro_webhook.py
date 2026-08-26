@@ -10,7 +10,7 @@ MAX_CALLBACK_BYTES = 65536
 
 @md.POST('maestro/webhook')
 @md.public_endpoint("Maestro workspace callback — HMAC verified with deployment ApiKey")
-@md.rate_limit("maestro_webhook", ip_limit=60)
+@md.strict_rate_limit("maestro_webhook", ip_limit=60)
 def on_maestro_webhook(request):
     """Receive a signed callback for the deployment's one Maestro integration."""
     if len(request.body or b"") > MAX_CALLBACK_BYTES:

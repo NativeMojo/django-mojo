@@ -46,7 +46,7 @@ def test_legacy_block_reports_once_per_window(opts):
     key = f"dm042d_{_uuid.uuid4().hex[:8]}"
     category = f"rate_limit:{key}"
     req = _fake_request(opts.user)
-    get_connection().delete(f"rlb:{key}:{req.ip}")
+    get_connection().delete(f"rlb:{key}:ip:{req.ip}")
     Event.objects.filter(category=category).delete()
 
     for i in range(3):
@@ -60,7 +60,7 @@ def test_legacy_block_reports_once_per_window(opts):
     assert count == 1, (
         f"3 consecutive 429s in one window must produce exactly 1 incident event, got {count}"
     )
-    get_connection().delete(f"rlb:{key}:{req.ip}")
+    get_connection().delete(f"rlb:{key}:ip:{req.ip}")
     Event.objects.filter(category=category).delete()
 
 

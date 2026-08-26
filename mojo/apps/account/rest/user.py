@@ -122,7 +122,7 @@ def on_read_throttle(request):
 @md.POST('token/refresh')
 @md.POST("auth/token/refresh")
 @md.POST('account/jwt/refresh')
-@md.rate_limit("refresh_token", ip_limit=30)
+@md.strict_rate_limit("refresh_token", ip_limit=30)
 @md.requires_params("refresh_token")
 def on_refresh_token(request):
     user, error = User.validate_jwt(request.DATA.refresh_token)
@@ -299,7 +299,7 @@ def _gate_handoff_destination(request, destination):
 @md.POST("auth/handoff")
 @md.denies_key_backed_session()
 @md.requires_auth()
-@md.rate_limit("auth_handoff", ip_limit=30)
+@md.strict_rate_limit("auth_handoff", ip_limit=30)
 @md.requires_geofence(scope="auth")
 def on_auth_handoff(request):
     """
@@ -1873,7 +1873,7 @@ def on_username_change(request):
 @md.denies_key_backed_session()
 @md.requires_auth()
 @md.requires_fresh_auth()
-@md.rate_limit("sessions_revoke", ip_limit=5, ip_window=300)
+@md.strict_rate_limit("sessions_revoke", ip_limit=5, ip_window=300)
 def on_sessions_revoke(request):
     """
     Rotate auth_key to invalidate all active sessions. Returns a fresh JWT
@@ -1903,7 +1903,7 @@ def on_sessions_revoke(request):
 @md.POST("account/deactivate")
 @md.requires_auth()
 @md.requires_fresh_auth()
-@md.rate_limit("account_deactivate", ip_limit=5, ip_window=300)
+@md.strict_rate_limit("account_deactivate", ip_limit=5, ip_window=300)
 def on_account_deactivate(request):
     """
     Step 1: Send a confirmation email with a short-lived dv: token.

@@ -85,8 +85,12 @@ class ApiKey(MojoSecrets, MojoModel):
     System-level permissions (sys.*) are always denied regardless of what is in
     the permissions field.
 
-    Rate limit overrides per endpoint are stored in limits:
+    ApiKeys are unlimited on ordinary throughput gates by default. Positive
+    hard overrides are stored per endpoint (or under ``api`` for the global
+    dispatcher throttle):
         {"assess": {"limit": 500, "window": 60}}   # window in minutes
+    Security-sensitive ``strict_rate_limit`` endpoints still enforce their
+    consumer limits for every caller, including ApiKeys.
     """
     created = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
     modified = models.DateTimeField(auto_now=True, db_index=True)

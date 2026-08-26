@@ -35,19 +35,29 @@ def _block(key, request, retry_after, min_granularity):
     try:
         r = get_connection()
         ip = getattr(request, "ip", None) or request.META.get("REMOTE_ADDR", "unknown")
-        first_engage = r.set(f"rlb:{key}:{ip}", 1, nx=True, ex=60)
+        api_key = getattr(request, "api_key", None)
+        engage_identity = f"apikey:{api_key.pk}" if api_key is not None else f"ip:{ip}"
+        first_engage = r.set(f"rlb:{key}:{engage_identity}", 1, nx=True, ex=60)
     except Exception:
         first_engage = False
     if first_engage:
         from mojo.apps import incident
         try:
             metrics.record(f"rate_limit:{key}", category="rate_limits", min_granularity=min_granularity)
+            event_kwargs = {}
+            if api_key is not None:
+                event_kwargs.update({
+                    "model_name": "traffic:apikey",
+                    "model_id": api_key.pk,
+                    "identity": f"apikey:{api_key.pk}",
+                })
             incident.report_event(
                 f"Rate limit exceeded: {key}",
                 category=f"rate_limit:{key}",
                 scope="api",
                 level=5,
                 request=request,
+                **event_kwargs,
             )
         except Exception:
             pass
@@ -85,39 +95,158 @@ def _check_sliding(r, redis_key, window, limit):
     return count, count <= limit
 
 
-def _get_apikey_limits(request, key, default_limit, default_window):
-    """
-    Resolve the effective limit and window for an api_key check.
-
-    Looks up request.api_key.limits[key] for per-group overrides.
-    Falls back to decorator defaults if not present.
-
-    Returns (group_pk, limit, window_seconds) or None if no api_key on request.
-    Window in request.api_key.limits is in minutes; converted to seconds here.
-    """
-    api_key = getattr(request, "api_key", None)
-    if not api_key and not request.group:
-        if request.user and request.user.org:
-            return request.user.org.pk, default_limit, default_window
-        return None
-    group = getattr(api_key, "group", None)
-    if not group:
-        return None
-    group_pk = group.pk
-
-    limit = default_limit
-    window = default_window
+def _log_invalid_apikey_limit(api_key, key, reason):
+    """Log malformed per-key configuration at most once per key per hour."""
     try:
-        key_limits = getattr(api_key, "limits", None)
-        if key_limits:
-            override = key_limits.get(key)
-            if override:
-                limit = override.get("limit", default_limit)
-                window = override.get("window", default_window // 60) * 60  # minutes → seconds
+        r = get_connection()
+        marker = f"rl:invalid:apikey:{api_key.pk}:{_hash_key(str(key))}"
+        if r.set(marker, 1, nx=True, ex=3600):
+            logger.error(
+                f"invalid ApiKey limit for api_key={api_key.pk} key={key!r}: {reason}"
+            )
     except Exception:
         pass
 
-    return group_pk, limit, window
+
+def _positive_int(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _get_apikey_limits(request, key, default_limit=None, default_window=60):
+    """
+    Resolve the effective limit and window for an api_key check.
+
+    Looks up request.api_key.limits[key] for a per-key hard limit. Falls back
+    to a positive developer/deployment default when no entry is present.
+
+    Returns (api_key_pk, limit_or_none, window_or_none, explicit) or None when
+    the request is not ApiKey-authenticated. Per-key windows are minutes and
+    are converted to seconds. Malformed/non-positive explicit entries fail
+    open rather than becoming an accidental denial-of-service control.
+    """
+    api_key = getattr(request, "api_key", None)
+    if api_key is None:
+        return None
+
+    try:
+        all_limits = getattr(api_key, "limits", None) or {}
+        if not isinstance(all_limits, dict):
+            _log_invalid_apikey_limit(api_key, key, "limits must be an object")
+            return api_key.pk, None, None, True
+        if key in all_limits:
+            override = all_limits.get(key)
+            if not isinstance(override, dict):
+                _log_invalid_apikey_limit(api_key, key, "entry must be an object")
+                return api_key.pk, None, None, True
+            limit = _positive_int(override.get("limit"))
+            if limit is None:
+                _log_invalid_apikey_limit(api_key, key, "limit must be a positive integer")
+                return api_key.pk, None, None, True
+            if "window" in override:
+                window_minutes = _positive_int(override.get("window"))
+                if window_minutes is None:
+                    _log_invalid_apikey_limit(api_key, key, "window must be positive minutes")
+                    return api_key.pk, None, None, True
+                window = window_minutes * 60
+            else:
+                window = _positive_int(default_window) or 60
+            return api_key.pk, limit, window, True
+    except Exception as err:
+        _log_invalid_apikey_limit(api_key, key, str(err))
+        return api_key.pk, None, None, True
+
+    limit = _positive_int(default_limit)
+    window = _positive_int(default_window)
+    if limit is None or window is None:
+        return api_key.pk, None, None, False
+    return api_key.pk, limit, window, False
+
+
+def _resolve_apikey_observation(ip_limit, ip_window, duid_limit, duid_window,
+                                muid_limit, muid_window, apikey_observe_limit,
+                                apikey_window):
+    """Return the ApiKey shadow threshold/window for an ordinary endpoint."""
+    explicit = _positive_int(apikey_observe_limit)
+    if explicit is not None:
+        return explicit, (_positive_int(apikey_window) or 60)
+    candidates = []
+    for limit, window in (
+        (ip_limit, ip_window),
+        (duid_limit, duid_window),
+        (muid_limit, muid_window),
+    ):
+        parsed_limit = _positive_int(limit)
+        parsed_window = _positive_int(window)
+        if parsed_limit is not None and parsed_window is not None:
+            candidates.append((parsed_limit, parsed_window))
+    return min(candidates, key=lambda item: item[0]) if candidates else (None, None)
+
+
+def _report_apikey_threshold(request, redis, api_key_pk, source, count, threshold,
+                             window, event_window=None, event_budget=None,
+                             report=None):
+    """Best-effort, bounded evidence for an allowed ApiKey threshold crossing."""
+    category = "traffic:apikey_threshold"
+    identity = f"apikey:{api_key_pk}"
+    try:
+        api_key = getattr(request, "api_key", None)
+        group = getattr(api_key, "group", None)
+        account = f"group-{group.pk}" if group is not None else "global"
+        metrics.record(
+            f"apikey_threshold:{source}:apikey:{api_key_pk}",
+            category="traffic_apikey_threshold",
+            account=account,
+            min_granularity="hours",
+        )
+    except Exception:
+        pass
+
+    try:
+        if event_window is None:
+            event_window = settings.get(
+                "API_THROTTLE_APIKEY_EVENT_WINDOW", 3600, kind="int")
+        if event_budget is None:
+            event_budget = settings.get(
+                "API_THROTTLE_APIKEY_EVENT_BUDGET", 100, kind="int")
+        event_window = _positive_int(event_window) or 3600
+        event_budget = _positive_int(event_budget) or 100
+        if report is None:
+            from mojo.apps import incident
+            report = incident.report_event_suppressed
+        report(
+            (
+                f"ApiKey observation threshold crossed: {identity} made "
+                f"{count} requests against {source} (threshold {threshold}/{window}s); "
+                "traffic was allowed"
+            ),
+            key=f"{api_key_pk}:{source}",
+            title=f"ApiKey traffic threshold: {source}",
+            category=category,
+            scope="api",
+            level=5,
+            request=request,
+            window=event_window,
+            budget=event_budget,
+            fail_open=False,
+            connection=redis,
+            model_name="traffic:apikey",
+            model_id=api_key_pk,
+            identity=identity,
+            source=source,
+            count=count,
+            threshold=threshold,
+            threshold_window=window,
+        )
+    except Exception:
+        pass
 
 
 def _get_dimension(request, dimension):
@@ -159,6 +288,7 @@ def _get_dimension(request, dimension):
 
 
 def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=None,
+               apikey_observe_limit=None,
                ip_window=60, duid_window=60, muid_window=60, apikey_window=60,
                min_granularity="hours"):
     """
@@ -168,9 +298,10 @@ def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=Non
     window boundary is acceptable. For security-sensitive endpoints (login,
     password reset, MFA) use strict_rate_limit instead.
 
-    api_key limits are resolved from request.api_key.limits[key] if present,
-    falling back to apikey_limit / apikey_window. Window overrides in
-    request.api_key.limits are in minutes.
+    Ordinary ApiKey traffic skips the consumer IP/duid/muid gates. Positive
+    per-key limits and apikey_limit remain hard; otherwise the consumer
+    threshold is shadow-counted per ApiKey and crossing it records bounded
+    evidence without blocking. Use strict_rate_limit for security boundaries.
 
     Usage:
         @md.POST("feed")
@@ -183,7 +314,9 @@ def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=Non
         key:             Rate limit bucket name (e.g. "assess", "feed")
         ip_limit:        Max requests per ip_window seconds per IP
         duid_limit:      Max requests per duid_window seconds per device UUID (optional)
-        apikey_limit:    Default max requests per apikey_window per API key group (optional)
+        apikey_limit:    Hard max requests per apikey_window per ApiKey (optional)
+        apikey_observe_limit: Non-blocking ApiKey threshold; defaults to the
+                          lowest positive consumer limit (optional)
         ip_window:       Window in seconds for IP counter (default 60)
         duid_window:     Window in seconds for duid counter (default 60)
         apikey_window:   Default window in seconds for API key counter (default 60)
@@ -196,40 +329,56 @@ def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=Non
                 r = get_connection()
                 now = int(time.time())
 
-                # --- IP check ---
-                ip = getattr(request, "ip", None) or request.META.get("REMOTE_ADDR", "unknown")
-                ip_window_start = now // ip_window * ip_window
-                ip_key = f"rl:{key}:ip:{ip}:{ip_window_start}"
-                if _incr_fixed(r, ip_key, ip_window) > ip_limit:
-                    return _block(key, request, _retry_after_fixed(ip_window_start, ip_window), min_granularity)
-
-                # --- duid check (optional) ---
-                if duid_limit is not None:
-                    duid = request.DATA.get("duid")
-                    if duid:
-                        duid_window_start = now // duid_window * duid_window
-                        duid_key = f"rl:{key}:duid:{duid}:{duid_window_start}"
-                        if _incr_fixed(r, duid_key, duid_window) > duid_limit:
-                            return _block(key, request, _retry_after_fixed(duid_window_start, duid_window), min_granularity)
-
-                # --- muid check (optional) — server-set cookie, bypass-resistant ---
-                if muid_limit is not None:
-                    muid = getattr(request, "muid", None)
-                    if muid:
-                        muid_window_start = now // muid_window * muid_window
-                        muid_key = f"rl:{key}:muid:{muid}:{muid_window_start}"
-                        if _incr_fixed(r, muid_key, muid_window) > muid_limit:
-                            return _block(key, request, _retry_after_fixed(muid_window_start, muid_window), min_granularity)
-
-                # --- api_key check (optional) ---
-                if apikey_limit is not None:
-                    resolved = _get_apikey_limits(request, key, apikey_limit, apikey_window)
-                    if resolved:
-                        group_pk, ak_limit, ak_window = resolved
+                api_key = getattr(request, "api_key", None)
+                if api_key is not None:
+                    resolved = _get_apikey_limits(
+                        request, key, apikey_limit, apikey_window)
+                    api_key_pk, ak_limit, ak_window, _ = resolved
+                    if ak_limit is not None:
                         ak_window_start = now // ak_window * ak_window
-                        ak_key = f"rl:{key}:apikey:{group_pk}:{ak_window_start}"
+                        ak_key = f"rl:{key}:apikey:{api_key_pk}:{ak_window_start}"
                         if _incr_fixed(r, ak_key, ak_window) > ak_limit:
                             return _block(key, request, _retry_after_fixed(ak_window_start, ak_window), min_granularity)
+                    else:
+                        observe_limit, observe_window = _resolve_apikey_observation(
+                            ip_limit, ip_window, duid_limit, duid_window,
+                            muid_limit, muid_window, apikey_observe_limit,
+                            apikey_window,
+                        )
+                        if observe_limit is not None:
+                            observe_start = now // observe_window * observe_window
+                            observe_key = (
+                                f"rl:{key}:observe:apikey:{api_key_pk}:{observe_start}")
+                            count = _incr_fixed(r, observe_key, observe_window)
+                            if count == observe_limit + 1:
+                                _report_apikey_threshold(
+                                    request, r, api_key_pk, f"endpoint:{key}",
+                                    count, observe_limit, observe_window)
+                else:
+                    # --- IP check ---
+                    ip = getattr(request, "ip", None) or request.META.get("REMOTE_ADDR", "unknown")
+                    ip_window_start = now // ip_window * ip_window
+                    ip_key = f"rl:{key}:ip:{ip}:{ip_window_start}"
+                    if _incr_fixed(r, ip_key, ip_window) > ip_limit:
+                        return _block(key, request, _retry_after_fixed(ip_window_start, ip_window), min_granularity)
+
+                    # --- duid check (optional) ---
+                    if duid_limit is not None:
+                        duid = request.DATA.get("duid")
+                        if duid:
+                            duid_window_start = now // duid_window * duid_window
+                            duid_key = f"rl:{key}:duid:{duid}:{duid_window_start}"
+                            if _incr_fixed(r, duid_key, duid_window) > duid_limit:
+                                return _block(key, request, _retry_after_fixed(duid_window_start, duid_window), min_granularity)
+
+                    # --- muid check (optional) — server-set cookie, bypass-resistant ---
+                    if muid_limit is not None:
+                        muid = getattr(request, "muid", None)
+                        if muid:
+                            muid_window_start = now // muid_window * muid_window
+                            muid_key = f"rl:{key}:muid:{muid}:{muid_window_start}"
+                            if _incr_fixed(r, muid_key, muid_window) > muid_limit:
+                                return _block(key, request, _retry_after_fixed(muid_window_start, muid_window), min_granularity)
 
             except Exception as err:
                 logger.error(f"rate_limit: Redis error for key '{key}': {err}")
@@ -249,9 +398,10 @@ def strict_rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_li
     boundaries are correctly caught. Use this for security-sensitive endpoints:
     login, password reset, MFA, registration.
 
-    api_key limits are resolved from request.api_key.limits[key] if present,
-    falling back to apikey_limit / apikey_window. Window overrides in
-    request.api_key.limits are in minutes.
+    ApiKey callers do not bypass this decorator's IP/duid/muid gates. Positive
+    hard limits resolve from request.api_key.limits[key] when present, falling
+    back to apikey_limit / apikey_window, and are keyed by the ApiKey pk.
+    Per-key window overrides are in minutes.
 
     Uses a Redis sorted set per key (slightly more memory than fixed-window
     but the only correct approach for tight limits).
@@ -267,7 +417,7 @@ def strict_rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_li
         key:             Rate limit bucket name (e.g. "login", "password_reset")
         ip_limit:        Max requests per ip_window seconds per IP
         duid_limit:      Max requests per duid_window seconds per device UUID (optional)
-        apikey_limit:    Default max requests per apikey_window per API key group (optional)
+        apikey_limit:    Hard max requests per apikey_window per ApiKey (optional)
         ip_window:       Window in seconds for IP sliding window (default 60)
         duid_window:     Window in seconds for duid sliding window (default 60)
         apikey_window:   Default window in seconds for API key sliding window (default 60)
@@ -304,12 +454,12 @@ def strict_rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_li
                         if not allowed:
                             return _block(key, request, _retry_after_sliding(muid_window), min_granularity)
 
-                # --- api_key check (optional) ---
-                if apikey_limit is not None:
-                    resolved = _get_apikey_limits(request, key, apikey_limit, apikey_window)
-                    if resolved:
-                        group_pk, ak_limit, ak_window = resolved
-                        ak_key = f"srl:{key}:apikey:{group_pk}"
+                # --- api_key check (optional developer or explicit per-key hard limit) ---
+                resolved = _get_apikey_limits(request, key, apikey_limit, apikey_window)
+                if resolved:
+                    api_key_pk, ak_limit, ak_window, _ = resolved
+                    if ak_limit is not None:
+                        ak_key = f"srl:{key}:apikey:{api_key_pk}"
                         _, allowed = _check_sliding(r, ak_key, ak_window, ak_limit)
                         if not allowed:
                             return _block(key, request, _retry_after_sliding(ak_window), min_granularity)
@@ -417,10 +567,10 @@ def read_account_attempt(key, account_id, limit=None, window=None):
 # api key pk) — never by IP: anonymous traffic is covered by the per-endpoint
 # decorators above, and IP-keyed global limits punish CGNAT bystanders.
 #
-# Hot-path cost: one pipelined Redis round-trip (4 commands). Once per
-# identity per window (~1/min) an extra small round-trip flushes the previous
-# window's exact count into the traffic:top accounting zset that the
-# concentration detector (incident cron) reads. Fail-open on any Redis error.
+# Hot-path cost: one pipelined Redis round-trip. Every request increments the
+# current identity and traffic-accounting buckets so a burst that stops before
+# the next identity window is still visible to the concentration detector.
+# Fail-open on any Redis error.
 # ---------------------------------------------------------------------------
 
 TRAFFIC_BUCKET_SECONDS = 300   # accounting bucket the concentration detector reads
@@ -428,6 +578,27 @@ TRAFFIC_KEY_TTL = 3600         # keep accounting keys around long enough to insp
 
 _throttle_config_cache = None
 _throttle_config_ts = 0.0
+
+
+def _build_throttle_config(get_setting):
+    """Build config through an injectable setting reader for isolated tests."""
+    return {
+        "enabled": get_setting("API_THROTTLE_ENABLED", True, kind="bool"),
+        "user_limit": get_setting("API_THROTTLE_USER", 240, kind="int"),
+        # ApiKeys are unlimited by default. A positive deployment value keeps
+        # the legacy global hard ceiling; positive per-key `limits["api"]`
+        # values remain hard regardless of this default.
+        "apikey_limit": get_setting("API_THROTTLE_APIKEY", 0, kind="int"),
+        "apikey_observe_limit": get_setting(
+            "API_THROTTLE_APIKEY_OBSERVE", 600, kind="int"),
+        "window": get_setting("API_THROTTLE_WINDOW", 60, kind="int"),
+        "exempt_prefixes": get_setting(
+            "API_THROTTLE_EXEMPT_PREFIXES", [], kind="list") or [],
+        "report_floor": get_setting(
+            "API_THROTTLE_REPORT_FLOOR", 60, kind="int"),
+        "config_ttl": get_setting(
+            "API_THROTTLE_CONFIG_TTL", 30, kind="int"),
+    }
 
 
 def _get_throttle_config():
@@ -439,15 +610,7 @@ def _get_throttle_config():
     cached = _throttle_config_cache
     if cached is not None and (now - _throttle_config_ts) < cached["config_ttl"]:
         return cached
-    cfg = {
-        "enabled": settings.get("API_THROTTLE_ENABLED", True, kind="bool"),
-        "user_limit": settings.get("API_THROTTLE_USER", 240, kind="int"),
-        "apikey_limit": settings.get("API_THROTTLE_APIKEY", 600, kind="int"),
-        "window": settings.get("API_THROTTLE_WINDOW", 60, kind="int"),
-        "exempt_prefixes": settings.get("API_THROTTLE_EXEMPT_PREFIXES", [], kind="list") or [],
-        "report_floor": settings.get("API_THROTTLE_REPORT_FLOOR", 60, kind="int"),
-        "config_ttl": settings.get("API_THROTTLE_CONFIG_TTL", 30, kind="int"),
-    }
+    cfg = _build_throttle_config(settings.get)
     _throttle_config_cache = cfg
     _throttle_config_ts = now
     return cfg
@@ -501,7 +664,10 @@ def _test_mode_throttle_config(request, cfg):
     if not isinstance(overrides, dict):
         return cfg
     merged = dict(cfg)
-    for name in ("enabled", "user_limit", "apikey_limit", "window", "report_floor", "exempt_prefixes"):
+    for name in (
+        "enabled", "user_limit", "apikey_limit", "apikey_observe_limit",
+        "window", "report_floor", "exempt_prefixes",
+    ):
         if name in overrides:
             merged[name] = overrides[name]
     return merged
@@ -518,12 +684,20 @@ def _throttle_block(request, kind, pk, limit, window_start, window):
         if r.set(f"rl:api:blocked:{kind}:{pk}:{window_start}", 1, nx=True, ex=window * 2):
             from mojo.apps import incident
             metrics.record("rate_limit:api", category="rate_limits", min_granularity="hours")
+            event_kwargs = {}
+            if kind == "apikey":
+                event_kwargs.update({
+                    "model_name": "traffic:apikey",
+                    "model_id": pk,
+                    "identity": f"apikey:{pk}",
+                })
             incident.report_event(
                 f"API throttle engaged: {kind}:{pk} exceeded {limit}/{window}s",
                 category="rate_limit:api",
                 scope="api",
                 level=5,
                 request=request,
+                **event_kwargs,
             )
     except Exception:
         pass
@@ -532,70 +706,72 @@ def _throttle_block(request, kind, pk, limit, window_start, window):
     return resp
 
 
-def check_api_throttle(request):
+def check_api_throttle(request, now=None, config=None, connection=None):
     """Global per-identity throttle + traffic accounting for every dispatched
     REST request. Returns a 429 HttpResponse when the identity is over budget
     and enforcement is enabled, else None.
 
     - Anonymous requests: immediate None, zero Redis cost.
-    - Accounting (identity counter + bucket total + top-talkers flush) always
+    - Accounting (identity counter + bucket total + top talkers) always
       runs for authenticated identities, even when enforcement is disabled —
       the concentration detector must see traffic regardless of 429 posture.
-    - Per-key override: request.api_key.limits["api"] = {"limit": N,
+    - Per-key hard override: request.api_key.limits["api"] = {"limit": N,
       "window": minutes} (same convention as the rate_limit decorators).
+    - ApiKeys have no built-in hard ceiling; their default 600/window
+      threshold records bounded review evidence while allowing traffic.
     - Fail-open: any Redis/config error logs and allows the request.
     """
     try:
         kind, pk = _resolve_throttle_identity(request)
         if kind is None:
             return None
-        cfg = _get_throttle_config()
+        cfg = _get_throttle_config() if config is None else dict(config)
         cfg = _test_mode_throttle_config(request, cfg)
-        window = int(cfg["window"]) or 60
+        window = _positive_int(cfg["window"]) or 60
+        explicit = False
         if kind == "apikey":
-            limit = int(cfg["apikey_limit"])
+            limit = _positive_int(cfg["apikey_limit"])
             resolved = _get_apikey_limits(request, "api", limit, window)
             if resolved:
-                _, limit, window = resolved
+                _, limit, resolved_window, explicit = resolved
+                if resolved_window is not None:
+                    window = resolved_window
         else:
-            limit = int(cfg["user_limit"])
-        if limit <= 0:
-            return None  # explicit unlimited for this identity class
-        for prefix in cfg["exempt_prefixes"]:
-            if _matches_prefix_rule(request, prefix):
-                return None
+            limit = _positive_int(cfg["user_limit"])
 
-        now = int(time.time())
+        exempt = any(
+            _matches_prefix_rule(request, prefix)
+            for prefix in cfg["exempt_prefixes"]
+        )
+        enforcement_active = bool(cfg["enabled"]) and not exempt and limit is not None
+
+        now = int(time.time()) if now is None else int(now)
         window_start = now // window * window
         bucket = now // TRAFFIC_BUCKET_SECONDS * TRAFFIC_BUCKET_SECONDS
         ident_key = f"rl:api:{kind}:{pk}:{window_start}"
+        top_key = f"traffic:top:{bucket}"
 
-        r = get_connection()
+        r = get_connection() if connection is None else connection
         p = r.pipeline(transaction=False)
         p.incr(ident_key)
         p.expire(ident_key, window * 2)
         p.incr(f"traffic:total:{bucket}")
         p.expire(f"traffic:total:{bucket}", TRAFFIC_KEY_TTL)
+        p.zincrby(top_key, 1, f"{kind}:{pk}")
+        ip = getattr(request, "ip", None)
+        if ip:
+            p.zincrby(top_key, 1, f"ip:{ip}")
+        p.expire(top_key, TRAFFIC_KEY_TTL)
         count = p.execute()[0]
 
-        if count == 1:
-            # First request of a new window: flush the previous window's exact
-            # count into the accounting zset (once per identity per window).
-            prev_count = r.get(f"rl:api:{kind}:{pk}:{window_start - window}")
-            if prev_count and int(prev_count) >= int(cfg["report_floor"]):
-                prev_bucket = (window_start - window) // TRAFFIC_BUCKET_SECONDS * TRAFFIC_BUCKET_SECONDS
-                top_key = f"traffic:top:{prev_bucket}"
-                p2 = r.pipeline(transaction=False)
-                p2.zincrby(top_key, int(prev_count), f"{kind}:{pk}")
-                ip = getattr(request, "ip", None)
-                if ip:
-                    # Approximate IP attribution — the identity's current IP is
-                    # credited with its previous window. Informational only.
-                    p2.zincrby(top_key, int(prev_count), f"ip:{ip}")
-                p2.expire(top_key, TRAFFIC_KEY_TTL)
-                p2.execute()
+        if kind == "apikey" and not enforcement_active:
+            observe_limit = _positive_int(cfg["apikey_observe_limit"])
+            if observe_limit is not None and count == observe_limit + 1:
+                source = "global:explicit-bypass" if explicit else "global"
+                _report_apikey_threshold(
+                    request, r, pk, source, count, observe_limit, window)
 
-        if cfg["enabled"] and count > limit:
+        if enforcement_active and count > limit:
             return _throttle_block(request, kind, pk, limit, window_start, window)
     except Exception as err:
         logger.error(f"check_api_throttle: fail-open: {err}")
@@ -633,6 +809,17 @@ def clear_rate_limits(ip=None, key=None, duid=None, muid=None, account_id=None,
                 for k in r.scan_iter(pattern):
                     r.delete(k)
                     deleted += 1
+    if apikey_id is not None:
+        endpoint_patterns = (
+            f"rl:*:apikey:{apikey_id}:*",
+            f"rl:*:observe:apikey:{apikey_id}:*",
+            f"srl:*:apikey:{apikey_id}",
+            f"rl:invalid:apikey:{apikey_id}:*",
+        )
+        for pattern in endpoint_patterns:
+            for k in r.scan_iter(pattern):
+                r.delete(k)
+                deleted += 1
     if ip:
         # Clear both strict (srl:) and fixed-window (rl:) rate limit keys
         srl_pattern = f"srl:{key}:ip:{ip}" if key else f"srl:*:ip:{ip}"

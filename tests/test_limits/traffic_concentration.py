@@ -1,8 +1,8 @@
 """DM-042: traffic-concentration detector (incident cron job).
 
-Drives run_concentration_check() directly with seeded Redis accounting keys —
-the same keys check_api_throttle maintains — using a synthetic time base far
-from the real clock so parallel test modules can never collide.
+Drives run_concentration_check() with isolated Redis accounting keys and also
+exercises those keys end to end through check_api_throttle(). A synthetic time
+base far from the real clock keeps parallel test modules from colliding.
 """
 import time
 import uuid as _uuid
@@ -71,6 +71,87 @@ def test_sustained_offender_alerts_once(opts):
                                 details__contains=opts.member).count() == 1, \
         "second run must not create another event inside the dedup window"
     _clean(opts)
+
+
+@th.django_unit_test()
+def test_unlimited_apikey_accounting_reaches_concentration_detector(opts):
+    """A quiet-stop ApiKey burst must be visible without a later request to
+    flush an enforcement window."""
+    from mojo.apps.incident.asyncjobs import run_concentration_check
+    from mojo.apps.incident.models import Event
+    from mojo.decorators import limits
+    from mojo.helpers.redis import get_connection
+
+    marker = 860_000_000 + int(_uuid.uuid4().int % 10_000_000)
+    member = f"apikey:{marker}"
+    ip_member = "ip:203.0.113.88"
+
+    class _ApiKey:
+        pk = marker
+        limits = {}
+        group = None
+
+    class _Anonymous:
+        is_authenticated = False
+
+    class _Request:
+        api_key = _ApiKey()
+        user = _Anonymous()
+        group = None
+        path = "/api/concentration-regression"
+        method = "GET"
+        ip = "203.0.113.88"
+        bearer = None
+        headers = {}
+        META = {"REMOTE_ADDR": ip}
+
+    r = get_connection()
+    cleanup_keys = (
+        f"traffic:top:{opts.b1}", f"traffic:top:{opts.b2}",
+        f"traffic:total:{opts.b1}", f"traffic:total:{opts.b2}",
+        f"traffic:alerted:{member}",
+    )
+    r.delete(*cleanup_keys)
+    Event.objects.filter(
+        category="traffic:concentration", model_id=marker).delete()
+
+    config = {
+        "enabled": True,
+        "user_limit": 240,
+        "apikey_limit": 0,
+        "apikey_observe_limit": 100_000,
+        "window": 60,
+        "exempt_prefixes": [],
+        "report_floor": 60,
+        "config_ttl": 30,
+    }
+    try:
+        for bucket in (opts.b2, opts.b1):
+            for _ in range(750):
+                blocked = limits.check_api_throttle(
+                    _Request(), now=bucket + 1, config=config)
+                assert blocked is None
+
+        assert float(r.zscore(f"traffic:top:{opts.b1}", member) or 0) == 750
+        assert float(r.zscore(f"traffic:top:{opts.b2}", member) or 0) == 750
+        assert float(r.zscore(f"traffic:top:{opts.b1}", ip_member) or 0) == 750
+
+        alerts = run_concentration_check(now=opts.now)
+        ours = [alert for alert in alerts if alert["identity"] == member]
+        assert len(ours) == 1, (
+            "unlimited ApiKey traffic written by check_api_throttle must reach "
+            f"the sustained-concentration alert, got {alerts}"
+        )
+        event = Event.objects.get(
+            category="traffic:concentration", model_id=marker)
+        assert event.model_name == "traffic:apikey"
+        assert event.metadata.get("identity") == member
+        assert event.metadata.get("top_ips") == [ip_member]
+    finally:
+        limits.clear_rate_limits(apikey_id=marker)
+        r.delete(*cleanup_keys)
+        Event.objects.filter(
+            category="traffic:concentration", model_id=marker).delete()
 
 
 @th.django_unit_test()

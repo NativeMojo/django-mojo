@@ -125,7 +125,7 @@ _GEOIP_SYNC_FORBIDDEN_FIELDS = (
 
 
 @md.POST('system/geoip/sync')
-@md.rate_limit("geoip_sync", ip_limit=60)
+@md.strict_rate_limit("geoip_sync", ip_limit=60)
 @md.requires_params('ip')
 # Federation ingest: writes GLOBAL threat intel, so no group-permission
 # fallback (a member-scoped geoip_sync grant must not reach it). allow_api_keys

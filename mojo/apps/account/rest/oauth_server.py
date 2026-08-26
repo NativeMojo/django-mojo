@@ -130,7 +130,7 @@ def on_register(request):
 
 @md.GET(f"{_ROOT}/authorize")
 @md.public_endpoint("OAuth 2.1 authorization (consent) page")
-@md.rate_limit("oauth_authorize", ip_limit=60)
+@md.strict_rate_limit("oauth_authorize", ip_limit=60)
 def on_authorize(request):
     return consent.handle_authorize(request, resources.public_origin())
 
@@ -212,7 +212,7 @@ def _refresh(request, origin):
 
 @md.POST(f"{_ROOT}/token")
 @md.public_endpoint("OAuth 2.1 token endpoint (authorization_code, refresh_token)")
-@md.rate_limit("oauth_token", ip_limit=60)
+@md.strict_rate_limit("oauth_token", ip_limit=60)
 def on_token(request):
     origin = resources.public_origin()
     if not resources.is_ready(origin):
@@ -230,7 +230,7 @@ def on_token(request):
 
 @md.POST(f"{_ROOT}/revoke")
 @md.public_endpoint("RFC 7009 token revocation")
-@md.rate_limit("oauth_revoke", ip_limit=30)
+@md.strict_rate_limit("oauth_revoke", ip_limit=30)
 def on_revoke(request):
     origin = resources.public_origin()
     if not resources.is_ready(origin):
