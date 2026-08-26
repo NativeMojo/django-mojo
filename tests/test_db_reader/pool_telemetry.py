@@ -218,6 +218,7 @@ def test_http_pool_timeout_returns_503(opts):
     from psycopg_pool import PoolTimeout
     from mojo.decorators.http import dispatch_error_handler
     from mojo.middleware.logging import LoggerMiddleware
+    from mojo.middleware.database_pool import DatabasePoolErrorMiddleware
 
     request = RequestFactory().get("/api/pool-test", HTTP_ACCEPT="application/json")
     request.DATA = objict()
@@ -242,6 +243,16 @@ def test_http_pool_timeout_returns_503(opts):
         f"outer middleware acquisition timeout must return bounded 503, got {response.status_code}: {payload!r}"
     assert request._mojo_pool_acquisition_error is True, \
         "the outer boundary must suppress ORM response logging after pool exhaustion"
+
+    del request._mojo_pool_acquisition_error
+    response = DatabasePoolErrorMiddleware(fail)(request)
+    payload = json.loads(response.content)
+    assert response.status_code == 503 and payload["code"] == 503, \
+        f"authentication-time acquisition timeout must return 503, got {response.status_code}: {payload!r}"
+    assert response["Retry-After"] == "1", \
+        "bounded acquisition failures must tell clients when to retry"
+    assert request._mojo_pool_acquisition_error is True, \
+        "the dedicated outer boundary must mark the acquisition failure"
 
     import mojo.middleware.logging as logging_middleware
     now = time.monotonic()
