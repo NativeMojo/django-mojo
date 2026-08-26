@@ -129,6 +129,24 @@ observer identity. Counter deltas tolerate a pool reset. States are:
 | `exhausted` | No lease is available and a waiter, pool error, or observed acquisition timeout exists. |
 | `recovering` | The prior sample was exhausted and capacity is available again. |
 
+For the MojoLand acquire/return investigation only, setting
+`DATABASE_POOL_LAB_TRACE_LEASES = True` adds one private
+`worker-<pid>-leases.jsonl` file and a `lab_leases` object to that worker's
+regular snapshot. Each lease receives a process-local correlation id and emits
+`acquired`, `returning`, and `returned` phases. A failed return emits
+`return_failed` and deliberately remains active instead of claiming recovery.
+The snapshot reports the active count, oldest age, and at most eight oldest
+leases.
+
+Trace records contain the database alias, bounded request path when one is
+available, thread identity, and at most eight bounded Python stack locations.
+They never serialize the connection object, credentials, or SQL. Each private
+event is capped at 4 KiB and the per-worker file rotates in place before 256
+KiB; it is diagnostic evidence, not a durable audit log. Stack capture occurs
+on every acquisition, so the flag is false/absent by default and must not be
+used as routine production telemetry. Disabling it leaves the ordinary pool
+gauges, counters, state events, and error signal unchanged.
+
 An acquisition timeout is detected through Django's exception cause chain,
 emitted once to the local atomic error file (or stderr), then re-raised
 unchanged. HTTP boundaries return bounded `503`; WebSockets close with `1013`.

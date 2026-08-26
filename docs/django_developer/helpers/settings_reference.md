@@ -39,6 +39,11 @@ These are read while URL/module bootstrap happens, so changes require a process 
 - `DATABASE_POOL_LAB_PROBE_ENABLED` — **file-only**, default false/absent.
   Enables the local, per-worker Unix-socket exhaustion probe only after the
   ordinary pool candidate is valid and active. It adds no HTTP route.
+- `DATABASE_POOL_LAB_TRACE_LEASES` — **file-only**, default false/absent.
+  Enables MojoLand's per-worker acquire/return correlation only while the
+  native pool is active. It captures bounded request-path, thread, and Python
+  stack evidence for the pooling laboratory; do not enable it as ordinary
+  production telemetry.
 - `MOJO_POOL_TELEMETRY_ROOT` / `MOJO_POOL_ERROR_FILE` /
   `MOJO_POOL_PROBE_SOCKET` — launcher-owned local output paths for atomic
   worker snapshots, the DB-independent acquisition-error signal, and an
