@@ -94,7 +94,7 @@ def test_conf_has_every_required_key(opts):
     for key in ("SECRET_KEY", "BASE_URL", "EMAIL_FROM", "GITHUB_REPO",
                 "GITHUB_WEBHOOK_SECRET",
                 "DATABASE_HOST", "DATABASE_PORT", "DATABASE_NAME",
-                "DATABASE_USER", "DATABASE_PASSWORD",
+                "DATABASE_USER", "DATABASE_PASSWORD", "DATABASE_CLUSTER_ID",
                 "REDIS_SERVER", "REDIS_PORT",
                 "AWS_REGION", "AWS_CONFIG_BUCKET", "AWS_CONFIG_PREFIX",
                 "CONFIG_SYNC_RESTART", "INFRASTRUCTURE_MODE"):
@@ -108,6 +108,9 @@ def test_conf_has_every_required_key(opts):
     th.assert_eq(values["DATABASE_USER"], "mojo",
                  "DATABASE_USER must match data.py's MASTER_USERNAME, or the "
                  "node cannot authenticate to the cluster that was just built")
+    th.assert_eq(values["DATABASE_CLUSTER_ID"], "demo-prod-aurora",
+                 "DATABASE_CLUSTER_ID must name the cluster the provisioner "
+                 "created so independent RDS observation can query it")
     th.assert_eq(values["EMAIL_FROM"], ANSWERS["operator_email"],
                  "EMAIL_FROM comes from the operator email answer")
     th.assert_eq(values["GITHUB_REPO"], ANSWERS["github_repo"],

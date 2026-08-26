@@ -116,6 +116,7 @@ def django_conf(spec, answers, observed, secrets):
     setting("DATABASE_NAME", _quote(names["db_name"]))
     setting("DATABASE_USER", _quote(DB_USER))
     setting("DATABASE_PASSWORD", _quote(secrets.get("db_password", "")))
+    setting("DATABASE_CLUSTER_ID", _quote(names["db_cluster"]))
     if observed.get("db_reader_endpoint"):
         setting("DATABASE_READER_HOST",
                 _quote(observed.get("db_reader_endpoint")))
