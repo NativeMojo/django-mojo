@@ -141,6 +141,42 @@ def atomic_write(path, payload):
     os.replace(temporary, target)
 
 
+def append_bounded_event(path, payload, max_bytes=262144):
+    """Append one private JSON event, atomically rotating before the size cap."""
+    target = Path(path)
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    line = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    if len(line) > 4096:
+        raise ValueError("pool telemetry event exceeds 4096 bytes")
+    try:
+        rotate = target.stat().st_size + len(line) > max_bytes
+    except FileNotFoundError:
+        rotate = False
+    if rotate:
+        temporary = target.with_name(
+            f".{target.name}.{os.getpid()}.{process_uuid()}.tmp")
+        temporary.write_bytes(line)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, target)
+        return
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(descriptor, line)
+        os.fchmod(descriptor, 0o600)
+    finally:
+        os.close(descriptor)
+
+
+def should_emit_state_event(state, previous_state, last_event_at, now, reminder=300):
+    """Emit transitions immediately and unhealthy reminders at a bounded rate."""
+    if state != previous_state:
+        return True
+    return bool(
+        state in {"saturated", "exhausted", "recovering"}
+        and now - (last_event_at or 0) >= reminder
+    )
+
+
 def read_snapshot(path):
     try:
         value = json.loads(Path(path).read_text())

@@ -12,7 +12,12 @@ from django.db import connections
 
 from mojo.db import config
 from mojo.db.errors import bounded_error
-from mojo.db.pool_telemetry import atomic_write, pool_snapshot
+from mojo.db.pool_telemetry import (
+    append_bounded_event,
+    atomic_write,
+    pool_snapshot,
+    should_emit_state_event,
+)
 from mojo.helpers.async_db import database_connection_boundary
 
 
@@ -28,6 +33,7 @@ class PoolRuntime:
         self.previous = None
         self.probe = None
         self.probe_thread = None
+        self.last_event_at = None
 
     def enabled(self):
         plan = config.LAST_POOL_PLAN or {}
@@ -40,10 +46,27 @@ class PoolRuntime:
             return None
         wrapper = connections["default"]
         pool = wrapper.pool
+        previous_state = (self.previous or {}).get("state")
         snapshot = pool_snapshot(pool, identity=config.LAST_POOL_PLAN.get("identity"),
                                  previous=self.previous)
         self.previous = snapshot
         atomic_write(self.root / f"worker-{self.pid}.json", snapshot)
+        if should_emit_state_event(
+                snapshot["state"], previous_state, self.last_event_at, snapshot["at"]):
+            append_bounded_event(self.root / f"worker-{self.pid}-events.jsonl", {
+                "schema": 1,
+                "event": "database_pool_state",
+                "at": snapshot["at"],
+                "pid": snapshot["pid"],
+                "process_uuid": snapshot["process_uuid"],
+                "identity": snapshot["identity"],
+                "state": snapshot["state"],
+                "previous_state": previous_state,
+                "gauges": snapshot["gauges"],
+                "interval": snapshot["interval"],
+                "in_use_or_preparing": snapshot["in_use_or_preparing"],
+            })
+            self.last_event_at = snapshot["at"]
         return snapshot
 
     def _run(self):
@@ -119,6 +142,8 @@ class LocalPoolProbe:
         self.cancelled.clear()
         started = time.monotonic()
         owned = []
+        exercise_error = None
+        waiter_timeout = False
         try:
             pool = self.connections["default"].pool
             if pool is None:
@@ -126,12 +151,35 @@ class LocalPoolProbe:
             maximum = int(pool.get_stats().get("pool_max", 0))
             if maximum <= 0:
                 return {"ok": False, "error": "pool maximum is unavailable"}
-            requested = max(1, min(int(leases), maximum))
+            requested = int(leases)
+            if requested != maximum:
+                return {
+                    "ok": False,
+                    "error": f"exhaustion exercise requires exactly pool_max={maximum} leases",
+                }
             for _index in range(requested):
-                if self.cancelled.is_set() or time.monotonic() - started > self.deadline:
+                remaining = self.deadline - (time.monotonic() - started)
+                if self.cancelled.is_set() or remaining <= 0:
                     break
-                owned.append(pool.getconn(timeout=min(2, self.deadline)))
-            self.cancelled.wait(max(0, min(float(hold_seconds), self.deadline)))
+                owned.append(pool.getconn(timeout=max(0.1, min(2, remaining))))
+            if len(owned) == requested and not self.cancelled.is_set():
+                remaining = self.deadline - (time.monotonic() - started)
+                if remaining > 0:
+                    try:
+                        unexpected = pool.getconn(timeout=max(0.1, min(1, remaining)))
+                    except Exception as error:
+                        from mojo.db.errors import is_pool_acquisition_error
+                        if is_pool_acquisition_error(error):
+                            waiter_timeout = True
+                        else:
+                            exercise_error = bounded_error(error)
+                    else:
+                        pool.putconn(unexpected)
+                        exercise_error = "extra waiter unexpectedly acquired a lease"
+            remaining = self.deadline - (time.monotonic() - started)
+            self.cancelled.wait(max(0, min(float(hold_seconds), remaining)))
+        except Exception as error:
+            exercise_error = bounded_error(error)
         finally:
             for connection in reversed(owned):
                 try:
@@ -145,10 +193,12 @@ class LocalPoolProbe:
         except Exception:
             recovered = False
         return {
-            "ok": recovered,
+            "ok": bool(recovered and waiter_timeout and not exercise_error),
             "leases_acquired": len(owned),
+            "waiter_timeout": waiter_timeout,
             "cancelled": self.cancelled.is_set(),
             "recovered_without_restart": recovered,
+            "error": exercise_error,
         }
 
     def cancel(self):

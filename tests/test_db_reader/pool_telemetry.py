@@ -87,7 +87,8 @@ def test_truthful_public_states(opts):
 
 @th.unit_test("pool telemetry: missing counters are zero and resets produce honest deltas")
 def test_counter_normalization_and_reset(opts):
-    from mojo.db.pool_telemetry import normalize_public_stats, reset_safe_delta
+    from mojo.db.pool_telemetry import (
+        normalize_public_stats, reset_safe_delta, should_emit_state_event)
 
     normalized = normalize_public_stats({"requests_num": 10, "future_key": 99})
     assert normalized["connections_lost"] == 0, \
@@ -98,6 +99,12 @@ def test_counter_normalization_and_reset(opts):
     )
     assert delta["requests_num"] == 3 and delta["requests_queued"] == 2, \
         f"counter reset and ordinary growth must both be represented honestly, got {delta!r}"
+    assert should_emit_state_event("exhausted", "busy", 99, 100), \
+        "a state transition must emit immediately"
+    assert not should_emit_state_event("exhausted", "exhausted", 99, 100), \
+        "unchanged exhaustion must not emit on every sample"
+    assert should_emit_state_event("exhausted", "exhausted", 100, 400), \
+        "persistent exhaustion must emit only its bounded reminder"
 
 
 @th.unit_test("pool telemetry: aggregation ignores stale and duplicate worker snapshots")
@@ -188,13 +195,21 @@ def test_local_probe_cancel_and_recovery(opts):
     class Pool:
         returned = 0
 
+        def __init__(self):
+            self.owned = 0
+
         def get_stats(self):
             return {"pool_max": 2}
 
         def getconn(self, timeout=None):
+            from psycopg_pool import PoolTimeout
+            if self.owned >= 2:
+                raise PoolTimeout("expected controlled waiter timeout")
+            self.owned += 1
             return object()
 
         def putconn(self, connection):
+            self.owned -= 1
             self.returned += 1
 
     class Wrapper:
@@ -239,5 +254,7 @@ def test_local_probe_cancel_and_recovery(opts):
         f"cancel must be accepted while exercise holds leases, got {cancelled!r}"
     assert result.get("recovered_without_restart") is True, \
         f"exercise must prove recovery without a process restart, got {result!r}"
+    assert result.get("waiter_timeout") is True, \
+        f"exercise must create exactly one bounded waiter timeout, got {result!r}"
     assert Wrapper.pool.returned == 2, \
         f"every deliberately held lease must return, got {Wrapper.pool.returned}"
