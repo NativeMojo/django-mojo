@@ -1124,6 +1124,10 @@ registered resource is enabled; until then every endpoint answers 404.
 
 ### WS
 
+- `WS_DATABASE_WORKERS` — **file-only**, startup-time size of each ASGI
+  process's dedicated realtime database executor (default `4`, clamped to
+  `1..32`). Changing it requires a process restart. This bounds concurrent ORM
+  work from sockets; it does not change a psycopg pool's `max_size`.
 - `WS_CONNECT_RATE_LIMIT` — per-IP websocket connect rate, checked before
   accept (default `30`/min, `<= 0` disables). See
   [Authenticated-Abuse Hardening](../security/abuse_hardening.md#4-websocket-connection-limits).
