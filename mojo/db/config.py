@@ -178,6 +178,9 @@ def apply_connection_defaults(context, environ=None):
     if plan["enabled"] and proven_api and not plan["valid"]:
         raise ImproperlyConfigured("; ".join(plan["errors"]))
     if plan["enabled"] and proven_api:
+        from mojo.db.asgi_compat import install_thread_sensitive_error_responses
+
+        install_thread_sensitive_error_responses()
         default = databases["default"]
         options = default.get("OPTIONS")
         if not isinstance(options, dict):
