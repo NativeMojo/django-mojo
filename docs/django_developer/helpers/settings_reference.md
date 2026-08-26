@@ -17,9 +17,10 @@ These are read while URL/module bootstrap happens, so changes require a process 
   ordinary connection. `False` needs no sizing settings and is the production
   default. An enabled API/ASGI candidate also requires `MIDDLEWARE` to be a
   list or tuple; django-mojo injects its database-pool error boundary
-  automatically for view exceptions; the database-backed API-key middleware
-  handles its own acquisition failures at source so both paths return a
-  bounded `503`. A database-backed `Setting` row is ignored.
+  automatically for view exceptions; `AuthenticationMiddleware` handles pool
+  failures from database-backed bearer handlers, including API keys, at source
+  so both paths return a bounded `503`. A database-backed `Setting` row is
+  ignored.
 - `DATABASE_POOL_ALIASES` — **file-only** exact allowlist. The laboratory
   accepts only `["default"]`; readers and multi-destination budgets are not
   inferred. Required only when pooling is enabled.
