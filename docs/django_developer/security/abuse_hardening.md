@@ -12,19 +12,21 @@ django-mojo ships layered, framework-level defenses (DM-042). This page
 documents each control, its cost, and the deployment-level hardening the
 framework cannot do for you.
 
-**Request-path cost of all of this: one pipelined Redis round-trip (4
-commands) per authenticated REST request. Anonymous requests: zero.** Every
+**Request-path cost of all of this: one pipelined Redis round-trip per
+authenticated REST request. Anonymous requests: zero.** Every
 control fails open on Redis errors — an outage never locks users out.
 
 ---
 
 ## 1. Global Per-Identity API Throttle
 
-Every `@md.URL` route is throttled per authenticated identity (User pk or
-ApiKey pk) — enforced in the URL dispatcher *before* group resolution and the
-view, so a rejected request costs no DB work beyond the auth lookup. Anonymous
-traffic is deliberately skipped: it is covered by the per-endpoint
-`rate_limit` decorators, and IP-keyed global limits punish CGNAT bystanders.
+Every `@md.URL` route is counted per authenticated identity (User pk or ApiKey
+pk) in the URL dispatcher *before* group resolution and the view. Users have a
+hard default. ApiKeys are unlimited by default because one integration can fan
+out work for thousands of consumers, but their traffic is still observed and
+can be given an explicit hard ceiling. Anonymous traffic is deliberately
+skipped here: it is covered by per-endpoint decorators, and IP-keyed global
+limits punish CGNAT bystanders.
 
 Over-budget requests get a cheap static `429` with `Retry-After` (seconds
 until the window resets):
@@ -39,21 +41,24 @@ until the window resets):
 |---|---|---|
 | `API_THROTTLE_ENABLED` | `True` | Enforcement on/off. Accounting (§2) runs regardless. |
 | `API_THROTTLE_USER` | `240` | Requests per window per User. `<= 0` = unlimited. |
-| `API_THROTTLE_APIKEY` | `600` | Requests per window per ApiKey. `<= 0` = unlimited. |
+| `API_THROTTLE_APIKEY` | `0` | Legacy deployment-wide **hard** requests/window per ApiKey. Positive values opt into enforcement; `<= 0` is unlimited. |
+| `API_THROTTLE_APIKEY_OBSERVE` | `600` | Non-blocking global observation threshold per ApiKey/window. `<= 0` disables threshold Events, not accounting. |
+| `API_THROTTLE_APIKEY_EVENT_WINDOW` | `3600` | Per ApiKey/source suppression window for observation Events, seconds. |
+| `API_THROTTLE_APIKEY_EVENT_BUDGET` | `100` | Maximum distinct ApiKey/source observation Events per event window. |
 | `API_THROTTLE_WINDOW` | `60` | Fixed window, seconds. |
 | `API_THROTTLE_EXEMPT_PREFIXES` | `[]` | Path carve-outs, same shape as `LOGIT_NO_LOG_PREFIX`: `"/api/foo"` or `"POST:/api/foo"`. |
-| `API_THROTTLE_REPORT_FLOOR` | `60` | Identities above this many requests/window enter the accounting zset (§2) — the detection floor. |
+| `API_THROTTLE_REPORT_FLOOR` | `60` | Legacy compatibility setting; direct five-minute accounting no longer drops identities below a floor. |
 | `API_THROTTLE_CONFIG_TTL` | `30` | In-process config cache, seconds. Setting changes land within this + one window. |
 
 All keys are DB-settable (`Setting` rows / `settings.get`) and resolved at
 most once per `API_THROTTLE_CONFIG_TTL` per process — never per request. The
-defaults only catch machine-rate traffic: 240/min sustained for a full minute
-is ~4 req/s from one account; real SPA bursts (a dashboard load firing 30–60
-requests in a few seconds) stay far under it.
+User default catches machine-rate traffic: 240/min sustained for a full minute
+is ~4 req/s from one account. The ApiKey observation default produces a review
+signal at 600/min but does not reject the request.
 
-### Per-key and per-tier overrides
+### Per-key hard limits and ordinary endpoint behavior
 
-A busy machine integration raises its own budget via the existing
+A positive per-key entry is an intentional hard ceiling using the existing
 `ApiKey.limits` convention (window in **minutes**):
 
 ```python
@@ -61,17 +66,34 @@ api_key.limits["api"] = {"limit": 5000, "window": 1}
 api_key.save()
 ```
 
-Fleet-federation endpoints (`requires_global_perms(..., allow_api_keys=True)`
-receivers — jobs control/broadcast, geoip sync, aws ingest) authenticate as
-ApiKeys and are subject to the `apikey` budget: give fleet keys a `limits["api"]`
-override, or exempt the paths via `API_THROTTLE_EXEMPT_PREFIXES`.
+Ordinary `rate_limit` endpoints grant ApiKeys a pass automatically: consumer
+IP/duid/muid gates do not collapse many end users into one shared service
+budget. A positive `limits[endpoint_key]` entry or decorator `apikey_limit`
+remains hard. Otherwise the decorator shadow-counts by ApiKey and files
+bounded evidence at its declared `apikey_observe_limit`, or the lowest
+positive consumer threshold.
+
+`strict_rate_limit` is the safety boundary for credentials, expensive work,
+and write amplification. It keeps IP/duid/muid gates hard for every caller,
+including ApiKeys. Exempt prefixes bypass only the global 429; they do not
+turn off identity counters, observation Events, or concentration accounting.
+Missing, malformed, and non-positive per-key limit entries fail open with
+bounded logging; revoke/deactivate a key instead of using `limit=0` as a kill
+switch.
+
+`traffic:apikey_threshold` Events are review evidence, not an abuse verdict.
+They carry the key id, global/endpoint source, count, threshold, and window,
+never the raw token. The category is deliberately outside `rate_limit:*`, so a
+shared service IP is not promoted into IP-abuser threat intelligence. Events
+are suppressed per key/source and share the distinct-key budget above.
 
 ### De-amplified 429s
 
 A blocked identity generates **one** metric + incident event per window
 (first engagement only, `SET NX`-gated) — never one per rejected request. The
 same gate was retrofitted onto the per-endpoint `rate_limit` /
-`strict_rate_limit` decorators (one event per key+IP per minute). A failed
+`strict_rate_limit` decorators (one event per ApiKey id or consumer IP per
+minute). A failed
 request must never cost the server more than a served one; that inversion is
 the doom-loop mechanism.
 
@@ -82,10 +104,11 @@ the doom-loop mechanism.
 The postmortem signature this catches: *one account silently becoming 96% of
 a service's traffic*. Detection is always on (independent of enforcement):
 
-- The throttle's own counter doubles as accounting. Once per identity per
-  window, its exact previous-window count is flushed into a 5-minute
-  `traffic:top:{bucket}` zset (identities above `API_THROTTLE_REPORT_FLOOR`
-  only), alongside a `traffic:total:{bucket}` counter.
+- Every authenticated request increments the current 5-minute
+  `traffic:top:{bucket}` member and `traffic:total:{bucket}` directly,
+  independent of its enforcement window. A burst remains visible after the
+  caller stops; no later request is needed to flush it. Buckets expire after
+  one hour, bounding retained cardinality.
 - The `check_traffic_concentration` cron (every 5 minutes,
   `mojo/apps/incident/cronjobs.py`) reads the completed buckets and emits a
   level-6 `traffic:concentration` incident event when an identity is over
@@ -164,8 +187,8 @@ per IP per window (`traffic:ws_connect`) / per identity per minute
 Endpoints where a client POST becomes a DB write are bounded per **session**
 (muid — the server-set HttpOnly cookie), not just per IP:
 
-- `account/bouncer/event`, `account/bouncer/assess`: `ip_limit=60, muid_limit=30`/min.
-- `incident/event`: `ip_limit=240, muid_limit=120`/min (generous — the same
+- `account/bouncer/event`, `account/bouncer/assess`: strict `ip_limit=60, muid_limit=30`/min.
+- `incident/event`: strict `ip_limit=240, muid_limit=120`/min (generous — the same
   route serves security-dashboard reads; ingest volume is also bounded by §1).
 
 **Never rate-limit `incident/ossec/alert/batch`.** The mojo-ossec sender is
@@ -214,8 +237,8 @@ The postmortem lessons that belong to your infrastructure, not this codebase:
   `WS_CONNECT_RATE_LIMIT = 0` — every module shares one identity budget and
   one IP, so suite-wide enforcement would flake.
 - Throttle tests opt in per-request with the `X-Mojo-Test-Api-Throttle`
-  header (JSON overrides: `enabled`, `user_limit`, `apikey_limit`, `window`,
-  `report_floor`, `exempt_prefixes`), gated by the standard
+  header (JSON overrides: `enabled`, `user_limit`, `apikey_limit`,
+  `apikey_observe_limit`, `window`, `report_floor`, `exempt_prefixes`), gated by the standard
   `mojo.helpers.test_mode.is_test_request` defenses.
 - `clear_rate_limits(user_id=..., apikey_id=...)` clears an identity's
   throttle counters; `testit`'s `client.login()` does this automatically.

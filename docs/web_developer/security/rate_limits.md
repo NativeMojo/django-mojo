@@ -1,10 +1,10 @@
 # Rate Limits & Required Client Backoff
 
-Every django-mojo API enforces per-identity rate limits (per user account,
-per API key, and per session — not just per IP). This page is the contract
-your client must honor. Clients that ignore it will find their traffic
-rejected, their account throttled, and — for sustained machine-rate abuse —
-their account disabled.
+django-mojo hard-limits human identities and security-sensitive endpoints.
+Ordinary ApiKey traffic is unlimited by default so a trusted integration can
+fan out work for many end users, but it is still counted, observed, and can be
+given a positive per-key hard ceiling. This page is the 429 contract every
+client must honor whenever a hard limit applies.
 
 ## The 429 contract
 
@@ -27,11 +27,29 @@ Required behavior:
 4. **Give up after ~20 attempts** and require human interaction to resume. A
    tab that can't connect after twenty tries should stop, not try harder.
 
-Limits are keyed to your **authenticated identity and session**. Rotating
-IPs, opening new tabs, or clearing cookies does not reset an account's
-budget. Default budgets are generous (hundreds of requests per minute per
-identity) — real interactive apps never hit them; scripts polling in a tight
-loop do.
+Hard identity limits are keyed to the **individual User or ApiKey**, never the
+ApiKey's group. Rotating IPs, opening tabs, or clearing cookies does not reset
+that budget. Strict endpoint IP/device gates are separate and remain active
+for every caller.
+
+## ApiKey defaults and explicit limits
+
+On an ordinary endpoint, `Authorization: apikey <token>` skips consumer
+IP/device fairness gates automatically. No endpoint-specific bypass flag is
+required. The request can still receive 429 when any of these apply:
+
+- the endpoint is a credential, expensive-work, or write-amplification
+  boundary using `strict_rate_limit`;
+- that ApiKey has a positive `limits[endpoint_key]` or global `limits["api"]`
+  entry;
+- the endpoint declares a positive hard ApiKey fallback; or
+- the deployment has deliberately enabled its legacy global ApiKey ceiling.
+
+Unlimited does not mean unobserved. The server records a bounded threshold
+event and five-minute concentration data by the individual key id. These are
+signals for operator review, not proof of abuse and not automatic revocation.
+Malformed or non-positive per-key values are not a kill switch; deactivate or
+delete the key to revoke it.
 
 ## Never report one telemetry event per failure
 
@@ -64,10 +82,10 @@ limited per session. If your app reports client-side errors:
 - Prefer the realtime websocket feed over REST polling for live data.
 - If you must poll, poll ≥ 5 s intervals and **never with cache-busting
   parameters in a tight loop**.
-- Sustained automated access (dashboards, exports, scraping) should go
-  through an issued API key with negotiated limits — ask the platform
-  operator. Scraping the portal at machine rate gets an account disabled;
-  an API key gets you a supported, quota'd path to the same data.
+- Sustained automated access (dashboards, exports, scraping) should use an
+  issued API key. Ask the operator whether that key has an explicit hard
+  ceiling; otherwise ordinary routes are pass-through but monitored. Scraping
+  through a human portal session at machine rate can get the account disabled.
 
 ## Related
 

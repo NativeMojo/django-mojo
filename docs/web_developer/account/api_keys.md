@@ -40,7 +40,7 @@ Requires `manage_group`, `manage_groups`, or the combined `groups` permission (g
 | `group` | Yes | Group ID the key is scoped to |
 | `name` | Yes | Descriptive name for the key |
 | `permissions` | No | JSON **object** of granted permissions (default: empty). Must be a real object — any other shape, including a JSON-encoded string, is rejected with `400` |
-| `limits` | No | Per-endpoint rate limit overrides |
+| `limits` | No | Positive per-key hard limits: `{endpoint_key: {"limit": N, "window": minutes}}`; use `"api"` for the global dispatcher ceiling |
 
 Four machine permissions are protected from ordinary group administrators:
 `geoip_sync`, `dnsman_acme_federation`, `edge_node`, and `mojosec_ingest`. On
@@ -141,6 +141,40 @@ Authorization: apikey <token>
 ```
 
 The key's group is automatically set on the request. Only permissions in the key's `permissions` dict are allowed. System-level permissions (`sys.*`) are always denied.
+
+### Rate limits and observation
+
+ApiKeys are unlimited on ordinary API throughput gates by default. A normal
+`rate_limit` endpoint automatically skips its consumer IP/device budget for an
+ApiKey; you do not need a per-endpoint `apikey_bypass` option. This supports
+services that fan thousands of end-user operations through one key and one
+shared egress address.
+
+Positive `limits` entries opt that individual key into a hard ceiling. Windows
+are minutes:
+
+```json
+{
+  "limits": {
+    "orders": {"limit": 500, "window": 1},
+    "api": {"limit": 5000, "window": 1}
+  }
+}
+```
+
+The `orders` entry applies to a decorator whose bucket key is `orders`; `api`
+applies globally. Two keys in the same group never share these counters.
+Security-sensitive, credential, expensive, and write-amplifying endpoints use
+strict limits and can still return 429 even when the key has no explicit
+entry. Always honor `Retry-After` as described in
+[Rate Limits & Required Client Backoff](../security/rate_limits.md).
+
+Unlimited keys remain observable. The server records bounded non-blocking
+threshold Events and five-minute concentration data identified by ApiKey id.
+These flag traffic for operator review; they do not automatically disable the
+key and are not proof of abuse. Raw tokens are never included in that evidence.
+Missing, malformed, zero, and negative limits do not create a hard ceiling;
+deactivate or delete the key when access must stop.
 
 **Deactivating the key's group instantly suspends the key** — every group-scoped request (list, detail, save, delete, custom endpoints, with or without a `group=` param) is denied while the group is inactive, including reads/writes of the group record itself. The key is never modified, so reactivating the group restores it immediately; you do not need to (and should not have to) deactivate the key itself. The key still *authenticates* (so the group-independent federation-sync path keeps working) — it simply has no group context. **Deactivating a parent group also suspends every descendant's keys** — a child group is only reachable via `group=<child id>` while it *and every ancestor* are active; an active child under a deactivated parent is treated as inactive too, with no flag written to the child. Reactivating the parent restores the whole subtree instantly.
 
@@ -294,6 +328,9 @@ The request runs with the user's full permissions. If `allowed_ips` was set, req
 - Store all tokens securely — treat them like passwords
 - **API key tokens are recoverable, not write-once — but read-back is opt-in.** The raw token is stored encrypted on the record and returned only by `GET /api/group/apikey/<id>?graph=token`; plain list and detail reads omit it. Every opt-in read is audited server-side. `manage_group` is intentionally a full-trust credential-management grant inside the tenant, so an API key carrying it may request the `token` graph and recover sibling keys' live tokens. The framework does not block that path: the opt-in narrows *where the secret travels*, not *who may ask for it*. Give ordinary integrations narrower permissions. If a management key is compromised, rotate or revoke every sibling it could have read; revoking only that key is not sufficient containment. Rotation does invalidate the previous token permanently.
 - **API Keys**: scoped to one group, explicit permissions, `sys.*` always denied
+- **Ordinary ApiKey traffic is unlimited by default, not unmonitored.** Set a
+  positive per-key limit when a contractual hard ceiling is required; strict
+  security/write endpoints remain hard for every caller.
 - **User Auth Tokens**: carry full user permissions including `sys.*` — use with caution
 - Set short expiry periods for temporary integrations
 - All key generation is logged in the audit trail

@@ -138,12 +138,23 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
 - `API_THROTTLE_ENABLED` — global per-identity API throttle enforcement
   on/off (default `True`; accounting runs regardless). See
   [Authenticated-Abuse Hardening](../security/abuse_hardening.md#settings).
-- `API_THROTTLE_USER`
-- `API_THROTTLE_APIKEY`
-- `API_THROTTLE_WINDOW`
-- `API_THROTTLE_EXEMPT_PREFIXES`
-- `API_THROTTLE_REPORT_FLOOR`
-- `API_THROTTLE_CONFIG_TTL`
+- `API_THROTTLE_USER` — hard User requests/window (default `240`; `<= 0`
+  disables enforcement but retains accounting)
+- `API_THROTTLE_APIKEY` — legacy deployment-wide hard ApiKey
+  requests/window (default `0`, so ApiKeys are unlimited unless this or a
+  positive per-key `limits["api"]` entry is configured)
+- `API_THROTTLE_APIKEY_OBSERVE` — non-blocking ApiKey threshold Event
+  (default `600`; enabled by default even though the hard ceiling is off)
+- `API_THROTTLE_APIKEY_EVENT_WINDOW` — ApiKey/source observation Event
+  suppression window in seconds (default `3600`)
+- `API_THROTTLE_APIKEY_EVENT_BUDGET` — maximum distinct ApiKey/source
+  observation Events per event window (default `100`)
+- `API_THROTTLE_WINDOW` — global fixed-window seconds (default `60`)
+- `API_THROTTLE_EXEMPT_PREFIXES` — enforcement carve-outs; accounting and
+  observation still run
+- `API_THROTTLE_REPORT_FLOOR` — retained legacy setting; direct five-minute
+  top-talker accounting now records every authenticated request
+- `API_THROTTLE_CONFIG_TTL` — in-process setting cache seconds (default `30`)
 
 ### APIKEY
 

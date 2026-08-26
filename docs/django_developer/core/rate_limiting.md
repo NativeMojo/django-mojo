@@ -4,8 +4,8 @@ Three decorators in `mojo.decorators` handle rate limiting and usage tracking:
 
 | Decorator | Algorithm | Use for |
 |---|---|---|
-| `@md.rate_limit` | Fixed-window | General API throughput limits |
-| `@md.strict_rate_limit` | Sliding-window | Security-sensitive endpoints |
+| `@md.rate_limit` | Fixed-window | Consumer fairness on ordinary API work; ApiKeys pass by default |
+| `@md.strict_rate_limit` | Sliding-window | Credentials, expensive work, and write-amplification boundaries; every caller is hard-limited |
 | `@md.endpoint_metrics` | Metrics recording | Per-endpoint usage tracking |
 
 All are available via the standard import:
@@ -22,6 +22,7 @@ Counts requests in fixed time buckets. Fast and cheap (one Redis INCR per check)
 
 ```python
 def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=None,
+               apikey_observe_limit=None,
                ip_window=60, duid_window=60, muid_window=60, apikey_window=60,
                min_granularity="hours")
 ```
@@ -34,7 +35,8 @@ def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=Non
 | `ip_limit` | Max requests per `ip_window` seconds per IP |
 | `duid_limit` | Max requests per `duid_window` seconds per device UUID (optional) |
 | `muid_limit` | Max requests per `muid_window` seconds per server-set muid cookie (optional) |
-| `apikey_limit` | Default max requests per `apikey_window` per API key group (optional) |
+| `apikey_limit` | Positive developer-declared hard limit per ApiKey (optional) |
+| `apikey_observe_limit` | Non-blocking ApiKey observation threshold; otherwise the lowest positive consumer threshold is used |
 | `ip_window` | Window in seconds for IP counter (default `60`) |
 | `duid_window` | Window in seconds for duid counter (default `60`) |
 | `muid_window` | Window in seconds for muid counter (default `60`) |
@@ -56,7 +58,13 @@ def on_feed(request):
 def on_search(request):
     ...
 
-# With API key limits: 60/min IP, 1000/hr per API key group
+# Ordinary consumers: 60/min IP. ApiKeys pass, but crossing 60/min is observed.
+@md.POST("assess")
+@md.rate_limit("assess", ip_limit=60)
+def on_assess(request):
+    ...
+
+# Deliberate hard ApiKey fallback: 1000/hr per individual key
 @md.POST("assess")
 @md.rate_limit("assess", ip_limit=60, apikey_limit=1000, apikey_window=3600)
 def on_assess(request):
@@ -125,35 +133,49 @@ With `limit=3, window=60s` and fixed-window, this sequence is allowed:
 
 4 requests in 9 seconds. With sliding-window, requests 1–3 fill the window and request 4 is blocked until request 1 is older than 60 seconds.
 
-Use `strict_rate_limit` wherever the limit is meant as a security control.
+Use `strict_rate_limit` wherever the limit is meant as a security control,
+protects expensive work, or bounds database/event amplification. It always
+applies IP/duid/muid gates to ApiKey callers too. In-tree examples include
+credential issuance, QR rendering, security-ingest writes, and `/api/event`.
 
 ---
 
 ## API Key Rate Limiting
 
-When `request.api_key` is set by middleware, both decorators support per-group rate limit overrides. The api_key object is expected to have this shape:
+When `request.api_key` is set by middleware, limits and evidence are keyed by
+the individual `ApiKey.pk`, never its group or source IP. Per-key hard limits
+use the existing `limits` object:
 
 ```python
-request.api_key = {
-    "group": <account.Group instance>,
-    "limits": {
-        "assess": {
-            "limit": 500,
-            "window": 60   # minutes
-        }
-    }
+api_key.limits = {
+    "assess": {"limit": 500, "window": 60},  # window is minutes
+    "api": {"limit": 5000, "window": 1},     # global dispatcher ceiling
 }
 ```
 
-The decorator looks up `request.api_key.limits[key]` to resolve the effective limit and window for that group. If no override is present, the decorator's `apikey_limit` / `apikey_window` defaults apply.
+`rate_limit` is a consumer-fairness control. An authenticated ApiKey skips its
+IP/duid/muid gates automatically, with no per-endpoint opt-in. A valid positive
+`limits[key]` entry wins; otherwise a positive decorator `apikey_limit` is the
+hard fallback. With neither, traffic continues and a shadow counter records a
+non-blocking `traffic:apikey_threshold` Event when it crosses
+`apikey_observe_limit`, or the lowest positive consumer threshold if that
+argument is omitted.
 
-The Redis key uses `group.pk` so all API keys belonging to the same group share a single counter:
+`strict_rate_limit` never grants that pass: IP/duid/muid remain hard for every
+caller, and positive per-key/developer ApiKey ceilings are additional hard
+gates. A valid per-key entry overrides the developer fallback.
+
+Hard and shadow Redis keys use the ApiKey row id, so sibling keys have isolated
+counters:
 
 ```
-rl:assess:apikey:42:1234567920
+rl:assess:apikey:73:1234567920
+rl:assess:observe:apikey:73:1234567920
 ```
 
-If `request.api_key` is `None` (unauthenticated request), the api_key check is skipped — IP limiting still applies.
+Missing, malformed, or non-positive per-key entries do not create a hard
+limit. They fail open with bounded logging; disable/revoke a key through its
+lifecycle field rather than encoding revocation as `limit=0`.
 
 Window values in `request.api_key.limits` are in **minutes**. The decorator converts them to seconds internally.
 
@@ -182,7 +204,7 @@ def endpoint_metrics(slug, by=None, min_granularity="hours")
 | `"ip"` | Source IP address |
 | `"duid"` | Device UUID from `request.DATA.get("duid")` |
 | `"muid"` | Server-set client cookie from `request.muid` |
-| `"api_key"` | API key group PK (`request.api_key.group.pk`) |
+| `"api_key"` | Individual API key PK (`request.api_key.pk`) |
 | `"user"` | Authenticated user ID |
 | `"group"` | Request group ID (`request.group.pk`) |
 
@@ -228,7 +250,7 @@ Dimensions that are absent on the request (no duid, unauthenticated user, no gro
 
 ## On Violation
 
-When a limit is exceeded, all three rate limiting decorators:
+When a hard limit is exceeded, both rate limiting decorators:
 
 1. Return 429 with `Retry-After` header — the view is never called
 2. Record a violation metric: `rate_limit:{key}` in category `rate_limits`
@@ -238,8 +260,9 @@ When a limit is exceeded, all three rate limiting decorators:
 {"error": "Rate limit exceeded", "code": 429, "status": false}
 ```
 
-**Metric + incident event are deduped to first-engagement per key+IP per
-minute (DM-042)** — a client stuck retrying against a live limit no longer
+**Metric + incident event are deduped to first-engagement per bucket identity
+per minute (DM-042)** — ApiKey blocks dedupe by key id; consumer blocks dedupe
+by IP. A client stuck retrying against a live limit no longer
 turns every rejected request into its own metric write + `Event` INSERT +
 rule evaluation. The 429 response itself is always returned on every
 over-budget request; only the accounting side is deduped. This means
@@ -355,7 +378,7 @@ clear_rate_limits(ip=None, key=None, duid=None, muid=None, account_id=None,
 | `muid` | Clear the server-cookie counter for this bucket (requires `key`) |
 | `account_id` | Clear the per-account counter for this user (requires `key`) |
 | `user_id` | Clear the global per-identity API throttle counters (`rl:api:user:*`) for this user (DM-042) |
-| `apikey_id` | Clear the global per-identity API throttle counters (`rl:api:apikey:*`) for this ApiKey (DM-042) |
+| `apikey_id` | Clear global, endpoint hard, strict, and observation counters for this ApiKey |
 
 Returns the number of Redis keys deleted.
 
@@ -369,8 +392,11 @@ dispatcher itself, before the view runs — `check_api_throttle` in
 `mojo/decorators/limits.py`, hooked into `dispatcher()` in
 `mojo/decorators/http.py`. It requires no per-endpoint decoration; anonymous
 requests are skipped entirely (they remain covered by `rate_limit` /
-`strict_rate_limit` above). Default budgets: 240/min per User, 600/min per
-ApiKey, overridable per-key via `ApiKey.limits["api"]`.
+`strict_rate_limit` above). The User default is a hard 240/min. ApiKeys are
+unlimited by default (`API_THROTTLE_APIKEY=0`) but observed at 600/min
+(`API_THROTTLE_APIKEY_OBSERVE=600`); a positive `ApiKey.limits["api"]` or
+explicitly configured positive deployment-wide hard setting still returns
+429. Accounting continues for unlimited, disabled, and exempt traffic.
 
 See [Authenticated-Abuse Hardening](../security/abuse_hardening.md) for the
 full settings table, traffic-concentration detection, and deployment
