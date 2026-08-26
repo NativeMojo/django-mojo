@@ -80,6 +80,14 @@ and every non-request execution path must close or return its connection.
 Psycopg exposes `pool_size`, `pool_available`, and `requests_waiting`; tune from
 those measurements rather than raising the cap speculatively.
 
+Realtime ASGI ORM work is bounded separately by file-only
+`WS_DATABASE_WORKERS` (default `4` per ASGI process). That worker count limits
+simultaneous socket-driven database demand; it does not multiply the pool's
+hard connection ceiling. If the pool is smaller, excess realtime DB work waits
+for a lease. If it is larger, idle allocated connections still count against
+the fleet budget. Checked-out leases are `pool_size - pool_available`; a quiet
+process has every allocated connection available and `requests_waiting == 0`.
+
 ### External poolers
 
 The native pool connects directly to the configured RDS or Aurora endpoint.

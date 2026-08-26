@@ -4,6 +4,13 @@
 
 Any model that authenticates via WebSocket can implement optional hook methods. The framework calls them automatically at connection lifecycle events.
 
+The socket retains only a plain `{model, pk, id, hooks}` identity descriptor.
+Before every hook call, django-mojo reloads the model inside the dedicated
+realtime database executor; the instance is discarded before control returns
+to the event loop. A hook must fully finish its ORM work and return only plain,
+materialized data. Returning a model, lazy queryset, cursor, transaction, or
+connection-owned object is rejected.
+
 ## Hook Methods
 
 Add these methods to your model (User, Device, or any model used as a WebSocket identity):
@@ -125,6 +132,11 @@ All hooks (`on_realtime_connection`, `on_realtime_connected`, `on_realtime_messa
 | `None` | No action |
 
 The `response` dict is delivered **directly over the WebSocket** — not through Redis pub/sub. This makes it reliable for initial state delivery on connect (no race conditions).
+
+Hook calls for one socket do not share a model instance. Persist any state that
+the next hook needs, and expect each call to observe a fresh database row.
+Cancelling the awaiting socket task does not stop a hook already executing in a
+thread; its lease returns when the hook exits and cleanup completes.
 
 ## Hook Execution Order
 

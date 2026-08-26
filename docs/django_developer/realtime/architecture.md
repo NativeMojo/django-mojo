@@ -11,6 +11,7 @@ The realtime system provides a generic WebSocket endpoint (`ws/realtime/`) using
 - Auto-subscription to own topic after auth
 - Pluggable message handlers via settings or model hooks
 - All state stored in Redis (stateless workers)
+- ORM-capable work runs in a bounded, pool-safe database executor
 
 ## Requirements
 
@@ -19,6 +20,26 @@ The realtime system provides a generic WebSocket endpoint (`ws/realtime/`) using
 - Python 3.8+
 
 No additional dependencies required — no Django Channels, no channels_redis.
+
+## Database execution
+
+Each ASGI process owns a dedicated executor for realtime work that may touch
+the ORM: bearer validation, DB-backed setting reads, incident reporting, and
+identity hooks. `WS_DATABASE_WORKERS` is file-only, defaults to `4`, clamps to
+`1..32`, and is read at process startup. A restart is required after changing
+it. Redis-only connection, presence, pub/sub, waiter, and topic operations stay
+on the ordinary executor.
+
+Every database unit closes old Django connections before it starts and in
+`finally` after it exits. Authentication returns a plain identity descriptor;
+each later hook reloads the model inside its own database unit. Models, lazy
+querysets, cursors, transactions, and connection wrappers never live on the
+event loop or for the lifetime of the socket.
+
+Cancelling an awaiter cannot preempt synchronous Python already running in a
+worker. Its connection is returned only after that callable really exits and
+the final cleanup runs. Put bounded timeouts around hook dependencies rather
+than relying on task cancellation to release a pool lease.
 
 ## Setup
 
@@ -101,6 +122,7 @@ applies instead.
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `WS_DATABASE_WORKERS` | `4` | File-only DB executor threads per ASGI process; restart to change; clamped to `1..32`. |
 | `WS_CONNECT_RATE_LIMIT` | `30` | Connects per minute per IP, checked before accept. `<= 0` disables. |
 | `WS_MAX_CONNECTIONS` | `10` | Concurrent sockets per authenticated identity. `<= 0` disables. |
 | `WS_UNAUTH_TIMEOUT` | `10` | Seconds an unauthenticated socket may live. |
@@ -178,3 +200,9 @@ The resolved IP is stored in:
 - Redis pub/sub ensures messages reach the correct worker
 - Each connection subscribes to its own Redis channel plus topic channels
 - Online status uses Redis SETs supporting multiple connections per user
+- The realtime DB executor is per ASGI process. Size the database pool for its
+  concurrent ORM demand, while keeping the fleet connection ceiling as
+  `nodes × database-using processes × sum(alias max_size)`.
+- Psycopg pool stats distinguish allocated capacity from active leases:
+  checked out is `pool_size - pool_available`; quiescence is all allocated
+  connections available with `requests_waiting == 0`.

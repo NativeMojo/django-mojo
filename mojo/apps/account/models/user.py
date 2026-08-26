@@ -1551,11 +1551,10 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             raise
 
     def on_realtime_connected(self):
-        # The realtime server holds this instance for the lifetime of the
-        # socket — re-sync the whole object so we never write back a stale
-        # metadata snapshot over concurrent (e.g. REST) writes, and so
-        # permission/active state converges too. Best-effort: hooks must not
-        # raise.
+        # The realtime database boundary rehydrates a fresh instance for each
+        # hook. Keep this defensive refresh for direct callers too, so we never
+        # write a stale metadata snapshot over a concurrent (e.g. REST) update.
+        # Best-effort: hooks must not raise.
         try:
             self.refresh_from_db()
         except Exception:

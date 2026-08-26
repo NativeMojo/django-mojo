@@ -1,6 +1,6 @@
 # Realtime (WebSocket) — Django Developer Reference
 
-- [Architecture & Setup](architecture.md) — Django Channels setup, configuration, connection/rate limits (DM-042)
+- [Architecture & Setup](architecture.md) — Raw ASGI setup, database executor sizing, and connection/rate limits
 - [Publishing Messages](publishing.md) — Server-side publish helpers
 - [Instance Hooks](hooks.md) — Model hooks for WebSocket events
 

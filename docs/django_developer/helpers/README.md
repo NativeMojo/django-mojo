@@ -7,6 +7,7 @@ Helpers live in `mojo/helpers/`. Import directly — no registration required.
 - [dates](dates.md) — Timezone-aware datetime utilities
 - [settings](settings.md) — Settings access with defaults
 - [settings reference](settings_reference.md) — Framework-recognized setting keys (names only)
+- [async database boundary](async_db.md) — Bounded sync ORM work from ASGI, connection cleanup, and cancellation semantics
 - [content_guard](content_guard.md) — Content moderation for usernames and text
 - [crypto](crypto.md) — Encryption, hashing, signing
 - [request](request.md) — Request parsing and client info

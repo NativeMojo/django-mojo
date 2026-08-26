@@ -12,8 +12,6 @@ Exposed capabilities:
 Note: WebSocket authentication is message-only; header/query parsing helpers were removed.
 """
 
-from asgiref.sync import sync_to_async
-
 # Reuse the same handler maps as the HTTP middleware for a single source of truth
 from mojo.middleware.auth import (
     AUTH_BEARER_HANDLER_PATHS,
@@ -22,6 +20,7 @@ from mojo.middleware.auth import (
 )
 from mojo.helpers import modules
 from mojo.helpers import logit
+from .db import run_database, serialize_identity
 
 logger = logit.get_logger(__name__, "realtime.log")
 
@@ -120,9 +119,24 @@ async def async_validate_bearer_token(
     request=None,
 ):
     """
-    Async wrapper for validate_bearer_token suitable for use in async consumers.
+    Validate in the realtime DB executor and return a plain identity descriptor.
+
+    The synchronous helper intentionally retains its historical model-instance
+    contract. Only the async boundary serializes it, so a live Django model can
+    never remain attached to a long-lived socket.
     """
-    return await sync_to_async(validate_bearer_token)(prefix, token, request)
+    def validate_and_serialize():
+        instance, error, key_name = validate_bearer_token(prefix, token, request)
+        if error is not None or instance is None:
+            return None, error, key_name
+        try:
+            identity = serialize_identity(instance)
+        except ValueError:
+            logger.exception("Bearer handler '%s' returned an invalid identity", prefix)
+            return None, "invalid identity", None
+        return identity, None, key_name
+
+    return await run_database(validate_and_serialize)
 
 
 def attach_identity_to_scope(

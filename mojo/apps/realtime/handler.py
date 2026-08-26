@@ -20,6 +20,13 @@ from mojo.helpers.redis.client import get_connection
 from mojo.helpers.request import normalize_ip
 from mojo.helpers.settings import settings
 from .auth import async_validate_bearer_token
+from .db import (
+    get_database_setting,
+    identity_has_hook,
+    identity_pk,
+    run_database,
+    run_identity_hook,
+)
 
 logger = logit.get_logger("realtime", "realtime.log")
 
@@ -30,6 +37,11 @@ TOPIC_TTL_SECONDS = 300              # topic membership TTL
 PRESENCE_REFRESH_MIN_INTERVAL = 30   # throttle presence refreshes
 AUTH_IDLE_TIMEOUT_SECONDS = 30       # authenticated idle timeout
 WS_CONNECT_WINDOW_SECONDS = 60       # fixed window for the pre-accept rate check
+
+
+async def _run_worker(func, *args):
+    """Run Redis-only or other non-ORM sync work on the ordinary executor."""
+    return await asyncio.get_running_loop().run_in_executor(None, func, *args)
 
 
 def resolve_scope_ip(scope):
@@ -89,14 +101,27 @@ def _connect_rate_check_sync(ip):
         return True
 
 
+def _report_incident_sync(details, event_type, level, event_scope, payload):
+    from mojo.apps import incident
+
+    incident.report_event(
+        details,
+        title=details[:80],
+        category=event_type,
+        level=level,
+        request=None,
+        scope=event_scope,
+        **payload,
+    )
+    return None
+
+
 async def check_connect_rate(scope):
     """Async pre-accept gate: one Redis INCR per connection attempt, run off
     the event loop. A refused storm costs a rejected handshake, not pub/sub +
     tasks + 30s of connection state."""
     ip = resolve_scope_ip(scope)
-    return await asyncio.get_event_loop().run_in_executor(
-        None, _connect_rate_check_sync, ip
-    )
+    return await run_database(_connect_rate_check_sync, ip)
 
 
 class WebSocketHandler:
@@ -105,6 +130,9 @@ class WebSocketHandler:
         self.path = path
         self.connection_id = str(uuid.uuid4())
         self.authenticated = False
+        self.identity = None
+        # Compatibility name, now always a plain descriptor in production.
+        # A live Django model is never retained by the socket.
         self.user = None
         self.user_type = None
         # The credential prefix this socket actually authenticated with, stamped
@@ -124,11 +152,8 @@ class WebSocketHandler:
         self.pubsub = None
         self._redis_task = None
 
-        # Unauthenticated sockets get a short window to send their token.
-        try:
-            self.unauth_timeout = settings.get("WS_UNAUTH_TIMEOUT", 10, kind="int")
-        except Exception:
-            self.unauth_timeout = 10
+        # Loaded through the DB executor at the start of handle_connection.
+        self.unauth_timeout = 10
 
         # Control flags
         self.running = True
@@ -139,14 +164,14 @@ class WebSocketHandler:
     def _log(self, message):
         try:
             rip = self.remote_ip
-            if self.user and self.user_type:
-                rip = f"{self.user_type}:{self.user.id} -> {rip}"
+            if self.identity and self.user_type:
+                rip = f"{self.user_type}:{identity_pk(self.identity)} -> {rip}"
         except Exception:
             rip = None
         logger.info(f"[{self.connection_id} -> {rip}]: {message}")
 
     def user_online_key(self):
-        return f"realtime:online:{self.user_type}:{self.user.id}"
+        return f"realtime:online:{self.user_type}:{identity_pk(self.identity)}"
 
     def resolve_remote_ip(self):
         """
@@ -215,6 +240,8 @@ class WebSocketHandler:
         self._log("connected")
 
         try:
+            self.unauth_timeout = await get_database_setting(
+                "WS_UNAUTH_TIMEOUT", 10, kind="int")
             # Register connection in Redis
             await self.register_connection()
 
@@ -264,10 +291,9 @@ class WebSocketHandler:
 
         key = f"realtime:connections:{self.connection_id}"
         try:
-            await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self.redis_client.setex(key, CONNECTION_TTL_SECONDS, json.dumps(connection_data))
-            )
+            await _run_worker(
+                lambda: self.redis_client.setex(
+                    key, CONNECTION_TTL_SECONDS, json.dumps(connection_data)))
         except Exception as e:
             self._log_exception("registration failed")
 
@@ -276,7 +302,7 @@ class WebSocketHandler:
         self._log("authenticated")
         connection_data = {
             "connection_id": self.connection_id,
-            "user_id": self.user.id if self.user else None,
+            "user_id": identity_pk(self.identity),
             "user_type": self.user_type,
             "authenticated": True,
             "connected_at": time.time(),
@@ -288,16 +314,15 @@ class WebSocketHandler:
 
         key = f"realtime:connections:{self.connection_id}"
         try:
-            await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self.redis_client.setex(key, CONNECTION_TTL_SECONDS, json.dumps(connection_data))
-            )
+            await _run_worker(
+                lambda: self.redis_client.setex(
+                    key, CONNECTION_TTL_SECONDS, json.dumps(connection_data)))
         except Exception as e:
             self._log_exception("update failed")
 
     async def register_user_online(self):
         """Register user as online in Redis"""
-        if not self.user or not self.user_type:
+        if not self.identity or not self.user_type:
             return
 
         key = self.user_online_key()
@@ -310,7 +335,7 @@ class WebSocketHandler:
             except Exception:
                 self._log_exception("Failed to register user online")
 
-        await asyncio.get_event_loop().run_in_executor(None, get_and_update)
+        await _run_worker(get_and_update)
 
     async def activity_timeout(self):
         """Handle both auth and activity timeouts. Unauthenticated sockets get
@@ -373,9 +398,7 @@ class WebSocketHandler:
             pubsub.subscribe("realtime:broadcast")
             return pubsub
 
-        self.pubsub = await asyncio.get_event_loop().run_in_executor(
-            None, create_pubsub
-        )
+        self.pubsub = await _run_worker(create_pubsub)
         self._redis_task = asyncio.create_task(self.handle_redis_messages())
 
     async def handle_redis_messages(self):
@@ -386,9 +409,7 @@ class WebSocketHandler:
                 def get_message():
                     return self.pubsub.get_message(timeout=1.0)
 
-                message = await asyncio.get_event_loop().run_in_executor(
-                    None, get_message
-                )
+                message = await _run_worker(get_message)
 
                 if message and message['type'] == 'message':
                     try:
@@ -401,9 +422,7 @@ class WebSocketHandler:
             self._log_exception(f"Error in Redis message handler: {e}")
         finally:
             if self.pubsub:
-                await asyncio.get_event_loop().run_in_executor(
-                    None, self.pubsub.close
-                )
+                await _run_worker(self.pubsub.close)
 
 
 
@@ -447,9 +466,9 @@ class WebSocketHandler:
             return
 
         # Use existing auth logic
-        user, error, key_name = await async_validate_bearer_token(prefix, token)
+        identity, error, key_name = await async_validate_bearer_token(prefix, token)
 
-        if error or not user:
+        if error or not identity:
             await self.report_incident("auth failed", "auth", 4)
             await self.send_error(f"Authentication failed: {error}")
             return
@@ -457,33 +476,37 @@ class WebSocketHandler:
         # Per-identity concurrency cap (DM-042): a reconnect loop that leaks
         # sockets (or an agent opening one per scrape) is bounded here. The
         # presence set is TTL'd (300s) so a stale overcount self-heals.
-        max_connections = settings.get("WS_MAX_CONNECTIONS", 10, kind="int")
+        max_connections = await get_database_setting(
+            "WS_MAX_CONNECTIONS", 10, kind="int")
+        user_id = identity_pk(identity)
         if max_connections > 0:
             def count_connections():
                 try:
-                    return self.redis_client.scard(f"realtime:online:{key_name}:{user.id}")
+                    return self.redis_client.scard(
+                        f"realtime:online:{key_name}:{user_id}")
                 except Exception:
                     return 0  # fail open
-            current = await asyncio.get_event_loop().run_in_executor(None, count_connections)
+            current = await _run_worker(count_connections)
             if current >= max_connections:
                 # One incident event per identity per minute — never one per
                 # rejected attempt.
                 def report_once():
                     try:
                         return self.redis_client.set(
-                            f"rl:ws_maxconn:{key_name}:{user.id}", 1, nx=True, ex=60)
+                            f"rl:ws_maxconn:{key_name}:{user_id}", 1, nx=True, ex=60)
                     except Exception:
                         return False
-                if await asyncio.get_event_loop().run_in_executor(None, report_once):
+                if await _run_worker(report_once):
                     await self.report_incident(
-                        f"too many connections for {key_name}:{user.id} "
+                        f"too many connections for {key_name}:{user_id} "
                         f"({current} >= {max_connections})",
                         "traffic:ws_maxconn", 6)
                 await self.send_error("Too many connections")
                 await self.close_connection()
                 return
 
-        self.user = user
+        self.identity = identity
+        self.user = identity
         self.user_type = key_name
         self.bearer_prefix = str(prefix or "").strip().lower()
         self.authenticated = True
@@ -497,26 +520,24 @@ class WebSocketHandler:
         await self.start_redis_messages()
 
         # Auto-subscribe to user's own topic
-        user_topic = f"{self.user_type}:{self.user.id}"
+        user_topic = f"{self.user_type}:{identity_pk(self.identity)}"
         await self.subscribe_to_topic(user_topic)
 
         # Call user's connected hook if available
-        if hasattr(self.user, 'on_realtime_connection'):
+        if identity_has_hook(self.identity, "on_realtime_connection"):
             connection_data = {
                 "connection_id": self.connection_id,
                 "remote_ip": self.remote_ip,
                 "user_agent": self.user_agent
             }
-            def call_hook():
-                return self.user.on_realtime_connection(connection_data)
-            result = await asyncio.get_event_loop().run_in_executor(None, call_hook)
+            result = await run_identity_hook(
+                self.identity, "on_realtime_connection", connection_data)
             # Process hook response
             if result:
                 await self._process_hook_response(result)
-        elif hasattr(self.user, 'on_realtime_connected'):
-            def call_hook():
-                return self.user.on_realtime_connected()
-            result = await asyncio.get_event_loop().run_in_executor(None, call_hook)
+        elif identity_has_hook(self.identity, "on_realtime_connected"):
+            result = await run_identity_hook(
+                self.identity, "on_realtime_connected")
 
             # Process hook response
             if result:
@@ -525,7 +546,7 @@ class WebSocketHandler:
         await self.send_message({
             "type": "auth_success",
             "user_type": self.user_type,
-            "user_id": self.user.id
+            "user_id": identity_pk(self.identity)
         })
 
     async def handle_subscribe(self, data):
@@ -540,14 +561,10 @@ class WebSocketHandler:
             return
 
         # Topic authorization check
-        if hasattr(self.user, 'on_realtime_can_subscribe'):
-            def check_permission():
-                return self.user.on_realtime_can_subscribe(topic)
-
+        if identity_has_hook(self.identity, "on_realtime_can_subscribe"):
             try:
-                can_subscribe = await asyncio.get_event_loop().run_in_executor(
-                    None, check_permission
-                )
+                can_subscribe = await run_identity_hook(
+                    self.identity, "on_realtime_can_subscribe", topic)
                 if not can_subscribe:
                     await self.report_incident(f"access denied for topic {topic}", "permission_denied", 4)
                     await self.send_error(f"Access denied to topic: {topic}")
@@ -594,7 +611,7 @@ class WebSocketHandler:
         await self.send_message({
             "type": "pong",
             "user_type": self.user_type,
-            "user_id": self.user.id if self.user else None
+            "user_id": identity_pk(self.identity)
         })
 
     async def handle_response(self, data):
@@ -615,14 +632,15 @@ class WebSocketHandler:
             self.redis_client.lpush(response_key, json.dumps(response_data))
             self.redis_client.expire(response_key, 120)
 
-        await asyncio.get_event_loop().run_in_executor(None, push_response)
+        await _run_worker(push_response)
 
     async def check_waiters(self, data):
         """Check if any active wait_for_event() waiters match this message."""
-        if not self.user or not self.user_type:
+        if not self.identity or not self.user_type:
             return
 
-        waiters_key = f"realtime:waiters:{self.user_type}:{self.user.id}"
+        waiters_key = (
+            f"realtime:waiters:{self.user_type}:{identity_pk(self.identity)}")
 
         def do_check():
             if not self.redis_client.exists(waiters_key):
@@ -652,7 +670,7 @@ class WebSocketHandler:
                     self.redis_client.srem(waiters_key, waiter_id)
                     self.redis_client.delete(f"realtime:waiter:{waiter_id}")
 
-        await asyncio.get_event_loop().run_in_executor(None, do_check)
+        await _run_worker(do_check)
 
     async def handle_custom_message(self, data):
         """Handle custom message - delegate to user's hook if available"""
@@ -660,7 +678,8 @@ class WebSocketHandler:
         # Check if any wait_for_event() calls match this message
         await self.check_waiters(data)
 
-        if hasattr(self.user, 'on_realtime_message'):
+        identity = getattr(self, "identity", None)
+        if identity_has_hook(identity, "on_realtime_message"):
             # Stamp the credential this socket really authenticated with,
             # ALWAYS overwriting whatever the client sent. A hook that gates on
             # "an interactive bearer session is driving this" (the assistant's
@@ -672,13 +691,9 @@ class WebSocketHandler:
             if isinstance(data, dict):
                 data["_bearer"] = self.bearer_prefix
 
-            def call_hook():
-                return self.user.on_realtime_message(data)
-
             try:
-                response = await asyncio.get_event_loop().run_in_executor(
-                    None, call_hook
-                )
+                response = await run_identity_hook(
+                    identity, "on_realtime_message", data)
 
                 if response:
                     await self._process_hook_response(response)
@@ -687,6 +702,13 @@ class WebSocketHandler:
             except Exception as e:
                 self._log_exception(f"Error in user message hook: {e}")
                 await self.send_error("Message processing error")
+        elif identity is None and hasattr(self.user, "on_realtime_message"):
+            # Narrow compatibility seam for in-process tests that construct a
+            # handler without authenticating. Production identities are always
+            # descriptors and take the pool-safe branch above.
+            response = self.user.on_realtime_message(data)
+            if response:
+                await self._process_hook_response(response)
         else:
 
             await self.send_error("Unsupported message type")
@@ -732,7 +754,7 @@ class WebSocketHandler:
                 self._log(f"Failed to subscribe to topic {topic}: {e}")
                 raise
 
-        await asyncio.get_event_loop().run_in_executor(None, subscribe)
+        await _run_worker(subscribe)
         self.subscribed_topics.add(topic)
 
     async def unsubscribe_from_topic(self, topic):
@@ -750,7 +772,7 @@ class WebSocketHandler:
             except Exception as e:
                 self._log(f"Failed to unsubscribe from topic {topic}: {e}")
 
-        await asyncio.get_event_loop().run_in_executor(None, unsubscribe)
+        await _run_worker(unsubscribe)
         self.subscribed_topics.discard(topic)
 
     async def process_redis_message(self, data):
@@ -814,14 +836,16 @@ class WebSocketHandler:
                 # Extend connection record TTL
                 self.redis_client.expire(conn_key, CONNECTION_TTL_SECONDS)
                 # Extend user online presence TTL, if authenticated
-                if self.user and self.user_type:
-                    online_key = f"realtime:online:{self.user_type}:{self.user.id}"
+                if self.identity and self.user_type:
+                    online_key = (
+                        f"realtime:online:{self.user_type}:"
+                        f"{identity_pk(self.identity)}")
                     self.redis_client.expire(online_key, ONLINE_TTL_SECONDS)
             except Exception:
                 # Keep presence refresh best-effort
                 pass
 
-        await asyncio.get_event_loop().run_in_executor(None, do_refresh)
+        await _run_worker(do_refresh)
 
     async def report_incident(self, details, event_type="info", level=1, scope="realtime", **context):
         """
@@ -838,24 +862,15 @@ class WebSocketHandler:
             payload.setdefault("http_user_agent", self.user_agent)
             if self.subscribed_topics:
                 payload.setdefault("topics", list(self.subscribed_topics))
-            if self.user and "uid" not in payload:
-                payload["uid"] = self.user.id
+            if self.identity and "uid" not in payload:
+                payload["uid"] = identity_pk(self.identity)
 
-            # Local import to avoid top-level dependency changes
-            from mojo.apps import incident
-
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None,
-                lambda: incident.report_event(
-                    details,
-                    title=details[:80],
-                    category=event_type,
-                    level=level,
-                    request=None,   # no HTTP request in websocket context
-                    scope=scope,
-                    **payload
-                )
+            await run_database(_report_incident_sync,
+                details,
+                event_type,
+                level,
+                scope,
+                payload,
             )
         except Exception as e:
             self._log_exception("failed to report incident")
@@ -890,7 +905,7 @@ class WebSocketHandler:
                     self.redis_client.srem(f"realtime:topic:{topic}", self.connection_id)
 
                 # Update user online status
-                if self.user and self.user_type:
+                if self.identity and self.user_type:
                     key = self.user_online_key()
                     # Remove this connection from the online set
                     self.redis_client.srem(key, self.connection_id)
@@ -902,20 +917,20 @@ class WebSocketHandler:
             except Exception as e:
                 self._log_exception("redis cleanup failed")
 
-        await asyncio.get_event_loop().run_in_executor(None, cleanup)
+        await _run_worker(cleanup)
 
         # Call user's disconnected hook if available
-        if self.authenticated and hasattr(self.user, 'on_realtime_disconnected'):
-            def call_hook():
-                self.user.on_realtime_disconnected()
+        if self.authenticated and identity_has_hook(
+                self.identity, "on_realtime_disconnected"):
             try:
-                await asyncio.get_event_loop().run_in_executor(None, call_hook)
+                await run_identity_hook(
+                    self.identity, "on_realtime_disconnected")
             except Exception as e:
                 self._log_exception("user disconnect hook failed")
 
         # Close pubsub
         if self.pubsub:
             try:
-                await asyncio.get_event_loop().run_in_executor(None, self.pubsub.close)
+                await _run_worker(self.pubsub.close)
             except Exception as e:
                 self._log(f"Failed to close pubsub: {e}")
