@@ -294,6 +294,10 @@ POST /api/system/geoip/sync
 
 **Requires:** ApiKey with `geoip_sync` permission (group-scoped). This endpoint is called by downstream mojo instances to push abuse signals observed locally back to this upstream.
 
+The receiver has a strict 60 requests/minute per-IP limit. ApiKey
+authentication does not bypass this ingest boundary; clients must honor the
+response's `Retry-After` header after a `429`.
+
 | Body field | Required | Description |
 |---|---|---|
 | `ip` | Yes | IP address |

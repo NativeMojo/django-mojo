@@ -202,6 +202,10 @@ POST /api/system/geoip/sync
 
 **Requires:** ApiKey token with `geoip_sync` permission (group-scoped). This endpoint is used by downstream django-mojo instances to push abuse signals observed locally back to this upstream. You do not call this manually — it is invoked by the `push_abuse_signals` async job.
 
+This security-ingest route has a strict 60 requests/minute per-IP limit.
+ApiKey authentication does not bypass it; after a `429`, honor the
+`Retry-After` header before retrying.
+
 > `geoip_sync` is a **protected** permission: because it writes fleet-wide
 > threat intel, only a global administrator can grant it to a key. A group
 > admin creating or editing a key will get a `403` if they try to turn it on.

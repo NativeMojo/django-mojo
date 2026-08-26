@@ -40,10 +40,11 @@ required. The request can still receive 429 when any of these apply:
 
 - the endpoint is a credential, expensive-work, or write-amplification
   boundary using `strict_rate_limit`;
-- that ApiKey has a positive `limits[endpoint_key]` or global `limits["api"]`
-  entry;
+- that ApiKey has a positive `limits[endpoint_key]` entry;
 - the endpoint declares a positive hard ApiKey fallback; or
-- the deployment has deliberately enabled its legacy global ApiKey ceiling.
+- while global throttle enforcement is enabled and the route is not exempt,
+  the key has a positive global `limits["api"]` entry or the deployment has
+  deliberately enabled its legacy global ApiKey ceiling.
 
 Unlimited does not mean unobserved. The server records a bounded threshold
 event and five-minute concentration data by the individual key id. These are

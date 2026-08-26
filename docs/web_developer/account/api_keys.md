@@ -176,6 +176,10 @@ key and are not proof of abuse. Raw tokens are never included in that evidence.
 Missing, malformed, zero, and negative limits do not create a hard ceiling;
 deactivate or delete the key when access must stop.
 
+Global hard ceilings apply only while global throttle enforcement is enabled
+and the route is not in the deployment's exempt-prefix list. Strict endpoint
+limits are independent of that global switch.
+
 **Deactivating the key's group instantly suspends the key** — every group-scoped request (list, detail, save, delete, custom endpoints, with or without a `group=` param) is denied while the group is inactive, including reads/writes of the group record itself. The key is never modified, so reactivating the group restores it immediately; you do not need to (and should not have to) deactivate the key itself. The key still *authenticates* (so the group-independent federation-sync path keeps working) — it simply has no group context. **Deactivating a parent group also suspends every descendant's keys** — a child group is only reachable via `group=<child id>` while it *and every ancestor* are active; an active child under a deactivated parent is treated as inactive too, with no flag written to the child. Reactivating the parent restores the whole subtree instantly.
 
 **A key cannot reach platform-global data, even with a matching permission.**

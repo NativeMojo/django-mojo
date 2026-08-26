@@ -147,7 +147,7 @@ def endpoint_metrics(slug, by=None, min_granularity="hours")
 |---|---|
 | `"ip"` | Source IP address |
 | `"duid"` | Device UUID from `request.DATA.get("duid")` |
-| `"api_key"` | API key group PK (`request.api_key.group.pk`) |
+| `"api_key"` | Individual API key PK (`request.api_key.pk`) |
 | `"user"` | Authenticated user ID |
 | `"group"` | Request group ID (`request.group.pk`) |
 

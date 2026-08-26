@@ -22,9 +22,8 @@ Counts requests in fixed time buckets. Fast and cheap (one Redis INCR per check)
 
 ```python
 def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=None,
-               apikey_observe_limit=None,
                ip_window=60, duid_window=60, muid_window=60, apikey_window=60,
-               min_granularity="hours")
+               min_granularity="hours", apikey_observe_limit=None)
 ```
 
 ### Parameters
@@ -36,11 +35,11 @@ def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=Non
 | `duid_limit` | Max requests per `duid_window` seconds per device UUID (optional) |
 | `muid_limit` | Max requests per `muid_window` seconds per server-set muid cookie (optional) |
 | `apikey_limit` | Positive developer-declared hard limit per ApiKey (optional) |
-| `apikey_observe_limit` | Non-blocking ApiKey observation threshold; otherwise the lowest positive consumer threshold is used |
+| `apikey_observe_limit` | Non-blocking ApiKey observation threshold; otherwise the lowest positive consumer threshold is used. Appended to the signature to preserve older positional calls |
 | `ip_window` | Window in seconds for IP counter (default `60`) |
 | `duid_window` | Window in seconds for duid counter (default `60`) |
 | `muid_window` | Window in seconds for muid counter (default `60`) |
-| `apikey_window` | Default window in seconds for API key counter (default `60`) |
+| `apikey_window` | Default window in seconds for hard and explicit observation ApiKey counters (default `60`) |
 | `min_granularity` | Granularity for violation metrics (default `"hours"`) |
 
 ### Examples
@@ -142,9 +141,10 @@ credential issuance, QR rendering, security-ingest writes, and `/api/event`.
 
 ## API Key Rate Limiting
 
-When `request.api_key` is set by middleware, limits and evidence are keyed by
-the individual `ApiKey.pk`, never its group or source IP. Per-key hard limits
-use the existing `limits` object:
+When `request.api_key` is set by middleware, ApiKey-specific hard counters,
+shadow counters, and evidence are keyed by the individual `ApiKey.pk`, never
+its group. (A `strict_rate_limit` endpoint also keeps its separate consumer
+IP/duid/muid gates.) Per-key hard limits use the existing `limits` object:
 
 ```python
 api_key.limits = {
@@ -159,7 +159,9 @@ IP/duid/muid gates automatically, with no per-endpoint opt-in. A valid positive
 hard fallback. With neither, traffic continues and a shadow counter records a
 non-blocking `traffic:apikey_threshold` Event when it crosses
 `apikey_observe_limit`, or the lowest positive consumer threshold if that
-argument is omitted.
+argument is omitted. An explicit observation threshold uses `apikey_window`;
+a derived threshold keeps the window belonging to the selected consumer
+limit.
 
 `strict_rate_limit` never grants that pass: IP/duid/muid remain hard for every
 caller, and positive per-key/developer ApiKey ceilings are additional hard
@@ -395,8 +397,9 @@ requests are skipped entirely (they remain covered by `rate_limit` /
 `strict_rate_limit` above). The User default is a hard 240/min. ApiKeys are
 unlimited by default (`API_THROTTLE_APIKEY=0`) but observed at 600/min
 (`API_THROTTLE_APIKEY_OBSERVE=600`); a positive `ApiKey.limits["api"]` or
-explicitly configured positive deployment-wide hard setting still returns
-429. Accounting continues for unlimited, disabled, and exempt traffic.
+explicitly configured positive deployment-wide hard setting returns 429 when
+global enforcement is enabled and the path is not exempt. Accounting continues
+for unlimited, disabled, and exempt traffic.
 
 See [Authenticated-Abuse Hardening](../security/abuse_hardening.md) for the
 full settings table, traffic-concentration detection, and deployment
