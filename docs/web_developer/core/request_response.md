@@ -110,10 +110,17 @@ Wait at least the number of seconds in `Retry-After` before retrying. Keep
 retries bounded; do not immediately fan out or retry every failed request at
 once.
 
+This emergency response is always the same JSON shape, even when the request
+explicitly prefers `text/html`. It bypasses project templates and DB-backed
+branding so reporting an exhausted pool never needs another database lease.
+
 ## HTML Error Pages — and why they will not reach you
 
 The server ships styled HTML pages for 400, 403, 404, 500, 503 and the unconfigured
 root, so a person who mistypes a URL sees a readable page instead of a JSON blob.
+
+The database-pool emergency response above is the deliberate exception: it is
+always JSON. The negotiation rules below apply to ordinary error responses.
 
 **Nothing about the JSON API changed.** The error envelope above, its fields, its
 status codes and its exact bytes are the same as before those pages existed. The
