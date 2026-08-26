@@ -126,14 +126,14 @@ def test_lab_lease_tracker(opts):
     with tempfile.TemporaryDirectory() as root:
         sink = Path(root) / "leases.jsonl"
         lease_id = tracker.acquired(
-            connection, alias="default", path="/api/group/apikey/me", sink_path=sink)
+            connection, alias="default", label="group-apikey-me", sink_path=sink)
         active = tracker.snapshot()
         assert active["count"] == 1 and active["oldest_seconds"] == 0.25, \
             f"one checked-out lease must be visible without retaining its connection, got {active!r}"
         assert active["leases"][0]["lease_id"] == lease_id, \
             f"the active snapshot must correlate with the acquire event, got {active!r}"
-        assert active["leases"][0]["path"] == "/api/group/apikey/me", \
-            f"the sandbox trace must identify the DB-backed request path, got {active!r}"
+        assert active["leases"][0]["label"] == "group-apikey-me", \
+            f"the sandbox trace must identify the allowlisted DB-backed route, got {active!r}"
 
         tracker.returning(connection, sink_path=sink)
         tracker.returned(connection, sink_path=sink)
@@ -147,6 +147,9 @@ def test_lab_lease_tracker(opts):
             f"all phases must use one nonsecret correlation id, got {events!r}"
         assert all("connection" not in event for event in events), \
             f"lease evidence must not serialize connection objects or credentials, got {events!r}"
+        assert all(event["thread_kind"] in {"main", "thread-pool", "mojo-runtime", "other"}
+                   for event in events), \
+            f"thread evidence must use bounded server-owned categories, got {events!r}"
 
 
 @th.unit_test("pool telemetry: failed lease returns remain visible for diagnosis")
@@ -163,12 +166,41 @@ def test_lab_lease_tracker_failed_return(opts):
     )
     tracker.acquired(connection, alias="default")
     tracker.returning(connection)
-    tracker.return_failed(connection, "pool rejected return")
+    tracker.return_failed(connection, RuntimeError("secret database detail"))
     active = tracker.snapshot()
     assert active["count"] == 1 and active["leases"][0]["phase"] == "return_failed", \
         f"a failed return must stay active instead of manufacturing recovery, got {active!r}"
-    assert active["leases"][0]["error"] == "pool rejected return", \
-        f"the bounded local failure must remain attributable, got {active!r}"
+    assert active["leases"][0]["error_type"] == "RuntimeError", \
+        f"the local failure must record only its class, got {active!r}"
+    assert "secret database detail" not in json.dumps(active), \
+        f"return exceptions must not expose database details, got {active!r}"
+
+
+@th.unit_test("pool telemetry: route labels and activation are sandbox allowlisted")
+def test_lab_lease_trace_allowlist(opts):
+    from mojo.db.pool_telemetry import lease_trace_allowed, request_trace_label
+
+    assert request_trace_label("/api/group/apikey/me") == "group-apikey-me", \
+        "the API-key identity exercise must have a stable server-owned label"
+    assert request_trace_label("/api/group/123") == "group-detail", \
+        "numeric group detail must omit the caller-controlled id"
+    assert request_trace_label("/api/filevault/download/secret-token") is None, \
+        "non-exercise paths must never enter lease evidence"
+    plan = {"enabled": True, "valid": True, "role": "api", "launcher": "asgi",
+            "identity": {"project": "mojoland"}}
+    assert lease_trace_allowed(True, True, plan), \
+        "the exact MojoLand API/probe lab identity must enable tracing"
+    for candidate, probe, changed in (
+        (1, True, {}), (True, False, {}), (True, True, {"enabled": False}),
+        (True, True, {"project": "customer"}), (True, True, {"role": "jobs"}),
+    ):
+        value = dict(plan)
+        if "project" in changed:
+            value["identity"] = {"project": changed["project"]}
+        else:
+            value.update(changed)
+        assert not lease_trace_allowed(candidate, probe, value), \
+            f"non-lab trace activation must fail closed: {candidate!r}, {probe!r}, {value!r}"
 
 
 @th.unit_test("pool telemetry: trace sink failures never escape into database lifecycle")
@@ -210,6 +242,25 @@ def test_lab_lease_trace_is_fail_open(opts):
     assert active_lease_snapshot(tracker=tracker) == {
         "count": 0, "oldest_seconds": 0, "leases": [], "trace_error": True,
     }, "a snapshot trace failure must degrade locally without blocking ASGI startup"
+
+
+@th.unit_test("pool telemetry: private event append refuses symlink targets")
+def test_private_event_sink_refuses_symlink(opts):
+    from mojo.db.pool_telemetry import append_bounded_event
+
+    with tempfile.TemporaryDirectory() as root:
+        protected = Path(root) / "protected"
+        protected.write_text("unchanged")
+        sink = Path(root) / "events.jsonl"
+        sink.symlink_to(protected)
+        try:
+            append_bounded_event(sink, {"event": "test"})
+        except OSError:
+            pass
+        else:
+            raise AssertionError("a private event sink must never follow a pre-created symlink")
+        assert protected.read_text() == "unchanged", \
+            "rejecting the event sink must not alter the symlink target"
 
 
 @th.unit_test("pool telemetry: aggregation ignores stale and duplicate worker snapshots")
