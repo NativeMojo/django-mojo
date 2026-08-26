@@ -15,6 +15,34 @@ result = await executor.run(load_report, report_id)
 and again in `finally`. With Django's native psycopg pool, the final close
 returns that worker's checked-out lease even when the callable raises.
 
+The same lifecycle is required for any raw thread that can touch the ORM,
+including a background thread living inside an API process. Wrap a thread
+target directly:
+
+```python
+from threading import Thread
+
+from mojo.helpers.async_db import database_thread_target
+
+thread = Thread(target=database_thread_target(write_audit_batch), daemon=True)
+thread.start()
+```
+
+For an existing `ThreadPoolExecutor`, submit the complete database unit through
+the companion helper:
+
+```python
+from mojo.helpers.async_db import submit_database_work
+
+future = submit_database_work(executor, build_report, report_id)
+```
+
+`database_connection_boundary()` is the lower-level context manager used by
+both helpers. Prefer the wrappers unless a callable already owns a larger
+explicit entry/exit boundary. Process-role gating does not clean up Django's
+thread-local connection wrapper; every ORM-capable thread needs one of these
+boundaries.
+
 The callable must be a complete synchronous database unit. Finish its
 transactions, consume cursors and lazy querysets, and return plain materialized
 data. Never return a model, queryset, cursor, transaction, connection wrapper,
