@@ -150,10 +150,11 @@ Content-Type: application/json
 {"status":false,"error":"Database temporarily unavailable","code":503}
 ```
 
-The response contains no exception or database detail. Non-pool exceptions
-continue through Django's ordinary error handling, and an explicit HTML
-request receives the standard `503` page through the same content-negotiation
-path.
+The response contains no exception or database detail. It is always this fixed
+JSON response, even for an HTML-preferring request: the exhaustion boundary
+must not consult DB-backed branding or project template loaders while no lease
+is available. Non-pool exceptions continue through Django's ordinary error
+handling.
 
 Raw ORM-capable threads must use `database_thread_target()` or
 `submit_database_work()`. Both enter and leave with
