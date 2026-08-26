@@ -50,6 +50,18 @@ def _clean(key, marker):
 
 
 @th.django_unit_test()
+def test_observation_option_preserves_legacy_positional_signature(opts):
+    import inspect
+    from mojo.decorators.limits import rate_limit
+
+    names = list(inspect.signature(rate_limit).parameters)
+    assert names[-1] == "apikey_observe_limit", (
+        "the new option must remain last so existing positional ip/window "
+        f"arguments keep their meaning; signature parameters were {names}"
+    )
+
+
+@th.django_unit_test()
 def test_ordinary_rate_limit_passes_apikey_by_default(opts):
     from mojo.apps.incident.models import Event
     from mojo.decorators.limits import rate_limit

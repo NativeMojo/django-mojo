@@ -288,9 +288,8 @@ def _get_dimension(request, dimension):
 
 
 def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=None,
-               apikey_observe_limit=None,
                ip_window=60, duid_window=60, muid_window=60, apikey_window=60,
-               min_granularity="hours"):
+               min_granularity="hours", apikey_observe_limit=None):
     """
     Fixed-window rate limiting decorator.
 
