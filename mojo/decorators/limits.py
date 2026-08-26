@@ -574,6 +574,7 @@ def read_account_attempt(key, account_id, limit=None, window=None):
 
 TRAFFIC_BUCKET_SECONDS = 300   # accounting bucket the concentration detector reads
 TRAFFIC_KEY_TTL = 3600         # keep accounting keys around long enough to inspect
+TRAFFIC_IP_MEMBER_LIMIT = 1000  # informational attribution must have bounded cardinality
 
 _throttle_config_cache = None
 _throttle_config_ts = 0.0
@@ -749,6 +750,7 @@ def check_api_throttle(request, now=None, config=None, connection=None):
         bucket = now // TRAFFIC_BUCKET_SECONDS * TRAFFIC_BUCKET_SECONDS
         ident_key = f"rl:api:{kind}:{pk}:{window_start}"
         top_key = f"traffic:top:{bucket}"
+        top_ip_key = f"traffic:top_ip:{bucket}"
 
         r = get_connection() if connection is None else connection
         p = r.pipeline(transaction=False)
@@ -757,10 +759,15 @@ def check_api_throttle(request, now=None, config=None, connection=None):
         p.incr(f"traffic:total:{bucket}")
         p.expire(f"traffic:total:{bucket}", TRAFFIC_KEY_TTL)
         p.zincrby(top_key, 1, f"{kind}:{pk}")
+        p.expire(top_key, TRAFFIC_KEY_TTL)
         ip = getattr(request, "ip", None)
         if ip:
-            p.zincrby(top_key, 1, f"ip:{ip}")
-        p.expire(top_key, TRAFFIC_KEY_TTL)
+            p.zincrby(top_ip_key, 1, f"ip:{ip}")
+            # Keep only the highest-scoring source IPs. IP attribution is
+            # informational; it must never let rotating sources grow Redis
+            # without bound or crowd authenticated identities out of top-K.
+            p.zremrangebyrank(top_ip_key, 0, -(TRAFFIC_IP_MEMBER_LIMIT + 1))
+            p.expire(top_ip_key, TRAFFIC_KEY_TTL)
         count = p.execute()[0]
 
         if kind == "apikey" and not enforcement_active:

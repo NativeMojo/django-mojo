@@ -104,11 +104,14 @@ the doom-loop mechanism.
 The postmortem signature this catches: *one account silently becoming 96% of
 a service's traffic*. Detection is always on (independent of enforcement):
 
-- Every authenticated request increments the current 5-minute
-  `traffic:top:{bucket}` member and `traffic:total:{bucket}` directly,
-  independent of its enforcement window. A burst remains visible after the
-  caller stops; no later request is needed to flush it. Buckets expire after
-  one hour, bounding retained cardinality.
+- Every authenticated request increments its identity in the current 5-minute
+  `traffic:top:{bucket}` set and increments `traffic:total:{bucket}` directly,
+  independent of its enforcement window. Source-IP attribution lives in the
+  separate `traffic:top_ip:{bucket}` set, capped at the highest-scoring 1,000
+  members, so rotating IPs cannot crowd authenticated identities out of the
+  detector or grow attribution without bound. A burst remains visible after
+  the caller stops; no later request is needed to flush it. All buckets expire
+  after one hour.
 - The `check_traffic_concentration` cron (every 5 minutes,
   `mojo/apps/incident/cronjobs.py`) reads the completed buckets and emits a
   level-6 `traffic:concentration` incident event when an identity is over

@@ -58,7 +58,7 @@ def _param_is_true(value):
 
 @md.GET('system/geoip/lookup')
 @md.requires_params('ip')
-@md.rate_limit("geoip_lookup", ip_limit=30)
+@md.strict_rate_limit("geoip_lookup", ip_limit=30)
 @md.requires_auth()
 def on_geo_located_ip_lookup(request):
     """Authenticated IP lookup — the federation read path.

@@ -245,7 +245,11 @@ Requires `manage_users` permission. PUT supports POST_SAVE_ACTIONS for block/unb
 GET /api/system/geoip/lookup?ip=1.2.3.4
 ```
 
-**Requires authentication** (`@md.requires_auth()`) and nothing more. Rate limited to 30 requests/minute per IP. Used by the `mojo` provider on downstream instances to query the upstream.
+**Requires authentication** (`@md.requires_auth()`) and nothing more. Strictly
+rate limited to 30 requests/minute per IP for every caller, including ApiKeys,
+because an arbitrary lookup can create a cache row and trigger a provider
+refresh. Used by the `mojo` provider on downstream instances to query the
+upstream.
 
 | Param | Required | Description |
 |---|---|---|

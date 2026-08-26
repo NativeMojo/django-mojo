@@ -8,7 +8,7 @@ MAX_QUERY_CHARS = 512
 
 @md.URL('search')
 @md.requires_auth()
-@md.rate_limit("docit_search", ip_limit=120, duid_limit=60)
+@md.strict_rate_limit("docit_search", ip_limit=120, duid_limit=60)
 def on_search(request):
     """
     Knowledge-base search over docit content.

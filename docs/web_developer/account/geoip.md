@@ -144,7 +144,8 @@ See [firewall.md](firewall.md) for full firewall management and security dashboa
 GET /api/system/geoip/lookup?ip=1.2.3.4
 ```
 
-**Requires authentication.** Rate limited to **30 requests/minute** per IP.
+**Requires authentication.** Strictly rate limited to **30 requests/minute**
+per IP for every caller, including ApiKeys. Honor `Retry-After` on 429.
 
 | Param | Required | Description |
 |---|---|---|

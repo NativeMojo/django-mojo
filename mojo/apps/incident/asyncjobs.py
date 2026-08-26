@@ -705,14 +705,12 @@ def run_concentration_check(now=None):
         return []
     total_raw = r.get(f"traffic:total:{newest}")
     total = int(total_raw) if total_raw else 0
-    top_ips = [m for m, _ in top if m.startswith("ip:")][:3]
+    # Source attribution is informational and cardinality-capped separately;
+    # it must never displace authenticated identities from this top-20 scan.
+    top_ips = r.zrevrange(f"traffic:top_ip:{newest}", 0, 2)
 
     alerts = []
     for member, score in top:
-        if member.startswith("ip:"):
-            # IP entries are approximate attribution, not an alert unit —
-            # identities are what we can act on (kill switch, per-key limits).
-            continue
         rpm = score / bucket_minutes
         share = (score / total) if total else 0.0
 

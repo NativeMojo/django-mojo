@@ -31,6 +31,7 @@ def _clean(opts):
     from mojo.apps.incident.models import Event
     r = get_connection()
     r.delete(f"traffic:top:{opts.b1}", f"traffic:top:{opts.b2}",
+             f"traffic:top_ip:{opts.b1}", f"traffic:top_ip:{opts.b2}",
              f"traffic:total:{opts.b1}", f"traffic:alerted:{opts.member}")
     Event.objects.filter(category="traffic:concentration",
                          details__contains=opts.member).delete()
@@ -45,8 +46,9 @@ def test_sustained_offender_alerts_once(opts):
     _clean(opts)
     r = get_connection()
     # 150 rpm in both complete buckets (threshold default 120 sustained x2).
-    r.zadd(f"traffic:top:{opts.b1}", {opts.member: 750, "ip:203.0.113.9": 750})
+    r.zadd(f"traffic:top:{opts.b1}", {opts.member: 750})
     r.zadd(f"traffic:top:{opts.b2}", {opts.member: 750})
+    r.zadd(f"traffic:top_ip:{opts.b1}", {"ip:203.0.113.9": 750})
     r.set(f"traffic:total:{opts.b1}", 800)
 
     alerts = run_concentration_check(now=opts.now)
@@ -108,6 +110,7 @@ def test_unlimited_apikey_accounting_reaches_concentration_detector(opts):
     r = get_connection()
     cleanup_keys = (
         f"traffic:top:{opts.b1}", f"traffic:top:{opts.b2}",
+        f"traffic:top_ip:{opts.b1}", f"traffic:top_ip:{opts.b2}",
         f"traffic:total:{opts.b1}", f"traffic:total:{opts.b2}",
         f"traffic:alerted:{member}",
     )
@@ -134,7 +137,7 @@ def test_unlimited_apikey_accounting_reaches_concentration_detector(opts):
 
         assert float(r.zscore(f"traffic:top:{opts.b1}", member) or 0) == 750
         assert float(r.zscore(f"traffic:top:{opts.b2}", member) or 0) == 750
-        assert float(r.zscore(f"traffic:top:{opts.b1}", ip_member) or 0) == 750
+        assert float(r.zscore(f"traffic:top_ip:{opts.b1}", ip_member) or 0) == 750
 
         alerts = run_concentration_check(now=opts.now)
         ours = [alert for alert in alerts if alert["identity"] == member]
@@ -152,6 +155,71 @@ def test_unlimited_apikey_accounting_reaches_concentration_detector(opts):
         r.delete(*cleanup_keys)
         Event.objects.filter(
             category="traffic:concentration", model_id=marker).delete()
+
+
+@th.django_unit_test()
+def test_rotating_ips_cannot_crowd_identity_accounting(opts):
+    from mojo.decorators import limits
+    from mojo.helpers.redis import get_connection
+
+    marker = 850_000_000 + int(_uuid.uuid4().int % 10_000_000)
+    member = f"apikey:{marker}"
+    bucket = opts.b2 - (10 * BUCKET)
+
+    class _ApiKey:
+        pk = marker
+        limits = {}
+        group = None
+
+    class _Anonymous:
+        is_authenticated = False
+
+    class _Request:
+        api_key = _ApiKey()
+        user = _Anonymous()
+        group = None
+        path = "/api/ip-cardinality-regression"
+        method = "GET"
+        bearer = None
+        headers = {}
+
+        def __init__(self, ip):
+            self.ip = ip
+            self.META = {"REMOTE_ADDR": ip}
+
+    config = {
+        "enabled": True,
+        "user_limit": 240,
+        "apikey_limit": 0,
+        "apikey_observe_limit": 100_000,
+        "window": 60,
+        "exempt_prefixes": [],
+        "report_floor": 60,
+        "config_ttl": 30,
+    }
+    top_key = f"traffic:top:{bucket}"
+    top_ip_key = f"traffic:top_ip:{bucket}"
+    total_key = f"traffic:total:{bucket}"
+    r = get_connection()
+    r.delete(top_key, top_ip_key, total_key)
+    total = limits.TRAFFIC_IP_MEMBER_LIMIT + 5
+    try:
+        for index in range(total):
+            blocked = limits.check_api_throttle(
+                _Request(f"2001:db8::{index}"), now=bucket + 1,
+                config=config)
+            assert blocked is None
+
+        assert float(r.zscore(top_key, member) or 0) == total
+        assert not list(r.zscan_iter(top_key, match="ip:*")), (
+            "IP attribution must never share the identity top-K structure"
+        )
+        assert r.zcard(top_ip_key) == limits.TRAFFIC_IP_MEMBER_LIMIT, (
+            "rotating source IPs must be capped in the attribution structure"
+        )
+    finally:
+        limits.clear_rate_limits(apikey_id=marker)
+        r.delete(top_key, top_ip_key, total_key)
 
 
 @th.django_unit_test()
@@ -206,8 +274,8 @@ def test_ip_members_never_alert(opts):
     r = get_connection()
     ip_member = "ip:198.51.100.77"
     r.delete(f"traffic:alerted:{ip_member}")
-    r.zadd(f"traffic:top:{opts.b1}", {ip_member: 5000})
-    r.zadd(f"traffic:top:{opts.b2}", {ip_member: 5000})
+    r.zadd(f"traffic:top_ip:{opts.b1}", {ip_member: 5000})
+    r.zadd(f"traffic:top_ip:{opts.b2}", {ip_member: 5000})
     r.set(f"traffic:total:{opts.b1}", 5000)
 
     alerts = run_concentration_check(now=opts.now)

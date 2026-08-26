@@ -275,7 +275,9 @@ via AWS Bedrock (pgvector storage, HNSW index), and served through a hybrid
 vector + full-text search — exposed as `GET/POST /api/docit/search` and as
 the assistant's `search_docs` tool. Without the app, the same endpoint falls
 back to page-level Postgres full-text search with no extra schema or
-dependencies.
+dependencies. The REST search route uses `strict_rate_limit` (120/min per IP,
+60/min per device) for every caller, including ApiKeys, because both search
+paths are bounded-work surfaces.
 
 See [knowledge.md](knowledge.md) for enabling, settings
 (`EMBEDDINGS_*` / `BEDROCK_*`), architecture, and the reindex/backfill flow.

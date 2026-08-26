@@ -224,7 +224,9 @@ the list endpoints will not appear here either.
 | `book` | no | Scope to one book by id or slug |
 | `limit` | no | Max results — default 10, clamped to 1–50 |
 
-The endpoint is rate-limited (120/min per IP, 60/min per device).
+The endpoint is strictly rate-limited for every caller, including ApiKeys
+(120/min per IP, 60/min per device), because hybrid/vector and full-text
+search are bounded-work surfaces. Honor `Retry-After` on 429.
 `snippet` is **untrusted text** — page authors control it; never render it
 as HTML. In `pages` mode, matched terms are wrapped in `**` (markdown
 emphasis), not HTML tags.

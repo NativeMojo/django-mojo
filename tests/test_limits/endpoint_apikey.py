@@ -49,6 +49,18 @@ def _clean(key, marker):
         category="traffic:apikey_threshold", model_id=marker).delete()
 
 
+def _limit_wrapper(func, expected_key):
+    import inspect
+
+    current = func
+    while current is not None:
+        closure = inspect.getclosurevars(current).nonlocals
+        if closure.get("key") == expected_key:
+            return current, closure
+        current = getattr(current, "__wrapped__", None)
+    return None, None
+
+
 @th.django_unit_test()
 def test_observation_option_preserves_legacy_positional_signature(opts):
     import inspect
@@ -262,25 +274,49 @@ def test_strict_per_key_limit_overrides_developer_fallback(opts):
 
 @th.django_unit_test()
 def test_incident_event_route_is_strict_for_apikey(opts):
-    import inspect
     from mojo.apps.incident.rest import event as event_rest
 
-    current = event_rest.on_event
-    found = None
-    while current is not None:
-        closure = inspect.getclosurevars(current).nonlocals
-        if closure.get("key") == "incident_event":
-            found = (current, closure)
-            break
-        current = getattr(current, "__wrapped__", None)
-
-    assert found is not None, "/api/event is missing its incident_event limiter"
-    wrapper, closure = found
+    wrapper, closure = _limit_wrapper(event_rest.on_event, "incident_event")
+    assert wrapper is not None, "/api/event is missing its incident_event limiter"
     assert "_check_sliding" in wrapper.__code__.co_names, (
         "/api/event must use strict_rate_limit, not the ordinary ApiKey pass"
     )
     assert closure.get("ip_limit") == 240
     assert closure.get("muid_limit") == 120
+
+
+@th.django_unit_test()
+def test_audited_safety_routes_use_strict_limits(opts):
+    from mojo.apps.account.rest import device, oauth_server, user
+    from mojo.apps.account.rest.bouncer import assess, event as bouncer_event
+    from mojo.apps.docit.rest import search
+    from mojo.apps.fileman.rest import qrcode
+    from mojo.apps.incident.rest import maestro_webhook
+
+    routes = (
+        (qrcode.on_qrcode, "qrcode"),
+        (qrcode.on_qrcode_vcard, "qrcode_vcard"),
+        (oauth_server.on_authorize, "oauth_authorize"),
+        (oauth_server.on_token, "oauth_token"),
+        (oauth_server.on_revoke, "oauth_revoke"),
+        (device.on_geo_located_ip_lookup, "geoip_lookup"),
+        (device.on_geo_located_ip_sync, "geoip_sync"),
+        (user.on_refresh_token, "refresh_token"),
+        (user.on_auth_handoff, "auth_handoff"),
+        (user.on_sessions_revoke, "sessions_revoke"),
+        (user.on_account_deactivate, "account_deactivate"),
+        (assess.on_bouncer_assess, "bouncer_assess"),
+        (bouncer_event.on_bouncer_event, "bouncer_event"),
+        (maestro_webhook.on_maestro_webhook, "maestro_webhook"),
+        (search.on_search, "docit_search"),
+    )
+
+    for func, key in routes:
+        wrapper, _ = _limit_wrapper(func, key)
+        assert wrapper is not None, f"{func.__module__}.{func.__name__} is missing {key}"
+        assert "_check_sliding" in wrapper.__code__.co_names, (
+            f"{func.__module__}.{func.__name__} must remain strict for ApiKeys"
+        )
 
 
 @th.django_unit_test()
