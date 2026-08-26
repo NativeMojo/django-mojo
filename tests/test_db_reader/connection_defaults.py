@@ -1,4 +1,4 @@
-"""Settings-dict and Django integration coverage for database pooling."""
+"""Pure connection-default and explicit pool opt-in coverage."""
 
 from testit import helpers as th
 
@@ -211,22 +211,3 @@ def test_project_pool_options_are_honored(opts):
         f"disabling the pool must retain per-request connections, got {default!r}"
     assert "pool" not in default.get("OPTIONS", {}), \
         f"a false DATABASE_POOL_OPTIONS must disable automatic pooling, got {default!r}"
-
-
-@th.django_unit_test("conn defaults: Django opens the configured psycopg pool")
-def test_django_pool_is_available(opts):
-    from django.db import connection
-
-    pool = connection.pool
-    assert pool is not None, \
-        "the generated ASGI test project must expose Django's native psycopg pool"
-    assert pool.min_size == 1, \
-        f"the live pool must use min_size=1, got {pool.min_size!r}"
-    assert pool.max_size == 8, \
-        ("the single-process test environment must cover all eight parallel "
-         f"TestIt workers, got max_size={pool.max_size!r}")
-    with connection.cursor() as cursor:
-        cursor.execute("SELECT 1")
-        value = cursor.fetchone()[0]
-    assert value == 1, \
-        f"the live pooled connection must execute a query, got {value!r}"

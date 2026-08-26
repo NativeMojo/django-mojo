@@ -432,18 +432,6 @@ DATABASES = {
     }
 }
 
-# TestIt runs up to eight module threads in one process and funnels their HTTP
-# traffic through one Uvicorn worker. Keep the real psycopg pool enabled, but
-# size each test process for that deliberate concurrency. Production pooling
-# is opt-in and must be sized for every ASGI and long-running worker process.
-DATABASE_POOL_OPTIONS = {
-    "min_size": 1,
-    "max_size": 8,
-    "timeout": 5,
-    "max_idle": 300,
-    "max_lifetime": 1800,
-}
-
 REDIS_DB = {"host": "localhost", "port": "6379"}
 
 # The mojo redis helper reads this (mojo/helpers/redis/client.py). It is the
