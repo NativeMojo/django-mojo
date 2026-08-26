@@ -12,6 +12,7 @@ import getpass
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import shutil
@@ -21,11 +22,16 @@ import sys
 import tarfile
 import tempfile
 from datetime import datetime, timezone
+import uuid
 import zipfile
 
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+BUILD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+VERSION_TOKEN_RE = re.compile(r"^[0-9]+(?:\.[0-9]+)+(?:[A-Za-z0-9.+-]*)?$")
+IDENTITY_RE = re.compile(r"^[^\x00-\x1f\x7f]{1,255}$")
 MIGRATION_RE = re.compile(r"(^|/)migrations/[^/]+\.py$")
+DEFAULT_LAB_REF = "codex/mojoland-pooling-lab"
 PROJECT_VERSION_RE = re.compile(
     r'(?ms)^(\[project\]\s.*?^version\s*=\s*)"([^"]+)"'
 )
@@ -63,9 +69,16 @@ def _exact_commit(repo, value, label):
     return resolved
 
 
-def _validate_source(repo, base_sha, source_sha):
+def _validate_source(repo, base_sha, source_sha, lab_ref):
     base_sha = _exact_commit(repo, base_sha, "base SHA")
     source_sha = _exact_commit(repo, source_sha, "source SHA")
+    checked_ref = _run(["git", "check-ref-format", "--branch", lab_ref], repo)
+    if checked_ref != lab_ref:
+        raise BuildError("lab ref must be an explicit normalized Git branch name")
+    lab_ref_commit = _run(
+        ["git", "rev-parse", "--verify", "{}^{{commit}}".format(lab_ref)],
+        repo,
+    )
     result = subprocess.run(
         ["git", "merge-base", "--is-ancestor", base_sha, source_sha],
         cwd=str(repo),
@@ -74,6 +87,14 @@ def _validate_source(repo, base_sha, source_sha):
     )
     if result.returncode:
         raise BuildError("source SHA is not a descendant of the approved base SHA")
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", source_sha, lab_ref_commit],
+        cwd=str(repo),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if result.returncode:
+        raise BuildError("source SHA is not reachable from lab ref {}".format(lab_ref))
     changed = _run(
         ["git", "diff", "--name-only", "{}..{}".format(base_sha, source_sha)],
         repo,
@@ -85,7 +106,44 @@ def _validate_source(repo, base_sha, source_sha):
                 ", ".join(migrations)
             )
         )
-    return changed
+    return changed, lab_ref_commit
+
+
+def _version_token(repo, argv, prefix):
+    output = _run(argv, repo)
+    if not output.startswith(prefix):
+        raise BuildError("{} returned an unrecognized version".format(argv[0]))
+    version = output[len(prefix):].split(None, 1)[0]
+    if not VERSION_TOKEN_RE.fullmatch(version):
+        raise BuildError("{} returned an invalid version token".format(argv[0]))
+    return version
+
+
+def _build_identifier(value):
+    value = value or uuid.uuid4().hex
+    if not BUILD_ID_RE.fullmatch(value):
+        raise BuildError(
+            "build ID must be 1-128 letters, digits, dots, underscores, or hyphens"
+        )
+    return value
+
+
+def _builder_identity(value):
+    value = value or "{}@{}".format(getpass.getuser(), socket.gethostname())
+    if not IDENTITY_RE.fullmatch(value):
+        raise BuildError("builder identity must be 1-255 printable characters")
+    return value
+
+
+def _normalized_builder_command(source_sha, base_sha, lab_ref, build_id):
+    return [
+        "uv", "run", "python", "scripts/build_mojoland_lab_wheel.py",
+        "--source-sha", source_sha,
+        "--base-sha", base_sha,
+        "--lab-ref", lab_ref,
+        "--output-dir", "<output-dir>",
+        "--build-id", build_id,
+    ]
 
 
 def _public_version(repo, source_sha):
@@ -149,13 +207,25 @@ def _sha256(path):
     return digest.hexdigest()
 
 
-def build(repo, source_sha, base_sha, output_dir, builder_identity=None):
+def build(
+    repo, source_sha, base_sha, output_dir, builder_identity=None,
+    build_id=None, lab_ref=DEFAULT_LAB_REF,
+):
     repo = Path(repo).resolve()
     output_dir = Path(output_dir).resolve()
-    _validate_source(repo, base_sha, source_sha)
+    build_id = _build_identifier(build_id)
+    builder_identity = _builder_identity(builder_identity)
+    _, lab_ref_commit = _validate_source(repo, base_sha, source_sha, lab_ref)
     public_version = _public_version(repo, source_sha)
     private_version = "{}+mojoland.g{}".format(public_version, source_sha)
     source_epoch = _run(["git", "show", "-s", "--format=%ct", source_sha], repo)
+    tool_versions = {
+        "git": _version_token(repo, ["git", "--version"], "git version "),
+        "python": platform.python_version(),
+        "uv": _version_token(repo, ["uv", "--version"], "uv "),
+    }
+    if not VERSION_TOKEN_RE.fullmatch(tool_versions["python"]):
+        raise BuildError("python returned an invalid version token")
 
     with tempfile.TemporaryDirectory(prefix="django-mojo-lab-") as temp_name:
         temp = Path(temp_name)
@@ -212,10 +282,18 @@ def build(repo, source_sha, base_sha, output_dir, builder_identity=None):
         "source": {
             "base_commit": base_sha,
             "commit": source_sha,
+            "lab_ref": lab_ref,
+            "lab_ref_check": "passed",
+            "lab_ref_commit": lab_ref_commit,
             "migration_check": "passed",
         },
         "builder": {
-            "identity": builder_identity or "{}@{}".format(getpass.getuser(), socket.gethostname()),
+            "build_id": build_id,
+            "command": _normalized_builder_command(
+                source_sha, base_sha, lab_ref, build_id
+            ),
+            "identity": builder_identity,
+            "tools": tool_versions,
             "utc": built_at,
         },
     }
@@ -228,8 +306,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--base-sha", required=True)
+    parser.add_argument("--lab-ref", default=DEFAULT_LAB_REF)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--repo", default=str(Path(__file__).resolve().parents[1]))
+    parser.add_argument("--build-id")
     parser.add_argument("--builder-identity")
     args = parser.parse_args()
     try:
@@ -239,6 +319,8 @@ def main():
             args.base_sha,
             args.output_dir,
             builder_identity=args.builder_identity,
+            build_id=args.build_id,
+            lab_ref=args.lab_ref,
         )
     except BuildError as error:
         print("ERROR: {}".format(error), file=sys.stderr)

@@ -13,21 +13,26 @@ commit IDs:
 uv run python scripts/build_mojoland_lab_wheel.py \
   --source-sha "$(git rev-parse HEAD)" \
   --base-sha 3b9763b327fed7a5081eb08211df6ea618fbf74a \
+  --build-id "pooling-candidate-$(date -u +%Y%m%dT%H%M%SZ)" \
   --output-dir var/mojoland-lab-artifacts
 ```
 
-The builder rejects abbreviated or unrelated commits and any Python migration
-changed since the approved base. It exports the selected commit with
-`git archive`, patches only the temporary copy, and gives the wheel a version
-such as `1.19.1+mojoland.g<40-character-sha>`. The checkout's public version is
-never edited.
+The builder rejects abbreviated or unrelated commits, commits that are not
+reachable from the default `codex/mojoland-pooling-lab` ref, and any Python
+migration changed since the approved base. Use `--lab-ref <branch>` only when
+an explicitly reviewed lab branch replaces that default. It exports the
+selected commit with `git archive`, patches only the temporary copy, and gives
+the wheel a version such as `1.19.1+mojoland.g<40-character-sha>`. The
+checkout's public version is never edited.
 
 The adjacent canonical manifest records the exact source and base commits,
 wheel name, byte count and SHA-256, inspected distribution/version, migration
-result, builder identity and UTC build time. Inspect and retain both files as
-one candidate. The MojoLand publisher derives immutable S3 object keys from
-their hashes; nodes consume only the exact activation descriptor committed to
-MojoLand.
+result, lab ref and exact checked ref tip, builder identity, nonsecret build
+ID, UTC build time, a path-independent normalized command array, and the Git,
+uv and Python versions. The command records `<output-dir>` rather than a
+machine-local path. Inspect and retain both files as one candidate. The
+MojoLand publisher derives immutable S3 object keys from their hashes; nodes
+consume only the exact activation descriptor committed to MojoLand.
 
 ## Boundaries
 
