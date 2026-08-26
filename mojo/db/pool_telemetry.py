@@ -120,6 +120,11 @@ class LeaseTracker:
             lease_id = self.by_connection.get(id(connection))
             return self.active.get(lease_id) if lease_id else None
 
+    def return_token(self, connection):
+        """Capture the checkout identity before psycopg can reuse the object."""
+        with self.lock:
+            return self.by_connection.get(id(connection))
+
     def returning(self, connection, sink_path=None):
         record = self._find(connection)
         if record is None:
@@ -128,20 +133,25 @@ class LeaseTracker:
             record["phase"] = "returning"
         return self._event(record, "returning", sink_path=sink_path)
 
-    def returned(self, connection, sink_path=None):
+    def returned(self, connection, lease_id=None, sink_path=None):
         connection_key = id(connection)
         with self.lock:
-            lease_id = self.by_connection.pop(connection_key, None)
-            record = self.active.pop(lease_id, None) if lease_id else None
+            mapped_lease = self.by_connection.get(connection_key)
+            target_lease = lease_id or mapped_lease
+            if mapped_lease == target_lease:
+                self.by_connection.pop(connection_key, None)
+            record = self.active.pop(target_lease, None) if target_lease else None
         if record is None:
             return None
         return self._event(record, "returned", sink_path=sink_path)
 
-    def return_failed(self, connection, error, sink_path=None):
-        record = self._find(connection)
-        if record is None:
-            return None
+    def return_failed(self, connection, error, lease_id=None, sink_path=None):
         with self.lock:
+            if lease_id is None:
+                lease_id = self.by_connection.get(id(connection))
+            record = self.active.get(lease_id) if lease_id else None
+            if record is None:
+                return None
             record["phase"] = "return_failed"
             record["error_type"] = type(error).__name__[:80]
         return self._event(
@@ -245,20 +255,28 @@ def record_lease_acquired(connection, alias, *, tracker=None):
 
 def record_lease_returning(connection, *, tracker=None):
     owner = tracker or _LEASE_TRACKER
-    return _trace_best_effort(
+    token_factory = getattr(owner, "return_token", None)
+    return_token = (
+        _trace_best_effort(token_factory, connection)
+        if callable(token_factory) else None
+    )
+    _trace_best_effort(
         owner.returning, connection, sink_path=_lease_sink_path())
+    return return_token
 
 
-def record_lease_returned(connection, *, tracker=None):
+def record_lease_returned(connection, lease_id=None, *, tracker=None):
     owner = tracker or _LEASE_TRACKER
     return _trace_best_effort(
-        owner.returned, connection, sink_path=_lease_sink_path())
+        owner.returned, connection, lease_id=lease_id,
+        sink_path=_lease_sink_path())
 
 
-def record_lease_return_failed(connection, error, *, tracker=None):
+def record_lease_return_failed(connection, error, lease_id=None, *, tracker=None):
     owner = tracker or _LEASE_TRACKER
     return _trace_best_effort(
-        owner.return_failed, connection, error, sink_path=_lease_sink_path())
+        owner.return_failed, connection, error, lease_id=lease_id,
+        sink_path=_lease_sink_path())
 
 
 def active_lease_snapshot(*, tracker=None):

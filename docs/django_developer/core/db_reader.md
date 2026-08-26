@@ -154,6 +154,9 @@ phases. A failed return emits `return_failed`, records only the exception class
 under `error_type`, and deliberately remains active instead of claiming
 recovery. The tracker retains at most 64 active correlations; the snapshot
 reports the full active count and oldest age but lists only the eight oldest.
+The return path captures that correlation id before handing the connection to
+psycopg, so immediate reuse of the same connection object by another thread
+cannot orphan the completed lease or erase the replacement lease.
 
 Request evidence is a server-owned allowlist, never a raw URL:
 `/api/group/<numeric-id>` becomes `group-detail`,

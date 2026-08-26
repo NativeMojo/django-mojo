@@ -55,11 +55,14 @@ class DatabaseWrapper(DjangoDatabaseWrapper):
         )
         if not lease_trace_enabled():
             return super()._close()
-        record_lease_returning(connection)
+        return_token = record_lease_returning(connection)
         try:
             result = super()._close()
         except Exception as error:
-            record_lease_return_failed(connection, error)
+            if return_token is not None:
+                record_lease_return_failed(
+                    connection, error, lease_id=return_token)
             raise
-        record_lease_returned(connection)
+        if return_token is not None:
+            record_lease_returned(connection, lease_id=return_token)
         return result
