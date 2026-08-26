@@ -152,6 +152,33 @@ def test_lab_lease_tracker(opts):
             f"thread evidence must use bounded server-owned categories, got {events!r}"
 
 
+@th.unit_test("pool telemetry: a returned connection cannot orphan a lease after immediate reuse")
+def test_lab_lease_tracker_immediate_reuse(opts):
+    from mojo.db.pool_telemetry import LeaseTracker
+
+    connection = object()
+    tracker = LeaseTracker(pid=44, stack_factory=lambda: ())
+    first_lease = tracker.acquired(connection, alias="default", label="first")
+    return_token = tracker.return_token(connection)
+    tracker.returning(connection)
+
+    second_lease = tracker.acquired(connection, alias="default", label="second")
+    tracker.returned(connection, lease_id=return_token)
+    active = tracker.snapshot()
+    assert active["count"] == 1 and active["leases"][0]["lease_id"] == second_lease, \
+        ("finishing the first return after psycopg immediately reuses the same "
+         f"connection must preserve the second lease, got {active!r}")
+    assert active["leases"][0]["phase"] == "acquired", \
+        f"the replacement lease must remain active, got {active!r}"
+
+    tracker.returning(connection)
+    tracker.returned(connection, lease_id=second_lease)
+    assert tracker.snapshot()["count"] == 0, \
+        "the replacement lease must still complete normally"
+    assert first_lease != second_lease, \
+        "each checkout of a reused connection object needs a distinct correlation id"
+
+
 @th.unit_test("pool telemetry: failed lease returns remain visible for diagnosis")
 def test_lab_lease_tracker_failed_return(opts):
     from mojo.db.pool_telemetry import LeaseTracker
