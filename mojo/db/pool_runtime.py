@@ -24,7 +24,8 @@ from mojo.helpers.async_db import database_connection_boundary
 class PoolRuntime:
     """One sampler per ASGI worker; all output stays local and best-effort."""
 
-    def __init__(self, interval=5, root=None):
+    def __init__(self, interval=5, root=None, connection_handler=None,
+                 thread_factory=threading.Thread):
         self.interval = max(1, int(interval))
         self.root = Path(root or os.environ.get("MOJO_POOL_TELEMETRY_ROOT", "/tmp/mojo-pool"))
         self.pid = os.getpid()
@@ -34,6 +35,9 @@ class PoolRuntime:
         self.probe = None
         self.probe_thread = None
         self.last_event_at = None
+        self.connections = (
+            connection_handler if connection_handler is not None else connections)
+        self.thread_factory = thread_factory
 
     def enabled(self):
         plan = config.LAST_POOL_PLAN or {}
@@ -44,7 +48,7 @@ class PoolRuntime:
     def sample_once(self):
         if not self.enabled():
             return None
-        wrapper = connections["default"]
+        wrapper = self.connections["default"]
         pool = wrapper.pool
         previous_state = (self.previous or {}).get("state")
         snapshot = pool_snapshot(pool, identity=config.LAST_POOL_PLAN.get("identity"),
@@ -92,16 +96,23 @@ class PoolRuntime:
             "schema": 1, "at": time.time(), "pid": self.pid,
             "event": "pool_runtime_starting",
         })
+        pool = self.connections["default"].pool
+        if pool is None:
+            raise RuntimeError("enabled database pool has no runtime pool")
+        # Lifespan startup is the evidence gate: validate public stats and
+        # publish one real snapshot before this worker can begin serving.
+        self.sample_once()
         if getattr(settings, "DATABASE_POOL_LAB_PROBE_ENABLED", False):
             socket_path = os.environ.get(
                 "MOJO_POOL_PROBE_SOCKET", str(self.root / f"probe-{self.pid}.sock"))
-            self.probe = LocalPoolProbe(socket_path)
+            self.probe = LocalPoolProbe(
+                socket_path, connection_handler=self.connections)
             self.probe.bind()
-        self.thread = threading.Thread(
+        self.thread = self.thread_factory(
             target=self._run, name="mojo-pool-sampler", daemon=True)
         self.thread.start()
         if self.probe:
-            self.probe_thread = threading.Thread(
+            self.probe_thread = self.thread_factory(
                 target=self.probe.serve_forever,
                 name="mojo-pool-lab-probe",
                 daemon=True,

@@ -105,10 +105,13 @@ PostgreSQL's 63-byte limit. Missing or ambiguous identity fails API startup;
 disabled and non-API processes need none.
 
 The observed PostgreSQL backend times only actual `get_new_connection()` pool
-acquisitions. A lifespan-owned sampler reads psycopg-pool's public
-`get_stats()` counters without opening the lazy pool or acquiring a lease and
-atomically writes one mode-0600 JSON snapshot per worker beneath
-`MOJO_POOL_TELEMETRY_ROOT`. Counter deltas tolerate a pool reset. States are:
+acquisitions. Before ASGI startup completes, the lifespan owner requires the
+configured pool and synchronously publishes one valid public-stat snapshot;
+startup fails if that evidence cannot be produced. Its sampler then reads
+psycopg-pool's public `get_stats()` counters without opening the lazy pool or
+acquiring a lease. It atomically writes one mode-0640 JSON snapshot per worker
+beneath `MOJO_POOL_TELEMETRY_ROOT`, readable only by the API group and a local
+observer identity. Counter deltas tolerate a pool reset. States are:
 
 | State | Meaning |
 |---|---|

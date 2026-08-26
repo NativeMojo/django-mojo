@@ -1,6 +1,7 @@
 """Pure pool identity, stats, state, aggregation, and signal contracts."""
 
 import json
+import os
 import socket
 import tempfile
 import threading
@@ -130,10 +131,63 @@ def test_snapshot_aggregation(opts):
             "gauges": {}, "in_use_or_preparing": 0,
         })
         result = aggregate_snapshots(root_path.glob("*.json"), max_age=10, now=105)
+        assert os.stat(root_path / "a.json").st_mode & 0o777 == 0o640, \
+            "worker snapshots must be readable by the dedicated observer group only"
         assert result["workers"] == 1 and result["stale_files"] == 1, \
             f"fresh process UUIDs must aggregate once and stale files must be named, got {result!r}"
         assert result["exhausted"] is True and result["gauges"]["pool_available"] == 0, \
             f"the newest worker snapshot must drive aggregate state, got {result!r}"
+
+
+@th.unit_test("pool telemetry: ASGI startup requires one synchronous real snapshot")
+def test_runtime_startup_evidence_gate(opts):
+    from mojo.db import pool_runtime
+
+    events = []
+
+    class Wrapper:
+        pool = object()
+
+    class Thread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def is_alive(self):
+            return False
+
+        def start(self):
+            events.append("thread")
+
+    class Runtime(pool_runtime.PoolRuntime):
+        def enabled(self):
+            return True
+
+        def sample_once(self):
+            events.append("sample")
+
+    class BadRuntime(Runtime):
+        def sample_once(self):
+            raise RuntimeError("bad stats")
+
+    with tempfile.TemporaryDirectory() as root:
+        runtime = Runtime(
+            root=root, connection_handler={"default": Wrapper()},
+            thread_factory=Thread)
+        assert runtime.start() is True
+        assert events == ["sample", "thread"], \
+            f"a valid snapshot must precede the sampler thread and startup success, got {events!r}"
+
+        events.clear()
+        runtime = BadRuntime(
+            root=root, connection_handler={"default": Wrapper()},
+            thread_factory=Thread)
+        try:
+            runtime.start()
+        except RuntimeError as error:
+            assert str(error) == "bad stats"
+        else:
+            raise AssertionError("invalid initial telemetry must fail ASGI startup")
+        assert events == [], "a failed initial snapshot must not start a background sampler"
 
 
 @th.unit_test("pool telemetry: acquisition errors emit once without a database logger")

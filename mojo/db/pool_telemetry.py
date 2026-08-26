@@ -134,10 +134,12 @@ def pool_snapshot(pool, identity=None, previous=None, now=None):
 
 def atomic_write(path, payload):
     target = Path(path)
-    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Snapshots contain no credentials and are group-readable so a separate
+    # local observer identity need not share the application UID.
+    target.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
     temporary = target.with_name(f".{target.name}.{os.getpid()}.{process_uuid()}.tmp")
     temporary.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
-    os.chmod(temporary, 0o600)
+    os.chmod(temporary, 0o640)
     os.replace(temporary, target)
 
 
