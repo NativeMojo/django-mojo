@@ -50,8 +50,13 @@ class ProtocolTypeRouter:
                 if message["type"] == "lifespan.startup":
                     try:
                         runtime.start()
-                    except Exception:
-                        pass
+                    except Exception as error:
+                        from mojo.db.errors import bounded_error
+                        await send({
+                            "type": "lifespan.startup.failed",
+                            "message": f"database pool evidence unavailable: {bounded_error(error)}",
+                        })
+                        return
                     await send({"type": "lifespan.startup.complete"})
                 elif message["type"] == "lifespan.shutdown":
                     try:

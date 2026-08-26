@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 from queue import Queue, Empty
 from mojo.apps.logit.models import Log
 from mojo.db.errors import emit_pool_error, is_pool_acquisition_error
@@ -22,6 +23,20 @@ LOGIT_ALWAYS_LOG_PREFIX = settings.get_static("LOGIT_ALWAYS_LOG_PREFIX", ['POST:
 # Async logging setup
 log_queue = Queue()
 background_thread = None
+_db_log_suspended_until = 0.0
+_DB_LOG_POOL_COOLDOWN = 30
+
+
+def _suspend_db_logging(now=None):
+    global _db_log_suspended_until
+    current = time.monotonic() if now is None else now
+    _db_log_suspended_until = max(
+        _db_log_suspended_until, current + _DB_LOG_POOL_COOLDOWN)
+
+
+def _db_logging_suspended(now=None):
+    current = time.monotonic() if now is None else now
+    return current < _db_log_suspended_until
 
 def background_logger():
     """Background thread to process logs without blocking responses."""
@@ -33,16 +48,24 @@ def background_logger():
 
             log_type, request, content, log_kind = log_item
 
-            if log_type == "db":
-                with database_connection_boundary():
-                    Log.logit(request, content, log_kind)
-            elif log_type == "file":
-                method = request.method if request else "SYSTEM"
-                ip = getattr(request, 'ip', 'unknown') if request else 'system'
-                path = getattr(request, 'path', 'unknown') if request else 'system'
-                LOGGER.info(f"{log_kind.upper()} - {method} - {ip} - {path}", content)
-
-            log_queue.task_done()
+            try:
+                if log_type == "db":
+                    if _db_logging_suspended():
+                        continue
+                    with database_connection_boundary():
+                        Log.logit(request, content, log_kind)
+                elif log_type == "file":
+                    method = request.method if request else "SYSTEM"
+                    ip = getattr(request, 'ip', 'unknown') if request else 'system'
+                    path = getattr(request, 'path', 'unknown') if request else 'system'
+                    LOGGER.info(f"{log_kind.upper()} - {method} - {ip} - {path}", content)
+            except Exception as error:
+                if is_pool_acquisition_error(error):
+                    _suspend_db_logging()
+                    emit_pool_error(error, path=getattr(request, "path", None))
+                ERROR_LOGGER.exception(f"Background logging error: {error}")
+            finally:
+                log_queue.task_done()
         except Empty:
             continue
         except Exception as e:

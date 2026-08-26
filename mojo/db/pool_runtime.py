@@ -88,13 +88,19 @@ class PoolRuntime:
             return False
         self.pid = os.getpid()
         self.stop_event.clear()
-        self.thread = threading.Thread(
-            target=self._run, name="mojo-pool-sampler", daemon=True)
-        self.thread.start()
+        atomic_write(self.root / f"worker-{self.pid}-runtime.json", {
+            "schema": 1, "at": time.time(), "pid": self.pid,
+            "event": "pool_runtime_starting",
+        })
         if getattr(settings, "DATABASE_POOL_LAB_PROBE_ENABLED", False):
             socket_path = os.environ.get(
                 "MOJO_POOL_PROBE_SOCKET", str(self.root / f"probe-{self.pid}.sock"))
             self.probe = LocalPoolProbe(socket_path)
+            self.probe.bind()
+        self.thread = threading.Thread(
+            target=self._run, name="mojo-pool-sampler", daemon=True)
+        self.thread.start()
+        if self.probe:
             self.probe_thread = threading.Thread(
                 target=self.probe.serve_forever,
                 name="mojo-pool-lab-probe",
@@ -129,6 +135,8 @@ class LocalPoolProbe:
         self.cancelled = threading.Event()
         self.stopped = threading.Event()
         self.lock = threading.Lock()
+        self.client_slots = threading.BoundedSemaphore(4)
+        self.server = None
 
     def _query(self):
         with database_connection_boundary():
@@ -144,6 +152,7 @@ class LocalPoolProbe:
         owned = []
         exercise_error = None
         waiter_timeout = False
+        return_errors = []
         try:
             pool = self.connections["default"].pool
             if pool is None:
@@ -174,7 +183,14 @@ class LocalPoolProbe:
                         else:
                             exercise_error = bounded_error(error)
                     else:
-                        pool.putconn(unexpected)
+                        try:
+                            pool.putconn(unexpected)
+                        except Exception as error:
+                            return_errors.append(bounded_error(error))
+                            try:
+                                unexpected.close()
+                            except Exception:
+                                pass
                         exercise_error = "extra waiter unexpectedly acquired a lease"
             remaining = self.deadline - (time.monotonic() - started)
             self.cancelled.wait(max(0, min(float(hold_seconds), remaining)))
@@ -184,20 +200,46 @@ class LocalPoolProbe:
             for connection in reversed(owned):
                 try:
                     self.connections["default"].pool.putconn(connection)
-                except Exception:
-                    pass
+                except Exception as error:
+                    return_errors.append(bounded_error(error))
+                    try:
+                        connection.close()
+                    except Exception:
+                        pass
             self.lock.release()
+        pool_recovered = False
+        pool_stats = {}
+        pool = self.connections["default"].pool
+        while time.monotonic() - started <= self.deadline:
+            try:
+                pool_stats = pool.get_stats()
+                pool_recovered = bool(
+                    pool_stats.get("pool_size", 0) > 0
+                    and pool_stats.get("pool_available", 0) == pool_stats.get("pool_size", 0)
+                    and pool_stats.get("requests_waiting", 0) == 0
+                )
+            except Exception as error:
+                exercise_error = exercise_error or bounded_error(error)
+                break
+            if pool_recovered:
+                break
+            time.sleep(0.05)
         recovered = False
-        try:
-            recovered = self._query() == 1
-        except Exception:
-            recovered = False
+        if pool_recovered and not return_errors:
+            try:
+                recovered = self._query() == 1
+            except Exception as error:
+                exercise_error = exercise_error or bounded_error(error)
         return {
-            "ok": bool(recovered and waiter_timeout and not exercise_error),
+            "ok": bool(
+                recovered and pool_recovered and waiter_timeout
+                and not exercise_error and not return_errors),
             "leases_acquired": len(owned),
             "waiter_timeout": waiter_timeout,
             "cancelled": self.cancelled.is_set(),
             "recovered_without_restart": recovered,
+            "pool_stats_recovered": pool_recovered,
+            "return_errors": return_errors[:4],
             "error": exercise_error,
         }
 
@@ -216,25 +258,32 @@ class LocalPoolProbe:
             pass
 
     def _handle(self, client):
-        with client:
-            try:
-                request = json.loads(client.recv(4096).decode("utf-8"))
-                if request.get("command") == "cancel":
-                    self.cancel()
-                    response = {"ok": True, "cancelled": True}
-                elif request.get("command") == "exercise":
-                    response = self.exercise(
-                        request.get("leases", 1), request.get("hold_seconds", 1))
-                else:
-                    response = {"ok": False, "error": "unsupported command"}
-            except Exception as error:
-                response = {"ok": False, "error": bounded_error(error)}
-            try:
-                client.sendall((json.dumps(response, sort_keys=True) + "\n").encode("utf-8"))
-            except OSError:
-                pass
+        try:
+            with client:
+                client.settimeout(2)
+                try:
+                    request = json.loads(client.recv(4096).decode("utf-8"))
+                    if request.get("command") == "cancel":
+                        self.cancel()
+                        response = {"ok": True, "cancelled": True}
+                    elif request.get("command") == "exercise":
+                        response = self.exercise(
+                            request.get("leases", 1), request.get("hold_seconds", 1))
+                    else:
+                        response = {"ok": False, "error": "unsupported command"}
+                except Exception as error:
+                    response = {"ok": False, "error": bounded_error(error)}
+                try:
+                    client.sendall(
+                        (json.dumps(response, sort_keys=True) + "\n").encode("utf-8"))
+                except OSError:
+                    pass
+        finally:
+            self.client_slots.release()
 
-    def serve_forever(self):
+    def bind(self):
+        if self.server is not None:
+            return
         self.socket_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
             self.socket_path.unlink()
@@ -246,10 +295,22 @@ class LocalPoolProbe:
             os.chmod(self.socket_path, 0o600)
             server.listen(4)
             server.settimeout(0.5)
+        except Exception:
+            server.close()
+            raise
+        self.server = server
+
+    def serve_forever(self):
+        self.bind()
+        server = self.server
+        try:
             while not self.stopped.is_set():
                 try:
                     client, _address = server.accept()
                 except socket.timeout:
+                    continue
+                if not self.client_slots.acquire(blocking=False):
+                    client.close()
                     continue
                 threading.Thread(
                     target=self._handle,
@@ -259,6 +320,7 @@ class LocalPoolProbe:
                 ).start()
         finally:
             server.close()
+            self.server = None
             try:
                 self.socket_path.unlink()
             except FileNotFoundError:

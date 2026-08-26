@@ -189,6 +189,14 @@ def test_http_pool_timeout_returns_503(opts):
     assert request._mojo_pool_acquisition_error is True, \
         "the outer boundary must suppress ORM response logging after pool exhaustion"
 
+    import mojo.middleware.logging as logging_middleware
+    now = time.monotonic()
+    logging_middleware._suspend_db_logging(now=now)
+    assert logging_middleware._db_logging_suspended(now=now + 29), \
+        "a DB logger pool failure must suppress repeated queue acquisitions"
+    assert not logging_middleware._db_logging_suspended(now=now + 30), \
+        "the DB logger circuit breaker must recover without restart"
+
 
 @th.unit_test("pool telemetry: local exercise is cancellable and returns every lease")
 def test_local_probe_cancel_and_recovery(opts):
@@ -201,7 +209,12 @@ def test_local_probe_cancel_and_recovery(opts):
             self.owned = 0
 
         def get_stats(self):
-            return {"pool_max": 2}
+            return {
+                "pool_max": 2,
+                "pool_size": 2,
+                "pool_available": 2 - self.owned,
+                "requests_waiting": 0,
+            }
 
         def getconn(self, timeout=None):
             from psycopg_pool import PoolTimeout
@@ -258,5 +271,37 @@ def test_local_probe_cancel_and_recovery(opts):
         f"exercise must prove recovery without a process restart, got {result!r}"
     assert result.get("waiter_timeout") is True, \
         f"exercise must create exactly one bounded waiter timeout, got {result!r}"
+    assert result.get("pool_stats_recovered") is True and result.get("return_errors") == [], \
+        f"recovery must include confirmed public stats and every successful return, got {result!r}"
     assert Wrapper.pool.returned == 2, \
         f"every deliberately held lease must return, got {Wrapper.pool.returned}"
+
+    class FailingReturnPool:
+        acquired = False
+
+        def get_stats(self):
+            return {
+                "pool_max": 1, "pool_size": 1, "pool_available": 1,
+                "requests_waiting": 0,
+            }
+
+        def getconn(self, timeout=None):
+            from psycopg_pool import PoolTimeout
+            if self.acquired:
+                raise PoolTimeout("expected controlled waiter timeout")
+            self.acquired = True
+            return object()
+
+        def putconn(self, connection):
+            raise RuntimeError("deliberate return failure")
+
+    class FailingWrapper:
+        pool = FailingReturnPool()
+
+    failed_probe = pool_runtime.LocalPoolProbe(
+        "/tmp/unused-pool-probe.sock", deadline=1,
+        connection_handler={"default": FailingWrapper()})
+    failed_probe._query = lambda: 1
+    failed = failed_probe.exercise(1, hold_seconds=0)
+    assert failed["ok"] is False and failed["return_errors"], \
+        f"a failed lease return must never produce false-green recovery, got {failed!r}"
