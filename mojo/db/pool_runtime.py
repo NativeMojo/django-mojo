@@ -13,8 +13,10 @@ from django.db import connections
 from mojo.db import config
 from mojo.db.errors import bounded_error
 from mojo.db.pool_telemetry import (
+    active_lease_snapshot,
     append_bounded_event,
     atomic_write,
+    lease_trace_enabled,
     pool_snapshot,
     should_emit_state_event,
 )
@@ -53,6 +55,8 @@ class PoolRuntime:
         previous_state = (self.previous or {}).get("state")
         snapshot = pool_snapshot(pool, identity=config.LAST_POOL_PLAN.get("identity"),
                                  previous=self.previous)
+        if lease_trace_enabled():
+            snapshot["lab_leases"] = active_lease_snapshot()
         self.previous = snapshot
         atomic_write(self.root / f"worker-{self.pid}.json", snapshot)
         if should_emit_state_event(

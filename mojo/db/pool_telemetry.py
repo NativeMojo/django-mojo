@@ -2,9 +2,13 @@
 
 import json
 import os
+import re
+import stat
 import threading
 import time
+import traceback
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 
 from mojo.db.errors import is_pool_acquisition_error
@@ -26,6 +30,242 @@ PROCESS_UUID = uuid.uuid4().hex
 _PROCESS_PID = os.getpid()
 _OBSERVED = {name: 0 for name in OBSERVED_COUNTERS}
 _OBSERVED_LOCK = threading.Lock()
+_EVENT_WRITE_LOCK = threading.Lock()
+
+
+class LeaseTracker:
+    """Lab-only acquire/return correlation without retaining DB connections."""
+
+    def __init__(self, pid=None, monotonic_clock=time.monotonic,
+                 wall_clock=time.time, stack_factory=None, max_active=64):
+        self.pid = os.getpid() if pid is None else int(pid)
+        self.monotonic_clock = monotonic_clock
+        self.wall_clock = wall_clock
+        self.stack_factory = stack_factory or self._bounded_stack
+        self.max_active = max(1, int(max_active))
+        self.lock = threading.Lock()
+        self.sequence = 0
+        self.by_connection = {}
+        self.active = {}
+
+    @staticmethod
+    def _bounded_stack():
+        frames = traceback.extract_stack(limit=14)[:-2]
+        return tuple(
+            f"{Path(frame.filename).name}:{frame.name}:{frame.lineno}"
+            for frame in frames[-8:]
+        )
+
+    @staticmethod
+    def _thread_kind(name):
+        if name == "MainThread":
+            return "main"
+        if name.startswith("ThreadPoolExecutor"):
+            return "thread-pool"
+        if name.startswith("mojo-"):
+            return "mojo-runtime"
+        return "other"
+
+    def _event(self, record, phase, sink_path=None, error=None):
+        payload = {
+            "schema": 1,
+            "event": "database_pool_lease",
+            "at": self.wall_clock(),
+            "pid": self.pid,
+            "lease_id": record["lease_id"],
+            "alias": record["alias"],
+            "phase": phase,
+            "label": record.get("label"),
+            "thread_id": record["thread_id"],
+            "thread_kind": record["thread_kind"],
+            "stack": record["stack"],
+        }
+        if error is not None:
+            payload["error_type"] = type(error).__name__[:80]
+        if sink_path is not None:
+            append_bounded_event(sink_path, payload)
+        return payload
+
+    def acquired(self, connection, alias, label=None, sink_path=None):
+        now = self.monotonic_clock()
+        thread = threading.current_thread()
+        connection_key = id(connection)
+        with self.lock:
+            self.sequence += 1
+            lease_id = f"p{self.pid}-l{self.sequence}"
+            record = {
+                "lease_id": lease_id,
+                "alias": str(alias)[:64],
+                "label": str(label)[:80] if label else None,
+                "thread_id": threading.get_ident(),
+                "thread_kind": self._thread_kind(thread.name),
+                "stack": tuple(self.stack_factory())[:6],
+                "acquired_at": now,
+                "phase": "acquired",
+            }
+            while len(self.active) >= self.max_active:
+                oldest = min(
+                    self.active.values(), key=lambda value: value["acquired_at"])
+                self.active.pop(oldest["lease_id"], None)
+                for key, value in tuple(self.by_connection.items()):
+                    if value == oldest["lease_id"]:
+                        self.by_connection.pop(key, None)
+            self.by_connection[connection_key] = lease_id
+            self.active[lease_id] = record
+        self._event(record, "acquired", sink_path=sink_path)
+        return lease_id
+
+    def _find(self, connection):
+        with self.lock:
+            lease_id = self.by_connection.get(id(connection))
+            return self.active.get(lease_id) if lease_id else None
+
+    def returning(self, connection, sink_path=None):
+        record = self._find(connection)
+        if record is None:
+            return None
+        with self.lock:
+            record["phase"] = "returning"
+        return self._event(record, "returning", sink_path=sink_path)
+
+    def returned(self, connection, sink_path=None):
+        connection_key = id(connection)
+        with self.lock:
+            lease_id = self.by_connection.pop(connection_key, None)
+            record = self.active.pop(lease_id, None) if lease_id else None
+        if record is None:
+            return None
+        return self._event(record, "returned", sink_path=sink_path)
+
+    def return_failed(self, connection, error, sink_path=None):
+        record = self._find(connection)
+        if record is None:
+            return None
+        with self.lock:
+            record["phase"] = "return_failed"
+            record["error_type"] = type(error).__name__[:80]
+        return self._event(
+            record, "return_failed", sink_path=sink_path, error=error)
+
+    def snapshot(self):
+        now = self.monotonic_clock()
+        with self.lock:
+            records = sorted(
+                (dict(record) for record in self.active.values()),
+                key=lambda record: record["acquired_at"],
+            )
+        leases = []
+        for record in records[:8]:
+            leases.append({
+                "lease_id": record["lease_id"],
+                "alias": record["alias"],
+                "label": record.get("label"),
+                "thread_id": record["thread_id"],
+                "thread_kind": record["thread_kind"],
+                "stack": record["stack"],
+                "phase": record["phase"],
+                "age_seconds": round(max(0.0, now - record["acquired_at"]), 3),
+                **({"error_type": record["error_type"]}
+                   if record.get("error_type") else {}),
+            })
+        return {
+            "count": len(records),
+            "oldest_seconds": leases[0]["age_seconds"] if leases else 0,
+            "leases": leases,
+        }
+
+
+_LEASE_TRACKER = LeaseTracker()
+
+
+def lease_trace_allowed(candidate, probe_enabled, plan):
+    identity = plan.get("identity") if isinstance(plan, Mapping) else None
+    return bool(
+        candidate is True
+        and probe_enabled is True
+        and isinstance(plan, Mapping)
+        and plan.get("enabled") is True
+        and plan.get("valid") is True
+        and plan.get("role") == "api"
+        and plan.get("launcher") == "asgi"
+        and isinstance(identity, Mapping)
+        and identity.get("project") == "mojoland"
+    )
+
+
+def lease_trace_enabled():
+    try:
+        from django.conf import settings
+        from mojo.db import config
+        return lease_trace_allowed(
+            getattr(settings, "DATABASE_POOL_LAB_TRACE_LEASES", False),
+            getattr(settings, "DATABASE_POOL_LAB_PROBE_ENABLED", False),
+            dict(config.LAST_POOL_PLAN or {}),
+        )
+    except Exception:
+        return False
+
+
+def _lease_sink_path():
+    root = Path(os.environ.get("MOJO_POOL_TELEMETRY_ROOT", "/tmp/mojo-pool"))
+    return root / f"worker-{os.getpid()}-leases.jsonl"
+
+
+def request_trace_label(path):
+    if path == "/api/group/apikey/me":
+        return "group-apikey-me"
+    if isinstance(path, str) and re.fullmatch(r"/api/group/[0-9]+", path):
+        return "group-detail"
+    return None
+
+
+def _active_request_label():
+    try:
+        from mojo.models.rest import ACTIVE_REQUEST
+        request = ACTIVE_REQUEST.get()
+        path = getattr(request, "path", None) if request is not None else None
+        return request_trace_label(path)
+    except Exception:
+        return None
+
+
+def _trace_best_effort(method, *args, **kwargs):
+    try:
+        return method(*args, **kwargs)
+    except Exception:
+        return None
+
+
+def record_lease_acquired(connection, alias, *, tracker=None):
+    owner = tracker or _LEASE_TRACKER
+    return _trace_best_effort(
+        owner.acquired, connection, alias=alias, label=_active_request_label(),
+        sink_path=_lease_sink_path())
+
+
+def record_lease_returning(connection, *, tracker=None):
+    owner = tracker or _LEASE_TRACKER
+    return _trace_best_effort(
+        owner.returning, connection, sink_path=_lease_sink_path())
+
+
+def record_lease_returned(connection, *, tracker=None):
+    owner = tracker or _LEASE_TRACKER
+    return _trace_best_effort(
+        owner.returned, connection, sink_path=_lease_sink_path())
+
+
+def record_lease_return_failed(connection, error, *, tracker=None):
+    owner = tracker or _LEASE_TRACKER
+    return _trace_best_effort(
+        owner.return_failed, connection, error, sink_path=_lease_sink_path())
+
+
+def active_lease_snapshot(*, tracker=None):
+    value = _trace_best_effort((tracker or _LEASE_TRACKER).snapshot)
+    if value is None:
+        return {"count": 0, "oldest_seconds": 0, "leases": [], "trace_error": True}
+    return value
 
 
 def process_uuid():
@@ -150,23 +390,60 @@ def append_bounded_event(path, payload, max_bytes=262144):
     line = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
     if len(line) > 4096:
         raise ValueError("pool telemetry event exceeds 4096 bytes")
-    try:
-        rotate = target.stat().st_size + len(line) > max_bytes
-    except FileNotFoundError:
-        rotate = False
-    if rotate:
-        temporary = target.with_name(
-            f".{target.name}.{os.getpid()}.{process_uuid()}.tmp")
-        temporary.write_bytes(line)
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, target)
-        return
-    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    try:
-        os.write(descriptor, line)
-        os.fchmod(descriptor, 0o600)
-    finally:
-        os.close(descriptor)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+
+    def validate(descriptor):
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_nlink != 1):
+            raise OSError("pool telemetry event sink is not a private owned file")
+
+    def write_all(descriptor):
+        offset = 0
+        while offset < len(line):
+            offset += os.write(descriptor, line[offset:])
+
+    with _EVENT_WRITE_LOCK:
+        try:
+            info = target.lstat()
+        except FileNotFoundError:
+            info = None
+        if info is not None and (
+                not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_nlink != 1):
+            raise OSError("pool telemetry event sink is not a private owned file")
+        rotate = bool(info and info.st_size + len(line) > max_bytes)
+        if rotate:
+            temporary = target.with_name(
+                f".{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+            try:
+                descriptor = os.open(
+                    temporary,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow,
+                    0o600,
+                )
+                try:
+                    validate(descriptor)
+                    write_all(descriptor)
+                    os.fchmod(descriptor, 0o600)
+                finally:
+                    os.close(descriptor)
+                os.replace(temporary, target)
+            except Exception:
+                try:
+                    temporary.unlink()
+                except OSError:
+                    pass
+                raise
+            return
+        descriptor = os.open(
+            target, os.O_WRONLY | os.O_CREAT | os.O_APPEND | nofollow, 0o600)
+        try:
+            validate(descriptor)
+            write_all(descriptor)
+            os.fchmod(descriptor, 0o600)
+        finally:
+            os.close(descriptor)
 
 
 def should_emit_state_event(state, previous_state, last_event_at, now, reminder=300):
