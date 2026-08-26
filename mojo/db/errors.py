@@ -14,20 +14,23 @@ _MAX_MESSAGE = 160
 def is_pool_acquisition_error(error):
     """Return True only for psycopg-pool acquisition/queue failures."""
     try:
-        from psycopg_pool import PoolTimeout
+        from psycopg_pool import PoolTimeout, TooManyRequests
     except ImportError:
-        PoolTimeout = ()
+        pool_errors = ()
+    else:
+        pool_errors = (PoolTimeout, TooManyRequests)
     current = error
     seen = set()
     for _depth in range(4):
         if current is None or id(current) in seen:
             break
         seen.add(id(current))
-        if PoolTimeout and isinstance(current, PoolTimeout):
+        if pool_errors and isinstance(current, pool_errors):
             return True
-        if current.__class__.__module__.startswith("psycopg_pool.") and (
+        if current.__class__.__module__.startswith("psycopg_pool") and (
                 "timeout" in current.__class__.__name__.lower()
-                or "queue" in current.__class__.__name__.lower()):
+                or "queue" in current.__class__.__name__.lower()
+                or "request" in current.__class__.__name__.lower()):
             return True
         current = current.__cause__ or current.__context__
     return False

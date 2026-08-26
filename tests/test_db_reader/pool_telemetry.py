@@ -138,8 +138,8 @@ def test_snapshot_aggregation(opts):
 
 @th.unit_test("pool telemetry: acquisition errors emit once without a database logger")
 def test_pool_error_signal_is_bounded_and_deduplicated(opts):
-    from psycopg_pool import PoolTimeout
-    from mojo.db.errors import emit_pool_error
+    from psycopg_pool import PoolTimeout, TooManyRequests
+    from mojo.db.errors import emit_pool_error, is_pool_acquisition_error
 
     with tempfile.TemporaryDirectory() as root:
         target = Path(root) / "pool-error.json"
@@ -153,6 +153,8 @@ def test_pool_error_signal_is_bounded_and_deduplicated(opts):
             f"the local signal must identify the bounded event, got {payload!r}"
         assert len(payload["error"]) <= 160 and "traceback" not in payload, \
             f"the DB-independent signal must stay bounded and omit internals, got {payload!r}"
+        assert is_pool_acquisition_error(TooManyRequests("queue is full")), \
+            "the public bounded-queue failure must use the same nonrecursive error path"
 
 
 @th.django_unit_test("pool telemetry: HTTP error boundaries return 503 without ORM recursion")
