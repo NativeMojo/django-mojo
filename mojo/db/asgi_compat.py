@@ -22,6 +22,13 @@ def install_thread_sensitive_error_responses():
     if getattr(current, _MARKER, False):
         base.convert_exception_to_response = current
         return False
+    if base.convert_exception_to_response is not current:
+        from django.core.exceptions import ImproperlyConfigured
+
+        raise ImproperlyConfigured(
+            "database pooling requires Django's unchanged ASGI exception "
+            "converter; refusing an unverified handler patch"
+        )
 
     @wraps(current)
     def convert_exception_to_response(get_response):

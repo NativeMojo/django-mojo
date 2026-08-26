@@ -203,6 +203,9 @@ def test_asgi_error_response_returns_lease_on_request_thread(opts):
                 "the Django 5.2 compatibility behavior must install once"
             assert install_thread_sensitive_error_responses() is False, \
                 "the compatibility behavior must be idempotent"
+            assert base.convert_exception_to_response is \
+                exception.convert_exception_to_response, \
+                "BaseHandler must construct middleware with the patched converter"
             response = asyncio.run(exercise())
             stats = pool.get_stats()
             assert response.status_code == 404, \
@@ -214,6 +217,18 @@ def test_asgi_error_response_returns_lease_on_request_thread(opts):
         finally:
             exception.convert_exception_to_response = original_exception
             base.convert_exception_to_response = original_base
+
+        drifted = lambda get_response: get_response
+        with mock.patch.object(base, "convert_exception_to_response", drifted):
+            try:
+                install_thread_sensitive_error_responses()
+            except Exception as error:
+                from django.core.exceptions import ImproperlyConfigured
+                assert isinstance(error, ImproperlyConfigured), \
+                    f"handler drift must fail pooled startup clearly, got {error!r}"
+            else:
+                raise AssertionError(
+                    "pool activation must refuse unexpected Django handler drift")
 
 
 @th.unit_test("API-resident ORM thread sites use the shared lifecycle boundary")
