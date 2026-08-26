@@ -129,23 +129,39 @@ observer identity. Counter deltas tolerate a pool reset. States are:
 | `exhausted` | No lease is available and a waiter, pool error, or observed acquisition timeout exists. |
 | `recovering` | The prior sample was exhausted and capacity is available again. |
 
-For the MojoLand acquire/return investigation only, setting
-`DATABASE_POOL_LAB_TRACE_LEASES = True` adds one private
-`worker-<pid>-leases.jsonl` file and a `lab_leases` object to that worker's
-regular snapshot. Each lease receives a process-local correlation id and emits
-`acquired`, `returning`, and `returned` phases. A failed return emits
-`return_failed` and deliberately remains active instead of claiming recovery.
-The snapshot reports the active count, oldest age, and at most eight oldest
-leases.
+For the MojoLand acquire/return investigation only, the trace activates when
+all of these conditions are exact: `DATABASE_POOL_LAB_TRACE_LEASES is True`,
+`DATABASE_POOL_LAB_PROBE_ENABLED is True`, and the enabled, valid pool plan has
+role `api`, launcher `asgi`, and identity project `mojoland`. Any other value,
+process role, launcher, project identity, disabled probe, or invalid pool plan
+fails closed with no trace.
 
-Trace records contain the database alias, bounded request path when one is
-available, thread identity, and at most eight bounded Python stack locations.
-They never serialize the connection object, credentials, or SQL. Each private
-event is capped at 4 KiB and the per-worker file rotates in place before 256
-KiB; it is diagnostic evidence, not a durable audit log. Stack capture occurs
-on every acquisition, so the flag is false/absent by default and must not be
-used as routine production telemetry. Disabling it leaves the ordinary pool
-gauges, counters, state events, and error signal unchanged.
+When active, tracing adds one private `worker-<pid>-leases.jsonl` file and a
+`lab_leases` object to that worker's regular snapshot. Each lease receives a
+process-local correlation id and emits `acquired`, `returning`, and `returned`
+phases. A failed return emits `return_failed`, records only the exception class
+under `error_type`, and deliberately remains active instead of claiming
+recovery. The tracker retains at most 64 active correlations; the snapshot
+reports the full active count and oldest age but lists only the eight oldest.
+
+Request evidence is a server-owned allowlist, never a raw URL:
+`/api/group/<numeric-id>` becomes `group-detail`,
+`/api/group/apikey/me` becomes `group-apikey-me`, and every other route (or an
+acquisition without active request context) has no label. Numeric group ids,
+query strings, and other caller-controlled path content are not retained.
+Records include the database alias, numeric thread id, a `thread_kind` limited
+to `main`, `thread-pool`, `mojo-runtime`, or `other`, and at most six bounded
+Python stack locations. They never serialize raw thread names, exception
+messages, the connection object, credentials, or SQL.
+
+Each private event is capped at 4 KiB and the per-worker file rotates in place
+before 256 KiB; it is diagnostic evidence, not a durable audit log. Trace and
+sink errors are fail-open for the real database lifecycle. A snapshot failure
+degrades to an empty `lab_leases` result with `trace_error: true` rather than
+blocking ASGI startup or a lease return. Stack capture still occurs on every
+acquisition, so the flag is false/absent by default and must not be used as
+routine production telemetry. Disabling it leaves the ordinary pool gauges,
+counters, state events, and error signal unchanged.
 
 An acquisition timeout is detected through Django's exception cause chain,
 emitted once to the local atomic error file (or stderr), then re-raised
