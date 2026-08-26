@@ -22,6 +22,7 @@ _POOL_OPTION_KEYS = {
 CONN_MAX_AGE_DEFAULT = 0
 CONN_HEALTH_CHECKS_DEFAULT = True
 POOL_OPTIONS_DEFAULT = False
+POOL_ERROR_MIDDLEWARE = "mojo.middleware.database_pool.DatabasePoolErrorMiddleware"
 
 
 def _immutable(value):
@@ -108,6 +109,8 @@ def _candidate_plan(context, databases, environ):
             errors.append("DATABASES.default.CONN_MAX_AGE must be 0 when pooling")
         if context.get("DATABASE_CONN_MAX_AGE", 0) != 0:
             errors.append("DATABASE_CONN_MAX_AGE must be 0 when pooling")
+        if not isinstance(context.get("MIDDLEWARE"), (list, tuple)):
+            errors.append("MIDDLEWARE must be a list or tuple when pooling")
         api_workers = context.get("DATABASE_POOL_API_WORKERS")
         node_count = context.get("DATABASE_POOL_NODE_COUNT")
         observer_reserve = context.get("DATABASE_POOL_OBSERVER_RESERVE", 2)
@@ -185,6 +188,14 @@ def apply_connection_defaults(context, environ=None):
             dict(plan["identity"]), plan["role"], "default")
         default["ENGINE"] = "mojo.db.backends.postgresql"
         default["CONN_MAX_AGE"] = 0
+        middleware = [
+            item for item in context["MIDDLEWARE"]
+            if item != POOL_ERROR_MIDDLEWARE
+        ]
+        cors = "mojo.middleware.cors.CORSMiddleware"
+        insert_at = middleware.index(cors) + 1 if cors in middleware else 0
+        middleware.insert(insert_at, POOL_ERROR_MIDDLEWARE)
+        context["MIDDLEWARE"] = middleware
         LAST_POOL_DIAGNOSTIC = "pool enabled for role=api launcher=asgi alias=default"
     elif plan["enabled"]:
         reason = "invalid candidate" if not plan["valid"] else "process is not api/asgi"

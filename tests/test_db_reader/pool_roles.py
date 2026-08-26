@@ -18,6 +18,11 @@ def _context(**overrides):
         "DATABASE_POOL_ALIASES": ["default"],
         "DATABASE_POOL_API_WORKERS": 4,
         "DATABASE_POOL_NODE_COUNT": 2,
+        "MIDDLEWARE": [
+            "mojo.middleware.cors.CORSMiddleware",
+            "mojo.middleware.auth.AuthenticationMiddleware",
+            "mojo.middleware.logging.LoggerMiddleware",
+        ],
         "DATABASE_POOL_IDENTITY": {
             "project": "mojoland",
             "node": "node-a",
@@ -57,6 +62,12 @@ def test_only_exact_api_asgi_injects(opts):
         f"the pooled session must carry bounded operator identity, got {default!r}"
     assert default["CONN_MAX_AGE"] == 0, \
         f"the pooled alias must force CONN_MAX_AGE=0, got {default!r}"
+    boundary = "mojo.middleware.database_pool.DatabasePoolErrorMiddleware"
+    assert context["MIDDLEWARE"].count(boundary) == 1, \
+        f"pool activation must inject exactly one outer HTTP boundary, got {context['MIDDLEWARE']!r}"
+    assert context["MIDDLEWARE"].index(boundary) < context["MIDDLEWARE"].index(
+        "mojo.middleware.auth.AuthenticationMiddleware"), \
+        "the pool boundary must catch authentication-time acquisitions"
 
     for role, launcher in (
         ("", ""), ("api", ""), ("", "asgi"), ("jobs", "jobman"),
@@ -124,6 +135,7 @@ def test_invalid_candidates_fail_closed(opts):
     invalid.append(_context(DATABASE_POOL_ALIASES=["default", "reader"]))
     invalid.append(_context(DATABASE_POOL_API_WORKERS=True))
     invalid.append(_context(DATABASE_POOL_NODE_COUNT=0))
+    invalid.append(_context(MIDDLEWARE=None))
     invalid.append(_context(DATABASE_POOL_IDENTITY=None))
     invalid.append(_context(DATABASE_POOL_IDENTITY={
         "project": "mojoland", "node": "node a", "application": "abc", "deployment": "lab"}))

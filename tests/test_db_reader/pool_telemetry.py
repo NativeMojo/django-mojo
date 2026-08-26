@@ -218,6 +218,7 @@ def test_http_pool_timeout_returns_503(opts):
     from psycopg_pool import PoolTimeout
     from mojo.decorators.http import dispatch_error_handler
     from mojo.middleware.logging import LoggerMiddleware
+    from mojo.middleware.database_pool import DatabasePoolErrorMiddleware
 
     request = RequestFactory().get("/api/pool-test", HTTP_ACCEPT="application/json")
     request.DATA = objict()
@@ -242,6 +243,53 @@ def test_http_pool_timeout_returns_503(opts):
         f"outer middleware acquisition timeout must return bounded 503, got {response.status_code}: {payload!r}"
     assert request._mojo_pool_acquisition_error is True, \
         "the outer boundary must suppress ORM response logging after pool exhaustion"
+
+    del request._mojo_pool_acquisition_error
+    view_error = PoolTimeout("expected view timeout")
+    view_error._mojo_pool_reported = True
+    response = DatabasePoolErrorMiddleware(lambda _request: None).process_exception(
+        request, view_error)
+    payload = json.loads(response.content)
+    assert response.status_code == 503 and payload["code"] == 503, \
+        f"view-time acquisition timeout must return 503, got {response.status_code}: {payload!r}"
+    assert response["Retry-After"] == "1", \
+        "bounded acquisition failures must tell clients when to retry"
+    assert request._mojo_pool_acquisition_error is True, \
+        "the dedicated outer boundary must mark the acquisition failure"
+
+    from django.core.handlers.exception import convert_exception_to_response
+    from mojo.middleware.auth import AuthenticationMiddleware
+
+    def fail_auth(_token, _request):
+        error = PoolTimeout("expected authentication timeout")
+        error._mojo_pool_reported = True
+        raise error
+
+    auth_request = RequestFactory().get(
+        "/api/group/apikey/me",
+        HTTP_ACCEPT="application/json",
+        HTTP_AUTHORIZATION="apikey test-token",
+    )
+    authentication = AuthenticationMiddleware(
+        lambda _request: None,
+        handler_cache={"apikey": fail_auth},
+        handler_paths={},
+        bearer_name_map={"apikey": "user"},
+    )
+    response = convert_exception_to_response(authentication)(auth_request)
+    payload = json.loads(response.content)
+    assert response.status_code == 503 and payload["code"] == 503, \
+        f"Django's middleware exception wrapper must receive a 503 from authentication, got {response.status_code}: {payload!r}"
+    assert response["Retry-After"] == "1", \
+        "the real authentication response must carry bounded retry guidance"
+
+    html_request = RequestFactory().get("/html", HTTP_ACCEPT="text/html")
+    html_error = PoolTimeout("expected HTML timeout")
+    html_error._mojo_pool_reported = True
+    response = DatabasePoolErrorMiddleware(lambda _request: None).process_exception(
+        html_request, html_error)
+    assert response["Content-Type"].startswith("application/json"), \
+        "the emergency response must bypass DB-backed HTML branding and templates"
 
     import mojo.middleware.logging as logging_middleware
     now = time.monotonic()

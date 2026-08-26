@@ -85,3 +85,21 @@ def emit_pool_error(error, path=None, sink_path=None):
     except Exception:
         pass
     return True
+
+
+def http_pool_error_response(request, error):
+    """Return the bounded retryable HTTP response without touching the ORM."""
+    from django.http import JsonResponse
+
+    request._mojo_pool_acquisition_error = True
+    emit_pool_error(error, path=getattr(request, "path", None))
+    response = JsonResponse(
+        {
+            "status": False,
+            "error": "Database temporarily unavailable",
+            "code": 503,
+        },
+        status=503,
+    )
+    response["Retry-After"] = "1"
+    return response
