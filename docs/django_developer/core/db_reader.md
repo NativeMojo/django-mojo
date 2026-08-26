@@ -75,6 +75,17 @@ outermost otherwise, and always before authentication. Applications do not
 add it manually. Pool activation fails closed if `MIDDLEWARE` is not a list or
 tuple.
 
+Pool activation also installs Django's upstream ASGI error-rendering fix from
+ticket `#36027` for the supported Django 5.2 line. Django 5.2 dispatches an
+unresolved route's `handler404` on the event loop's shared executor. If an HTML
+error page or context processor opens a database connection there, ordinary
+request cleanup runs on a different thread and cannot return that lease. Under
+load, otherwise harmless scanner 404s can therefore consume an entire pool.
+Django 6.2 renders the error response on the request's thread-sensitive worker;
+django-mojo applies that same behavior before constructing a pooled ASGI
+handler. Disabled and non-API processes do not install the compatibility
+behavior.
+
 ### Pool sizing
 
 The pool is per API worker. Counts have no framework defaults: deployment must
@@ -173,8 +184,11 @@ The injected middleware uses Django's `process_exception` hook for view-time
 failures. `AuthenticationMiddleware` catches the same pool errors around its
 database-backed bearer handlers, including API keys, because Django converts
 middleware exceptions to responses before an outer middleware can see them.
-Together these boundaries cover authentication and view work. For a JSON
-request, a pool queue timeout or rejection returns:
+The thread-sensitive error-rendering compatibility covers ORM work performed
+by `handler400`, `handler403`, `handler404`, `handler500`, and their template
+context processors. Together these boundaries cover authentication, view, and
+error-response work. For a JSON request, a pool queue timeout or rejection
+returns:
 
 ```http
 HTTP/1.1 503 Service Unavailable

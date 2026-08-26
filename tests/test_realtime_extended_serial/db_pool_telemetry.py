@@ -1,10 +1,10 @@
 """Real tiny-pool acquisition, evidence, thread cleanup, and recovery proof."""
 
+import asyncio
 import copy
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from unittest import mock
 
@@ -163,30 +163,57 @@ def test_raw_thread_boundary_returns_every_lease(opts):
 
 
 @th.django_unit_test(
-    "HTTP pool boundary returns a 404 lease before the ASGI sync thread is reused")
-def test_http_request_boundary_returns_lease_on_response(opts):
-    from django.http import HttpResponseNotFound
+    "ASGI error rendering uses the request thread so its pool lease is returned")
+def test_asgi_error_response_returns_lease_on_request_thread(opts):
+    from asgiref.sync import ThreadSensitiveContext, sync_to_async
+    from django.core.handlers import base, exception
+    from django.db import close_old_connections
+    from django.http import Http404, HttpResponseNotFound
     from django.test import RequestFactory
-    from mojo.middleware.database_pool import DatabasePoolErrorMiddleware
+    from mojo.db.asgi_compat import install_thread_sensitive_error_responses
 
     with _observed_pool() as (alias, pool):
-        request = RequestFactory().get("/wp-admin/install.php?step=1")
+        request = RequestFactory().get(
+            "/open/visitors/info/gets?uuid=1",
+            HTTP_ACCEPT="text/html,application/xhtml+xml,*/*;q=0.8",
+        )
 
-        def missing(_request):
+        async def missing(_request):
+            raise Http404("expected unresolved route")
+
+        def render_error(_request, _error):
             assert _query(alias) == 1, \
-                "the representative 404 request must execute real PostgreSQL work"
+                "the HTML error handler must execute real PostgreSQL work"
             return HttpResponseNotFound("missing")
 
-        boundary = DatabasePoolErrorMiddleware(missing)
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            response = executor.submit(boundary, request).result(timeout=3)
+        async def exercise():
+            async with ThreadSensitiveContext():
+                handler = exception.convert_exception_to_response(missing)
+                with mock.patch.object(
+                        exception, "response_for_exception", render_error):
+                    response = await handler(request)
+                await sync_to_async(
+                    close_old_connections, thread_sensitive=True)()
+                return response
+
+        original_exception = exception.convert_exception_to_response
+        original_base = base.convert_exception_to_response
+        try:
+            assert install_thread_sensitive_error_responses() is True, \
+                "the Django 5.2 compatibility behavior must install once"
+            assert install_thread_sensitive_error_responses() is False, \
+                "the compatibility behavior must be idempotent"
+            response = asyncio.run(exercise())
             stats = pool.get_stats()
             assert response.status_code == 404, \
                 f"the request must retain its original response, got {response.status_code}"
             assert stats.get("pool_available") == stats.get("pool_size"), \
-                f"the outer HTTP boundary must return its same-thread lease, got {stats!r}"
+                f"the ASGI error handler must share request cleanup, got {stats!r}"
             assert stats.get("requests_waiting", 0) == 0, \
-                f"the completed 404 must not strand a waiter, got {stats!r}"
+                f"the completed HTML 404 must not strand a waiter, got {stats!r}"
+        finally:
+            exception.convert_exception_to_response = original_exception
+            base.convert_exception_to_response = original_base
 
 
 @th.unit_test("API-resident ORM thread sites use the shared lifecycle boundary")

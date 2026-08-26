@@ -19,8 +19,10 @@ These are read while URL/module bootstrap happens, so changes require a process 
   list or tuple; django-mojo injects its database-pool error boundary
   automatically for view exceptions; `AuthenticationMiddleware` handles pool
   failures from database-backed bearer handlers, including API keys, at source
-  so both paths return a bounded `503`. A database-backed `Setting` row is
-  ignored.
+  so both paths return a bounded `503`. Pool activation also backports Django
+  6.2's thread-sensitive ASGI error rendering to the supported Django 5.2
+  runtime, preventing database-backed HTML error handlers from stranding
+  executor-thread leases. A database-backed `Setting` row is ignored.
 - `DATABASE_POOL_ALIASES` — **file-only** exact allowlist. The laboratory
   accepts only `["default"]`; readers and multi-destination budgets are not
   inferred. Required only when pooling is enabled.
