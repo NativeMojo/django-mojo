@@ -44,17 +44,22 @@ class ProtocolTypeRouter:
             application = self.application_mapping[protocol_type]
             await application(scope, receive, send)
         elif protocol_type == "lifespan":
-            # Route lifespan events to HTTP application (Django handles startup/shutdown)
-            http_app = self.application_mapping.get("http")
-            if http_app:
-                await http_app(scope, receive, send)
-            else:
-                # No HTTP app to handle lifespan, just acknowledge
+            from mojo.db.pool_runtime import runtime
+            while True:
                 message = await receive()
                 if message["type"] == "lifespan.startup":
+                    try:
+                        runtime.start()
+                    except Exception:
+                        pass
                     await send({"type": "lifespan.startup.complete"})
                 elif message["type"] == "lifespan.shutdown":
+                    try:
+                        runtime.stop()
+                    except Exception:
+                        pass
                     await send({"type": "lifespan.shutdown.complete"})
+                    return
         else:
             # Unsupported protocol
 

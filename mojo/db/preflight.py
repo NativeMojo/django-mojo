@@ -5,7 +5,8 @@ from collections import namedtuple
 
 PoolPreflightResult = namedtuple(
     "PoolPreflightResult",
-    "enabled required_connections budget max_connections nodes workers max_size destination",
+    "enabled required_connections budget max_connections nodes workers max_size destination "
+    "reserved_connections current_connections observer_reserve headroom",
 )
 
 
@@ -22,7 +23,7 @@ def _positive_int(value, name):
 def validate_pool_preflight(plan, observed):
     """Validate candidate settings against facts from the default destination."""
     if not plan.get("enabled"):
-        return PoolPreflightResult(False, 0, 0, 0, 0, 0, 0, "disabled")
+        return PoolPreflightResult(False, 0, 0, 0, 0, 0, 0, "disabled", 0, 0, 0, 0)
     if not plan.get("valid"):
         raise PoolPreflightError("invalid pool plan: " + "; ".join(plan.get("errors") or ()))
     if plan.get("role") != "preflight" or plan.get("launcher") != "preflight":
@@ -58,15 +59,32 @@ def validate_pool_preflight(plan, observed):
         raise PoolPreflightError("connected database port does not match DATABASES.default")
 
     max_connections = _positive_int(observed.get("max_connections"), "database max_connections")
+    superuser_reserved = observed.get("superuser_reserved_connections", 0)
+    reserved = observed.get("reserved_connections", 0)
+    current_connections = observed.get("current_connections", 0)
+    observer_reserve = plan.get("observer_reserve", 2)
+    for value, name in (
+        (superuser_reserved, "superuser reserved connections"),
+        (reserved, "reserved connections"),
+        (current_connections, "current connection count"),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise PoolPreflightError(f"{name} must be a non-negative integer")
+    observer_reserve = _positive_int(observer_reserve, "observer connection reserve")
+    total_reserved = superuser_reserved + reserved
+    headroom = max_connections - total_reserved - current_connections - observer_reserve
+    if headroom <= 0:
+        raise PoolPreflightError("database has no ordinary connection headroom for the candidate pool")
     max_size = _positive_int(plan.get("options", {}).get("max_size"), "pool max_size")
     required = expected_nodes * expected_workers * max_size
-    budget = max_connections * 60 // 100
+    budget = min(max_connections * 60 // 100, headroom)
     if required > budget:
         raise PoolPreflightError(
             f"pool requires {required} connections but the 60% database budget is {budget}")
     return PoolPreflightResult(
         True, required, budget, max_connections, expected_nodes,
         expected_workers, max_size, expected_destination.get("host", ""),
+        total_reserved, current_connections, observer_reserve, headroom,
     )
 
 
@@ -77,11 +95,20 @@ def inspect_default_connection(connection):
     with connection.cursor() as cursor:
         cursor.execute("SHOW max_connections")
         max_connections = int(cursor.fetchone()[0])
+        cursor.execute("SHOW superuser_reserved_connections")
+        superuser_reserved_connections = int(cursor.fetchone()[0])
+        cursor.execute("SELECT current_setting('reserved_connections', true)")
+        reserved_connections = int(cursor.fetchone()[0] or 0)
+        cursor.execute("SELECT count(*) FROM pg_stat_activity")
+        current_connections = int(cursor.fetchone()[0])
         cursor.execute("SELECT current_database(), inet_server_port()")
         database_name, database_port = cursor.fetchone()
     return {
         "connection_is_pooled": pool is not None,
         "max_connections": max_connections,
+        "superuser_reserved_connections": superuser_reserved_connections,
+        "reserved_connections": reserved_connections,
+        "current_connections": current_connections,
         "database_name": database_name,
         "database_port": database_port,
         "destination": {

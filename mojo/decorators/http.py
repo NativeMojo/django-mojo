@@ -244,6 +244,15 @@ def dispatch_error_handler(func):
             return error_pages.error_response(
                 request, {"error": str(err), "code": 400, "status": False  }, 400)
         except Exception as err:
+            from mojo.db.errors import emit_pool_error, is_pool_acquisition_error
+            if is_pool_acquisition_error(err):
+                request._mojo_pool_acquisition_error = True
+                emit_pool_error(err, path=getattr(request, "path", None))
+                return error_pages.error_response(
+                    request,
+                    {"error": "Database temporarily unavailable", "code": 503, "status": False},
+                    503,
+                )
             if _api_metrics_enabled():
                 metrics.record("api_errors", category="mojo_api", min_granularity=_api_metrics_granularity())
             # logger.exception(f"Unhandled REST Exception: {request.path}")

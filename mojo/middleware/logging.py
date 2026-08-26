@@ -2,6 +2,8 @@ import json
 import threading
 from queue import Queue, Empty
 from mojo.apps.logit.models import Log
+from mojo.db.errors import emit_pool_error, is_pool_acquisition_error
+from mojo.helpers.async_db import database_connection_boundary
 from mojo.helpers.settings import settings
 from mojo.helpers import logit, request as request_helper
 from mojo.helpers import error_pages
@@ -32,7 +34,8 @@ def background_logger():
             log_type, request, content, log_kind = log_item
 
             if log_type == "db":
-                Log.logit(request, content, log_kind)
+                with database_connection_boundary():
+                    Log.logit(request, content, log_kind)
             elif log_type == "file":
                 method = request.method if request else "SYSTEM"
                 ip = getattr(request, 'ip', 'unknown') if request else 'system'
@@ -87,6 +90,16 @@ class LoggerMiddleware:
         try:
             response = self.get_response(request)
         except Exception as e:
+            if is_pool_acquisition_error(e):
+                request._mojo_pool_acquisition_error = True
+                emit_pool_error(e, path=getattr(request, "path", None))
+                response = error_pages.error_response(
+                    request,
+                    {"status": False, "error": "Database temporarily unavailable", "code": 503},
+                    503,
+                )
+                self.log_response(request, response)
+                return response
             err = ERROR_LOGGER.exception()
             Log.logit(request, err, "api_error")  # Keep errors synchronous
             error = "system error"
@@ -210,7 +223,7 @@ class LoggerMiddleware:
 
         log_content = self.get_response_log_content(request, response)
 
-        if LOGIT_DB_ALL:
+        if LOGIT_DB_ALL and not getattr(request, "_mojo_pool_acquisition_error", False):
             self.queue_log("db", request, log_content, "response")
         if LOGIT_FILE_ALL:
             self.queue_log("file", request, log_content, "response")
