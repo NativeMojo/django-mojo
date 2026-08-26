@@ -1,40 +1,179 @@
 """Settings-time database pooling and optional reader configuration."""
 
 import copy
+import os
+from types import MappingProxyType
+
+from django.core.exceptions import ImproperlyConfigured
 
 
 LAST_SKIP_REASON = None
+LAST_POOL_PLAN = None
+LAST_POOL_DIAGNOSTIC = None
 
-# Engines that hold a real server connection. Substring matching keeps legacy
-# aliases ("postgresql_psycopg2") working; file-backed engines stay untouched.
 _SERVER_ENGINES = ("postgresql", "mysql", "oracle")
+_POOL_OPTION_KEYS = {
+    "min_size", "max_size", "timeout", "max_idle", "max_lifetime",
+}
 
 CONN_MAX_AGE_DEFAULT = 0
 CONN_HEALTH_CHECKS_DEFAULT = True
 POOL_OPTIONS_DEFAULT = False
 
 
-def apply_connection_defaults(context):
-    """Apply explicit psycopg pools and safe connection defaults.
+def _immutable(value):
+    if isinstance(value, dict):
+        return MappingProxyType({key: _immutable(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_immutable(item) for item in value)
+    return value
 
-    Django advises disabling persistent connections under ASGI. PostgreSQL
-    aliases therefore retain per-request connections and ``CONN_MAX_AGE = 0``
-    by default. ``DATABASE_POOL_OPTIONS`` explicitly enables a native psycopg
-    pool for otherwise unconfigured PostgreSQL aliases.
 
-    Explicit alias ``CONN_MAX_AGE`` / ``OPTIONS["pool"]`` values always win.
-    Setting the legacy ``DATABASE_CONN_MAX_AGE`` key selects persistent
-    connections instead. MySQL and Oracle retain Django's per-request default
-    because Django's native pool is PostgreSQL-only.
-    """
+def _positive_int(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _positive_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+
+
+def _pool_intent(databases):
+    aliases = []
+    for name, alias in databases.items():
+        if not isinstance(alias, dict):
+            continue
+        options = alias.get("OPTIONS")
+        if isinstance(options, dict) and options.get("pool"):
+            aliases.append(name)
+    return aliases
+
+
+def _strip_pools(databases):
+    for alias in databases.values():
+        if not isinstance(alias, dict):
+            continue
+        options = alias.get("OPTIONS")
+        if isinstance(options, dict):
+            options.pop("pool", None)
+
+
+def _candidate_plan(context, databases, environ):
+    pool_options = context.get("DATABASE_POOL_OPTIONS", POOL_OPTIONS_DEFAULT)
+    embedded_aliases = _pool_intent(databases)
+    enabled = pool_options is not False or bool(embedded_aliases)
+    role = environ.get("MOJO_PROCESS_ROLE", "")
+    launcher = environ.get("MOJO_PROCESS_LAUNCHER", "")
+    default = databases.get("default") if isinstance(databases.get("default"), dict) else {}
+    errors = []
+
+    if enabled:
+        if not isinstance(pool_options, dict):
+            errors.append("DATABASE_POOL_OPTIONS must be a dictionary")
+            clean_options = {}
+        else:
+            clean_options = copy.deepcopy(pool_options)
+            unknown = sorted(set(clean_options) - _POOL_OPTION_KEYS)
+            if unknown:
+                errors.append("DATABASE_POOL_OPTIONS contains unsupported keys: " + ", ".join(unknown))
+            if not _positive_int(clean_options.get("max_size")):
+                errors.append("DATABASE_POOL_OPTIONS.max_size must be a positive integer")
+            min_size = clean_options.get("min_size")
+            if not isinstance(min_size, int) or isinstance(min_size, bool) or min_size < 0:
+                errors.append("DATABASE_POOL_OPTIONS.min_size must be a non-negative integer")
+            elif _positive_int(clean_options.get("max_size")) and min_size > clean_options["max_size"]:
+                errors.append("DATABASE_POOL_OPTIONS.min_size cannot exceed max_size")
+            if not _positive_number(clean_options.get("timeout")):
+                errors.append("DATABASE_POOL_OPTIONS.timeout must be a positive number")
+            for name in ("max_idle", "max_lifetime"):
+                if name in clean_options and not _positive_number(clean_options[name]):
+                    errors.append(f"DATABASE_POOL_OPTIONS.{name} must be a positive number")
+
+        if context.get("DATABASE_POOL_ALIASES") != ["default"]:
+            errors.append('DATABASE_POOL_ALIASES must be exactly ["default"]')
+        if embedded_aliases:
+            errors.append("pool intent must come from DATABASE_POOL_OPTIONS, not DATABASES aliases")
+        if not default:
+            errors.append("DATABASES.default must be a dictionary")
+        elif "postgresql" not in (default.get("ENGINE") or ""):
+            errors.append("DATABASES.default must use PostgreSQL")
+        if default.get("CONN_MAX_AGE", 0) != 0:
+            errors.append("DATABASES.default.CONN_MAX_AGE must be 0 when pooling")
+        if context.get("DATABASE_CONN_MAX_AGE", 0) != 0:
+            errors.append("DATABASE_CONN_MAX_AGE must be 0 when pooling")
+        api_workers = context.get("DATABASE_POOL_API_WORKERS")
+        node_count = context.get("DATABASE_POOL_NODE_COUNT")
+        if not _positive_int(api_workers):
+            errors.append("DATABASE_POOL_API_WORKERS must be a positive integer")
+        if not _positive_int(node_count):
+            errors.append("DATABASE_POOL_NODE_COUNT must be a positive integer")
+    else:
+        clean_options = {}
+        api_workers = None
+        node_count = None
+
+    destination = {
+        "engine": default.get("ENGINE", ""),
+        "host": default.get("HOST", ""),
+        "port": str(default.get("PORT", "") or ""),
+        "name": default.get("NAME", ""),
+    }
+    return _immutable({
+        "enabled": enabled,
+        "valid": not errors,
+        "errors": tuple(errors),
+        "role": role,
+        "launcher": launcher,
+        "aliases": ("default",) if enabled else (),
+        "options": clean_options,
+        "api_workers": api_workers,
+        "node_count": node_count,
+        "destination": destination,
+    })
+
+
+def apply_connection_defaults(context, environ=None):
+    """Apply safe defaults and an API-only validated psycopg pool."""
+    global LAST_POOL_DIAGNOSTIC, LAST_POOL_PLAN
+
     databases = context.get("DATABASES")
     if not isinstance(databases, dict):
+        LAST_POOL_PLAN = _immutable({
+            "enabled": False, "valid": True, "errors": (), "role": "",
+            "launcher": "", "aliases": (), "options": {},
+            "api_workers": None, "node_count": None, "destination": {},
+        })
+        LAST_POOL_DIAGNOSTIC = "pool disabled: DATABASES is not a dictionary"
         return
+
+    environ = os.environ if environ is None else environ
+    plan = _candidate_plan(context, databases, environ)
+    LAST_POOL_PLAN = plan
+    _strip_pools(databases)
+
+    proven_api = plan["role"] == "api" and plan["launcher"] == "asgi"
+    if plan["enabled"] and proven_api and not plan["valid"]:
+        raise ImproperlyConfigured("; ".join(plan["errors"]))
+    if plan["enabled"] and proven_api:
+        default = databases["default"]
+        options = default.get("OPTIONS")
+        if not isinstance(options, dict):
+            options = {}
+            default["OPTIONS"] = options
+        options["pool"] = copy.deepcopy(dict(plan["options"]))
+        default["CONN_MAX_AGE"] = 0
+        LAST_POOL_DIAGNOSTIC = "pool enabled for role=api launcher=asgi alias=default"
+    elif plan["enabled"]:
+        reason = "invalid candidate" if not plan["valid"] else "process is not api/asgi"
+        LAST_POOL_DIAGNOSTIC = (
+            f"pool suppressed for role={plan['role'] or 'missing'} "
+            f"launcher={plan['launcher'] or 'missing'}: {reason}"
+        )[:240]
+    else:
+        LAST_POOL_DIAGNOSTIC = "pool disabled by DATABASE_POOL_OPTIONS=False"
+
     max_age = context.get("DATABASE_CONN_MAX_AGE", CONN_MAX_AGE_DEFAULT)
-    max_age_configured = "DATABASE_CONN_MAX_AGE" in context
     health_checks = context.get(
         "DATABASE_CONN_HEALTH_CHECKS", CONN_HEALTH_CHECKS_DEFAULT)
-    pool_options = context.get("DATABASE_POOL_OPTIONS", POOL_OPTIONS_DEFAULT)
     for alias in databases.values():
         if not isinstance(alias, dict):
             continue
@@ -42,28 +181,13 @@ def apply_connection_defaults(context):
         if not any(name in engine for name in _SERVER_ENGINES):
             continue
         options = alias.get("OPTIONS")
-        explicit_pool = isinstance(options, dict) and "pool" in options
-        explicit_max_age = "CONN_MAX_AGE" in alias
-        use_default_pool = (
-            "postgresql" in engine
-            and pool_options
-            and not explicit_pool
-            and not explicit_max_age
-            and not max_age_configured
-        )
-
-        if use_default_pool:
-            if not isinstance(options, dict):
-                options = {}
-                alias["OPTIONS"] = options
-            options["pool"] = copy.deepcopy(pool_options)
+        has_pool = isinstance(options, dict) and bool(options.get("pool"))
+        if has_pool:
             alias["CONN_MAX_AGE"] = 0
-        elif explicit_pool and options.get("pool"):
-            # Django rejects a native pool combined with persistent connections.
-            alias.setdefault("CONN_MAX_AGE", 0)
         else:
             alias.setdefault("CONN_MAX_AGE", max_age)
         alias.setdefault("CONN_HEALTH_CHECKS", health_checks)
+
 
 _ROUTER = "mojo.db.router.ReaderRouter"
 _MIDDLEWARE = "mojo.middleware.db_reader.ReaderPinMiddleware"
@@ -93,8 +217,6 @@ def apply_reader_database(context):
         if context.get("DATABASE_READER_PORT") is not None:
             reader["PORT"] = context["DATABASE_READER_PORT"]
         if "DATABASE_READER_CONN_MAX_AGE" in context:
-            # This legacy override explicitly selects persistent connections
-            # for the reader, so it cannot also inherit a native psycopg pool.
             reader["CONN_MAX_AGE"] = context["DATABASE_READER_CONN_MAX_AGE"]
             options = reader.get("OPTIONS")
             if isinstance(options, dict):

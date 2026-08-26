@@ -2,10 +2,11 @@
 
 > **ASGI connection pooling.** Independently of reader routing, django-mojo
 > leaves PostgreSQL connections per-request by default. Native psycopg 3
-> pooling is opt-in through `DATABASE_POOL_OPTIONS` or an alias's
-> `OPTIONS["pool"]`; `CONN_MAX_AGE` stays `0`, as Django requires for native
-> pooling and recommends under ASGI. Explicit per-alias connection settings
-> always win. See `DATABASE_POOL_OPTIONS`, `DATABASE_CONN_MAX_AGE`, and
+> pooling is an API-process-only opt-in through strict
+> `DATABASE_POOL_OPTIONS`; `CONN_MAX_AGE` stays `0`, as Django requires for
+> native pooling and recommends under ASGI. The laboratory supports only the
+> exact `default` alias and rejects alias-embedded pool configuration. See
+> `DATABASE_POOL_OPTIONS`, `DATABASE_POOL_ALIASES`, and
 > `DATABASE_CONN_HEALTH_CHECKS` in the [settings reference](../helpers/settings_reference.md).
 
 django-mojo can route safe reads to a database replica without application
@@ -55,28 +56,32 @@ DATABASE_POOL_OPTIONS = {
     "max_idle": 300,
     "max_lifetime": 1800,
 }
+DATABASE_POOL_ALIASES = ["default"]
+DATABASE_POOL_API_WORKERS = 4
+DATABASE_POOL_NODE_COUNT = 2
 ```
 
-`DATABASE_POOL_OPTIONS` applies to both writer and reader. Declare an explicit
-`DATABASES["reader"]` alias when the reader needs different pool sizing. The
-example's 30-minute maximum lifetime periodically replaces connections so an
-Aurora reader endpoint can redistribute them. The legacy
-`DATABASE_READER_CONN_MAX_AGE` remains available, but setting it opts the
-derived reader out of native pooling.
+These values describe a candidate; they do not authorize every process to use
+it. The launcher must overwrite `MOJO_PROCESS_ROLE=api` and
+`MOJO_PROCESS_LAUNCHER=asgi` before importing Django. Jobs, cron, management,
+tests, preflight and missing or contradictory markers strip the candidate and
+retain ordinary connections. The reader stays unpooled. The example's
+30-minute maximum lifetime periodically replaces writer connections.
 
 ### Pool sizing
 
-The pool is per process and per alias. django-mojo deploys four Uvicorn workers
-by default, and applications may also run job, scheduler, MCP, or custom worker
-processes. Size the fleet with:
+The pool is per API worker. Counts have no framework defaults: deployment must
+provide exact values and prove rendered and live topology agree. Size with:
 
 ```text
-nodes × database-using processes per node × sum(each alias's max_size)
+nodes × API workers per node × default.max_size
 ```
 
-Leave database capacity for migrations, background processes, operators, and
-failover. The pool size must cover each process's concurrent database users,
-and every non-request execution path must close or return its connection.
+Preflight reads `SHOW max_connections` through the same ordinary `default`
+connection and permits at most `floor(max_connections × 0.60)`. It fails before
+migrations, host mutation or restart when topology, destination, ordinary
+connection status or capacity cannot be proved. The remaining 40 percent is
+reserved for migrations, background processes, operators and failover.
 Psycopg exposes `pool_size`, `pool_available`, and `requests_waiting`; tune from
 those measurements rather than raising the cap speculatively.
 
@@ -109,7 +114,9 @@ them as lists, keeps custom routers before `ReaderRouter`, and inserts its
 request middleware only when it is not already present. A configuration with
 no valid `DATABASES["default"]` or no `MIDDLEWARE` is left unchanged rather
 than breaking startup; `mojo.db.config.LAST_SKIP_REASON` records why reader
-routing was skipped.
+routing was skipped. `LAST_POOL_PLAN` is an immutable, nonsecret snapshot
+captured before role suppression; `LAST_POOL_DIAGNOSTIC` is the bounded startup
+disposition.
 
 ## Routing decisions
 

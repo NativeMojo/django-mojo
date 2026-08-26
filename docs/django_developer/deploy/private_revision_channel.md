@@ -41,6 +41,9 @@ consume only the exact activation descriptor committed to MojoLand.
   cannot reverse schema changes.
 - Building does not activate anything. Publishing the bytes and committing a
   MojoLand descriptor are separate reviewed steps.
+- Pool-capable revisions still ship dark. The application must opt in with the
+  strict default-only settings and its deploy must pass ordinary-connection
+  topology/capacity preflight before migrations or restart.
 - Retire the private descriptor and force-reinstall the recorded public
   version when the experiment ends. A plain `django-mojo==1.19.1` install is
   insufficient because PEP 440 can consider a local `1.19.1+...` build a
