@@ -133,49 +133,6 @@ def test_sqlite_untouched(opts):
         f"sqlite aliases must not receive health-check defaults, got {local!r}"
 
 
-@th.unit_test("conn defaults: explicit native psycopg pool is preserved")
-def test_explicit_pool_is_preserved(opts):
-    from mojo.db.config import apply_connection_defaults
-
-    context = _context(DATABASE_CONN_MAX_AGE=300)
-    context["DATABASES"]["default"]["OPTIONS"] = {"pool": True}
-    apply_connection_defaults(context)
-    default = context["DATABASES"]["default"]
-
-    assert default["OPTIONS"]["pool"] is True, \
-        f"an explicit pool configuration must survive unchanged, got {default!r}"
-    assert default["CONN_MAX_AGE"] == 0, \
-        f"an explicit pool must receive a compatible CONN_MAX_AGE, got {default!r}"
-    assert default["CONN_HEALTH_CHECKS"] is True, \
-        f"an explicit pool must still receive health-check defaults, got {default!r}"
-
-
-@th.unit_test("conn defaults: writer and derived reader get independent pools")
-def test_reader_alias_gets_pool(opts):
-    from mojo.db.config import apply_connection_defaults, apply_reader_database
-
-    pool_options = {"min_size": 1, "max_size": 4, "timeout": 5}
-    context = _context(
-        DATABASE_READER_HOST="reader.internal",
-        DATABASE_POOL_OPTIONS=pool_options,
-    )
-    context["MIDDLEWARE"] = ["project.middleware.Existing"]
-    apply_reader_database(context)
-    apply_connection_defaults(context)
-    databases = context["DATABASES"]
-
-    assert databases["reader"]["CONN_MAX_AGE"] == 0, \
-        f"the reader must use a pool-compatible connection age: {databases['reader']!r}"
-    assert databases["reader"]["CONN_HEALTH_CHECKS"] is True, \
-        f"the reader alias must still gain health checks: {databases['reader']!r}"
-    assert databases["default"]["CONN_MAX_AGE"] == 0, \
-        f"the default alias must use a pool-compatible age: {databases['default']!r}"
-    assert databases["reader"]["OPTIONS"]["pool"] == databases["default"]["OPTIONS"]["pool"], \
-        f"writer and reader must receive the same explicit pool options: {databases!r}"
-    assert databases["reader"]["OPTIONS"]["pool"] is not databases["default"]["OPTIONS"]["pool"], \
-        "writer and reader pool dictionaries must be independent copies"
-
-
 @th.unit_test("conn defaults: PostgreSQL pooling requires explicit opt-in")
 def test_postgresql_pooling_requires_explicit_opt_in(opts):
     from mojo.db.config import apply_connection_defaults
@@ -190,19 +147,9 @@ def test_postgresql_pooling_requires_explicit_opt_in(opts):
         f"native pooling must require an explicit project opt-in, got {default!r}"
 
 
-@th.unit_test("conn defaults: project can replace or disable pool defaults")
-def test_project_pool_options_are_honored(opts):
+@th.unit_test("conn defaults: project can explicitly disable pooling")
+def test_project_can_disable_pool(opts):
     from mojo.db.config import apply_connection_defaults
-
-    custom = {"min_size": 0, "max_size": 2, "timeout": 3}
-    context = _context(DATABASE_POOL_OPTIONS=custom)
-    apply_connection_defaults(context)
-    default = context["DATABASES"]["default"]
-
-    assert default["OPTIONS"]["pool"] == custom, \
-        f"DATABASE_POOL_OPTIONS must replace the defaults, got {default!r}"
-    assert default["OPTIONS"]["pool"] is not custom, \
-        "pool options must be copied instead of mutating the project setting"
 
     disabled = _context(DATABASE_POOL_OPTIONS=False)
     apply_connection_defaults(disabled)

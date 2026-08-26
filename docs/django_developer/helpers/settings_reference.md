@@ -6,13 +6,26 @@ This reference lists framework-recognized setting keys (names only, no values).
 
 These are read while URL/module bootstrap happens, so changes require a process restart.
 
-- `DATABASE_POOL_OPTIONS` — optional **file-only** psycopg 3 pool dictionary
-  applied to PostgreSQL aliases that declare neither `CONN_MAX_AGE` nor
-  `OPTIONS["pool"]`. Unset or `False`, connections remain per-request and no
-  pool is created. Each Uvicorn worker and long-running process owns an
-  independent pool, so enable this only after sizing every process and proving
-  that non-request worker paths return connections. Set `OPTIONS["pool"]` on
-  an alias for per-alias control. A database-backed `Setting` row is ignored.
+- `DATABASE_POOL_OPTIONS` — **file-only**, disabled unless it is a strict
+  psycopg 3 dictionary with positive `max_size` and `timeout`, non-negative
+  `min_size` no greater than `max_size`, and optional positive `max_idle` /
+  `max_lifetime`. `True`, unknown keys and alias-embedded pool intent are
+  rejected. Even a valid candidate is injected only into `default` when the
+  process proves exact `MOJO_PROCESS_ROLE=api` and
+  `MOJO_PROCESS_LAUNCHER=asgi`; every other role strips it and keeps an
+  ordinary connection. `False` needs no sizing settings and is the production
+  default. A database-backed `Setting` row is ignored.
+- `DATABASE_POOL_ALIASES` — **file-only** exact allowlist. The laboratory
+  accepts only `["default"]`; readers and multi-destination budgets are not
+  inferred. Required only when pooling is enabled.
+- `DATABASE_POOL_API_WORKERS` — **file-only** positive integer count of ASGI
+  workers per API node. No default; enabling without an explicit value fails.
+- `DATABASE_POOL_NODE_COUNT` — **file-only** positive integer count of API
+  nodes. No default; enabling without an explicit value fails.
+- `MOJO_PROCESS_ROLE` / `MOJO_PROCESS_LAUNCHER` — launcher-owned environment
+  identity. Applications must overwrite inherited values before importing
+  Django. Only `api` / `asgi` can receive the pool; management, jobs, cron,
+  tests, preflight and unknown/missing pairs remain unpooled.
 - `DATABASE_CONN_MAX_AGE` — **file-only** compatibility default for
   `CONN_MAX_AGE` (seconds), default `0`. An explicit per-alias value always
   wins. Native psycopg pooling always uses
@@ -31,9 +44,8 @@ These are read while URL/module bootstrap happens, so changes require a process 
   primary port is retained. Ignored when the application explicitly declares
   `DATABASES["reader"]`.
 - `DATABASE_READER_CONN_MAX_AGE` — **file-only** connection lifetime in seconds
-  for a django-mojo-derived `reader` alias. Unset, the reader receives the same
-  per-request default or explicit `DATABASE_POOL_OPTIONS` as other PostgreSQL
-  aliases. Setting this legacy key opts the derived reader out of pooling.
+  for a django-mojo-derived `reader` alias. The pooling laboratory never pools
+  a reader; this legacy setting affects its ordinary connection only.
   Ignored when the application
   explicitly declares `DATABASES["reader"]`.
 - `MOJO_API_MODULE`
