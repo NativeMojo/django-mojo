@@ -171,6 +171,47 @@ def test_lab_lease_tracker_failed_return(opts):
         f"the bounded local failure must remain attributable, got {active!r}"
 
 
+@th.unit_test("pool telemetry: trace sink failures never escape into database lifecycle")
+def test_lab_lease_trace_is_fail_open(opts):
+    from mojo.db.pool_telemetry import (
+        active_lease_snapshot,
+        record_lease_acquired,
+        record_lease_returned,
+        record_lease_return_failed,
+        record_lease_returning,
+    )
+
+    class BrokenTracker:
+        def acquired(self, *args, **kwargs):
+            raise OSError("trace sink unavailable")
+
+        def returning(self, *args, **kwargs):
+            raise OSError("trace sink unavailable")
+
+        def returned(self, *args, **kwargs):
+            raise OSError("trace sink unavailable")
+
+        def return_failed(self, *args, **kwargs):
+            raise OSError("trace sink unavailable")
+
+        def snapshot(self):
+            raise OSError("trace sink unavailable")
+
+    tracker = BrokenTracker()
+    connection = object()
+    assert record_lease_acquired(connection, "default", tracker=tracker) is None, \
+        "an acquire trace failure must disappear instead of leaking a checked-out connection"
+    assert record_lease_returning(connection, tracker=tracker) is None, \
+        "a pre-return trace failure must never prevent the real pool return"
+    assert record_lease_returned(connection, tracker=tracker) is None, \
+        "a post-return trace failure must not change a successful close"
+    assert record_lease_return_failed(connection, "return error", tracker=tracker) is None, \
+        "a failed-return trace failure must preserve the original database error"
+    assert active_lease_snapshot(tracker=tracker) == {
+        "count": 0, "oldest_seconds": 0, "leases": [], "trace_error": True,
+    }, "a snapshot trace failure must degrade locally without blocking ASGI startup"
+
+
 @th.unit_test("pool telemetry: aggregation ignores stale and duplicate worker snapshots")
 def test_snapshot_aggregation(opts):
     from mojo.db.pool_telemetry import aggregate_snapshots, atomic_write

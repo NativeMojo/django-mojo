@@ -178,27 +178,43 @@ def _active_request_path():
         return None
 
 
-def record_lease_acquired(connection, alias):
-    return _LEASE_TRACKER.acquired(
-        connection, alias=alias, path=_active_request_path(),
+def _trace_best_effort(method, *args, **kwargs):
+    try:
+        return method(*args, **kwargs)
+    except Exception:
+        return None
+
+
+def record_lease_acquired(connection, alias, *, tracker=None):
+    owner = tracker or _LEASE_TRACKER
+    return _trace_best_effort(
+        owner.acquired, connection, alias=alias, path=_active_request_path(),
         sink_path=_lease_sink_path())
 
 
-def record_lease_returning(connection):
-    return _LEASE_TRACKER.returning(connection, sink_path=_lease_sink_path())
+def record_lease_returning(connection, *, tracker=None):
+    owner = tracker or _LEASE_TRACKER
+    return _trace_best_effort(
+        owner.returning, connection, sink_path=_lease_sink_path())
 
 
-def record_lease_returned(connection):
-    return _LEASE_TRACKER.returned(connection, sink_path=_lease_sink_path())
+def record_lease_returned(connection, *, tracker=None):
+    owner = tracker or _LEASE_TRACKER
+    return _trace_best_effort(
+        owner.returned, connection, sink_path=_lease_sink_path())
 
 
-def record_lease_return_failed(connection, error):
-    return _LEASE_TRACKER.return_failed(
-        connection, error, sink_path=_lease_sink_path())
+def record_lease_return_failed(connection, error, *, tracker=None):
+    owner = tracker or _LEASE_TRACKER
+    return _trace_best_effort(
+        owner.return_failed, connection, error, sink_path=_lease_sink_path())
 
 
-def active_lease_snapshot():
-    return _LEASE_TRACKER.snapshot()
+def active_lease_snapshot(*, tracker=None):
+    value = _trace_best_effort((tracker or _LEASE_TRACKER).snapshot)
+    if value is None:
+        return {"count": 0, "oldest_seconds": 0, "leases": [], "trace_error": True}
+    return value
 
 
 def process_uuid():
