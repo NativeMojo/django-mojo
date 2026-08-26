@@ -1,5 +1,10 @@
 # Project deployment scripts
 
+For the isolated MojoLand database-pooling laboratory, see
+[Private MojoLand framework revisions](private_revision_channel.md). That path
+builds and identifies an exact private wheel without publishing it to PyPI;
+ordinary projects continue to use the release flow documented below.
+
 django-mojo owns the deployment transaction. The normal entry point is the
 packaged `update.sh`, resolved without importing project Django:
 
