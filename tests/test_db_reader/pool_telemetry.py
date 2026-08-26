@@ -562,3 +562,61 @@ def test_local_probe_cancel_and_recovery(opts):
     failed = failed_probe.exercise(1, hold_seconds=0)
     assert failed["ok"] is False and failed["return_errors"], \
         f"a failed lease return must never produce false-green recovery, got {failed!r}"
+
+
+@th.unit_test("pool telemetry: local SQL failure fixtures recover without leaking details")
+def test_local_probe_sql_failure_fixtures(opts):
+    from django.db import DatabaseError
+    from mojo.db.pool_runtime import LocalPoolProbe
+
+    class Cursor:
+        def __init__(self, error=False):
+            self.error = error
+            self.executed = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, statement, params=None):
+            self.executed.append((statement, params))
+            if self.error:
+                raise DatabaseError("deliberate secret fixture detail")
+
+    class Wrapper:
+        def __init__(self):
+            self.cursors = []
+            self.fail_next = False
+            self.rollbacks = 0
+
+        def cursor(self):
+            cursor = Cursor(error=self.fail_next)
+            self.fail_next = False
+            self.cursors.append(cursor)
+            return cursor
+
+        def rollback(self):
+            self.rollbacks += 1
+
+    wrapper = Wrapper()
+    probe = LocalPoolProbe(
+        "/tmp/unused-pool-fixture.sock", deadline=3,
+        connection_handler={"default": wrapper})
+    probe._query = lambda: 1
+
+    slow = probe.slow_query(0.05)
+    assert slow["ok"] is True and slow["fixture"] == "slow_query", \
+        f"the bounded slow query must recover cleanly, got {slow!r}"
+    assert wrapper.cursors[0].executed == [("SELECT pg_sleep(%s)", [0.05])], \
+        f"the fixture must use a parameterized bounded sleep, got {wrapper.cursors[0].executed!r}"
+
+    wrapper.fail_next = True
+    failed = probe.transaction_error()
+    assert failed["ok"] is True and failed["expected_database_error"] is True, \
+        f"the deliberate statement error must be observed and recovered, got {failed!r}"
+    assert failed["recovered_without_restart"] is True and wrapper.rollbacks == 1, \
+        f"the failed transaction must roll back before the fresh query, got {failed!r}"
+    assert "secret fixture detail" not in json.dumps(failed), \
+        f"the local response must expose error classes only, got {failed!r}"

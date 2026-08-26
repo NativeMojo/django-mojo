@@ -258,6 +258,70 @@ class LocalPoolProbe:
             "error": exercise_error,
         }
 
+    def slow_query(self, seconds=1):
+        """Run one bounded PostgreSQL sleep through Django's pooled wrapper."""
+        if not self.lock.acquire(blocking=False):
+            return {"ok": False, "error": "probe already running"}
+        duration = max(0.05, min(float(seconds), 5.0, self.deadline - 0.5))
+        started = time.monotonic()
+        error_type = None
+        try:
+            with database_connection_boundary():
+                with self.connections["default"].cursor() as cursor:
+                    cursor.execute("SELECT pg_sleep(%s)", [duration])
+            recovered = self._query() == 1
+        except Exception as error:
+            recovered = False
+            error_type = type(error).__name__[:80]
+        finally:
+            self.lock.release()
+        return {
+            "ok": bool(recovered and error_type is None),
+            "fixture": "slow_query",
+            "requested_seconds": round(duration, 3),
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "recovered_without_restart": recovered,
+            "error_type": error_type,
+        }
+
+    def transaction_error(self):
+        """Prove a failed statement rolls back and returns a reusable lease."""
+        from django.db import DatabaseError
+
+        if not self.lock.acquire(blocking=False):
+            return {"ok": False, "error": "probe already running"}
+        expected_error = False
+        rollback_error_type = None
+        error_type = None
+        wrapper = self.connections["default"]
+        try:
+            with database_connection_boundary():
+                try:
+                    with wrapper.cursor() as cursor:
+                        cursor.execute("SELECT 1 / 0")
+                except DatabaseError:
+                    expected_error = True
+                    try:
+                        wrapper.rollback()
+                    except Exception as error:
+                        rollback_error_type = type(error).__name__[:80]
+            recovered = self._query() == 1
+        except Exception as error:
+            recovered = False
+            error_type = type(error).__name__[:80]
+        finally:
+            self.lock.release()
+        return {
+            "ok": bool(
+                expected_error and recovered
+                and rollback_error_type is None and error_type is None),
+            "fixture": "transaction_error",
+            "expected_database_error": expected_error,
+            "rollback_error_type": rollback_error_type,
+            "recovered_without_restart": recovered,
+            "error_type": error_type,
+        }
+
     def cancel(self):
         self.cancelled.set()
 
@@ -284,6 +348,10 @@ class LocalPoolProbe:
                     elif request.get("command") == "exercise":
                         response = self.exercise(
                             request.get("leases", 1), request.get("hold_seconds", 1))
+                    elif request.get("command") == "slow_query":
+                        response = self.slow_query(request.get("seconds", 1))
+                    elif request.get("command") == "transaction_error":
+                        response = self.transaction_error()
                     else:
                         response = {"ok": False, "error": "unsupported command"}
                 except Exception as error:
