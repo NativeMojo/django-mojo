@@ -245,14 +245,51 @@ def test_http_pool_timeout_returns_503(opts):
         "the outer boundary must suppress ORM response logging after pool exhaustion"
 
     del request._mojo_pool_acquisition_error
-    response = DatabasePoolErrorMiddleware(fail)(request)
+    view_error = PoolTimeout("expected view timeout")
+    view_error._mojo_pool_reported = True
+    response = DatabasePoolErrorMiddleware(lambda _request: None).process_exception(
+        request, view_error)
     payload = json.loads(response.content)
     assert response.status_code == 503 and payload["code"] == 503, \
-        f"authentication-time acquisition timeout must return 503, got {response.status_code}: {payload!r}"
+        f"view-time acquisition timeout must return 503, got {response.status_code}: {payload!r}"
     assert response["Retry-After"] == "1", \
         "bounded acquisition failures must tell clients when to retry"
     assert request._mojo_pool_acquisition_error is True, \
         "the dedicated outer boundary must mark the acquisition failure"
+
+    from django.core.handlers.base import BaseHandler
+    from django.test import override_settings
+    from mojo.middleware import auth as auth_middleware
+
+    original = auth_middleware.AUTH_BEARER_HANDLERS_CACHE["apikey"]
+
+    def fail_auth(_token, _request):
+        error = PoolTimeout("expected authentication timeout")
+        error._mojo_pool_reported = True
+        raise error
+
+    auth_middleware.AUTH_BEARER_HANDLERS_CACHE["apikey"] = fail_auth
+    try:
+        with override_settings(MIDDLEWARE=[
+            "mojo.middleware.database_pool.DatabasePoolErrorMiddleware",
+            "mojo.middleware.auth.AuthenticationMiddleware",
+        ]):
+            handler = BaseHandler()
+            handler._get_response = lambda _request: None
+            handler.load_middleware(is_async=False)
+            auth_request = RequestFactory().get(
+                "/api/group/apikey/me",
+                HTTP_ACCEPT="application/json",
+                HTTP_AUTHORIZATION="apikey test-token",
+            )
+            response = handler._middleware_chain(auth_request)
+    finally:
+        auth_middleware.AUTH_BEARER_HANDLERS_CACHE["apikey"] = original
+    payload = json.loads(response.content)
+    assert response.status_code == 503 and payload["code"] == 503, \
+        f"the real Django stack must map authentication PoolTimeout to 503, got {response.status_code}: {payload!r}"
+    assert response["Retry-After"] == "1", \
+        "the real authentication response must carry bounded retry guidance"
 
     import mojo.middleware.logging as logging_middleware
     now = time.monotonic()

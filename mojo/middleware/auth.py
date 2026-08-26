@@ -9,6 +9,7 @@ from mojo.helpers import modules
 from objict import objict
 from mojo.helpers import logit
 from mojo.db import use_primary
+from mojo.db.errors import http_pool_error_response, is_pool_acquisition_error
 
 AUTH_BEARER_HANDLER_PATHS = settings.get_static("AUTH_BEARER_HANDLERS", {})
 
@@ -49,8 +50,16 @@ class AuthenticationMiddleware(MiddlewareMixin):
         request.auth_token = objict(prefix=prefix, token=token)
 
         # decode data to find the instance
-        with use_primary():
-            instance, error = handler(token, request)
+        try:
+            with use_primary():
+                instance, error = handler(token, request)
+        except Exception as error:
+            # Middleware exceptions are converted to 500 responses by Django
+            # before an outer middleware's __call__ can see them. Authentication
+            # is itself DB-touching, so its pool boundary must live here.
+            if is_pool_acquisition_error(error):
+                return http_pool_error_response(request, error)
+            raise
         if error is not None:
             response = JsonResponse({'error': error}, status=401)
             # A bad bearer never reaches a view, so this is the ONLY place a

@@ -135,9 +135,12 @@ unchanged. HTTP boundaries return bounded `503`; WebSockets close with `1013`.
 Those paths never attempt ORM logging, so exhaustion cannot recursively need a
 second lease to report the first failure.
 
-The injected HTTP boundary covers session/authentication database access as
-well as view and response work. For a JSON request, a pool queue timeout or
-rejection returns:
+The injected middleware uses Django's `process_exception` hook for view-time
+failures. Database-backed API-key authentication catches the same pool errors
+at its own acquisition site, because Django converts middleware exceptions to
+responses before an outer middleware can see them. Together these boundaries
+cover authentication and view work. For a JSON request, a pool queue timeout
+or rejection returns:
 
 ```http
 HTTP/1.1 503 Service Unavailable

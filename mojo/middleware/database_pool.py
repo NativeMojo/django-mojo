@@ -1,31 +1,14 @@
-"""Outermost HTTP boundary for bounded database-pool acquisition failures."""
+"""Django exception hook for bounded database-pool acquisition failures."""
 
-from mojo.db.errors import emit_pool_error, is_pool_acquisition_error
-from mojo.helpers import error_pages
+from django.utils.deprecation import MiddlewareMixin
+
+from mojo.db.errors import http_pool_error_response, is_pool_acquisition_error
 
 
-class DatabasePoolErrorMiddleware:
-    """Map pool queue failures from authentication or later work to HTTP 503."""
+class DatabasePoolErrorMiddleware(MiddlewareMixin):
+    """Map view-time pool queue failures through Django's exception hook."""
 
-    def __init__(self, get_response):
-        self.get_response = get_response
-
-    def __call__(self, request):
-        try:
-            return self.get_response(request)
-        except Exception as error:
-            if not is_pool_acquisition_error(error):
-                raise
-            request._mojo_pool_acquisition_error = True
-            emit_pool_error(error, path=getattr(request, "path", None))
-            response = error_pages.error_response(
-                request,
-                {
-                    "status": False,
-                    "error": "Database temporarily unavailable",
-                    "code": 503,
-                },
-                503,
-            )
-            response["Retry-After"] = "1"
-            return response
+    def process_exception(self, request, error):
+        if not is_pool_acquisition_error(error):
+            return None
+        return http_pool_error_response(request, error)
