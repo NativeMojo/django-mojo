@@ -80,6 +80,7 @@ Every response is wrapped in a standard envelope.
 | 401 | Not authenticated — request reached a permission-gated endpoint with no valid session |
 | 403 | Authenticated but permission denied |
 | 404 | Resource not found |
+| 503 | Service temporarily unavailable — retry according to `Retry-After` |
 | 500 | Server error |
 
 **401 vs 403:** Permission-gated endpoints return **401** for unauthenticated requests and **403** for authenticated requests that lack the required permission. Both include `"is_authenticated": false` or `true` respectively in the error envelope. Clients should redirect to login on 401 and show a "not authorized" message on 403.
@@ -89,6 +90,25 @@ Every response is wrapped in a standard envelope.
 whitespace-separated parts), the server treats the request as unauthenticated rather than
 erroring — a permission-gated endpoint responds normally with **401**, and a public endpoint
 still succeeds.
+
+### Temporary database unavailability
+
+Deployments using the bounded ASGI database pool can return this response if
+all database leases are briefly occupied, including while authenticating the
+request:
+
+```http
+HTTP/1.1 503 Service Unavailable
+Retry-After: 1
+Content-Type: application/json
+
+{"status":false,"error":"Database temporarily unavailable","code":503}
+```
+
+This is a transient service-capacity response, not an authentication failure.
+Wait at least the number of seconds in `Retry-After` before retrying. Keep
+retries bounded; do not immediately fan out or retry every failed request at
+once.
 
 ## HTML Error Pages — and why they will not reach you
 

@@ -68,6 +68,13 @@ tests, preflight and missing or contradictory markers strip the candidate and
 retain ordinary connections. The reader stays unpooled. The example's
 30-minute maximum lifetime periodically replaces writer connections.
 
+For the exact pooled API/ASGI process, django-mojo also injects
+`mojo.middleware.database_pool.DatabasePoolErrorMiddleware` exactly once. It
+sits immediately inside `CORSMiddleware` when that middleware is present, or
+outermost otherwise, and always before authentication. Applications do not
+add it manually. Pool activation fails closed if `MIDDLEWARE` is not a list or
+tuple.
+
 ### Pool sizing
 
 The pool is per API worker. Counts have no framework defaults: deployment must
@@ -127,6 +134,23 @@ emitted once to the local atomic error file (or stderr), then re-raised
 unchanged. HTTP boundaries return bounded `503`; WebSockets close with `1013`.
 Those paths never attempt ORM logging, so exhaustion cannot recursively need a
 second lease to report the first failure.
+
+The injected HTTP boundary covers session/authentication database access as
+well as view and response work. For a JSON request, a pool queue timeout or
+rejection returns:
+
+```http
+HTTP/1.1 503 Service Unavailable
+Retry-After: 1
+Content-Type: application/json
+
+{"status":false,"error":"Database temporarily unavailable","code":503}
+```
+
+The response contains no exception or database detail. Non-pool exceptions
+continue through Django's ordinary error handling, and an explicit HTML
+request receives the standard `503` page through the same content-negotiation
+path.
 
 Raw ORM-capable threads must use `database_thread_target()` or
 `submit_database_work()`. Both enter and leave with

@@ -15,7 +15,10 @@ These are read while URL/module bootstrap happens, so changes require a process 
   process proves exact `MOJO_PROCESS_ROLE=api` and
   `MOJO_PROCESS_LAUNCHER=asgi`; every other role strips it and keeps an
   ordinary connection. `False` needs no sizing settings and is the production
-  default. A database-backed `Setting` row is ignored.
+  default. An enabled API/ASGI candidate also requires `MIDDLEWARE` to be a
+  list or tuple; django-mojo injects its database-pool error boundary
+  automatically so authentication-time acquisition failures can return a
+  bounded `503`. A database-backed `Setting` row is ignored.
 - `DATABASE_POOL_ALIASES` — **file-only** exact allowlist. The laboratory
   accepts only `["default"]`; readers and multi-destination budgets are not
   inferred. Required only when pooling is enabled.
