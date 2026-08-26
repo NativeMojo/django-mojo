@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import time
+import traceback
 import uuid
 from pathlib import Path
 
@@ -26,6 +27,178 @@ PROCESS_UUID = uuid.uuid4().hex
 _PROCESS_PID = os.getpid()
 _OBSERVED = {name: 0 for name in OBSERVED_COUNTERS}
 _OBSERVED_LOCK = threading.Lock()
+
+
+class LeaseTracker:
+    """Lab-only acquire/return correlation without retaining DB connections."""
+
+    def __init__(self, pid=None, monotonic_clock=time.monotonic,
+                 wall_clock=time.time, stack_factory=None):
+        self.pid = os.getpid() if pid is None else int(pid)
+        self.monotonic_clock = monotonic_clock
+        self.wall_clock = wall_clock
+        self.stack_factory = stack_factory or self._bounded_stack
+        self.lock = threading.Lock()
+        self.sequence = 0
+        self.by_connection = {}
+        self.active = {}
+
+    @staticmethod
+    def _bounded_stack():
+        frames = traceback.extract_stack(limit=14)[:-2]
+        return tuple(
+            f"{Path(frame.filename).name}:{frame.name}:{frame.lineno}"
+            for frame in frames[-8:]
+        )
+
+    def _event(self, record, phase, sink_path=None, error=None):
+        payload = {
+            "schema": 1,
+            "event": "database_pool_lease",
+            "at": self.wall_clock(),
+            "pid": self.pid,
+            "lease_id": record["lease_id"],
+            "alias": record["alias"],
+            "phase": phase,
+            "path": record.get("path"),
+            "thread_id": record["thread_id"],
+            "thread_name": record["thread_name"],
+            "stack": record["stack"],
+        }
+        if error:
+            payload["error"] = str(error)[:160]
+        if sink_path is not None:
+            append_bounded_event(sink_path, payload)
+        return payload
+
+    def acquired(self, connection, alias, path=None, sink_path=None):
+        now = self.monotonic_clock()
+        thread = threading.current_thread()
+        connection_key = id(connection)
+        with self.lock:
+            self.sequence += 1
+            lease_id = f"p{self.pid}-l{self.sequence}"
+            record = {
+                "lease_id": lease_id,
+                "alias": str(alias)[:64],
+                "path": str(path)[:240] if path else None,
+                "thread_id": threading.get_ident(),
+                "thread_name": thread.name[:80],
+                "stack": tuple(self.stack_factory())[:8],
+                "acquired_at": now,
+                "phase": "acquired",
+            }
+            self.by_connection[connection_key] = lease_id
+            self.active[lease_id] = record
+        self._event(record, "acquired", sink_path=sink_path)
+        return lease_id
+
+    def _find(self, connection):
+        with self.lock:
+            lease_id = self.by_connection.get(id(connection))
+            return self.active.get(lease_id) if lease_id else None
+
+    def returning(self, connection, sink_path=None):
+        record = self._find(connection)
+        if record is None:
+            return None
+        with self.lock:
+            record["phase"] = "returning"
+        return self._event(record, "returning", sink_path=sink_path)
+
+    def returned(self, connection, sink_path=None):
+        connection_key = id(connection)
+        with self.lock:
+            lease_id = self.by_connection.pop(connection_key, None)
+            record = self.active.pop(lease_id, None) if lease_id else None
+        if record is None:
+            return None
+        return self._event(record, "returned", sink_path=sink_path)
+
+    def return_failed(self, connection, error, sink_path=None):
+        record = self._find(connection)
+        if record is None:
+            return None
+        with self.lock:
+            record["phase"] = "return_failed"
+            record["error"] = str(error)[:160]
+        return self._event(
+            record, "return_failed", sink_path=sink_path, error=error)
+
+    def snapshot(self):
+        now = self.monotonic_clock()
+        with self.lock:
+            records = sorted(
+                (dict(record) for record in self.active.values()),
+                key=lambda record: record["acquired_at"],
+            )
+        leases = []
+        for record in records[:8]:
+            leases.append({
+                "lease_id": record["lease_id"],
+                "alias": record["alias"],
+                "path": record.get("path"),
+                "thread_id": record["thread_id"],
+                "thread_name": record["thread_name"],
+                "stack": record["stack"],
+                "phase": record["phase"],
+                "age_seconds": round(max(0.0, now - record["acquired_at"]), 3),
+                **({"error": record["error"]} if record.get("error") else {}),
+            })
+        return {
+            "count": len(records),
+            "oldest_seconds": leases[0]["age_seconds"] if leases else 0,
+            "leases": leases,
+        }
+
+
+_LEASE_TRACKER = LeaseTracker()
+
+
+def lease_trace_enabled():
+    try:
+        from django.conf import settings
+        return bool(getattr(settings, "DATABASE_POOL_LAB_TRACE_LEASES", False))
+    except Exception:
+        return False
+
+
+def _lease_sink_path():
+    root = Path(os.environ.get("MOJO_POOL_TELEMETRY_ROOT", "/tmp/mojo-pool"))
+    return root / f"worker-{os.getpid()}-leases.jsonl"
+
+
+def _active_request_path():
+    try:
+        from mojo.models.rest import ACTIVE_REQUEST
+        request = ACTIVE_REQUEST.get()
+        path = getattr(request, "path", None) if request is not None else None
+        return str(path)[:240] if path else None
+    except Exception:
+        return None
+
+
+def record_lease_acquired(connection, alias):
+    return _LEASE_TRACKER.acquired(
+        connection, alias=alias, path=_active_request_path(),
+        sink_path=_lease_sink_path())
+
+
+def record_lease_returning(connection):
+    return _LEASE_TRACKER.returning(connection, sink_path=_lease_sink_path())
+
+
+def record_lease_returned(connection):
+    return _LEASE_TRACKER.returned(connection, sink_path=_lease_sink_path())
+
+
+def record_lease_return_failed(connection, error):
+    return _LEASE_TRACKER.return_failed(
+        connection, error, sink_path=_lease_sink_path())
+
+
+def active_lease_snapshot():
+    return _LEASE_TRACKER.snapshot()
 
 
 def process_uuid():

@@ -38,4 +38,28 @@ class DatabaseWrapper(DjangoDatabaseWrapper):
             raise
         from mojo.db.pool_telemetry import record_acquisition
         record_acquisition(max(0.0, time.monotonic() - started))
+        from mojo.db.pool_telemetry import lease_trace_enabled, record_lease_acquired
+        if self.pool and lease_trace_enabled():
+            record_lease_acquired(connection, self.alias)
         return connection
+
+    def _close(self):
+        connection = self.connection
+        if connection is None or not self.pool:
+            return super()._close()
+        from mojo.db.pool_telemetry import (
+            lease_trace_enabled,
+            record_lease_returned,
+            record_lease_return_failed,
+            record_lease_returning,
+        )
+        if not lease_trace_enabled():
+            return super()._close()
+        record_lease_returning(connection)
+        try:
+            result = super()._close()
+        except Exception as error:
+            record_lease_return_failed(connection, error)
+            raise
+        record_lease_returned(connection)
+        return result

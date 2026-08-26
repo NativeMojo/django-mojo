@@ -108,6 +108,69 @@ def test_counter_normalization_and_reset(opts):
         "persistent exhaustion must emit only its bounded reminder"
 
 
+@th.unit_test("pool telemetry: lab lease tracing pairs acquire and return without retaining connections")
+def test_lab_lease_tracker(opts):
+    from mojo.db.pool_telemetry import LeaseTracker
+
+    class Connection:
+        pass
+
+    ticks = iter((10.0, 10.25, 11.0, 11.5))
+    tracker = LeaseTracker(
+        pid=42,
+        monotonic_clock=lambda: next(ticks),
+        wall_clock=lambda: 100.0,
+        stack_factory=lambda: ("auth.py:validate:10", "base.py:get_new_connection:20"),
+    )
+    connection = Connection()
+    with tempfile.TemporaryDirectory() as root:
+        sink = Path(root) / "leases.jsonl"
+        lease_id = tracker.acquired(
+            connection, alias="default", path="/api/group/apikey/me", sink_path=sink)
+        active = tracker.snapshot()
+        assert active["count"] == 1 and active["oldest_seconds"] == 0.25, \
+            f"one checked-out lease must be visible without retaining its connection, got {active!r}"
+        assert active["leases"][0]["lease_id"] == lease_id, \
+            f"the active snapshot must correlate with the acquire event, got {active!r}"
+        assert active["leases"][0]["path"] == "/api/group/apikey/me", \
+            f"the sandbox trace must identify the DB-backed request path, got {active!r}"
+
+        tracker.returning(connection, sink_path=sink)
+        tracker.returned(connection, sink_path=sink)
+        released = tracker.snapshot()
+        events = [json.loads(line) for line in sink.read_text().splitlines()]
+        assert released["count"] == 0 and released["oldest_seconds"] == 0, \
+            f"a matching Django close must remove the active lease, got {released!r}"
+        assert [event["phase"] for event in events] == ["acquired", "returning", "returned"], \
+            f"the local trace must prove the complete lifecycle, got {events!r}"
+        assert all(event["lease_id"] == lease_id for event in events), \
+            f"all phases must use one nonsecret correlation id, got {events!r}"
+        assert all("connection" not in event for event in events), \
+            f"lease evidence must not serialize connection objects or credentials, got {events!r}"
+
+
+@th.unit_test("pool telemetry: failed lease returns remain visible for diagnosis")
+def test_lab_lease_tracker_failed_return(opts):
+    from mojo.db.pool_telemetry import LeaseTracker
+
+    connection = object()
+    ticks = iter((20.0, 20.5, 21.0))
+    tracker = LeaseTracker(
+        pid=43,
+        monotonic_clock=lambda: next(ticks),
+        wall_clock=lambda: 200.0,
+        stack_factory=lambda: (),
+    )
+    tracker.acquired(connection, alias="default")
+    tracker.returning(connection)
+    tracker.return_failed(connection, "pool rejected return")
+    active = tracker.snapshot()
+    assert active["count"] == 1 and active["leases"][0]["phase"] == "return_failed", \
+        f"a failed return must stay active instead of manufacturing recovery, got {active!r}"
+    assert active["leases"][0]["error"] == "pool rejected return", \
+        f"the bounded local failure must remain attributable, got {active!r}"
+
+
 @th.unit_test("pool telemetry: aggregation ignores stale and duplicate worker snapshots")
 def test_snapshot_aggregation(opts):
     from mojo.db.pool_telemetry import aggregate_snapshots, atomic_write
