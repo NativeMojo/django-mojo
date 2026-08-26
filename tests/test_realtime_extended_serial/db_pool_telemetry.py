@@ -4,6 +4,7 @@ import copy
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from unittest import mock
 
@@ -159,6 +160,33 @@ def test_raw_thread_boundary_returns_every_lease(opts):
             f"reused raw threads must return every pool lease, got {stats!r}"
         assert stats.get("requests_waiting", 0) == 0, \
             f"repeated thread work must not leave waiters, got {stats!r}"
+
+
+@th.django_unit_test(
+    "HTTP pool boundary returns a 404 lease before the ASGI sync thread is reused")
+def test_http_request_boundary_returns_lease_on_response(opts):
+    from django.http import HttpResponseNotFound
+    from django.test import RequestFactory
+    from mojo.middleware.database_pool import DatabasePoolErrorMiddleware
+
+    with _observed_pool() as (alias, pool):
+        request = RequestFactory().get("/wp-admin/install.php?step=1")
+
+        def missing(_request):
+            assert _query(alias) == 1, \
+                "the representative 404 request must execute real PostgreSQL work"
+            return HttpResponseNotFound("missing")
+
+        boundary = DatabasePoolErrorMiddleware(missing)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            response = executor.submit(boundary, request).result(timeout=3)
+            stats = pool.get_stats()
+            assert response.status_code == 404, \
+                f"the request must retain its original response, got {response.status_code}"
+            assert stats.get("pool_available") == stats.get("pool_size"), \
+                f"the outer HTTP boundary must return its same-thread lease, got {stats!r}"
+            assert stats.get("requests_waiting", 0) == 0, \
+                f"the completed 404 must not strand a waiter, got {stats!r}"
 
 
 @th.unit_test("API-resident ORM thread sites use the shared lifecycle boundary")
