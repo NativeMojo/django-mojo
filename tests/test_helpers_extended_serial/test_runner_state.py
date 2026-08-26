@@ -9,7 +9,7 @@ from testit import helpers as th
 
 
 @th.django_unit_setup()
-def setup_pooled_connection_boundary(opts):
+def setup_connection_boundary(opts):
     from django.db import connection, connections
 
     connections.close_all()
@@ -17,31 +17,31 @@ def setup_pooled_connection_boundary(opts):
         cursor.execute("SELECT 1")
 
 
-@th.unit_test("django_unit_setup returns pooled connections at its boundary")
+@th.unit_test("django_unit_setup closes connections at its boundary")
 def test_django_setup_closes_connections(opts):
     from django.db import connection
 
     th.assert_true(
         connection.connection is None,
-        "django_unit_setup must return its thread-local connection to the pool",
+        "django_unit_setup must close its thread-local connection at the boundary",
     )
 
 
-@th.django_unit_test("pooled lifecycle probe")
-def test_pooled_connection_probe(opts):
+@th.django_unit_test("connection lifecycle probe")
+def test_connection_lifecycle_probe(opts):
     from django.db import connection
 
     with connection.cursor() as cursor:
         cursor.execute("SELECT 1")
 
 
-@th.unit_test("django_unit_test returns pooled connections at its boundary")
+@th.unit_test("django_unit_test closes connections at its boundary")
 def test_django_test_closes_connections(opts):
     from django.db import connection
 
     th.assert_true(
         connection.connection is None,
-        "django_unit_test must return its thread-local connection to the pool",
+        "django_unit_test must close its thread-local connection at the boundary",
     )
 
 

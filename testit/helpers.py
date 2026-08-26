@@ -156,9 +156,8 @@ def django_unit_setup():
                 return _run_setup(func, *args, **kwargs)
             finally:
                 # TestIt reuses ThreadPoolExecutor workers across modules.
-                # Return this thread's connection at the setup boundary just
-                # as Django does at request/test boundaries, otherwise a
-                # bounded psycopg pool is exhausted by idle worker threads.
+                # Close this thread's Django wrappers at the setup boundary so
+                # long-lived idle workers do not retain database connections.
                 from django.db import connections
                 connections.close_all()
         wrapper._is_setup = True
@@ -417,8 +416,8 @@ def django_unit_test(arg=None):
                 _run_unit(func, test_name, *args, **kwargs)
             finally:
                 # The runner's worker threads outlive individual tests. Close
-                # their Django wrappers so pooled connections are checked in
-                # instead of remaining leased to an idle thread indefinitely.
+                # their Django wrappers so idle threads do not retain database
+                # connections between test boundaries.
                 from django.db import connections
                 connections.close_all()
 
