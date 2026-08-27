@@ -42,16 +42,63 @@ def setup_users(opts):
 
 
 @th.tier("core")
-@th.unit_test("user_jwt_login")
+@th.django_unit_test("user_jwt_login")
 def test_user_jwt_login(opts):
+    from mojo.apps.account.models import User
+
+    # Existing users already have an auth_key, so token creation does not
+    # incidentally full-save the in-memory last_login assignment.
+    User.objects.filter(username=TEST_USER).update(
+        auth_key="test-auth-key", last_login=None)
     resp = opts.client.login(TEST_USER, TEST_PWORD)
     assert opts.client.is_authenticated, "authentication failed"
     assert opts.client.jwt_data.uid is not None, "missing user id"
+    last_login = User.objects.values_list("last_login", flat=True).get(username=TEST_USER)
+    assert last_login is not None, \
+        "successful JWT login must persist last_login on the user record"
     resp = opts.client.get(f"/api/user/{opts.client.jwt_data.uid}")
     assert resp.status_code == 200, f"Expected status_code is 200 but got {resp.status_code}"
     assert resp.response.data.id == opts.client.jwt_data.uid
     assert resp.response.data.username == TEST_USER, f"username: {resp.response.data.username }"
     opts.user_id = opts.client.jwt_data.uid
+
+
+@th.tier("core")
+@th.django_unit_test("failed JWT mint does not record login success")
+def test_failed_jwt_mint_preserves_last_login(opts):
+    from types import SimpleNamespace
+    from objict import objict
+    from mojo.apps.account.models import User, UserLoginEvent
+    from mojo.apps.account.rest.user import jwt_login
+
+    user = User.objects.get(username=TEST_USER)
+    before_last_login = user.last_login
+    before_events = UserLoginEvent.objects.filter(
+        user=user, source="sessions_revoke").count()
+
+    def fail_auth_key():
+        raise RuntimeError("forced JWT mint failure")
+
+    user.get_auth_key = fail_auth_key
+    user.track = lambda: None
+    request = SimpleNamespace(
+        DATA=objict(), META={}, device=None, ip="127.0.0.1", user_agent="")
+
+    with th.assert_raises(RuntimeError):
+        jwt_login(request, user, source="sessions_revoke")
+
+    user.refresh_from_db()
+    assert user.last_login == before_last_login, (
+        "a failed JWT mint must not change persisted last_login "
+        f"({before_last_login!r} -> {user.last_login!r})"
+    )
+    after_events = UserLoginEvent.objects.filter(
+        user=user, source="sessions_revoke").count()
+    assert after_events == before_events, (
+        "a failed JWT mint must not create a login event "
+        f"({before_events} -> {after_events})"
+    )
+
 
 @th.tier("core")
 @th.unit_test("admin_jwt_login")

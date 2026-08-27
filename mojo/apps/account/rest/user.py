@@ -842,15 +842,7 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
             return blocked
     if user.requires_password_change:
         return forced_password_response(user)
-    user.last_login = dates.utcnow()
     user.track()
-    # Record login event with geo data — must not break login on failure
-    try:
-        from mojo.apps.account.models.login_event import UserLoginEvent
-        UserLoginEvent.track(request, user, device=request.device, source=source)
-    except Exception:
-        from mojo.helpers import logit
-        logit.exception("Failed to record login event")
     # auth_time stamps WHEN the user genuinely authenticated (this login). It is
     # carried forward unchanged across silent refreshes (see on_refresh_token) and
     # read by the step-up freshness gate (services.fresh_auth). Stamped always —
@@ -869,7 +861,6 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
         user.get_auth_key(),
         access_token_expiry=access_token_expiry,
         refresh_token_expiry=refresh_token_expiry).create(**keys)
-    token_package['user'] = user.to_dict("basic")
     # track webapp origin for multi-tenant URL resolution
     webapp_url = request.DATA.get("webapp_base_url") or request.META.get("HTTP_ORIGIN")
     if webapp_url:
@@ -877,11 +868,11 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
             user.set_protected_metadata("orig_webapp_url", webapp_url)
         else:
             user.set_protected_metadata("last_webapp_url", webapp_url)
-    # USER_LOGIN_HANDLER — wrapped internally; runtime errors never block login
-    account_extensions.fire_user_login(
-        user=user, request=request, source=source, is_new_user=is_new_user)
+    now = dates.utcnow()
+    user.last_login = now
+    token_package['user'] = user.to_dict("basic")
     if legacy:
-        return {
+        response = {
             "status": True,
             "data": {
                 "access": token_package.access_token,
@@ -889,10 +880,26 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
                 "id": user.id
             }
         }
-    response_data = dict(token_package)
-    if extra:
-        response_data.update(extra)
-    return JsonResponse(dict(status=True, data=response_data))
+    else:
+        response_data = dict(token_package)
+        if extra:
+            response_data.update(extra)
+        response = JsonResponse(dict(status=True, data=response_data))
+
+    # Persist success only after token minting and response construction. This
+    # keeps a failed mint from clearing first-login/pending state.
+    User.objects.filter(pk=user.pk).update(last_login=now)
+    # Record login event with geo data — must not break login on failure
+    try:
+        from mojo.apps.account.models.login_event import UserLoginEvent
+        UserLoginEvent.track(request, user, device=request.device, source=source)
+    except Exception:
+        from mojo.helpers import logit
+        logit.exception("Failed to record login event")
+    # USER_LOGIN_HANDLER — wrapped internally; runtime errors never block login
+    account_extensions.fire_user_login(
+        user=user, request=request, source=source, is_new_user=is_new_user)
+    return response
 
 
 # Login source recorded for a gated handoff exchange. A visitor signing into a
@@ -906,8 +913,8 @@ def group_token_login(request, user, group):
 
     A sibling of `jwt_login`, not a branch inside it: the JWT pair is never
     constructed, so there is no code path here that could return one by
-    accident. The side effects are jwt_login's, performed explicitly and in the
-    same order, with two deliberate differences noted below.
+    accident. Its success side effects mirror jwt_login, with two deliberate
+    differences noted below.
 
     Response shape (NO `refresh_token` key at all — its absence is what makes
     the client clear a stale one):
@@ -933,11 +940,9 @@ def group_token_login(request, user, group):
 
     now = dates.utcnow()
     user.last_login = now
-    # Persisted EXPLICITLY. `user.track()` only writes last_activity; in
-    # jwt_login the last_login assignment reaches the database as a side effect
-    # of the webapp_url protected-metadata save, which this path deliberately
-    # does not perform (see below). A targeted update mirrors User.touch()'s own
-    # idiom and keeps a full save() off the login path.
+    # Persisted explicitly because `user.track()` only writes last_activity.
+    # The targeted update mirrors jwt_login and User.touch(), keeping a full
+    # save() off the login path.
     User.objects.filter(pk=user.pk).update(last_login=now)
     user.track()
     try:
