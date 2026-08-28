@@ -1813,39 +1813,30 @@ def _send_account_realtime_event(user, event, data):
         pass
 
 
-@md.POST("auth/email/change/confirm")
-@md.denies_key_backed_session()
-@md.strict_rate_limit("email_change_confirm", ip_limit=10, ip_window=3600)
-@md.custom_security("requires valid email change token, or authenticated session with valid OTP code")
-def on_email_change_confirm(request):
+def _commit_email_change(request, user, new_email):
     """
-    Complete an email change.
+    Apply an already-authorised email change — the ONE commit path.
 
-    Accepts either:
-      { "token": "ec:..." }   — existing link flow; no auth required (token is the credential)
-      { "code": "123456" }    — code flow; requires authentication (Bearer token)
+    Both confirm endpoints call this and nothing else does the work, so the
+    JWT-issuing legacy POST and the confirm-only sibling can never drift apart
+    on availability, rotation, audit or notification. The caller has already
+    proved authorisation (a verified ec: token, or an authenticated session
+    plus a valid OTP); everything from there down is identical either way:
 
-    In both cases: commits the new email, marks it verified, rotates auth_key
-    (invalidates all other sessions), and issues a fresh JWT.
+      * the account must still be active,
+      * the address must still be free (another account may have claimed it
+        while the confirmation sat in an inbox),
+      * email + is_email_verified + a fresh auth_key are written directly,
+        bypassing the REST guard, and username follows when it mirrored the
+        old address,
+      * one `email:changed` user log line,
+      * exactly one account-global `email_change:confirmed` activity row,
+      * one best-effort realtime event to the other open sessions.
+
+    Returns the committed address. Raises on refusal, so no partial commit is
+    ever reported as success.
     """
     import uuid
-    from mojo.apps.account.utils import tokens as tok_utils
-
-    token = request.DATA.get("token")
-    code = request.DATA.get("code")
-
-    if not token and not code:
-        raise merrors.ValueException("token or code is required")
-
-    if code:
-        # Code path — user must be authenticated; identity comes from the JWT
-        if not request.user or not request.user.is_authenticated:
-            raise merrors.PermissionDeniedException("Authentication required", 401, 401)
-        user = request.user
-        new_email = tok_utils.verify_email_change_otp(user, code)
-    else:
-        # Link/token path — token is the credential; no active session required
-        user, new_email = tok_utils.verify_email_change_token(token)
 
     if not user.is_active:
         raise merrors.PermissionDeniedException("Account is disabled", 403, 403)
@@ -1884,7 +1875,98 @@ def on_email_change_confirm(request):
     # event gives them a clean signal to re-prompt login rather than silently failing)
     _send_account_realtime_event(user, "account:email:changed", {"email": new_email})
 
+    return new_email
+
+
+@md.POST("auth/email/change/confirm")
+@md.denies_key_backed_session()
+@md.strict_rate_limit("email_change_confirm", ip_limit=10, ip_window=3600)
+@md.custom_security("requires valid email change token, or authenticated session with valid OTP code")
+def on_email_change_confirm(request):
+    """
+    Complete an email change AND sign the caller in.
+
+    Accepts either:
+      { "token": "ec:..." }   — existing link flow; no auth required (token is the credential)
+      { "code": "123456" }    — code flow; requires authentication (Bearer token)
+
+    In both cases: commits the new email, marks it verified, rotates auth_key
+    (invalidates all other sessions), and issues a fresh JWT.
+
+    Kept exactly as-is for the SPA clients that already call it — the code flow
+    is theirs, and a client that already holds a session legitimately wants the
+    re-issued pair after the rotation. The confirmation LANDING does not use
+    this endpoint; see on_email_change_apply below for why a link click must
+    not mint a session.
+    """
+    from mojo.apps.account.utils import tokens as tok_utils
+
+    token = request.DATA.get("token")
+    code = request.DATA.get("code")
+
+    if not token and not code:
+        raise merrors.ValueException("token or code is required")
+
+    if code:
+        # Code path — user must be authenticated; identity comes from the JWT
+        if not request.user or not request.user.is_authenticated:
+            raise merrors.PermissionDeniedException("Authentication required", 401, 401)
+        user = request.user
+        new_email = tok_utils.verify_email_change_otp(user, code)
+    else:
+        # Link/token path — token is the credential; no active session required
+        user, new_email = tok_utils.verify_email_change_token(token)
+
+    _commit_email_change(request, user, new_email)
+
     return jwt_login(request, user, source="email_change")
+
+
+@md.POST("auth/email/change/apply")
+@md.denies_key_backed_session()
+@md.strict_rate_limit("email_change_apply", ip_limit=10, ip_window=3600)
+@md.custom_security("requires valid email change token")
+@md.requires_params("token")
+def on_email_change_apply(request):
+    """
+    Commit an ec: token's email change and NOTHING else — the button on the
+    email-change landing page (GET auth/email/change/confirm) calls this.
+
+    Deliberately not POST auth/email/change/confirm. That endpoint ends in
+    jwt_login, so a landing pointed there hands a full access+refresh pair to
+    whatever browser happened to open the emailed link — a shared machine, a
+    mail client's embedded webview — plus last_login, the USER_LOGIN_HANDLER
+    and a UserLoginEvent. The page then throws the pair away and tells the
+    person they were not signed in. Clicking a confirmation link is not
+    signing in, and the token in that link is proof of mailbox control, not of
+    an intent to start a session.
+
+    So: the same token verification, the same commit path
+    (_commit_email_change — availability re-check, the direct email/username
+    writes, auth_key rotation, the email:changed log line, the one
+    account-global email_change:confirmed row, the realtime event) — and no
+    JWT, no last_login, no login handler, no login event.
+
+    Token-only by design: the 6-digit OTP flow belongs to an authenticated SPA
+    that already has a session, and it keeps using the endpoint above.
+
+    It lives on its own path because auth/email/change/confirm is a GET/POST
+    pair whose POST is that SPA contract; widening it in place would change
+    what existing clients receive. Its own strict bucket, sized like that
+    POST's, so the landing's confirmations and the SPA's cannot eat each
+    other's budget.
+    """
+    from mojo.apps.account.utils import tokens as tok_utils
+
+    token = request.DATA.get("token")
+    user, new_email = tok_utils.verify_email_change_token(token)
+    _commit_email_change(request, user, new_email)
+
+    return JsonResponse({
+        "status": True,
+        "message": "Email address changed",
+        "data": {"email": str(user.email)},
+    })
 
 
 @md.GET("auth/email/change/confirm")
@@ -1901,8 +1983,10 @@ def on_email_change_confirm_get(request):
     the account exactly as it found it. #3257: this handler used to commit the
     change here, which is precisely how a token got burned with nobody present.
 
-    The change is committed by POST auth/email/change/confirm, which the page's
-    button calls with the token the person actually clicked through to.
+    The change is committed by POST auth/email/change/apply, which the page's
+    button calls with the token the person actually clicked through to. That
+    sibling commits and stops — the JWT-issuing POST on THIS path stays the
+    SPA's, so a link click never mints a session in whatever browser opened it.
 
     The GET has its OWN rate bucket, separate from the POST's, so previews and
     reloads cannot eat the confirmation budget — and it opts out of

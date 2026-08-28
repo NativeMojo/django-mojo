@@ -40,13 +40,17 @@ PREFIX_ROUTES = {
 }
 
 # Token prefix -> the endpoint the landing's button POSTs to. Same path as the
-# landing for `ec:` and `dv:` (a GET/POST pair). `ev:` differs deliberately:
-# the landing GET keeps the historical `auth/verify/email/confirm` path, whose
-# POST is the authenticated 6-digit-code handler, so the public verify-only
-# token confirm lives on its own sibling route.
+# landing only for `dv:`, whose POST closes the account and issues nothing.
+#
+# `ev:` and `ec:` each point at a sibling route instead, for the same reason:
+# the POST sharing the landing's path signs the caller in, and a landing must
+# never do that. `auth/verify/email/confirm` POST is the authenticated
+# 6-digit-code handler; `auth/email/change/confirm` POST ends in jwt_login and
+# is the SPA's contract. Both siblings commit exactly what the landing claims
+# and hand back no token pair.
 CONFIRM_ROUTES = {
     "ev": "auth/email/verify/confirm",
-    "ec": "auth/email/change/confirm",
+    "ec": "auth/email/change/apply",
     "dv": "account/deactivate/confirm",
 }
 

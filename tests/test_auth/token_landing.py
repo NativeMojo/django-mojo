@@ -11,7 +11,9 @@ Contract this file enforces:
   - Opening a landing NEVER validates or consumes the token and NEVER touches
     account state. The same token still works afterwards.
   - Only an explicit POST — the button press — commits anything.
-  - The ev: confirm is verify-only: no JWT, no last_login, no login event.
+  - The ev: confirm is verify-only and the ec: confirm is commit-only: no JWT,
+    no last_login, no login event. Both legacy token-returning endpoints keep
+    their contract for the SPA clients that already call them.
   - Emailed links point at the landings; /auth?token=<prefix>:... still reaches
     them through a server-side compatibility redirect.
   - The token lives only in inert page state; the page is self-contained, sends
@@ -53,6 +55,7 @@ def setup_token_landing(opts):
     clear_rate_limits(ip="127.0.0.1")
 
     opts.ec_user_id = _fresh_user(f"{TL_PREFIX}_ec").pk
+    opts.ec_apply_user_id = _fresh_user(f"{TL_PREFIX}_ecapply").pk
     opts.ev_user_id = _fresh_user(f"{TL_PREFIX}_ev").pk
     opts.dv_user_id = _fresh_user(f"{TL_PREFIX}_dv").pk
     opts.misc_user_id = _fresh_user(f"{TL_PREFIX}_misc").pk
@@ -176,7 +179,11 @@ def test_dv_landing_get_does_not_deactivate(opts):
 
 
 # ===========================================================================
-# The verify-only confirm — a confirmation page must not be a login
+# The landing confirms — a confirmation page must not be a login
+#
+# Both ev: and ec: post to a sibling endpoint that does the work and stops.
+# The endpoints sharing the landings' paths end in jwt_login and stay exactly
+# as they were: they are the SPA's, and their clients asked for a session.
 # ===========================================================================
 
 @th.django_unit_test("ev: confirm verifies the email and issues no session")
@@ -238,6 +245,132 @@ def test_legacy_email_verify_still_logs_in(opts):
     user.refresh_from_db()
     assert_true(user.is_email_verified,
                 "The legacy endpoint still verifies the address")
+
+
+def _reset_ec_apply_user(opts):
+    """Put the ec: apply fixture back to its starting address and session state."""
+    from mojo.apps.account.models import User
+    username = f"{TL_PREFIX}_ecapply"
+    User.objects.filter(pk=opts.ec_apply_user_id).update(
+        username=username, email=f"{username}@example.com",
+        is_active=True, is_email_verified=False, last_login=None)
+    return User.objects.get(pk=opts.ec_apply_user_id)
+
+
+@th.django_unit_test("ec: confirm commits the change and issues no session")
+def test_ec_confirm_is_commit_only(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.login_event import UserLoginEvent
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+
+    new_email = f"{TL_PREFIX}_ecapply_new@example.com"
+    User.objects.filter(email=new_email).exclude(pk=opts.ec_apply_user_id).delete()
+    user = _reset_ec_apply_user(opts)
+    old_auth_key = str(user.auth_key)
+    logins_before = UserLoginEvent.objects.filter(user=user).count()
+    token = tokens.generate_email_change_token(user, new_email)
+
+    clear_rate_limits(ip="127.0.0.1")
+    resp = opts.client.post("/api/auth/email/change/apply", {"token": token})
+
+    assert_eq(resp.status_code, 200,
+              f"The commit-only confirm must succeed, got {resp.status_code}")
+    body = resp.get("response") or {}
+    assert_true(body.get("status") is True,
+                f"Expected status true, got {body!r}")
+    data = body.get("data") or {}
+    for key in ("access_token", "refresh_token", "access", "refresh"):
+        assert_true(key not in data,
+                    f"The landing's confirm must issue NO token package — a link click "
+                    f"is not a sign-in; found {key} in {data!r}")
+    assert_eq(data.get("email"), new_email,
+              f"The page displays the committed address, so it must be returned; got {data!r}")
+
+    user.refresh_from_db()
+    assert_eq(str(user.email), new_email,
+              "The commit-only confirm must still change the address")
+    assert_true(user.is_email_verified,
+                "The commit-only confirm must still mark the new address verified")
+    assert_true(str(user.auth_key) != old_auth_key,
+                "The commit-only confirm must still rotate auth_key — every other "
+                "session used the OLD address to sign in")
+    assert_true(user.last_login is None,
+                f"Confirming an address change is not signing in — last_login must be "
+                f"untouched, got {user.last_login!r}")
+    assert_eq(UserLoginEvent.objects.filter(user=user).count(), logins_before,
+              "The commit-only confirm must record no login event — jwt_login writes "
+              "one, and this path must never reach it")
+
+
+@th.django_unit_test("ec: confirm refuses a replayed token")
+def test_ec_confirm_token_is_single_use(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+
+    new_email = f"{TL_PREFIX}_ecapply_replay@example.com"
+    User.objects.filter(email=new_email).exclude(pk=opts.ec_apply_user_id).delete()
+    user = _reset_ec_apply_user(opts)
+    token = tokens.generate_email_change_token(user, new_email)
+
+    clear_rate_limits(ip="127.0.0.1")
+    first = opts.client.post("/api/auth/email/change/apply", {"token": token})
+    assert_eq(first.status_code, 200,
+              f"The first confirm must succeed, got {first.status_code}")
+
+    clear_rate_limits(ip="127.0.0.1")
+    replay = opts.client.post("/api/auth/email/change/apply", {"token": token})
+    assert_true(replay.status_code >= 400,
+                f"An ec: token is single-use — a replay must be refused, got "
+                f"{replay.status_code}")
+
+    user.refresh_from_db()
+    assert_eq(str(user.email), new_email,
+              "A refused replay must leave the committed address exactly as it was")
+
+
+@th.django_unit_test("ec: the landing's button targets the commit-only endpoint")
+def test_ec_landing_targets_commit_only_endpoint(opts):
+    resp, body = _get(opts, "/api/auth/email/change/confirm", token="ec:render")
+
+    assert_eq(resp.status_code, 200, f"The landing must render 200, got {resp.status_code}")
+    marker = '<script id="mojo-landing-data" type="application/json">'
+    assert_true(marker in body, f"Expected the json_script data block, got: {body[:400]!r}")
+    start = body.index(marker)
+    data_block = body[start:body.index("</script>", start)]
+
+    assert_true("/api/auth/email/change/apply" in data_block,
+                f"The landing must post to the commit-only endpoint, got: {data_block!r}")
+    assert_true("/api/auth/email/change/confirm" not in data_block,
+                f"The landing must NOT post to the JWT-issuing endpoint — that hands a "
+                f"session to whatever browser opened the link; got: {data_block!r}")
+
+
+@th.django_unit_test("ec: the legacy confirm-then-login endpoint is untouched")
+def test_legacy_email_change_still_logs_in(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+
+    new_email = f"{TL_PREFIX}_ec_legacy@example.com"
+    User.objects.filter(email=new_email).exclude(pk=opts.ec_user_id).delete()
+    User.objects.filter(pk=opts.ec_user_id).update(
+        is_active=True, requires_password_change=False)
+    user = User.objects.get(pk=opts.ec_user_id)
+    token = tokens.generate_email_change_token(user, new_email)
+
+    clear_rate_limits(ip="127.0.0.1")
+    resp = opts.client.post("/api/auth/email/change/confirm", {"token": token})
+
+    assert_eq(resp.status_code, 200,
+              f"The existing confirm-then-login endpoint must keep working, got {resp.status_code}")
+    data = (resp.get("response") or {}).get("data") or {}
+    assert_true("access_token" in data,
+                f"Existing SPA clients still receive a token package here, got {sorted(data)!r}")
+    user.refresh_from_db()
+    assert_eq(str(user.email), new_email,
+              "The legacy endpoint still commits the address change")
 
 
 # ===========================================================================

@@ -50,6 +50,9 @@ Send-truthfulness contract (#3328):
   - The old-address notice runs only after acceptance, is skipped when there is
     no old address, and reports its own failure as email_change:notice_failed
   - A successful POST confirm records account-global email_change:confirmed
+  - POST auth/email/change/apply — the landing's commit-only sibling — commits
+    exactly the same change and writes exactly the same single row, with no JWT
+    envelope and no last_login
 """
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
@@ -2158,6 +2161,65 @@ def test_confirm_records_account_global_activity(opts):
         assert_true(user.is_email_verified, "confirm must still mark the address verified")
         assert_true(str(user.auth_key) != old_auth_key,
                     "confirm must still rotate auth_key")
+
+        rows = list(_activity(opts.user_id, "email_change:confirmed"))
+        assert_eq(len(rows), 1,
+                  f"exactly one email_change:confirmed row must be written, got {len(rows)}")
+        event = rows[0]
+        assert_eq(event.uid, opts.user_id,
+                  "the row must be attributed to the TOKEN's verified subject")
+        assert_true(event.group_id is None,
+                    f"an account-global row carries no group, got {event.group_id!r}")
+        assert_eq(event.metadata.get("security_activity_scope"), "account",
+                  f"the account marker is what makes the row globally visible: "
+                  f"{event.metadata}")
+        assert_eq(event.scope, "account",
+                  f"Event.scope must stay 'account', got {event.scope!r}")
+    finally:
+        from mojo.apps.account.models import User as _User
+        _User.objects.filter(pk=opts.user_id).update(
+            email=opts.original_email, username=opts.original_username)
+        _clear_email_change_state(opts)
+
+
+@th.tier("bug")
+@th.django_unit_test("email/change/apply: records the same single account-global row, and no session")
+def test_apply_records_account_global_activity(opts):
+    """The landing's commit-only endpoint writes exactly what the JWT-issuing
+    one writes — one account-global row for the token's subject — and issues no
+    token pair, so the two confirms can never drift apart on audit."""
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    try:
+        _clear_email_change_state(opts)
+        User.objects.filter(pk=opts.user_id).update(
+            email=opts.original_email, username=opts.original_username,
+            last_login=None)
+        user = User.objects.get(pk=opts.user_id)
+        old_auth_key = str(user.auth_key)
+        token = tokens.generate_email_change_token(user, "applied_activity@example.com")
+
+        resp = opts.client.post("/api/auth/email/change/apply", {"token": token})
+        assert_eq(resp.status_code, 200,
+                  f"apply must return 200, got {resp.status_code}: {resp.content}")
+        assert_true(resp.json.get("status") is True, "Response status must be True")
+        data = resp.json.get("data") or {}
+        assert_eq(data.get("email"), "applied_activity@example.com",
+                  f"apply returns the committed address for the page to display, got {data!r}")
+        for key in ("access_token", "refresh_token", "access", "refresh"):
+            assert_true(key not in data,
+                        f"apply must issue no JWT envelope — found {key} in {data!r}")
+
+        user.refresh_from_db()
+        assert_eq(str(user.email), "applied_activity@example.com",
+                  "apply must commit the new address")
+        assert_true(user.is_email_verified, "apply must mark the address verified")
+        assert_true(str(user.auth_key) != old_auth_key, "apply must rotate auth_key")
+        assert_true(user.last_login is None,
+                    f"apply must not sign anyone in, got last_login={user.last_login!r}")
 
         rows = list(_activity(opts.user_id, "email_change:confirmed"))
         assert_eq(len(rows), 1,
