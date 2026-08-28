@@ -20,6 +20,7 @@ from mojo.helpers.redis.client import get_connection
 from mojo.helpers.request import normalize_ip
 from mojo.helpers.settings import settings
 from .auth import async_validate_bearer_token
+from .channels import broadcast_channel, topic_channel, messages_channel
 
 logger = logit.get_logger("realtime", "realtime.log")
 
@@ -369,8 +370,8 @@ class WebSocketHandler:
         def create_pubsub():
             pubsub = self.redis_client.pubsub()
             # Subscribe to connection-specific channel
-            pubsub.subscribe(f"realtime:messages:{self.connection_id}")
-            pubsub.subscribe("realtime:broadcast")
+            pubsub.subscribe(messages_channel(self.connection_id))
+            pubsub.subscribe(broadcast_channel())
             return pubsub
 
         self.pubsub = await asyncio.get_event_loop().run_in_executor(
@@ -722,12 +723,12 @@ class WebSocketHandler:
 
         def subscribe():
             try:
-                # Add to topic subscribers
+                # Add to topic subscribers (storage key — no isolation prefix)
                 self.redis_client.sadd(f"realtime:topic:{topic}", self.connection_id)
                 self.redis_client.expire(f"realtime:topic:{topic}", TOPIC_TTL_SECONDS)
 
                 # Subscribe to Redis channel
-                self.pubsub.subscribe(f"realtime:topic:{topic}")
+                self.pubsub.subscribe(topic_channel(topic))
             except Exception as e:
                 self._log(f"Failed to subscribe to topic {topic}: {e}")
                 raise
@@ -742,11 +743,11 @@ class WebSocketHandler:
 
         def unsubscribe():
             try:
-                # Remove from topic subscribers
+                # Remove from topic subscribers (storage key — no isolation prefix)
                 self.redis_client.srem(f"realtime:topic:{topic}", self.connection_id)
 
                 # Unsubscribe from Redis channel
-                self.pubsub.unsubscribe(f"realtime:topic:{topic}")
+                self.pubsub.unsubscribe(topic_channel(topic))
             except Exception as e:
                 self._log(f"Failed to unsubscribe from topic {topic}: {e}")
 

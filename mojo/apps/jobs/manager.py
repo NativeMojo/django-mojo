@@ -468,7 +468,7 @@ class JobManager:
             expected_runners = len([r for r in runners if r.get('alive', False)])
             logit.debug(f"Broadcasting command '{command}' to {expected_runners} active runners")
 
-        reply_channel = f"mojo:jobs:replies:{uuid_module.uuid4().hex[:8]}"
+        reply_channel = self.keys.reply_channel(uuid_module.uuid4().hex[:8])
 
         # Subscribe to replies before sending
         pubsub = self.redis.pubsub()
@@ -482,7 +482,7 @@ class JobManager:
             'timestamp': timezone.now().isoformat()
         }
 
-        self.redis.publish("mojo:jobs:runners:broadcast", json.dumps(message))
+        self.redis.publish(self.keys.runners_broadcast(), json.dumps(message))
 
         # Collect responses
         responses = []
@@ -577,7 +577,7 @@ class JobManager:
                 expected_runners = len([r for r in runners if r.get('alive', False)])
                 logit.debug(f"Broadcasting to {expected_runners} active runners")
 
-            reply_channel = f"mojo:jobs:replies:{uuid_module.uuid4().hex[:8]}"
+            reply_channel = self.keys.reply_channel(uuid_module.uuid4().hex[:8])
             message['reply_channel'] = reply_channel
 
             # Subscribe to replies before sending
@@ -585,7 +585,7 @@ class JobManager:
             pubsub.subscribe(reply_channel)
 
             # Send broadcast
-            self.redis.publish("mojo:jobs:runners:broadcast", json.dumps(message))
+            self.redis.publish(self.keys.runners_broadcast(), json.dumps(message))
 
             # Collect responses
             responses = []
@@ -613,7 +613,7 @@ class JobManager:
             return responses
         else:
             # Fire-and-forget
-            self.redis.publish("mojo:jobs:runners:broadcast", json.dumps(message))
+            self.redis.publish(self.keys.runners_broadcast(), json.dumps(message))
             return []
 
     def execute_on_runner(self, runner_id: str, func_path: str, data: Dict = None,
@@ -656,7 +656,7 @@ class JobManager:
         }
 
         if wait_for_reply:
-            reply_channel = f"mojo:jobs:replies:{uuid_module.uuid4().hex[:8]}"
+            reply_channel = self.keys.reply_channel(uuid_module.uuid4().hex[:8])
             message['reply_channel'] = reply_channel
 
             # Subscribe to reply channel before sending
@@ -704,7 +704,7 @@ class JobManager:
         """
         try:
             import uuid as uuid_module
-            reply_channel = f"mojo:jobs:ping:{uuid_module.uuid4().hex[:8]}"
+            reply_channel = self.keys.ping_reply(uuid_module.uuid4().hex[:8])
 
             # Subscribe to reply channel before sending
             pubsub = self.redis.pubsub()

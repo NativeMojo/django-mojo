@@ -10,6 +10,8 @@ import json
 import time
 import uuid
 
+from .channels import broadcast_channel, topic_channel, messages_channel
+
 def get_redis():
     from mojo.helpers.redis.client import get_connection
     return get_connection()
@@ -29,7 +31,7 @@ def broadcast(message_data):
         "data": message_data,
         "timestamp": time.time()
     }
-    redis_client.publish("realtime:broadcast", json.dumps(message))
+    redis_client.publish(broadcast_channel(), json.dumps(message))
 
 
 def publish_topic(topic, message_data):
@@ -47,7 +49,7 @@ def publish_topic(topic, message_data):
         "data": message_data,
         "timestamp": time.time()
     }
-    redis_client.publish(f"realtime:topic:{topic}", json.dumps(message))
+    redis_client.publish(topic_channel(topic), json.dumps(message))
 
 
 def send_to_user(user_type, user_id, message_data):
@@ -78,7 +80,7 @@ def send_to_connection(connection_id, message_data):
         "data": message_data,
         "timestamp": time.time()
     }
-    redis_client.publish(f"realtime:messages:{connection_id}", json.dumps(message))
+    redis_client.publish(messages_channel(connection_id), json.dumps(message))
 
 
 def send_event_to_user(user_type, user_id, event_data):
@@ -117,7 +119,7 @@ def send_event_to_connection(connection_id, event_data):
         "data": event_data,
         "timestamp": time.time()
     }
-    redis_client.publish(f"realtime:messages:{connection_id}", json.dumps(message))
+    redis_client.publish(messages_channel(connection_id), json.dumps(message))
 
 
 def is_online(user_type, user_id):

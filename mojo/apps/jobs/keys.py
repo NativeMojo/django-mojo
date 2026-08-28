@@ -4,6 +4,7 @@ Centralized, prefix-aware key management.
 """
 from typing import Optional
 from mojo.helpers.settings import settings
+from mojo.helpers.redis.channels import channel_name, isolation_prefix
 
 
 QUEUE_TAG = "{jobs}"  # same slot for all queues (cluster-safe)
@@ -18,14 +19,19 @@ def dlq_key(name: str) -> str:
 class JobKeys:
     """Centralized Redis key builder for the jobs system."""
 
-    def __init__(self, prefix: Optional[str] = None):
+    def __init__(self, prefix: Optional[str] = None, pubsub_prefix=None):
         """
         Initialize with optional prefix override.
 
         Args:
             prefix: Override the default prefix from settings
+            pubsub_prefix: Isolation prefix for Pub/Sub CHANNEL names only
+                (None = the configured REDIS_PUBSUB_PREFIX, "" = disabled).
+                Storage keys never carry it — they are isolated by the
+                per-checkout Redis database index.
         """
         self.prefix = prefix or getattr(settings, 'JOBS_REDIS_PREFIX', 'mojo:jobs')
+        self.pubsub_prefix = isolation_prefix() if pubsub_prefix is None else pubsub_prefix
 
     # ----------------------------
     # Streams (legacy/compat only)
@@ -157,15 +163,40 @@ class JobKeys:
 
     def runner_ctl(self, runner_id: str) -> str:
         """
-        Get the control channel key for a runner.
+        Get the control Pub/Sub CHANNEL for a runner.
+
+        Pure pub/sub on both sides (engine subscribes, manager publishes),
+        so it carries the isolation prefix.
 
         Args:
             runner_id: The runner's unique identifier
 
         Returns:
-            Redis key for runner control messages
+            Pub/Sub channel name for runner control messages
         """
-        return f"{self.prefix}:runner:{runner_id}:ctl"
+        return channel_name(f"{self.prefix}:runner:{runner_id}:ctl", self.pubsub_prefix)
+
+    # ----------------------------
+    # Pub/Sub channels (NOT storage keys)
+    # ----------------------------
+    # These three are rooted at the literal "mojo:jobs" regardless of a
+    # custom JOBS_REDIS_PREFIX — deliberately. The broadcast channel is an
+    # agreed rendezvous between independently restarted manager and engine
+    # processes; deriving it from the configurable prefix would move the
+    # wire name for custom-prefix deployments even with an empty isolation
+    # prefix, stranding old engines during a rolling deploy. Only the
+    # isolation prefix moves them.
+    def runners_broadcast(self) -> str:
+        """Global runner control/execute broadcast channel."""
+        return channel_name("mojo:jobs:runners:broadcast", self.pubsub_prefix)
+
+    def reply_channel(self, token: str) -> str:
+        """One-shot reply channel; the name travels inside the message."""
+        return channel_name(f"mojo:jobs:replies:{token}", self.pubsub_prefix)
+
+    def ping_reply(self, token: str) -> str:
+        """One-shot ping reply channel; the name travels inside the message."""
+        return channel_name(f"mojo:jobs:ping:{token}", self.pubsub_prefix)
 
     def runner_hb(self, runner_id: str) -> str:
         """

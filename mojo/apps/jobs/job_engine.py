@@ -454,7 +454,7 @@ class JobEngine:
     def _control_loop(self):
         """Control channel listener loop."""
         control_key = self.keys.runner_ctl(self.runner_id)
-        broadcast_key = "mojo:jobs:runners:broadcast"
+        broadcast_key = self.keys.runners_broadcast()
         pubsub = self.redis.pubsub()
         # Listen to runner-specific control and global broadcast control
         pubsub.subscribe(control_key, broadcast_key)
