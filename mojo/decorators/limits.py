@@ -26,12 +26,20 @@ def _retry_after_sliding(window):
     return max(1, window)
 
 
-def _block(key, request, retry_after, min_granularity):
+def _block(key, request, retry_after, min_granularity, include_request_in_incident=True):
     # Metric + incident event are gated to fire once per key+IP per minute
     # (SET NX). A retry storm that keeps hitting a limit must not turn every
     # rejected request into a synchronous Event INSERT + rule evaluation —
     # that makes a failed request cost MORE than a served one, the classic
     # self-amplifying failure loop. The 429 itself is always returned.
+    #
+    # include_request_in_incident=False drops the request-derived metadata the
+    # reporter stamps on every request-backed Event (http_path,
+    # http_query_string, http_user_agent, ...) and hands it only the source IP
+    # it already resolved. Endpoints whose URL carries a single-use credential
+    # — the token confirmation landings — opt out so a throttled diagnostic
+    # cannot persist the token it was throttling.
+    ip = None
     try:
         r = get_connection()
         ip = getattr(request, "ip", None) or request.META.get("REMOTE_ADDR", "unknown")
@@ -51,12 +59,16 @@ def _block(key, request, retry_after, min_granularity):
                     "model_id": api_key.pk,
                     "identity": f"apikey:{api_key.pk}",
                 })
+            if include_request_in_incident:
+                event_kwargs["request"] = request
+            else:
+                event_kwargs["request"] = None
+                event_kwargs["source_ip"] = ip
             incident.report_event(
                 f"Rate limit exceeded: {key}",
                 category=f"rate_limit:{key}",
                 scope="api",
                 level=5,
-                request=request,
                 **event_kwargs,
             )
         except Exception:
@@ -289,7 +301,8 @@ def _get_dimension(request, dimension):
 
 def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=None,
                ip_window=60, duid_window=60, muid_window=60, apikey_window=60,
-               min_granularity="hours", apikey_observe_limit=None):
+               min_granularity="hours", apikey_observe_limit=None,
+               include_request_in_incident=True):
     """
     Fixed-window rate limiting decorator.
 
@@ -320,6 +333,11 @@ def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=Non
         duid_window:     Window in seconds for duid counter (default 60)
         apikey_window:   Default window in seconds for API key counter (default 60)
         min_granularity: Granularity passed to metrics.record() (default "hours")
+        include_request_in_incident: Whether the throttle Event carries the
+                          request-derived metadata (path, query string, user
+                          agent). False keeps only fixed text, the category and
+                          the source IP — for endpoints whose URL carries a
+                          single-use credential (default True)
     """
     def decorator(func):
         @wraps(func)
@@ -337,7 +355,7 @@ def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=Non
                         ak_window_start = now // ak_window * ak_window
                         ak_key = f"rl:{key}:apikey:{api_key_pk}:{ak_window_start}"
                         if _incr_fixed(r, ak_key, ak_window) > ak_limit:
-                            return _block(key, request, _retry_after_fixed(ak_window_start, ak_window), min_granularity)
+                            return _block(key, request, _retry_after_fixed(ak_window_start, ak_window), min_granularity, include_request_in_incident)
                     else:
                         observe_limit, observe_window = _resolve_apikey_observation(
                             ip_limit, ip_window, duid_limit, duid_window,
@@ -359,7 +377,7 @@ def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=Non
                     ip_window_start = now // ip_window * ip_window
                     ip_key = f"rl:{key}:ip:{ip}:{ip_window_start}"
                     if _incr_fixed(r, ip_key, ip_window) > ip_limit:
-                        return _block(key, request, _retry_after_fixed(ip_window_start, ip_window), min_granularity)
+                        return _block(key, request, _retry_after_fixed(ip_window_start, ip_window), min_granularity, include_request_in_incident)
 
                     # --- duid check (optional) ---
                     if duid_limit is not None:
@@ -368,7 +386,7 @@ def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=Non
                             duid_window_start = now // duid_window * duid_window
                             duid_key = f"rl:{key}:duid:{duid}:{duid_window_start}"
                             if _incr_fixed(r, duid_key, duid_window) > duid_limit:
-                                return _block(key, request, _retry_after_fixed(duid_window_start, duid_window), min_granularity)
+                                return _block(key, request, _retry_after_fixed(duid_window_start, duid_window), min_granularity, include_request_in_incident)
 
                     # --- muid check (optional) — server-set cookie, bypass-resistant ---
                     if muid_limit is not None:
@@ -377,7 +395,7 @@ def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=Non
                             muid_window_start = now // muid_window * muid_window
                             muid_key = f"rl:{key}:muid:{muid}:{muid_window_start}"
                             if _incr_fixed(r, muid_key, muid_window) > muid_limit:
-                                return _block(key, request, _retry_after_fixed(muid_window_start, muid_window), min_granularity)
+                                return _block(key, request, _retry_after_fixed(muid_window_start, muid_window), min_granularity, include_request_in_incident)
 
             except Exception as err:
                 logger.error(f"rate_limit: Redis error for key '{key}': {err}")
@@ -389,7 +407,7 @@ def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=Non
 
 def strict_rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=None,
                       ip_window=60, duid_window=60, muid_window=60, apikey_window=60,
-                      min_granularity="hours"):
+                      min_granularity="hours", include_request_in_incident=True):
     """
     Sliding-window rate limiting decorator.
 
@@ -421,6 +439,11 @@ def strict_rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_li
         duid_window:     Window in seconds for duid sliding window (default 60)
         apikey_window:   Default window in seconds for API key sliding window (default 60)
         min_granularity: Granularity passed to metrics.record() (default "hours")
+        include_request_in_incident: Whether the throttle Event carries the
+                          request-derived metadata (path, query string, user
+                          agent). False keeps only fixed text, the category and
+                          the source IP — for endpoints whose URL carries a
+                          single-use credential (default True)
     """
     def decorator(func):
         @wraps(func)
@@ -433,7 +456,7 @@ def strict_rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_li
                 ip_key = f"srl:{key}:ip:{ip}"
                 _, allowed = _check_sliding(r, ip_key, ip_window, ip_limit)
                 if not allowed:
-                    return _block(key, request, _retry_after_sliding(ip_window), min_granularity)
+                    return _block(key, request, _retry_after_sliding(ip_window), min_granularity, include_request_in_incident)
 
                 # --- duid check (optional) ---
                 if duid_limit is not None:
@@ -442,7 +465,7 @@ def strict_rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_li
                         duid_key = f"srl:{key}:duid:{duid}"
                         _, allowed = _check_sliding(r, duid_key, duid_window, duid_limit)
                         if not allowed:
-                            return _block(key, request, _retry_after_sliding(duid_window), min_granularity)
+                            return _block(key, request, _retry_after_sliding(duid_window), min_granularity, include_request_in_incident)
 
                 # --- muid check (optional) — server-set cookie, bypass-resistant ---
                 if muid_limit is not None:
@@ -451,7 +474,7 @@ def strict_rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_li
                         muid_key = f"srl:{key}:muid:{muid}"
                         _, allowed = _check_sliding(r, muid_key, muid_window, muid_limit)
                         if not allowed:
-                            return _block(key, request, _retry_after_sliding(muid_window), min_granularity)
+                            return _block(key, request, _retry_after_sliding(muid_window), min_granularity, include_request_in_incident)
 
                 # --- api_key check (optional developer or explicit per-key hard limit) ---
                 resolved = _get_apikey_limits(request, key, apikey_limit, apikey_window)
@@ -461,7 +484,7 @@ def strict_rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_li
                         ak_key = f"srl:{key}:apikey:{api_key_pk}"
                         _, allowed = _check_sliding(r, ak_key, ak_window, ak_limit)
                         if not allowed:
-                            return _block(key, request, _retry_after_sliding(ak_window), min_granularity)
+                            return _block(key, request, _retry_after_sliding(ak_window), min_granularity, include_request_in_incident)
 
             except Exception as err:
                 logger.error(f"strict_rate_limit: Redis error for key '{key}': {err}")
