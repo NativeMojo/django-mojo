@@ -175,6 +175,18 @@ def slug(path):
     return hashlib.sha1(real.encode("utf-8")).hexdigest()[:8]
 
 
+def expected_pubsub_prefix(root):
+    """The Pub/Sub isolation prefix this checkout's testproject must carry.
+
+    Single source for derivation (bin/create_testproject writes it into the
+    generated settings) and verification (bin/testit.py refuses to run when
+    the live setting disagrees — a stale pre-prefix testproject would
+    otherwise silently talk on the legacy shared channels). Same identity as
+    the cache KEY_PREFIX: mojot_ + the checkout slug.
+    """
+    return f"mojot_{slug(root)}"
+
+
 def project_root(start=None):
     """Best-effort checkout root: the nearest ancestor holding a `.git`.
 

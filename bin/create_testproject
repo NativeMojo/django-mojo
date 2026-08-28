@@ -440,6 +440,18 @@ REDIS_DB = {"host": "localhost", "port": "6379"}
 # other.
 REDIS_DB_INDEX = $TESTENV_REDIS_INDEX
 
+# Pub/Sub channel isolation. The db index above isolates stored keys but
+# Redis Pub/Sub ignores database numbers, so without this prefix two
+# checkouts on one Redis server hear each other's realtime messages and
+# job-control broadcasts. Derived from the same checkout identity as the
+# cache prefix below; bin/testit.py fails the run if this goes stale.
+REDIS_PUBSUB_PREFIX = "mojot_$TESTENV_SLUG"
+
+# Set explicitly: the settings helper's attribute access returns None for
+# missing keys, so JobKeys' getattr(..., 'mojo:jobs') fallback never fires
+# and an unset value yields literal "None:"-rooted job keys/channels.
+JOBS_REDIS_PREFIX = "mojo:jobs"
+
 CACHES = {
     "default": {
         "BACKEND": "mojo.cache.MojoRedisCache",

@@ -102,6 +102,25 @@ if redis_client is not None:
             print(f"ERROR: {err}", file=sys.stderr)
             sys.exit(1)
 
+    # Pub/Sub isolation guard. The db index above only isolates stored keys —
+    # Redis Pub/Sub ignores database numbers — so an isolated run must carry
+    # the per-checkout channel prefix, or its realtime messages and job
+    # broadcasts land on the legacy shared channels of every other checkout.
+    # A testproject generated before the prefix existed fails here visibly
+    # instead of falling back silently.
+    from mojo.helpers.settings import settings as mojo_settings
+    _expected_prefix = testenv.expected_pubsub_prefix(str(REPO_ROOT))
+    _actual_prefix = mojo_settings.get_static("REDIS_PUBSUB_PREFIX", "") or ""
+    if _actual_prefix != _expected_prefix:
+        print(
+            "ERROR: REDIS_PUBSUB_PREFIX is "
+            + (f"'{_actual_prefix}'" if _actual_prefix else "missing")
+            + f" but this checkout requires '{_expected_prefix}'.\n"
+            "       The testproject predates Pub/Sub isolation or is stale.\n"
+            "       Fix: run bin/create_testproject to regenerate it.",
+            file=sys.stderr)
+        sys.exit(1)
+
 # Skip flush when continuing from a checkpoint so prior test state is preserved
 if CONTINUING:
     print("==> Skipping flush (--continue mode)")
