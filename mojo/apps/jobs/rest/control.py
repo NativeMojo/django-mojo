@@ -199,7 +199,7 @@ def on_reset_failed_jobs(request):
         requeue_results = []
 
         if channel:
-            requeue_results.append(manager.requeue_db_pending(channel, limit=reset_count))
+            requeue_results.append(manager.requeue_db_pending(channel, limit=None))
         else:
             for ch in affected_channels:
                 requeue_results.append(manager.requeue_db_pending(ch, limit=None))
