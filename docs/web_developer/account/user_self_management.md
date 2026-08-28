@@ -486,6 +486,8 @@ On success: `is_phone_verified` is set to `true`. No new JWT. The
 | Error | Meaning |
 |---|---|
 | `"No phone number on account"` | Set a number first via `POST /api/user/me` |
+| **503** `"Unable to send the text message right now. Please try again in a few minutes."` | The SMS transport did not accept the message — show a Retry button rather than "check your phone" (same contract as the email 503 above) |
+| **400** `"This phone number cannot receive text messages."` | The provider rejected the number itself (invalid, blocked, or not SMS-capable) — retrying will not help; have the user fix the number |
 | `"Invalid code"` | Wrong OTP — try again |
 | `"Expired code"` | Code is older than 10 minutes — resend |
 
@@ -1296,6 +1298,8 @@ Public endpoint — the token is the credential (no Bearer token required).
 **Important:** After a successful confirm, clear all stored tokens on the client.
 Any subsequent API call with the old JWT will return 401.
 
+Rate-limited: 10 requests per IP per hour.
+
 **Error cases:**
 
 | Condition | Status |
@@ -1307,6 +1311,7 @@ Any subsequent API call with the old JWT will return 401.
 | Missing token | 400 |
 | `ALLOW_SELF_DEACTIVATION = False` | 403 |
 | Unauthenticated request to Step 1 | 401/403 |
+| Rate limit exceeded | 429 + `Retry-After` header |
 | Deployment's closure handler failed | 400 — **retryable, see below** |
 
 **The retryable failure case.** If the deployment configures

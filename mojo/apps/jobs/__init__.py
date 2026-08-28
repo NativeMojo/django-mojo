@@ -516,10 +516,12 @@ def _record_uncertain_publication(job_id, channel, alias, err, deferred, operati
             f"jobs.publish could not confirm the Redis {operation} for job "
             f"{job_id} on channel '{channel}' ({type(err).__name__}). The write "
             f"may well have landed, so the row is left pending and executable "
-            f"with last_error='{UNCONFIRMED_PUBLISH_ERROR}'. Nothing replays it: "
-            f"if the job never runs, re-publish with the SAME idempotency_key "
-            f"(a keyless re-publish is at-least-once). prune_jobs removes the "
-            f"row after 7 days.",
+            f"with last_error='{UNCONFIRMED_PUBLISH_ERROR}'. If the job never "
+            f"runs, re-publish with the SAME idempotency_key (a keyless "
+            f"re-publish is at-least-once), or have an operator run "
+            f"JobManager.requeue_db_pending(channel) to re-mirror the "
+            f"channel's pending rows. prune_jobs removes the row after "
+            f"7 days.",
             key=channel,
             title=f"Unconfirmed job publication: {channel}",
             category=UNCONFIRMED_PUBLISH_CATEGORY,

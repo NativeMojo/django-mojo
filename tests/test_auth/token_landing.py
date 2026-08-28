@@ -670,3 +670,69 @@ def test_landing_throttle_incident_carries_no_token(opts):
                 "The throttled request's own token must never reach the Event")
     assert_true("email_change_landing" in event.details,
                 f"The diagnostic must still name the bucket, got {event.details!r}")
+
+
+@th.django_unit_test("dv: the confirm POST has its own strict bucket")
+def test_dv_confirm_post_has_own_strict_bucket(opts):
+    ip = _isolated_ip()
+    headers = {"X-Real-IP": ip}
+
+    blocked = None
+    for attempt in range(11):
+        resp = opts.client.post(
+            "/api/account/deactivate/confirm", {"token": "dv:notavalidtoken"},
+            headers=headers)
+        if resp.status_code == 429:
+            blocked = resp
+            break
+    assert_true(blocked is not None,
+                "11 confirm POSTs from one IP must trip the 10/hour "
+                "account_deactivate_confirm bucket")
+    assert_true(_header(opts, "Retry-After"),
+                "A throttled confirm must still carry Retry-After")
+
+    # The landing's budget is untouched — a person whose confirm was throttled
+    # can still read the page that explains what the button does.
+    resp = opts.client.get(
+        "/api/account/deactivate/confirm",
+        params={"token": "dv:preview"}, headers=headers)
+    assert_true(resp.status_code != 429,
+                f"The landing bucket is separate from the confirm POST's and must "
+                f"be untouched by it; got {resp.status_code}")
+
+
+@th.django_unit_test("dv: a confirm throttle diagnostic carries no token, path or query")
+def test_dv_confirm_throttle_incident_carries_no_token(opts):
+    from mojo.apps.incident.models import Event
+
+    ip = _isolated_ip()
+    headers = {"X-Real-IP": ip}
+    token = "dv:throttle-marker-secret-3369"
+
+    # The token rides in BOTH the query string and the body — request.DATA
+    # merges query params, so either leg could leak into a throttle Event.
+    for attempt in range(11):
+        resp = opts.client.post(
+            "/api/account/deactivate/confirm", {"token": token},
+            params={"token": token}, headers=headers)
+        if resp.status_code == 429:
+            break
+    assert_eq(resp.status_code, 429,
+              f"The confirm bucket must engage after 10 POSTs, got {resp.status_code}")
+
+    # Assert against the ONE throttle Event only. The pre-throttle invalid-token
+    # 400s legitimately file mojo_rest_error events that carry the raw query
+    # string — those are out of this contract.
+    event = Event.objects.filter(
+        category="rate_limit:account_deactivate_confirm", source_ip=ip).last()
+    assert_true(event is not None,
+                f"A throttled confirm must still file its diagnostic for {ip}")
+    meta = event.metadata or {}
+    for field in ("http_path", "http_query_string", "http_user_agent", "request_ip"):
+        assert_true(field not in meta,
+                    f"{field} must not be recorded for a confirm throttle; metadata was {meta!r}")
+    blob = f"{event.details}{event.title}{meta!r}"
+    assert_true("throttle-marker-secret-3369" not in blob,
+                "The throttled request's own token must never reach the Event")
+    assert_true("account_deactivate_confirm" in event.details,
+                f"The diagnostic must still name the bucket, got {event.details!r}")

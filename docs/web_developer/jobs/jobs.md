@@ -220,10 +220,13 @@ it — the write may well have landed. Such a job reads:
 - `status` = `pending`, `attempt` = `0`
 - `last_error` = `"Redis publish not confirmed"`
 
-Most of these jobs still run normally. One that never does needs a re-publish
-with the same `idempotency_key`; it is not retryable through `reset-failed`,
-which only sees `failed` jobs. A `failed` job, by contrast, still means execution
-was actually attempted and threw.
+Most of these jobs still run normally. For one that never does, a re-publish
+with the same `idempotency_key` remains the client-side recovery. An
+operator-side requeue of the channel also recovers it now: the requeue phase of
+`POST /api/jobs/control/reset-failed` re-delivers every `pending` job on the
+channel and clears the marker on confirmed delivery. (The *reset* phase itself
+still only sees `failed` jobs.) A `failed` job, by contrast, still means
+execution was actually attempted and threw.
 
 ---
 

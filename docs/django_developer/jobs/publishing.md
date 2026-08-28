@@ -103,9 +103,12 @@ kill work that is about to execute. `publish()` therefore no longer writes
   both fields are REST-readable under `view_jobs`, and a Redis exception string
   can carry the connection DSN. The full exception goes to the log only.
 - One budgeted `jobs:unconfirmed_publish` incident is filed (suppressed per
-  channel per hour). Every existing recovery surface — `retry_job`,
-  `control/reset-failed`, the platform health collector — keys off
-  `status='failed'`, so this incident is what tells an operator to look.
+  channel per hour). `retry_job` and the platform health collector both key
+  off `status='failed'` and never see one of these rows on their own; so does
+  `reset-failed`'s *reset* phase. Its *requeue* phase is the exception (see
+  below), and only once an operator points it — or a channel-less call with a
+  qualifying failed job — at the right channel, so this incident is still
+  what tells them to look.
 - The **immediate** path still raises `RuntimeError`. Its message now states
   that the job may still execute and that a retry is safe **only with the same
   `idempotency_key`** (which reuses the same row). A keyless re-publish after
@@ -121,9 +124,23 @@ cleared once the mirror is confirmed. So:
 
 That is the detector for the one residual gap: the process dying between commit
 and callback, or an earlier non-robust `on_commit` callback raising and taking
-the rest of the queue with it. Nothing replays these rows — this is not a
-transactional outbox. Recover by re-publishing with the same `idempotency_key`;
-otherwise `prune_jobs` removes the row after 7 days.
+the rest of the queue with it. Nothing replays these rows *automatically* —
+this is not a transactional outbox. Recovery is either side:
+
+- **Publisher-side**: re-publish with the same `idempotency_key` (reuses the
+  same row).
+- **Operator-side**: `JobManager.requeue_db_pending(channel)` — also the
+  requeue phase of `control/reset-failed` — re-mirrors the channel's `pending`
+  rows through this same live publish path (queue List / sched ZSETs) and
+  clears the marker on a confirmed mirror. Delivery stays at-least-once: a row
+  whose original `RPUSH` did land gets a second queue entry, and the duplicate
+  is fenced by the engine's DB compare-and-set claim, not by the queue.
+
+A requeue is a real publish mirror, so the `jobs.published` /
+`jobs.published.<channel>` metrics tick for each re-mirrored row — and
+`deferred: true` in an uncertainty record means the *non-raising* path, which
+includes operator requeues, not only on-commit publishes. Rows nobody recovers
+are removed by `prune_jobs` after 7 days.
 
 ### Parameter Reference
 

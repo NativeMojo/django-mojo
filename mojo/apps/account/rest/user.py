@@ -2297,6 +2297,8 @@ def on_account_deactivate(request):
 
 
 @md.POST("account/deactivate/confirm")
+@md.strict_rate_limit("account_deactivate_confirm", ip_limit=10, ip_window=3600,
+                      include_request_in_incident=False)
 @md.requires_params("token")
 @md.public_endpoint()
 def on_account_deactivate_confirm(request):
@@ -2308,6 +2310,11 @@ def on_account_deactivate_confirm(request):
     here; see mojo/apps/account/services/closure.py. A failure there raises and
     leaves the account active — the token is already spent, so recovery is a
     fresh POST account/deactivate.
+
+    Its own strict bucket, separate from the GET landing's
+    account_deactivate_landing one, with request metadata excluded from
+    throttle events because request.DATA also accepts the token from the
+    query string.
     """
     raw_token = request.DATA.get("token", "")
     user = tokens.verify_deactivate_token(raw_token)

@@ -1126,37 +1126,54 @@ class JobManager:
 
     def requeue_db_pending(self, channel: str, limit: Optional[int] = None) -> Dict[str, Any]:
         """
-        Requeue DB 'pending' jobs for a channel back into Redis streams.
-        Useful after a clear to rebuild the stream from DB truth.
+        Re-publish a channel's DB 'pending' jobs through the live publish
+        mirror, onto the queue List and sched ZSETs the engine consumes.
+
+        This is the operator recovery for rows stranded by an unconfirmed
+        publish (#3326, last_error=UNCONFIRMED_PUBLISH_ERROR): a confirmed
+        mirror clears that marker and records the authoritative
+        'queued'/'scheduled' event. Deliberately NOT gated by
+        JOBS_ALLOWED_CHANNELS — requeue republishes rows that already exist
+        in the DB, and refusing would strand rows on since-undeclared
+        channels with no recovery. A call with limit=None is still capped at
+        JOBS_REQUEUE_MAX (default 5000); a truncated sweep says so in the
+        result ('truncated': True plus the 'remaining' count) so the
+        operator knows to run it again.
         """
         try:
+            from . import _mirror_job_to_redis, _job_write_alias, validate_channel_name
+
+            # Charset check only — a malformed channel would reach Redis keys,
+            # metric slugs and incident titles verbatim. Membership
+            # (JOBS_ALLOWED_CHANNELS) stays deliberately unenforced here.
+            validate_channel_name(channel)
+
             qs = Job.objects.filter(channel=channel, status='pending').order_by('created')
-            if limit is not None:
-                qs = qs[:int(limit)]
+            total = qs.count()
+            # A sweep with no caller limit is still bounded — one synchronous
+            # HTTP request must not mirror an arbitrarily large backlog.
+            effective = int(limit) if limit is not None else int(settings.get_static('JOBS_REQUEUE_MAX', 5000))
+            qs = qs[:effective]
 
             requeued = 0
-            for job in qs:
-                stream_key = self.keys.stream_broadcast(channel) if job.broadcast else self.keys.stream(channel)
-                try:
-                    self.redis.xadd(stream_key, {
-                        'job_id': job.id,
-                        'func': job.func,
-                        'created': timezone.now().isoformat()
-                    })
-                    try:
-                        JobEvent.objects.create(
-                            job=job,
-                            channel=channel,
-                            event='queued',
-                            details={'requeued': True}
-                        )
-                    except Exception:
-                        pass
+            for job in qs.iterator(chunk_size=500):
+                confirmed = _mirror_job_to_redis(
+                    job.id, job.channel, job.run_at, job.broadcast,
+                    _job_write_alias(job), deferred=True)
+                if confirmed:
                     requeued += 1
-                except Exception as e:
-                    logit.warn(f"Failed to requeue job {job.id} on {channel}: {e}")
+                else:
+                    # The mirror already recorded the uncertainty marker,
+                    # JobLog entry and incident for this row.
+                    logit.warn(
+                        f"Failed to requeue job {job.id} on {channel}: "
+                        f"mirror unconfirmed")
 
-            return {'status': True, 'requeued': requeued, 'channel': channel}
+            result = {'status': True, 'requeued': requeued, 'channel': channel}
+            if total > effective:
+                result['truncated'] = True
+                result['remaining'] = total - effective
+            return result
         except Exception as e:
             return {'status': False, 'error': str(e), 'channel': channel}
 

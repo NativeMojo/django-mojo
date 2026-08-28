@@ -1,6 +1,8 @@
 import mojo.decorators as md
+from mojo.helpers import logit
 from mojo.helpers.response import JsonResponse
 from mojo.apps.account.services import email_delivery
+from mojo.apps.account.services import sms_delivery
 from mojo.apps.account.services import token_landing
 from mojo.apps.account.utils import tokens
 from mojo.apps.account.utils.webapp_url import build_token_url
@@ -129,8 +131,22 @@ def on_email_verify_confirm(request):
 @md.POST('auth/verify/phone/send')
 @md.strict_rate_limit("phone_verify_send", ip_limit=5, ip_window=300)
 @md.requires_auth()
-def on_phone_verify_send(request):
-    """Send a 6-digit SMS code to the requesting user's phone number."""
+def on_phone_verify_send(request, *, send=None):
+    """
+    Send a 6-digit SMS code to the requesting user's phone number.
+
+    Answers 503 with a safe retry message when the SMS transport did not
+    accept the message (misconfiguration, provider refusal or outage) and 400
+    with fixed copy when the provider rejected the recipient number itself —
+    telling someone a code is on its way when none was sent leaves them
+    waiting forever. The code is still generated and stored: it is single-use
+    and TTL-bounded, and the next request rotates it.
+
+    `send` is a test seam, not part of the wire contract — the dispatcher never
+    passes it. It exists because the test project's +1555 short-circuit means a
+    send over HTTP is always accepted, so the failure paths are not reachable
+    over the wire.
+    """
     from mojo.apps import phonehub
 
     user = request.user
@@ -143,10 +159,17 @@ def on_phone_verify_send(request):
     if not normalized:
         raise merrors.ValueException("Phone number is invalid")
 
+    sender = send if send is not None else phonehub.send_sms
     code = tokens.generate_phone_verify_code(user)
-    sms = phonehub.send_sms(normalized, f"Your verification code is: {code}")
-    if sms and sms.status == "failed":
-        raise merrors.ValueException("Failed to send SMS — check your phone number")
+    try:
+        sms = sender(normalized, f"Your verification code is: {code}")
+    except Exception:
+        logit.exception(f"phone verify SMS transport raised for user {user.pk}")
+        sms = None
+    if sms_delivery.recipient_rejected(sms):
+        return sms_delivery.number_unreachable_response()
+    if not sms_delivery.was_accepted(sms):
+        return sms_delivery.send_unavailable_response()
 
     user.report_incident(f"{user.username} requested phone verification", "phone_verify:sent")
     return JsonResponse(dict(status=True, message="Verification code sent"))

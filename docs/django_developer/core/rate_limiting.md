@@ -295,9 +295,16 @@ all unchanged; only the request-derived metadata is dropped:
                       include_request_in_incident=False)
 ```
 
-The three emailed-token confirmation landings are the in-tree users. Do not
-reach for it anywhere else: an `Event` without a path is materially harder to
-triage, and that cost is only worth paying when the path is a secret.
+The in-tree users are the three emailed-token confirmation landings plus
+`POST account/deactivate/confirm`. The criterion is slightly wider than "the
+URL is a secret": because `request.DATA` merges query-string parameters into
+the request body, a body-parameter endpoint like the deactivation confirm
+legally accepts its token via `?token=` — so its throttled query string can
+carry the secret just as a landing's URL does. Pass the flag when the URL
+itself is a secret, or when the query-merge lets a secret legally travel in
+the query string of a body-parameter endpoint. Do not reach for it anywhere
+else: an `Event` without a path is materially harder to triage, and that cost
+is only worth paying when the request line can carry a credential.
 
 ---
 

@@ -309,8 +309,11 @@ curl -X POST \
 |---|---|
 | No phone number on account | `400 No phone number on account` |
 | Phone number invalid/un-normalizable | `400 Phone number is invalid` |
-| SMS delivery failure | `400 Failed to send SMS — check your phone number` |
+| SMS transport did not accept the message (misconfiguration, provider refusal or outage) | `503` `{"status": false, "code": 503, "error": "Unable to send the text message right now. Please try again in a few minutes."}` — offer a Retry button |
+| Provider rejected the recipient number (invalid, blocked, or not SMS-capable) | `400` `{"status": false, "code": 400, "error": "This phone number cannot receive text messages."}` — retrying with the same number will not help |
 | Already verified | `200` success, no SMS sent |
+
+The 503 mirrors the email send contract above: the body is fixed, no provider error text is ever exposed, and the code is still generated — a retry simply rotates it. Retries share this endpoint's rate limit of **5 requests per 300 seconds per IP**, so keep the retry manual. Deployments running the legacy `MOJO_APP_STATUS_200_ON_ERROR` shim receive both failure bodies over HTTP 200, with the real `code` inside — read `status`/`code` from the body.
 
 ---
 

@@ -227,6 +227,13 @@ anything the POST does, and files its throttle diagnostics with
 `include_request_in_incident=False` so a throttled preview never records the
 `dv:` token sitting in its own query string.
 
+The POST now carries its own strict bucket too (`account_deactivate_confirm`,
+10/IP/hour) with the same token-free throttle diagnostics — `request.DATA`
+merges query parameters, so the confirm legally accepts `?token=` and its
+throttled query string could otherwise persist the token. The two buckets stay
+separate: previews and reloads of the landing never eat the confirm budget,
+and a throttled confirm leaves the landing readable.
+
 Deployments whose handler does something other than close-and-anonymise should
 override `account/account_deactivate_landing.html` so the copy matches what
 actually happens.

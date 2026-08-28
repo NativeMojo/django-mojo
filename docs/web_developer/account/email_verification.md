@@ -302,6 +302,10 @@ Returns 200 immediately if the phone is already verified. Returns 400 if no phon
 | Status | `error` | Meaning |
 |---|---|---|
 | 400 | `Value Error` | No phone number on account, or number is invalid |
+| 503 | `Unable to send the text message right now. Please try again in a few minutes.` | The SMS transport did not accept the message (misconfiguration, provider refusal or outage). Same contract as the email 503 above: the body is fixed (`{"status": false, "code": 503, "error": ...}`), no provider detail is exposed, the code is still generated so a retry is safe — offer a **Retry** button. |
+| 400 | `This phone number cannot receive text messages.` | The provider rejected the recipient number itself (invalid, blocked, or not SMS-capable). Retrying with the same number will never help — collect a working number first. |
+
+Retries share this endpoint's rate limit of **5 requests per 300 seconds per IP**, so keep the retry manual. Deployments running the legacy `MOJO_APP_STATUS_200_ON_ERROR` shim receive both failure bodies over HTTP 200 with the real `code` inside, exactly as for the email send above.
 
 ---
 
