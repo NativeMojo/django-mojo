@@ -980,6 +980,11 @@ registered resource is enabled; until then every endpoint answers 404.
 - `REDIS_MAX_CONN`
 - `REDIS_PASSWORD`
 - `REDIS_PORT`
+- `REDIS_PUBSUB_PREFIX` — **file-only** (`settings.get_static`) opt-in prefix
+  for every framework Pub/Sub channel name (jobs runner ctl/broadcast/replies/
+  ping; realtime broadcast/topic/messages), default `""`. Cooperative
+  test-checkout isolation, not a security boundary — leave unset in
+  production. See [Isolation — Messaging isolation](../testit/Isolation.md#messaging-isolation--the-pubsub-prefix).
 - `REDIS_READ_FROM_REPLICAS`
 - `REDIS_READER_URL` — **file-only** full URL for the opt-in standalone reader
   client. With `get_connection(reader=True)`, it takes precedence over all

@@ -28,6 +28,7 @@ All settings are optional. Configure in `settings.py` or via environment variabl
 | `REDIS_SERVER` | `"localhost"` | Hostname |
 | `REDIS_PORT` | `6379` | Port |
 | `REDIS_DB_INDEX` | `0` | Database index |
+| `REDIS_PUBSUB_PREFIX` | `""` | File-static (`settings.get_static`) opt-in prefix for framework Pub/Sub channel names — `{prefix}:{name}`. Isolates test checkouts sharing one Redis server (Pub/Sub ignores database indexes); leave unset in production. See `docs/django_developer/testit/Isolation.md` — "Messaging isolation" |
 | `REDIS_USERNAME` | — | ACL username (Serverless Valkey / Redis 6+) |
 | `REDIS_PASSWORD` | — | ACL password |
 | `REDIS_SCHEME` | `"rediss"` | `"redis"` or `"rediss"` (TLS). Auto-set to `"redis"` when host contains `localhost` |
@@ -225,6 +226,11 @@ for message in ps.listen():
     if message["type"] == "message":
         print(message["data"])
 ```
+
+`adapter.publish()`/`pubsub()` use the channel name you pass verbatim — they
+do not apply `REDIS_PUBSUB_PREFIX`. To namespace your own channels the same
+way the framework namespaces its own (jobs, realtime), build the name with
+`mojo.helpers.redis.channels.channel_name(name)` instead of a raw string.
 
 ### Streams
 
