@@ -391,6 +391,16 @@ do NOT extend `auth_base.html`, carry no CSP nonce, and load nothing from
 another origin. Each has its own 10/IP/hour bucket, separate from the POST
 budget, so previews and reloads cannot eat someone's confirmation attempts.
 
+The button's POST target is **not** always the landing's own path. `dv:` posts
+to `POST /api/account/deactivate/confirm`, which issues nothing anyway; `ev:`
+posts to `POST /api/auth/email/verify/confirm` and `ec:` to
+`POST /api/auth/email/change/apply` — confirm-only siblings that commit the
+change and hand back no session. The endpoints sharing those two landings'
+paths end in `jwt_login` and remain the SPA contract they always were: a
+landing pointed at one would deliver an access+refresh pair, `last_login` and a
+`UserLoginEvent` into whatever browser opened the emailed link. The map lives
+in `token_landing.CONFIRM_ROUTES`.
+
 Emailed `ev:`/`ec:`/`dv:` links point at these paths directly (see
 `mojo/apps/account/utils/webapp_url.py`). Links **already in inboxes** use the
 old `/auth?flow=…&token=…` shape, so `on_login_page` calls

@@ -169,12 +169,29 @@ leaves the account untouched. Downstream projects can override the template (see
 [Template Customisation](#template-customisation)).
 
 Pressing the page's button sends `{"token": "ec:…"}` to
-`POST /api/auth/email/change/confirm` (Option C's endpoint) with
-`credentials: "omit"` and no `Authorization` header. That POST is what commits
-the change, rotates `auth_key` and returns a fresh JWT — which this page
-**discards**, telling the person to sign in again. Confirming requires
-JavaScript; a `<noscript>` block says so, and the token survives for a later
-attempt in a JavaScript-capable browser.
+**`POST /api/auth/email/change/apply`** with `credentials: "omit"` and no
+`Authorization` header. That POST commits the change and rotates `auth_key` —
+and issues **no session at all**: no access/refresh pair, no `last_login`, no
+login event. Clicking a link from an inbox is not signing in, and the browser
+that opened it may not be the person's own, so the page tells them to return to
+the app and sign in there. Confirming requires JavaScript; a `<noscript>` block
+says so, and the token survives for a later attempt in a JavaScript-capable
+browser.
+
+**`apply` response:**
+
+```json
+{
+  "status": true,
+  "message": "Email address changed",
+  "data": { "email": "newemail@example.com" }
+}
+```
+
+Errors are the same set as Option C below (invalid/expired token, address no
+longer available, disabled account). It is token-only — the 6-digit code path
+is Option A's, and stays on `/confirm`. It carries its own rate-limit bucket,
+so page reloads never eat the SPA's confirmation budget.
 
 **Optional redirect parameter:**
 
@@ -203,6 +220,11 @@ Public endpoint. No authentication header required. Rate limited.
 ```
 
 On success: same behavior as the code path — new email committed, `auth_key` rotated, fresh JWT returned.
+
+> **Want the commit without a session?** Post the same body to
+> `POST /api/auth/email/change/apply` instead. Identical commit, no token pair.
+> Use it wherever the confirmation is not itself a sign-in — a hosted
+> confirmation page, a link opened on a device that is not the user's.
 
 ---
 
@@ -280,7 +302,8 @@ Because `auth_key` is rotated on confirm, any open sessions will find their JWTs
 1. Show the user a form with a field for `email`.
 2. Call `POST /api/auth/email/change/request` (no `method` param). On success, display: *"A confirmation link has been sent to newemail@example.com. Check your inbox and click the link to confirm."*
 3. Optionally show a **Cancel pending change** button that calls `POST /api/auth/email/change/cancel`.
-4. The link in the email points directly to `GET /api/auth/email/change/confirm?token=ec:...&redirect=https://yourapp.com/login`. The server renders the confirmation page and the user presses its button; no frontend route needed.
+4. The link in the email points directly to `GET /api/auth/email/change/confirm?token=ec:...&redirect=https://yourapp.com/login`. The server renders the confirmation page and the user presses its button, which posts to `/api/auth/email/change/apply`; no frontend route needed.
+5. **The person is not signed in by this page** — it issues no tokens by design. The `&redirect=` link brings them back to your app, where they sign in with the new address.
 
 ### SPA / mobile setup (frontend handles link)
 

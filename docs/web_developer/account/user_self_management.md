@@ -391,20 +391,33 @@ POST /api/auth/email/change/confirm
 The confirmation email links to `GET /api/auth/email/change/confirm?token=ec:...`
 on the API origin. Since #3257 that GET is a **confirmation page, not a commit**:
 opening it changes nothing and consumes nothing, so a mail scanner or link
-preview cannot burn the token. Its button POSTs the token to the same path:
+preview cannot burn the token. Its button POSTs the token to a **confirm-only
+sibling endpoint**:
 
 ```json
-POST /api/auth/email/change/confirm
+POST /api/auth/email/change/apply
 { "token": "ec:4e6f..." }
 ```
 
-That POST is unchanged — it commits the address, rotates `auth_key` and returns
-a fresh JWT. The framework's page **discards** that JWT and tells the person to
-sign in again; an SPA that posts the token itself may of course keep it.
+`apply` commits the address and rotates `auth_key`, and returns **no session**:
+
+```json
+{ "status": true, "message": "Email address changed",
+  "data": { "email": "newemail@example.com" } }
+```
+
+Clicking a link from an inbox is not signing in — the browser that opened it
+may not even be the person's own — so the page tells them to return to the app
+and sign in with the new address.
+
+`POST /api/auth/email/change/confirm` is unchanged and remains the SPA's
+endpoint: it accepts the same `{"token": …}` (and the 6-digit `{"code": …}`),
+commits the same change, and **does** return a fresh JWT. Use it when your own
+frontend handles the token and wants to keep the session going.
 
 On success (all paths): the new email is committed, `is_email_verified` is
-set to `true`, all other sessions are invalidated, and a fresh JWT is
-returned. Store the new tokens immediately.
+set to `true`, and all other sessions are invalidated. `/confirm` additionally
+returns a fresh JWT — store the new tokens immediately; `/apply` does not.
 
 **Cancel a pending change**
 
@@ -1753,7 +1766,8 @@ Refresh the user profile to pick up the updated `is_email_verified` or
 | Confirm email verify (link) | GET | `/api/auth/verify/email/confirm` | Public |
 | Request email change | POST | `/api/auth/email/change/request` | Required |
 | Confirm email change (code) | POST | `/api/auth/email/change/confirm` | Required |
-| Confirm email change (link) | POST/GET | `/api/auth/email/change/confirm` | Public |
+| Confirm email change (link, returns JWT) | POST/GET | `/api/auth/email/change/confirm` | Public |
+| Confirm email change (link, no session) | POST | `/api/auth/email/change/apply` | Public |
 | Cancel email change | POST | `/api/auth/email/change/cancel` | Required |
 | Set phone number (first time) | POST | `/api/user/me` | Required |
 | Send phone verify | POST | `/api/auth/verify/phone/send` | Required |

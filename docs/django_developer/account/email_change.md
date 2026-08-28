@@ -73,7 +73,8 @@ Both `verify_email_change_token` and `verify_email_change_otp` raise `merrors.Va
 | Endpoint | Auth | What it does |
 |---|---|---|
 | `POST /api/auth/email/change/request` | Bearer token required | Validates password + new email; sends link or OTP depending on `method`; notifies the old address **after** the provider accepted the confirmation |
-| `POST /api/auth/email/change/confirm` | None (token path) / Bearer token required (code path) | Commits the new email, rotates `auth_key`, returns fresh JWT |
+| `POST /api/auth/email/change/confirm` | None (token path) / Bearer token required (code path) | Commits the new email, rotates `auth_key`, **returns a fresh JWT**. The SPA's endpoint — both the `ec:` link and the 6-digit code are accepted here |
+| `POST /api/auth/email/change/apply` | None — the `ec:` token is the credential | Commits exactly the same change and **issues no session**: no token pair, no `last_login`, no login event. Token-only. This is what the landing page's button calls |
 | `GET /api/auth/email/change/confirm` | None | Confirmation **landing page** the emailed link opens; renders `account/email_change_landing.html` and changes **nothing** — see below |
 | `POST /api/auth/email/change/cancel` | Bearer token required | Invalidates any outstanding token **and** OTP immediately |
 
@@ -273,17 +274,35 @@ still be wrapped in a shortlink.
 **The GET no longer commits anything.** It renders a page that describes what
 will happen, carries the token as an inert `json_script` data block, names no
 account, and acts only when the person presses the button — which sends
-`POST /api/auth/email/change/confirm` with `{ "token": "ec:..." }`,
+`POST /api/auth/email/change/apply` with `{ "token": "ec:..." }`,
 `credentials: "omit"` and no `Authorization` header. Opening, prefetching or
 scanning the URL changes nothing. Confirming needs JavaScript; a `<noscript>`
 block says so, and the token is still unspent afterwards.
 
+**The button posts to `apply`, not to `confirm`, on purpose.** The `confirm`
+POST ends in `jwt_login`, so a landing pointed at it would hand a full
+access+refresh pair — plus `last_login`, the `USER_LOGIN_HANDLER` and a
+`UserLoginEvent` — to whatever browser opened the emailed link, which may be a
+shared machine or a mail client's embedded webview. The page then throws the
+pair away and tells the person they were not signed in. `apply` runs the
+identical commit path (`_commit_email_change`: availability re-check, the
+direct email/username writes, `auth_key` rotation, the `email:changed` log
+line, the one account-global `email_change:confirmed` row, the realtime event)
+and returns `{"status": true, "message": "Email address changed",
+"data": {"email": "<new address>"}}`. It has its own strict rate bucket
+(`email_change_apply`, 10/hour/IP), sized like the `confirm` POST's, so the
+landing's confirmations and the SPA's cannot eat each other's budget. It is
+token-only: the 6-digit code belongs to an authenticated SPA and stays on
+`confirm`.
+
 **If your SPA wants to own this confirmation**, `WEBAPP_BASE_URL` /
 `WEBAPP_AUTH_PATH` no longer reach it — override the `email_change_confirm`
 email template so the link points at your own page, and have that page call
-`POST /api/auth/email/change/confirm` itself. If you only want the framework's
-page to look like yours, override `account/email_change_landing.html` (or the
-shared `account/token_landing_base.html`) via `TEMPLATES.DIRS` instead.
+either endpoint itself: `POST /api/auth/email/change/confirm` when it wants the
+JWT back, `POST /api/auth/email/change/apply` when it only wants the address
+committed. If you only want the framework's page to look like yours, override
+`account/email_change_landing.html` (or the shared
+`account/token_landing_base.html`) via `TEMPLATES.DIRS` instead.
 
 **`/auth?flow=email_change&token=ec:…` still works.** Links already in inboxes
 hit `on_login_page`, which redirects them to the landing server-side before any
