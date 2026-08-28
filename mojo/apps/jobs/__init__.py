@@ -429,6 +429,232 @@ def get_startup_hooks():
     return list(ENGINE_STARTUP_HOOKS)
 
 
+# ---------------------------------------------------------------------------
+# Commit-ordered publication (maestro item #3326)
+#
+# The Redis mirror is what makes a job id visible to every worker on the
+# channel, so doing it inside the caller's transaction is a race the worker
+# wins on a fast box: it loads the row, gets DoesNotExist, drops the queue
+# entry and returns, leaving the job pending at attempt 0 forever. Only the
+# mirror rides transaction.on_commit — validation, the durable Job row, the
+# 'created' event and the returned id all stay synchronous.
+#
+# A mirror error is UNCERTAINTY, not failure: the RPUSH may well have landed
+# and only the acknowledgment was lost. The row therefore stays executable and
+# carries a marker, instead of the old status='failed' write that could kill
+# work already sitting on the queue.
+# ---------------------------------------------------------------------------
+
+# The single fixed safe text, in Job.last_error and in JobLog.message. Fixed on
+# purpose: both are REST-readable under view_jobs and a Redis exception string
+# can carry the connection DSN. The exception itself goes to the log only.
+UNCONFIRMED_PUBLISH_ERROR = "Redis publish not confirmed"
+
+UNCONFIRMED_PUBLISH_CATEGORY = "jobs:unconfirmed_publish"
+
+
+def _job_write_alias(job):
+    """The database alias the Job row was actually written on.
+
+    router.db_for_write, not job._state.db alone: it honors a consumer's router
+    (and under a reader/writer router its pinning keeps later reads on primary).
+    Never the alias of the idempotency lookup — that read routes through
+    db_for_read and can land on a replica.
+    """
+    from .models import Job
+
+    try:
+        from django.db import router
+        alias = router.db_for_write(Job, instance=job)
+        if alias:
+            return alias
+    except Exception as e:
+        logit.warning(f"jobs: write-alias lookup failed for job {job.pk}: {e}")
+    return job._state.db or 'default'
+
+
+def _record_uncertain_publication(job_id, channel, alias, err, deferred, operation):
+    """Record that a Redis mirror write may or may not have landed.
+
+    NEVER raises, and each write is independently guarded: on the deferred path
+    this runs inside an on_commit callback, where an exception would abort every
+    remaining callback in the queue.
+    """
+    from .models import Job, JobLog
+
+    logit.error(
+        f"jobs: Redis {operation} for job {job_id} on {channel} is unconfirmed "
+        f"(deferred={bool(deferred)}): {err}")
+
+    try:
+        JobLog.objects.using(alias).create(
+            job_id=job_id,
+            channel=channel,
+            kind='error',
+            message=UNCONFIRMED_PUBLISH_ERROR,
+            meta={
+                'phase': 'redis_mirror',
+                'delivery_state': 'unknown',
+                'deferred': bool(deferred),
+                'operation': operation,
+            })
+    except Exception as e:
+        logit.error(f"jobs: failed to log the unconfirmed publish of {job_id}: {e}")
+
+    try:
+        # Conditional: a row a worker already claimed keeps its own execution
+        # error. A queryset update bypasses auto_now, hence the explicit value.
+        Job.objects.using(alias).filter(
+            pk=job_id, status='pending', attempt=0,
+        ).update(last_error=UNCONFIRMED_PUBLISH_ERROR, modified=timezone.now())
+    except Exception as e:
+        logit.error(f"jobs: failed to mark job {job_id} unconfirmed: {e}")
+
+    try:
+        from mojo.apps import incident
+        incident.report_event_suppressed(
+            f"jobs.publish could not confirm the Redis {operation} for job "
+            f"{job_id} on channel '{channel}' ({type(err).__name__}). The write "
+            f"may well have landed, so the row is left pending and executable "
+            f"with last_error='{UNCONFIRMED_PUBLISH_ERROR}'. Nothing replays it: "
+            f"if the job never runs, re-publish with the SAME idempotency_key "
+            f"(a keyless re-publish is at-least-once). prune_jobs removes the "
+            f"row after 7 days.",
+            key=channel,
+            title=f"Unconfirmed job publication: {channel}",
+            category=UNCONFIRMED_PUBLISH_CATEGORY,
+            level=3,
+            window=REJECTED_RENOTIFY_SEC,
+            budget=8,
+            fail_open=False,
+            channel=channel,
+            deferred=bool(deferred),
+            operation=operation)
+    except Exception as e:
+        logit.error(
+            f"jobs: failed to report an unconfirmed publication on {channel}: {e}")
+
+
+def _clear_uncertainty_marker(job_id, alias):
+    """Drop the delivery-uncertainty marker after a confirmed mirror. Never raises.
+
+    Filtered on the marker text alone, deliberately not on status/attempt: a
+    worker may claim the row between the RPUSH and this clear, and stranding a
+    stale marker on a job that ran fine is worse than a no-op.
+    """
+    from .models import Job
+
+    try:
+        Job.objects.using(alias).filter(
+            pk=job_id, last_error=UNCONFIRMED_PUBLISH_ERROR,
+        ).update(last_error="", modified=timezone.now())
+    except Exception as e:
+        logit.warning(
+            f"jobs: failed to clear the uncertainty marker on {job_id}: {e}")
+
+
+def _mirror_job_to_redis(job_id, channel, run_at, broadcast, alias, deferred):
+    """Make one job id visible to workers, then record what follows.
+
+    Returns True on a confirmed mirror; on the deferred path a failure returns
+    False instead of raising. run_at and expires_at are never recomputed — only
+    the due-versus-scheduled decision is re-made here, so a transaction that
+    outlived run_at queues immediately instead of waiting for a scheduler poll,
+    and no expiry is extended.
+    """
+    from .models import JobEvent
+
+    keys = JobKeys()
+    now = timezone.now()
+    scheduled = bool(run_at and run_at > now)
+    operation = 'zadd' if scheduled else 'rpush'
+
+    # Mirror to Redis (Plan B: List + ZSET + Scheduled ZSET)
+    try:
+        redis = get_adapter()
+
+        # No per-job Redis hash (KISS): DB is source of truth
+
+        if scheduled:
+            # Add to scheduled ZSET (two-ZSET routing remains)
+            score = run_at.timestamp() * 1000  # milliseconds
+            target_zset = keys.sched_broadcast(channel) if broadcast else keys.sched(channel)
+            redis.zadd(target_zset, {job_id: score})
+
+            # So the cluster's single scheduler promotes this even if the box it
+            # runs on does not consume `channel`.
+            register_sched_channel(channel)
+
+            logit.info(f"Scheduled job {job_id} on {channel} for {run_at} "
+                       f"(zset={'sched_broadcast' if broadcast else 'sched'})")
+        else:
+            # Immediate execution: enqueue to List queue (Plan B)
+            queue_key = keys.queue(channel)
+            redis.rpush(queue_key, job_id)
+
+            logit.info(f"Queued job {job_id} on {channel} (broadcast={broadcast}) to queue {queue_key}")
+
+    except Exception as e:
+        _record_uncertain_publication(
+            job_id, channel, alias, e, deferred, operation)
+        if deferred:
+            return False
+        # The row is NOT marked failed any more, so a blind retry can execute
+        # the work twice — the message has to say so.
+        raise RuntimeError(
+            f"Failed to queue job {job_id}: delivery unconfirmed "
+            f"({type(e).__name__}). The job row remains pending and may still "
+            f"execute; retry ONLY with the same idempotency_key.")
+
+    _clear_uncertainty_marker(job_id, alias)
+
+    try:
+        JobEvent.objects.using(alias).create(
+            job_id=job_id,
+            channel=channel,
+            event='scheduled' if scheduled else 'queued',
+            details=(
+                {'run_at': run_at.isoformat()}
+                if scheduled
+                else {'queue': keys.queue(channel)}
+            ),
+        )
+    except Exception as e:
+        logit.warning(f"Failed to record publish event for job {job_id}: {e}")
+
+    try:
+        metrics.record(
+            slug="jobs.published",
+            when=now,
+            count=1,
+            category="jobs"
+        )
+        metrics.record(
+            slug=f"jobs.published.{channel}",
+            when=now,
+            count=1,
+            category="jobs"
+        )
+    except Exception as e:
+        logit.warning(f"Failed to record publish metrics for job {job_id}: {e}")
+
+    return True
+
+
+def _publish_after_commit(job_id, channel, run_at, broadcast, alias):
+    """Mirror the job now that its row is durable — the on_commit callback.
+
+    Blanket except: Django abandons every remaining run_on_commit callback when
+    one raises, so a Redis fault here must not take unrelated callbacks with it.
+    """
+    try:
+        _mirror_job_to_redis(
+            job_id, channel, run_at, broadcast, alias, deferred=True)
+    except Exception as e:
+        logit.error(
+            f"jobs: deferred publish of job {job_id} on {channel} failed: {e}")
+
+
 def publish(
     func: Union[str, Callable],
     payload: Dict[str, Any] = None,
@@ -481,9 +707,18 @@ def publish(
         Job ID (UUID string without dashes) — or, for an immediate broadcast
         with at least one live runner, a list of such ids (one per runner).
 
+        The row, its 'created' event and this id are synchronous. The Redis
+        queue/scheduled entry is NOT: inside an enclosing transaction it is
+        deferred to that transaction's commit, so a worker can never see the id
+        before the row it needs. Rollback (outer or savepoint) publishes nothing.
+
     Raises:
         ValueError: If func is not registered or arguments are invalid
-        RuntimeError: If publishing fails
+        RuntimeError: If the immediate (autocommit) mirror cannot be confirmed.
+            The row stays pending and executable, marked
+            last_error=UNCONFIRMED_PUBLISH_ERROR — so retry ONLY with the same
+            idempotency_key. A deferred mirror records the same uncertainty and
+            returns instead of raising; the caller has already been given the id.
     """
     if _capture_router is not None:
         handled, captured_result = _capture_router({
@@ -745,70 +980,28 @@ def publish(
             logit.error(f"Failed to create job in database: {e}")
             raise RuntimeError(f"Failed to create job: {e}")
 
-    # Mirror to Redis (Plan B: List + ZSET + Scheduled ZSET)
-    try:
-        redis = get_adapter()
-        keys = JobKeys()
-
-        # No per-job Redis hash (KISS): DB is source of truth
-
-        # Route based on scheduling (Plan B: List + ZSET for immediate/scheduled)
-        if run_at and run_at > now:
-            # Add to scheduled ZSET (two-ZSET routing remains)
-            score = run_at.timestamp() * 1000  # milliseconds
-            target_zset = keys.sched_broadcast(channel) if broadcast else keys.sched(channel)
-            redis.zadd(target_zset, {job_id: score})
-
-            # So the cluster's single scheduler promotes this even if the box it
-            # runs on does not consume `channel`.
-            register_sched_channel(channel)
-
-            logit.info(f"Scheduled job {job_id} on {channel} for {run_at} "
-                       f"(zset={'sched_broadcast' if broadcast else 'sched'})")
-        else:
-            # Immediate execution: enqueue to List queue (Plan B)
-            queue_key = keys.queue(channel)
-            redis.rpush(queue_key, job_id)
-
-            logit.info(f"Queued job {job_id} on {channel} (broadcast={broadcast}) to queue {queue_key}")
-
-    except Exception as e:
-        logit.error(f"Failed to mirror job {job_id} to Redis: {e}")
-        # Mark job as failed in DB since it couldn't be queued
-        job.status = 'failed'
-        job.last_error = f"Failed to queue: {e}"
-        job.save(update_fields=['status', 'last_error', 'modified'])
-        raise RuntimeError(f"Failed to queue job: {e}")
-
-    try:
-        JobEvent.objects.create(
-            job=job,
-            channel=channel,
-            event='scheduled' if run_at and run_at > now else 'queued',
-            details=(
-                {'run_at': run_at.isoformat()}
-                if run_at and run_at > now
-                else {'queue': keys.queue(channel)}
-            ),
-        )
-    except Exception as e:
-        logit.warning(f"Failed to record publish event for job {job_id}: {e}")
-
-    try:
-        metrics.record(
-            slug="jobs.published",
-            when=now,
-            count=1,
-            category="jobs"
-        )
-        metrics.record(
-            slug=f"jobs.published.{channel}",
-            when=now,
-            count=1,
-            category="jobs"
-        )
-    except Exception as e:
-        logit.warning(f"Failed to record publish metrics for job {job_id}: {e}")
+    # The Redis mirror is the moment the id becomes claimable, so it must never
+    # precede the commit of the transaction that wrote the row. publish()'s own
+    # atomic() block has already exited above, so in_atomic_block here means a
+    # CALLER transaction encloses us. Branching explicitly rather than leaning on
+    # on_commit's autocommit passthrough keeps the immediate path's RuntimeError
+    # unambiguous and survives a manual set_autocommit(False).
+    write_alias = _job_write_alias(job)
+    if transaction.get_connection(using=write_alias).in_atomic_block:
+        # Written inside the caller's transaction and cleared on a confirmed
+        # mirror: a row that commits but never gets mirrored — process death, or
+        # an earlier non-robust on_commit callback aborting the queue — is then
+        # detectable from the row alone, with no schema change.
+        Job.objects.using(write_alias).filter(pk=job_id).update(
+            last_error=UNCONFIRMED_PUBLISH_ERROR, modified=timezone.now())
+        transaction.on_commit(
+            lambda: _publish_after_commit(
+                job_id, channel, run_at, broadcast, write_alias),
+            using=write_alias)
+        logit.info(f"Deferred publish of job {job_id} on {channel} until commit")
+    else:
+        _mirror_job_to_redis(job_id, channel, run_at, broadcast, write_alias,
+                             deferred=False)
 
     return job_id
 
