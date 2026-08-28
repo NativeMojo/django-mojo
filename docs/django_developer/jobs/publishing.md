@@ -103,9 +103,12 @@ kill work that is about to execute. `publish()` therefore no longer writes
   both fields are REST-readable under `view_jobs`, and a Redis exception string
   can carry the connection DSN. The full exception goes to the log only.
 - One budgeted `jobs:unconfirmed_publish` incident is filed (suppressed per
-  channel per hour). Every existing recovery surface — `retry_job`,
-  `control/reset-failed`, the platform health collector — keys off
-  `status='failed'`, so this incident is what tells an operator to look.
+  channel per hour). `retry_job` and the platform health collector both key
+  off `status='failed'` and never see one of these rows on their own; so does
+  `reset-failed`'s *reset* phase. Its *requeue* phase is the exception (see
+  below), and only once an operator points it — or a channel-less call with a
+  qualifying failed job — at the right channel, so this incident is still
+  what tells them to look.
 - The **immediate** path still raises `RuntimeError`. Its message now states
   that the job may still execute and that a retry is safe **only with the same
   `idempotency_key`** (which reuses the same row). A keyless re-publish after
