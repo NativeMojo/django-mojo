@@ -2145,6 +2145,35 @@ def on_account_deactivate_confirm(request):
     return JsonResponse({"status": True, "message": "Your account has been deactivated."})
 
 
+@md.GET("account/deactivate/confirm")
+@md.strict_rate_limit("account_deactivate_landing", ip_limit=10, ip_window=3600,
+                      include_request_in_incident=False)
+@md.public_endpoint("Deactivation confirmation landing page — presentation only")
+def on_account_deactivate_confirm_get(request):
+    """
+    The page a dv: link from the user's inbox opens.
+
+    Before #3257 this flow had no human page at all — its only confirm route
+    was the POST above, so the emailed link led to an ordinary login form that
+    ignored the token. The page states the consequence plainly and closes
+    nothing: the closure runs on POST account/deactivate/confirm, which the
+    button calls with the token the person clicked through to, and which still
+    delegates to ACCOUNT_CLOSURE_HANDLER exactly as before.
+
+    Presentation ONLY: no token verification, no lookup, no account identity on
+    the page. Its own rate bucket, with request-stamped incident metadata
+    switched off so a throttled preview never files the token in its own query
+    string.
+
+    Deployments override account/account_deactivate_landing.html (or the shared
+    account/token_landing_base.html) via TEMPLATES.DIRS.
+    """
+    ctx = token_landing.landing_context(
+        request, token_landing.confirm_path("dv"))
+    return token_landing.render_landing(
+        request, "account_deactivate_landing.html", ctx)
+
+
 # -----------------------------------------------------------------
 # Security events log
 # -----------------------------------------------------------------

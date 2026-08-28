@@ -441,3 +441,67 @@ def test_pii_anonymize_call_sites_are_pinned(opts):
               "pii_anonymize() must only be called by account/services/closure.py, so every "
               "erasure path goes through the deployment's ACCOUNT_CLOSURE_HANDLER. "
               f"Unexpected call sites: {sorted(callers - allowed_callers)}")
+
+
+# ===========================================================================
+# The confirmation landing (#3257)
+#
+# Before #3257 this flow had no human page: the emailed dv: link opened an
+# ordinary login form that ignored the token, and the only confirm route was a
+# POST. The landing GET must render the consequence and close NOTHING.
+# ===========================================================================
+
+@th.django_unit_test("deactivate landing: GET renders and does not close the account")
+def test_deactivate_landing_get_renders_and_does_not_close(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+
+    User.objects.filter(pk=opts.user_id).update(is_active=True)
+    user = User.objects.get(pk=opts.user_id)
+    token = tokens.generate_deactivate_token(user)
+
+    clear_rate_limits(ip="127.0.0.1")
+    resp = opts.client.get("/api/account/deactivate/confirm", params={"token": token})
+    body = resp.get("text") or ""
+
+    assert_eq(resp.status_code, 200,
+              f"The deactivation landing must render 200, got {resp.status_code}")
+    assert_true('id="mojo-landing-ready"' in body,
+                f"Expected the ready state to render, got: {body[:400]!r}")
+
+    user.refresh_from_db()
+    assert_true(user.is_active,
+                "Opening the deactivation landing must NOT close the account — "
+                "a mail scanner or link preview would otherwise close it")
+
+    # The GET consumed nothing: the same token still works.
+    clear_rate_limits(ip="127.0.0.1")
+    check = tokens.verify_deactivate_token(token)
+    assert_eq(check.pk, user.pk,
+              "The token the landing rendered must still be valid after the GET")
+
+    User.objects.filter(pk=opts.user_id).update(is_active=True)
+
+
+@th.django_unit_test("deactivate landing: the page names the consequence and the action")
+def test_deactivate_landing_names_the_consequence(opts):
+    from mojo.decorators.limits import clear_rate_limits
+
+    clear_rate_limits(ip="127.0.0.1")
+    resp = opts.client.get(
+        "/api/account/deactivate/confirm", params={"token": "dv:renderonly"})
+    body = (resp.get("text") or "").lower()
+
+    assert_eq(resp.status_code, 200,
+              f"The deactivation landing must render 200, got {resp.status_code}")
+    assert_true("mojo-landing-ready" in body,
+                f"Expected the ready state to render, got: {body[:400]!r}")
+    assert_true("closes the account for good" in body,
+                "The page must say plainly that the account is closed permanently")
+    assert_true("nothing has happened yet" in body,
+                "The page must say nothing has happened yet — opening a link is not consent")
+    assert_true("btn--danger" in body,
+                "The confirm button must carry the destructive style")
+    assert_true("deactivate my account" in body,
+                "The button must name the action it performs")

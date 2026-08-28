@@ -1,0 +1,31 @@
+{% extends "account/token_landing_base.html" %}
+
+{% comment %}
+Account deactivation landing (dv:). Presentation only — see
+mojo/apps/account/services/token_landing.py. Before #3257 this flow had no
+human page at all: its only confirm route was a POST, so the emailed link led
+nowhere. Deployments override this file (or the base) under templates/account/
+with higher TEMPLATES.DIRS priority.
+
+The copy names the consequence plainly and the button carries the destructive
+style. A deployment whose ACCOUNT_CLOSURE_HANDLER does something other than
+close-and-anonymise should override this template to say what it does instead.
+{% endcomment %}
+
+{% block page_title %}Confirm account deactivation{% endblock %}
+
+{% block headline %}Deactivate this account?{% endblock %}
+
+{% block consequence %}This closes the account for good. You will be signed out
+everywhere, you will not be able to sign in again, and personal details on the
+account are removed. This cannot be undone from here. Nothing has happened yet
+— it only happens when you press the button.{% endblock %}
+
+{% block button_class %}btn--danger{% endblock %}
+
+{% block button_label %}Deactivate my account{% endblock %}
+
+{% block success_headline %}Account deactivated{% endblock %}
+
+{% block success_copy %}The account has been closed and every session signed
+out. If this was not you, contact support straight away.{% endblock %}
