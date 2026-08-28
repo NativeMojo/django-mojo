@@ -146,6 +146,31 @@ Controls the job engine (runner) behavior.
 | `JOBS_STREAM_MAXLEN` | `100000` | Max messages per Redis stream (approximate trimming) |
 | `JOBS_LOCAL_QUEUE_MAXSIZE` | `1000` | Max local in-process queue size (for `publish_local`) |
 
+Set `JOBS_REDIS_PREFIX` explicitly in your settings file. The settings
+helper's attribute access returns `None` for missing keys, so the
+`"mojo:jobs"` fallback in `JobKeys` never actually fires — an unset value
+yields literal `None:`-rooted keys (consistent on both sides, so it works,
+but not what you want).
+
+### Pub/Sub channels and `REDIS_PUBSUB_PREFIX`
+
+`JOBS_REDIS_PREFIX` covers storage keys and the per-runner control channel.
+Three Pub/Sub channels are deliberately rooted at the **literal** `mojo:jobs`
+regardless of a custom prefix (pre-existing wire behavior, preserved —
+the broadcast channel is a rendezvous between independently restarted
+processes and must not move on upgrade):
+
+- `mojo:jobs:runners:broadcast` — global control/execute broadcasts
+- `mojo:jobs:replies:{token}` / `mojo:jobs:ping:{token}` — one-shot reply
+  channels (the name travels inside the message)
+
+Separately, the file-static `REDIS_PUBSUB_PREFIX` (default `""`) prefixes
+**every** Pub/Sub channel — runner ctl, broadcast, replies, ping — as
+`{REDIS_PUBSUB_PREFIX}:{name}`. It exists for test-checkout isolation
+(Redis Pub/Sub ignores database numbers); `bin/create_testproject` derives
+a per-checkout value. Leave it unset in production. See
+`testit/Isolation.md` — "Messaging isolation".
+
 ## Timeouts & Heartbeats
 
 | Setting | Default | Description |

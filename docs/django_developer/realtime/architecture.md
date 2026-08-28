@@ -157,6 +157,25 @@ All connection state lives in Redis, making workers stateless and horizontally s
 
 All keys have automatic TTL (default 300 seconds, refreshed on activity).
 
+There is also a Pub/Sub channel per topic, `realtime:topic:{name}` — same
+string as the membership SET above, different Redis namespace.
+
+### Channel naming and `REDIS_PUBSUB_PREFIX`
+
+The three Pub/Sub channels (broadcast, per-topic, per-connection messages)
+are built by `mojo/apps/realtime/channels.py`. When the file-static setting
+`REDIS_PUBSUB_PREFIX` is nonempty, every channel becomes
+`{REDIS_PUBSUB_PREFIX}:{name}` on publish, subscribe, and unsubscribe.
+Storage keys are unaffected (they are isolated by the Redis database
+index), and nothing changes for clients — topic names, payloads, auth, and
+topic authorization are identical; the prefix exists only on the Redis
+wire. Default is `""` (channel names byte-identical to the table above).
+It exists for test-checkout isolation — Redis Pub/Sub ignores database
+numbers, so two test environments sharing one Redis would otherwise
+receive each other's messages. `bin/create_testproject` derives a
+per-checkout value; leave it unset in production. See
+`testit/Isolation.md` — "Messaging isolation".
+
 ## Client IP Resolution
 
 The WS handler derives the client IP using the same trust order as the HTTP path (DM-009 / DM-010):

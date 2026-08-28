@@ -287,6 +287,11 @@ The system uses these Redis key patterns:
 
 All keys have automatic TTL for cleanup.
 
+When the file-static setting `REDIS_PUBSUB_PREFIX` is nonempty (test
+isolation — see `docs/django_developer/testit/Isolation.md`), the PUB/SUB
+channels above are prefixed as `{REDIS_PUBSUB_PREFIX}:{name}` via
+`channels.py`; storage keys are not.
+
 ## Message Protocol
 
 ### Client -> Server

@@ -37,6 +37,7 @@ in `~/.mojo/testenv.json`.
 | Redis DB index | `REDIS_DB_INDEX` | same file |
 | Dev server port | `port=` | `testproject/config/dev_server.conf` |
 | Django cache prefix | `mojot_<slug>` | same `db.py` |
+| Pub/Sub channel prefix | `REDIS_PUBSUB_PREFIX = mojot_<slug>` | same `db.py` |
 
 `<slug>` is `sha1(realpath(checkout))[:8]`. Stable across reboots and branch
 switches; different for every worktree. `realpath` matters — `/var` and
@@ -92,6 +93,44 @@ leak above.
 > exists. Downstream repos that need the path without importing the package can
 > use `importlib.util.find_spec("testit").origin`, which locates it without
 > executing it.
+
+## Messaging isolation — the Pub/Sub prefix
+
+The database index isolates **stored keys** only. [Redis Pub/Sub ignores
+logical database numbers](https://redis.io/docs/latest/develop/pubsub/): a
+message published on `realtime:broadcast` from db 3 is delivered to a
+subscriber of `realtime:broadcast` on db 7 of the same server. Before this
+existed, two checkouts' suites heard each other's realtime messages and
+job-control broadcasts even with fully separated data.
+
+The fix is the file-static Django setting **`REDIS_PUBSUB_PREFIX`**
+(default `""`). When nonempty, every framework Pub/Sub channel — jobs
+runner ctl, runners broadcast, replies, ping; realtime broadcast, topics,
+per-connection messages — becomes `{REDIS_PUBSUB_PREFIX}:{legacy_name}` on
+publish, subscribe, and unsubscribe. Empty means the legacy names,
+byte-identical. Storage keys never carry it, and clients see no change —
+the prefix exists only on the Redis wire.
+
+`bin/create_testproject` writes `REDIS_PUBSUB_PREFIX = "mojot_<slug>"`
+into the generated `db.py` — the same checkout identity as the cache
+prefix, via `testenv.expected_pubsub_prefix(root)`. One settings file
+feeds every participating process (test runner, `bin/asgi_local` server,
+in-test job engines), so they always agree.
+
+**The guard fails closed.** `bin/testit.py` compares the live setting to
+`expected_pubsub_prefix(checkout root)` before flushing anything; a
+missing or mismatched value — a testproject generated before this feature
+existed, or one copied from another tree — aborts the run with the fix
+(`bin/create_testproject`) instead of silently talking on the legacy
+shared channels.
+
+Scope honestly stated: this is cooperative segregation between test
+processes that all apply the prefix. Two *empty-prefix* environments on
+one Redis server are still not isolated from each other, and none of this
+is a substitute for Redis ACLs against a hostile client. Leave the setting
+unset in production. Do not override `REDIS_PUBSUB_PREFIX` through
+`th.server_settings()` — the runner and the reloaded server would then
+disagree and every delivery test fails.
 
 ## Two deliberate offsets
 
@@ -168,6 +207,24 @@ env = testenv.allocate(REPO_ROOT, "myproj_test", limit=64)
 Load it by file path (or `find_spec`), never `import testit.testenv` —
 importing the package runs `testit/__init__.py`, which needs a configured
 project.
+
+### Adopting messaging isolation
+
+The Pub/Sub prefix rides the same allocation. In the generated (or test)
+settings, alongside `REDIS_DB_INDEX`:
+
+```python
+REDIS_PUBSUB_PREFIX = testenv.expected_pubsub_prefix(REPO_ROOT)
+```
+
+That is the whole consumer contract: set the setting, and every framework
+Pub/Sub path — and anything you publish through `realtime.publish_topic`
+etc. — is namespaced per checkout. If your own code publishes raw Redis
+channels, build the names through
+`mojo.helpers.redis.channels.channel_name(name)`. To fail closed the way
+django-mojo's own runner does, compare the live setting to
+`testenv.expected_pubsub_prefix(root)` in your runner preflight and abort
+on mismatch (see `bin/testit.py`).
 
 ### Guarding your own flush
 
