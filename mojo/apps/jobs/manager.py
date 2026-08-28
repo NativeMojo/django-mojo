@@ -1135,17 +1135,28 @@ class JobManager:
         'queued'/'scheduled' event. Deliberately NOT gated by
         JOBS_ALLOWED_CHANNELS — requeue republishes rows that already exist
         in the DB, and refusing would strand rows on since-undeclared
-        channels with no recovery.
+        channels with no recovery. A call with limit=None is still capped at
+        JOBS_REQUEUE_MAX (default 5000); a truncated sweep says so in the
+        result ('truncated': True plus the 'remaining' count) so the
+        operator knows to run it again.
         """
         try:
-            from . import _mirror_job_to_redis, _job_write_alias
+            from . import _mirror_job_to_redis, _job_write_alias, validate_channel_name
+
+            # Charset check only — a malformed channel would reach Redis keys,
+            # metric slugs and incident titles verbatim. Membership
+            # (JOBS_ALLOWED_CHANNELS) stays deliberately unenforced here.
+            validate_channel_name(channel)
 
             qs = Job.objects.filter(channel=channel, status='pending').order_by('created')
-            if limit is not None:
-                qs = qs[:int(limit)]
+            total = qs.count()
+            # A sweep with no caller limit is still bounded — one synchronous
+            # HTTP request must not mirror an arbitrarily large backlog.
+            effective = int(limit) if limit is not None else int(settings.get_static('JOBS_REQUEUE_MAX', 5000))
+            qs = qs[:effective]
 
             requeued = 0
-            for job in qs:
+            for job in qs.iterator(chunk_size=500):
                 confirmed = _mirror_job_to_redis(
                     job.id, job.channel, job.run_at, job.broadcast,
                     _job_write_alias(job), deferred=True)
@@ -1158,7 +1169,11 @@ class JobManager:
                         f"Failed to requeue job {job.id} on {channel}: "
                         f"mirror unconfirmed")
 
-            return {'status': True, 'requeued': requeued, 'channel': channel}
+            result = {'status': True, 'requeued': requeued, 'channel': channel}
+            if total > effective:
+                result['truncated'] = True
+                result['remaining'] = total - effective
+            return result
         except Exception as e:
             return {'status': False, 'error': str(e), 'channel': channel}
 

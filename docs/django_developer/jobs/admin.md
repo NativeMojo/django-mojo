@@ -178,7 +178,10 @@ channel's `pending` set (`limit=None`), so it also re-mirrors rows stranded by
 an unconfirmed publish (`last_error = "Redis publish not confirmed"`) and
 clears that marker on confirmation. The requeue is deliberately exempt from
 `JOBS_ALLOWED_CHANNELS`: it republishes rows that already exist in the DB, and
-refusing would strand rows on since-undeclared channels with no recovery.
+refusing would strand rows on since-undeclared channels with no recovery. A
+no-limit sweep is still capped at `JOBS_REQUEUE_MAX` (default 5000) so one
+request cannot mirror an arbitrarily large backlog; a capped sweep returns
+`"truncated": true` with the `"remaining"` count — run it again to continue.
 
 ### POST /api/jobs/control/rebuild-scheduled
 
