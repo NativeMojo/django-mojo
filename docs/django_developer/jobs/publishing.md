@@ -121,9 +121,23 @@ cleared once the mirror is confirmed. So:
 
 That is the detector for the one residual gap: the process dying between commit
 and callback, or an earlier non-robust `on_commit` callback raising and taking
-the rest of the queue with it. Nothing replays these rows — this is not a
-transactional outbox. Recover by re-publishing with the same `idempotency_key`;
-otherwise `prune_jobs` removes the row after 7 days.
+the rest of the queue with it. Nothing replays these rows *automatically* —
+this is not a transactional outbox. Recovery is either side:
+
+- **Publisher-side**: re-publish with the same `idempotency_key` (reuses the
+  same row).
+- **Operator-side**: `JobManager.requeue_db_pending(channel)` — also the
+  requeue phase of `control/reset-failed` — re-mirrors the channel's `pending`
+  rows through this same live publish path (queue List / sched ZSETs) and
+  clears the marker on a confirmed mirror. Delivery stays at-least-once: a row
+  whose original `RPUSH` did land gets a second queue entry, and the duplicate
+  is fenced by the engine's DB compare-and-set claim, not by the queue.
+
+A requeue is a real publish mirror, so the `jobs.published` /
+`jobs.published.<channel>` metrics tick for each re-mirrored row — and
+`deferred: true` in an uncertainty record means the *non-raising* path, which
+includes operator requeues, not only on-commit publishes. Rows nobody recovers
+are removed by `prune_jobs` after 7 days.
 
 ### Parameter Reference
 

@@ -171,7 +171,14 @@ Reset failed jobs to pending for re-execution.
 
 **Body**: `{"channel": "default", "since": "2026-03-01T00:00:00Z", "limit": 100}`
 
-All params optional.
+All params optional. `limit` caps how many `failed` rows are reset to
+`pending`. The requeue phase that follows publishes through the live mirror —
+the queue List and scheduled ZSETs the engine consumes — and sweeps the whole
+channel's `pending` set (`limit=None`), so it also re-mirrors rows stranded by
+an unconfirmed publish (`last_error = "Redis publish not confirmed"`) and
+clears that marker on confirmation. The requeue is deliberately exempt from
+`JOBS_ALLOWED_CHANNELS`: it republishes rows that already exist in the DB, and
+refusing would strand rows on since-undeclared channels with no recovery.
 
 ### POST /api/jobs/control/rebuild-scheduled
 
@@ -218,6 +225,11 @@ stats = mgr.get_stats()
 
 # Clear stuck jobs
 result = mgr.clear_stuck_jobs("default", idle_threshold_ms=60000)
+
+# Requeue a channel's DB-pending rows through the live publish mirror
+# (recovers rows stranded by an unconfirmed publish; clears the marker)
+result = mgr.requeue_db_pending("default")
+# {"status": True, "requeued": 3, "channel": "default"}
 
 # Pause/resume a channel
 mgr.pause_channel("maintenance")
