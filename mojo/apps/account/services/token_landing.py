@@ -129,6 +129,10 @@ def render_landing(request, template, ctx):
     """
     response = render(request, f"account/{template}", ctx)
     response["Referrer-Policy"] = "no-referrer"
+    # Same per-response stamp the admin portal and OAuth consent pages use:
+    # a framed landing plus its token is a clickjacking primitive, and the
+    # deactivation page is a one-click destructive action.
+    response["X-Frame-Options"] = "DENY"
     return response
 
 

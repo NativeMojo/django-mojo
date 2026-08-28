@@ -100,20 +100,18 @@ def get_api_base_url(request=None):
 
     Lookup order:
     1. settings.BASE_URL            — the platform's public address
-    2. the request's own origin     — correct by construction when we have one
-    3. ""                           — a root-relative link, which still works
+    2. ""                           — a root-relative link, which still works
                                       when opened but is useless in an email;
                                       that is a BASE_URL misconfiguration, and
                                       readiness already reports it.
+
+    Deliberately NEVER derived from the request: under a permissive
+    ALLOWED_HOSTS a poisoned Host header on a send endpoint would otherwise
+    become the origin of an emailed single-use token link.
     """
     val = settings.get("BASE_URL", "") or ""
     if val:
         return val.rstrip("/")
-    if request is not None:
-        try:
-            return request.build_absolute_uri("/").rstrip("/")
-        except Exception:
-            pass
     return ""
 
 

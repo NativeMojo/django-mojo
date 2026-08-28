@@ -360,6 +360,9 @@ def test_landing_sends_no_referrer(opts):
     assert_eq(_header(opts, "Referrer-Policy"), "no-referrer",
               f"The token is in this URL — it must not ride along in a Referer. "
               f"Headers were: {dict(opts.client.last_response.headers)!r}")
+    assert_eq(_header(opts, "X-Frame-Options"), "DENY",
+              f"A framed landing plus its token is a clickjacking primitive. "
+              f"Headers were: {dict(opts.client.last_response.headers)!r}")
 
 
 @th.django_unit_test("landing: nothing auto-navigates")
