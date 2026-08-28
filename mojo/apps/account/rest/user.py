@@ -11,6 +11,7 @@ from mojo.apps.account.models.user import User
 from mojo.apps.account.services import extensions as account_extensions
 from mojo.apps.account.services import auth_config
 from mojo.apps.account.services import closure as account_closure
+from mojo.apps.account.services import email_delivery
 from mojo.apps.account.utils import tokens
 from mojo.apps.account.utils.webapp_url import build_token_url
 from mojo.apps.shortlink import maybe_shorten_url
@@ -1303,13 +1304,114 @@ def on_invite_accept(request):
 # Email change (self-service, verify-then-commit)
 # -----------------------------------------------------------------
 
+def _send_failure_class(sent):
+    """Closed enum naming HOW a send failed — never provider text.
+
+      "not_sent"     — nothing came back from the transport at all: no mailbox
+                       is configured, or the send helper caught an exception.
+      "not_accepted" — a SentMessage came back that the provider did not accept
+                       (refused, or an unexpected state / missing message id).
+
+    Two values, both server-authored. The provider's own words live on the
+    SentMessage row (status_reason, admin-gated) and in email.log.
+    """
+    return "not_sent" if sent is None else "not_accepted"
+
+
+def _attributable_group(request):
+    """The brand this request may legitimately be attributed to, or None.
+
+    The dispatcher sets ``request.group`` from a caller-supplied ``?group=`` /
+    ``?group_uuid=`` with no membership check (mojo/decorators/http.py), so an
+    event stamped straight from it would let anyone file activity into any
+    brand's history. Attribution therefore requires an ACTIVE DIRECT membership
+    (``check_parents=False``); ``get_member_for_user`` additionally refuses a
+    group whose ancestor chain is deactivated.
+
+    Fail-closed: anything unexpected is "no attribution", which costs the row
+    its brand placement and nothing else.
+    """
+    try:
+        from mojo.apps.account.models import Group
+        group = getattr(request, "group", None)
+        if not isinstance(group, Group):
+            return None
+        member = group.get_member_for_user(
+            request.user, check_parents=False, is_active=True)
+        return group if member is not None else None
+    except Exception:
+        return None
+
+
+def _record_account_activity(category, uid, title, details, *, provenance,
+                             group=None, source_ip=None, level=1, **metadata):
+    """Record ONE account-activity Event with explicit, non-inferred provenance.
+
+    ``provenance`` is required and is the ONLY thing that marks an event
+    account-global:
+
+      "account" — genuinely account-wide. ``group`` is forced to None and
+                  ``metadata.security_activity_scope`` becomes "account".
+      "brand"   — originated inside one brand context (attributed or not).
+                  ``metadata.security_activity_scope`` becomes "brand", and
+                  ``metadata.origin_group_id`` carries the group id when
+                  attribution succeeded (absent when it did not).
+
+    ``Event.group`` uses SET_NULL, so a null FK alone is never proof of account
+    origin — the explicit marker is. ``Event.scope`` (the indexed column and
+    the RuleSet lookup key) stays "account" on every row this writes;
+    ``provenance`` never touches it.
+
+    Request-less by design: ``record_event(request=None)`` so the caller's
+    explicit uid / source_ip / group are never overwritten by an ambient
+    (possibly stale-bearer) request identity. ``record_event`` rather than
+    ``report_event``, so no RuleSet traversal happens on the request path —
+    the trade is that these categories no longer increment the incident event
+    metrics and no longer reach rule handlers.
+
+    Never raises: an audit write that fails must not fail a committed action.
+    """
+    try:
+        from mojo.apps.incident.reporter import record_event
+        meta = dict(metadata)
+        meta["security_activity_scope"] = provenance
+        if provenance == "account":
+            group = None
+        elif group is not None:
+            meta["origin_group_id"] = group.id
+        record_event(
+            details,
+            title=title,
+            category=category,
+            level=level,
+            request=None,
+            scope="account",
+            uid=uid,
+            source_ip=source_ip,
+            group=group,
+            **meta)
+    except Exception as e:
+        logit.error("account_activity", f"failed to record {category}: {e}")
+
+
+def _record_email_change_send_failure(request, user, sent):
+    """The one safe activity row an unaccepted confirmation send may leave."""
+    _record_account_activity(
+        "email_change:send_failed", user.pk,
+        "Email change confirmation could not be sent",
+        "The mail provider did not accept the confirmation message.",
+        provenance="brand", group=_attributable_group(request),
+        source_ip=getattr(request, "ip", None), level=6,
+        failure_class=_send_failure_class(sent))
+
+
 @md.POST("auth/email/change/request")
 @md.denies_key_backed_session()
 @md.requires_auth()
 @md.requires_fresh_auth()
 @md.strict_rate_limit("email_change_request", ip_limit=5, ip_window=3600)
 @md.requires_params("email")
-def on_email_change_request(request):
+def on_email_change_request(request, *, send=None, notify_send=None):
     """
     Begin a self-service email change. current_password is optional.
     If provided and non-empty, it is validated; otherwise the password check
@@ -1320,8 +1422,21 @@ def on_email_change_request(request):
       method: "code"           — send a 6-digit OTP to the new address instead
 
     In both cases a notification is sent to the OLD address alerting them of
-    the change request. The current email is NOT changed until the confirm
-    step is completed.
+    the change request — but only AFTER the confirmation message was accepted,
+    and only when there is an old address to tell. The current email is NOT
+    changed until the confirm step is completed.
+
+    Answers 503 with a safe retry message when the email provider did not
+    accept the confirmation message. A 200 means the provider took custody of
+    it, not that it reached the inbox. The pending change survives a 503 — the
+    stored pending_email and the ec: JTI / OTP are untouched, so a retry
+    resumes the same change. The 5-per-hour IP budget on this endpoint counts
+    every attempt including failures, so a retry loop can exhaust it; the copy
+    asks for a few minutes.
+
+    `send` / `notify_send` are test seams, not part of the wire contract — the
+    dispatcher never passes them. They exist because the test project ships no
+    mailbox, so the accepted path is unreachable over HTTP.
     """
     if not settings.get("ALLOW_EMAIL_CHANGE", True, kind="bool"):
         raise merrors.PermissionDeniedException("Email change is not allowed")
@@ -1345,34 +1460,59 @@ def on_email_change_request(request):
         raise merrors.ValueException("Email already in use")
 
     method = request.DATA.get("method", "link")
+    source_ip = getattr(request, "ip", None)
 
     if method == "code":
         otp = tok_utils.generate_email_change_otp(user, new_email)
-        _send_email_change_code(user, new_email, otp)
-        user.send_template_email("email_change_notify", dict(new_email=new_email))
-        user.report_incident(f"{user.username} requested email change to {new_email} (code)", "email_change:requested_code")
+        sent = _send_email_change_code(user, new_email, otp, send=send)
+        if not email_delivery.was_accepted(sent):
+            # No cleanup here on purpose: clearing the pending state would race
+            # a confirmation that the provider is still processing, and the OTP
+            # is single-use and TTL-bounded anyway.
+            _record_email_change_send_failure(request, user, sent)
+            return email_delivery.send_unavailable_response()
+        _record_account_activity(
+            "email_change:requested_code", user.pk,
+            f"{user.username} requested email change to {new_email} (code)",
+            f"{user.username} requested email change to {new_email} (code)",
+            provenance="brand", group=_attributable_group(request),
+            source_ip=source_ip)
+        _notify_old_email_change_address(
+            request, user, new_email, send=notify_send)
         return JsonResponse({"status": True, "message": "A verification code has been sent to your new email address."})
 
     token = tok_utils.generate_email_change_token(user, new_email)
 
     # Confirmation link sent to the NEW address — resolve the mailbox the same way
     # send_template_email does internally, since that method always sends to self.email.
-    _send_email_change_confirm(request, user, new_email, token)
+    sent = _send_email_change_confirm(request, user, new_email, token, send=send)
+    if not email_delivery.was_accepted(sent):
+        _record_email_change_send_failure(request, user, sent)
+        return email_delivery.send_unavailable_response()
+
+    _record_account_activity(
+        "email_change:requested", user.pk,
+        f"{user.username} requested email change to {new_email}",
+        f"{user.username} requested email change to {new_email}",
+        provenance="brand", group=_attributable_group(request),
+        source_ip=source_ip)
 
     # Notification to the OLD address — no cancel token (single-JTI design means issuing
     # a second ec: token would immediately invalidate the first). The user can cancel via
     # POST /api/auth/email/change/cancel while authenticated, or simply let the 1h link expire.
-    user.send_template_email("email_change_notify", dict(new_email=new_email))
+    _notify_old_email_change_address(request, user, new_email, send=notify_send)
 
-    user.report_incident(f"{user.username} requested email change to {new_email}", "email_change:requested")
     return JsonResponse({"status": True, "message": "A confirmation link has been sent to your new email address."})
 
 
-def _send_email_change_confirm(request, user, new_email, token):
-    """
-    Send the email-change confirmation link to the NEW address.
-    Uses the same mailbox-resolution logic as user.send_template_email but
-    overrides the recipient so the message goes to new_email, not user.email.
+def _resolve_email_change_mailbox(user, purpose):
+    """The mailbox both email-change sends use, or None (incident filed).
+
+    Same resolution user.send_template_email does internally — org domain
+    default, any outbound-capable mailbox on that domain, then the system
+    default. ``email:no_mailbox`` is kept: it is an operator signal about
+    deployment configuration, carries no provider text, and is invisible to
+    the self-service activity feed.
     """
     from mojo.apps.aws.models import Mailbox
 
@@ -1391,11 +1531,41 @@ def _send_email_change_confirm(request, user, new_email, token):
 
     if not mailbox:
         user.report_incident(
-            "No mailbox available to send email change confirmation",
+            f"No mailbox available to send email change {purpose}",
             "email:no_mailbox",
             level=6,
         )
-        return
+        return None
+    return mailbox
+
+
+def _send_email_change_confirm(request, user, new_email, token, *, send=None):
+    """
+    Send the email-change confirmation link to the NEW address.
+    Uses the same mailbox-resolution logic as user.send_template_email but
+    overrides the recipient so the message goes to new_email, not user.email.
+
+    RETURNS the transport result — a SentMessage, or None when nothing could be
+    sent. A truthy result is not proof of a send: a message the provider
+    refused is persisted with status="failed" and no ses_message_id, so the
+    caller judges acceptance with email_delivery.was_accepted().
+
+    A raising transport is swallowed to None and logged. It does NOT file a raw
+    email:send_failed incident any more — that event carried the provider's
+    error text into the account's history alongside the safe row the caller
+    writes. The text survives on the failed SentMessage row (status_reason,
+    admin-gated) and in email.log.
+
+    `send` is a test seam, not part of any wire contract: it stands in for the
+    resolved mailbox's sender so the accepted path is reachable in a test
+    project that ships no mailbox.
+    """
+    sender = send
+    if sender is None:
+        mailbox = _resolve_email_change_mailbox(user, "confirmation")
+        if mailbox is None:
+            return None
+        sender = mailbox.send_template_email
 
     try:
         group = getattr(request, "group", None)
@@ -1409,47 +1579,29 @@ def _send_email_change_confirm(request, user, new_email, token):
             "token_url": token_url,
             "new_email": new_email,
         }
-        mailbox.send_template_email(
+        return sender(
             to=new_email,
             template_name="email_change_confirm",
             context=context,
             allow_unverified=True,
         )
     except Exception as e:
-        user.report_incident(
-            f"email change confirm send failed: {e}",
-            "email:send_failed",
-            level=6,
-        )
+        logit.error("email_change", f"confirm send failed: {e}")
+        return None
 
 
-def _send_email_change_code(user, new_email, otp):
+def _send_email_change_code(user, new_email, otp, *, send=None):
     """
     Send the email-change OTP code to the NEW address.
-    Uses identical mailbox resolution to _send_email_change_confirm.
+    Uses identical mailbox resolution to _send_email_change_confirm, and the
+    same return contract: the transport result, or None.
     """
-    from mojo.apps.aws.models import Mailbox
-
-    mailbox = None
-    if user.org and hasattr(user.org, "metadata"):
-        domain = user.org.metadata.get("domain")
-        if domain:
-            mailbox = Mailbox.get_domain_default(domain)
-            if not mailbox:
-                mailbox = Mailbox.objects.filter(
-                    domain__name__iexact=domain,
-                    allow_outbound=True,
-                ).first()
-    if not mailbox:
-        mailbox = Mailbox.get_system_default()
-
-    if not mailbox:
-        user.report_incident(
-            "No mailbox available to send email change code",
-            "email:no_mailbox",
-            level=6,
-        )
-        return
+    sender = send
+    if sender is None:
+        mailbox = _resolve_email_change_mailbox(user, "code")
+        if mailbox is None:
+            return None
+        sender = mailbox.send_template_email
 
     context = {
         "user": user.to_dict("basic"),
@@ -1457,18 +1609,56 @@ def _send_email_change_code(user, new_email, otp):
         "new_email": new_email,
     }
     try:
-        mailbox.send_template_email(
+        return sender(
             to=new_email,
             template_name="email_change_code",
             context=context,
             allow_unverified=True,
         )
     except Exception as e:
-        user.report_incident(
-            f"email change code send failed: {e}",
-            "email:send_failed",
-            level=6,
-        )
+        logit.error("email_change", f"code send failed: {e}")
+        return None
+
+
+def _notify_old_email_change_address(request, user, new_email, *, send=None):
+    """
+    Tell the PREVIOUS address that a change was requested — best effort.
+
+    Runs only after the confirmation message was accepted, and only when there
+    IS an old address to tell: a first-email account has none, and handing ""
+    to the mailbox raised a ValueError that became a raw incident.
+
+    fail_silently=False is deliberate. The forgiving default files its own raw
+    email:send_failed incident carrying provider text — the duplicate raw/safe
+    pair this flow exists to remove — so the failure is caught here instead and
+    reported once, safely, as email_change:notice_failed.
+
+    Never re-raises and never changes the caller's outcome: a notice that did
+    not go out must not relabel a confirmation that did.
+    """
+    if not str(user.email or "").strip():
+        return
+
+    sender = send if send is not None else user.send_template_email
+    try:
+        result = sender(
+            "email_change_notify",
+            context=dict(new_email=new_email),
+            fail_silently=False)
+        if email_delivery.was_accepted(result):
+            return
+        failure_class = _send_failure_class(result)
+    except Exception as e:
+        logit.error("email_change", f"old-address notice failed: {e}")
+        failure_class = "not_sent"
+
+    _record_account_activity(
+        "email_change:notice_failed", user.pk,
+        "Email change notice to the previous address could not be sent",
+        "The mail provider did not accept the notice to the previous address.",
+        provenance="brand", group=_attributable_group(request),
+        source_ip=getattr(request, "ip", None), level=4,
+        failure_class=failure_class)
 
 
 def _send_account_realtime_event(user, event, data):
@@ -1568,6 +1758,16 @@ def on_email_change_confirm(request):
 
     user.refresh_from_db()
     user.log(kind="email:changed", log=f"{old_email} to {new_email}")
+
+    # Account-global by construction: the address moved for the whole account,
+    # not for one brand. uid is the TOKEN's verified subject rather than
+    # request.user — the link path may carry no session at all, or a different
+    # signed-in user.
+    _record_account_activity(
+        "email_change:confirmed", user.pk,
+        "Email address changed",
+        "The account email address was changed and verified.",
+        provenance="account", source_ip=getattr(request, "ip", None))
 
     # Notify any other open sessions — they should refresh their profile
     # (auth_key was just rotated so their JWTs are already invalid, but the
@@ -1999,6 +2199,13 @@ def on_account_security_events(request):
     Scoped unconditionally to request.user — no cross-user access.
     Uses the Event model's 'security' graph for serialization and the
     framework's built-in date-range filtering, sorting, and pagination.
+
+    Brand scoping: with no group supplied the feed stays owner-wide, exactly as
+    before. With ``group``/``group_uuid`` it returns the caller's own rows
+    attributed to THAT brand, plus their own account-global email-change rows —
+    the address moved for the whole account, so that history belongs on every
+    brand's page. Their unattributed rows (a request that carried no valid
+    brand context) remain visible in the owner-wide view only.
     """
     from django.db.models import Q
     from mojo.apps.incident.models.event import Event
@@ -2018,7 +2225,29 @@ def on_account_security_events(request):
     for prefix in _SECURITY_CATEGORY_PREFIXES:
         q |= Q(category__startswith=prefix)
 
+    group = getattr(request, "group", None)
+    # Consume the routing inputs: this endpoint owns its brand scoping. Left in
+    # place, on_rest_list re-filters group=request.group (mojo/models/rest.py)
+    # and build_rest_filters turns ?group= into a plain field filter — either
+    # would drop the account-global rows admitted below.
+    request.group = None
+    params = request.GET.copy()
+    for key in ("group", "group_uuid"):
+        if key in params:
+            del params[key]
+    request.GET = params
+
     qs = Event.objects.filter(q, uid=request.user.pk)
+    if group is not None:
+        # Triple-guarded so nothing sneaks into the account exception: the
+        # category prefix keeps login/sessions rows out, the null FK keeps
+        # brand rows out, and the explicit marker keeps orphaned brand rows
+        # (Event.group is SET_NULL) and unmarked legacy rows out.
+        account_global = Q(
+            category__startswith="email_change:",
+            group__isnull=True,
+            metadata__security_activity_scope="account")
+        qs = qs.filter(Q(group=group) | account_global)
 
     # Delegate to framework — handles date range, sorting, pagination, serialization
     return Event.on_rest_list(request, qs)

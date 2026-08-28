@@ -11,6 +11,16 @@ Coverage:
   - details, title, metadata, level, model_name are absent from all results
   - Unknown category values fall back to the category string as summary
   - Response contains expected fields: created, kind, summary, ip
+
+Brand scoping (#3328) — the visibility matrix this file enforces:
+  - No group supplied: owner-wide, exactly as before
+  - ?group=<brand>: the caller's own rows attributed to that brand, PLUS their
+    own null-group email_change: rows carrying security_activity_scope=account
+  - Everything else stays out under ?group=: another brand's rows, unmarked
+    legacy null-group rows, orphaned brand rows (Event.group is SET_NULL), and
+    global login/sessions rows even when they carry the account marker
+  - The group/group_uuid routing params are CONSUMED, so the generic list
+    filter cannot re-apply them and drop the account-global rows
 """
 from testit import helpers as th
 from testit.helpers import assert_true, assert_eq
@@ -21,6 +31,26 @@ TEST_EMAIL = "secevents_user@example.com"
 
 OTHER_USER = "secevents_other"
 OTHER_EMAIL = "secevents_other@example.com"
+
+BRAND_A = "secevents_brand_a"
+BRAND_B = "secevents_brand_b"
+
+# Every seeded event carries a unique source_ip so a result row can be
+# identified through the restricted `security` graph, which exposes only
+# created/kind/summary/ip.
+IP_BASE = ["10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5", "10.0.0.99"]
+IP_BRAND_A = "10.1.0.1"          # login, attributed to brand A
+IP_BRAND_B = "10.1.0.2"          # login, attributed to brand B
+IP_ACCOUNT_GLOBAL = "10.1.0.3"   # email_change:confirmed, null group, account marker
+IP_UNMARKED_NULL = "10.1.0.4"    # email_change:requested, null group, NO marker
+IP_GLOBAL_LOGIN = "10.1.0.5"     # login, null group, account marker (prefix guard)
+IP_FAIL_ATTRIBUTED = "10.1.0.6"  # email_change:send_failed, attributed to brand A
+IP_FAIL_UNATTRIBUTED = "10.1.0.7"  # email_change:send_failed, brand marker, no group
+IP_BRAND_SEEDED = [
+    IP_BRAND_A, IP_BRAND_B, IP_ACCOUNT_GLOBAL, IP_UNMARKED_NULL,
+    IP_GLOBAL_LOGIN, IP_FAIL_ATTRIBUTED, IP_FAIL_UNATTRIBUTED,
+]
+SEEDED_IPS = set(IP_BASE) | set(IP_BRAND_SEEDED)
 
 
 # ===========================================================================
@@ -105,6 +135,74 @@ def setup_security_events(opts):
         details="Other user internal details",
     )
 
+    _setup_brand_fixtures(opts, user)
+
+
+def _setup_brand_fixtures(opts, user):
+    """Two brands and one row of every class the visibility matrix names."""
+    from mojo.apps.account.models import Group
+    from mojo.apps.incident.models.event import Event
+
+    brand_a = Group.objects.filter(name=BRAND_A).last()
+    if brand_a is None:
+        brand_a = Group.objects.create(name=BRAND_A, kind="organization")
+    brand_a.is_active = True
+    brand_a.save()
+    brand_a.add_member(user)
+    opts.brand_a_id = brand_a.pk
+
+    brand_b = Group.objects.filter(name=BRAND_B).last()
+    if brand_b is None:
+        brand_b = Group.objects.create(name=BRAND_B, kind="organization")
+    brand_b.is_active = True
+    brand_b.save()
+    opts.brand_b_id = brand_b.pk
+
+    Event.objects.filter(uid=user.pk, source_ip__in=IP_BRAND_SEEDED).delete()
+
+    def _seed(category, ip, group, metadata):
+        Event.objects.create(
+            uid=user.pk,
+            category=category,
+            source_ip=ip,
+            level=1,
+            group=group,
+            title=f"Test event {category} {ip}",
+            details=f"Internal details for {category}",
+            metadata=metadata,
+        )
+
+    _seed("login", IP_BRAND_A, brand_a,
+          {"security_activity_scope": "brand", "origin_group_id": brand_a.pk})
+    _seed("login", IP_BRAND_B, brand_b,
+          {"security_activity_scope": "brand", "origin_group_id": brand_b.pk})
+    _seed("email_change:confirmed", IP_ACCOUNT_GLOBAL, None,
+          {"security_activity_scope": "account"})
+    # Legacy shape: written before the marker existed.
+    _seed("email_change:requested", IP_UNMARKED_NULL, None, {})
+    # A global row that is NOT an email change — the category prefix is what
+    # keeps it out of the account exception, not the marker.
+    _seed("login", IP_GLOBAL_LOGIN, None,
+          {"security_activity_scope": "account"})
+    _seed("email_change:send_failed", IP_FAIL_ATTRIBUTED, brand_a,
+          {"security_activity_scope": "brand", "origin_group_id": brand_a.pk,
+           "failure_class": "not_sent"})
+    _seed("email_change:send_failed", IP_FAIL_UNATTRIBUTED, None,
+          {"security_activity_scope": "brand", "failure_class": "not_sent"})
+
+
+def _ips(resp):
+    return {row.get("ip") for row in resp.json.get("data", [])}
+
+
+def _events(opts, path):
+    """Authenticated GET against the security-events feed."""
+    opts.client.login(TEST_USER, TEST_PWORD)
+    resp = opts.client.get(path)
+    opts.client.logout()
+    assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
+    return resp
+
 
 # ===========================================================================
 # Endpoint tests
@@ -124,10 +222,9 @@ def test_security_events_basic(opts):
 
     # All results must belong to our user (we can't check uid directly
     # since it's not in the response, but we can verify known IPs)
-    known_ips = {"10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5", "10.0.0.99"}
     for r in results:
         if r.get("ip"):
-            assert_true(r["ip"] in known_ips or r["ip"] == "127.0.0.1",
+            assert_true(r["ip"] in SEEDED_IPS or r["ip"] == "127.0.0.1",
                         f"Unexpected IP in results: {r['ip']}")
 
 
@@ -315,3 +412,208 @@ def test_security_events_non_security_excluded(opts):
     for r in results:
         assert_true(r.get("kind") != "some_random_system_event",
                     "Non-security category should not appear in results")
+
+# ===========================================================================
+# Brand scoping (#3328)
+# ===========================================================================
+
+@th.django_unit_test("security events: ?group= shows the caller's own rows for THAT brand")
+def test_security_events_group_scoped_to_current_brand(opts):
+    resp = _events(opts, f"/api/account/security-events?group={opts.brand_a_id}&size=100")
+    ips = _ips(resp)
+    assert_true(IP_BRAND_A in ips,
+                f"a row attributed to the selected brand must be visible: {sorted(ips)}")
+    assert_true(IP_FAIL_ATTRIBUTED in ips,
+                f"an attributed email_change:send_failed row belongs on its brand's "
+                f"page: {sorted(ips)}")
+
+
+@th.django_unit_test("security events: ?group= excludes rows attributed to another brand")
+def test_security_events_excludes_other_brand(opts):
+    resp = _events(opts, f"/api/account/security-events?group={opts.brand_a_id}&size=100")
+    ips = _ips(resp)
+    assert_true(IP_BRAND_B not in ips,
+                f"another brand's activity must not leak into this brand's feed: "
+                f"{sorted(ips)}")
+
+
+@th.django_unit_test("security events: ?group= still includes account-marked email-change rows")
+def test_security_events_includes_account_marked_email_change(opts):
+    resp = _events(opts, f"/api/account/security-events?group={opts.brand_a_id}&size=100")
+    ips = _ips(resp)
+    assert_true(IP_ACCOUNT_GLOBAL in ips,
+                f"the address moved for the whole account, so email_change:confirmed "
+                f"belongs on every brand's page: {sorted(ips)}")
+
+
+@th.django_unit_test("security events: ?group= excludes unmarked null-group rows")
+def test_security_events_excludes_unmarked_null_group_rows(opts):
+    resp = _events(opts, f"/api/account/security-events?group={opts.brand_a_id}&size=100")
+    ips = _ips(resp)
+    assert_true(IP_UNMARKED_NULL not in ips,
+                f"a null group is not proof of account origin — only the explicit "
+                f"marker is: {sorted(ips)}")
+
+
+@th.django_unit_test("security events: ?group= excludes global login rows even when account-marked")
+def test_security_events_excludes_global_login_rows_under_group(opts):
+    resp = _events(opts, f"/api/account/security-events?group={opts.brand_a_id}&size=100")
+    ips = _ips(resp)
+    assert_true(IP_GLOBAL_LOGIN not in ips,
+                f"the account exception is scoped to email_change: by prefix — a "
+                f"marked login row must still stay out: {sorted(ips)}")
+
+
+@th.django_unit_test("security events: an orphaned brand row keeps its markers and stays out")
+def test_security_events_excludes_orphaned_brand_rows(opts):
+    """Event.group is SET_NULL, so deleting a brand nulls the FK. The row must
+    not become account-global by accident."""
+    from mojo.apps.account.models import Group
+    from mojo.apps.incident.models.event import Event
+
+    orphan_ip = "10.1.9.9"
+    Event.objects.filter(uid=opts.user_id, source_ip=orphan_ip).delete()
+    Group.objects.filter(name="secevents_brand_doomed").delete()
+    doomed = Group.objects.create(name="secevents_brand_doomed", kind="organization")
+    try:
+        Event.objects.create(
+            uid=opts.user_id,
+            category="email_change:send_failed",
+            source_ip=orphan_ip,
+            level=6,
+            group=doomed,
+            title="Orphan-to-be",
+            details="Internal details",
+            metadata={"security_activity_scope": "brand",
+                      "origin_group_id": doomed.pk,
+                      "failure_class": "not_sent"},
+        )
+        doomed_id = doomed.pk
+        doomed.delete()
+
+        row = Event.objects.filter(uid=opts.user_id, source_ip=orphan_ip).last()
+        assert_true(row is not None, "the audit row must survive the group deletion")
+        assert_true(row.group_id is None,
+                    f"precondition: SET_NULL must have nulled the FK, got {row.group_id!r}")
+        assert_eq(row.metadata.get("security_activity_scope"), "brand",
+                  f"the brand marker must survive the deletion: {row.metadata}")
+        assert_eq(row.metadata.get("origin_group_id"), doomed_id,
+                  f"the origin group id must survive the deletion: {row.metadata}")
+
+        resp = _events(opts, f"/api/account/security-events?group={opts.brand_a_id}&size=100")
+        assert_true(orphan_ip not in _ips(resp),
+                    "an orphaned brand row must never masquerade as global history")
+    finally:
+        Event.objects.filter(uid=opts.user_id, source_ip=orphan_ip).delete()
+        Group.objects.filter(name="secevents_brand_doomed").delete()
+
+
+@th.django_unit_test("security events: group attribution requires active direct membership")
+def test_security_events_group_requires_membership(opts):
+    """_attributable_group is what stops a caller-supplied ?group= from filing
+    activity into a brand they have nothing to do with."""
+    from django.test import RequestFactory
+    from objict import objict
+    from mojo.apps.account.models import Group, User
+    from mojo.apps.account.rest import user as user_rest
+
+    factory = RequestFactory(REMOTE_ADDR="127.0.0.1")
+    request = factory.post("/api/auth/email/change/request", {})
+    request.DATA = objict.from_dict({})
+    request.user = User.objects.get(pk=opts.user_id)
+
+    request.group = None
+    assert_true(user_rest._attributable_group(request) is None,
+                "no group on the request means no attribution")
+
+    request.group = Group.objects.get(pk=opts.brand_b_id)
+    assert_true(user_rest._attributable_group(request) is None,
+                "a brand the caller is not a member of must never be attributed — "
+                "the dispatcher resolves ?group= with no membership check")
+
+    brand_a = Group.objects.get(pk=opts.brand_a_id)
+    request.group = brand_a
+    attributed = user_rest._attributable_group(request)
+    assert_true(attributed is not None and attributed.pk == brand_a.pk,
+                f"an active direct membership must attribute the row, got {attributed!r}")
+
+
+@th.django_unit_test("security events: no group supplied stays owner-wide (unchanged behavior)")
+def test_security_events_no_group_stays_owner_wide(opts):
+    resp = _events(opts, "/api/account/security-events?size=100")
+    ips = _ips(resp)
+    for ip in IP_BRAND_SEEDED:
+        assert_true(ip in ips,
+                    f"with no group the feed must stay owner-wide — {ip} is missing: "
+                    f"{sorted(ips)}")
+
+
+@th.django_unit_test("security events: brand scoping preserves size/date/sort/graph primitives")
+def test_security_events_group_scope_preserves_query_primitives(opts):
+    base = f"/api/account/security-events?group={opts.brand_a_id}"
+
+    resp = _events(opts, f"{base}&size=1")
+    results = resp.json.get("data", [])
+    assert_true(len(results) <= 1, f"size must still cap the page, got {len(results)}")
+
+    resp = _events(opts, f"{base}&size=999")
+    assert_true(len(resp.json.get("data", [])) <= 100,
+                "the 100-row cap must still apply under brand scoping")
+
+    resp = _events(opts, f"{base}&dr_start=2099-01-01")
+    assert_eq(len(resp.json.get("data", [])), 0,
+              "dr_start must still filter under brand scoping")
+
+    resp = _events(opts, f"{base}&dr_end=2000-01-01")
+    assert_eq(len(resp.json.get("data", [])), 0,
+              "dr_end must still filter under brand scoping")
+
+    resp = _events(opts, f"{base}&size=100")
+    data = resp.json
+    assert_true(data.get("status") is True, f"the response envelope is unchanged: {data.keys()}")
+    assert_true("count" in data, "the paginated envelope must still carry count")
+    rows = data.get("data", [])
+    assert_true(len(rows) > 0, "need at least one row to check the graph")
+    for row in rows:
+        assert_eq(sorted(row.keys()), ["created", "ip", "kind", "summary"],
+                  f"the restricted security graph must be unchanged: {sorted(row.keys())}")
+
+    created = [row["created"] for row in rows]
+    assert_eq(created, sorted(created, reverse=True),
+              "the default -created sort must survive brand scoping")
+
+
+@th.django_unit_test("security events: ?group= is consumed as routing, never re-applied as a filter")
+def test_security_events_group_param_not_treated_as_filter(opts):
+    """If the endpoint left group/group_uuid in place, the generic list filter
+    would re-apply group=<brand> and drop every account-global row."""
+    resp = _events(opts, f"/api/account/security-events?group={opts.brand_a_id}&size=100")
+    assert_true(IP_ACCOUNT_GLOBAL in _ips(resp),
+                "the account-marked null-group row is only reachable if the routing "
+                "params were consumed before the generic filter ran")
+
+    from mojo.apps.account.models import Group
+    uuid = Group.objects.get(pk=opts.brand_a_id).get_uuid()
+    resp = _events(opts, f"/api/account/security-events?group_uuid={uuid}&size=100")
+    ips = _ips(resp)
+    assert_true(IP_ACCOUNT_GLOBAL in ips,
+                f"group_uuid must route exactly like group: {sorted(ips)}")
+    assert_true(IP_BRAND_B not in ips,
+                f"group_uuid must scope exactly like group: {sorted(ips)}")
+
+
+@th.django_unit_test("security events: send_failed visibility matrix — attributed by brand, unattributed owner-wide")
+def test_send_failed_visibility_matrix(opts):
+    scoped = _ips(_events(
+        opts, f"/api/account/security-events?group={opts.brand_a_id}&size=100"))
+    assert_true(IP_FAIL_ATTRIBUTED in scoped,
+                f"a send_failed filed WITH brand attribution shows under that brand: "
+                f"{sorted(scoped)}")
+    assert_true(IP_FAIL_UNATTRIBUTED not in scoped,
+                f"a send_failed filed WITHOUT attribution must not appear under any "
+                f"brand: {sorted(scoped)}")
+
+    wide = _ips(_events(opts, "/api/account/security-events?size=100"))
+    assert_true(IP_FAIL_UNATTRIBUTED in wide,
+                f"an unattributed row is still the caller's own history and stays "
+                f"visible owner-wide: {sorted(wide)}")
