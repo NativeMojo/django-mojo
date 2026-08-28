@@ -67,9 +67,18 @@ def test_observation_option_preserves_legacy_positional_signature(opts):
     from mojo.decorators.limits import rate_limit
 
     names = list(inspect.signature(rate_limit).parameters)
-    assert names[-1] == "apikey_observe_limit", (
-        "the new option must remain last so existing positional ip/window "
+    legacy_prefix = [
+        "key", "ip_limit", "duid_limit", "muid_limit", "apikey_limit",
+        "ip_window", "duid_window", "muid_window", "apikey_window",
+        "min_granularity",
+    ]
+    assert names[:len(legacy_prefix)] == legacy_prefix, (
+        "new options must only APPEND so existing positional ip/window "
         f"arguments keep their meaning; signature parameters were {names}"
+    )
+    assert "apikey_observe_limit" in names[len(legacy_prefix):], (
+        "apikey_observe_limit must stay behind the legacy positional prefix; "
+        f"signature parameters were {names}"
     )
 
 
