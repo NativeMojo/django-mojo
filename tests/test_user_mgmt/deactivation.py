@@ -212,6 +212,8 @@ def test_deactivate_request_incident(opts):
 def test_deactivate_confirm_happy(opts):
     from mojo.apps.account.models import User
     from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1", key="account_deactivate_confirm")
 
     user = User.objects.get(pk=opts.happy_user_id)
     tok = tokens.generate_deactivate_token(user)
@@ -237,6 +239,8 @@ def test_deactivate_confirm_happy(opts):
 def test_deactivate_confirm_already_inactive(opts):
     from mojo.apps.account.models import User
     from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1", key="account_deactivate_confirm")
 
     user = User.objects.get(pk=opts.inactive_user_id)
 
@@ -264,6 +268,9 @@ def test_deactivate_confirm_already_inactive(opts):
 
 @th.django_unit_test("deactivate confirm: missing token returns 400")
 def test_deactivate_confirm_missing_token(opts):
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1", key="account_deactivate_confirm")
+
     opts.client.logout()
     resp = opts.client.post("/api/account/deactivate/confirm", {})
     assert_true(resp.status_code in (400, 422), f"Expected 400, got {resp.status_code}")
@@ -271,6 +278,9 @@ def test_deactivate_confirm_missing_token(opts):
 
 @th.django_unit_test("deactivate confirm: invalid token returns 400/403")
 def test_deactivate_confirm_invalid_token(opts):
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1", key="account_deactivate_confirm")
+
     opts.client.logout()
     resp = opts.client.post("/api/account/deactivate/confirm", {"token": "dv:totally_invalid_garbage"})
     assert_true(resp.status_code in (400, 403, 500), f"Expected 400 or 403, got {resp.status_code}")
@@ -280,6 +290,8 @@ def test_deactivate_confirm_invalid_token(opts):
 def test_deactivate_confirm_wrong_kind(opts):
     from mojo.apps.account.models import User
     from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1", key="account_deactivate_confirm")
 
     user = User.objects.get(pk=opts.user_id)
     pr_token = tokens.generate_password_reset_token(user)
@@ -293,6 +305,8 @@ def test_deactivate_confirm_wrong_kind(opts):
 def test_deactivate_confirm_used_token(opts):
     from mojo.apps.account.models import User
     from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1", key="account_deactivate_confirm")
 
     # Use the inactive_user for this so we don't burn the primary user
     user = User.objects.get(pk=opts.inactive_user_id)
@@ -324,6 +338,8 @@ def test_deactivate_confirm_incident_logged(opts):
     from mojo.apps.account.models import User
     from mojo.apps.account.utils import tokens
     from mojo.apps.incident.models.event import Event
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1", key="account_deactivate_confirm")
 
     # Create a fresh disposable user for this test
     disposable = User.objects.filter(email="deact_incident_test@example.com").last()
@@ -358,6 +374,8 @@ def test_deactivate_confirm_incident_logged(opts):
 def test_deactivate_jwt_invalid_after(opts):
     from mojo.apps.account.models import User
     from mojo.apps.account.utils import tokens
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1", key="account_deactivate_confirm")
 
     # Create a fresh disposable user
     disposable = User.objects.filter(email="deact_jwt_test@example.com").last()
