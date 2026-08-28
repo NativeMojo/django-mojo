@@ -32,9 +32,12 @@ Email OTP code flow (POST /api/auth/verify/email/send + confirm):
   - Code confirm does NOT issue a new JWT — existing session continues (unlike link flow)
   - User A's code cannot verify User B — JWT identity is the gate, not the code value
   - Already-verified user: send returns 200 but no code is generated
+  - An unaccepted send (no mailbox / provider refusal) returns 503 with a safe
+    retry message — never a false "sent" (#3253); token/code generation is
+    unaffected, and an account with no email address gets 400 instead
 """
 from testit import helpers as th
-from testit.helpers import assert_true, assert_eq
+from testit.helpers import assert_true, assert_eq, assert_in
 from mojo.helpers import dates, crypto
 
 TESTIT_TIER = "extended"
@@ -101,6 +104,19 @@ def setup_verification(opts):
     sms_user.set_secret("sms_otp_ts", None)
     sms_user.save()
     opts.sms_user_id = sms_user.pk
+
+    # No-email user — registered by phone/username only. Email verification
+    # send must answer 400 (nothing to send to), never a retryable 503.
+    User.objects.filter(username="verify_no_email_user").delete()
+    no_email_user = User(username="verify_no_email_user", email=None)
+    no_email_user.save()
+    no_email_user.is_active = True
+    no_email_user.is_email_verified = False
+    no_email_user.is_phone_verified = False
+    no_email_user.requires_mfa = False
+    no_email_user.save_password(TEST_PWORD)
+    no_email_user.save()
+    opts.no_email_user_id = no_email_user.pk
 
 
 # ===========================================================================
@@ -1870,8 +1886,19 @@ def test_email_verify_code_expired(opts):
 # REST: POST /api/auth/verify/email/send  (authenticated, method param)
 # ===========================================================================
 
-@th.django_unit_test("verify/email/send: method=code returns 200 and stores code in secrets")
-def test_email_verify_send_code_happy_path(opts):
+@th.tier("bug")
+@th.django_unit_test("verify/email/send: method=code returns 503 when the provider did not accept the message")
+def test_email_verify_send_code_unavailable_mailbox_returns_503(opts):
+    """
+    REGRESSION (#3253): the endpoint used to answer 200 "Verification code
+    sent" even when nothing was sent. The test project ships no system default
+    mailbox by design, so send_template_email returns None here and the
+    endpoint must say so with a safe, retryable 503.
+
+    The stored-code assertion is kept from the original happy-path test: code
+    generation is unchanged by the fix, so an unconditional-503 stub cannot
+    pass this test.
+    """
     from mojo.apps.account.models import User
     from mojo.decorators.limits import clear_rate_limits
     clear_rate_limits(ip="127.0.0.1")
@@ -1881,20 +1908,31 @@ def test_email_verify_send_code_happy_path(opts):
     resp = opts.client.post("/api/auth/verify/email/send", {"method": "code"})
     opts.client.logout()
 
-    assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
-    assert_true(resp.response.status is True, "Response status must be True")
+    try:
+        assert_eq(resp.status_code, 503,
+                  f"Unaccepted send must not report success, got {resp.status_code}: {resp.json}")
+        # Imported after the status assertion on purpose: a run against the
+        # unfixed endpoint then reports the real 200 rather than an ImportError.
+        from mojo.apps.account.services.email_delivery import EMAIL_SEND_UNAVAILABLE
+        assert_eq(
+            dict(resp.json),
+            {"status": False, "code": 503, "error": EMAIL_SEND_UNAVAILABLE},
+            "503 body must be exactly the fixed safe-retry payload — no provider text",
+        )
 
-    user = User.objects.get(pk=opts.user_id)
-    stored_code = user.get_secret("email_verify_code")
-    assert_true(
-        stored_code is not None and len(stored_code) == 6 and stored_code.isdigit(),
-        f"6-digit numeric code must be stored in secrets after send, got: {stored_code!r}",
-    )
-
-    # clean up
-    user.set_secret("email_verify_code", None)
-    user.set_secret("email_verify_code_ts", None)
-    user.save(update_fields=["mojo_secrets", "modified"])
+        user = User.objects.get(pk=opts.user_id)
+        stored_code = user.get_secret("email_verify_code")
+        assert_true(
+            stored_code is not None and len(stored_code) == 6 and stored_code.isdigit(),
+            f"6-digit numeric code must still be generated and stored, got: {stored_code!r}",
+        )
+    finally:
+        # In a finally so a failure here can never leak the generated code into
+        # the already-verified test that follows.
+        user = User.objects.get(pk=opts.user_id)
+        user.set_secret("email_verify_code", None)
+        user.set_secret("email_verify_code_ts", None)
+        user.save(update_fields=["mojo_secrets", "modified"])
 
 
 @th.django_unit_test("verify/email/send: method=code requires authentication — 401 without token")
@@ -1930,11 +1968,16 @@ def test_email_verify_send_code_already_verified_no_code_generated(opts):
     User.objects.filter(pk=opts.user_id).update(is_email_verified=False)
 
 
-@th.django_unit_test("verify/email/send: omitting method sends link — backward compatible")
-def test_email_verify_send_omit_method_sends_link(opts):
+@th.tier("bug")
+@th.django_unit_test("verify/email/send: omitting method still builds a link, and returns 503 on an unaccepted send")
+def test_email_verify_send_link_unavailable_mailbox_returns_503(opts):
     """
-    Existing callers that omit 'method' must receive a link token, not a code.
-    The ev: JTI must be stored; the OTP code secret must remain absent.
+    REGRESSION (#3253) for the default (link) branch.
+
+    Existing callers that omit 'method' must still receive a link token, not a
+    code — the ev: JTI must be stored and the OTP code secret must remain
+    absent — but with no mailbox available the response must be the safe 503,
+    not a false "Verification email sent".
     """
     from mojo.apps.account.models import User
     import mojo.apps.account.utils.tokens as tok_module
@@ -1946,23 +1989,38 @@ def test_email_verify_send_omit_method_sends_link(opts):
     resp = opts.client.post("/api/auth/verify/email/send", {})
     opts.client.logout()
 
-    assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
-    user = User.objects.get(pk=opts.user_id)
-    assert_true(
-        user.get_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_VERIFY]) is not None,
-        "ev: JTI must be stored when method is omitted (link flow)",
-    )
-    assert_eq(
-        user.get_secret("email_verify_code"), None,
-        "email_verify_code must NOT be set when method is omitted",
-    )
-    # clear leftover JTI
-    user.set_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_VERIFY], None)
-    user.save(update_fields=["mojo_secrets", "modified"])
+    try:
+        assert_eq(resp.status_code, 503,
+                  f"Unaccepted send must not report success, got {resp.status_code}: {resp.json}")
+        # Imported after the status assertion on purpose: a run against the
+        # unfixed endpoint then reports the real 200 rather than an ImportError.
+        from mojo.apps.account.services.email_delivery import EMAIL_SEND_UNAVAILABLE
+        assert_eq(
+            dict(resp.json),
+            {"status": False, "code": 503, "error": EMAIL_SEND_UNAVAILABLE},
+            "503 body must be exactly the fixed safe-retry payload — no provider text",
+        )
+
+        user = User.objects.get(pk=opts.user_id)
+        assert_true(
+            user.get_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_VERIFY]) is not None,
+            "ev: JTI must be stored when method is omitted (link flow)",
+        )
+        assert_eq(
+            user.get_secret("email_verify_code"), None,
+            "email_verify_code must NOT be set when method is omitted",
+        )
+    finally:
+        # clear leftover JTI — in a finally so a failure cannot leak it
+        user = User.objects.get(pk=opts.user_id)
+        user.set_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_VERIFY], None)
+        user.save(update_fields=["mojo_secrets", "modified"])
 
 
-@th.django_unit_test("verify/email/send: method=link explicit sends link — backward compatible")
+@th.tier("bug")
+@th.django_unit_test("verify/email/send: method=link explicit still builds a link, and returns 503 on an unaccepted send")
 def test_email_verify_send_explicit_link_method(opts):
+    """REGRESSION (#3253) for the explicit method=link branch."""
     from mojo.apps.account.models import User
     import mojo.apps.account.utils.tokens as tok_module
     from mojo.decorators.limits import clear_rate_limits
@@ -1973,16 +2031,54 @@ def test_email_verify_send_explicit_link_method(opts):
     resp = opts.client.post("/api/auth/verify/email/send", {"method": "link"})
     opts.client.logout()
 
-    assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
-    user = User.objects.get(pk=opts.user_id)
-    assert_true(
-        user.get_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_VERIFY]) is not None,
-        "ev: JTI must be stored for method=link",
-    )
-    assert_eq(user.get_secret("email_verify_code"), None,
-              "OTP code must NOT be set for method=link")
-    user.set_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_VERIFY], None)
-    user.save(update_fields=["mojo_secrets", "modified"])
+    try:
+        assert_eq(resp.status_code, 503,
+                  f"Unaccepted send must not report success, got {resp.status_code}: {resp.json}")
+        # Imported after the status assertion on purpose: a run against the
+        # unfixed endpoint then reports the real 200 rather than an ImportError.
+        from mojo.apps.account.services.email_delivery import EMAIL_SEND_UNAVAILABLE
+        assert_eq(
+            dict(resp.json),
+            {"status": False, "code": 503, "error": EMAIL_SEND_UNAVAILABLE},
+            "503 body must be exactly the fixed safe-retry payload — no provider text",
+        )
+
+        user = User.objects.get(pk=opts.user_id)
+        assert_true(
+            user.get_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_VERIFY]) is not None,
+            "ev: JTI must be stored for method=link",
+        )
+        assert_eq(user.get_secret("email_verify_code"), None,
+                  "OTP code must NOT be set for method=link")
+    finally:
+        # clear leftover JTI — in a finally so a failure cannot leak it
+        user = User.objects.get(pk=opts.user_id)
+        user.set_secret(tok_module._JTI_KEYS[tok_module.KIND_EMAIL_VERIFY], None)
+        user.save(update_fields=["mojo_secrets", "modified"])
+
+
+@th.tier("bug")
+@th.django_unit_test("verify/email/send: account with no email address returns 400, not a retryable 503")
+def test_email_verify_send_without_email_returns_400(opts):
+    """
+    A phone/username-only account has nothing to send to. That is a caller
+    error, not a transient provider problem — retrying will never help, so it
+    must not be reported with the retryable 503.
+    """
+    from mojo.apps.account.models import User
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    User.objects.filter(pk=opts.no_email_user_id).update(
+        is_email_verified=False, is_active=True, email=None)
+    opts.client.login("verify_no_email_user", TEST_PWORD)
+    resp = opts.client.post("/api/auth/verify/email/send", {"method": "link"})
+    opts.client.logout()
+
+    assert_eq(resp.status_code, 400,
+              f"Account with no email must get 400, got {resp.status_code}: {resp.json}")
+    assert_in("email", str(resp.json.get("error", "")).lower(),
+              f"400 error must name the missing email address, got {resp.json}")
 
 
 # ===========================================================================

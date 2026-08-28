@@ -101,23 +101,29 @@ def test_shipped_token_link_templates_render_real_urls(opts):
                      f"{name} metadata must document its token_url context")
 
 
-@th.django_unit_test()
-def test_account_email_senders_have_shipped_templates(opts):
-    """Literal account template names must resolve to shipped seed files."""
-    import inspect
-    import mojo.apps.account as account_app
-    from mojo.apps.aws.services.email_templates import load_shipped_templates
+# Local names an account handler binds its send function to so a test can
+# inject a fake (`sender = send if send is not None else user.send_template_email`,
+# see mojo/apps/account/rest/verify.py). A call through such a name has no
+# `.send_template_email` attribute for the AST walk to recognise, so without
+# these the scanner below would go green while covering nothing.
+SENDER_SEAM_NAMES = {"sender", "send"}
 
-    account_dir = Path(inspect.getfile(account_app)).parent
+
+def _referenced_template_names(account_dir):
+    """Every literal template name any account source asks to send."""
     referenced = set()
     for source_path in account_dir.rglob("*.py"):
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
-            if not isinstance(node.func, ast.Attribute):
-                continue
-            if node.func.attr != "send_template_email":
+            if isinstance(node.func, ast.Attribute):
+                if node.func.attr != "send_template_email":
+                    continue
+            elif isinstance(node.func, ast.Name):
+                if node.func.id not in SENDER_SEAM_NAMES:
+                    continue
+            else:
                 continue
             template_node = node.args[0] if node.args else None
             for keyword in node.keywords:
@@ -127,6 +133,30 @@ def test_account_email_senders_have_shipped_templates(opts):
             if isinstance(template_node, ast.Constant) and isinstance(
                     template_node.value, str):
                 referenced.add(template_node.value)
+    return referenced
+
+
+@th.django_unit_test()
+def test_account_email_senders_have_shipped_templates(opts):
+    """Literal account template names must resolve to shipped seed files."""
+    import inspect
+    import mojo.apps.account as account_app
+    from mojo.apps.aws.services.email_templates import load_shipped_templates
+
+    account_dir = Path(inspect.getfile(account_app)).parent
+    referenced = _referenced_template_names(account_dir)
+
+    # Positive marker: the scan must actually SEE the seam-injected sends in
+    # rest/verify.py. Without it this test passes vacuously the moment a
+    # handler routes its send through an injectable local — the exact way the
+    # coverage was lost when #3253 added the seam.
+    for expected in ("email_verify", "email_verify_code"):
+        th.assert_in(
+            expected,
+            referenced,
+            "the scanner must see template names sent through an injected "
+            "sender seam — add the local name to SENDER_SEAM_NAMES",
+        )
 
     shipped = {row["name"] for row in load_shipped_templates()}
     th.assert_eq(

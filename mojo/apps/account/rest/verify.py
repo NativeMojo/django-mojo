@@ -1,6 +1,7 @@
 import mojo.decorators as md
 from mojo.helpers.response import JsonResponse
 from django.shortcuts import render
+from mojo.apps.account.services import email_delivery
 from mojo.apps.account.utils import tokens
 from mojo.apps.account.utils.webapp_url import build_token_url
 from mojo.apps.shortlink import maybe_shorten_url
@@ -47,21 +48,36 @@ def _render_verify(request, template, ctx):
 @md.POST('auth/verify/email/send')
 @md.strict_rate_limit("email_verify_send", ip_limit=5, ip_window=300)
 @md.requires_auth()
-def on_email_verify_send(request):
+def on_email_verify_send(request, *, send=None):
     """
     Send an email verification message to the requesting user's email address.
 
     Optional body param:
       method: "link" (default) — send a verification link (ev: token)
       method: "code"           — send a 6-digit OTP code instead
+
+    Answers 503 with a safe retry message when the email provider did not
+    accept the message (no mailbox configured, provider refusal or outage) —
+    telling someone an email is on its way when none was sent leaves them
+    waiting forever. The token/code is still generated and stored: it is
+    single-use and TTL-bounded, and the next request rotates it.
+
+    `send` is a test seam, not part of the wire contract — the dispatcher never
+    passes it. It exists because the test project ships no mailbox, so the
+    accepted path is not reachable over HTTP.
     """
     user = request.user
     if user.is_email_verified:
         return JsonResponse(dict(status=True, message="Email is already verified"))
+    if not user.email:
+        raise merrors.ValueException("No email address on account")
+    sender = send if send is not None else user.send_template_email
     method = request.DATA.get("method", "link")
     if method == "code":
         code = tokens.generate_email_verify_code(user)
-        user.send_template_email("email_verify_code", context=dict(code=code))
+        sent = sender("email_verify_code", context=dict(code=code))
+        if not email_delivery.was_accepted(sent):
+            return email_delivery.send_unavailable_response()
         user.report_incident(f"{user.username} requested email verification (code)", "email_verify:sent_code")
         return JsonResponse(dict(status=True, message="Verification code sent"))
     token = tokens.generate_email_verify_token(user)
@@ -70,8 +86,10 @@ def on_email_verify_send(request):
         "email_verify", token, request=request, user=user, group=group)
     token_url = maybe_shorten_url(
         token_url, source="email_verify", user=user, expire_hours=24)
-    user.send_template_email(
+    sent = sender(
         "email_verify", context=dict(token=token, token_url=token_url))
+    if not email_delivery.was_accepted(sent):
+        return email_delivery.send_unavailable_response()
     user.report_incident(f"{user.username} requested email verification", "email_verify:sent")
     return JsonResponse(dict(status=True, message="Verification email sent"))
 
