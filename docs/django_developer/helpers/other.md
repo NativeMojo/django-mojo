@@ -171,6 +171,9 @@ where an off-site value is genuinely unwanted.
 hosted auth pages. The two must keep agreeing on what is refused; they differ
 only in that the browser twin returns the resolved absolute href.
 
-Current callers: `_render_verify` (`mojo/apps/account/rest/verify.py`) and
-`_render_confirm` (`mojo/apps/account/rest/user.py`) — the two server-rendered
-account confirm pages.
+Current callers: `landing_context()` and `landing_redirect()` in
+`mojo/apps/account/services/token_landing.py` — the shared machinery behind the
+three emailed-token confirmation landings (email verify, email change, account
+deactivation) and behind the `/auth` compatibility redirect that forwards a
+legacy link's `?redirect=` passenger. The per-view `_render_verify` /
+`_render_confirm` helpers those pages used to have were removed in #3257.

@@ -74,7 +74,7 @@ Both `verify_email_change_token` and `verify_email_change_otp` raise `merrors.Va
 |---|---|---|
 | `POST /api/auth/email/change/request` | Bearer token required | Validates password + new email; sends link or OTP depending on `method`; notifies the old address **after** the provider accepted the confirmation |
 | `POST /api/auth/email/change/confirm` | None (token path) / Bearer token required (code path) | Commits the new email, rotates `auth_key`, returns fresh JWT |
-| `GET /api/auth/email/change/confirm` | None | Browser link-click handler; renders `account/email_change_confirm.html` |
+| `GET /api/auth/email/change/confirm` | None | Confirmation **landing page** the emailed link opens; renders `account/email_change_landing.html` and changes **nothing** — see below |
 | `POST /api/auth/email/change/cancel` | Bearer token required | Invalidates any outstanding token **and** OTP immediately |
 
 ### Request — `method` parameter
@@ -252,7 +252,7 @@ Sent to the **new** address when `method: "link"`. Context variables:
 
 | Variable | Description |
 |---|---|
-| `token_url` | Fully resolved frontend URL containing the `ec:` token |
+| `token_url` | Fully resolved URL of the confirmation landing page, carrying the `ec:` token |
 | `new_email` | The new email address being confirmed |
 | `user` | Basic user dict |
 
@@ -263,14 +263,33 @@ The shipped template renders:
 ```
 
 `_send_email_change_confirm` builds that URL through `build_token_url` using
-the `email_change` flow, so it respects tenant/project `WEBAPP_BASE_URL` and
-`WEBAPP_AUTH_PATH` configuration and may use a shortlink. The frontend extracts
-the token and calls `POST /api/auth/email/change/confirm` with
-`{ "token": "ec:..." }`. A project override may instead point directly at
-`GET /api/auth/email/change/confirm?token=...&redirect=https://yourapp.com/login`
-to have the API render the result page.
+the `email_change` flow. **Since #3257 that flow points at this deployment's own
+landing page** — `BASE_URL` plus `GET /api/auth/email/change/confirm` (the `/api`
+segment comes from `MOJO_PREFIX`) — not at `WEBAPP_BASE_URL` + `WEBAPP_AUTH_PATH`.
+`WEBAPP_BASE_URL` is the *frontend* origin, and on any deployment whose frontend
+is a separate SPA there is no page there that can handle an `ec:` token. It may
+still be wrapped in a shortlink.
 
-The `&redirect=` destination must be `http`, `https`, or scheme-less — anything else (a custom app scheme such as `myapp://home`, `javascript:`, `data:`) is dropped by `mojo.helpers.urls.safe_nav_url` before it reaches the template, and the page renders with **no button at all**. The host is deliberately not restricted; scheme-relative and path-relative values pass through unchanged and may still resolve off-origin. The same rule applies to `&redirect=` on `GET /api/auth/verify/email/confirm`.
+**The GET no longer commits anything.** It renders a page that describes what
+will happen, carries the token as an inert `json_script` data block, names no
+account, and acts only when the person presses the button — which sends
+`POST /api/auth/email/change/confirm` with `{ "token": "ec:..." }`,
+`credentials: "omit"` and no `Authorization` header. Opening, prefetching or
+scanning the URL changes nothing. Confirming needs JavaScript; a `<noscript>`
+block says so, and the token is still unspent afterwards.
+
+**If your SPA wants to own this confirmation**, `WEBAPP_BASE_URL` /
+`WEBAPP_AUTH_PATH` no longer reach it — override the `email_change_confirm`
+email template so the link points at your own page, and have that page call
+`POST /api/auth/email/change/confirm` itself. If you only want the framework's
+page to look like yours, override `account/email_change_landing.html` (or the
+shared `account/token_landing_base.html`) via `TEMPLATES.DIRS` instead.
+
+**`/auth?flow=email_change&token=ec:…` still works.** Links already in inboxes
+hit `on_login_page`, which redirects them to the landing server-side before any
+bouncer work, keyed on the token prefix.
+
+The `&redirect=` destination must be `http`, `https`, or scheme-less — anything else (a custom app scheme such as `myapp://home`, `javascript:`, `data:`) is dropped by `mojo.helpers.urls.safe_nav_url` before it reaches the template, and the page renders with **no "Go back" link at all**. The host is deliberately not restricted; scheme-relative and path-relative values pass through unchanged and may still resolve off-origin. The same rule applies to `&redirect=` on `GET /api/auth/verify/email/confirm` and `GET /api/account/deactivate/confirm`. `&redirect=` is only ever an optional navigation link on these pages — nothing auto-navigates, and no `<meta http-equiv="refresh">` is ever emitted.
 
 ### `email_change_code` (code flow)
 

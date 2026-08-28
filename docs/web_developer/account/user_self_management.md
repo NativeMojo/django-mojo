@@ -333,11 +333,20 @@ Same failure contract as the code flow: **503** with the fixed safe-retry body w
 
 **Step 2: User clicks the link**
 
-The shipped email template uses the server-resolved frontend URL:
-`{WEBAPP_BASE_URL}{WEBAPP_AUTH_PATH}?flow=email_verify&token=ev:...`. The
-frontend submits that token to `POST /api/auth/email/verify`. A deployment may
-instead override the template to use the server-rendered
-`GET /api/auth/verify/email/confirm?token=ev:...` page.
+The shipped email template now links to the framework's own confirmation page
+on the API origin: `{BASE_URL}/api/auth/verify/email/confirm?token=ev:...`
+(#3257). Opening that page **verifies nothing** — it describes what will happen
+and acts only when the person presses its button, which calls the verify-only
+`POST /api/auth/email/verify/confirm`. That confirm sets `is_email_verified` and
+returns **no JWT**: clicking a verification link is not signing in.
+
+A deployment whose SPA wants to own this step overrides the `email_verify` /
+`email_verify_link` email templates so the link points at its own route, and
+submits the token itself — to `POST /api/auth/email/verify/confirm` for
+verify-only, or `POST /api/auth/email/verify` to verify **and** log in (the
+long-standing endpoint, unchanged). `WEBAPP_BASE_URL` / `WEBAPP_AUTH_PATH` no
+longer steer this flow; a `/auth?flow=email_verify&token=ev:…` link already in
+an inbox is redirected to the landing server-side.
 
 ---
 
@@ -379,14 +388,19 @@ POST /api/auth/email/change/confirm
 
 **Step 2: Confirm (link)**
 
-The confirmation email contains a link to
-`GET /api/auth/email/change/confirm?token=ec:...`. Or have the user
-submit the token via:
+The confirmation email links to `GET /api/auth/email/change/confirm?token=ec:...`
+on the API origin. Since #3257 that GET is a **confirmation page, not a commit**:
+opening it changes nothing and consumes nothing, so a mail scanner or link
+preview cannot burn the token. Its button POSTs the token to the same path:
 
 ```json
 POST /api/auth/email/change/confirm
 { "token": "ec:4e6f..." }
 ```
+
+That POST is unchanged — it commits the address, rotates `auth_key` and returns
+a fresh JWT. The framework's page **discards** that JWT and tells the person to
+sign in again; an SPA that posts the token itself may of course keep it.
 
 On success (all paths): the new email is committed, `is_email_verified` is
 set to `true`, all other sessions are invalidated, and a fresh JWT is
@@ -1220,8 +1234,14 @@ Authorization: Bearer <access_token>
 ```
 
 No request body required. Returns 200 and sends a confirmation email containing
-a server-resolved frontend link with a `dv:` token (15-minute TTL, single-use):
-`{WEBAPP_BASE_URL}{WEBAPP_AUTH_PATH}?flow=account_deactivate&token=dv:...`.
+a server-resolved link with a `dv:` token (15-minute TTL, single-use):
+`{BASE_URL}/api/account/deactivate/confirm?token=dv:...`.
+
+Since #3257 that link opens a **confirmation page** the framework serves — the
+flow used to have no page at all, so the link landed on the ordinary login form
+and the deactivation could not be completed. The page states the consequence
+plainly and closes nothing; its button performs Step 2 below. Opening,
+prefetching or scanning the URL leaves the account active.
 
 ```json
 {
@@ -1635,7 +1655,7 @@ or on another device.
 
 | Event | Fires after |
 |---|---|
-| `account:email:verified` | Email verified (code or link path) |
+| `account:email:verified` | Email verified (any confirm POST — code, verify-only token, or verify-and-login). The link *landing* does not fire it: opening it verifies nothing |
 | `account:email:changed` | Email change committed |
 | `account:phone:verified` | Phone number verified |
 | `notification` | New notification created server-side |

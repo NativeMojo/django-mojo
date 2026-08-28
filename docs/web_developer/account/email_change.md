@@ -152,25 +152,39 @@ Codes expire after `EMAIL_CHANGE_CODE_TTL` seconds (default 10 minutes) and are 
 ### Option B — Link confirm via API page (simple setups)
 
 Use this when the request was made with the default `method: "link"` and your
-deployment overrides the shipped email template to point directly to the API.
-The shipped template uses the resolved frontend `token_url` described in Option
-C; a direct API-page link remains available for simple deployments.
+**This is what the shipped email links to since #3257** — `token_url` resolves
+to `{BASE_URL}/api/auth/email/change/confirm?token=ec:...`, not to a frontend
+route. Option C below is still available for deployments that override the email
+template and handle the token themselves.
 
 **GET** `/api/auth/email/change/confirm?token=ec:...`
 
 Public endpoint. No authentication header required. Rate limited.
 
-On success the server renders `account/email_change_confirm.html` — a minimal, self-contained page. Downstream projects can override this template (see [Template Customisation](#template-customisation)).
+**The GET commits nothing.** It renders `account/email_change_landing.html` — a
+minimal, self-contained confirmation page — and that is all it does: it does not
+validate the token, does not consume it, and never displays the account's
+address. A mail scanner, link preview or browser prefetch that opens the URL
+leaves the account untouched. Downstream projects can override the template (see
+[Template Customisation](#template-customisation)).
+
+Pressing the page's button sends `{"token": "ec:…"}` to
+`POST /api/auth/email/change/confirm` (Option C's endpoint) with
+`credentials: "omit"` and no `Authorization` header. That POST is what commits
+the change, rotates `auth_key` and returns a fresh JWT — which this page
+**discards**, telling the person to sign in again. Confirming requires
+JavaScript; a `<noscript>` block says so, and the token survives for a later
+attempt in a JavaScript-capable browser.
 
 **Optional redirect parameter:**
 
-Append `&redirect=https://yourapp.com/login` to the link in the confirmation email. On success the page shows a **Continue** button pointing to the redirect URL and automatically navigates there after 3 seconds. On error the redirect URL is shown as a **Go back** button only — no automatic redirect.
+Append `&redirect=https://yourapp.com/login` to the link in the confirmation email to add a **Go back** link to the page. Nothing auto-navigates — no `<meta http-equiv="refresh">` is emitted in any state.
 
 ```
 GET /api/auth/email/change/confirm?token=ec:4e6f...&redirect=https://app.example.com/login
 ```
 
-**The destination must be `http`, `https`, or scheme-less.** Anything else — `javascript:`, `data:`, or a custom app scheme such as `myapp://home` — is dropped: **no button is rendered at all** (the page falls back to *"You can close this tab"*) and no automatic redirect is emitted. Status code, page copy and every other context value are unchanged, and the email change itself still commits. Point deep links at an https universal/app link instead. The **host is deliberately not restricted** — a cross-origin `https://` destination works — and scheme-relative or path-relative values pass through unchanged and may still resolve off-origin. Passing the parameter more than once (`?redirect=a&redirect=b`) is refused rather than taking the last value.
+**The destination must be `http`, `https`, or scheme-less.** Anything else — `javascript:`, `data:`, or a custom app scheme such as `myapp://home` — is dropped: **no link is rendered at all**, and no automatic redirect is emitted. Status code and page copy are unchanged. Point deep links at an https universal/app link instead. The **host is deliberately not restricted** — a cross-origin `https://` destination works — and scheme-relative or path-relative values pass through unchanged and may still resolve off-origin. Passing the parameter more than once (`?redirect=a&redirect=b`) is refused rather than taking the last value.
 
 ---
 
@@ -266,7 +280,7 @@ Because `auth_key` is rotated on confirm, any open sessions will find their JWTs
 1. Show the user a form with a field for `email`.
 2. Call `POST /api/auth/email/change/request` (no `method` param). On success, display: *"A confirmation link has been sent to newemail@example.com. Check your inbox and click the link to confirm."*
 3. Optionally show a **Cancel pending change** button that calls `POST /api/auth/email/change/cancel`.
-4. The link in the email points directly to `GET /api/auth/email/change/confirm?token=ec:...&redirect=https://yourapp.com/login`. The server renders the result page; no frontend route needed.
+4. The link in the email points directly to `GET /api/auth/email/change/confirm?token=ec:...&redirect=https://yourapp.com/login`. The server renders the confirmation page and the user presses its button; no frontend route needed.
 
 ### SPA / mobile setup (frontend handles link)
 
@@ -291,39 +305,58 @@ Because `auth_key` is rotated on confirm, any open sessions will find their JWTs
 
 ## Template Customisation
 
-The `GET /api/auth/email/change/confirm` endpoint renders `account/email_change_confirm.html`. The default template is a minimal, self-contained page with no external dependencies. To customise it, create your own version at a path that takes priority in Django's `TEMPLATES` settings:
+> ### ⚠️ Upgrade note — the old template name is gone
+>
+> #3257 replaced `account/email_change_confirm.html` with
+> `account/email_change_landing.html` (extending the shared
+> `account/token_landing_base.html`). **A branded override of the old name stops
+> rendering silently** — Django resolves the new name and falls back to the
+> framework's default page with no error. Rename yours and re-check it against
+> the blocks and context below. The sibling renames are
+> `account/email_verify_confirm.html` → `account/email_verify_landing.html`, and
+> the new `account/account_deactivate_landing.html`.
+
+The `GET /api/auth/email/change/confirm` endpoint renders `account/email_change_landing.html`, which extends `account/token_landing_base.html`. Both are minimal and fully self-contained — no external stylesheet, script, image or font. To customise, create your own version at a path that takes priority in Django's `TEMPLATES` settings:
 
 ```
-yourproject/templates/account/email_change_confirm.html
+yourproject/templates/account/email_change_landing.html
+yourproject/templates/account/token_landing_base.html   # to restyle all three landings at once
 ```
+
+Blocks the flow template overrides: `page_title`, `headline`, `consequence`, `button_class`, `button_label`, `success_headline`, `success_copy`, `success_footer`.
 
 Template context variables:
 
 | Variable | Type | Description |
 |---|---|---|
-| `success` | bool | `True` if the change was committed successfully |
-| `new_email` | string | The newly committed email address (on success) |
-| `error_title` | string | Short error heading (on failure) |
-| `error_message` | string | Descriptive error text (on failure) |
-| `redirect_url` | string | Vetted value of the `?redirect=` param — always either `""` or an `http`/`https`/relative URL (see **Optional redirect parameter** under Option B). May be empty. |
-| `redirect_delay` | int | Seconds before automatic redirect (3 on success, 0 on error) |
+| `has_token` | bool | `True` when the request carried a usable `?token=`. `False` renders the invalid-link state and **no submit control** |
+| `landing_data` | dict | `{"token": …, "confirm_url": …}`, emitted through `json_script` as an inert `application/json` data block. The token appears nowhere else on the page and is never written to `localStorage`/`sessionStorage` |
+| `redirect_url` | string | Vetted value of the `?redirect=` param — always either `""` or an `http`/`https`/relative URL. May be empty |
 
-`redirect_url` is scheme-guarded **before** it reaches the context, so an overridden template inherits the guard for free: it is never a `javascript:`/`data:`/custom-app value, and a refused destination arrives as `""`. Keep the link inside a `{% if redirect_url %}` wrapper so a refused destination omits the button rather than rendering a dead one.
+There is no `success` / `new_email` / `error_title` / `error_message` / `redirect_delay` any more: the GET knows none of that, because it never validates the token. Success and error copy are page states the button's response switches on, client-side.
+
+`redirect_url` is scheme-guarded **before** it reaches the context, so an overridden template inherits the guard for free: it is never a `javascript:`/`data:`/custom-app value, and a refused destination arrives as `""`. Keep the link inside a `{% if redirect_url %}` wrapper so a refused destination omits the link rather than rendering a dead one.
+
+If you override the base, keep three properties: the token stays inside the `json_script` block (never interpolated into `<script>` text or an `href`), the page loads nothing from another origin, and nothing navigates on its own.
 
 Two email templates must also be defined in your project's email template system:
 
 ### `email_change_confirm` (link flow)
 
 Sent to the **new** address when `method: "link"`. Django-MOJO ships a default
-template containing the resolved frontend URL:
+template containing the resolved URL:
 
 ```
 {{ token_url }}
 ```
 
-The URL is built server-side from `WEBAPP_BASE_URL` and `WEBAPP_AUTH_PATH` as
-`?flow=email_change&token=...`, then may be shortened. Context: `token_url`,
-`new_email`, `user`.
+Since #3257 the URL is built server-side as
+`{BASE_URL}/api/auth/email/change/confirm?token=...` — this deployment's own
+confirmation page — then may be shortened. `WEBAPP_BASE_URL` and
+`WEBAPP_AUTH_PATH` no longer steer this flow: they name the *frontend* origin,
+where on a separate-SPA deployment no page exists that can handle an `ec:`
+token. To send people to your own route instead, override this email template.
+Context: `token_url`, `new_email`, `user`.
 
 ### `email_change_code` (code flow)
 

@@ -23,7 +23,8 @@ Counts requests in fixed time buckets. Fast and cheap (one Redis INCR per check)
 ```python
 def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=None,
                ip_window=60, duid_window=60, muid_window=60, apikey_window=60,
-               min_granularity="hours", apikey_observe_limit=None)
+               min_granularity="hours", apikey_observe_limit=None,
+               include_request_in_incident=True)
 ```
 
 ### Parameters
@@ -41,6 +42,7 @@ def rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=Non
 | `muid_window` | Window in seconds for muid counter (default `60`) |
 | `apikey_window` | Default window in seconds for hard and explicit observation ApiKey counters (default `60`) |
 | `min_granularity` | Granularity for violation metrics (default `"hours"`) |
+| `include_request_in_incident` | Whether the violation `Event` carries request-derived metadata (`http_path`, `http_query_string`, `http_user_agent`, …). `False` keeps only the fixed text, the category and the source IP. Appended to the signature to preserve older positional calls (default `True`) |
 
 ### Examples
 
@@ -94,8 +96,11 @@ Same signature as `rate_limit`:
 ```python
 def strict_rate_limit(key, ip_limit, duid_limit=None, muid_limit=None, apikey_limit=None,
                       ip_window=60, duid_window=60, muid_window=60, apikey_window=60,
-                      min_granularity="hours")
+                      min_granularity="hours", include_request_in_incident=True)
 ```
+
+(`apikey_observe_limit` is the one parameter `rate_limit` has that this one does
+not — a strict limiter never shadow-counts.)
 
 ### Examples
 
@@ -271,6 +276,28 @@ over-budget request; only the accounting side is deduped. This means
 violations are still automatically visible in both the metrics dashboard and
 the incident system, with no extra code, but a failed request never costs
 the server more than a served one.
+
+### When the URL itself is a secret — `include_request_in_incident=False`
+
+`mojo/apps/incident/reporter.py` stamps `http_path`, `http_query_string`,
+`http_user_agent`, `http_host` and `http_method` onto every request-backed
+`Event`. That is exactly what you want for ordinary triage — and exactly wrong
+for an endpoint whose URL carries a single-use credential, because a throttled
+request would persist the very token it was throttling.
+
+Pass `include_request_in_incident=False` on such endpoints. The 429, the
+`Retry-After`, the first-engagement dedup, the metric and the `source_ip` are
+all unchanged; only the request-derived metadata is dropped:
+
+```python
+@md.GET("auth/email/change/confirm")
+@md.strict_rate_limit("email_change_landing", ip_limit=10, ip_window=3600,
+                      include_request_in_incident=False)
+```
+
+The three emailed-token confirmation landings are the in-tree users. Do not
+reach for it anywhere else: an `Event` without a path is materially harder to
+triage, and that cost is only worth paying when the path is a secret.
 
 ---
 

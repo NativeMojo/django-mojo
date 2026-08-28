@@ -205,6 +205,32 @@ but cannot know everywhere a product stores personal data. So the framework does
 not try to enumerate it: the product runs its own closure, in the order it
 decides, and calls `pii_anonymize()` as the last step.
 
+### The human confirmation page (`GET account/deactivate/confirm`)
+
+Before #3257 this flow had no page at all: the `dv:` link in the confirmation
+email opened the ordinary login form, which ignored the token, so there was no
+way for a person to finish the deactivation they had asked for.
+
+`GET /api/account/deactivate/confirm` now renders
+`account/account_deactivate_landing.html` — a standalone page that states the
+consequence plainly (permanent closure, signed out everywhere, personal details
+removed) behind a destructive button. It is **presentation only**: it does not
+verify the token, does not consume it, names no account, and closes nothing. A
+mail scanner, link preview or browser prefetch that opens the URL leaves the
+account exactly as it found it.
+
+The button POSTs `{"token": "dv:…"}` to the endpoint above with
+`credentials: "omit"`, so the closure path, the token's single-use-at-verify
+semantics and `ACCOUNT_CLOSURE_HANDLER` delegation are all unchanged. The GET
+carries its own 10/IP/hour bucket (`account_deactivate_landing`), separate from
+anything the POST does, and files its throttle diagnostics with
+`include_request_in_incident=False` so a throttled preview never records the
+`dv:` token sitting in its own query string.
+
+Deployments whose handler does something other than close-and-anonymise should
+override `account/account_deactivate_landing.html` so the copy matches what
+actually happens.
+
 ```python
 # settings file — NOT a DB-backed Setting row, see below
 ACCOUNT_CLOSURE_HANDLER = "myapp.services.closure.close_account"

@@ -60,7 +60,7 @@ changes until you set `AUTH_CSP_ENABLED = True`.
 | `GET /passkey` | yes, `frame-ancestors 'none'` | same |
 | `GET /contact` | yes, **no `frame-ancestors`** | documented as iframe-embeddable |
 | `bouncer_challenge.html` / `bouncer_decoy.html` | **no** | un-nonce'd inline content by design |
-| `email_verify_confirm.html` / `email_change_confirm.html` | **no** | same |
+| `token_landing_base.html` and the three landings it feeds (`email_verify_landing.html`, `email_change_landing.html`, `account_deactivate_landing.html`) | **no** | same — standalone pages, un-nonce'd inline `<style>`/`<script>` by design |
 | every JSON API response | **no** | not a document |
 
 The paths above are the defaults; they follow `BOUNCER_LOGIN_PATH`,

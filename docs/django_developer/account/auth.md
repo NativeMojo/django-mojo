@@ -1143,13 +1143,34 @@ REQUIRE_GROUP_ON_REGISTRATION = True   # default False
 
 ## Token URLs
 
-Transactional token links (invite, magic login, password reset, email verify) are built as:
+Transactional token links come in two shapes, and which one a flow gets is
+deliberate (#3257).
+
+**Frontend links** — `invite`, `magic_login`, `password_reset`. Their
+confirmation pages are implemented by the deployment's own SPA, so:
 
 ```
 {base_url}{auth_path}?flow={flow}&token={token}
 ```
 
-The frontend dispatches on `flow=` so only one auth path needs to be configured per tenant.
+The frontend dispatches on `flow=` so only one auth path needs to be configured
+per tenant. The resolution order below applies to these.
+
+**Framework landing links** — `email_verify`, `email_change`,
+`account_deactivate`. Those three confirmation pages are served by django-mojo
+itself, on the API origin, so they ignore the chain below entirely:
+
+```
+{BASE_URL}{MOJO_PREFIX}/<landing route>?token={token}
+```
+
+`WEBAPP_BASE_URL` is the *frontend* origin; on a separate-SPA deployment there
+is no page there that can handle an `ev:`/`ec:`/`dv:` token, and a custom
+`WEBAPP_AUTH_PATH` could even land the link on the bouncer decoy page. Routes
+come from `mojo.apps.account.services.token_landing`; a deployment that wants
+its own SPA to own these overrides the email templates. Links already in inboxes
+using the old `/auth?flow=…` shape are redirected server-side by
+`on_login_page`, keyed on the token prefix.
 
 **Resolution order** (first non-empty wins):
 

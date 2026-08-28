@@ -158,13 +158,19 @@ Codes expire after `EMAIL_VERIFY_CODE_TTL` seconds (default 10 minutes) and are 
 
 The verification email contains a link with a `token` query parameter. There are two ways to handle link clicks depending on your setup.
 
-**Option A — Link clicks directly to the API (recommended for simple setups)**
+**Option A — Link opens the framework's confirmation page (the shipped default)**
 
-The email link points to `GET /api/auth/verify/email/confirm?token=ev:...`. The server validates the token, marks the email verified, and renders a clean HTML page confirming success or describing the error. No frontend JavaScript is required.
+Since #3257 the email link points at `GET /api/auth/verify/email/confirm?token=ev:...` on the **API origin** (built from `BASE_URL`, not `WEBAPP_BASE_URL`), and that page is a **confirmation landing**:
 
-Append `&redirect=https://yourapp.com/dashboard` to the link in the email. On success the page shows a **Continue** button and automatically navigates there after 3 seconds. On error the redirect URL is shown as a **Go back** button only.
+* Opening it verifies nothing. It does not validate or consume the token, does not touch the account, and never displays the account's email address or username. A mail scanner, link preview or browser prefetch leaves everything as it found it — that is the whole point of the change.
+* The page describes what will happen and offers one button. Pressing it POSTs `{"token": "ev:…"}` to `POST /api/auth/email/verify/confirm` with `credentials: "omit"` and no `Authorization` header.
+* That confirm is **verify-only**: it marks the address verified and returns `{"status": true, "message": "Email verified", "data": {"email": "…"}}`. It issues **no JWT**, does not touch `last_login`, and records no login. Clicking a verification link is not signing in — the page tells the person to return to the app.
+* **Confirming requires JavaScript.** (This retires the old "No frontend JavaScript is required" guarantee.) A `<noscript>` block explains it, and because the GET consumes nothing, opening the same link later in a JavaScript-capable browser still works.
+* A network failure or unreadable response shows an *"we could not confirm whether this went through"* state — it never claims the account was unchanged.
 
-**The destination must be `http`, `https`, or scheme-less.** Anything else — `javascript:`, `data:`, or a custom app scheme such as `myapp://home` — is dropped: **no button is rendered at all** (the page falls back to *"You can close this tab"*) and no automatic redirect is emitted. Status code, page copy and every other context value are unchanged. Point deep links at an https universal/app link instead. The **host is deliberately not restricted** — a cross-origin `https://` destination works — and scheme-relative or path-relative values pass through unchanged and may still resolve off-origin. Passing the parameter more than once (`?redirect=a&redirect=b`) is refused rather than taking the last value.
+Append `&redirect=https://yourapp.com/dashboard` to the link in the email to add a **Go back** link to the page. Nothing auto-navigates: no `<meta http-equiv="refresh">` is ever emitted, on any state.
+
+**The destination must be `http`, `https`, or scheme-less.** Anything else — `javascript:`, `data:`, or a custom app scheme such as `myapp://home` — is dropped and **no link is rendered at all**. Status code and page copy are unchanged. Point deep links at an https universal/app link instead. The **host is deliberately not restricted** — a cross-origin `https://` destination works — and scheme-relative or path-relative values pass through unchanged and may still resolve off-origin. Passing the parameter more than once (`?redirect=a&redirect=b`) is refused rather than taking the last value. The same applies to `?token=`: a repeated or structured value is treated as absent, and the page renders its invalid-link state with no button.
 
 **Option B — Frontend handles the token (SPA / mobile apps)**
 
@@ -176,7 +182,9 @@ The email link points to a frontend route (e.g. `/verify-email?token=ev:...`). T
 { "token": "ev:4e6f74546f6b656e..." }
 ```
 
-On success, the server marks `is_email_verified = true` and **logs the user in**, returning a full JWT — no separate login step is needed.
+On success, the server marks `is_email_verified = true` and **logs the user in**, returning a full JWT — no separate login step is needed. Unchanged, and still supported.
+
+> Want verification *without* a session? Use **`POST /api/auth/email/verify/confirm`** instead — same body, same token, but it only sets `is_email_verified` and returns `{"status": true, "message": "Email verified", "data": {"email": "…"}}`. No JWT, no `last_login` update, no login event. This is what the framework's own confirmation page calls, and it is the right endpoint whenever the person is not actually signing in.
 
 **Response:**
 
@@ -361,7 +369,7 @@ After successful verification, the server emits a WebSocket event to all of the 
 
 ### Email verified
 
-Emitted after either confirm path (`POST /api/auth/verify/email/confirm` or `GET /api/auth/verify/email/confirm`) succeeds:
+Emitted after any confirm path succeeds — `POST /api/auth/verify/email/confirm` (code), `POST /api/auth/email/verify/confirm` (verify-only token) or `POST /api/auth/email/verify` (verify-and-login). The **GET** landing emits nothing: it changes nothing.
 
 ```json
 {
@@ -389,26 +397,45 @@ Use this to dismiss a phone verification prompt or enable SMS-dependent features
 
 ## Template Customisation
 
-The `GET /api/auth/verify/email/confirm` endpoint renders `account/email_verify_confirm.html`. The default template is a minimal, self-contained page with no external dependencies. To customise it, create your own version at a path that takes priority in Django's `TEMPLATES` settings:
+> ### ⚠️ Upgrade note — the old template names are gone
+>
+> #3257 replaced the two server-rendered confirm pages with three confirmation
+> landings, under **new file names**:
+>
+> | Old (deleted) | New |
+> |---|---|
+> | `account/email_verify_confirm.html` | `account/email_verify_landing.html` |
+> | `account/email_change_confirm.html` | `account/email_change_landing.html` |
+> | — (this page did not exist) | `account/account_deactivate_landing.html` |
+> | — | `account/token_landing_base.html` (shared base for all three) |
+>
+> **This breaks branded overrides silently.** Django resolves the *new* name, so
+> a deployment's own `templates/account/email_verify_confirm.html` simply stops
+> being rendered — no error, no warning, just the framework's default page.
+> Rename your override and re-check it against the new blocks below.
+
+The `GET /api/auth/verify/email/confirm` endpoint renders `account/email_verify_landing.html`, which extends `account/token_landing_base.html`. Both are minimal and fully self-contained — no external stylesheet, script, image or font. To customise, create your own version at a path that takes priority in Django's `TEMPLATES` settings:
 
 ```
-yourproject/templates/account/email_verify_confirm.html
+yourproject/templates/account/email_verify_landing.html
+yourproject/templates/account/token_landing_base.html   # to restyle all three at once
 ```
+
+Blocks the flow templates override: `page_title`, `headline`, `consequence`, `button_class`, `button_label`, `success_headline`, `success_copy`, `success_footer`.
 
 Template context variables:
 
 | Variable | Type | Description |
 |---|---|---|
-| `success` | bool | `True` if the address was verified successfully |
-| `email` | string | The verified email address (on success) |
-| `error_title` | string | Short error heading (on failure) |
-| `error_message` | string | Descriptive error text (on failure) |
-| `redirect_url` | string | Vetted value of the `?redirect=` param — always either `""` or an `http`/`https`/relative URL (see below). May be empty. |
-| `redirect_delay` | int | Seconds before automatic redirect (3 on success, 0 on error) |
+| `has_token` | bool | `True` when the request carried a usable `?token=`. `False` renders the invalid-link state and **no submit control** |
+| `landing_data` | dict | `{"token": …, "confirm_url": …}`, emitted through `json_script` as an inert `application/json` data block. The token appears nowhere else on the page and is never written to `localStorage`/`sessionStorage` |
+| `redirect_url` | string | Vetted value of the `?redirect=` param — always either `""` or an `http`/`https`/relative URL. May be empty |
 
-`redirect_url` is scheme-guarded **before** it reaches the context, so an overridden template inherits the guard for free: it is never a `javascript:`/`data:`/custom-app value, and a refused destination arrives as `""`. Keep the link inside a `{% if redirect_url %}` wrapper so a refused destination omits the button rather than rendering a dead one.
+There is no `success` / `email` / `error_title` / `error_message` / `redirect_delay` any more: the GET knows none of that, because it never validates the token. Success and error copy are page states the button's response switches on, client-side.
 
-Append `?redirect=https://yourapp.com/dashboard` to the verification link in the email to add a **Continue** button and an automatic 3-second redirect on success.
+`redirect_url` is scheme-guarded **before** it reaches the context, so an overridden template inherits the guard for free: it is never a `javascript:`/`data:`/custom-app value, and a refused destination arrives as `""`. Keep the link inside a `{% if redirect_url %}` wrapper so a refused destination omits the link rather than rendering a dead one.
+
+If you override the base, keep three properties: the token stays inside the `json_script` block (never interpolated into `<script>` text or an `href`), the page loads nothing from another origin, and nothing navigates on its own.
 
 ---
 
@@ -442,7 +469,8 @@ The only legitimate paths that set these fields are:
 | Action | Sets |
 |---|---|
 | `POST /api/auth/email/verify` (link token redemption) | `is_email_verified = true` |
-| `GET /api/auth/verify/email/confirm` (link click) | `is_email_verified = true` |
+| `GET /api/auth/verify/email/confirm` (link click) | nothing — renders the confirmation page |
+| `POST /api/auth/email/verify/confirm` (the page's button) | `is_email_verified = true`, no session |
 | `POST /api/auth/verify/email/confirm` (OTP code) | `is_email_verified = true` |
 | `POST /api/auth/invite/accept` (invite token redemption) | `is_email_verified = true` |
 | `POST /api/auth/verify/phone/confirm` (OTP code) | `is_phone_verified = true` |

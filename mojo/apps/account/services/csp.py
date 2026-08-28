@@ -10,9 +10,11 @@ serves (login/register/passkey hold access and refresh tokens in
 This is NOT a framework-wide default and must not become one. A nonce is only
 valid for a response whose markup carries the same value, so blanket middleware
 cannot know which templates are nonce-aware — it would silently break every
-un-nonce'd inline block (`bouncer_challenge.html`, `bouncer_decoy.html`,
-`email_change_confirm.html`, `email_verify_confirm.html`). Consuming
-applications own the CSP for their own pages.
+un-nonce'd inline block (`bouncer_challenge.html`, `bouncer_decoy.html`, and
+`token_landing_base.html` with the three confirmation landings that extend it:
+`email_verify_landing.html`, `email_change_landing.html`,
+`account_deactivate_landing.html`). Consuming applications own the CSP for
+their own pages.
 
 (Unrelated name collision: `render_ctx.css_nonce` on the bouncer challenge page
 is an anti-automation class-name randomizer, not a CSP nonce.)

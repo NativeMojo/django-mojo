@@ -359,7 +359,7 @@ explanation.
 
 | Path | Method | View | Description |
 |------|--------|------|-------------|
-| `/{BOUNCER_LOGIN_PATH}` | GET | `on_login_page` | Bouncer-gated login page |
+| `/{BOUNCER_LOGIN_PATH}` | GET | `on_login_page` | Bouncer-gated login page. An `ev:`/`ec:`/`dv:` `?token=` is 302'd to its confirmation landing **before** any bouncer work — see below |
 | `/{BOUNCER_REGISTER_PATH}` | GET | `on_register_page` | Bouncer-gated registration page |
 | `/{BOUNCER_PASSKEY_PATH}` | GET | `on_passkey_enroll_page` | Passkey enrollment (authenticated) |
 | `/{OAUTH_SERVER_PATH}/authorize` | GET | `on_authorize` | OAuth 2.1 consent screen — not bouncer-gated; redirects to `/{BOUNCER_LOGIN_PATH}?redirect=` when there is no session. `X-Frame-Options: DENY` unconditionally |
@@ -374,9 +374,33 @@ explanation.
 | `/api/account/static/mojo-auth-theme.css` | GET | Static | Responsive layout and appearance presets |
 | `/api/account/static/mojo-auth.js` | GET | Static | MojoAuth JS library |
 | `/api/account/static/mojo-auth.css` | GET | Static | Legacy light theme CSS |
+| `/api/auth/verify/email/confirm` | GET | `on_email_verify_confirm` | Email-verification confirmation landing (`ev:`) — renders only |
+| `/api/auth/email/change/confirm` | GET | `on_email_change_confirm_get` | Email-change confirmation landing (`ec:`) — renders only |
+| `/api/account/deactivate/confirm` | GET | `on_account_deactivate_confirm_get` | Deactivation confirmation landing (`dv:`) — renders only |
 
 All root-level paths (`/auth`, `/register`, `/passkey`, etc.) are registered
 as absolute URLs and bypass the `/api/` prefix.
+
+### Confirmation landings, and the `/auth` compatibility redirect
+
+The three landing GETs above are **presentation only**: they read the token out
+of `request.DATA`, hand it back to the page as an inert `json_script` data
+block, name no account, and change nothing. Only the button — an explicit
+`fetch` POST with `credentials: "omit"` — acts. They are standalone pages: they
+do NOT extend `auth_base.html`, carry no CSP nonce, and load nothing from
+another origin. Each has its own 10/IP/hour bucket, separate from the POST
+budget, so previews and reloads cannot eat someone's confirmation attempts.
+
+Emailed `ev:`/`ec:`/`dv:` links point at these paths directly (see
+`mojo/apps/account/utils/webapp_url.py`). Links **already in inboxes** use the
+old `/auth?flow=…&token=…` shape, so `on_login_page` calls
+`token_landing.landing_redirect(request)` immediately after the `DISABLE_LOGIN`
+check and 302s them to the right landing. That has to happen server-side and
+before the bouncer: the challenge page stashes only `pr:` tokens, so a cold
+visitor's `ev:`/`ec:`/`dv:` token would otherwise be destroyed. Routing keys on
+the **token prefix**, never on `flow=` — `flow` is read nowhere in the
+framework and is attacker-supplied. `ml:`, `pr:`, `iv:` and token-less requests
+fall through unchanged.
 
 ---
 

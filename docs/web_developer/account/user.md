@@ -20,7 +20,8 @@
 | GET | `/api/auth/manage/throttle?user_id=N` | `manage_users` | Read login attempt counter |
 | POST | `/api/auth/manage/clear_rate_limit` | `manage_users` | Clear login throttle for a user |
 | POST | `/api/auth/verify/email/send` | required | Send email verification link |
-| GET | `/api/auth/verify/email/confirm` | public | Confirm email via link |
+| GET | `/api/auth/verify/email/confirm` | public | Confirmation **page** the emailed link opens — renders only, verifies nothing |
+| POST | `/api/auth/email/verify/confirm` | public (token) | Verify-only confirm — sets `is_email_verified`, issues no session |
 | POST | `/api/auth/verify/phone/send` | required | Send SMS verification code |
 | POST | `/api/auth/verify/phone/confirm` | required | Confirm phone via code |
 | POST | `/api/account/admin/user/password/reset` | global `users`/`manage_users`; fresh interactive auth | Send a dedicated audited reset link for a selected user |
@@ -224,7 +225,7 @@ curl -X POST \
 {"status": true, "message": "Verification email sent"}
 ```
 
-The email contains a link to `/api/auth/verify/email/confirm?token=ev:<token>`.
+The email contains a link to `{BASE_URL}/api/auth/verify/email/confirm?token=ev:<token>` — this deployment's own confirmation page.
 
 If the email provider did not accept the message (no mailbox configured, provider refusal or outage) the endpoint returns **HTTP 503** with a fixed, safe retry message instead of a false success — offer a Retry button:
 
@@ -246,14 +247,31 @@ Public endpoint — designed to be clicked directly from an email client. No `Au
 GET /api/auth/verify/email/confirm?token=ev:3a9f...
 ```
 
+Returns an **HTML confirmation page**, not JSON. Since #3257 it verifies
+nothing: it does not validate or consume the token, does not touch the account,
+and names no account. A mail scanner, link preview or browser prefetch opening
+the URL changes nothing.
+
+**POST** `/api/auth/email/verify/confirm`
+
+What the page's button calls, and what an SPA handling the token itself should
+call. Public — the token is the credential.
+
+```json
+{ "token": "ev:3a9f..." }
+```
+
 **Response:**
 
 ```json
-{"status": true, "message": "Email verified"}
+{"status": true, "message": "Email verified", "data": {"email": "alice@example.com"}}
 ```
 
 - Tokens are single-use and expire after 24 hours (configurable via `EMAIL_VERIFY_TOKEN_TTL`).
 - On success, `is_email_verified` is set to `true` on the user's account.
+- **No JWT is issued** and `last_login` is untouched — verifying an address is
+  not signing in. Use `POST /api/auth/email/verify` when you do want the token
+  exchanged for a session.
 
 ---
 
