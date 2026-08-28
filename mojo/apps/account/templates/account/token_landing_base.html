@@ -135,10 +135,11 @@ button_label, button_class, success_headline, success_copy.
 
     <div id="mojo-landing-success" hidden>
       <h1>{% block success_headline %}All done{% endblock %}</h1>
-      <p><span id="mojo-landing-success-address" class="address"></span></p>
+      <p id="mojo-landing-success-address-row" hidden><span
+        id="mojo-landing-success-address" class="address"></span></p>
       <p>{% block success_copy %}Your request has been confirmed.{% endblock %}</p>
-      <p class="muted">For your security you have not been signed in here.
-      Return to the app and sign in again.</p>
+      <p class="muted">{% block success_footer %}For your security you have not
+      been signed in here. Return to the app and sign in again.{% endblock %}</p>
     </div>
 
     <div id="mojo-landing-error" hidden>
@@ -185,6 +186,7 @@ button_label, button_class, success_headline, success_copy.
       var failure = document.getElementById("mojo-landing-error");
       var message = document.getElementById("mojo-landing-error-message");
       var address = document.getElementById("mojo-landing-success-address");
+      var addressRow = document.getElementById("mojo-landing-success-address-row");
       var button = document.getElementById("mojo-landing-submit");
 
       function show(target) {
@@ -232,7 +234,10 @@ button_label, button_class, success_headline, success_copy.
           var body = result.body;
           if (result.ok && body && body.status === true) {
             var email = addressOf(body);
-            if (address && email) { address.textContent = email; }
+            if (address && email) {
+              address.textContent = email;
+              if (addressRow) { addressRow.hidden = false; }
+            }
             show(success);
             return;
           }
