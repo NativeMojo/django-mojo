@@ -351,6 +351,8 @@ POST /api/auth/verify/phone/confirm  → user submits code, sets is_phone_verifi
 
 The phone number is normalized via `phonehub.normalize()` before the SMS is sent. An invalid or un-normalizable number returns a `ValueException` before any Twilio call is made.
 
+The send endpoint returns **503** with a fixed safe-retry body when the SMS transport did not accept the message (misconfiguration, provider refusal or outage) rather than a false success, and **400** with fixed copy when the provider rejected the recipient number itself — Twilio's invalid-'To' (21211), blocked-recipient (21610) and non-SMS-capable (21614) codes, an allowlist; unknown codes fail toward the retryable 503. Acceptance is classified by `mojo.apps.account.services.sms_delivery` (`was_accepted()` / `recipient_rejected()`), the SMS twin of `email_delivery` above — with one deliberate deviation: no `provider_message_id` is required, because the mojo remote provider can accept a send without returning an id. The code is still generated on the failure path; it is single-use and TTL-bounded, and the next request rotates it.
+
 Code TTL is configurable via `PHONE_VERIFY_CODE_TTL` (default 600 seconds). Codes are single-use and consumed on successful verification.
 
 ## Post-Save Actions

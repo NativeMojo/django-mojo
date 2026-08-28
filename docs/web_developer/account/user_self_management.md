@@ -486,6 +486,8 @@ On success: `is_phone_verified` is set to `true`. No new JWT. The
 | Error | Meaning |
 |---|---|
 | `"No phone number on account"` | Set a number first via `POST /api/user/me` |
+| **503** `"Unable to send the text message right now. Please try again in a few minutes."` | The SMS transport did not accept the message — show a Retry button rather than "check your phone" (same contract as the email 503 above) |
+| **400** `"This phone number cannot receive text messages."` | The provider rejected the number itself (invalid, blocked, or not SMS-capable) — retrying will not help; have the user fix the number |
 | `"Invalid code"` | Wrong OTP — try again |
 | `"Expired code"` | Code is older than 10 minutes — resend |
 
