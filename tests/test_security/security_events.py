@@ -617,3 +617,384 @@ def test_send_failed_visibility_matrix(opts):
     assert_true(IP_FAIL_UNATTRIBUTED in wide,
                 f"an unattributed row is still the caller's own history and stays "
                 f"visible owner-wide: {sorted(wide)}")
+
+
+# ===========================================================================
+# Sign-out telemetry + the sign-in row (#3329)
+# ===========================================================================
+#
+# POST /api/account/security-events/logout is AUDIT ONLY: it records that this
+# browser signed out and does nothing else — no auth_key rotation, no token
+# minting or revocation, no last_login write, no effect on another device.
+# Every test below is either "the row reaches the feed" or "nothing else moved".
+
+LOGOUT_PATH = "/api/account/security-events/logout"
+LOGOUT_KIND = "sessions:logout"
+LOGOUT_SUMMARY = "Browser sign-out requested"
+
+
+def _clear_logout_limits(opts, account_id=None):
+    """Flush the endpoint's own ip/muid buckets plus the global API throttle.
+
+    ip_limit is 30/60s and muid_limit 10/300s; this module makes well over ten
+    sign-out calls, so every one of them clears first.
+    """
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1", key="security_logout")
+    muid = opts.client.session.cookies.get("_muid")
+    if muid:
+        clear_rate_limits(key="security_logout", muid=muid)
+    if account_id is not None:
+        clear_rate_limits(user_id=account_id)
+
+
+def _logout_rows(uid, category=LOGOUT_KIND):
+    from mojo.apps.incident.models.event import Event
+    return Event.objects.filter(uid=uid, category=category)
+
+
+def _post_logout(opts, body=None, headers=None, account_id=None):
+    _clear_logout_limits(opts, account_id=account_id)
+    return opts.client.post(LOGOUT_PATH, body or {}, headers=headers or {})
+
+
+@th.django_unit_test("logout telemetry: the POST reaches the user's own feed")
+def test_logout_endpoint_reaches_the_feed(opts):
+    opts.client.login(TEST_USER, TEST_PWORD)
+    before = _logout_rows(opts.user_id).count()
+
+    resp = _post_logout(opts, account_id=opts.user_id)
+    assert_eq(resp.status_code, 200,
+              f"the sign-out notification must always 200, got "
+              f"{resp.status_code}: {opts.client.last_response.body}")
+    assert_true(resp.json.get("data", {}).get("recorded") is True,
+                f"a plain authenticated sign-out must record: {resp.json}")
+    assert_eq(_logout_rows(opts.user_id).count(), before + 1,
+              "exactly one sign-out row per call")
+
+    feed = opts.client.get("/api/account/security-events?size=100")
+    opts.client.logout()
+    assert_eq(feed.status_code, 200, f"Expected 200, got {feed.status_code}")
+    rows = [r for r in feed.json.get("data", []) if r.get("kind") == LOGOUT_KIND]
+    assert_true(len(rows) > 0,
+                f"the sign-out must be visible on the Security page — the whole "
+                f"point of the endpoint: {feed.json.get('data')}")
+    assert_eq(rows[0].get("summary"), LOGOUT_SUMMARY,
+              f"the feed must render a human summary, not the raw category, got "
+              f"{rows[0].get('summary')!r}")
+
+
+@th.django_unit_test("logout telemetry: spoofed audit fields in the body are ignored")
+def test_logout_ignores_spoofed_audit_fields(opts):
+    from mojo.apps.incident.models.event import Event
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    other_before = Event.objects.filter(uid=opts.other_user_id).count()
+
+    resp = _post_logout(opts, {
+        "uid": opts.other_user_id,
+        "category": "admin:owned",
+        "title": "spoofed title",
+        "details": "spoofed details",
+        "source_ip": "9.9.9.9",
+        "level": 9,
+    }, account_id=opts.user_id)
+    opts.client.logout()
+
+    assert_eq(resp.status_code, 200,
+              f"a spoofed body must not change the response, got "
+              f"{resp.status_code}: {opts.client.last_response.body}")
+    row = _logout_rows(opts.user_id).order_by("-id").first()
+    assert_true(row is not None, "the sign-out row must have been written")
+    assert_eq(row.uid, opts.user_id,
+              f"the row belongs to the authenticated caller, never a body-supplied "
+              f"uid, got {row.uid!r}")
+    assert_eq(row.category, LOGOUT_KIND,
+              f"the category is a fixed literal, got {row.category!r}")
+    assert_eq(row.title, LOGOUT_SUMMARY,
+              f"the title is a fixed literal, got {row.title!r}")
+    assert_eq(row.source_ip, "127.0.0.1",
+              f"the source IP comes from the request, got {row.source_ip!r}")
+    assert_eq(row.level, 1,
+              f"the level is fixed, got {row.level!r}")
+    assert_eq(Event.objects.filter(uid=opts.other_user_id).count(), other_before,
+              "another user's history must be untouchable from this endpoint")
+    assert_eq(Event.objects.filter(
+        uid=opts.user_id, category="admin:owned").count(), 0,
+        "a body-supplied category must never become the row's category")
+
+
+@th.django_unit_test("logout telemetry: no session side effects at all")
+def test_logout_has_no_session_side_effects(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.login_event import UserLoginEvent
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+    token = opts.client.access_token
+    assert_true(bool(token), "precondition: we need a live access token")
+
+    user = User.objects.get(pk=opts.user_id)
+    auth_key_before = str(user.auth_key)
+    last_login_before = user.last_login
+    login_events_before = UserLoginEvent.objects.filter(user_id=opts.user_id).count()
+
+    resp = _post_logout(opts, account_id=opts.user_id)
+    assert_eq(resp.status_code, 200,
+              f"Expected 200, got {resp.status_code}: {opts.client.last_response.body}")
+
+    body = str(opts.client.last_response.body)
+    for leaked in ("access_token", "refresh_token", "auth_key"):
+        assert_true(leaked not in body,
+                    f"an audit-only notification must return no credential "
+                    f"material — found {leaked!r} in {body}")
+
+    user.refresh_from_db()
+    assert_eq(str(user.auth_key), auth_key_before,
+              "a sign-out notification must NOT rotate auth_key — that would "
+              "silently revoke every other device")
+    assert_eq(user.last_login, last_login_before,
+              "a sign-out notification must NOT touch last_login")
+    assert_eq(UserLoginEvent.objects.filter(user_id=opts.user_id).count(),
+              login_events_before,
+              "a sign-out is not a login and must write no UserLoginEvent")
+
+    # The token that made the call still works: this records history, it does
+    # not revoke anything, on this device or any other.
+    me = opts.client.get("/api/user/me")
+    opts.client.logout()
+    assert_eq(me.status_code, 200,
+              f"the caller's own token must survive the notification, got "
+              f"{me.status_code}: {opts.client.last_response.body}")
+
+
+@th.django_unit_test("logout telemetry: credential matrix — JWT yes, confined bearers no")
+def test_logout_credential_matrix(opts):
+    from mojo.apps.account.models import ApiKey, Group, User
+    from mojo.apps.account.services import group_token
+
+    user = User.objects.get(pk=opts.user_id)
+    brand_a = Group.objects.get(pk=opts.brand_a_id)
+
+    # --- unauthenticated -------------------------------------------------
+    opts.client.logout()
+    before = _logout_rows(opts.user_id).count()
+    resp = _post_logout(opts)
+    assert_true(resp.status_code in (401, 403),
+                f"an unauthenticated sign-out notification must be refused, got "
+                f"{resp.status_code}: {opts.client.last_response.body}")
+    assert_eq(_logout_rows(opts.user_id).count(), before,
+              "a refused call must write no row")
+
+    # --- a JWT session: the supported client ------------------------------
+    opts.client.login(TEST_USER, TEST_PWORD)
+    before = _logout_rows(opts.user_id).count()
+    resp = _post_logout(opts, account_id=opts.user_id)
+    opts.client.logout()
+    assert_eq(resp.status_code, 200,
+              f"a current JWT client must be accepted, got {resp.status_code}: "
+              f"{opts.client.last_response.body}")
+    assert_eq(_logout_rows(opts.user_id).count(), before + 1,
+              "the JWT call must write exactly one row")
+
+    # --- an ApiKey acting AS the user: refused ----------------------------
+    ApiKey.objects.filter(name="secevents_logout_key").delete()
+    api_key, raw_token = ApiKey.create_for_group(
+        brand_a, "secevents_logout_key", permissions={}, user=user,
+        override_user=True)
+    try:
+        before = _logout_rows(opts.user_id).count()
+        resp = _post_logout(
+            opts, headers={"Authorization": f"apikey {raw_token}"})
+        assert_true(resp.status_code in (401, 403),
+                    f"an ApiKey is a confined bearer in a config file, not a "
+                    f"browser signing out — it must be refused, got "
+                    f"{resp.status_code}: {opts.client.last_response.body}")
+        assert_eq(_logout_rows(opts.user_id).count(), before,
+                  "a refused ApiKey call must write no row, even though the key "
+                  "acts as this very user")
+    finally:
+        api_key.delete()
+
+    # --- a GroupScopedToken: refused --------------------------------------
+    gs_token = group_token.mint(user, brand_a)
+    before = _logout_rows(opts.user_id).count()
+    resp = _post_logout(
+        opts, headers={"Authorization": f"grouptoken {gs_token}"})
+    assert_true(resp.status_code in (401, 403),
+                f"a confined group token is delivered to a tenant-controlled "
+                f"page and must be refused, got {resp.status_code}: "
+                f"{opts.client.last_response.body}")
+    assert_eq(_logout_rows(opts.user_id).count(), before,
+              "a refused group-token call must write no row")
+
+
+@th.django_unit_test("logout telemetry: api-scope OAuth grants keep their JWT equivalence")
+def test_logout_oauth_grant_equivalence(opts):
+    """The seam that decides the equivalence, asserted directly: the endpoint
+    adds no identity gate beyond the shared decorator, and that decorator's
+    predicate deliberately does not treat an OAuth grant as key-backed."""
+    from objict import objict
+    from mojo.decorators.auth import SECURITY_REGISTRY
+    from mojo.helpers.request import is_key_backed_session
+    from mojo.apps.account.rest import user as user_rest
+
+    key = "mojo.apps.account.rest.user.on_account_security_events_logout"
+    entry = SECURITY_REGISTRY.get(key)
+    assert_true(entry is not None,
+                f"the endpoint must be registered for security introspection; "
+                f"registry has {len(SECURITY_REGISTRY)} entries")
+    assert_true(entry.get("denies_key_backed_session") is True,
+                f"the confined-bearer refusal must come from the shared "
+                f"decorator: {entry}")
+    assert_eq(entry.get("type"), "authentication",
+              f"the only other gate is plain authentication — no permission and "
+              f"no fresh-auth requirement may creep in: {entry}")
+    assert_true("permissions" not in entry,
+                f"a self-service sign-out needs no permission: {entry}")
+    assert_true("geofence" not in entry,
+                f"a user in a blocked geo must still be able to sign out of "
+                f"their browser: {entry}")
+    assert_true(callable(getattr(user_rest, "on_account_security_events_logout", None)),
+                "the registry key must name the real view function")
+
+    grant_only = objict(oauth_grant=objict(scopes=["api"], token_type="mcp"))
+    assert_eq(is_key_backed_session(grant_only), False,
+              "an OAuth grant is the person's own consented session, not a "
+              "confined bearer — it must reach every endpoint their JWT reaches")
+
+
+@th.django_unit_test("logout telemetry: an unusable group selection records nothing, and denies nothing")
+def test_logout_invalid_group_records_nothing(opts):
+    from mojo.apps.account.models import Group, GroupMember, User
+    from mojo.apps.incident.models.event import Event
+
+    opts.client.login(TEST_USER, TEST_PWORD)
+
+    def _probe(body, why):
+        denied_before = Event.objects.filter(
+            uid=opts.user_id, category="user_permission_denied").count()
+        before = _logout_rows(opts.user_id).count()
+        resp = _post_logout(opts, body, account_id=opts.user_id)
+        assert_eq(resp.status_code, 200,
+                  f"{why}: a telemetry write must never look like a failed "
+                  f"sign-out, got {resp.status_code}: "
+                  f"{opts.client.last_response.body}")
+        assert_true(resp.json.get("data", {}).get("recorded") is False,
+                    f"{why}: the honest answer is recorded=false, got {resp.json}")
+        assert_eq(_logout_rows(opts.user_id).count(), before,
+                  f"{why}: an unusable selection must write no row")
+        assert_eq(Event.objects.filter(
+            uid=opts.user_id, category="user_permission_denied").count(),
+            denied_before,
+            f"{why}: routine membership churn must not file a published "
+            f"permission-denied event on every sign-out")
+
+    # 1. A group id that does not exist.
+    ghost = (Group.objects.order_by("-pk").values_list("pk", flat=True).first() or 0) + 100000
+    _probe({"group": ghost}, "a nonexistent group id")
+
+    # 2. A real group the caller is not a member of.
+    _probe({"group": opts.brand_b_id}, "a non-member group")
+
+    # 3. A group whose membership exists but is inactive.
+    member = GroupMember.objects.filter(
+        user_id=opts.user_id, group_id=opts.brand_a_id).last()
+    assert_true(member is not None, "precondition: the brand A membership fixture")
+    GroupMember.objects.filter(pk=member.pk).update(is_active=False)
+    try:
+        _probe({"group": opts.brand_a_id}, "an inactive membership")
+    finally:
+        GroupMember.objects.filter(pk=member.pk).update(is_active=True)
+
+    # 4. An active child under a deactivated parent (DM-048).
+    Group.objects.filter(name="secevents_dark_child").delete()
+    Group.objects.filter(name="secevents_dark_parent").delete()
+    dark_parent = Group.objects.create(
+        name="secevents_dark_parent", kind="organization")
+    dark_child = Group.objects.create(
+        name="secevents_dark_child", kind="organization", parent=dark_parent)
+    dark_child.add_member(User.objects.get(pk=opts.user_id))
+    Group.objects.filter(pk=dark_parent.pk).update(is_active=False)
+    try:
+        _probe({"group": dark_child.pk}, "an active child under a dark parent")
+    finally:
+        Group.objects.filter(pk=dark_child.pk).delete()
+        Group.objects.filter(pk=dark_parent.pk).delete()
+
+    # 5. The control: a brand the caller really is an active direct member of
+    #    records, and carries the attribution. Without this the four checks
+    #    above would pass with the whole feature deleted.
+    before = _logout_rows(opts.user_id).count()
+    resp = _post_logout(opts, {"group": opts.brand_a_id}, account_id=opts.user_id)
+    opts.client.logout()
+    assert_eq(resp.status_code, 200,
+              f"a valid brand selection must succeed, got {resp.status_code}: "
+              f"{opts.client.last_response.body}")
+    assert_true(resp.json.get("data", {}).get("recorded") is True,
+                f"a valid brand selection must record: {resp.json}")
+    assert_eq(_logout_rows(opts.user_id).count(), before + 1,
+              "the valid selection must write exactly one row")
+    row = _logout_rows(opts.user_id).order_by("-id").first()
+    assert_eq(row.group_id, opts.brand_a_id,
+              f"the row must be attributed to the selected brand, got "
+              f"{row.group_id!r}")
+
+
+@th.django_unit_test("sign-in reaches the feed, and follows the brand-visibility matrix")
+def test_signin_reaches_the_feed(opts):
+    from mojo.apps.incident.models.event import Event
+    from mojo.decorators.limits import clear_rate_limits
+
+    def _fresh_login(body):
+        opts.client.logout()
+        # Only rows this test creates carry 127.0.0.1 + kind=login once cleared.
+        Event.objects.filter(
+            uid=opts.user_id, category="login", source_ip="127.0.0.1").delete()
+        clear_rate_limits(ip="127.0.0.1", key="login")
+        muid = opts.client.session.cookies.get("_muid")
+        if muid:
+            clear_rate_limits(key="login", muid=muid)
+        clear_rate_limits(key="login", account_id=opts.user_id)
+        clear_rate_limits(user_id=opts.user_id)
+        payload = {"username": TEST_USER, "password": TEST_PWORD}
+        payload.update(body)
+        resp = opts.client.post("/api/login", payload)
+        assert_eq(resp.status_code, 200,
+                  f"the sign-in must succeed, got {resp.status_code}: "
+                  f"{opts.client.last_response.body}")
+        opts.client.access_token = resp.response.data.access_token
+        opts.client.is_authenticated = True
+
+    def _live_login_ips(path):
+        resp = opts.client.get(path)
+        assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}")
+        return {r.get("ip") for r in resp.json.get("data", [])
+                if r.get("kind") == "login"}
+
+    # --- attributed: visible owner-wide AND under its own brand -----------
+    _fresh_login({"group": opts.brand_a_id})
+    wide = _live_login_ips("/api/account/security-events?size=100")
+    scoped = _live_login_ips(
+        f"/api/account/security-events?group={opts.brand_a_id}&size=100")
+    assert_true("127.0.0.1" in wide,
+                f"a real sign-in must appear in the owner-wide feed: {sorted(wide)}")
+    assert_true("127.0.0.1" in scoped,
+                f"a sign-in attributed to a brand belongs on that brand's "
+                f"Security page: {sorted(scoped)}")
+    other = _live_login_ips(
+        f"/api/account/security-events?group={opts.brand_b_id}&size=100")
+    assert_true("127.0.0.1" not in other,
+                f"it must NOT appear under a different brand: {sorted(other)}")
+
+    # --- unattributed: owner-wide only (the settled visibility matrix) ----
+    _fresh_login({})
+    wide = _live_login_ips("/api/account/security-events?size=100")
+    scoped = _live_login_ips(
+        f"/api/account/security-events?group={opts.brand_a_id}&size=100")
+    opts.client.logout()
+    assert_true("127.0.0.1" in wide,
+                f"an unattributed sign-in is still the caller's own history: "
+                f"{sorted(wide)}")
+    assert_true("127.0.0.1" not in scoped,
+                f"a sign-in that carried no brand context stays in the owner-wide "
+                f"view only: {sorted(scoped)}")

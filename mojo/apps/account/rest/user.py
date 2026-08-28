@@ -801,6 +801,79 @@ def _check_verification_gate(user, source=None):
 # OTHER source (including future ones) is geofenced by default (fail-closed).
 GEOFENCE_EXEMPT_JWT_SOURCES = ("sessions_revoke", "email_change")
 
+# jwt_login sources that record NO sign-in row in the security history: an
+# authed re-issue of an existing session is not a new sign-in, and telling the
+# user "you signed in" because they revoked their sessions or confirmed an
+# email change would be a lie in their own audit trail.
+#
+# A SEPARATE tuple from GEOFENCE_EXEMPT_JWT_SOURCES on purpose, even though the
+# members match today. That one decides whether a geofence runs and is
+# fail-closed for every future source; this one decides whether history records
+# a sign-in. Aliasing them would let an addition HERE silently skip the
+# geofence there.
+#
+# `refresh` needs no entry: on_refresh_token mints directly and never calls
+# jwt_login, so a silent refresh is excluded structurally.
+LOGIN_EVENT_EXEMPT_JWT_SOURCES = ("sessions_revoke", "email_change")
+
+# Fixed, non-interpolated text for the two session rows. No username, email,
+# token, path or query string can reach a row built from these.
+SIGNIN_EVENT_CATEGORY = "login"
+SIGNIN_EVENT_TITLE = "Successful login"
+SIGNIN_EVENT_DETAILS = "A sign-in completed for this account."
+
+LOGOUT_EVENT_CATEGORY = "sessions:logout"
+LOGOUT_EVENT_TITLE = "Browser sign-out requested"
+LOGOUT_EVENT_DETAILS = (
+    "This browser reported signing out. Tokens already issued to other "
+    "devices are unaffected.")
+
+
+def _record_session_activity(request, user, category, title, details, group=None):
+    """One call shape for every sign-in / sign-out history row.
+
+    Delegates to _record_account_activity (defined with the other
+    account-activity helpers below), which is request-less and never raises —
+    an audit write must not be able to fail a login.
+
+    Always provenance="brand": the "account" marker is the email-change
+    exception's key (see on_account_security_events) and a session row must
+    never ride it.
+
+    Returns True when the row was written.
+    """
+    return _record_account_activity(
+        category, user.pk, title, details,
+        provenance="brand", group=group,
+        source_ip=getattr(request, "ip", None))
+
+
+def _attributable_login_group(request, user):
+    """The brand a SIGN-IN may legitimately be attributed to, or None.
+
+    The sibling of _attributable_group, keyed on the credential-VERIFIED user
+    instead of request.user: on a login POST the request identity is anonymous
+    (a fresh sign-in) or, worse, a stale foreign bearer left attached by the
+    client. Attribution must follow the subject the credentials proved.
+
+    The bar is an ACTIVE DIRECT membership (check_parents=False) of an
+    effectively-active group — the same bar group_token.can_mint uses.
+    request.group is already dispatcher-resolved through Group.get_active.
+
+    Fail-closed and never raising: anything unexpected means "no attribution",
+    which costs the row its brand placement and never the login itself.
+    """
+    try:
+        from mojo.apps.account.models import Group
+        group = getattr(request, "group", None)
+        if not isinstance(group, Group):
+            return None
+        member = group.get_member_for_user(
+            user, check_parents=False, is_active=True)
+        return group if member is not None else None
+    except Exception:
+        return None
+
 
 def forced_password_response(user):
     """Return only the short-lived credential needed to set a real password."""
@@ -896,6 +969,15 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
     except Exception:
         from mojo.helpers import logit
         logit.exception("Failed to record login event")
+    # The user-visible half: one minimal row in their own security history.
+    # Position is load-bearing — the geofence gate, requires_password_change
+    # and a raising mint all return above this point, so a blocked, forced-
+    # change or failed-mint login writes nothing.
+    if source not in LOGIN_EVENT_EXEMPT_JWT_SOURCES:
+        _record_session_activity(
+            request, user, SIGNIN_EVENT_CATEGORY, SIGNIN_EVENT_TITLE,
+            SIGNIN_EVENT_DETAILS,
+            group=_attributable_login_group(request, user))
     # USER_LOGIN_HANDLER — wrapped internally; runtime errors never block login
     account_extensions.fire_user_login(
         user=user, request=request, source=source, is_new_user=is_new_user)
@@ -951,6 +1033,13 @@ def group_token_login(request, user, group):
                              source=GROUP_TOKEN_HANDOFF_SOURCE)
     except Exception:
         logit.exception("Failed to record login event")
+
+    # This IS a sign-in, so it gets the same history row. `group` is the
+    # TRUSTED handoff context (the gid stamped at issuance), and mint() above
+    # already proved an active direct membership — no second check needed.
+    _record_session_activity(
+        request, user, SIGNIN_EVENT_CATEGORY, SIGNIN_EVENT_TITLE,
+        SIGNIN_EVENT_DETAILS, group=group)
 
     # NO webapp_url protected-metadata write, unlike jwt_login. `webapp_base_url`
     # and HTTP_ORIGIN on an exchange call come from the GATED destination's own
@@ -1416,6 +1505,9 @@ def _record_account_activity(category, uid, title, details, *, provenance,
     metrics and no longer reach rule handlers.
 
     Never raises: an audit write that fails must not fail a committed action.
+    Returns True when the row was written and False when it was not, for the
+    one caller that reports the outcome back to the client
+    (on_account_security_events_logout). Every other call site ignores it.
     """
     try:
         from mojo.apps.incident.reporter import record_event
@@ -1436,8 +1528,10 @@ def _record_account_activity(category, uid, title, details, *, provenance,
             source_ip=source_ip,
             group=group,
             **meta)
+        return True
     except Exception as e:
         logit.error("account_activity", f"failed to record {category}: {e}")
+        return False
 
 
 def _record_email_change_send_failure(request, user, sent):
@@ -2257,3 +2351,55 @@ def on_account_security_events(request):
 
     # Delegate to framework — handles date range, sorting, pagination, serialization
     return Event.on_rest_list(request, qs)
+
+
+@md.POST("account/security-events/logout")
+@md.denies_key_backed_session()
+@md.requires_auth()
+@md.strict_rate_limit("security_logout", ip_limit=30,
+                      muid_limit=10, muid_window=300)
+def on_account_security_events_logout(request):
+    """
+    Record that this browser signed out, so the sign-out appears in the user's
+    own security history.
+
+    AUDIT ONLY — deliberately not /auth/logout. It records history and nothing
+    else: it does NOT rotate auth_key, mint or revoke a token, update
+    last_login, or affect any other device. A JWT already copied elsewhere
+    keeps working; POST /api/auth/sessions/revoke is what invalidates sessions.
+    The client clears its own credentials regardless of what this returns.
+
+    Body is ignored except for an optional brand selection (`group` /
+    `group_uuid`, consumed by the dispatcher). A caller-supplied `uid`,
+    `category`, `title`, `details` or `source_ip` is never read.
+
+    Response is always 200 {"status": true, "data": {"recorded": <bool>}}.
+    `recorded: false` means no row was written — an unusable brand selection,
+    or a best-effort write that failed. A telemetry write must never look like
+    a failed sign-out.
+
+    Not geofenced and not fresh-auth gated: a user in a blocked geo must still
+    be able to sign out of their browser.
+    """
+    from mojo.helpers.request import is_request_user
+
+    # A custom AUTH_BEARER_HANDLERS identity is authenticated and not
+    # key-backed, so the decorators alone do not settle "is this a real User".
+    if not is_request_user(request):
+        return JsonResponse({"status": True, "data": {"recorded": False}})
+
+    named = bool(request.DATA.get("group") or request.DATA.get("group_uuid"))
+    group = _attributable_login_group(request, request.user)
+    if named and group is None:
+        # A brand was named that we cannot attribute — a deactivated group, a
+        # removed membership, or a group the caller never belonged to. Record
+        # nothing and say so. Raising PermissionDenied here would file a
+        # published user_permission_denied event on every sign-out after
+        # routine membership churn; the contract is only that an invalid
+        # selection creates no event.
+        return JsonResponse({"status": True, "data": {"recorded": False}})
+
+    recorded = _record_session_activity(
+        request, request.user, LOGOUT_EVENT_CATEGORY, LOGOUT_EVENT_TITLE,
+        LOGOUT_EVENT_DETAILS, group=group)
+    return JsonResponse({"status": True, "data": {"recorded": bool(recorded)}})

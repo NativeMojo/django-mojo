@@ -179,6 +179,7 @@ class Event(models.Model, MojoModel):
         "account:deactivate_requested": "Account deactivation requested",
         "sessions:revoked": "All sessions revoked",
         "sessions:revoke_failed": "Session revoke — incorrect password",
+        "sessions:logout": "Browser sign-out requested",
     }
 
     @property

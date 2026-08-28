@@ -93,8 +93,11 @@ def test_blocked_geo_invalid_creds_401(opts):
 def test_blocked_geo_valid_creds_403_no_side_effects(opts):
     from mojo.apps.account.models import User
     from mojo.apps.account.models.login_event import UserLoginEvent
+    from mojo.apps.incident.models import Event as IncidentEvent
 
     _clear_evt("datacenter_detected")
+    security_rows_before = IncidentEvent.objects.filter(
+        uid=opts.plain_user_id, category="login").count()
     resp = _login(opts, opts.plain_email, opts.password,
                   geo=GEO_DATACENTER, system_rules={"abuse": {"datacenter": False}})
     assert resp.status_code == 403, \
@@ -108,6 +111,14 @@ def test_blocked_geo_valid_creds_403_no_side_effects(opts):
         f"blocked login must NOT stamp last_login, got {user.last_login!r}"
     assert UserLoginEvent.objects.filter(user=user).count() == 0, \
         "blocked login must NOT record a UserLoginEvent"
+    # ...nor a security-history sign-in row (#3329). The geofence gate returns
+    # from jwt_login above the recorder, so a blocked login must leave the
+    # user's own Security page untouched.
+    security_rows_after = IncidentEvent.objects.filter(
+        uid=opts.plain_user_id, category="login").count()
+    assert security_rows_after == security_rows_before, \
+        (f"blocked login must NOT write a security-history login row "
+         f"({security_rows_before} -> {security_rows_after})")
 
     # Evidence: the block event carries the credential-verified user (DM-043).
     from mojo.apps.incident.models import Event

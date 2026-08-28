@@ -570,6 +570,7 @@ def test_block1_enforce(opts):
     from mojo.apps.account.models import User, Group
     from mojo.apps.account.models.member import GroupMember
     from mojo.apps.account.models.login_event import UserLoginEvent
+    from mojo.apps.incident.models import Event as IncidentEvent
     from tests.test_register import _capture
 
     source = "handoff:grouptoken"
@@ -611,6 +612,11 @@ def test_block1_enforce(opts):
         opts.client.logout()
 
         # --- the group package ----------------------------------------------
+        # #3329: a gated exchange IS a sign-in, so it must also leave one
+        # security-history row attributed to the destination's group. Cleared
+        # first — the member login above wrote an unattributed one of its own.
+        IncidentEvent.objects.filter(
+            uid=opts.member_id, category="login").delete()
         resp = opts.client.post("/api/auth/exchange", {"code": code_gated})
         assert_eq(resp.status_code, 200,
                   f"a gated exchange should succeed for a member, got "
@@ -635,6 +641,18 @@ def test_block1_enforce(opts):
         assert_eq(group.get("name"), "hgt_tenant_a", f"wrong group name: {group!r}")
         assert_eq((data.get("user") or {}).get("id"), opts.member_id,
                   f"the package must identify the signed-in visitor: {data.get('user')!r}")
+
+        rows = list(IncidentEvent.objects.filter(
+            uid=opts.member_id, category="login"))
+        assert_eq(len(rows), 1,
+                  f"a gated exchange must write exactly ONE security-history "
+                  f"sign-in row, got {len(rows)}")
+        assert_eq(rows[0].group_id, opts.group_a_id,
+                  f"the row must be attributed to the destination's group — the "
+                  f"trusted handoff context, whose membership mint() already "
+                  f"proved. Got {rows[0].group_id!r}")
+        assert_eq(rows[0].metadata.get("origin_group_id"), opts.group_a_id,
+                  f"the brand marker must name the group: {rows[0].metadata}")
 
         # --- the token actually works, and buys nothing more ----------------
         me = opts.client.get("/api/user/me",
@@ -735,6 +753,8 @@ def test_block1_enforce(opts):
         _capture.clear_capture(capture_id)
 
         # --- the group goes dark between mint and exchange -------------------
+        signin_rows_before = IncidentEvent.objects.filter(
+            uid=opts.member_id, category="login").count()
         Group.objects.filter(pk=opts.group_a_id).update(is_active=False)
         try:
             resp = opts.client.post("/api/auth/exchange", {"code": code_deact})
@@ -744,6 +764,12 @@ def test_block1_enforce(opts):
             assert_false("access_token" in _data(resp),
                          f"a refused gated exchange must never fall back to a "
                          f"JWT: {resp.response}")
+            signin_rows_after = IncidentEvent.objects.filter(
+                uid=opts.member_id, category="login").count()
+            assert_eq(signin_rows_after, signin_rows_before,
+                      f"#3329: a failed mint raises above the recorder, so a "
+                      f"refused gated exchange must leave NO security-history "
+                      f"sign-in row ({signin_rows_before} -> {signin_rows_after})")
         finally:
             Group.objects.filter(pk=opts.group_a_id).update(is_active=True)
 
