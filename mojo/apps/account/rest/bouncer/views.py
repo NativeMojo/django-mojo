@@ -86,7 +86,15 @@ def on_login_page(request):
     """
     Server-side bot gate. Serves challenge page, full login, or decoy based
     on pre-screen results and pass cookie.
+
+    Ahead of all of that: an `ev:`/`ec:`/`dv:` token arriving here belongs to a
+    confirmation landing, not to a login form (#3257). Those links are already
+    in inboxes, and a deployment may still build `/auth?flow=…&token=…` URLs.
+    The hand-off has to happen SERVER-side and before any bouncer work — the
+    challenge page stashes only `pr:` tokens, so a cold visitor's token would
+    otherwise be destroyed before any client-side handler could see it.
     """
+    from mojo.apps.account.services import token_landing
     from mojo.apps.account.services.bouncer.learner import check_signature_cache
     from mojo.apps.account.services.bouncer.environment import EnvironmentService
     from mojo.apps.account.services.bouncer.scoring import RiskScorer, ScoringContext
@@ -94,6 +102,10 @@ def on_login_page(request):
     if DISABLE_LOGIN:
         from django.http import Http404
         raise Http404("Page not found")
+
+    landing = token_landing.landing_redirect(request)
+    if landing is not None:
+        return landing
 
     group = _resolve_group(request)
     ua = request.user_agent
