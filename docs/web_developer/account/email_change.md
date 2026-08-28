@@ -49,8 +49,26 @@ Requires authentication (Bearer token). Rate limited.
 | `email` is the same as the current address | 400 | `"error": "New email must be different from current email"` |
 | `email` is already in use by another account | 400 | `"error": "Email already in use"` |
 | Feature disabled via `ALLOW_EMAIL_CHANGE` | 403 | `"error": "Email change is not allowed"` |
+| The email provider did not accept the confirmation message | 503 | `"error": "Unable to send the email right now. Please try again in a few minutes."` |
 
-In both cases, a **notification** is sent to the **old** address informing the real owner so they can react if the request was not made by them. Nothing is committed yet.
+A **notification** is sent to the **old** address informing the real owner so they can react if the request was not made by them — but only after the confirmation message was accepted, and only when the account has an old address (a first-email account has none). Nothing is committed yet.
+
+### When the email could not be sent
+
+```json
+{
+  "status": false,
+  "code": 503,
+  "error": "Unable to send the email right now. Please try again in a few minutes."
+}
+```
+
+- **It is retryable, and the pending change survives it.** The stored pending address and the link token / OTP are untouched, so calling `/request` again resumes the same change. Show the message and offer a retry.
+- **The error text is fixed.** It never carries provider detail, so do not parse it for a cause — there is nothing behind it to read.
+- **Mind the budget.** The request endpoint allows 5 attempts per hour per IP and failures count, so back off rather than retrying in a tight loop.
+- **Deployments running the legacy `MOJO_APP_STATUS_200_ON_ERROR` shim** receive the same body over HTTP 200 with `"code": 503` inside it — read `status`/`code` from the body, exactly as for any other error on those deployments.
+
+> **A 200 means the provider accepted the message, not that it arrived.** The address can still bounce afterwards. "We sent it" is the strongest honest claim the endpoint can make at request time, so word your success copy that way.
 
 **Response (link flow):**
 

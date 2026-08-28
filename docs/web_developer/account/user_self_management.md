@@ -1319,6 +1319,33 @@ Authorization: Bearer <access_token>
 | `size` | 25 | Max results; hard cap 100 |
 | `dr_start` | — | ISO date range start (inclusive) |
 | `dr_end` | — | ISO date range end (inclusive) |
+| `group` | — | Scope the feed to one brand (group id). See below |
+| `group_uuid` | — | Same, by group UUID |
+
+### Brand scoping
+
+Passing `group` or `group_uuid` narrows the feed to one brand. The visibility
+matrix is:
+
+| Row | No `group` | With `group=<brand>` |
+|---|---|---|
+| Your rows attributed to that brand | shown | **shown** |
+| Your rows attributed to another brand | shown | hidden |
+| Your account-global email-change rows (today: `email_change:confirmed`) | shown | **shown** — the address moved for the whole account |
+| Your rows with no brand attribution (a request that carried no brand context) | shown | hidden |
+| Rows written before brand markers existed | shown | hidden |
+| Anyone else's rows | never | never |
+
+Notes:
+
+- **With no `group`, nothing changes** — the feed is owner-wide exactly as before.
+- **Send the brand context on the originating request** if you want request-time
+  rows (`email_change:requested`, `email_change:send_failed`) to appear on a
+  brand page. A row can only be attributed to a brand the user is an active
+  direct member of; without that it is filed unattributed and appears in the
+  owner-wide view only.
+- A row whose brand was later deleted does **not** become account-global; it
+  stays out of every brand-scoped view.
 
 ### Response
 
@@ -1363,6 +1390,9 @@ build icons, colours, or groupings in your UI.
 | `totp:recovery_used` | TOTP recovery code used |
 | `email_change:requested` | Email change requested |
 | `email_change:requested_code` | Email change requested (code flow) |
+| `email_change:confirmed` | Email address changed |
+| `email_change:send_failed` | Email change — confirmation message was not accepted for delivery |
+| `email_change:notice_failed` | Email change — notice to the previous address was not accepted for delivery |
 | `email_change:cancelled` | Email change cancelled |
 | `email_change:invalid` | Email change — invalid token |
 | `email_change:expired` | Email change — expired token |
@@ -1526,6 +1556,9 @@ GET /api/logs?uid=<me>&kind__startswith=login
 | `email_verify:confirmed` | Email address was verified |
 | `email_verify:confirmed_code` | Email verified via OTP code |
 | `email_change:requested` | Email change was requested |
+| `email_change:confirmed` | Email address was changed and verified |
+| `email_change:send_failed` | The confirmation message was not accepted for delivery |
+| `email_change:notice_failed` | The notice to the previous address was not accepted for delivery |
 | `email_change:cancelled` | Pending email change was cancelled |
 | `phone:changed` | Phone number was changed |
 | `phone_verify:confirmed` | Phone number was verified |

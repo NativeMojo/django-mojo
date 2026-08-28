@@ -72,7 +72,7 @@ Both `verify_email_change_token` and `verify_email_change_otp` raise `merrors.Va
 
 | Endpoint | Auth | What it does |
 |---|---|---|
-| `POST /api/auth/email/change/request` | Bearer token required | Validates password + new email; sends link or OTP depending on `method`; always notifies old address |
+| `POST /api/auth/email/change/request` | Bearer token required | Validates password + new email; sends link or OTP depending on `method`; notifies the old address **after** the provider accepted the confirmation |
 | `POST /api/auth/email/change/confirm` | None (token path) / Bearer token required (code path) | Commits the new email, rotates `auth_key`, returns fresh JWT |
 | `GET /api/auth/email/change/confirm` | None | Browser link-click handler; renders `account/email_change_confirm.html` |
 | `POST /api/auth/email/change/cancel` | Bearer token required | Invalidates any outstanding token **and** OTP immediately |
@@ -86,7 +86,141 @@ The `method` field in the request body controls which confirmation path is used:
 | `"link"` (default, or omitted) | Generates an `ec:` token, sends `email_change_confirm` template to new address |
 | `"code"` | Generates a 6-digit OTP, sends `email_change_code` template to new address |
 
-In both cases the `email_change_notify` template is sent to the old address.
+In both cases the `email_change_notify` template is sent to the old address —
+but only after the confirmation message was accepted, and only when the account
+has an old address to tell (see below).
+
+---
+
+## Send Truthfulness — What a 200 Means
+
+`POST /api/auth/email/change/request` used to answer 200 unconditionally: both
+send helpers discarded the transport result, so a message SES refused produced
+the same cheerful "check your inbox" as one it accepted, plus an
+`email_change:requested` line in the account's history that never happened.
+
+Both helpers now **return** the transport result, and the endpoint judges it
+with the shared acceptance rule:
+
+```python
+from mojo.apps.account.services import email_delivery
+
+sent = _send_email_change_confirm(request, user, new_email, token, send=send)
+if not email_delivery.was_accepted(sent):
+    _record_email_change_send_failure(request, user, sent)
+    return email_delivery.send_unavailable_response()
+```
+
+| Helper | Signature | Returns |
+|---|---|---|
+| `_send_email_change_confirm` | `(request, user, new_email, token, *, send=None)` | the `SentMessage`, or `None` |
+| `_send_email_change_code` | `(user, new_email, otp, *, send=None)` | the `SentMessage`, or `None` |
+| `_notify_old_email_change_address` | `(request, user, new_email, *, send=None)` | nothing — best effort |
+
+`email_delivery.was_accepted(sent)` (owned by
+`mojo/apps/account/services/email_delivery.py`) is True only for a non-`None`
+result whose `status` is `sending`/`delivered` **and** which carries a nonempty
+`ses_message_id`. A truthy `SentMessage` is not proof of a send: a refused
+message is persisted with `status="failed"`, no id, and the provider's error
+text in `status_reason`.
+
+`email_delivery.send_unavailable_response()` is the one failure answer — HTTP
+503 with the fixed body `{"status": false, "code": 503, "error": ...}`. It is
+**returned, not raised**: raising would make `dispatch_error_handler` file a
+second, raw `mojo_rest_error` event carrying the request body, a stack trace
+and an unverified `request.group` stamp — exactly the duplicate raw/safe pair
+this flow exists to remove. `MOJO_APP_STATUS_200_ON_ERROR` is honored inside
+that helper.
+
+**No provider text ever reaches the client or the activity row.** The refusal
+reason survives on the `SentMessage` row (admin-gated) and in `email.log`. The
+raw `email:send_failed` incident the two send helpers used to file is gone;
+they log through `logit.error("email_change", ...)` and return `None` instead.
+`email:no_mailbox` is **kept** — it is an operator signal about deployment
+configuration, carries no provider text, and never surfaces in the
+self-service feed.
+
+**Nothing is cleaned up on failure.** `pending_email` and the `ec:` JTI / OTP
+stay exactly as generated, so a retry resumes the same change instead of
+racing a confirmation the provider may still be processing.
+
+**The 5/hour IP budget still counts failures.**
+`@md.strict_rate_limit("email_change_request", ip_limit=5, ip_window=3600)`
+runs before the view, so an honest 503 invites retries that can exhaust it.
+That is accepted: the failure copy asks for "a few minutes", and exempting
+failures from the counter would open a free probe channel on an endpoint that
+takes a password.
+
+**The `send=` / `notify_send=` seams are test-only.** The dispatcher never
+passes them; they exist because a test project with no mailbox can never reach
+the accepted path over HTTP.
+
+---
+
+## Account Activity Rows
+
+The email-change flow writes its own audit rows through one private helper in
+`mojo/apps/account/rest/user.py`:
+
+```python
+_record_account_activity(category, uid, title, details, *, provenance,
+                         group=None, source_ip=None, level=1, **metadata)
+```
+
+| Aspect | Behaviour |
+|---|---|
+| `provenance="account"` | genuinely account-wide. `group` is forced to `None`; `metadata.security_activity_scope = "account"` |
+| `provenance="brand"` | originated inside one brand context. `metadata.security_activity_scope = "brand"`; `metadata.origin_group_id` carries the group id when attribution succeeded, and is absent when it did not |
+| `Event.scope` | always `"account"` — `provenance` selects the metadata marker only, and never touches the indexed column the RuleSet engine looks up |
+| Request | always `request=None`, so the caller's explicit `uid` / `source_ip` / `group` are never overwritten by an ambient request identity |
+| Failure | swallowed and logged — an audit write must never fail an action that already committed |
+
+It calls `incident.record_event`, not `report_event`: no `RuleSet` traversal on
+the request path. Two consequences are deliberate and declared — these
+categories no longer increment `record_event_metrics()` counters, and no
+deployment rule keyed on the `"account"` scope (or a `"*"` catch-all) sees
+them. No shipped ruleset matches `email_change:*`, so the loss is
+deployment-specific.
+
+`Event.group` uses `SET_NULL`, so a null FK alone is **never** proof of account
+origin. The explicit marker is what a reader may trust.
+
+**`_attributable_group(request)`** decides whether a row may be attributed to a
+brand at all. The dispatcher sets `request.group` from a caller-supplied
+`?group=` / `?group_uuid=` with no membership check, so attribution requires an
+**active direct membership** (`get_member_for_user(user, check_parents=False,
+is_active=True)`, which also refuses a group under a deactivated ancestor).
+Anything unexpected returns `None` — the row loses its brand placement and
+nothing else.
+
+### Categories this flow writes
+
+| Category | Provenance | When |
+|---|---|---|
+| `email_change:requested` | brand | link confirmation accepted by the provider |
+| `email_change:requested_code` | brand | code confirmation accepted by the provider |
+| `email_change:send_failed` | brand | confirmation was not accepted; `metadata.failure_class` is `not_sent` (nothing came back) or `not_accepted` (a result came back that was not accepted) |
+| `email_change:notice_failed` | brand | the notice to the previous address was not accepted; never changes the request's own outcome |
+| `email_change:confirmed` | **account** | the address actually moved (POST confirm) |
+
+`email_change:confirmed` records the **token's verified subject** (`user.pk`),
+not `request.user` — the link path may carry no session at all, or a different
+signed-in user.
+
+**Scope of the privacy promise.** This is a targeted projection over the new
+rows, not framework-wide redaction. `email_change:bad_password`,
+`email_change:cancelled` and the token/OTP diagnostics keep the context they
+have always carried.
+
+### `_notify_old_email_change_address`
+
+- Returns immediately when the account has no old address — a first-email
+  account used to hand `""` to the mailbox, which raised and filed a raw event.
+- Calls `user.send_template_email(..., fail_silently=False)` deliberately: the
+  forgiving default files its own raw `email:send_failed` with provider text.
+  The failure is caught here and reported once, safely.
+- Runs **after** acceptance and after the `requested`/`requested_code` row, and
+  never re-raises.
 
 ### Confirm — routing logic
 
@@ -183,6 +317,11 @@ if str(user.username).lower() == old_email.lower():
 
 user.refresh_from_db()
 user.log(kind="email:changed", log=f"{old_email} to {new_email}")
+_record_account_activity(
+    "email_change:confirmed", user.pk,
+    "Email address changed",
+    "The account email address was changed and verified.",
+    provenance="account", source_ip=getattr(request, "ip", None))
 _send_account_realtime_event(user, "account:email:changed", {"email": new_email})
 ```
 
@@ -192,6 +331,7 @@ Key points:
 - **`auth_key` rotation** immediately invalidates every JWT signed with the old key — including any attacker session that may have triggered the flow. This applies to both the link path and the code path.
 - **`username` sync** only occurs when `user.username` was equal to the old `user.email` at the time of confirm. Accounts that use a separate username are not affected.
 - **`user.log`** writes an audit record queryable via the standard incident/audit log.
+- **`email_change:confirmed`** is the one account-activity row this flow writes with `provenance="account"` — the address moved for the whole account, so it stays visible under every brand in the self-service feed. Only the POST handler writes it; the GET landing page is documented separately.
 - **Realtime event** `account:email:changed` is emitted to all of the user's active WebSocket connections after every successful confirm path.
 
 After the update, the confirm endpoint issues a new JWT signed against the rotated `auth_key` and returns it as a standard login response. The client must replace its stored tokens with the new ones.
