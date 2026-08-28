@@ -301,6 +301,8 @@ POST /api/auth/verify/email/send
 { "method": "code" }
 ```
 
+A **503** here means the provider did not accept the message (`{"status": false, "code": 503, "error": "Unable to send the email right now. Please try again in a few minutes."}`) — show a Retry button rather than "check your email".
+
 **Step 2: Confirm**
 
 ```json
@@ -326,6 +328,8 @@ POST /api/auth/verify/email/send
 ```
 
 (No body, or `{ "method": "link" }`)
+
+Same failure contract as the code flow: **503** with the fixed safe-retry body when the provider did not accept the message, **400** when the account has no email address at all.
 
 **Step 2: User clicks the link**
 

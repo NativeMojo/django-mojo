@@ -226,6 +226,14 @@ curl -X POST \
 
 The email contains a link to `/api/auth/verify/email/confirm?token=ev:<token>`.
 
+If the email provider did not accept the message (no mailbox configured, provider refusal or outage) the endpoint returns **HTTP 503** with a fixed, safe retry message instead of a false success — offer a Retry button:
+
+```json
+{"status": false, "code": 503, "error": "Unable to send the email right now. Please try again in a few minutes."}
+```
+
+An account with no email address on file gets **HTTP 400** (`No email address on account`) — retrying will not help. See [email_verification.md](email_verification.md) for the full contract.
+
 ---
 
 ### Confirm Email

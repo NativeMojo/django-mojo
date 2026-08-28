@@ -91,7 +91,38 @@ If the email address is already verified, no message is sent regardless of `meth
 }
 ```
 
-> **Note:** There is also a public (unauthenticated) endpoint at `POST /api/auth/email/verify/send` that accepts a `username` or `email` field and always returns 200 regardless of account existence (prevents enumeration). That endpoint is intended for post-registration nudges and does not support the `method` parameter — it always sends a link.
+**A 200 means the email provider accepted the message — not that it landed in the inbox.** The message can still bounce or be rejected by the recipient's mail server afterwards; that is reported later, not on this call.
+
+#### Failure response
+
+If the provider did **not** accept the message — no sending mailbox is configured, the provider refused it, or the provider is unreachable — the endpoint says so instead of claiming success:
+
+```
+HTTP 503
+```
+
+```json
+{
+  "status": false,
+  "code": 503,
+  "error": "Unable to send the email right now. Please try again in a few minutes."
+}
+```
+
+The message is fixed: no provider error text is ever exposed. Offer the user a **Retry** button rather than telling them to check their inbox. The verification token or code is still generated and stored, so a retry is safe — it simply rotates it.
+
+Retries share this endpoint's rate limit of **5 requests per 300 seconds per IP**, which the public resend endpoint below also draws from, so keep the retry manual (a button) rather than automatic. The "few minutes" in the copy matches that window.
+
+Two other error cases:
+
+| Status | `error` | Meaning |
+|---|---|---|
+| 400 | `No email address on account` | The account has no email address (e.g. registered by phone only). Retrying will never help — collect an address first. |
+| 401 / 403 | — | Not authenticated. |
+
+> **Note:** There is also a public (unauthenticated) endpoint at `POST /api/auth/email/verify/send` that accepts a `username` or `email` field and always returns 200 regardless of account existence (prevents enumeration) — including when the send fails, since any other answer would be an enumeration oracle. That endpoint is intended for post-registration nudges and does not support the `method` parameter — it always sends a link.
+
+> **Deployments running the legacy `MOJO_APP_STATUS_200_ON_ERROR` shim** receive the same body over HTTP 200, with `"code": 503` inside it — read `status`/`code` from the body, exactly as for any other error on those deployments.
 
 ---
 

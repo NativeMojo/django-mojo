@@ -334,6 +334,8 @@ GET  /api/auth/verify/email/confirm  → public, token in query string (click-th
 
 `is_email_verified` is set to `True` on confirm. Both endpoints require the user to be authenticated except the confirm link which is public so it works directly from an email client.
 
+The send endpoint returns **503** with a fixed safe-retry body when the email provider did not accept the message (no mailbox configured, provider refusal or outage) rather than a false success, and **400** when the account has no email address at all. Acceptance is classified by `mojo.apps.account.services.email_delivery.was_accepted()` — see [email/sending.md](../email/sending.md#knowing-whether-a-send-was-accepted). The token or code is still generated on the failure path; it is single-use and TTL-bounded, and the next request rotates it.
+
 ### Auto-Verify via Invite
 
 When a user accepts an invite link (`POST /api/auth/password/reset/token`) and `last_login is None` (i.e. they have never logged in — this is their first access), `is_email_verified` is set automatically. The act of receiving and clicking the invite link is sufficient proof of email ownership.

@@ -199,6 +199,60 @@ user.send_template_email(
 
 ---
 
+## Knowing whether a send was accepted
+
+`User.send_template_email()` defaults to `fail_silently=True` so a send can
+never 500 an endpoint. The cost is that the return value is the *only* signal,
+and there are three distinct ways a send fails while the call looks fine:
+
+| What happened | What you get back | Incident filed |
+|---|---|---|
+| No mailbox for the user's org and no system default | `None` | `email:no_mailbox` (level 6) |
+| The provider call raised | `None` | `email:send_failed` (level 6) |
+| **The provider refused the message** | a **`SentMessage`** with `status="failed"`, no `ses_message_id`, provider text in `status_reason` | none — the row and `email.log` are the record |
+
+That third row is the trap: the refusal path *persists and returns* a
+`SentMessage`, so `if not sent:` reports a refused send as a success.
+
+Route the result through the shared classifier instead:
+
+```python
+from mojo.apps.account.services import email_delivery
+
+sent = user.send_template_email("email_verify_code", context=dict(code=code))
+if not email_delivery.was_accepted(sent):
+    return email_delivery.send_unavailable_response()
+```
+
+- **`was_accepted(sent)`** — True only when the result is not `None`, its
+  `status` is in `ACCEPTED_STATES` (`"sending"`, `"delivered"`), and it carries
+  a truthy `ses_message_id`. Duck-typed and never raises.
+- **`send_unavailable_response()`** — an HTTP 503 `JsonResponse` carrying the
+  fixed body `{"status": false, "code": 503, "error": <safe retry copy>}`.
+  Return it directly; do not raise. Raising would file a second, raw
+  `mojo_rest_error` event with the request body and a stack trace on top of the
+  incident the send already filed. It honors `MOJO_APP_STATUS_200_ON_ERROR` the
+  same way the dispatcher does.
+- **`ACCEPTED_STATES`** / **`EMAIL_SEND_UNAVAILABLE`** — the state tuple and the
+  one client-visible message. Provider error text (`status_reason`) must never
+  reach a client.
+
+**Any endpoint that tells a person "we sent it" must route its result through
+this.** Callers that only need best-effort delivery (background nudges,
+notifications) can keep ignoring the result.
+
+Two caveats:
+
+- **Acceptance is provider custody, not inbox delivery.** True means SES took
+  the message and returned an id. Bounces and rejections arrive later over SNS
+  and update the `SentMessage` row.
+- **Do not use it for a `kind=`-tagged send.** A `kind` send returns `None`
+  when the user's notification preferences suppress it — a successful outcome
+  that must not be reported as a delivery failure. System and transactional
+  email does not pass `kind`, which is exactly the traffic this is for.
+
+---
+
 ## Async Sending
 
 For high-volume or non-blocking sends, route through the jobs system:
