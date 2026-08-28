@@ -1324,13 +1324,27 @@ database template when a deployment needs different branding or routing.
 ## 15. Security Events
 
 A lightweight, user-scoped feed of auth-relevant audit events. No special
-permission required — a user can only see their own events. Useful for a
-"Recent security activity" card on a settings or dashboard page.
+permission required — a user can only see their own events, and history is
+private to the authenticated user. Useful for a "Recent security activity" card
+on a settings or dashboard page.
 
 ```
 GET /api/account/security-events
 Authorization: Bearer <access_token>
 ```
+
+**Sign-ins appear here.** Every real authentication — password, magic link,
+OAuth, passkey, MFA finish, invite, forced-password, and the group-token
+handoff exchange — writes one `login` row for the account whose credentials
+were verified. Denied and re-issued paths write nothing: a bad password, a
+geofence block, an unfinished MFA challenge, a silent token refresh, the JWT
+re-issued by `POST /api/auth/sessions/revoke`, and the one re-issued by an
+email-change confirmation all leave the feed unchanged.
+
+A `login` row is attributed to a brand only when the sign-in request carried
+that brand's context (`group` / `group_uuid`) **and** the verified user is an
+active direct member of it. Naming a brand the user does not belong to never
+fails the sign-in — the row is simply filed unattributed.
 
 ### Query parameters
 
@@ -1428,6 +1442,7 @@ build icons, colours, or groupings in your UI.
 | `account:deactivated` | Account deactivated |
 | `account:deactivate_requested` | Account deactivation requested |
 | `sessions:revoked` | All sessions revoked |
+| `sessions:logout` | Browser sign-out requested |
 
 Unknown `kind` values fall back to the `kind` string itself as the summary
 (forward-compatible — new event types work without a client update).
@@ -1436,8 +1451,51 @@ Unknown `kind` values fall back to the `kind` string itself as the summary
 
 - **Red / warning** — `invalid_password`, `totp:login_failed`, `passkey:login_failed`
 - **Green / success** — `login`, `oauth`, `email_verify:confirmed`, `phone_verify:confirmed`
-- **Neutral / info** — everything else (changes, requests, resets)
+- **Neutral / info** — everything else (changes, requests, resets), including
+  `sessions:logout`
 - Show `ip` with a "not you?" prompt linking to the session revoke flow
+
+### Record a browser sign-out
+
+```
+POST /api/account/security-events/logout
+Authorization: Bearer <access_token>
+```
+
+Optional body: `group` or `group_uuid`, to attribute the row to one brand.
+Nothing else in the body is read — a `uid`, `category`, `title`, `details` or
+`source_ip` you send is ignored.
+
+```json
+{ "status": true, "data": { "recorded": true } }
+```
+
+**This is audit only — it is not a logout.** It writes one `sessions:logout`
+row to the caller's own history and does nothing else. It does **not**:
+
+- revoke or invalidate any token, on this device or another one
+- rotate `auth_key`
+- update `last_login`
+- end a session anywhere
+
+A JWT already copied elsewhere keeps working. To actually invalidate other
+sessions, use `POST /api/auth/sessions/revoke`.
+
+**Clear your own credentials regardless of the response.** The local sign-out
+must never depend on this call succeeding — fire it, then clear storage.
+
+The response is always `200`. `recorded: false` means no row was written:
+either the named brand is unusable (deactivated, or the user is not an active
+direct member of it) or the best-effort write failed. Neither is a failed
+sign-out, and neither files a permission-denied event.
+
+Accepted credentials: a current JWT session, and an OAuth grant holding the
+`api` scope (the same equivalence every `Bearer` endpoint gives it). Refused:
+an ApiKey (`Authorization: apikey …`) and a confined `GroupScopedToken`
+(`Authorization: grouptoken …`) — both are bearer secrets held by software, not
+a browser signing out. Unauthenticated calls are refused.
+
+Rate limited per IP (30/min) and per browser (10 per 5 minutes).
 
 ---
 
@@ -1729,6 +1787,7 @@ Refresh the user profile to pick up the updated `is_email_verified` or
 | Request account deactivation | POST | `/api/account/deactivate` | Required |
 | Confirm account deactivation | POST | `/api/account/deactivate/confirm` | Public |
 | View security events | GET | `/api/account/security-events` | Required |
+| Record a browser sign-out (audit only) | POST | `/api/account/security-events/logout` | Required |
 | List own files | GET | `/api/fileman/file` | Required |
 | Delete own file | DELETE | `/api/fileman/file/<id>` | Required |
 | Upload encrypted file | POST | `/api/filevault/file/upload` | Required |

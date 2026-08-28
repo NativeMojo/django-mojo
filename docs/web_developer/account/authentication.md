@@ -400,6 +400,25 @@ that library actually uses — `access_token`, `refresh_token`, `token_type` and
 [group-scoped token](#group-scoped-tokens-grouptoken); a stale marker or
 deadline left behind outlives the session it described.
 
+### Optional: make the sign-out show up in security history
+
+Clearing local storage leaves no server-side record, so an ordinary sign-out
+never appears on the user's Security page. A client may report it:
+
+```
+POST /api/account/security-events/logout
+Authorization: Bearer <access_token>
+```
+
+**This is a record, not a revocation.** It writes one `sessions:logout` row and
+nothing else — no token is invalidated, `auth_key` is not rotated, and no other
+device is affected. Use `POST /api/auth/sessions/revoke` when you actually need
+to invalidate other sessions.
+
+Fire it *before* clearing storage (it needs the token), ignore the result, and
+clear regardless — the local sign-out must never depend on the call succeeding.
+See [User Self-Management § Record a browser sign-out](user_self_management.md#record-a-browser-sign-out).
+
 ## Security Notes
 
 - Do not store `mfa_token` long-term; it is short-lived and only for MFA completion.
@@ -410,6 +429,8 @@ deadline left behind outlives the session it described.
 - **Revoke all sessions:** `POST /api/auth/sessions/revoke` rotates `auth_key`, immediately invalidating every outstanding JWT. No `current_password` required — ownership is the authenticated session; when `FRESH_AUTH_WINDOW` is enabled a recent login is required instead (see [Step-Up Auth](step_up_auth.md)). Returns a fresh JWT for the calling session so the user stays logged in. See [User Self-Management § Sessions & Devices](user_self_management.md#8-sessions--devices).
 - **Email change also rotates `auth_key`** — after a successful email change confirm, all other sessions are invalidated as a side effect.
 - **Security events feed:** `GET /api/account/security-events` returns auth-relevant audit events (logins, failed passwords, MFA events, email/phone changes, session revokes, etc.) scoped to the authenticated user. No special permission required. See [User Self-Management § Security Events](user_self_management.md#15-security-events).
+- **`login`** — written for every real authentication, for the account whose credentials were verified. A blocked, unfinished or refused attempt writes nothing, and neither does a silent refresh or a re-issue from session revoke / email change.
+- **`sessions:logout`** — written only when a client posts `/api/account/security-events/logout`. It is a note in the history, not a revocation.
 
 ## Get Current User
 

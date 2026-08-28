@@ -90,6 +90,98 @@ event = UserLoginEvent.track(request, user, device=request.device, source="custo
 
 ---
 
+## The user-visible half: `incident.Event` sign-in rows
+
+`UserLoginEvent` is the operator's log — it is gated behind `manage_users` /
+`security` / `users` and the end user never sees it. The user's own Security
+page (`GET /api/account/security-events`) reads `incident.Event` instead, so
+`jwt_login()` and `group_token_login()` write a second, minimal row there
+alongside the `UserLoginEvent`.
+
+**Where it is written.** In `jwt_login` (`mojo/apps/account/rest/user.py`),
+immediately after the `UserLoginEvent.track()` try/except and before
+`fire_user_login`. The position is load-bearing: the post-credential geofence
+gate, `requires_password_change`, and a raising `group_token.mint` all return
+above it, so a blocked, forced-change or failed-mint login writes nothing.
+
+**The row.** Fixed, non-interpolated text — no username, email, token, path or
+query string can reach it:
+
+| | |
+|---|---|
+| `category` | `login` (`SIGNIN_EVENT_CATEGORY`) |
+| `title` | `Successful login` |
+| `details` | `A sign-in completed for this account.` |
+| `level` | 1 |
+| `scope` | `account` |
+| `source_ip` | `request.ip` (may be `None`) |
+
+`sessions:logout` (`Browser sign-out requested`) is the same shape, written only
+by `POST /api/account/security-events/logout` — an audit-only endpoint that
+records history and has no session side effects at all.
+
+### Exempt sources
+
+```python
+LOGIN_EVENT_EXEMPT_JWT_SOURCES = ("sessions_revoke", "email_change")
+```
+
+An authed re-issue of an existing session is not a new sign-in, and telling the
+user "you signed in" because they revoked their sessions or confirmed an email
+change would be a lie in their own audit trail.
+
+This is a **separate tuple** from `GEOFENCE_EXEMPT_JWT_SOURCES`, even though the
+members match today. That one decides whether a geofence runs and is fail-closed
+for every future source; this one decides whether history records a sign-in.
+Aliasing them would let an addition here silently skip the geofence.
+
+`refresh` needs no entry: `on_refresh_token` mints directly and never calls
+`jwt_login`, so a silent refresh is excluded **structurally**.
+
+### Request-less, with an explicit uid
+
+The rows go through `_record_account_activity(..., provenance="brand")`, which
+calls `record_event(request=None)`. That is deliberate:
+`mojo/apps/incident/reporter.py` overwrites a caller-supplied `uid` with
+`request.user.id` whenever the passed request is authenticated — and on a login
+POST that identity can be a **stale foreign bearer** the client left attached
+while posting somebody else's credentials. Passing no request keeps the
+credential-verified subject on the row. It also keeps `bearer`, `user_email`,
+`http_query_string` and `http_user_agent` out of it, which the fixed-text
+contract requires at the source.
+
+### Record, do not publish
+
+`record_event` writes the row; `report_event` additionally runs
+`Event.publish()` → RuleSet matching, including the `"*"` catch-all. Publishing
+would mean an incident on every successful login for any deployment with a
+catch-all rule, plus two RuleSet queries on the hot path. Level 1 is far below
+`INCIDENT_LEVEL_THRESHOLD` anyway.
+
+### Group attribution
+
+`_attributable_login_group(request, user)` — the sibling of
+`_attributable_group`, keyed on the **verified user** rather than
+`request.user`. It returns `request.group` only when that group is an
+`account.Group` and `get_member_for_user(user, check_parents=False,
+is_active=True)` finds a row: an effectively-active group and an active
+**direct** membership, the same bar `group_token.can_mint` uses. Anything else
+is `None` — the row is written unattributed, and the login itself is never
+affected. `group_token_login` skips the check and passes its trusted handoff
+group directly, because `mint()` already proved that membership.
+
+Attributed rows appear under `?group=<brand>` on the Security feed;
+unattributed rows appear in the owner-wide view only.
+
+### Best effort, always
+
+`_record_account_activity` never raises — it logs through
+`logit.error("account_activity", …)` and returns `False`. An audit write that
+fails must not fail a committed sign-in. (It returns `True`/`False` for the one
+caller that reports the outcome to a client; every other call site ignores it.)
+
+---
+
 ## Metrics
 
 Four metrics are recorded per login (when geo data is available):
