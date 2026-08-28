@@ -1298,6 +1298,8 @@ Public endpoint — the token is the credential (no Bearer token required).
 **Important:** After a successful confirm, clear all stored tokens on the client.
 Any subsequent API call with the old JWT will return 401.
 
+Rate-limited: 10 requests per IP per hour.
+
 **Error cases:**
 
 | Condition | Status |
@@ -1309,6 +1311,7 @@ Any subsequent API call with the old JWT will return 401.
 | Missing token | 400 |
 | `ALLOW_SELF_DEACTIVATION = False` | 403 |
 | Unauthenticated request to Step 1 | 401/403 |
+| Rate limit exceeded | 429 + `Retry-After` header |
 | Deployment's closure handler failed | 400 — **retryable, see below** |
 
 **The retryable failure case.** If the deployment configures
