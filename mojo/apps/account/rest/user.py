@@ -1265,7 +1265,12 @@ def on_email_verify_send(request):
 @md.requires_geofence(scope="auth", after_auth=True)
 @md.requires_params("token")
 def on_email_verify(request):
-    """Exchange an email verify token — marks email verified and logs the user in."""
+    """Exchange an email verify token — marks email verified and logs the user in.
+
+    Kept exactly as-is for the clients that already call it. The confirmation
+    landing does NOT use this endpoint; see on_email_verify_confirm_post below
+    for why a confirmation page must not be a login.
+    """
     from mojo.apps.account.utils import tokens as tok_utils
     token = request.DATA.get("token")
     user = tok_utils.verify_email_verify_token(token)
@@ -1275,6 +1280,48 @@ def on_email_verify(request):
     user.save(update_fields=["is_email_verified", "modified"])
     _send_account_realtime_event(user, "account:email:verified", {"email": user.email})
     return jwt_login(request, user, source="email_verify")
+
+
+@md.POST("auth/email/verify/confirm")
+@md.strict_rate_limit("email_verify_confirm", ip_limit=10, ip_window=300)
+@md.custom_security("requires valid email verify token")
+@md.requires_params("token")
+def on_email_verify_confirm_post(request):
+    """
+    Verify an ev: token and NOTHING else — the button on the verification
+    landing page (GET auth/verify/email/confirm) calls this.
+
+    Deliberately not POST auth/email/verify. That endpoint verifies and then
+    calls jwt_login, whose geofence and forced-password branches run AFTER the
+    mutation: a landing pointed there would show an error on an account that
+    WAS just verified, and would silently upgrade a link click into a full
+    login — last_login, a UserLoginEvent, the USER_LOGIN_HANDLER, and a token
+    pair the page immediately throws away. Clicking a verification link is not
+    signing in.
+
+    So: the same token verification, the same is_email_verified commit, the
+    same realtime event and the same email_verify:confirmed audit row the old
+    GET wrote — and no JWT, no last_login, no login handler, no login event.
+
+    It also lives on its own path rather than sharing one with the landing GET:
+    POST auth/verify/email/confirm is already taken by the AUTHENTICATED
+    6-digit-code handler (rest/verify.py), whose contract must not be widened
+    into a public token endpoint.
+    """
+    from mojo.apps.account.utils import tokens as tok_utils
+    token = request.DATA.get("token")
+    user = tok_utils.verify_email_verify_token(token)
+    if not user.is_active:
+        raise merrors.PermissionDeniedException("Account is disabled", 403, 403)
+    user.is_email_verified = True
+    user.save(update_fields=["is_email_verified", "modified"])
+    user.report_incident(f"{user.username} email verified", "email_verify:confirmed")
+    _send_account_realtime_event(user, "account:email:verified", {"email": user.email})
+    return JsonResponse({
+        "status": True,
+        "message": "Email verified",
+        "data": {"email": str(user.email)},
+    })
 
 
 @md.POST("auth/invite/accept")

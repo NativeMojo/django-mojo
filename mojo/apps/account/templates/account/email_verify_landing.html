@@ -1,0 +1,24 @@
+{% extends "account/token_landing_base.html" %}
+
+{% comment %}
+Email-verification landing (ev:). Presentation only — see
+mojo/apps/account/services/token_landing.py. Deployments override this file
+(or the base) under templates/account/ with higher TEMPLATES.DIRS priority.
+Replaces the old account/email_verify_confirm.html, which verified the address
+on GET and signed the visitor in.
+{% endcomment %}
+
+{% block page_title %}Verify your email address{% endblock %}
+
+{% block headline %}Verify your email address{% endblock %}
+
+{% block consequence %}Confirming tells us this mailbox really belongs to you,
+so we can use it for sign-in and account notices. Nothing else about your
+account changes, and you will not be signed in here. Nothing has happened yet —
+this only happens when you press the button.{% endblock %}
+
+{% block button_label %}Verify email address{% endblock %}
+
+{% block success_headline %}Email verified{% endblock %}
+
+{% block success_copy %}This address is now verified on the account.{% endblock %}

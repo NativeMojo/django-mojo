@@ -1,11 +1,10 @@
 import mojo.decorators as md
 from mojo.helpers.response import JsonResponse
-from django.shortcuts import render
 from mojo.apps.account.services import email_delivery
+from mojo.apps.account.services import token_landing
 from mojo.apps.account.utils import tokens
 from mojo.apps.account.utils.webapp_url import build_token_url
 from mojo.apps.shortlink import maybe_shorten_url
-from mojo.helpers import urls
 from mojo import errors as merrors
 
 
@@ -16,29 +15,6 @@ def _send_realtime_event(user, event, data):
         realtime.send_to_user("user", user.pk, {"event": event, "data": data})
     except Exception:
         pass
-
-
-def _render_verify(request, template, ctx):
-    """
-    Render an account verify template.
-    If ?redirect=<url> is present and success=True, adds a Continue button and
-    auto-redirect via <meta http-equiv=refresh> after a brief delay.
-
-    The destination is scheme-guarded by `urls.safe_nav_url` BEFORE it reaches
-    the template context: only http/https and scheme-less (relative or
-    scheme-relative) values survive; a javascript:/data:/custom-app scheme
-    becomes "" and the template's `{% if redirect_url %}` wrapper omits the
-    link entirely. The host is deliberately not restricted. Guarding here
-    rather than in the template covers all three sinks (meta refresh, Continue
-    anchor, Go-back anchor) with one check, and protects deployment template
-    overrides too — they inherit a `redirect_url` that is always either "" or a
-    vetted http(s)/relative value.
-    """
-    redirect_url = urls.safe_nav_url(request.DATA.get("redirect"))
-    redirect_delay = 3 if ctx.get("success") else 0
-    ctx["redirect_url"] = redirect_url
-    ctx["redirect_delay"] = redirect_delay
-    return render(request, f"account/{template}", ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -115,48 +91,35 @@ def on_email_verify_code_confirm(request):
 
 
 @md.GET('auth/verify/email/confirm')
-@md.public_endpoint()
+@md.strict_rate_limit("email_verify_landing", ip_limit=10, ip_window=3600,
+                      include_request_in_incident=False)
+@md.public_endpoint("Email verification landing page — presentation only")
 def on_email_verify_confirm(request):
     """
-    GET handler for the email verification link clicked from the user's inbox.
+    The page an ev: link from the user's inbox opens.
 
-    Renders account/email_verify_confirm.html on success or error.
-    If ?redirect=<url> is present, a Continue button and auto-redirect are shown.
-    Downstream projects can override the template via TEMPLATES.DIRS.
+    Presentation ONLY. It does not verify the token, does not consume it, does
+    not touch the account, and does not name the account it belongs to — a mail
+    scanner, a link preview or a browser prefetch opening this URL must leave
+    the account exactly as it found it. #3257: this handler used to verify and
+    commit here (reading request.GET directly, at that), which is precisely how
+    a token got burned with nobody present.
+
+    Verification happens on POST auth/email/verify/confirm — the verify-ONLY
+    endpoint, deliberately not the verify-then-login one — which the page's
+    button calls with the token the person actually clicked through to.
+
+    The GET has its OWN rate bucket, separate from the POST's, so previews and
+    reloads cannot eat the confirmation budget — and it opts out of
+    request-stamped incident metadata so a throttled preview never files the
+    token in its own query string.
+
+    Deployments override account/email_verify_landing.html (or the shared
+    account/token_landing_base.html) via TEMPLATES.DIRS.
     """
-    token = request.GET.get("token", "")
-    if not token:
-        return _render_verify(request, "email_verify_confirm.html", {
-            "success": False,
-            "error_title": "Link invalid",
-            "error_message": "No token was provided. Please use the link from your verification email.",
-        })
-
-    try:
-        user = tokens.verify_email_verify_token(token)
-    except Exception:
-        return _render_verify(request, "email_verify_confirm.html", {
-            "success": False,
-            "error_title": "Link invalid or expired",
-            "error_message": "This verification link is invalid or has already been used. Links expire after 24 hours and can only be used once.",
-        })
-
-    if not user.is_active:
-        return _render_verify(request, "email_verify_confirm.html", {
-            "success": False,
-            "error_title": "Account disabled",
-            "error_message": "This account has been disabled. Please contact support.",
-        })
-
-    user.is_email_verified = True
-    user.save(update_fields=["is_email_verified", "modified"])
-    user.report_incident(f"{user.username} email verified", "email_verify:confirmed")
-    _send_realtime_event(user, "account:email:verified", {"email": user.email})
-
-    return _render_verify(request, "email_verify_confirm.html", {
-        "success": True,
-        "email": user.email,
-    })
+    ctx = token_landing.landing_context(
+        request, token_landing.confirm_path("ev"))
+    return token_landing.render_landing(request, "email_verify_landing.html", ctx)
 
 
 # ---------------------------------------------------------------------------
