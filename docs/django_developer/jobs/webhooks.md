@@ -39,9 +39,20 @@ publish_webhook(
 
 **Returns**: Job ID string.
 
-**Raises**: `ValueError` for invalid URL or non-serializable data.
+**Raises**: `ValueError` for invalid URL or non-serializable data. `RuntimeError`
+when the **immediate** (autocommit) Redis mirror cannot be confirmed — inside a
+transaction that failure is recorded after commit instead of raised.
 
 Internally creates a job that calls `mojo.apps.jobs.handlers.webhook.post_webhook`.
+
+`publish_webhook` delegates to `publish()`, so it inherits its publication
+timing and failure semantics exactly: the `Job` row and the returned ID are
+synchronous, the Redis queue entry is deferred to the enclosing transaction's
+commit, a rollback publishes nothing, and an unconfirmed mirror leaves the row
+`pending` with `last_error = "Redis publish not confirmed"` rather than marking
+it failed. See
+[Publishing Jobs — Transactional semantics](publishing.md#transactional-semantics)
+and [Publication failure](publishing.md#publication-failure).
 
 ## Parameter Reference
 

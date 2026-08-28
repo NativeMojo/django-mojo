@@ -190,7 +190,7 @@ GET /api/jobs/job/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4?graph=status
 | `cancel_requested` | boolean | Cooperative cancel flag (checked by long-running jobs) |
 | `max_exec_seconds` | integer\|null | Hard execution time limit in seconds |
 | `runner_id` | string\|null | ID of the runner currently (or last) executing the job |
-| `last_error` | string | Error message from the most recent failed attempt |
+| `last_error` | string | Error message from the most recent failed attempt. On a `pending` job with `attempt = 0` it may instead read `"Redis publish not confirmed"` — a delivery-uncertainty flag, not an execution failure (see [Job Status Values](#job-status-values)) |
 | `metadata` | object | Custom data set by the job function during execution |
 | `created` | datetime | When the job was created |
 | `modified` | datetime | When the job record was last updated |
@@ -204,7 +204,7 @@ GET /api/jobs/job/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4?graph=status
 
 | Status | Meaning |
 |---|---|
-| `pending` | Queued, waiting to be claimed by a runner |
+| `pending` | Durably recorded and waiting to be claimed by a runner — queue delivery is normally confirmed, but may be unconfirmed (see below) |
 | `running` | Currently being executed by a runner |
 | `completed` | Finished successfully |
 | `failed` | Execution threw an exception; may be retried |
@@ -212,6 +212,18 @@ GET /api/jobs/job/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4?graph=status
 | `expired` | Not claimed before `expires_at` was reached |
 
 A job in `completed`, `failed`, `canceled`, or `expired` is terminal and will not run again unless explicitly retried.
+
+**`pending` no longer implies the queue entry was confirmed.** When the backend
+cannot confirm the Redis write, it leaves the job executable rather than failing
+it — the write may well have landed. Such a job reads:
+
+- `status` = `pending`, `attempt` = `0`
+- `last_error` = `"Redis publish not confirmed"`
+
+Most of these jobs still run normally. One that never does needs a re-publish
+with the same `idempotency_key`; it is not retryable through `reset-failed`,
+which only sees `failed` jobs. A `failed` job, by contrast, still means execution
+was actually attempted and threw.
 
 ---
 
@@ -589,6 +601,13 @@ Events are append-only audit records automatically created by the system at each
 ## Job Logs
 
 Job log entries are structured messages written by the job function itself during execution using `job.add_log()`. They cannot be created via the API.
+
+One log is written outside execution: a `kind="error"` entry whose
+`meta.phase == "redis_mirror"` records a queue delivery the backend could not
+confirm. It is the same marker as `last_error = "Redis publish not confirmed"` on
+the job row (see [Job Status Values](#job-status-values)), and its `meta` carries
+`delivery_state`, `deferred` and `operation` for context. It does not mean the job
+failed.
 
 ### List Logs
 

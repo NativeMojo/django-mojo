@@ -37,7 +37,93 @@ jobs.publish(
 
 **Returns**: Job ID string (32-char UUID without dashes).
 
-**Raises**: `ValueError` for invalid params, `RuntimeError` on publish failure.
+**Raises**: `ValueError` for invalid params. `RuntimeError` when the **immediate**
+(autocommit) Redis mirror cannot be confirmed — see
+[Publication failure](#publication-failure). Inside a transaction the mirror runs
+after commit and records the failure instead of raising; the caller already has
+its id by then.
+
+### Transactional semantics
+
+`publish()` splits into two halves, and only the first is synchronous:
+
+| Synchronous, always | Deferred to commit, when a transaction is open |
+|---|---|
+| Channel validation and the allow-list gate | The Redis queue entry (`RPUSH`) or scheduled ZSET entry (`ZADD`) |
+| Payload checks | The scheduler-registry write (`register_sched_channel`) |
+| The durable `Job` row and its `created` `JobEvent` | The `queued` / `scheduled` `JobEvent` |
+| The returned job ID (or the list of IDs from a broadcast fan-out) | The `jobs.published` / `jobs.published.<channel>` metrics |
+
+The Redis mirror is the moment the job ID becomes claimable by a worker, so it
+must never precede the commit of the transaction that wrote the row — otherwise
+a worker wins the race, loads nothing, drops the queue entry, and the job sits
+`pending` at `attempt=0` forever.
+
+```python
+with transaction.atomic():
+    job_id = jobs.publish("myapp.services.kyc.notify", {"check_id": 7})
+    # job_id is usable here. No worker can see it yet.
+    customer.mark_verified()
+# commit — the id reaches Redis now
+```
+
+- **Autocommit is unchanged**: with no enclosing transaction the mirror happens
+  inline, before `publish()` returns.
+- **Rollback publishes nothing** — outer or savepoint. A rolled-back block
+  discards both the `Job` row and the pending mirror.
+- **Nested transactions** defer to the *outermost* commit, on the row's own
+  writer alias (`router.db_for_write`).
+- **`run_at` and `expires_at` are never recomputed.** Only the
+  due-versus-scheduled decision is re-made at commit time, so a transaction that
+  outlives `run_at` puts the job straight on the queue instead of waiting for a
+  scheduler poll. Expiry is never extended.
+- A broadcast fan-out inside a transaction registers one callback per runner;
+  all fire in registration order after the single commit. The return shape (a
+  list) is unchanged.
+
+Deferring only the mirror is deliberate: wrapping a whole `jobs.publish` in your
+own `transaction.on_commit` costs you the job ID (the callback returns nothing)
+and leaves no durable row when the transaction rolls back. Do not do it.
+
+### Publication failure
+
+A Redis mirror error is treated as **uncertainty, not failure**: the `RPUSH` may
+well have landed and only the acknowledgment was lost, so killing the row would
+kill work that is about to execute. `publish()` therefore no longer writes
+`status='failed'`. Instead:
+
+- The row stays `pending` at `attempt=0` with
+  `last_error = "Redis publish not confirmed"`. `status`, `attempt`,
+  `started_at` and `finished_at` are never touched, and the marker is written
+  only while the row is still `pending`/`attempt=0` — a job a worker already
+  claimed keeps its own execution error.
+- One `JobLog(kind='error')` is appended with the same fixed text and bounded
+  metadata: `{"phase": "redis_mirror", "delivery_state": "unknown", "deferred":
+  <bool>, "operation": "rpush"|"zadd"}`. The persisted text is fixed on purpose —
+  both fields are REST-readable under `view_jobs`, and a Redis exception string
+  can carry the connection DSN. The full exception goes to the log only.
+- One budgeted `jobs:unconfirmed_publish` incident is filed (suppressed per
+  channel per hour). Every existing recovery surface — `retry_job`,
+  `control/reset-failed`, the platform health collector — keys off
+  `status='failed'`, so this incident is what tells an operator to look.
+- The **immediate** path still raises `RuntimeError`. Its message now states
+  that the job may still execute and that a retry is safe **only with the same
+  `idempotency_key`** (which reuses the same row). A keyless re-publish after
+  this error is at-least-once — that is the price of keeping the row executable.
+- The **deferred** path records the same evidence and returns. It never raises:
+  Django abandons every remaining `on_commit` callback when one raises.
+
+On the deferred path the marker is written *inside* the caller's transaction and
+cleared once the mirror is confirmed. So:
+
+> `status='pending'` + `attempt=0` + `last_error="Redis publish not confirmed"`
+> means **committed, delivery unconfirmed**.
+
+That is the detector for the one residual gap: the process dying between commit
+and callback, or an earlier non-robust `on_commit` callback raising and taking
+the rest of the queue with it. Nothing replays these rows — this is not a
+transactional outbox. Recover by re-publishing with the same `idempotency_key`;
+otherwise `prune_jobs` removes the row after 7 days.
 
 ### Parameter Reference
 
