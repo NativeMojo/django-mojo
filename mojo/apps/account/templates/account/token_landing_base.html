@@ -1,0 +1,253 @@
+{% comment %}
+Base template for the emailed-token confirmation landings (#3257).
+
+Deliberately standalone — it does NOT extend auth_base.html. Those four pages
+carry a CSP nonce and hold tokens in localStorage; a landing does neither, and
+inheriting their nonce contract would silently disable this page's script on
+any deployment that turns the CSP on.
+
+Rules this file exists to keep:
+
+  * The token appears ONCE, inside the `json_script` data block. Django renders
+    that as `type="application/json"`, which HTML treats as a data block — never
+    executed, read back with `.textContent`. It is never interpolated into the
+    <script> below, into an href, or into browser storage.
+  * The <style> and <script> bodies carry ZERO `{{ }}` interpolations. Both are
+    raw-text elements where autoescape does not save you, and the standing audit
+    in tests/test_auth/bouncer_forms.py enforces it codebase-wide.
+  * Nothing here is fetched from another origin: no stylesheet link, no script
+    src, no image, no font.
+  * Nothing navigates on its own. No <meta http-equiv="refresh">, ever.
+
+Blocks a flow template overrides: page_title, headline, consequence,
+button_label, button_class, success_headline, success_copy.
+{% endcomment %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block page_title %}Confirm{% endblock %}</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #f5f5f5;
+      color: #1a1a1a;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      max-width: 440px;
+      width: 100%;
+      padding: 2.5rem 2rem;
+      text-align: center;
+    }
+    h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+    p {
+      font-size: 0.9375rem;
+      color: #555;
+      line-height: 1.5;
+      margin-bottom: 1.25rem;
+    }
+    p:last-child { margin-bottom: 0; }
+    .address {
+      font-weight: 600;
+      color: #1a1a1a;
+      word-break: break-all;
+    }
+    .btn {
+      display: inline-block;
+      padding: 0.6875rem 1.75rem;
+      border-radius: 6px;
+      font-size: 0.9375rem;
+      font-weight: 500;
+      font-family: inherit;
+      text-decoration: none;
+      cursor: pointer;
+      border: none;
+    }
+    .btn[disabled] { opacity: 0.55; cursor: default; }
+    .btn--primary { background: #2563eb; color: #fff; }
+    .btn--primary:hover:not([disabled]) { background: #1d4ed8; }
+    .btn--danger { background: #b42318; color: #fff; }
+    .btn--danger:hover:not([disabled]) { background: #912018; }
+    .btn--secondary { background: #f3f4f6; color: #374151; }
+    .btn--secondary:hover { background: #e5e7eb; }
+    .btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
+    .footer-nav { margin-top: 1.5rem; }
+    .notice {
+      margin-top: 1.5rem;
+      font-size: 0.8125rem;
+      line-height: 1.5;
+      color: #6b7280;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 0.75rem 1rem;
+    }
+    .muted { color: #9ca3af; font-size: 0.875rem; }
+    @media (max-width: 480px) {
+      body { padding: 1rem; align-items: flex-start; }
+      .card { padding: 1.75rem 1.25rem; }
+      .btn { display: block; width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+
+    {% if has_token %}
+    <div id="mojo-landing-ready">
+      <h1>{% block headline %}Confirm this request{% endblock %}</h1>
+      <p>{% block consequence %}Press the button below to continue. Nothing has changed yet.{% endblock %}</p>
+      <button type="button" id="mojo-landing-submit"
+              class="btn {% block button_class %}btn--primary{% endblock %}">{% block button_label %}Confirm{% endblock %}</button>
+      <noscript>
+        <p class="notice">Confirming needs JavaScript, which is turned off in this
+        browser. Nothing has been changed. Open this same link in a browser with
+        JavaScript enabled — the link is still valid.</p>
+      </noscript>
+    </div>
+    {% else %}
+    <div id="mojo-landing-invalid">
+      <h1>Link invalid</h1>
+      <p>No token was provided. Please open the link exactly as it appears in
+      the email we sent you.</p>
+    </div>
+    {% endif %}
+
+    <div id="mojo-landing-submitting" hidden>
+      <h1>Working on it…</h1>
+      <p>Confirming your request. This only takes a moment.</p>
+    </div>
+
+    <div id="mojo-landing-success" hidden>
+      <h1>{% block success_headline %}All done{% endblock %}</h1>
+      <p><span id="mojo-landing-success-address" class="address"></span></p>
+      <p>{% block success_copy %}Your request has been confirmed.{% endblock %}</p>
+      <p class="muted">For your security you have not been signed in here.
+      Return to the app and sign in again.</p>
+    </div>
+
+    <div id="mojo-landing-error" hidden>
+      <h1>That did not go through</h1>
+      <p id="mojo-landing-error-message"></p>
+      <p class="muted">If you still need to make this change, start it again
+      from the app and use the new email we send you.</p>
+    </div>
+
+    {% if redirect_url %}
+    <div class="footer-nav">
+      <a href="{{ redirect_url }}" class="btn btn--secondary">Go back</a>
+    </div>
+    {% endif %}
+
+  </main>
+
+  {{ landing_data|json_script:"mojo-landing-data" }}
+  <script>
+    (function () {
+      var AMBIGUOUS = "We could not confirm whether this went through. " +
+        "Check your email before trying again.";
+
+      var dataEl = document.getElementById("mojo-landing-data");
+      if (!dataEl) { return; }
+      var payload = {};
+      try {
+        payload = JSON.parse(dataEl.textContent || "{}") || {};
+      } catch (err) {
+        payload = {};
+      }
+
+      // Drop the query string from the address bar and from history: the token
+      // must not survive a bookmark, a back button or a shoulder.
+      try {
+        if (window.history && window.history.replaceState) {
+          window.history.replaceState(null, "", window.location.pathname);
+        }
+      } catch (err) { /* history is a nicety, never a requirement */ }
+
+      var ready = document.getElementById("mojo-landing-ready");
+      var submitting = document.getElementById("mojo-landing-submitting");
+      var success = document.getElementById("mojo-landing-success");
+      var failure = document.getElementById("mojo-landing-error");
+      var message = document.getElementById("mojo-landing-error-message");
+      var address = document.getElementById("mojo-landing-success-address");
+      var button = document.getElementById("mojo-landing-submit");
+
+      function show(target) {
+        [ready, submitting, success, failure].forEach(function (node) {
+          if (node) { node.hidden = node !== target; }
+        });
+      }
+
+      function fail(text) {
+        if (message) { message.textContent = text || AMBIGUOUS; }
+        show(failure);
+      }
+
+      function addressOf(body) {
+        var data = body && body.data;
+        if (!data) { return ""; }
+        if (data.user && typeof data.user.email === "string") { return data.user.email; }
+        if (typeof data.email === "string") { return data.email; }
+        return "";
+      }
+
+      if (!button || !payload.token || !payload.confirm_url) { return; }
+
+      button.addEventListener("click", function () {
+        if (button.disabled) { return; }
+        button.disabled = true;
+        show(submitting);
+
+        // credentials omitted on purpose: the token IS the credential. No
+        // cookie, no Authorization header, no query string, no redirect
+        // parameter travels with this request.
+        fetch(payload.confirm_url, {
+          method: "POST",
+          credentials: "omit",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: payload.token })
+        }).then(function (response) {
+          return response.json().then(function (body) {
+            return { ok: response.ok, body: body };
+          }, function () {
+            // A response we cannot read is NOT proof nothing happened.
+            return { ok: false, body: null };
+          });
+        }).then(function (result) {
+          var body = result.body;
+          if (result.ok && body && body.status === true) {
+            var email = addressOf(body);
+            if (address && email) { address.textContent = email; }
+            show(success);
+            return;
+          }
+          if (body && typeof body.error === "string" && body.error) {
+            fail(body.error);
+          } else if (body && typeof body.message === "string" && body.message) {
+            fail(body.message);
+          } else {
+            fail(AMBIGUOUS);
+          }
+        }).catch(function () {
+          fail(AMBIGUOUS);
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

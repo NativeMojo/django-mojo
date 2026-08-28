@@ -5,17 +5,16 @@ from mojo import decorators as md
 from mojo.apps.account.utils.jwtoken import JWToken
 # from django.http import JsonResponse
 from mojo.helpers.response import JsonResponse
-from django.shortcuts import render
-from django.http import HttpResponseRedirect
 from mojo.apps.account.models.user import User
 from mojo.apps.account.services import extensions as account_extensions
 from mojo.apps.account.services import auth_config
 from mojo.apps.account.services import closure as account_closure
 from mojo.apps.account.services import email_delivery
+from mojo.apps.account.services import token_landing
 from mojo.apps.account.utils import tokens
 from mojo.apps.account.utils.webapp_url import build_token_url
 from mojo.apps.shortlink import maybe_shorten_url
-from mojo.helpers import dates, crypto, logit, urls
+from mojo.helpers import dates, crypto, logit
 from mojo import errors as merrors
 from mojo.helpers.settings import settings
 
@@ -1673,36 +1672,6 @@ def _send_account_realtime_event(user, event, data):
         pass
 
 
-def _render_confirm(request, template, ctx):
-    """
-    Render an account confirmation template.
-    If ?redirect=<url> is present and success=True, honour it:
-      - immediately if redirect_delay is falsy / zero
-      - after a short delay via <meta http-equiv=refresh> otherwise
-    Downstream projects can override the templates by placing their own versions
-    under templates/account/<name>.html with higher priority in TEMPLATES.DIRS.
-
-    The destination is scheme-guarded by `urls.safe_nav_url` BEFORE it reaches
-    either the redirect branch below or the template context: only http/https
-    and scheme-less (relative or scheme-relative) values survive; a
-    javascript:/data:/custom-app scheme becomes "" and the template's
-    `{% if redirect_url %}` wrapper omits the link entirely. The host is
-    deliberately not restricted. There is no raw-query fallback here on
-    purpose — `safe_nav_url` returns "" for exactly the hostile inputs, so an
-    `or request.GET.get("redirect", "")` tail would fall through to the
-    unguarded value and invert the guard into a pass-through.
-    """
-    redirect_url = urls.safe_nav_url(request.DATA.get("redirect"))
-    redirect_delay = 3 if ctx.get("success") else 0
-
-    if redirect_url and ctx.get("success") and not redirect_delay:
-        return HttpResponseRedirect(redirect_url)
-
-    ctx["redirect_url"] = redirect_url
-    ctx["redirect_delay"] = redirect_delay
-    return render(request, f"account/{template}", ctx)
-
-
 @md.POST("auth/email/change/confirm")
 @md.denies_key_backed_session()
 @md.strict_rate_limit("email_change_confirm", ip_limit=10, ip_window=3600)
@@ -1778,72 +1747,33 @@ def on_email_change_confirm(request):
 
 
 @md.GET("auth/email/change/confirm")
-@md.strict_rate_limit("email_change_confirm", ip_limit=10, ip_window=3600)
-@md.public_endpoint()
+@md.strict_rate_limit("email_change_landing", ip_limit=10, ip_window=3600,
+                      include_request_in_incident=False)
+@md.public_endpoint("Email change confirmation landing page — presentation only")
 def on_email_change_confirm_get(request):
     """
-    GET handler for the email-change confirmation link clicked from the user's inbox.
+    The page an ec: link from the user's inbox opens.
 
-    Validates the ec: token, commits the change, then renders a Django template
-    page (account/email_change_confirm.html).  If a ?redirect=<url> param is
-    present it will be used as a "Continue" button target and as an automatic
-    redirect (after a brief delay) on success.
+    Presentation ONLY. It does not verify the token, does not consume it, does
+    not touch the account, and does not name the account it belongs to — a mail
+    scanner, a link preview or a browser prefetch opening this URL must leave
+    the account exactly as it found it. #3257: this handler used to commit the
+    change here, which is precisely how a token got burned with nobody present.
 
-    Downstream projects can override the template by placing their own version at
-    templates/account/email_change_confirm.html with higher priority in TEMPLATES.DIRS.
+    The change is committed by POST auth/email/change/confirm, which the page's
+    button calls with the token the person actually clicked through to.
+
+    The GET has its OWN rate bucket, separate from the POST's, so previews and
+    reloads cannot eat the confirmation budget — and it opts out of
+    request-stamped incident metadata so a throttled preview never files the
+    token in its own query string.
+
+    Deployments override account/email_change_landing.html (or the shared
+    account/token_landing_base.html) via TEMPLATES.DIRS.
     """
-    import uuid
-    from mojo.apps.account.utils import tokens as tok_utils
-
-    token = request.DATA.get("token") or request.GET.get("token", "")
-    if not token:
-        return _render_confirm(request, "email_change_confirm.html", {
-            "success": False,
-            "error_title": "Link invalid",
-            "error_message": "No token was provided. Please use the link from your confirmation email.",
-        })
-
-    try:
-        user, new_email = tok_utils.verify_email_change_token(token)
-    except Exception:
-        return _render_confirm(request, "email_change_confirm.html", {
-            "success": False,
-            "error_title": "Link invalid or expired",
-            "error_message": "This email change link is invalid or has already been used. Links expire after 1 hour and can only be used once.",
-        })
-
-    if not user.is_active:
-        return _render_confirm(request, "email_change_confirm.html", {
-            "success": False,
-            "error_title": "Account disabled",
-            "error_message": "This account has been disabled. Please contact support.",
-        })
-
-    if User.objects.filter(email=new_email).exclude(pk=user.pk).exists():
-        return _render_confirm(request, "email_change_confirm.html", {
-            "success": False,
-            "error_title": "Address no longer available",
-            "error_message": f"The address {new_email} has been registered by another account since this link was issued. Please request a new email change.",
-        })
-
-    old_email = str(user.email)
-
-    User.objects.filter(pk=user.pk).update(
-        email=new_email,
-        is_email_verified=True,
-        auth_key=uuid.uuid4().hex,
-    )
-    if str(user.username).lower() == old_email.lower():
-        User.objects.filter(pk=user.pk).update(username=new_email)
-
-    user.refresh_from_db()
-    user.log(kind="email:changed", log=f"{old_email} to {new_email}")
-    _send_account_realtime_event(user, "account:email:changed", {"email": new_email})
-
-    return _render_confirm(request, "email_change_confirm.html", {
-        "success": True,
-        "new_email": new_email,
-    })
+    ctx = token_landing.landing_context(
+        request, token_landing.confirm_path("ec"))
+    return token_landing.render_landing(request, "email_change_landing.html", ctx)
 
 
 @md.POST("auth/email/change/cancel")

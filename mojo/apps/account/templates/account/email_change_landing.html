@@ -1,0 +1,25 @@
+{% extends "account/token_landing_base.html" %}
+
+{% comment %}
+Email-change confirmation landing (ec:). Presentation only — see
+mojo/apps/account/services/token_landing.py. Deployments override this file
+(or the base) under templates/account/ with higher TEMPLATES.DIRS priority.
+Replaces the old account/email_change_confirm.html, which committed the change
+on GET.
+{% endcomment %}
+
+{% block page_title %}Confirm your new email address{% endblock %}
+
+{% block headline %}Confirm your new email address{% endblock %}
+
+{% block consequence %}Confirming replaces the email address on this account
+with the one this message was sent to, and marks it verified. Every other
+signed-in session is signed out. Nothing has changed yet — this only happens
+when you press the button.{% endblock %}
+
+{% block button_label %}Confirm email change{% endblock %}
+
+{% block success_headline %}Email address updated{% endblock %}
+
+{% block success_copy %}This account now uses the address above, and it is
+verified. Your other sessions have been signed out.{% endblock %}
