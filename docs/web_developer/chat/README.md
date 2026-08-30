@@ -60,7 +60,15 @@ not an error.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/chat/dm` | Get or create DM `{user_id}` |
+| POST | `/api/chat/dm` | Get or create DM `{user_id}` — returns the room, including its `group` |
+
+**Check `group` on the room you get back.** `/api/chat/dm` prefers the pair's
+*personal* (groupless) direct room. If the only direct room you two share is a
+workspace-managed one, that room is returned as-is with `group` set to the
+group id — the endpoint will not quietly open a second, empty room and strand
+the conversation you already have. `group: null` means a personal DM. Decide
+what to do about a non-null `group` in your UI; there is no flag to force a
+new personal room.
 
 ### Read State
 

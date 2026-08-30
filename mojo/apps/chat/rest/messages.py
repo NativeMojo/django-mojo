@@ -98,7 +98,14 @@ def on_chat_room_flagged(request):
 def on_chat_dm(request):
     """
     Get or create a direct message room with the given user.
-    Returns the existing room if one already exists.
+
+    Reuse is groupless-first: a personal DM is groupless by construction, so
+    this endpoint never hands out a tenant-managed room as if it were one. If
+    the pair's only shared direct room IS group-scoped, that room is returned
+    as-is, with its `group` field set, and the client decides what to do about
+    it. Minting a second groupless room instead would strand the conversation:
+    the history stays in the old room, `/api/chat/rooms` lists both, and
+    neither party learns why the thread went blank.
     """
     from mojo.apps.account.models import User
 
@@ -116,20 +123,38 @@ def on_chat_dm(request):
     if not target_user:
         return ChatRoom.rest_error_response(request, 404, error="User not found")
 
-    # Check if a DM room already exists between these two users
+    # Every direct room the caller is in. The group predicate is applied to
+    # each lookup below, never here: the two cases stay separate and explicit
+    # so neither can silently answer for the other.
     my_rooms = ChatMembership.objects.filter(
         user=request.user,
         room__kind="direct",
     ).values_list("room_id", flat=True)
 
+    # 1. A personal DM the pair already shares. Groupless, like the one the
+    # create path below builds.
     existing_room = ChatMembership.objects.filter(
         user=target_user,
         room_id__in=my_rooms,
         room__kind="direct",
+        room__group__isnull=True,
     ).select_related("room").first()
 
     if existing_room:
         return existing_room.room.on_rest_get(request)
+
+    # 2. No personal DM, but the pair may already share a tenant-managed one.
+    # Return it rather than forking the conversation into a second room; the
+    # response carries `group`, which is how a client tells the two apart.
+    scoped_room = ChatMembership.objects.filter(
+        user=target_user,
+        room_id__in=my_rooms,
+        room__kind="direct",
+        room__group__isnull=False,
+    ).select_related("room").first()
+
+    if scoped_room:
+        return scoped_room.room.on_rest_get(request)
 
     # Create new DM room
     room = ChatRoom.objects.create(

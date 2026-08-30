@@ -123,11 +123,29 @@ Moderator-only. Returns flagged messages for review.
 
 ### `POST /api/chat/dm` — Get or create DM
 
-Returns existing DM room if one exists between the two users, or creates a new one.
+Returns the pair's existing direct room if one exists, otherwise creates one.
 
 ```json
 {"user_id": 42}
 ```
+
+**Reuse is groupless-first.** A personal DM is groupless by construction — the
+create path here has always built one that way, and `_deny_cross_tenant_room(request, None)`
+runs first, so no confined credential (ApiKey / GroupScopedToken) ever reaches
+this endpoint. The reuse lookup used to filter only on `kind="direct"` plus
+shared membership, so it could hand a **tenant-managed** room back from the
+global endpoint as though it were personal. It is now two separate, explicit
+lookups:
+
+1. A shared direct room with `group IS NULL` — the personal DM. Returned.
+2. Otherwise, a shared direct room with a `group`. **Also returned**, as-is.
+
+Case 2 does *not* fall through to creating a second, groupless room. Minting
+one would strand the conversation: the history stays in the old room,
+`GET /api/chat/rooms` lists both, and neither party learns why the thread went
+blank. The response carries `group` (it is in both `ChatRoom` graphs), which is
+how a client tells "this is your tenant-managed room" from "this is your
+personal DM" and decides what to do about it.
 
 ## Read State
 

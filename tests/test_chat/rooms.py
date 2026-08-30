@@ -176,6 +176,111 @@ def test_dm_room_reuse(opts):
     assert_eq(resp.json.data.id, opts.dm_room_id, "expected same DM room id")
 
 
+def _shared_direct_room_ids(user_a, user_b):
+    """Every direct room `user_a` and `user_b` are both members of."""
+    from mojo.apps.chat.models import ChatMembership
+
+    mine = ChatMembership.objects.filter(
+        user=user_a, room__kind="direct").values_list("room_id", flat=True)
+    return set(ChatMembership.objects.filter(
+        user=user_b, room_id__in=mine).values_list("room_id", flat=True))
+
+
+@th.tier("core")
+@th.django_unit_test()
+def test_dm_returns_group_scoped_room_with_group_field(opts):
+    """When the pair's only shared direct room is group-scoped, /dm returns it.
+
+    The reuse lookup no longer hands a tenant-managed room out of the groupless
+    match -- but it must not fork the conversation either. Creating a second,
+    groupless room would leave the history in the old one, list both under
+    /api/chat/rooms, and tell neither party why the thread went blank. The
+    `group` field on the response is how a client tells the two apart.
+    """
+    from mojo.apps.account.models import Group
+    from mojo.apps.chat.models import ChatRoom, ChatMembership
+
+    # Delete before creating -- this runs against a long-lived database.
+    ChatRoom.objects.filter(name="test-chat-dm-scoped").delete()
+    Group.objects.filter(name="test-chat-dm-group").delete()
+    group = Group.objects.create(name="test-chat-dm-group")
+    scoped = ChatRoom.objects.create(
+        name="test-chat-dm-scoped", kind="direct", group=group, user=opts.user1)
+    ChatMembership.objects.create(room=scoped, user=opts.user1, role="owner")
+    ChatMembership.objects.create(room=scoped, user=opts.admin_user, role="member")
+
+    before = _shared_direct_room_ids(opts.user1, opts.admin_user)
+    assert_eq(
+        before, {scoped.pk},
+        f"expected the group-scoped room to be the pair's only direct room, got {before}")
+
+    opts.client.login(TEST_EMAIL_1, TEST_PASSWORD)
+    resp = opts.client.post('/api/chat/dm', {
+        'user_id': opts.admin_user.pk,
+    })
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.json}")
+    assert_eq(
+        resp.json.data.id, scoped.pk,
+        f"expected the existing group-scoped room {scoped.pk}, got {resp.json.data.id}")
+    assert_eq(
+        resp.json.data.group, group.pk,
+        f"expected the response to carry group={group.pk}, got {resp.json.data.group}")
+
+    after = _shared_direct_room_ids(opts.user1, opts.admin_user)
+    assert_eq(
+        after, before,
+        f"expected no second room to be created for the pair, got {after - before} new")
+
+
+@th.tier("core")
+@th.django_unit_test()
+def test_dm_prefers_groupless_room_over_scoped(opts):
+    """With both kinds present, /dm hands back the personal (groupless) room.
+
+    This is the actual boundary: the reuse lookup used to filter on
+    `kind="direct"` and shared membership only, so a tenant-managed room could
+    be returned from the global endpoint as though it were a personal DM. The
+    groupless match is now explicit.
+    """
+    from mojo.apps.account.models import Group
+    from mojo.apps.chat.models import ChatRoom, ChatMembership
+
+    # The group-scoped room is created FIRST, so an unordered `.first()` over
+    # "any shared direct room" -- what the endpoint used to run -- reaches it
+    # ahead of the personal one.
+    for name in ("test-chat-dm-both-scoped", "test-chat-dm-both-personal"):
+        ChatRoom.objects.filter(name=name).delete()
+    Group.objects.filter(name="test-chat-dm-both-group").delete()
+    group = Group.objects.create(name="test-chat-dm-both-group")
+    scoped = ChatRoom.objects.create(
+        name="test-chat-dm-both-scoped", kind="direct", group=group, user=opts.user2)
+    ChatMembership.objects.create(room=scoped, user=opts.user2, role="owner")
+    ChatMembership.objects.create(room=scoped, user=opts.admin_user, role="member")
+
+    personal = ChatRoom.objects.create(
+        name="test-chat-dm-both-personal", kind="direct", user=opts.user2)
+    ChatMembership.objects.create(room=personal, user=opts.user2, role="owner")
+    ChatMembership.objects.create(room=personal, user=opts.admin_user, role="member")
+
+    shared = _shared_direct_room_ids(opts.user2, opts.admin_user)
+    assert_eq(
+        shared, {scoped.pk, personal.pk},
+        f"expected the pair to share exactly both rooms before the call, got {shared}")
+
+    opts.client.login(TEST_EMAIL_2, TEST_PASSWORD)
+    resp = opts.client.post('/api/chat/dm', {
+        'user_id': opts.admin_user.pk,
+    })
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}: {resp.json}")
+    assert_eq(
+        resp.json.data.id, personal.pk,
+        f"expected the groupless personal DM {personal.pk}, got {resp.json.data.id} "
+        f"(the group-scoped room is {scoped.pk})")
+    assert_true(
+        resp.json.data.group is None,
+        f"expected a groupless room from /dm here, got group={resp.json.data.group}")
+
+
 @th.django_unit_test()
 def test_dm_cannot_self(opts):
     """Cannot create a DM with yourself."""
