@@ -708,7 +708,7 @@ GET /api/jobs/health/email
     "channel": "email",
     "status": "healthy",
     "messages": {
-      "total": 120,
+      "total": 10,
       "unclaimed": 8,
       "pending": 2,
       "scheduled": 5,
@@ -724,15 +724,45 @@ GET /api/jobs/health/email
 }
 ```
 
+**`messages` field reference:**
+
+| Field | Counts | Redis structure |
+|---|---|---|
+| `unclaimed` | Jobs sitting on the queue that no runner has picked up yet | the channel's immediate queue **list** (`LLEN`) |
+| `pending` | Jobs a runner has claimed and not yet finished (in flight) | the channel's processing **ZSET** (`ZCARD`) |
+| `total` | `unclaimed + pending` — everything on the channel right now | queue list + processing ZSET |
+| `scheduled` | Delayed/retrying jobs not yet due | the channel's `sched` + `sched_broadcast` **ZSETs** |
+| `stuck` | In-flight entries whose claim is older than 60 seconds | processing ZSET, entries scored past the threshold |
+
+The counters nest: **`stuck` ⊆ `pending` ⊆ `total`**. `scheduled` is deliberately
+**not** part of `total` — scheduled work has not been queued yet, so it is neither
+waiting for a runner nor held by one.
+
+> **Two different meanings of "pending" in this document.** On `/api/jobs/stats`
+> (below), `totals.pending` is an alias of `totals.queued` — work **waiting to be
+> claimed**. Here in health, `messages.pending` is the opposite: work **already
+> claimed** and in flight. The health counter that matches the stats sense of the
+> word is `messages.unclaimed`.
+
 **Channel status values:**
 
 | Status | Condition |
 |---|---|
 | `healthy` | No issues detected |
 | `warning` | Unclaimed > 100, or any stuck jobs present |
-| `critical` | Unclaimed > 500, more than 10 stuck jobs, or no runners with pending messages |
+| `critical` | Unclaimed > 500, more than 10 stuck jobs, no runners with messages on the channel, or the channel state could not be read |
 
-**Stuck jobs** are jobs in `running` state whose runner has stopped sending heartbeats. Up to 10 are listed in `stuck_jobs`.
+**Stuck jobs** are entries still in the channel's processing ZSET whose claim
+timestamp is older than 60 seconds. Up to 10 are listed in `stuck_jobs`. The 60s
+threshold sits above the engine's 30s visibility timeout, so normal in-flight
+work — and work the reaper requeues on schedule — never reaches it: the counter
+mainly surfaces orphaned entries on channels nothing is reaping.
+
+**Degraded state.** Every Redis read behind these counters is guarded, so a Redis
+outage yields zeroes rather than an error. When that happens the response is
+still `200`, but `status` is `critical`, the `metrics` key is absent, and
+`alerts` carries `"Channel state unavailable — Redis reads failed"`. Treat the
+counters in such a response as unknown, not as an empty queue.
 
 ---
 
@@ -750,15 +780,19 @@ Returns a system-wide snapshot of queue sizes and database counts.
   "data": {
     "channels": {
       "default": {
-        "stream_length": 42,
-        "pending_count": 3,
+        "channel": "default",
+        "queued_count": 42,
+        "inflight_count": 3,
         "scheduled_count": 5,
+        "runners": 2,
         "db_running": 3
       },
       "email": {
-        "stream_length": 18,
-        "pending_count": 1,
+        "channel": "email",
+        "queued_count": 18,
+        "inflight_count": 1,
         "scheduled_count": 2,
+        "runners": 1,
         "db_running": 1
       }
     },
@@ -806,6 +840,18 @@ Returns a system-wide snapshot of queue sizes and database counts.
 | `failed` | All-time failed job count in the database |
 | `scheduled` | Jobs in the scheduled queue across all channels |
 | `runners_active` | Number of runners with a live heartbeat |
+
+Each entry under `channels` is the raw queue state for that channel:
+`queued_count` (waiting to be claimed), `inflight_count` (claimed by a runner),
+`scheduled_count`, `runners` (live runners serving it) and `db_running` (rows
+with `status=running` in the database).
+
+> **`pending` here is not `pending` in Health.** `totals.pending` above is an
+> alias of `totals.queued` — work **waiting to be claimed**, the same number
+> Health reports as `messages.unclaimed`. Health's `messages.pending` means the
+> opposite: work already **claimed** and in flight, which is `totals.inflight`
+> here. Same word, two senses, one document — check which endpoint you are
+> reading.
 
 ---
 

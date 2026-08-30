@@ -209,12 +209,17 @@ class JobManager:
         runners.sort(key=lambda row: row.get("runner_id", ""))
         return runners
 
-    def get_queue_state(self, channel: str) -> Dict[str, Any]:
+    def get_queue_state(self, channel: str, *, runners=None) -> Dict[str, Any]:
         """
         Get queue state for a channel.
 
         Args:
             channel: Channel name
+            runners: Optional pre-fetched roster for this channel (as returned
+                by ``get_runners(channel)``). ``get_runners()`` scans the whole
+                Redis keyspace, so a caller that already holds the roster —
+                ``get_channel_health()`` does — passes it in rather than paying
+                for a second scan. ``None`` fetches it here, as always.
 
         Returns:
             Dict with queue statistics (Plan B):
@@ -222,6 +227,9 @@ class JobManager:
                 - inflight_count: Number of in-flight messages (ZCARD of processing)
                 - scheduled_count: Number of scheduled/delayed jobs (ZCARD of sched + sched_broadcast)
                 - runners: Number of active runners
+                - metrics: DB-derived channel metrics — present ONLY when every
+                  read above succeeded. Callers use its absence as the signal
+                  that the Redis reads failed and the counters are meaningless.
         """
         state = {
             'channel': channel,
@@ -242,9 +250,11 @@ class JobManager:
             state['inflight_count'] = self.redis.zcard(processing_key) or 0
             state['scheduled_count'] = (self.redis.zcard(sched_key) or 0) + (self.redis.zcard(sched_b_key) or 0)
             # Active runners for this channel
-            runners = self.get_runners(channel)
+            if runners is None:
+                runners = self.get_runners(channel)
             state['runners'] = len([r for r in runners if r.get('alive')])
-            # Add metrics (DB-derived)
+            # Add metrics (DB-derived). Keep this LAST: its presence is the
+            # sentinel that says the reads above all completed.
             state['metrics'] = self._get_channel_metrics(channel)
         except Exception as e:
             logit.error(f"Failed to get queue state for {channel}: {e}")
@@ -258,26 +268,42 @@ class JobManager:
             channel: Channel name
 
         Returns:
-            Dict with health status including unclaimed jobs, stuck jobs, and alerts
+            Dict with keys:
+                - channel: Channel name
+                - status: 'healthy' | 'warning' | 'critical'
+                - messages: dict of counters, all Plan B structures —
+                    - unclaimed: LLEN of the immediate queue list (waiting to
+                      be claimed by a runner)
+                    - pending: ZCARD of the processing ZSET (claimed and
+                      in-flight)
+                    - total: unclaimed + pending. Scheduled work is NOT
+                      included — it is not yet on the queue.
+                    - scheduled: ZCARD of the sched + sched_broadcast ZSETs
+                    - stuck: processing-ZSET entries scored older than the
+                      60s idle threshold (a subset of `pending`)
+                - runners: {'active': live heartbeats, 'total': roster size}
+                - stuck_jobs: up to the first 10 stuck entries
+                - alerts: list of human-readable alert strings
+                - metrics: DB-derived channel metrics, only when the Redis
+                  reads succeeded. When they did not, the counters above are
+                  all zero and meaningless, so status is forced to 'critical'.
         """
-        stream_key = self.keys.stream(channel)
-        group_key = self.keys.group_workers(channel)
-        sched_key = self.keys.sched(channel)
+        # One roster read per health request: get_runners() scans the whole
+        # keyspace, and the overview endpoint calls this for every channel.
+        runners = self.get_runners(channel)
+        active_runners = [r for r in runners if r.get('alive')]
 
-        # Get basic queue state
-        state = self.get_queue_state(channel)
+        # Get basic queue state (reusing the roster we just fetched)
+        state = self.get_queue_state(channel, runners=runners)
 
-        # Calculate unclaimed (waiting to be picked up)
-        total_messages = state['stream_length']
-        pending_count = state['pending_count']
-        unclaimed = max(0, total_messages - pending_count)
+        # Plan B counters: the queue list holds work nobody has claimed, the
+        # processing ZSET holds work a runner has claimed and not finished.
+        unclaimed = state['queued_count']
+        pending_count = state['inflight_count']
+        total_messages = unclaimed + pending_count
 
         # Find stuck jobs
         stuck = self._find_stuck_jobs(channel)
-
-        # Get active runners
-        runners = self.get_runners(channel)
-        active_runners = [r for r in runners if r.get('alive')]
 
         # Build health status
         health = {
@@ -320,6 +346,14 @@ class JobManager:
         # Add metrics if available
         if 'metrics' in state:
             health['metrics'] = state['metrics']
+        else:
+            # get_queue_state() sets 'metrics' as the last statement of its try
+            # block, so a missing key means its Redis reads raised and were
+            # swallowed. Every counter above is then a zero we made up. Report
+            # that instead of a green channel — LAST, so it beats 'healthy'.
+            health['alerts'].append(
+                "Channel state unavailable — Redis reads failed")
+            health['status'] = 'critical'
 
         return health
 
