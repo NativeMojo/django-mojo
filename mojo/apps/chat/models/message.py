@@ -19,7 +19,10 @@ class ChatMessage(models.Model, MojoModel):
     class RestMeta:
         VIEW_PERMS = ["comms", "manage_chat"]
         # user pinned so comms admins can't spoof message authorship.
-        NO_SAVE_FIELDS = ["user", "is_flagged", "flagged_by", "flagged_at", "moderation_decision"]
+        NO_SAVE_FIELDS = [
+            "user", "is_flagged", "flagged_by", "flagged_at",
+            "moderation_decision", "client_key",
+        ]
         GRAPHS = {
             "list": {
                 "fields": [
@@ -32,7 +35,7 @@ class ChatMessage(models.Model, MojoModel):
                     "id", "room", "user", "body", "kind",
                     "moderation_decision", "edited_at",
                     "is_flagged", "flagged_by", "flagged_at",
-                    "metadata", "created",
+                    "metadata", "client_key", "created",
                 ],
             },
         }
@@ -57,6 +60,10 @@ class ChatMessage(models.Model, MojoModel):
     )
     flagged_at = models.DateTimeField(null=True, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
+    # Optional client-supplied idempotency key for a send. Scoped to
+    # (room, user) by the partial unique constraint below; no separate
+    # index -- that constraint leads with room, user and serves the lookup.
+    client_key = models.CharField(max_length=64, null=True, blank=True)
     created = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
 
     class Meta:
@@ -64,6 +71,12 @@ class ChatMessage(models.Model, MojoModel):
         indexes = [
             models.Index(fields=["room", "created"]),
             models.Index(fields=["room", "is_flagged", "created"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["room", "user", "client_key"],
+                condition=models.Q(client_key__isnull=False),
+                name="chat_message_client_key_uniq"),
         ]
 
     def __str__(self):

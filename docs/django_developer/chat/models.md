@@ -51,7 +51,18 @@ A single message in a room.
 - `is_flagged` — True if flagged by moderator (hidden from normal history)
 - `flagged_by`, `flagged_at` — who flagged and when
 - `metadata` — flexible JSONField
+- `client_key` — optional client-supplied idempotency key for the send
+  (`CharField(max_length=64, null=True, blank=True)`). Set by the WebSocket
+  `chat_message` handler; never writable over REST (listed in `NO_SAVE_FIELDS`).
 - `created` — timestamp
+
+**Unique constraint:** `chat_message_client_key_uniq` — a *partial* unique constraint
+on `(room, user, client_key)` with condition `client_key IS NOT NULL`. Messages
+without a key (the common case) are unaffected. There is deliberately no separate
+`db_index=True` on `client_key`: the constraint's index leads with `room, user` and
+already serves the dedupe lookup, and a second index would be dead weight on a
+high-write table. See `docs/django_developer/chat/handler.md` for the idempotency
+contract this enforces.
 
 ## ChatMembership
 

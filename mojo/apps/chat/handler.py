@@ -12,6 +12,10 @@ Message types:
   - chat_typing: Broadcast typing indicator (ephemeral)
   - chat_read: Mark messages as read
 """
+import re
+
+from django.db import IntegrityError, transaction
+
 from mojo.helpers import logit, dates
 
 logger = logit.get_logger("chat", "chat.log")
@@ -24,6 +28,52 @@ CHAT_MESSAGE_TYPES = {
     "chat_typing",
     "chat_read",
 }
+
+CLIENT_KEY_MAX = 64
+_CLIENT_KEY_RE = re.compile(r"[A-Za-z0-9._:-]{1,64}")
+CLIENT_KEY_ERROR = (
+    "client_key must be 1-64 characters using letters, digits, '.', '_', ':' or '-'")
+
+
+def _client_key(value):
+    """Return (key_or_None, error_or_None). Absent/blank means no key."""
+    if value is None:
+        return None, None
+    if not isinstance(value, str):
+        return None, CLIENT_KEY_ERROR
+    if not value.strip():
+        # Blank (or whitespace-only) is "no key", not a bad key.
+        return None, None
+    # Validate the value as sent -- do not normalize whitespace away, or
+    # " abc" and "abc" would silently become the same idempotency key.
+    # fullmatch, never re.match with $ -- "$" also matches just before a
+    # trailing newline, which would let "abc\n" through to be stored and
+    # broadcast verbatim.
+    if not _CLIENT_KEY_RE.fullmatch(value):
+        return None, CLIENT_KEY_ERROR
+    return value, None
+
+
+def _send_error(client_key, message, **extra):
+    """Error frame for a send, echoing the client_key when we have a valid one."""
+    out = {"type": "error", "error": message}
+    if client_key:
+        out["client_key"] = client_key
+    out.update(extra)
+    return out
+
+
+def _send_ack(msg, room, client_key):
+    """Ack frame for a send. The single builder for every ack path."""
+    out = {
+        "type": "chat_message_ack",
+        "message_id": msg.pk,
+        "room_id": room.pk,
+        "created": msg.created.isoformat(),
+    }
+    if client_key:
+        out["client_key"] = client_key
+    return out
 
 
 def handle_chat_message(user, data):
@@ -52,7 +102,13 @@ def handle_chat_message(user, data):
         return handler(user, data)
     except Exception as e:
         logger.error(f"Chat handler error: {e}", exc_info=True)
-        return {"type": "error", "error": "Chat message processing error"}
+        error = {"type": "error", "error": "Chat message processing error"}
+        if message_type == "chat_message":
+            # Best-effort: let the client correlate the crash with its send.
+            key, key_error = _client_key(data.get("client_key"))
+            if key and not key_error:
+                error["client_key"] = key
+        return error
 
 
 def _get_membership(user, room_id):
@@ -70,50 +126,96 @@ def _get_membership(user, room_id):
     return membership, room, None
 
 
-def _handle_send(user, data):
-    """Handle sending a new chat message."""
+def _handle_send(user, data, *, publisher=None):
+    """Handle sending a new chat message.
+
+    An optional `client_key` makes the send idempotent for the
+    (room, user) pair: a retry with the same key returns the ack for the
+    message already stored instead of creating a second one.
+
+    `publisher` is a test seam for the room broadcast; production callers
+    leave it unset and the realtime publisher is used.
+    """
     from .models import ChatMessage
     from .rules import check_rules, check_moderation, check_rate_limit
     from mojo.apps.realtime import publish_topic
+
+    publish = publisher or publish_topic
+
+    client_key, key_error = _client_key(data.get("client_key"))
+    if key_error:
+        # Never echo the offending value back.
+        return {"type": "error", "error": key_error}
 
     room_id = data.get("room_id")
     body = (data.get("body") or "").strip()
     kind = data.get("kind", "text")
 
     if not room_id:
-        return {"type": "error", "error": "room_id is required"}
+        return _send_error(client_key, "room_id is required")
     if not body and kind == "text":
-        return {"type": "error", "error": "body is required"}
+        return _send_error(client_key, "body is required")
 
     membership, room, error = _get_membership(user, room_id)
     if error:
-        return error
+        return _send_error(client_key, error["error"])
+
+    # Dedupe before rate limiting and can_send: a retry of a message we
+    # already stored must not be punished for the retry.
+    if client_key:
+        existing = ChatMessage.objects.filter(
+            room=room, user=user, client_key=client_key).first()
+        if existing:
+            if existing.body != body or existing.kind != kind:
+                return _send_error(
+                    client_key, "client_key is already bound to a different message")
+            return _send_ack(existing, room, client_key)
 
     if not membership.can_send:
-        return {"type": "error", "error": f"Cannot send messages (status: {membership.status})"}
+        return _send_error(
+            client_key, f"Cannot send messages (status: {membership.status})")
 
     # Rate limit
     if not check_rate_limit(room, user):
-        return {"type": "error", "error": "Rate limit exceeded"}
+        return _send_error(client_key, "Rate limit exceeded")
 
     # Room rules
     rule_errors = check_rules(room, body, kind)
     if rule_errors:
-        return {"type": "error", "error": rule_errors[0]}
+        return _send_error(client_key, rule_errors[0])
 
     # Content moderation
     decision, reasons = check_moderation(body)
     if decision == "block":
-        return {"type": "error", "error": "Message blocked by moderation", "reasons": reasons}
+        return _send_error(
+            client_key, "Message blocked by moderation", reasons=reasons)
 
     # Persist
-    msg = ChatMessage.objects.create(
-        room=room,
-        user=user,
-        body=body,
-        kind=kind,
-        moderation_decision=decision,
-    )
+    try:
+        with transaction.atomic():
+            msg = ChatMessage.objects.create(
+                room=room,
+                user=user,
+                body=body,
+                kind=kind,
+                moderation_decision=decision,
+                client_key=client_key,
+            )
+    except IntegrityError:
+        if not client_key:
+            raise
+        # Either a concurrent send won the unique constraint, or the row
+        # could not be written at all (the room was deleted mid-send and
+        # the FK failed). Re-read decides which; either way we return here
+        # and never broadcast a second frame for the same message.
+        existing = ChatMessage.objects.filter(
+            room=room, user=user, client_key=client_key).first()
+        if existing is None:
+            return _send_error(client_key, "Could not persist the message")
+        if existing.body != body or existing.kind != kind:
+            return _send_error(
+                client_key, "client_key is already bound to a different message")
+        return _send_ack(existing, room, client_key)
 
     # Publish to room topic
     msg_data = {
@@ -127,18 +229,15 @@ def _handle_send(user, data):
     }
     if decision == "warn":
         msg_data["moderation_decision"] = "warn"
+    if client_key:
+        msg_data["client_key"] = client_key
 
-    publish_topic(room.topic, msg_data)
+    publish(room.topic, msg_data)
 
     # Update room modified timestamp
     room.save(update_fields=["modified"])
 
-    return {
-        "type": "chat_message_ack",
-        "message_id": msg.pk,
-        "room_id": room.pk,
-        "created": msg.created.isoformat(),
-    }
+    return _send_ack(msg, room, client_key)
 
 
 def _handle_edit(user, data):

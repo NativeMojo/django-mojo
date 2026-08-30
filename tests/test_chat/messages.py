@@ -496,3 +496,337 @@ def test_subscription_auth(opts):
     ChatMembership.objects.create(room=opts.room, user=outsider, status="banned")
     can = outsider.on_realtime_can_subscribe(f"chat:{opts.room.pk}")
     assert_true(not can, "expected banned member cannot subscribe")
+
+
+# ---------------------------------------------------------------------------
+# client_key — idempotent send identity
+# ---------------------------------------------------------------------------
+
+def _make_room(name, user, rules=None):
+    """Create a fresh room owned by `user`, deleting any prior run's copy."""
+    from mojo.apps.chat.models import ChatRoom, ChatMembership
+
+    ChatRoom.objects.filter(name=name).delete()
+    room = ChatRoom.objects.create(name=name, kind="group", user=user)
+    if rules is not None:
+        room.rules = rules
+        room.save()
+    ChatMembership.objects.get_or_create(room=room, user=user, defaults={"role": "owner"})
+    return room
+
+
+@th.tier("core")
+@th.django_unit_test()
+def test_client_key_retry_returns_same_message(opts):
+    """A resend with the same client_key acks the original, creating no second row."""
+    from mojo.apps.chat.handler import handle_chat_message
+    from mojo.apps.chat.models import ChatMessage
+
+    frame = {
+        "type": "chat_message",
+        "room_id": opts.room.pk,
+        "body": "idempotent hello",
+        "client_key": "ck-retry-1",
+    }
+
+    first = handle_chat_message(opts.user1, dict(frame))
+    assert_eq(first["type"], "chat_message_ack", f"expected ack, got {first}")
+    assert_eq(first.get("client_key"), "ck-retry-1", "expected client_key echoed on ack")
+
+    second = handle_chat_message(opts.user1, dict(frame))
+    assert_eq(second["type"], "chat_message_ack", f"expected ack on retry, got {second}")
+    assert_eq(
+        second["message_id"], first["message_id"],
+        "expected the retry to ack the original message_id")
+
+    count = ChatMessage.objects.filter(
+        room=opts.room, user=opts.user1, client_key="ck-retry-1").count()
+    assert_eq(count, 1, f"expected exactly one stored message, got {count}")
+
+
+@th.tier("core")
+@th.django_unit_test()
+def test_client_key_rebind_refused(opts):
+    """Reusing a key with different content errors instead of dropping the message."""
+    from mojo.apps.chat.handler import handle_chat_message
+    from mojo.apps.chat.models import ChatMessage
+
+    frame = {
+        "type": "chat_message",
+        "room_id": opts.room.pk,
+        "body": "original body",
+        "client_key": "ck-rebind-1",
+    }
+    first = handle_chat_message(opts.user1, dict(frame))
+    assert_eq(first["type"], "chat_message_ack", f"expected ack, got {first}")
+
+    frame["body"] = "a completely different body"
+    second = handle_chat_message(opts.user1, dict(frame))
+    assert_eq(second["type"], "error", f"expected error on rebind, got {second}")
+    assert_true(
+        "already bound" in second["error"],
+        f"expected a rebind error, got {second['error']}")
+    assert_eq(second.get("client_key"), "ck-rebind-1", "expected client_key echoed on error")
+
+    rows = ChatMessage.objects.filter(
+        room=opts.room, user=opts.user1, client_key="ck-rebind-1")
+    assert_eq(rows.count(), 1, "expected no second row for a refused rebind")
+    assert_eq(
+        rows.first().body, "original body",
+        "expected the original body to survive the refused rebind")
+
+
+@th.tier("core")
+@th.django_unit_test()
+def test_client_key_absent_behaves_as_before(opts):
+    """Sends with no client_key still create one message each, with no key echo."""
+    from mojo.apps.chat.handler import handle_chat_message
+    from mojo.apps.chat.models import ChatMessage
+
+    count_before = ChatMessage.objects.filter(room=opts.room).count()
+
+    first = handle_chat_message(opts.user1, {
+        "type": "chat_message", "room_id": opts.room.pk, "body": "keyless one",
+    })
+    second = handle_chat_message(opts.user1, {
+        "type": "chat_message", "room_id": opts.room.pk, "body": "keyless one",
+    })
+
+    assert_eq(first["type"], "chat_message_ack", f"expected ack, got {first}")
+    assert_eq(second["type"], "chat_message_ack", f"expected ack, got {second}")
+    assert_true(
+        first["message_id"] != second["message_id"],
+        "expected two distinct messages when no client_key is supplied")
+    assert_true("client_key" not in first, "expected no client_key on a keyless ack")
+
+    count_after = ChatMessage.objects.filter(room=opts.room).count()
+    assert_eq(count_after, count_before + 2, "expected both keyless messages to persist")
+
+    stored = ChatMessage.objects.get(pk=first["message_id"])
+    assert_eq(stored.client_key, None, "expected a keyless message to store client_key=None")
+
+
+@th.tier("core")
+@th.django_unit_test()
+def test_client_key_echoed_in_broadcast(opts):
+    """The room broadcast carries the key, and a retry publishes nothing new."""
+    from mojo.apps.chat.handler import _handle_send
+
+    captured = []
+
+    def capture(topic, payload):
+        captured.append((topic, payload))
+
+    frame = {
+        "type": "chat_message",
+        "room_id": opts.room.pk,
+        "body": "broadcast me",
+        "client_key": "ck-broadcast-1",
+    }
+
+    result = _handle_send(opts.user1, dict(frame), publisher=capture)
+    assert_eq(result["type"], "chat_message_ack", f"expected ack, got {result}")
+    assert_eq(len(captured), 1, f"expected exactly one broadcast, got {len(captured)}")
+
+    topic, payload = captured[0]
+    assert_eq(topic, opts.room.topic, f"expected publish on the room topic, got {topic}")
+    assert_eq(
+        payload.get("client_key"), "ck-broadcast-1",
+        "expected client_key on the broadcast payload")
+
+    retry = _handle_send(opts.user1, dict(frame), publisher=capture)
+    assert_eq(retry["type"], "chat_message_ack", f"expected ack on retry, got {retry}")
+    assert_eq(
+        len(captured), 1,
+        f"expected the retry to publish nothing, got {len(captured)} broadcasts")
+
+
+@th.tier("core")
+@th.django_unit_test()
+def test_client_key_echoed_in_send_error(opts):
+    """A rejected send echoes the client_key so the client can correlate it."""
+    from mojo.apps.chat.handler import handle_chat_message
+    from mojo.apps.chat.models import ChatMessage
+
+    result = handle_chat_message(opts.user1, {
+        "type": "chat_message",
+        "room_id": opts.room.pk,
+        "body": "x" * 5000,  # room max_message_length is 4000
+        "client_key": "ck-error-1",
+    })
+    assert_eq(result["type"], "error", f"expected error for long message, got {result}")
+    assert_eq(result.get("client_key"), "ck-error-1", "expected client_key echoed on error")
+
+    assert_eq(
+        ChatMessage.objects.filter(client_key="ck-error-1").count(), 0,
+        "expected no row for a rejected send")
+
+
+@th.tier("core")
+@th.django_unit_test()
+def test_client_key_invalid_is_rejected(opts):
+    """Malformed client_keys are rejected, echo nothing, and store nothing."""
+    from mojo.apps.chat.handler import handle_chat_message
+    from mojo.apps.chat.models import ChatMessage
+
+    count_before = ChatMessage.objects.filter(room=opts.room).count()
+
+    bad_keys = [
+        "a" * 65,            # too long
+        12345,               # not a string
+        "has a space",       # disallowed character
+        "abc\n",             # trailing newline -- fullmatch, not $
+    ]
+
+    for bad in bad_keys:
+        result = handle_chat_message(opts.user1, {
+            "type": "chat_message",
+            "room_id": opts.room.pk,
+            "body": "should not persist",
+            "client_key": bad,
+        })
+        assert_eq(result["type"], "error", f"expected error for client_key {bad!r}")
+        assert_true(
+            "client_key must be" in result["error"],
+            f"expected a client_key validation error for {bad!r}, got {result['error']}")
+        assert_true(
+            "client_key" not in result,
+            f"expected the offending client_key {bad!r} not to be echoed back")
+
+    count_after = ChatMessage.objects.filter(room=opts.room).count()
+    assert_eq(count_after, count_before, "expected no messages stored for invalid keys")
+    assert_eq(
+        ChatMessage.objects.filter(body="should not persist").count(), 0,
+        "expected no message row for any invalid client_key")
+
+
+@th.tier("core")
+@th.django_unit_test()
+def test_client_key_history_author_scoped(opts):
+    """History returns client_key only on the requesting user's own messages."""
+    from mojo.apps.chat.handler import handle_chat_message
+
+    ack = handle_chat_message(opts.user1, {
+        "type": "chat_message",
+        "room_id": opts.room.pk,
+        "body": "author scoped key",
+        "client_key": "ck-history-1",
+    })
+    assert_eq(ack["type"], "chat_message_ack", f"expected ack, got {ack}")
+    message_id = ack["message_id"]
+
+    # The other member sees the message but not its key.
+    opts.client.login(TEST_EMAIL_2, TEST_PASSWORD)
+    resp = opts.client.get('/api/chat/room/messages', params={'room_id': opts.room.pk})
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}")
+    rows = [m for m in resp.json.data if m["id"] == message_id]
+    assert_eq(len(rows), 1, "expected the message in the other member's history")
+    assert_eq(
+        rows[0]["client_key"], None,
+        "expected another member's client_key to be withheld")
+
+    # The author sees their own key.
+    opts.client.login(TEST_EMAIL_1, TEST_PASSWORD)
+    resp = opts.client.get('/api/chat/room/messages', params={'room_id': opts.room.pk})
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}")
+    rows = [m for m in resp.json.data if m["id"] == message_id]
+    assert_eq(len(rows), 1, "expected the message in the author's own history")
+    assert_eq(
+        rows[0]["client_key"], "ck-history-1",
+        "expected the author to see their own client_key")
+
+
+@th.tier("core")
+@th.django_unit_test()
+def test_client_key_scoped_per_room(opts):
+    """The same key in a different room is a different message."""
+    from mojo.apps.chat.handler import handle_chat_message
+    from mojo.apps.chat.models import ChatMessage
+
+    other_room = _make_room("test-msg-key-room2", opts.user1)
+
+    key = "ck-per-room-1"
+    first = handle_chat_message(opts.user1, {
+        "type": "chat_message", "room_id": opts.room.pk,
+        "body": "same key, room one", "client_key": key,
+    })
+    second = handle_chat_message(opts.user1, {
+        "type": "chat_message", "room_id": other_room.pk,
+        "body": "same key, room two", "client_key": key,
+    })
+
+    assert_eq(first["type"], "chat_message_ack", f"expected ack in room one, got {first}")
+    assert_eq(second["type"], "chat_message_ack", f"expected ack in room two, got {second}")
+    assert_true(
+        first["message_id"] != second["message_id"],
+        "expected the same client_key in another room to create its own message")
+
+    assert_eq(
+        ChatMessage.objects.filter(
+            room=other_room, user=opts.user1, client_key=key).count(), 1,
+        "expected exactly one message stored in the second room")
+
+
+@th.tier("core")
+@th.django_unit_test()
+def test_client_key_retry_skips_rate_limit(opts):
+    """A retry is deduped before the rate limiter, so it is never rate limited."""
+    from mojo.apps.chat.handler import handle_chat_message
+
+    room = _make_room("test-msg-key-ratelimit", opts.user1, rules={"rate_limit": 1})
+
+    frame = {
+        "type": "chat_message",
+        "room_id": room.pk,
+        "body": "first and only",
+        "client_key": "ck-ratelimit-1",
+    }
+
+    first = handle_chat_message(opts.user1, dict(frame))
+    assert_eq(first["type"], "chat_message_ack", f"expected ack, got {first}")
+
+    # Consume the (limit of 1) budget so the limiter is exhausted.
+    blocked = handle_chat_message(opts.user1, {
+        "type": "chat_message", "room_id": room.pk, "body": "second in the window",
+    })
+    assert_eq(blocked["type"], "error", f"expected the limiter to be exhausted, got {blocked}")
+    assert_true(
+        "Rate limit" in blocked["error"],
+        f"expected a rate limit error, got {blocked['error']}")
+
+    retry = handle_chat_message(opts.user1, dict(frame))
+    assert_eq(
+        retry["type"], "chat_message_ack",
+        f"expected the retry to be deduped ahead of the rate limiter, got {retry}")
+    assert_eq(
+        retry["message_id"], first["message_id"],
+        "expected the retry to ack the original message")
+
+
+@th.tier("core")
+@th.django_unit_test()
+def test_client_key_unique_constraint_enforced(opts):
+    """The database refuses two messages with the same (room, user, client_key)."""
+    from django.db import IntegrityError, transaction
+    from mojo.apps.chat.models import ChatMessage
+
+    key = "ck-constraint-1"
+    ChatMessage.objects.filter(
+        room=opts.room, user=opts.user1, client_key=key).delete()
+
+    ChatMessage.objects.create(
+        room=opts.room, user=opts.user1, body="constraint one", client_key=key)
+
+    raised = False
+    try:
+        with transaction.atomic():
+            ChatMessage.objects.create(
+                room=opts.room, user=opts.user1, body="constraint two", client_key=key)
+    except IntegrityError:
+        raised = True
+
+    assert_true(raised, "expected IntegrityError on a duplicate (room, user, client_key)")
+    assert_eq(
+        ChatMessage.objects.filter(
+            room=opts.room, user=opts.user1, client_key=key).count(), 1,
+        "expected only the first message to survive")

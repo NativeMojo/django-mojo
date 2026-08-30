@@ -68,6 +68,10 @@ def on_chat_room_messages(request):
             "moderation_decision": msg.moderation_decision,
             "created": msg.created.isoformat(),
             "metadata": msg.metadata,
+            # Author-scoped: client keys are client-chosen and may encode
+            # device identity or content equality, so only the sender of a
+            # message ever sees its key.
+            "client_key": msg.client_key if msg.user_id == request.user.pk else None,
         })
 
     has_more = len(messages) == limit

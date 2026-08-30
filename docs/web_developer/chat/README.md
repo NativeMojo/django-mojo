@@ -40,6 +40,10 @@ All require JWT authentication via `Authorization: Bearer <token>`.
 
 Pagination: pass `limit` (max 200) and `before` (message ID cursor).
 
+Each history row is `{id, user_id, body, kind, edited_at, moderation_decision, created,
+metadata, client_key}`. `client_key` is **author-scoped**: it carries the key on your
+own messages and is `null` on everyone else's.
+
 ### Direct Messages
 
 | Method | Endpoint | Description |
@@ -59,9 +63,12 @@ Send via the existing realtime WebSocket connection. All require authentication.
 
 ### Send message
 ```json
-{"type": "chat_message", "room_id": 5, "body": "hello", "kind": "text"}
+{"type": "chat_message", "room_id": 5, "body": "hello", "kind": "text",
+ "client_key": "01J8Z0K3Q0X"}
 ```
-Response: `{"type": "chat_message_ack", "message_id": 123, "created": "..."}`
+Response: `{"type": "chat_message_ack", "message_id": 123, "room_id": 5, "created": "...", "client_key": "01J8Z0K3Q0X"}`
+
+`client_key` is optional — see [Idempotent sends](#idempotent-sends).
 
 ### Edit message
 ```json
@@ -88,11 +95,42 @@ Response: `{"type": "chat_message_ack", "message_id": 123, "created": "..."}`
 {"type": "chat_flag", "message_id": 42}
 ```
 
+## Idempotent sends
+
+A WebSocket send can be lost after the server stored it but before the ack reached you.
+Retrying blindly posts the message twice. To make a retry safe, put a `client_key` on
+the send frame.
+
+**How to use it**
+
+1. Generate a **fresh UUID or ULID per logical send** — one new key each time the user
+   presses send, not per connection and not per room.
+2. If the ack does not arrive, **resend the identical frame** — same `client_key`, same
+   `body`, same `kind`.
+3. Match the ack (and the `chat_message` event on the room topic) back to your pending
+   send by `client_key`; `message_id` is only known after the first ack.
+
+**Rules**
+
+- 1–64 characters from `A-Z a-z 0-9 . _ : -`, sent exactly as-is. No spaces, no
+  newlines, no surrounding whitespace — those are rejected with an error frame. Omit
+  the field (or send an empty string) to opt out entirely.
+- A retry returns the **original** `message_id`. No duplicate message is stored and no
+  duplicate `chat_message` event is broadcast.
+- **Reusing a key with different content is an error**, not a silent no-op: you get
+  `{"type": "error", "error": "client_key is already bound to a different message",
+  "client_key": "..."}` and nothing is stored. Never recycle a key for a new message —
+  generate a new one.
+- Keys are scoped per room and per sender. The same key in a different room is a
+  different message.
+- Every error frame from a send echoes your `client_key` back (except the frame
+  rejecting the key itself, which never echoes the bad value).
+
 ## Incoming Events (subscribe to `chat:{room_id}`)
 
 | Event type | Description |
 |-----------|-------------|
-| `chat_message` | New message `{message_id, room_id, user_id, body, kind, created}` |
+| `chat_message` | New message `{message_id, room_id, user_id, body, kind, created, client_key?}` |
 | `chat_message_edited` | Message edited `{message_id, body, edited_at}` |
 | `chat_message_flagged` | Message flagged (hide it) `{message_id}` |
 | `chat_reaction` | Reaction toggled `{message_id, user_id, emoji, action}` |
