@@ -3,7 +3,8 @@ from mojo import errors as merrors
 from mojo.helpers import dates
 from mojo.helpers.request import (
     identity_allows_group, is_override_user_session, restricted_identity)
-from ..models import ChatRoom, ChatMembership, ChatMessage
+from ..models import ChatRoom, ChatMembership
+from ..services.messages import send_message
 
 
 def _deny_cross_tenant_room(request, room):
@@ -87,10 +88,13 @@ def on_chat_room_join(request):
 
     # System message
     if created:
-        ChatMessage.objects.create(
-            room=room, user=request.user,
-            body=f"{request.user.display_name or request.user.username} joined",
-            kind="system",
+        # broadcast=False is load-bearing: this site publishes
+        # chat_member_joined below, never a chat_message frame.
+        send_message(
+            room, request.user,
+            f"{request.user.display_name or request.user.username} joined",
+            kind="system", client_authored=False,
+            enforce_room_policy=False, broadcast=False,
         )
         from mojo.apps.realtime import publish_topic
         publish_topic(room.topic, {
@@ -127,10 +131,12 @@ def on_chat_room_leave(request):
     membership.delete()
 
     # System message
-    ChatMessage.objects.create(
-        room=room, user=request.user,
-        body=f"{request.user.display_name or request.user.username} left",
-        kind="system",
+    # broadcast=False: chat_member_left is published below instead.
+    send_message(
+        room, request.user,
+        f"{request.user.display_name or request.user.username} left",
+        kind="system", client_authored=False,
+        enforce_room_policy=False, broadcast=False,
     )
     from mojo.apps.realtime import publish_topic
     publish_topic(room.topic, {
@@ -176,10 +182,12 @@ def on_chat_room_add_member(request):
         membership.save(update_fields=["status"])
 
     if created:
-        ChatMessage.objects.create(
-            room=room, user=request.user,
-            body=f"{target_user.display_name or target_user.username} was added",
-            kind="system",
+        # broadcast=False: this site publishes nothing on the room topic.
+        send_message(
+            room, request.user,
+            f"{target_user.display_name or target_user.username} was added",
+            kind="system", client_authored=False,
+            enforce_room_policy=False, broadcast=False,
         )
 
     return membership.on_rest_get(request)

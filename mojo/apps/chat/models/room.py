@@ -8,6 +8,11 @@ KIND_CHOICES = [
     ("channel", "Channel"),
 ]
 
+# Sentinel for the on_rest_pre_delete test seam. Local on purpose: importing
+# the services package at model-import time would be load-order coupling for
+# nothing.
+_UNSET = object()
+
 DEFAULT_RULES = {
     "allow_urls": True,
     "allow_media": True,
@@ -76,6 +81,23 @@ class ChatRoom(models.Model, MojoModel):
     def on_rest_pre_save(self, changed_fields, created):
         if created and not self.rules:
             self.rules = dict(DEFAULT_RULES)
+
+    def on_rest_pre_delete(self, *, handler=_UNSET):
+        """Notify the deletion handler before the message cascade runs.
+
+        `ChatMessage.room` is `on_delete=CASCADE` and `RestMeta.CAN_DELETE` is
+        True, so one room delete destroys every message in it at once -- the
+        worse orphan case for a consumer holding message references. The ids
+        are only readable before the delete, hence the pre hook.
+
+        `handler` is a keyword-only test seam with a sentinel default; the REST
+        layer calls this with no arguments.
+        """
+        from ..services.deletion import notify_room_deleted
+        if handler is _UNSET:
+            notify_room_deleted(self)
+        else:
+            notify_room_deleted(self, handler=handler)
 
     def on_rest_created(self):
         if self.user:

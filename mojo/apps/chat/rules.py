@@ -40,6 +40,68 @@ def check_rules(room, body, kind="text"):
     return errors
 
 
+def _payload_strings(value, out):
+    """Collect every string key and string value inside a payload."""
+    if isinstance(value, str):
+        out.append(value)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _payload_strings(item, out)
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(key, str):
+                out.append(key)
+            _payload_strings(item, out)
+
+
+def check_payload_rules(room, metadata):
+    """
+    Apply the room's URL/phone rules to string values inside a message payload.
+
+    `allow_urls=False` is a binary policy a room owner set, and check_rules
+    reads `body` only -- so without this a card could carry
+    {"link": "https://evil.tld/lure"} and defeat it outright.
+
+    The moderation classifier is deliberately NOT applied here: running a
+    heuristic over ids and slugs produces false positives with no recourse,
+    and `body` is the human-visible moderated surface.
+
+    Expects an already-validated, already-capped payload. Returns a list of
+    error strings; empty means the payload passes.
+    """
+    allow_urls = room.get_rule("allow_urls", True)
+    allow_phones = room.get_rule("allow_phone_numbers", True)
+    if allow_urls and allow_phones:
+        return []
+
+    if not metadata:
+        return []
+
+    values = []
+    _payload_strings(metadata, values)
+    if not values:
+        return []
+
+    from mojo.helpers import content_guard
+    result = content_guard.check_text("\n".join(values), surface="chat")
+
+    errors = []
+    if not allow_urls:
+        for match in result.matches:
+            if match.type in ("spam_link", "url"):
+                errors.append("URLs are not allowed in this room")
+                break
+    if not allow_phones:
+        for match in result.matches:
+            if match.type in ("spam_phone", "phone"):
+                errors.append("Phone numbers are not allowed in this room")
+                break
+
+    return errors
+
+
 def check_moderation(body):
     """
     Run content_guard moderation on message body.

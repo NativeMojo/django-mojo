@@ -6,6 +6,12 @@ MESSAGE_KIND_CHOICES = [
     ("text", "Text"),
     ("image", "Image"),
     ("system", "System"),
+    # Opaque, consumer-defined typed payload in `metadata`. Client-authored
+    # only when the host registers a validator for it.
+    ("card", "Card"),
+    # Server-authored only -- the send service refuses a client-authored
+    # `file` frame. Listed because production rows already carry this kind.
+    ("file", "File"),
 ]
 
 MODERATION_CHOICES = [
@@ -21,12 +27,12 @@ class ChatMessage(models.Model, MojoModel):
         # user pinned so comms admins can't spoof message authorship.
         NO_SAVE_FIELDS = [
             "user", "is_flagged", "flagged_by", "flagged_at",
-            "moderation_decision", "client_key",
+            "moderation_decision", "client_key", "metadata",
         ]
         GRAPHS = {
             "list": {
                 "fields": [
-                    "id", "room", "user", "body", "kind",
+                    "id", "room", "user", "body", "kind", "metadata",
                     "edited_at", "created",
                 ],
             },

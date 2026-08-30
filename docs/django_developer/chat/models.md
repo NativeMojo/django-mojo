@@ -24,6 +24,8 @@ Represents a chat room. Three kinds:
 **Hooks:**
 - `on_rest_pre_save` — sets default rules on creation
 - `on_rest_created` — auto-creates owner membership
+- `on_rest_pre_delete` — notifies the [deletion hook](services.md#deletion-hook)
+  with every message id in the room before the cascade destroys them
 
 **Default rules:**
 ```python
@@ -45,12 +47,35 @@ A single message in a room.
 - `room` — FK to ChatRoom
 - `user` — FK to User (sender)
 - `body` — message text (markdown)
-- `kind` — `"text"`, `"image"`, or `"system"`
+- `kind` — one of:
+
+  | Kind | Authorable by | Notes |
+  |------|---------------|-------|
+  | `text` | client, server | A body is required. |
+  | `image` | client, server | Body optional when `metadata` is non-empty. |
+  | `system` | **server only** | Join/leave/member-add notices. |
+  | `card` | server; client **only** with a registered validator | Opaque, consumer-defined typed payload in `metadata`. |
+  | `file` | **server only** | Listed because production rows already carry it. A client-authored `file` frame is refused. |
+
+  The choices tuple is descriptive, not restrictive — nothing in this codebase
+  runs `full_clean` on the save path, so `ChatMessage.objects.create` accepts
+  any string. Enforcement lives in
+  [`send_message`](services.md#kind-whitelist), which is the one creation path.
 - `moderation_decision` — `"allow"`, `"warn"`, or `"block"`
 - `edited_at` — set when message is edited
 - `is_flagged` — True if flagged by moderator (hidden from normal history)
 - `flagged_by`, `flagged_at` — who flagged and when
-- `metadata` — flexible JSONField
+- `metadata` — JSONField carrying the message payload: the card body for
+  `kind="card"`, the file reference for `kind="file"`, render hints for an
+  image. Validated on every send by
+  [`send_message`](services.md#metadata-contract): JSON scalars/lists/dicts
+  only, finite numbers, string keys of at most 64 characters, at most 5 levels
+  deep, and a byte cap on the compact JSON encoding
+  (`CHAT_METADATA_MAX_BYTES`, default **4096**). Listed in `NO_SAVE_FIELDS`, so
+  no future model-security route can let a client write it directly. Included
+  in both the `list` and `default` graphs, so a client renders a message
+  without a second fetch — note the `list` graph is live, it drives
+  `GET /api/chat/room/flagged`.
 - `client_key` — optional client-supplied idempotency key for the send
   (`CharField(max_length=64, null=True, blank=True)`). Set by the WebSocket
   `chat_message` handler; never writable over REST (listed in `NO_SAVE_FIELDS`).

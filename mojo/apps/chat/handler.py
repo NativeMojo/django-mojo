@@ -14,7 +14,7 @@ Message types:
 """
 import re
 
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 
 from mojo.helpers import logit, dates
 
@@ -69,6 +69,8 @@ def _send_ack(msg, room, client_key):
         "type": "chat_message_ack",
         "message_id": msg.pk,
         "room_id": room.pk,
+        "kind": msg.kind,
+        "metadata": msg.metadata,
         "created": msg.created.isoformat(),
     }
     if client_key:
@@ -133,14 +135,15 @@ def _handle_send(user, data, *, publisher=None):
     (room, user) pair: a retry with the same key returns the ack for the
     message already stored instead of creating a second one.
 
+    Everything from validation onward is delegated to
+    `services.messages.send_message`, the one creation path; this function owns
+    the WebSocket frame shape and the client_key idempotency contract.
+
     `publisher` is a test seam for the room broadcast; production callers
     leave it unset and the realtime publisher is used.
     """
     from .models import ChatMessage
-    from .rules import check_rules, check_moderation, check_rate_limit
-    from mojo.apps.realtime import publish_topic
-
-    publish = publisher or publish_topic
+    from .services.messages import send_message
 
     client_key, key_error = _client_key(data.get("client_key"))
     if key_error:
@@ -150,11 +153,10 @@ def _handle_send(user, data, *, publisher=None):
     room_id = data.get("room_id")
     body = (data.get("body") or "").strip()
     kind = data.get("kind", "text")
+    metadata = data.get("metadata")
 
     if not room_id:
         return _send_error(client_key, "room_id is required")
-    if not body and kind == "text":
-        return _send_error(client_key, "body is required")
 
     membership, room, error = _get_membership(user, room_id)
     if error:
@@ -175,32 +177,17 @@ def _handle_send(user, data, *, publisher=None):
         return _send_error(
             client_key, f"Cannot send messages (status: {membership.status})")
 
-    # Rate limit
-    if not check_rate_limit(room, user):
-        return _send_error(client_key, "Rate limit exceeded")
-
-    # Room rules
-    rule_errors = check_rules(room, body, kind)
-    if rule_errors:
-        return _send_error(client_key, rule_errors[0])
-
-    # Content moderation
-    decision, reasons = check_moderation(body)
-    if decision == "block":
-        return _send_error(
-            client_key, "Message blocked by moderation", reasons=reasons)
-
-    # Persist
+    # Validation, room policy, persistence and the broadcast all live in the
+    # send service. `client_authored=True` is what keeps a WebSocket client off
+    # the server-only kinds.
     try:
-        with transaction.atomic():
-            msg = ChatMessage.objects.create(
-                room=room,
-                user=user,
-                body=body,
-                kind=kind,
-                moderation_decision=decision,
-                client_key=client_key,
-            )
+        msg, error = send_message(
+            room, user, body, kind=kind, metadata=metadata,
+            client_authored=True,
+            client_key=client_key,
+            publisher=publisher,
+            broadcast_extra={"client_key": client_key} if client_key else None,
+        )
     except IntegrityError:
         if not client_key:
             raise
@@ -217,25 +204,10 @@ def _handle_send(user, data, *, publisher=None):
                 client_key, "client_key is already bound to a different message")
         return _send_ack(existing, room, client_key)
 
-    # Publish to room topic
-    msg_data = {
-        "type": "chat_message",
-        "message_id": msg.pk,
-        "room_id": room.pk,
-        "user_id": user.pk,
-        "body": body,
-        "kind": kind,
-        "created": msg.created.isoformat(),
-    }
-    if decision == "warn":
-        msg_data["moderation_decision"] = "warn"
-    if client_key:
-        msg_data["client_key"] = client_key
-
-    publish(room.topic, msg_data)
-
-    # Update room modified timestamp
-    room.save(update_fields=["modified"])
+    if error:
+        if client_key:
+            error["client_key"] = client_key
+        return error
 
     return _send_ack(msg, room, client_key)
 

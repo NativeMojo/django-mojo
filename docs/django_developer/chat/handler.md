@@ -8,7 +8,7 @@ Chat messages are sent and received over the existing realtime WebSocket connect
 
 ```json
 {"type": "chat_message", "room_id": 5, "body": "hello", "kind": "text",
- "client_key": "01J8Z0K3Q0X"}
+ "metadata": {}, "client_key": "01J8Z0K3Q0X"}
 ```
 
 Flow:
@@ -16,12 +16,41 @@ Flow:
 2. Validate membership
 3. **Dedupe on `client_key`** — return the existing ack if this key already sent
 4. Check `can_send` (`status == "active"`)
-5. Check rate limit
-6. Enforce room rules (max length, URL/phone/media restrictions)
-7. Run `content_guard.check_text()` — block or warn
-8. Persist `ChatMessage` to DB
-9. Publish to `chat:5` topic
-10. Return ack with `message_id`, `room_id`, `created`
+5. Hand off to [`send_message`](services.md) with `client_authored=True`, which
+   whitelists the kind, validates `metadata`, applies the rate limit, the room
+   rules, the card payload rules and moderation, persists the row and publishes
+   to `chat:5`
+6. Return ack with `message_id`, `room_id`, `kind`, `metadata`, `created`
+
+`_handle_send` owns the frame shape, the membership checks and the `client_key`
+idempotency contract; everything from validation onward lives in the send
+service, which is also what the server-authored system messages in
+`rest/rooms.py` use. The `IntegrityError` recovery below still sits in the
+handler — the service lets the exception propagate for exactly that reason.
+
+#### kind and metadata
+
+`kind` defaults to `"text"`. The **kind whitelist** is what makes accepting it
+from a client safe: a WebSocket client may author `text` and `image`, plus
+`card` when the host has registered a validator for it. `system` and `file` are
+**server-authored only** — a client frame carrying either is refused with
+`{"type": "error", "error": "Unsupported message kind"}` and nothing is stored.
+Any unrecognized kind string is refused the same way. See
+[Services](services.md#kind-whitelist).
+
+`metadata` is read from the frame (previously ignored) and validated on every
+send regardless of kind: JSON scalars/lists/dicts only, finite numbers, string
+keys, depth-bounded, and capped at `CHAT_METADATA_MAX_BYTES` (default 4096).
+See [the metadata contract](services.md#metadata-contract).
+
+**Body rule.** `kind="text"` still requires a body, exactly as before. Every
+other kind is satisfied by a body **or** non-empty validated metadata — an
+uncaptioned image or a bodyless card is normal. A message with neither is
+refused with `"body or metadata is required"`.
+
+Note the body check now runs *after* membership resolution rather than before
+it, because it lives in the send service. A non-member sending an empty body
+gets `"Not a member of this room"` instead of `"body is required"`.
 
 #### client_key — idempotent sends
 
@@ -76,6 +105,11 @@ re-raises the `IntegrityError` unchanged.
 `ChatMessage.RestMeta.NO_SAVE_FIELDS` also lists `client_key` so no future model-security
 route can let a client write it directly. (`ChatMessage` has no
 `uses_model_security` route today — this is forward defense, not a live control.)
+
+**Ack and broadcast shape.** Both the `chat_message_ack` frame and the
+`chat_message` broadcast carry `kind` and `metadata`, so a client renders the
+message without a second fetch. The `client_key` echo described above is
+unchanged and rides on both.
 
 **Test seam.** `_handle_send(user, data, *, publisher=None)` takes an optional
 `publisher` callable with the same signature as `publish_topic(topic, payload)`.
