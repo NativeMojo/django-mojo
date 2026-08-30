@@ -355,6 +355,20 @@ The send endpoint returns **503** with a fixed safe-retry body when the SMS tran
 
 Code TTL is configurable via `PHONE_VERIFY_CODE_TTL` (default 600 seconds). Codes are single-use and consumed on successful verification.
 
+### Phone Change Flow
+
+```
+POST /api/auth/phone/change/request  → OTP to the NEW number, returns session_token
+POST /api/auth/phone/change/confirm  → commits the new number, sets is_phone_verified=True
+POST /api/auth/phone/change/cancel   → discards the pending change
+```
+
+The request endpoint reports its send with the same predicates as phone verification above: **503** with the fixed safe-retry body when `sms_delivery.was_accepted()` is False, **400** with fixed copy when `sms_delivery.recipient_rejected()` classifies the failure as the number itself. A transport exception is caught and answered as the 503 rather than escaping as a 500.
+
+**Every failure path clears all four pieces of pending state** — `pending_phone`, `phone_change_otp`, `phone_change_otp_ts` and the `pc:` session-token JTI — through the shared `_clear_phone_change_state()` helper that `/cancel` also uses, so an outstanding `session_token` dies immediately rather than at TTL and the caller restarts cleanly at step 1. `phone_change_ts` is deliberately left alone, matching cancel's long-standing behavior.
+
+The old number is notified only **after** the classification returns: a change that never started must never text the previous owner.
+
 ## Post-Save Actions
 
 `POST_SAVE_ACTIONS = ['send_invite', 'disable', 'reactivate']`. The body key IS the action name. Each action requires `manage_users` (re-checked inside the handler).

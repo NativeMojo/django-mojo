@@ -114,6 +114,8 @@ Always returns success to prevent account enumeration:
 
 The hosted sign-in page (`/auth`) mirrors this honestly in its UX: it tells the user up front that a code arrives only if the number is already linked to an account, and offers a "Create an account" link in the SMS view for users who do not yet have one.
 
+**This endpoint deliberately never reports the send outcome.** An unknown identifier, a real account with no phone number on file, and an account whose SMS send failed all return the byte-identical body above. Any difference would be an account-existence oracle, so there is nothing here for a client to branch on — the operator gets the signal through incident events instead.
+
 ### Step 2 — Submit SMS Code
 
 **POST** `/api/auth/sms/verify`
@@ -146,10 +148,42 @@ The user can complete the second factor using either method. Use the same `mfa_t
 
 ---
 
+## Pre-Registration Phone Verification
+
+`POST /api/auth/phone/register/start` (see [Authentication](authentication.md#phone-based-registration-verify-then-register)) reports its send truthfully — unlike `/auth/sms/login` it has no account-existence check, so it has no enumeration surface and the bodies below are identical for registered and unregistered numbers:
+
+| Condition | Status | Response |
+|---|---|---|
+| SMS transport did not accept the message (misconfiguration, provider refusal or outage) | 503 | `{"status": false, "code": 503, "error": "Unable to send the text message right now. Please try again in a few minutes."}` — retryable |
+| Provider rejected the number itself (invalid, blocked, or not SMS-capable) | 400 | `{"status": false, "code": 400, "error": "This phone number cannot receive text messages."}` — retrying the same number will not help |
+
+Neither failure returns a `session_token`: restart at step 1. Provider error text and codes never reach the client.
+
+---
+
+## Rate Limits
+
+Each endpoint has its own per-IP bucket. They used to share a single 60/minute bucket by accident, which let code-request spam lock a legitimate user out of submitting their code.
+
+| Endpoint | Limit |
+|---|---|
+| `POST /api/auth/sms/send` | 10 requests / 60s per IP |
+| `POST /api/auth/sms/verify` | 10 requests / 60s per IP |
+| `POST /api/auth/sms/login` | 10 requests / 60s per IP |
+| `POST /api/auth/phone/register/start` | 5 requests / 300s per IP |
+| `POST /api/auth/phone/register/verify` | 10 requests / 60s per IP |
+
+Exceeding a bucket returns `429` with a `Retry-After` header.
+
+---
+
 ## Error Responses
 
 | Status | Cause |
 |--------|-------|
-| `400` | Missing required params, no phone number on account |
+| `400` | Missing required params; no phone number on account (`/api/auth/sms/send` only — `/api/auth/sms/login` never reveals this) |
 | `401` | Invalid or expired `mfa_token` |
 | `403` | Invalid or expired SMS code |
+| `429` | Rate limit exceeded — see the table above |
+
+`/api/auth/sms/login` is the exception: it returns `200` for every input, including a real account with no phone number on file. See the note under Step 1 above.

@@ -42,8 +42,13 @@ Requires authentication (Bearer token). Rate limited.
 | `phone_number` has an invalid format | 400 | `"error": "Invalid phone number format"` |
 | `phone_number` is the same as the current number | 400 | `"error": "New phone number must be different from current phone number"` |
 | `phone_number` is already registered to another account | 400 | `"error": "Phone number already in use"` |
-| SMS delivery to the new number failed | 400 | `"error": "Failed to send SMS to the new number — check the number and try again"` |
+| SMS transport did not accept the message (misconfiguration, provider refusal or outage) | 503 | `{"status": false, "code": 503, "error": "Unable to send the text message right now. Please try again in a few minutes."}` — offer a Retry button |
+| Provider rejected the new number itself (invalid, blocked, or not SMS-capable) | 400 | `{"status": false, "code": 400, "error": "This phone number cannot receive text messages."}` — retrying with the same number will not help |
 | Feature disabled via `ALLOW_PHONE_CHANGE` | 403 | `"error": "Phone number change is not allowed"` |
+
+**Every failure discards the pending change.** The stored target number, the OTP and the session-token id are all cleared before the error is returned, so the flow restarts at Step 1 — do not reuse a `session_token` from a request that failed, and do not keep one across a retry. The bodies above are fixed: provider error text and provider error codes never reach the client. Deployments running the legacy `MOJO_APP_STATUS_200_ON_ERROR` shim receive both failure bodies over HTTP 200 with the real `code` inside — read `status`/`code` from the body.
+
+The old number is only notified once the transport has accepted the code for the new number, so an aborted change never texts the previous owner.
 
 On success, a 6-digit OTP is sent via SMS to the **new** number. The current number and `is_phone_verified` flag are untouched until Step 2 is completed.
 

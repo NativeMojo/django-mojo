@@ -144,18 +144,21 @@ can confirm this by inspecting `registration.fields` from `GET /api/auth/config`
 
 ### SMS code autofill
 
-OTP texts (login and registration) include an origin-bound last line —
-`@<your-domain> #<code>` — so browsers can autofill the code. The hosted
-`/auth` and `/register` pages already handle this. If you build a custom
+OTP texts (login and registration) are a plain single line —
+`Your verification code is: 123456`. There is **no** origin-bound
+`@<your-domain> #<code>` line: it was removed because it suppressed Chrome's
+own native one-time-code chip. The hosted `/auth` and `/register` pages rely
+on the platform's native autofill, and so should you. If you build a custom
 code-entry UI:
 
-- Put `autocomplete="one-time-code"` on the code `<input>` — iOS Safari
-  autofills from the keyboard suggestion bar.
-- For Android Chrome, call the WebOTP API while the code step is visible:
-  `navigator.credentials.get({ otp: { transport: ['sms'] } })`, then fill the
-  field with the resolved `.code`.
-- Both require an HTTPS page whose domain matches the `@host` in the SMS — the
-  server derives that host from your request's `Origin` header.
+- Put `autocomplete="one-time-code"` on the code `<input>`. Android Chrome and
+  iOS Safari both offer the code from a message in this shape — that attribute
+  is the whole integration.
+- Do **not** call the WebOTP API (`navigator.credentials.get({ otp: ... })`).
+  It requires the `@host` binding line the server does not send, so it will
+  never resolve.
+- Serve the page over HTTPS.
+
 Passwordless accounts may also enroll a passkey (if `registration.passkey_prompt`
 is enabled) as an additional login path.
 

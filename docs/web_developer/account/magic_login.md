@@ -45,7 +45,9 @@ Always returns success to prevent account enumeration:
 
 For `method=email`, an email is sent using the `magic_login_link` template with a `{{ token }}` variable.
 
-For `method=sms`, the token is sent as a text message to the user's verified phone number. If the user has no phone number on file the request is silently ignored.
+For `method=sms`, the token is sent as a text message to the user's phone number, which is normalized to E.164 before the send. If the user has no phone number on file — or the stored number has no normalized form, which is treated the same way — the request is silently ignored and an operator incident is filed server-side.
+
+**The response never varies.** Not on account existence, not on the send outcome: a transport failure, a provider refusal and a successful send all return the same 200 body above. That uniformity is the anti-enumeration guarantee, so there is nothing for a client to branch on — never present "we sent it" as certainty.
 
 ### Step 2 — Complete Login
 

@@ -483,6 +483,17 @@ with no account has a clear path out. A snooping third party still learns nothin
 Do not change `on_sms_login` to branch on account existence — the privacy
 guarantee depends on the uniform response.
 
+**This invariant is now actually enforced for the no-phone case.** It used to
+leak: `_send_otp` raises `ValueException("No phone number on file for this
+account")`, and `on_sms_login` called it unguarded — so a real account with no
+phone number answered 400 while an unknown identifier answered 200, which is
+the enumeration oracle the paragraph above forbids. `on_sms_login` now handles
+the no-phone case at the call site, returning the same generic body and filing
+a `sms:login_no_phone` incident so the operator still gets the signal.
+`_send_otp` keeps its raise for its other, authenticated callers
+(`/auth/sms/send`), which are entitled to a real error. Send failures are
+absorbed the same way — the response is identical whatever the transport did.
+
 The page leads with the **primary credential**: when `password` is in
 `login.methods` the sign-in form is the landing view and every other method
 (SMS, passkey, Google, Apple, GitHub) is a button below an "or continue with"
@@ -544,24 +555,22 @@ for the exact rejection contract consumed by custom front-ends.
 ### SMS code autofill
 
 Every OTP text — the SMS-code login (`_send_otp`) and the registration
-phone-verify (`/auth/phone/register/start`) — is sent with an **origin-bound
-one-time-code line** appended:
+phone-verify (`/auth/phone/register/start`) — is a **plain single line**:
 
 ```
 Your verification code is: 123456
-
-@auth.example.com #123456
 ```
 
-The `@host` is taken from the request's `Origin` header (falling back to
-`Host`), so it matches the page the user is on. This line is required by
-Android Chrome's WebOTP API and is used by iOS Security Code AutoFill too.
+There is no `@host #code` binding line. `_otp_sms_body()`
+(`mojo/apps/account/rest/sms.py`) does not append one, and
+`tests/test_auth/sms_otp_autofill.py` asserts it never does: the WebOTP path
+was dropped because the binding line suppressed Chrome's own native
+one-time-code chip.
 
-The hosted login (SMS view) and registration (stepped verify) pages call the
-WebOTP API via a shared `_mat.watchOtp` helper — filling the code field, and
-submitting, the moment the SMS arrives. iOS has no WebOTP; it autofills from
-the keyboard suggestion bar via the code input's `autocomplete="one-time-code"`
-attribute. Both mechanisms require the page to be served over HTTPS.
+Autofill therefore comes from the platform, not from page JavaScript. Android
+Chrome and iOS both offer the code from a message in this shape when the input
+carries `autocomplete="one-time-code"`, which the hosted login (SMS view) and
+registration (stepped verify) pages both set.
 
 ### Passkey enrollment page (`/passkey`)
 
