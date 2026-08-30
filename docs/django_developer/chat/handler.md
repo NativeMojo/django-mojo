@@ -138,14 +138,47 @@ production callers omit it and the realtime publisher is used.
 - Publishes `chat_message_flagged` event (frontends hide the message)
 - Message stays in DB as evidence
 
-### chat_react — Toggle emoji reaction
+### chat_react — Add, remove or toggle an emoji reaction
 
 ```json
-{"type": "chat_react", "message_id": 42, "emoji": "\ud83d\udc4d"}
+{"type": "chat_react", "message_id": 42, "emoji": "\ud83d\udc4d", "action": "add"}
 ```
 
-- Toggle: add if not exists, remove if exists
-- Publishes `chat_reaction` event with `action: "added"` or `"removed"`
+`action` is **optional**:
+
+| `action` | Behaviour |
+|---|---|
+| absent | Legacy toggle — add if absent, remove if present. Unchanged. |
+| `"add"` | `get_or_create`. Acks `added` whether or not a row was written. |
+| `"remove"` | `filter(...).delete()`. Acks `removed` whether or not a row existed. |
+| anything else | `{"type": "error", "error": "Invalid action"}` |
+
+Explicit actions are **idempotent**, so a retried frame cannot invert the
+reaction the way a retried toggle did.
+
+> **The request verbs are `add`/`remove`; the ack and the `chat_reaction` event
+> report `added`/`removed`.** That mismatch is a shipped contract, not an
+> oversight. Do not rename either side.
+
+**A no-op does not broadcast.** `chat_reaction` is published only on a real
+state change — `get_or_create`'s `created` flag and `delete()`'s row count are
+the signal, free. `chat_react` is *not* rate limited (`check_rate_limit` runs
+inside `_handle_send` only), so publishing on every call would let one member
+loop `add` and fan one inbound frame out to every subscriber in the room. The
+idempotent **ack** is the useful half of the contract; the broadcast is not.
+
+**Target resolution.** The message must be one the caller was entitled to see —
+unflagged and at or after their `joined_at`, via
+`services.messages.join_bounded_messages`. A nonexistent message, a flagged
+one, one from before the caller joined, **and one in a room the caller is not
+in** all return the same `{"type": "error", "error": "Message not found"}`. The
+frame carries no `room_id`, so a distinguishable "Not a member of this room"
+would be a *global* cross-tenant message-existence oracle for any authenticated
+user. Keep those returns identical.
+
+**Test seam.** `_handle_react(user, data, *, publisher=None)` takes an optional
+publisher with the same signature as `publish_topic(topic, payload)`, so a test
+can assert on the broadcast — or its absence — without patching anything.
 
 ### chat_typing — Typing indicator (ephemeral)
 
@@ -163,9 +196,55 @@ production callers omit it and the realtime publisher is used.
 {"type": "chat_read", "room_id": 5, "up_to_message_id": 482}
 ```
 
-- For `direct`/`group` rooms: bulk-creates `ChatReadReceipt` for unread messages up to that ID
+- Requires a membership with `status in ("active", "muted")` — the same
+  predicate history and `/unread` use. A **banned** member is refused with
+  `"Not a member of this room"` and writes nothing; a **muted** member still
+  marks read, because mute stops sending, not reading (a muted member who
+  could not mark read would show as permanently unread to everyone else).
+- `up_to_message_id` is **resolved, not trusted** — see below
+- For `direct`/`group` rooms: bulk-creates `ChatReadReceipt` for unread messages up to the RESOLVED id
 - For `channel` rooms: updates `last_read_at` on ChatMembership
-- Publishes `chat_read` event for direct/group rooms (sender sees read indicator)
+- Publishes `chat_read` for direct/group rooms, carrying the **resolved** id,
+  and only when something resolved
+- Acks `{"type": "chat_read_ack", "room_id": 5, "up_to_message_id": <resolved or null>}`
+
+#### Target resolution and last_read_at
+
+Both this handler and `POST /api/chat/room/read` go through
+`services.read_state.mark_read`; the two used to carry duplicate copies of the
+receipt block and could drift.
+
+`resolve_read_target(room, membership, up_to_message_id)` returns **the newest
+message at or below the supplied id that the caller was entitled to see**, or
+`None`. A non-integer or `< 1` value resolves to `None`; so does an id below
+everything the caller may read. `None` writes nothing, broadcasts nothing, and
+acks `up_to_message_id: null`.
+
+`last_read_at` comes from `target.created`, not `utcnow()`, and **only moves
+forward**. There is no mark-unread feature, and the channel branch of
+`GET /api/chat/unread` counts `created__gt=last_read_at`, so rewinding would
+resurrect already-read messages as unread. This is a real behaviour change for
+channels, which previously stamped the wall clock.
+
+> **Resolution applies the join bound, NOT the disappearing-message TTL.**
+> This is deliberate and easy to get wrong. TTL expiry is monotonic in age and
+> age is monotonic in pk, so once message N has aged out, every message below
+> it has too — a TTL-bounded `pk__lte=N` lookup is *empty*, not "the newest
+> message still on screen". Resolving through `visible_messages` would
+> therefore **discard the read entirely** in exactly the race the clamp exists
+> to survive, and the sender's read indicator would never update for a message
+> the other party genuinely read. Visibility belongs on *which id you may
+> name* (`join_bounded_messages` — entitlement, which does not expire), not on
+> *which messages the acknowledgement covers*. Receipts are sourced from the
+> same join bound, for the same reason.
+
+Receipts are bounded by `pk`, `last_read_at` by `created`. `created` is
+`auto_now_add` set in Python while `pk` comes from the database sequence, so
+under concurrent inserts the two orderings can disagree; the pairing matches
+how `GET /api/chat/unread` reads each. It is not a claim that they agree.
+
+**Test seam.** `_handle_read(user, data, *, publisher=None)`, same contract as
+`_handle_send`'s.
 
 ## Integration
 

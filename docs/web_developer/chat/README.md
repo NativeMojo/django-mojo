@@ -73,6 +73,21 @@ not an error.
 return for you — the same join-date bound, and the same disappearing-message
 expiry. A badge therefore never exceeds what opening the room shows.
 
+**The server resolves `up_to_message_id`; trust the id it echoes, not the one
+you sent.** It is clamped to the newest message at or below your value that you
+are allowed to have seen — an id from another room, one from before you joined,
+a flagged one, or a number that does not exist yet all clamp downward rather
+than being taken at face value. `POST /api/chat/room/read` returns it as
+`data.up_to_message_id` (a new field alongside the existing `data.status`); it
+is `null` when nothing resolved, including for a non-numeric value, which now
+answers cleanly instead of erroring.
+
+A message that has since aged out of a disappearing-message room still counts:
+the read happened, so receipts and the `chat_read` event still go out.
+
+**Banned members cannot mark read.** Muted members can — mute stops sending,
+not reading.
+
 ## WebSocket Messages
 
 Send via the existing realtime WebSocket connection. All require authentication.
@@ -97,10 +112,40 @@ Response:
 {"type": "chat_edit", "message_id": 42, "body": "updated text"}
 ```
 
-### React to message (toggle)
+### React to message
 ```json
-{"type": "chat_react", "message_id": 42, "emoji": "\ud83d\udc4d"}
+{"type": "chat_react", "message_id": 42, "emoji": "\ud83d\udc4d", "action": "add"}
 ```
+
+`action` is optional and controls whether the call is a toggle or idempotent:
+
+| `action` | What happens |
+|---|---|
+| omitted | Toggle — adds if you have not reacted, removes if you have. The original behaviour. |
+| `"add"` | Ensures the reaction exists. Sending it twice leaves one reaction. |
+| `"remove"` | Ensures it does not. Sending it twice leaves none. |
+| anything else | `{"type": "error", "error": "Invalid action"}` |
+
+**Prefer `add`/`remove` over the toggle.** A retried toggle inverts the
+reaction; a retried `add` does not. Both explicit forms always ack the state
+they guarantee, whether or not anything changed.
+
+> **Mind the verbs.** You *send* `add` / `remove`. The ack and the
+> `chat_reaction` event report `added` / `removed`. The two vocabularies do not
+> match, and that is the shipped contract — do not send `added`.
+
+```json
+{"type": "chat_react_ack", "message_id": 42, "emoji": "\ud83d\udc4d", "action": "added"}
+```
+
+**A no-op does not broadcast.** You still get your ack, but other subscribers
+see no `chat_reaction` event when nothing actually changed. Drive your own UI
+from the ack; drive everyone else's from the event.
+
+A message you cannot react to — nonexistent, flagged, sent before you joined,
+or in a room you are not in — returns the same
+`{"type": "error", "error": "Message not found"}` in every case. The error does
+not tell you which.
 
 ### Typing indicator
 ```json
@@ -111,6 +156,10 @@ Response:
 ```json
 {"type": "chat_read", "room_id": 5, "up_to_message_id": 482}
 ```
+
+Acks `{"type": "chat_read_ack", "room_id": 5, "up_to_message_id": 480}` with
+the **server-resolved** id (see [Read State](#read-state)) — `null` if nothing
+resolved, in which case nothing was written and no `chat_read` event went out.
 
 ### Flag message (moderator)
 ```json
@@ -217,9 +266,9 @@ the send frame.
 | `chat_message` | New message `{message_id, room_id, user_id, body, kind, metadata, created, client_key?}` |
 | `chat_message_edited` | Message edited `{message_id, body, edited_at}` |
 | `chat_message_flagged` | Message flagged (hide it) `{message_id}` |
-| `chat_reaction` | Reaction toggled `{message_id, user_id, emoji, action}` |
+| `chat_reaction` | Reaction changed `{message_id, user_id, emoji, action}` — `action` is `added`/`removed`; not sent for a no-op |
 | `chat_typing` | User is typing `{room_id, user_id}` |
-| `chat_read` | Messages read `{room_id, user_id, up_to_message_id}` |
+| `chat_read` | Messages read `{room_id, user_id, up_to_message_id}` — the id is server-resolved, not the sender's raw value, and the event only fires when one resolved |
 | `chat_member_joined` | Member joined `{room_id, user_id}` |
 | `chat_member_left` | Member left `{room_id, user_id}` |
 
@@ -236,6 +285,6 @@ the send frame.
 
 | Kind | Join | History | Use case |
 |------|------|---------|----------|
-| `direct` | Auto (DM endpoint) | Full | 1:1 private messages |
+| `direct` | Auto (DM endpoint) | From join date | 1:1 private messages |
 | `group` | Invite only | From join date | Teams, support |
 | `channel` | Self-join | Full | Announcements, community |

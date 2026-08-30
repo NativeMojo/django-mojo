@@ -8,7 +8,7 @@ Message types:
   - chat_message: Send a new message to a room
   - chat_edit: Edit an existing message
   - chat_flag: Flag a message for moderation
-  - chat_react: Toggle an emoji reaction
+  - chat_react: Add, remove or toggle an emoji reaction
   - chat_typing: Broadcast typing indicator (ephemeral)
   - chat_read: Mark messages as read
 """
@@ -315,13 +315,27 @@ def _handle_flag(user, data):
     }
 
 
-def _handle_react(user, data):
-    """Handle adding/removing an emoji reaction (toggle)."""
+def _handle_react(user, data, *, publisher=None):
+    """Handle adding/removing an emoji reaction.
+
+    `action` is optional. Absent, the call toggles exactly as it always did.
+    `"add"` and `"remove"` are explicit and idempotent, so a retried frame
+    cannot invert the reaction. Anything else is refused.
+
+    The request verbs are `add`/`remove`; the ack and the `chat_reaction` event
+    keep reporting `added`/`removed`. That mismatch is a shipped contract, not
+    an oversight -- do not "fix" it.
+
+    `publisher` is a test seam for the room broadcast; production callers leave
+    it unset and the realtime publisher is used.
+    """
     from .models import ChatMessage, ChatReaction, ChatMembership
+    from .services.messages import join_bounded_messages
     from mojo.apps.realtime import publish_topic
 
     message_id = data.get("message_id")
     emoji = (data.get("emoji") or "").strip()
+    action = data.get("action")
 
     if not message_id:
         return {"type": "error", "error": "message_id is required"}
@@ -329,43 +343,75 @@ def _handle_react(user, data):
         return {"type": "error", "error": "emoji is required"}
     if len(emoji) > 8:
         return {"type": "error", "error": "Invalid emoji"}
+    if action is not None and action not in ("add", "remove"):
+        return {"type": "error", "error": "Invalid action"}
+
+    # ONE error for every unreachable target: nonexistent, flagged, before the
+    # caller joined, or in a room they are not in. The frame carries no
+    # room_id, so a distinguishable "Not a member of this room" would make this
+    # a GLOBAL, cross-tenant message-existence oracle for any authenticated
+    # user. Keep these three returns identical.
+    not_found = {"type": "error", "error": "Message not found"}
 
     msg = ChatMessage.objects.filter(pk=message_id).select_related("room").first()
     if not msg:
-        return {"type": "error", "error": "Message not found"}
+        return not_found
 
-    # Must be a member
     membership = ChatMembership.objects.filter(room=msg.room, user=user).first()
     if not membership or membership.status == "banned":
-        return {"type": "error", "error": "Not a member of this room"}
+        return not_found
 
-    # Toggle reaction
-    existing = ChatReaction.objects.filter(
-        message=msg, user=user, emoji=emoji,
-    ).first()
+    # Bound the target exactly as history is bounded, minus the TTL: a member
+    # may react to anything they were entitled to see.
+    if not join_bounded_messages(msg.room, membership).filter(pk=msg.pk).exists():
+        return not_found
 
-    if existing:
-        existing.delete()
-        action = "removed"
+    if action == "add":
+        # unique_together on (message, user, emoji) backs this: a concurrent
+        # duplicate re-gets instead of raising.
+        _, changed = ChatReaction.objects.get_or_create(
+            message=msg, user=user, emoji=emoji,
+        )
+        result = "added"
+    elif action == "remove":
+        deleted, _ = ChatReaction.objects.filter(
+            message=msg, user=user, emoji=emoji,
+        ).delete()
+        changed = bool(deleted)
+        result = "removed"
     else:
-        ChatReaction.objects.create(message=msg, user=user, emoji=emoji)
-        action = "added"
+        # Legacy toggle -- unchanged for clients that send no action.
+        existing = ChatReaction.objects.filter(
+            message=msg, user=user, emoji=emoji,
+        ).first()
+        if existing:
+            existing.delete()
+            result = "removed"
+        else:
+            ChatReaction.objects.create(message=msg, user=user, emoji=emoji)
+            result = "added"
+        changed = True
 
-    # Publish reaction event
-    publish_topic(msg.room.topic, {
-        "type": "chat_reaction",
-        "message_id": msg.pk,
-        "room_id": msg.room_id,
-        "user_id": user.pk,
-        "emoji": emoji,
-        "action": action,
-    })
+    # Publish ONLY on a real state change. chat_react is not rate limited
+    # (check_rate_limit lives inside _handle_send), so broadcasting on every
+    # call would let one member loop `add` and fan 1 inbound frame out to every
+    # subscriber in the room. The idempotent ack below is the useful half.
+    if changed:
+        publish = publisher or publish_topic
+        publish(msg.room.topic, {
+            "type": "chat_reaction",
+            "message_id": msg.pk,
+            "room_id": msg.room_id,
+            "user_id": user.pk,
+            "emoji": emoji,
+            "action": result,
+        })
 
     return {
         "type": "chat_react_ack",
         "message_id": msg.pk,
         "emoji": emoji,
-        "action": action,
+        "action": result,
     }
 
 
@@ -399,9 +445,18 @@ def _handle_typing(user, data):
     return None  # No ack for typing
 
 
-def _handle_read(user, data):
-    """Handle marking messages as read."""
-    from .models import ChatRoom, ChatMessage, ChatMembership, ChatReadReceipt
+def _handle_read(user, data, *, publisher=None):
+    """Handle marking messages as read.
+
+    Everything from the target clamp onward lives in
+    `services.read_state.mark_read`, which `POST /api/chat/room/read` shares --
+    the two used to carry duplicate copies of this block and could drift.
+
+    `publisher` is a test seam for the room broadcast; production callers leave
+    it unset and the realtime publisher is used.
+    """
+    from .models import ChatRoom, ChatMembership
+    from .services.read_state import mark_read
 
     room_id = data.get("room_id")
     up_to_message_id = data.get("up_to_message_id")
@@ -413,49 +468,33 @@ def _handle_read(user, data):
     if not room:
         return {"type": "error", "error": "Room not found"}
 
-    membership = ChatMembership.objects.filter(room=room, user=user).first()
+    # Active + muted, the same predicate history and `/unread` use. A muted
+    # member still reads; only a banned one is shut out. Letting a banned
+    # member stamp receipts would write state they have no standing to write,
+    # and a muted member who could NOT mark read would show as permanently
+    # unread to everyone else in the room.
+    membership = ChatMembership.objects.filter(
+        room=room, user=user, status__in=["active", "muted"],
+    ).first()
     if not membership:
         return {"type": "error", "error": "Not a member of this room"}
 
-    if room.kind == "channel":
-        # Channels: just update last_read_at on membership
-        membership.last_read_at = dates.utcnow()
-        membership.save(update_fields=["last_read_at"])
-    else:
-        # Direct/group: create read receipts for unread messages
-        unread_messages = ChatMessage.objects.filter(
-            room=room,
-            pk__lte=up_to_message_id,
-            is_flagged=False,
-        ).exclude(
-            user=user,  # Don't create receipts for own messages
-        ).exclude(
-            read_receipts__user=user,  # Skip already-read messages
-        ).values_list("pk", flat=True)
+    target = mark_read(room, user, membership, up_to_message_id)
 
-        receipts = [
-            ChatReadReceipt(message_id=msg_id, user=user)
-            for msg_id in unread_messages
-        ]
-        if receipts:
-            ChatReadReceipt.objects.bulk_create(receipts, ignore_conflicts=True)
-
-        # Also update last_read_at for convenience
-        membership.last_read_at = dates.utcnow()
-        membership.save(update_fields=["last_read_at"])
-
-    # Publish read event for direct/group so sender sees read indicator
-    if room.kind in ("direct", "group"):
+    # Publish the RESOLVED id, and only when something resolved -- the sender's
+    # read indicator must not be whatever integer the reader sent.
+    if target is not None and room.kind in ("direct", "group"):
         from mojo.apps.realtime import publish_topic
-        publish_topic(room.topic, {
+        publish = publisher or publish_topic
+        publish(room.topic, {
             "type": "chat_read",
             "room_id": room.pk,
             "user_id": user.pk,
-            "up_to_message_id": up_to_message_id,
+            "up_to_message_id": target.pk,
         })
 
     return {
         "type": "chat_read_ack",
         "room_id": room.pk,
-        "up_to_message_id": up_to_message_id,
+        "up_to_message_id": target.pk if target else None,
     }

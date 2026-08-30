@@ -137,6 +137,30 @@ Returns existing DM room if one exists between the two users, or creates a new o
 {"room_id": 5, "up_to_message_id": 482}
 ```
 
+Requires a membership with `status in ("active", "muted")` — the same predicate
+history and `/unread` use. A **banned** member gets 404 `"Not a member"` and
+writes nothing; a **muted** member still marks read.
+
+`up_to_message_id` is resolved through `services.read_state.mark_read`, shared
+with the `chat_read` WebSocket handler — see
+[Target resolution and last_read_at](handler.md#target-resolution-and-last_read_at)
+for the clamp, the monotonic `last_read_at`, and why the disappearing-message
+TTL is deliberately excluded from resolution.
+
+The response carries the resolved id **additively**:
+
+```json
+{"status": true, "code": 200, "data": {"status": true, "up_to_message_id": 480}}
+```
+
+The endpoint returns a plain dict with no `data` key, so the response decorator
+wraps it — `data.status` is unchanged and `data.up_to_message_id` is the new
+field. It is `null` when nothing resolved.
+
+A **non-numeric** `up_to_message_id` now resolves to `null` and returns 200.
+It previously ran a bare `int()` and raised `ValueError` out of the view as a
+500.
+
 ### `GET /api/chat/unread` — Unread counts
 
 Returns unread message counts per room for the authenticated user.

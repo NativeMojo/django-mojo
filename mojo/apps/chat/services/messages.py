@@ -4,7 +4,8 @@ Server-side chat message creation and read visibility.
 `visible_messages` is the one read bound: every reader of a room's history --
 the REST history endpoint, the unread counter, and the WebSocket handler --
 narrows through it, so the join-time cutoff and the disappearing-message TTL
-cannot drift apart between callers.
+cannot drift apart between callers. `join_bounded_messages` is its TTL-free
+half, the entitlement bound `services.read_state` resolves against.
 
 `send_message` is the one creation path for a chat message. It whitelists the
 kind, validates and size-bounds the `metadata` payload, applies the room's
@@ -367,14 +368,19 @@ def send_message(room, user, body, kind="text", metadata=None, *,
 # ---------------------------------------------------------------------------
 
 
-def visible_messages(room, membership):
-    """Messages in `room` that `membership` is allowed to see.
+def join_bounded_messages(room, membership):
+    """Messages in `room` the caller was ever entitled to see: unflagged, and
+    at or after their join time in every room kind except `channel`.
 
-    Three bounds, all AND-ed: unflagged, the join-time history cutoff for
-    invite-based rooms, and the room's disappearing-message TTL. `membership`
-    is None only on the manage_chat moderator read path -- a moderator
-    reviewing a room they never joined has no joined_at to be bound by.
-    Ordering, cursor and limit stay with the caller.
+    This is `visible_messages` MINUS the disappearing-message TTL, and it is
+    the bound that answers "which message id may this caller name?" --
+    entitlement, which does not expire. `services.read_state` resolves read and
+    react targets through it for exactly that reason; see that module for why
+    applying the TTL there would discard a read instead of clamping it.
+
+    `membership` is None only on the manage_chat moderator read path -- a
+    moderator reviewing a room they never joined has no joined_at to be bound
+    by. Ordering, cursor and limit stay with the caller.
 
     The cutoff is excluded for `channel` rather than allowlisted for
     `direct`/`group` on purpose. `ChatRoom.kind` is a caller-settable
@@ -391,6 +397,18 @@ def visible_messages(room, membership):
     qs = ChatMessage.objects.filter(room=room, is_flagged=False)
     if membership and room.kind != "channel":
         qs = qs.filter(created__gte=membership.joined_at)
+    return qs
+
+
+def visible_messages(room, membership):
+    """Messages in `room` that `membership` is allowed to see RIGHT NOW.
+
+    `join_bounded_messages` plus the room's disappearing-message TTL. This is
+    the display bound -- what history returns and what the unread badge counts,
+    so the two can never disagree. Ordering, cursor and limit stay with the
+    caller.
+    """
+    qs = join_bounded_messages(room, membership)
     ttl = room.get_rule("disappearing_ttl", 0)
     if ttl:
         qs = qs.filter(created__gte=dates.utcnow() - timedelta(seconds=ttl))

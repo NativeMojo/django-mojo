@@ -1,13 +1,10 @@
 from mojo import decorators as md
 from mojo import errors as merrors
-from mojo.helpers import dates
 from mojo.helpers.request import is_override_user_session
 from .rooms import _deny_cross_tenant_room
-from ..models import (
-    ChatRoom, ChatMessage, ChatMembership,
-    ChatReadReceipt,
-)
+from ..models import ChatRoom, ChatMessage, ChatMembership
 from ..services.messages import visible_messages
+from ..services.read_state import mark_read
 
 
 @md.GET('room/messages')
@@ -149,45 +146,32 @@ def on_chat_dm(request):
 @md.requires_auth()
 @md.requires_params('room_id', 'up_to_message_id')
 def on_chat_room_read(request):
-    """Mark messages as read up to a given message id."""
+    """Mark messages as read up to a given message id.
+
+    `up_to_message_id` is clamped to the newest message the caller is entitled
+    to; the resolved id comes back in the response (additive). A value that
+    resolves to nothing writes nothing and returns `up_to_message_id: null` --
+    including a non-numeric one, which used to raise `ValueError` out of the
+    view as a 500.
+    """
     room = ChatRoom.objects.filter(pk=request.DATA.room_id).first()
     if not room:
         return ChatRoom.rest_error_response(request, 404, error="Room not found")
 
     _deny_cross_tenant_room(request, room)
 
-    membership = ChatMembership.objects.filter(room=room, user=request.user).first()
+    # Active + muted, the same predicate history and `/unread` use. A banned
+    # member has no standing to write read state; a muted member still reads.
+    membership = ChatMembership.objects.filter(
+        room=room, user=request.user, status__in=["active", "muted"],
+    ).first()
     if not membership:
         return ChatRoom.rest_error_response(request, 404, error="Not a member")
 
-    up_to = int(request.DATA.up_to_message_id)
+    target = mark_read(
+        room, request.user, membership, request.DATA.up_to_message_id)
 
-    if room.kind == "channel":
-        membership.last_read_at = dates.utcnow()
-        membership.save(update_fields=["last_read_at"])
-    else:
-        # Bulk create read receipts for unread messages
-        unread_ids = ChatMessage.objects.filter(
-            room=room,
-            pk__lte=up_to,
-            is_flagged=False,
-        ).exclude(
-            user=request.user,
-        ).exclude(
-            read_receipts__user=request.user,
-        ).values_list("pk", flat=True)
-
-        receipts = [
-            ChatReadReceipt(message_id=msg_id, user=request.user)
-            for msg_id in unread_ids
-        ]
-        if receipts:
-            ChatReadReceipt.objects.bulk_create(receipts, ignore_conflicts=True)
-
-        membership.last_read_at = dates.utcnow()
-        membership.save(update_fields=["last_read_at"])
-
-    return {"status": True}
+    return {"status": True, "up_to_message_id": target.pk if target else None}
 
 
 @md.GET('unread')

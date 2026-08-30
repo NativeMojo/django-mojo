@@ -47,3 +47,23 @@ Users with `manage_chat` in `user.permissions` have global access.
 
 - **Muted**: can subscribe (see messages) but handler rejects sends
 - **Banned**: cannot subscribe at all (`on_realtime_can_subscribe` returns False)
+
+`status in ("active", "muted")` is the **read-side predicate**, used by
+`GET /api/chat/room/messages`, `GET /api/chat/unread`, `chat_read`,
+`POST /api/chat/room/read` and `chat_react`. Active-only (as `chat_typing`
+uses) is the wrong bound for any of them: a muted member reads, and one who
+could not mark read would show as permanently unread to everyone else in the
+room.
+
+| Capability | active | muted | banned |
+|---|---|---|---|
+| Read history / unread counts | yes | yes | no |
+| Mark read (`chat_read`, `POST room/read`) — receipts and `last_read_at` | yes | yes | **no** |
+| React (`chat_react`) | yes | yes | **no** |
+| Send (`chat_message`) | yes | no | no |
+| Subscribe to the room topic | yes | yes | no |
+
+A banned member attempting to mark read or react gets an error and writes
+nothing. React's refusal is the **generic** `"Message not found"`, not a
+membership error — see [the handler doc](handler.md#chat_react--add-remove-or-toggle-an-emoji-reaction)
+for why distinguishing them would be a cross-tenant existence oracle.

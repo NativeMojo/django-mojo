@@ -2,7 +2,11 @@
 
 Domain logic for the chat app lives in `mojo/apps/chat/services/`.
 
-- `services/messages.py` — `send_message`, the one creation path for a chat message
+- `services/messages.py` — `send_message`, the one creation path for a chat
+  message, plus the two read bounds `join_bounded_messages` and
+  `visible_messages`
+- `services/read_state.py` — `resolve_read_target` and `mark_read`, the one
+  read-acknowledgement path
 - `services/deletion.py` — the deletion notification hook
 
 ## `send_message`
@@ -162,6 +166,65 @@ because `tests/test_chat` is scanned strict by `testit/isolation.py` — the
 package declares `default_core` with no cold budget and carries `@th.tier("core")`
 tests, so `th.server_settings()` and `mock.patch` both fail the whole package.
 The seams are the only legal way to exercise the settings-driven behavior.
+
+## Read bounds — `join_bounded_messages` vs `visible_messages`
+
+```python
+from mojo.apps.chat.services.messages import join_bounded_messages, visible_messages
+```
+
+Two bounds, one nested inside the other. Picking the wrong one is the single
+easiest mistake in this app, so they are named for what they answer:
+
+| Function | Bounds | Answers |
+|---|---|---|
+| `join_bounded_messages(room, membership)` | unflagged + `created >= joined_at` (every kind except `channel`) | *Which message id may this caller name?* — **entitlement** |
+| `visible_messages(room, membership)` | the above **plus** the room's `disappearing_ttl` | *What does this caller see right now?* — **display** |
+
+`visible_messages` is the display bound: `GET /api/chat/room/messages` and
+`GET /api/chat/unread` both narrow through it, so a badge can never count a
+message opening the room will not show.
+
+`join_bounded_messages` is the entitlement bound, and it is what
+`services/read_state.py` resolves read and react targets against. Entitlement
+does not expire; visibility does.
+
+`membership` is `None` only on the `manage_chat` moderator read path — a
+moderator reviewing a room they never joined has no `joined_at` to be bound by.
+The join cutoff is *excluded for `channel`* rather than allowlisted for
+`direct`/`group`: `ChatRoom.kind` is a caller-settable CharField, so an
+allowlist would fail **open** on any kind nobody reasoned about.
+
+## `read_state` — resolving a read acknowledgement
+
+```python
+from mojo.apps.chat.services.read_state import resolve_read_target, mark_read
+
+target = resolve_read_target(room, membership, up_to_message_id)   # ChatMessage or None
+target = mark_read(room, user, membership, up_to_message_id)       # writes, then returns it
+```
+
+`resolve_read_target` clamps a client-supplied bound to **the newest message at
+or below it that the caller was entitled to see**. `None` means "nothing to
+acknowledge": the value was not a usable message id (non-numeric, `< 1`), or
+the caller is entitled to no message at or below it. `mark_read` writes nothing
+and returns `None` in that case, and its callers must not broadcast.
+
+`mark_read` writes the receipt bulk-create for non-`channel` rooms and advances
+`membership.last_read_at` to `target.created` — **only forward**, never
+backward.
+
+> **Resolution and receipts apply the join bound, NOT the TTL.** TTL expiry is
+> monotonic in age and age is monotonic in pk: once message N has aged out,
+> every message below it has too, so a TTL-bounded `pk__lte=N` lookup is
+> *empty*, not clamped. Resolving through `visible_messages` would discard the
+> read entirely — no receipt, no `last_read_at`, no broadcast — in exactly the
+> race the clamp exists to survive. `cleanup.run_cleanup` is wired to nothing
+> in this repo, so expired rows persist indefinitely and nothing self-heals.
+
+Both `chat_read` and `POST /api/chat/room/read` go through `mark_read`; they
+previously carried duplicate copies of the receipt block and could drift.
+`chat_react` resolves its target through `join_bounded_messages` directly.
 
 ## Deletion hook
 
