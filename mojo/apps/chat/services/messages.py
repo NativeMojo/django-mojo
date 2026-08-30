@@ -1,5 +1,10 @@
 """
-Server-side chat message creation.
+Server-side chat message creation and read visibility.
+
+`visible_messages` is the one read bound: every reader of a room's history --
+the REST history endpoint, the unread counter, and the WebSocket handler --
+narrows through it, so the join-time cutoff and the disappearing-message TTL
+cannot drift apart between callers.
 
 `send_message` is the one creation path for a chat message. It whitelists the
 kind, validates and size-bounds the `metadata` payload, applies the room's
@@ -23,10 +28,11 @@ gate -- they are data integrity, not room policy.
 """
 import json
 import math
+from datetime import timedelta
 
 from django.db import transaction
 
-from mojo.helpers import logit, modules
+from mojo.helpers import dates, logit, modules
 from mojo.helpers.settings import settings
 
 logger = logit.get_logger("chat", "chat.log")
@@ -354,3 +360,38 @@ def send_message(room, user, body, kind="text", metadata=None, *,
     room.save(update_fields=["modified"])
 
     return msg, None
+
+
+# ---------------------------------------------------------------------------
+# Read visibility
+# ---------------------------------------------------------------------------
+
+
+def visible_messages(room, membership):
+    """Messages in `room` that `membership` is allowed to see.
+
+    Three bounds, all AND-ed: unflagged, the join-time history cutoff for
+    invite-based rooms, and the room's disappearing-message TTL. `membership`
+    is None only on the manage_chat moderator read path -- a moderator
+    reviewing a room they never joined has no joined_at to be bound by.
+    Ordering, cursor and limit stay with the caller.
+
+    The cutoff is excluded for `channel` rather than allowlisted for
+    `direct`/`group` on purpose. `ChatRoom.kind` is a caller-settable
+    CharField (`choices` is never enforced and `CREATE_PERMS` is
+    `["authenticated"]`), so an allowlist would fail OPEN on any kind nobody
+    reasoned about -- a room created with an arbitrary kind would hand a
+    re-added member the full history they missed. The exclusion fails closed.
+
+    `__gte`, not `__gt`: a founding participant whose membership and whose
+    first message land in the same microsecond keeps that message.
+    """
+    from ..models import ChatMessage
+
+    qs = ChatMessage.objects.filter(room=room, is_flagged=False)
+    if membership and room.kind != "channel":
+        qs = qs.filter(created__gte=membership.joined_at)
+    ttl = room.get_rule("disappearing_ttl", 0)
+    if ttl:
+        qs = qs.filter(created__gte=dates.utcnow() - timedelta(seconds=ttl))
+    return qs

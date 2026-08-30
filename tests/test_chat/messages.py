@@ -13,6 +13,10 @@ from testit.helpers import assert_true, assert_eq
 TEST_EMAIL_1 = 'chat-msg-user1@example.com'
 TEST_EMAIL_2 = 'chat-msg-user2@example.com'
 TEST_EMAIL_ADMIN = 'chat-msg-admin@example.com'
+# A THIRD user, used only by the join-cutoff tests. Deliberately not user1/user2:
+# on_chat_dm's reuse lookup filters only on user + kind="direct", so a
+# user1<->user2 direct room here would be silently handed to test_dm_flow.
+TEST_EMAIL_DM = 'chat-msg-dmuser@example.com'
 TEST_PASSWORD = 'TestPass1!'
 
 
@@ -23,7 +27,9 @@ def setup_messages(opts):
     from mojo.apps.chat.models import ChatRoom, ChatMembership, ChatMessage, ChatReaction, ChatReadReceipt
 
     # Clean up
-    User.objects.filter(email__in=[TEST_EMAIL_1, TEST_EMAIL_2, TEST_EMAIL_ADMIN]).delete()
+    User.objects.filter(email__in=[
+        TEST_EMAIL_1, TEST_EMAIL_2, TEST_EMAIL_ADMIN, TEST_EMAIL_DM,
+    ]).delete()
     ChatRoom.objects.filter(name__startswith="test-msg-").delete()
 
     # Create users (mark verified so login works with REQUIRE_VERIFIED_EMAIL)
@@ -43,6 +49,11 @@ def setup_messages(opts):
     opts.admin_user.is_email_verified = True
     opts.admin_user.save()
     opts.admin_user.add_permission("manage_chat")
+    opts.dm_user = User.objects.create_user(
+        username=TEST_EMAIL_DM, email=TEST_EMAIL_DM, password=TEST_PASSWORD,
+    )
+    opts.dm_user.is_email_verified = True
+    opts.dm_user.save()
 
     # Create a group room with both users
     opts.room = ChatRoom.objects.create(
@@ -830,3 +841,206 @@ def test_client_key_unique_constraint_enforced(opts):
         ChatMessage.objects.filter(
             room=opts.room, user=opts.user1, client_key=key).count(), 1,
         "expected only the first message to survive")
+
+
+# ---------------------------------------------------------------------------
+# Join-time history cutoff (item #3378)
+#
+# `ChatMembership.joined_at` bounds what a member may read in every room kind
+# except `channel`. A hard-deleted-and-recreated membership row re-stamps
+# joined_at, so a re-added member must not see what they missed. These tests
+# build the membership churn at the model layer, which is where tenant
+# products drive it -- no shipped endpoint creates a direct-room membership.
+#
+# `created` and `joined_at` are both auto_now_add and cannot be set at
+# create(); every timestamp below is placed with .update(), never inferred
+# from statement ordering.
+# ---------------------------------------------------------------------------
+
+
+def _cutoff_room(name, kind, owner):
+    """A room of `kind` whose owner membership predates every message in it.
+
+    Returns (room, t_old) -- `t_old` is the timestamp the caller should stamp
+    on the pre-cutoff messages.
+    """
+    from datetime import timedelta
+    from mojo.helpers import dates
+    from mojo.apps.chat.models import ChatRoom, ChatMembership
+
+    ChatRoom.objects.filter(name=name).delete()
+    room = ChatRoom.objects.create(name=name, kind=kind, user=owner)
+    ChatMembership.objects.create(room=room, user=owner, role="owner")
+    # The founding membership is backdated ahead of the messages, so this test
+    # asserts the cutoff and not merely the order two ORM writes happened in.
+    ChatMembership.objects.filter(room=room, user=owner).update(
+        joined_at=dates.utcnow() - timedelta(hours=2))
+    return room, dates.utcnow() - timedelta(hours=1)
+
+
+def _old_messages(room, author, at, count=2):
+    """`count` messages in `room` stamped `at`, returned newest-id last."""
+    from mojo.apps.chat.models import ChatMessage
+
+    ids = []
+    for i in range(count):
+        ids.append(ChatMessage.objects.create(
+            room=room, user=author, body=f"before the cutoff {i}").pk)
+    ChatMessage.objects.filter(pk__in=ids).update(created=at)
+    return ids
+
+
+def _rejoin(room, user, at):
+    """Hard-delete and recreate `user`'s membership, stamping joined_at `at`."""
+    from mojo.apps.chat.models import ChatMembership
+
+    ChatMembership.objects.filter(room=room, user=user).delete()
+    ChatMembership.objects.create(room=room, user=user, role="member")
+    ChatMembership.objects.filter(room=room, user=user).update(joined_at=at)
+
+
+def _history_ids(opts, email, room_id):
+    """The message ids `email` sees in `room_id` via the history endpoint."""
+    opts.client.login(email, TEST_PASSWORD)
+    resp = opts.client.get('/api/chat/room/messages', params={'room_id': room_id})
+    assert_eq(resp.status_code, 200, f"expected 200 from history, got {resp.status_code}")
+    return [m["id"] for m in resp.json.data]
+
+
+@th.tier("bug")
+@th.django_unit_test()
+def test_direct_room_rejoin_history_cutoff(opts):
+    """A re-added direct-room member reads only messages sent after they rejoined."""
+    from datetime import timedelta
+    from mojo.helpers import dates
+    from mojo.apps.chat.models import ChatMessage, ChatMembership
+
+    room, t_old = _cutoff_room("test-msg-dm-cutoff", "direct", opts.user1)
+    ChatMembership.objects.create(room=room, user=opts.dm_user, role="member")
+    old_ids = _old_messages(room, opts.user1, t_old)
+
+    # What a tenant product does on a remove/re-add: hard delete, recreate.
+    _rejoin(room, opts.dm_user, dates.utcnow() - timedelta(minutes=10))
+
+    new_id = ChatMessage.objects.create(
+        room=room, user=opts.user1, body="after the rejoin").pk
+
+    opts.dm_cutoff_room_id = room.pk
+    opts.dm_cutoff_new_message_id = new_id
+
+    seen = _history_ids(opts, TEST_EMAIL_DM, room.pk)
+    assert_eq(
+        seen, [new_id],
+        f"expected the re-added member to see only the post-rejoin message, got {seen}")
+
+    # The founding participant is untouched by the bound.
+    seen = set(_history_ids(opts, TEST_EMAIL_1, room.pk))
+    assert_eq(
+        seen, set(old_ids + [new_id]),
+        f"expected the founding member to still see all three messages, got {sorted(seen)}")
+
+
+@th.tier("bug")
+@th.django_unit_test()
+def test_arbitrary_kind_room_rejoin_cutoff(opts):
+    """The cutoff covers unknown room kinds, not just direct/group.
+
+    `ChatRoom.kind` is a caller-settable CharField -- `choices` is never
+    enforced and CREATE_PERMS is ["authenticated"] -- so a room created with an
+    arbitrary kind must be bound too. An allowlist of ("direct", "group")
+    fails open here; excluding only "channel" fails closed.
+    """
+    from datetime import timedelta
+    from mojo.helpers import dates
+    from mojo.apps.chat.models import ChatMessage, ChatMembership
+
+    room, t_old = _cutoff_room("test-msg-clubhouse-cutoff", "clubhouse", opts.user1)
+    ChatMembership.objects.create(room=room, user=opts.dm_user, role="member")
+    old_ids = _old_messages(room, opts.user1, t_old)
+
+    _rejoin(room, opts.dm_user, dates.utcnow() - timedelta(minutes=10))
+
+    new_id = ChatMessage.objects.create(
+        room=room, user=opts.user1, body="after the rejoin").pk
+
+    seen = _history_ids(opts, TEST_EMAIL_DM, room.pk)
+    assert_eq(
+        seen, [new_id],
+        f"expected an arbitrary-kind room to bound the re-added member to the "
+        f"post-rejoin message, got {seen}")
+
+    seen = set(_history_ids(opts, TEST_EMAIL_1, room.pk))
+    assert_eq(
+        seen, set(old_ids + [new_id]),
+        f"expected the founding member to still see all three messages, got {sorted(seen)}")
+
+
+@th.django_unit_test()
+def test_group_room_join_cutoff(opts):
+    """A member added to a group room after messages exist sees only newer ones."""
+    from datetime import timedelta
+    from mojo.helpers import dates
+    from mojo.apps.chat.models import ChatMessage, ChatMembership
+
+    room, t_old = _cutoff_room("test-msg-group-cutoff", "group", opts.user1)
+    old_ids = _old_messages(room, opts.user1, t_old)
+
+    ChatMembership.objects.create(room=room, user=opts.dm_user, role="member")
+    ChatMembership.objects.filter(room=room, user=opts.dm_user).update(
+        joined_at=dates.utcnow() - timedelta(minutes=10))
+
+    new_id = ChatMessage.objects.create(
+        room=room, user=opts.user1, body="after the join").pk
+
+    seen = _history_ids(opts, TEST_EMAIL_DM, room.pk)
+    assert_eq(
+        seen, [new_id],
+        f"expected the late joiner to see only the post-join message, got {seen}")
+
+    seen = set(_history_ids(opts, TEST_EMAIL_1, room.pk))
+    assert_eq(
+        seen, set(old_ids + [new_id]),
+        f"expected the founding member to still see all three messages, got {sorted(seen)}")
+
+
+@th.django_unit_test()
+def test_channel_room_has_no_cutoff(opts):
+    """Channels are public: a late joiner still reads the full history."""
+    from datetime import timedelta
+    from mojo.helpers import dates
+    from mojo.apps.chat.models import ChatMessage, ChatMembership
+
+    room, t_old = _cutoff_room("test-msg-channel-nocutoff", "channel", opts.user1)
+    old_ids = _old_messages(room, opts.user1, t_old)
+
+    ChatMembership.objects.create(room=room, user=opts.dm_user, role="member")
+    ChatMembership.objects.filter(room=room, user=opts.dm_user).update(
+        joined_at=dates.utcnow() - timedelta(minutes=10))
+
+    new_id = ChatMessage.objects.create(
+        room=room, user=opts.user1, body="after the join").pk
+
+    seen = set(_history_ids(opts, TEST_EMAIL_DM, room.pk))
+    assert_eq(
+        seen, set(old_ids + [new_id]),
+        f"expected a channel joiner to see the full history, got {sorted(seen)}")
+
+
+@th.django_unit_test()
+def test_direct_room_rejoin_unread_count(opts):
+    """The unread badge counts only what the history endpoint would return."""
+    room_id = opts.dm_cutoff_room_id
+
+    opts.client.login(TEST_EMAIL_DM, TEST_PASSWORD)
+    resp = opts.client.get('/api/chat/unread')
+    assert_eq(resp.status_code, 200, f"expected 200, got {resp.status_code}")
+
+    entry = None
+    for item in resp.json.data:
+        if item["room_id"] == room_id:
+            entry = item
+            break
+    assert_true(entry is not None, "expected the re-joined DM room in the unread counts")
+    assert_eq(
+        entry["unread_count"], 1,
+        f"expected only the post-rejoin message to be unread, got {entry['unread_count']}")

@@ -6,13 +6,15 @@ Represents a chat room. Three kinds:
 
 | Kind | Behavior |
 |------|----------|
-| `direct` | 1:1 DM. Exactly 2 members. Cannot join/leave. |
+| `direct` | 1:1 DM. Exactly 2 members. Cannot join/leave. Members see history from join date. |
 | `group` | Invite-only. Members see history from join date. |
 | `channel` | Public. Anyone can join/leave. Full history visible. |
 
 **Key fields:**
 - `name` — display name (blank for DMs)
-- `kind` — `"direct"`, `"group"`, or `"channel"`
+- `kind` — `"direct"`, `"group"`, or `"channel"`. The choices tuple is
+  descriptive: nothing validates it, so a caller may store any value. Read
+  visibility treats every kind except `channel` as invite-based.
 - `user` — FK to owner (User)
 - `group` — FK to Group (optional). Links room to the permission system.
 - `rules` — JSONField with per-room content policies
@@ -99,7 +101,22 @@ Links a user to a room with role and status.
 - `role` — `"member"`, `"admin"`, or `"owner"`
 - `status` — `"active"`, `"muted"`, or `"banned"`
 - `last_read_at` — used for channel unread counts
-- `joined_at` — timestamp
+- `joined_at` — timestamp, `auto_now_add`. **This is the read bound for every
+  non-`channel` room kind**: message history and unread counts return only
+  messages created at or after it (see
+  [`GET /api/chat/room/messages`](rest.md#messages)).
+
+> **Deleting and recreating a membership resets `joined_at`.** That is the
+> intended behaviour for a remove/re-add — the re-added member cannot read what
+> they missed — but it makes a *wholesale membership resync* destructive: code
+> that deletes every membership in a room and recreates them blanks the room's
+> history for everyone. Update the rows you mean to change; do not delete and
+> reinsert the set.
+>
+> **Contract: attach every founding membership before the first message.** A
+> participant whose membership is created after messages already exist starts
+> with an empty room. `on_chat_dm` and `POST room/member/add` both already do
+> this; consumer code driving the ORM directly must too.
 
 **Properties:**
 - `is_active` — status == "active"

@@ -48,6 +48,14 @@ empty) — see [Message metadata](#message-metadata).
 `/api/chat/room/flagged` now includes `metadata` on each row too, so a moderator
 sees the payload a card or file message carried.
 
+**History starts at your join date.** In every room kind except `channel`
+(`direct`, `group`, and anything else), history returns only messages sent at or
+after you joined the room. If you were removed and later re-added, the room opens
+at the moment you rejoined — the messages you missed are not returned, and there
+is no cursor that reaches them. Channels are public and always return their full
+history. Expect an empty first page for a freshly-joined room; that is the bound,
+not an error.
+
 ### Direct Messages
 
 | Method | Endpoint | Description |
@@ -60,6 +68,10 @@ sees the payload a card or file message carried.
 |--------|----------|-------------|
 | POST | `/api/chat/room/read` | Mark read `{room_id, up_to_message_id}` |
 | GET | `/api/chat/unread` | Unread counts per room |
+
+`/api/chat/unread` counts exactly the messages `/api/chat/room/messages` would
+return for you — the same join-date bound, and the same disappearing-message
+expiry. A badge therefore never exceeds what opening the room shows.
 
 ## WebSocket Messages
 

@@ -98,7 +98,22 @@ Paginated, newest first. Excludes flagged messages. Supports cursor pagination.
 
 Response includes `has_more` and `cursor` for pagination.
 
-For `group` rooms, only messages from after the user joined are returned.
+**Join-time history cutoff.** For every room kind **except `channel`**, only
+messages created at or after the caller's `ChatMembership.joined_at` are
+returned. The bound is an exclusion, not an allowlist: `ChatRoom.kind` is a
+caller-settable CharField, so a room created with an unrecognised kind is bound
+too. `joined_at` is `auto_now_add`, so deleting and recreating a membership row
+re-stamps it and the member loses everything sent before the new row — which is
+exactly what makes a remove/re-add safe.
+
+Two callers are deliberately not bound: `channel` rooms (public, full history to
+every member), and the `manage_chat` moderator read path, which has no
+membership row and therefore no `joined_at` to be bound by.
+
+The same three bounds — unflagged, join cutoff, disappearing-message TTL — live
+in `mojo.apps.chat.services.messages.visible_messages(room, membership)`. Every
+reader narrows through it, `GET /api/chat/unread` included, so a badge can never
+count a message this endpoint will not return.
 
 ### `GET /api/chat/room/flagged?room_id=5` — Flagged messages
 

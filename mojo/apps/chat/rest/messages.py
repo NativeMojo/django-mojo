@@ -7,6 +7,7 @@ from ..models import (
     ChatRoom, ChatMessage, ChatMembership,
     ChatReadReceipt,
 )
+from ..services.messages import visible_messages
 
 
 @md.GET('room/messages')
@@ -33,23 +34,15 @@ def on_chat_room_messages(request):
                 not is_override_user_session(request))):
             raise merrors.PermissionDeniedException()
 
-    qs = ChatMessage.objects.filter(room=room, is_flagged=False)
-
-    # For group rooms, only show messages from after the user joined
-    if room.kind == "group" and membership:
-        qs = qs.filter(created__gte=membership.joined_at)
+    # Unflagged, the join-time cutoff for every non-channel kind, and the
+    # disappearing-message TTL. One shared bound so history and the unread
+    # counter can never disagree.
+    qs = visible_messages(room, membership)
 
     # Cursor pagination: messages before a given message id
     before = request.DATA.get("before")
     if before:
         qs = qs.filter(pk__lt=int(before))
-
-    # Filter out expired disappearing messages
-    ttl = room.get_rule("disappearing_ttl", 0)
-    if ttl:
-        from datetime import timedelta
-        cutoff = dates.utcnow() - timedelta(seconds=ttl)
-        qs = qs.filter(created__gte=cutoff)
 
     qs = qs.order_by("-created")
 
@@ -208,10 +201,9 @@ def on_chat_unread(request):
 
     counts = []
     for ms in memberships:
-        qs = ChatMessage.objects.filter(
-            room=ms.room,
-            is_flagged=False,
-        ).exclude(user=request.user)
+        # Same bound as the history endpoint, so a badge can never count a
+        # message GET room/messages will not return.
+        qs = visible_messages(ms.room, ms).exclude(user=request.user)
 
         if ms.room.kind == "channel":
             # Channel: count messages after last_read_at
