@@ -746,8 +746,8 @@ See [Incident API: Request LLM Analysis](../logging/incidents.md#request-llm-ana
 | `MOJOSEC_HANDLER_MAX_ATTEMPTS` | `100` | Handler dispatch attempts before a MojoSec receipt is dead-lettered |
 | `MOJOSEC_HANDLER_QUEUED_STALE_SECONDS` | `1800` | Age after which a queued MojoSec receipt's vanished dispatch job is recovered |
 | `MOJOSEC_LEARNING_EVALUATION_RETENTION_DAYS` | `90` | Offline replay/shadow summary retention; clamped to 30–3,650 days |
-| `LLM_HANDLER_API_KEY` | `None` | Claude API key (enables LLM agent). An owner can also store it from the built-in Admin's Assistant setup |
-| `LLM_HANDLER_MODEL` | (auto-detect) | Claude model for LLM agent. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
+| `LLM_HANDLER_API_KEY` | `None` | Platform credential selectable by an exact policy route; it never substitutes for a missing `credential: "admin"` route |
+| `LLM_HANDLER_MODEL` | (legacy picker pin) | Does not select a guarded model; every guarded request uses its exact policy-route model |
 | `LLM_SAFETY_POLICY` | required | File-owned provider routes, budgets, and breaker thresholds; absence denies calls |
 | `LLM_SAFETY_POLICY_EXPECTED_HASH` | required DB agreement | Owner-activated hash of the policy deployed identically on every node |
 | `LLM_EMERGENCY_STOP` | `False` | Deployment OR protected database stop; database uncertainty denies |

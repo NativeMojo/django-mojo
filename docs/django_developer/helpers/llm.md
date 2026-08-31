@@ -14,9 +14,10 @@ from mojo.helpers import llm
 key = llm.get_api_key()
 # Resolution: LLM_ADMIN_API_KEY -> LLM_HANDLER_API_KEY -> None
 
-ok, error = llm.verify_api_key()
+ok, error = llm.verify_api_key("admin")
 # Returns (True, None) or (False, "error message")
-# Optionally pass api_key= for the fixed candidate-only configuration probe
+# Pass "handler" to check that exact stored target. Candidate material is
+# accepted only by the fresh-owner Assistant setup service.
 ```
 
 ## Model Selection

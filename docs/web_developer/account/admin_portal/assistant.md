@@ -1,6 +1,8 @@
 # Admin Assistant setup API
 
-Two endpoints, both **owner-only for read and write**. The coarse readiness
+Three endpoints expose this control plane. The Assistant GET and POST are
+**literal-owner-only**; the aggregate LLM-safety GET is for global security
+readers. The coarse readiness
 every operator needs rides in the Admin bootstrap (`features.assistant`);
 nothing below a literal superuser has a reason to read a key hint or a
 verification outcome.
@@ -47,6 +49,11 @@ of any kind.
     "handler_verify": {"ok": null, "code": "", "message": "", "at": ""},
     "emergency_stop": true,
     "emergency_stop_static": true,
+    "emergency_stop_database": false,
+    "route": {"feature": "assistant", "provider": "anthropic",
+              "model": "claude-sonnet-5", "credential": "admin",
+              "credential_configured": true, "ready": false,
+              "error": "emergency_stopped"},
     "autonomous_triage": false,
     "autonomous_triage_activated_at": null,
     "safety": {"hours": 24, "requests": [], "breakers": []},
@@ -90,10 +97,10 @@ of any kind.
 | Field | Meaning |
 |---|---|
 | `enabled` | The `LLM_ADMIN_ENABLED` flag |
-| `key.configured` | Whether **any** credential resolves |
+| `key.configured` | Legacy picker/display resolution only; guarded readiness is `route.credential_configured` |
 | `key.hint` | The last four characters, or `""` when the value is too short to hint at safely |
 | `key.source` | `admin` (stored here) · `deployment` (the settings file) · `fallback` (resolving through the platform key) · `none` |
-| `handler_key` | The **platform** key, `LLM_HANDLER_API_KEY` — used by every LLM feature (incident triage, the LLM agent) and as the Assistant's fallback. Same `configured` / `hint` / `source` shape; `source` is `admin` · `deployment` · `none` |
+| `handler_key` | The **platform** key, `LLM_HANDLER_API_KEY` — used only by policy routes declaring `credential: "handler"`. Legacy picker display may show it as the Assistant fallback, but guarded Assistant readiness never falls back. Same `configured` / `hint` / `source` shape; `source` is `admin` · `deployment` · `none` |
 | `model.selected` | The stored pin, `""` for automatic |
 | `model.effective` | What resolution actually returns right now |
 | `model.source` | `admin` · `deployment` · `automatic` |
@@ -102,6 +109,8 @@ of any kind.
 | `handler_verify` | The same record for the stored platform key |
 | `emergency_stop` | Effective deployment OR authoritative database stop |
 | `emergency_stop_static` | Whether deployment configuration is holding the stop on; it requires removal and redeploy |
+| `emergency_stop_database` | The editable authoritative database half; both Admin checkboxes bind and submit only this value |
+| `route` | Exact guarded Assistant provider, model and credential name plus safe readiness; never a key or fingerprint |
 | `autonomous_triage` | Authoritative primary-DB catch-all switch; fail-closed on ambiguity |
 | `autonomous_triage_activated_at` | Primary-DB no-history watermark, or `null` |
 | `safety` | Bounded aggregate usage and breaker rows; no per-row records or fingerprints |
@@ -168,13 +177,14 @@ page sees the truth on its very next call.
 ### `action: "verify"`
 
 ```json
-{"action": "verify"}                                  // check what the Assistant resolves
+{"action": "verify"}                                  // check the exact stored admin key
 {"action": "verify", "target": "handler"}             // check the stored platform key
 {"action": "verify", "api_key": "sk-…"}               // check a candidate before saving
 {"action": "verify", "api_key": "sk-…", "target": "handler"}
 ```
 
-`target` is `assistant` (default) or `handler`. It chooses which stored key is
+`target` is `assistant` (default, exact `LLM_ADMIN_API_KEY`) or `handler`
+(exact `LLM_HANDLER_API_KEY`). There is no fallback. It chooses which stored key is
 checked when no candidate is supplied, and which record (`verify` /
 `handler_verify`) a stored-key check is written to.
 
@@ -194,8 +204,11 @@ configuration this installation is running.
 A stored-key check is an ordinary guarded request and is refused while the
 emergency stop is effective. Only a supplied candidate receives the stopped
 exception: one installation-wide single-flight, fixed `Reply OK` request on
-the configuration route with no tools, images, cache, caller model, context,
-or pagination.
+the configuration route/model with no tools, images, cache, caller model,
+context, or pagination. Candidate input must be a non-empty string and the
+service re-proves active literal-owner authority; REST also requires fresh
+authentication. A configuration route with capabilities `["text"]` is
+sufficient.
 
 ### `action: "save"`
 
@@ -218,8 +231,8 @@ or pagination.
 | `emergency_stop` | Optional boolean. Protected database stop for ordinary provider requests |
 | `autonomous_triage` | Optional boolean. Enables only post-watermark catch-all incident work |
 
-`GET /api/account/admin/llm-safety` is available to globally authorized
-security readers. `hours` is clamped to 1–168. It returns schema version 2 and
+`GET /api/account/admin/llm-safety?hours=24` is available to globally
+authorized security readers. `hours` is clamped to 1–168. It returns schema version 2 and
 bounded provider/feature/status aggregates and breaker counts, never per-row
 ledger/circuit/attempt records or credential fingerprints.
 
@@ -314,7 +327,7 @@ scoped operation.
 
 | Status | When |
 |---|---|
-| `400` | Unknown action, an unexpected field, a malformed model, an API key over 4096 characters, a non-boolean `mcp_enabled`, or a `grant_id` that is not a positive integer |
+| `400` | Unknown action, unexpected field, malformed/empty candidate, malformed model, API key over 4096 characters, non-boolean switches, invalid `hours`, invalid reset provider, invalid historical timestamp/limit, or a non-positive `grant_id` |
 | `403` | Not a superuser, not an interactive bearer session, or the Origin does not match |
 | `440` | The session is not recent enough. Step up and retry |
 

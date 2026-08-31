@@ -360,7 +360,9 @@ Invokes the LLM security agent for autonomous triage. No parameters — the agen
 llm://
 ```
 
-**Requires:** `LLM_HANDLER_API_KEY` setting and the `anthropic` Python package (`anthropic>=0.52.0`).
+**Requires:** a valid safety-policy route, that route's exact configured
+credential, enabled autonomous catch-all state, and the `anthropic` Python
+package. Credential presence alone does not authorize work.
 
 #### `job://<module.function>?<params>`
 
@@ -501,7 +503,7 @@ The LLM agent provides autonomous security triage. When invoked via the `llm://`
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `LLM_HANDLER_API_KEY` | None | Anthropic API key. **Required** to enable LLM handlers. Settable from the built-in Admin's Assistant setup (stored encrypted; read at call time, no restart needed). |
+| `LLM_HANDLER_API_KEY` | None | Platform credential used only by routes declaring `credential: "handler"`; never fallback for an admin route. Settable from the built-in Admin's Assistant setup. |
 | `LLM_HANDLER_MODEL` | (auto-detect suggestion) | Legacy picker/helper input; guarded calls use the exact model owned by their safety-policy route |
 
 If the policy-selected credential is absent, the guard returns the safe
@@ -938,8 +940,8 @@ Single-server job functions follow the engine's calling convention: `func(job)` 
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `LLM_HANDLER_API_KEY` | None | Anthropic API key. Required for `llm://` handlers. Also settable from the built-in Admin's Assistant setup. |
-| `LLM_HANDLER_MODEL` | (auto-detect) | Claude model for triage. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
+| `LLM_HANDLER_API_KEY` | None | Platform credential used only when the feature's exact safety route declares `credential: "handler"` |
+| `LLM_HANDLER_MODEL` | (legacy picker pin) | Does not choose the guarded triage model; the safety-policy route owns it |
 
 ### OSSEC Settings
 

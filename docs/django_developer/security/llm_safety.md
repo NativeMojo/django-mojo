@@ -12,7 +12,7 @@ failover.
 
 The deployment must define an exact version-1 policy. This Python settings
 example is copyable; the temporary `_LLM_LIMITS` name is only used to avoid
-repeating the ten required keys:
+repeating the eleven required keys:
 
 ```python
 _LLM_LIMITS = {
@@ -168,8 +168,12 @@ and standalone-ticket active constraints make duplicate delivery converge.
 Running attempts carry an owner-token lease sized for the policy loop and
 heartbeat it around provider/tool work. Guard, provider, missing-input, and
 loop-exhaustion failures become a queued retry or terminal state; terminal
-incident work restores its prior status. Repair never requeues an unexpired
-worker.
+incident work restores its prior status. Transient exhaustion retains a safe
+cooldown (including bounded `retry_after`) and a later sweep may re-arm the
+same logical attempt after it expires; permanent context errors remain
+terminal. Every repair publication uses a new delivery generation, so a
+failed/canceled/expired Job key cannot suppress its replacement. Repair never
+requeues an unexpired worker.
 
 States are:
 
@@ -223,8 +227,11 @@ tools, images, cache, caller context, or pagination. Its concurrency lease is
 installation-wide across every candidate fingerprint. Owner/fresh-auth and
 audit remain at the Assistant REST/service boundary.
 
-Checking a stored credential is an ordinary guarded call and is refused while
-stopped. Model discovery is one page of at most 100 models with the policy
+Checking a stored credential targets exactly `admin` or `handler`, never
+fallback resolution. It is an ordinary guarded call, is refused while stopped,
+uses the configuration route/model and accounting, and forces prompt caching
+off. Candidate probes require owner authority in the service as well as the
+fresh-auth owner REST boundary. Model discovery is one page of at most 100 models with the policy
 timeout and one permit/ledger; it does not paginate invisibly.
 
 ## Stable failures and retry semantics

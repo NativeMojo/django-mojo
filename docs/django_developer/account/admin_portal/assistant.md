@@ -165,15 +165,18 @@ for the keys, the protection, and the resolution precedence.
 The setup state schema is version 2. Both Admin asset bundles expose the same
 fresh-auth owner actions: exact save/verify payloads, policy activation,
 breaker reset, bounded historical triage, and grant revocation. The effective
-emergency stop is deployment OR authoritative database state; a deployment
-true is shown explicitly and cannot be cleared from the browser.
+emergency stop is deployment OR authoritative database state. State reports
+static, database, and effective values separately; the editable checkbox owns
+only the database value, so an unrelated save under static=true cannot persist
+database=true. Static true is shown explicitly and calls resume only after it
+is removed from deployment configuration and every node is redeployed.
 
 Four capabilities ride in the Admin bootstrap:
 
 | Capability | Source |
 |---|---|
 | `assistant` | `view_admin` **alone** — the WebSocket handler admits nothing else |
-| `assistant_ready` | `assistant_setup.is_ready()` — the feature is on and a credential resolves |
+| `assistant_ready` | `assistant_setup.is_ready()` — the feature is on and its exact policy-route credential/model/control state is ready |
 | `assistant_setup` | `request.user.is_superuser` — the writer's own predicate |
 | `assistant_mcp` | `assistant_setup.mcp_ready()` — remote agent access is on, the assistant app is installed, and a public address resolves |
 
