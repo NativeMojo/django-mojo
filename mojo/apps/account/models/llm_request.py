@@ -39,21 +39,3 @@ class LLMRequest(models.Model, MojoModel):
             models.Index(fields=("feature", "status", "created"),
                          name="account_llmr_feature_idx"),
         ]
-
-    class RestMeta:
-        VIEW_PERMS = ["view_security", "manage_security", "security"]
-        SAVE_PERMS = ["manage_security", "security"]
-        CAN_CREATE = False
-        CAN_UPDATE = False
-        CAN_DELETE = False
-        DENY_AI = True
-        SENSITIVE_FIELDS = ["credential_fingerprint", "policy_hash"]
-        GRAPHS = {
-            "default": {"fields": [
-                "id", "created", "finished_at", "feature", "operation",
-                "provider", "model", "status", "error_code", "input_tokens",
-                "output_tokens", "cache_read_input_tokens",
-                "cache_creation_input_tokens", "duration_ms", "job_id",
-                "incident_id", "conversation_id", "file_id",
-            ]},
-        }

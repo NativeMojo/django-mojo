@@ -37,7 +37,13 @@ class AnthropicProvider(ProviderAdapter):
                 code = "provider_rejected"
         else:
             code = "provider_failed"
-        raise ProviderError(code, request_id) from None
+        retry_after = None
+        if code == "provider_rate_limited":
+            try:
+                retry_after = int(err.response.headers.get("retry-after", ""))
+            except (AttributeError, TypeError, ValueError):
+                pass
+        raise ProviderError(code, request_id, retry_after=retry_after) from None
 
     def call(self, messages, model, max_tokens, system=None, tools=None,
              cache_enabled=True, timeout=None):
@@ -60,17 +66,14 @@ class AnthropicProvider(ProviderAdapter):
         except Exception as err:
             self._raise_safe(err)
 
-    def list_models(self):
-        models = []
+    def list_models(self, timeout=None):
+        """Return one bounded page; pagination is a separately-accounted operation."""
         try:
-            page = self._client().models.list(limit=100)
-            for model in page.data:
-                models.append(model.model_dump(mode="json"))
-            while page.has_more:
-                page = self._client().models.list(limit=100, after_id=page.last_id)
-                for model in page.data:
-                    models.append(model.model_dump(mode="json"))
-            return models
+            kwargs = {"limit": 100}
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            page = self._client().models.list(**kwargs)
+            return [model.model_dump(mode="json") for model in page.data]
         except Exception as err:
             self._raise_safe(err)
 

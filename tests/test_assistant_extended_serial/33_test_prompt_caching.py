@@ -253,10 +253,10 @@ def test_zero_usage_warning_fires_once(opts):
     # Reset the process-level guard so this test is deterministic.
     llm._zero_cache_warned = False
 
-    fake_client, _ = _make_fake_client(_canned_response(usage={
+    response = _canned_response(usage={
         "input_tokens": 5, "output_tokens": 3,
         "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
-    }))
+    })
 
     stdlib_logger = llm.logger.logger
     handler = _ListHandler()
@@ -265,11 +265,9 @@ def test_zero_usage_warning_fires_once(opts):
     stdlib_logger.setLevel(logging.WARNING)
 
     try:
-        # Two calls — both return zero cache counters
-        llm.call(messages=[{"role": "user", "content": "hi"}], model="m",
-                 client=fake_client)
-        llm.call(messages=[{"role": "user", "content": "hi2"}], model="m",
-                 client=fake_client)
+        # Two guarded-call results — both return zero cache counters.
+        llm._warn_zero_cache(response, "m", True)
+        llm._warn_zero_cache(response, "m", True)
     finally:
         stdlib_logger.removeHandler(handler)
         stdlib_logger.setLevel(prev_level)

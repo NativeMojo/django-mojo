@@ -25,16 +25,3 @@ class LLMCircuitBreaker(models.Model, MojoModel):
         indexes = [
             models.Index(fields=("provider", "state"), name="account_llmb_state_idx"),
         ]
-
-    class RestMeta:
-        VIEW_PERMS = ["view_security", "manage_security", "security"]
-        SAVE_PERMS = ["manage_security", "security"]
-        CAN_CREATE = False
-        CAN_UPDATE = False
-        CAN_DELETE = False
-        DENY_AI = True
-        SENSITIVE_FIELDS = ["credential_fingerprint", "half_open_owner"]
-        GRAPHS = {"default": {"fields": [
-            "id", "created", "modified", "provider", "state", "generation",
-            "failure_count", "error_code", "opened_until",
-        ]}}

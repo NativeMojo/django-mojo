@@ -365,14 +365,13 @@ def test_cache_expiry(opts):
 
 
 @th.django_unit_test()
-def test_fetch_models_is_json_serializable(opts):
-    """_fetch_models_from_api returns dicts the Redis cache can serialize"""
+def test_provider_models_are_json_serializable(opts):
+    """The provider adapter returns dicts the Redis cache can serialize."""
     import json
     from unittest import mock
 
-    import anthropic
     from anthropic.types import ModelInfo
-    from mojo.helpers import llm
+    from mojo.helpers.llm_providers.anthropic import AnthropicProvider
 
     page = mock.Mock()
     page.data = [ModelInfo(
@@ -385,8 +384,7 @@ def test_fetch_models_is_json_serializable(opts):
     client = mock.Mock()
     client.models.list.return_value = page
 
-    with mock.patch.object(anthropic, "Anthropic", return_value=client):
-        models = llm._fetch_models_from_api(api_key="test-key")
+    models = AnthropicProvider(client=client).list_models(timeout=5)
 
     assert models, f"Expected a model list from the stubbed client, got {models}"
     assert isinstance(models[0]["created_at"], str), \
@@ -399,8 +397,8 @@ def test_fetch_models_is_json_serializable(opts):
 
 
 @th.django_unit_test()
-def test_ask_raises_without_api_key(opts):
-    """ask() raises ValueError when no API key is available"""
+def test_ask_raises_safe_error_without_configuration(opts):
+    """ask() exposes only the stable execution boundary when unconfigured."""
     from mojo.helpers import llm
 
     # Only test if no key is configured in the environment
@@ -408,10 +406,11 @@ def test_ask_raises_without_api_key(opts):
         return
 
     try:
-        llm.ask("hello")
-        assert False, "Expected ValueError from ask() with no API key"
-    except ValueError as e:
-        assert "API key" in str(e), f"Expected API key error, got: {e}"
+        llm.ask("hello", feature="unattributed")
+        assert False, "Expected LLMExecutionError from an unconfigured call"
+    except llm.LLMExecutionError as err:
+        assert err.code in {"policy_invalid", "policy_mixed", "credential_missing"}, \
+            f"Expected one stable safety code, got: {err.code}"
 
 
 # ---------------------------------------------------------------------------

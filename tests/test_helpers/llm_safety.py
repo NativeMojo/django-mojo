@@ -87,26 +87,14 @@ def test_policy_rejects_window_and_feature_mistakes(opts):
 def test_unknown_explicit_feature_never_calls_adapter(opts):
     from mojo.helpers import llm
 
-    class Messages:
-        calls = 0
-
-        def create(self, **kwargs):
-            self.calls += 1
-            raise AssertionError("unknown features must fail before provider I/O")
-
-    class Client:
-        messages = Messages()
-
     try:
         llm.call(
             [{"role": "user", "content": "hello"}], model="claude-test",
-            client=Client(), feature="mystery")
+            feature="mystery")
         assert False, "unknown explicit feature must be refused"
     except ValueError as err:
         assert str(err) == "Unknown LLM feature", \
             f"unknown feature error must be stable, got {err}"
-    assert Client.messages.calls == 0, \
-        f"provider call count must stay zero, got {Client.messages.calls}"
 
 
 @th.django_unit_test()
@@ -118,3 +106,65 @@ def test_fingerprint_is_provider_scoped_and_secret_free(opts):
     assert first != second, "the same credential under different providers needs different state"
     assert "secret-value" not in first, "the fingerprint must not contain credential material"
     assert len(first) == 64, f"the fingerprint must be sha256 hex, got {len(first)} chars"
+
+
+@th.django_unit_test()
+def test_non_owner_and_late_release_cannot_free_new_lease(opts):
+    from mojo.apps.account.services import llm_safety
+    from mojo.helpers.redis import get_connection
+
+    redis = get_connection()
+    marker = __import__("uuid").uuid4().hex
+    shared = _limits(concurrency=2)
+    feature = _limits(concurrency=2)
+    first = llm_safety.acquire_permit(
+        redis, "anthropic", marker, "unattributed", shared, feature, 20,
+        owner="first-owner", now=120)
+    keys = first["keys"]
+    try:
+        forged = dict(first, owner="not-the-owner")
+        assert llm_safety.release_permit(redis, forged, actual_tokens=1) is False, \
+            "a non-owner release must be refused"
+        assert redis.zcard(keys[0]) == 1, \
+            "a non-owner release must not free the shared concurrency lease"
+
+        assert llm_safety.release_permit(redis, first, actual_tokens=5) is True, \
+            "the real owner must be able to release its own lease"
+        second = llm_safety.acquire_permit(
+            redis, "anthropic", marker, "unattributed", shared, feature, 30,
+            owner="second-owner", now=181)
+        new_token_key = [key for key in second["keys"] if ":tokens:minute:" in key][0]
+        before = int(redis.get(new_token_key))
+        assert llm_safety.release_permit(redis, first, actual_tokens=0) is False, \
+            "a late release from the old owner must be refused"
+        assert redis.zcard(second["keys"][0]) == 1, \
+            "the old owner must not free the newer concurrency lease"
+        assert int(redis.get(new_token_key)) == before, \
+            "old-epoch reconciliation must not decrement the newer token epoch"
+        llm_safety.release_permit(redis, second, actual_tokens=30)
+    finally:
+        redis.delete(*(set(keys) | set(locals().get("second", {}).get("keys", []))))
+
+
+@th.django_unit_test()
+def test_public_call_has_no_adapter_bypass_parameters(opts):
+    import inspect
+    from mojo.helpers import llm
+    from mojo.apps.account.services import llm_safety
+
+    call_parameters = inspect.signature(llm.call).parameters
+    invoke_parameters = inspect.signature(llm_safety.invoke).parameters
+    assert "client" not in call_parameters, \
+        f"public call must not accept a provider client, got {tuple(call_parameters)}"
+    assert "candidate" not in invoke_parameters and "allow_stopped" not in invoke_parameters, \
+        f"production invoke must expose no stopped-state bypass, got {tuple(invoke_parameters)}"
+
+
+@th.django_unit_test()
+def test_safety_records_have_no_generic_row_rest_surface(opts):
+    from mojo.apps.account.models import LLMCircuitBreaker, LLMRequest
+    from mojo.apps.incident.models import IncidentLLMAttempt
+
+    for model in (LLMRequest, LLMCircuitBreaker, IncidentLLMAttempt):
+        assert not hasattr(model, "RestMeta"), \
+            f"{model.__name__} must be visible only through aggregate services"

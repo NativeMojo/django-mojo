@@ -10,10 +10,11 @@ Usage:
     model = llm.get_model("fast")      # latest Haiku
 
     # Quick one-shot question
-    answer = llm.ask("Summarize this text: ...")
+    answer = llm.ask("Summarize this text: ...", feature="scheduled_task")
 
     # Full messages API call (tool use, multi-turn, etc.)
-    response = llm.call(messages, system="You are...", tools=[...])
+    response = llm.call(
+        messages, system="You are...", tools=[...], feature="assistant")
 
     # API key helpers
     key = llm.get_api_key()
@@ -98,6 +99,15 @@ def get_api_key():
     return key
 
 
+class LLMExecutionError(Exception):
+    """Stable safe-code boundary; provider exception text never crosses it."""
+
+    def __init__(self, code, retry_after=None):
+        self.code = code
+        self.retry_after = retry_after
+        super().__init__(code)
+
+
 def verify_api_key(api_key=None):
     """
     Verify an Anthropic API key is valid.
@@ -109,7 +119,10 @@ def verify_api_key(api_key=None):
         return False, "No API key configured. Set LLM_ADMIN_API_KEY or LLM_HANDLER_API_KEY."
     try:
         from mojo.apps.account.services import llm_safety
-        llm_safety.verify_candidate(key)
+        if api_key is None:
+            llm_safety.verify_stored_key()
+        else:
+            llm_safety.verify_candidate(key)
         return True, None
     except Exception as err:
         code = getattr(err, "code", "provider_unavailable")
@@ -122,13 +135,9 @@ def verify_api_key(api_key=None):
 # Model discovery
 # ---------------------------------------------------------------------------
 
-def _fetch_models_from_api(api_key=None):
+def _fetch_models_from_api():
     """Fetch the full model list from Anthropic's /v1/models endpoint."""
     try:
-        if api_key is not None:
-            # Explicit-key seam retained for the adapter compatibility test.
-            from mojo.helpers.llm_providers import get_provider
-            return get_provider("anthropic", api_key=api_key).list_models()
         from mojo.apps.account.services import llm_safety
         return llm_safety.discover_models()
     except Exception:
@@ -360,7 +369,7 @@ def get_model(use="general"):
 # ---------------------------------------------------------------------------
 
 def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
-         client=None, feature=None, operation="call", context=None):
+         feature=None, operation="call", context=None):
     """
     Call the Anthropic messages API.
 
@@ -371,9 +380,7 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
     top level so Anthropic caches the prefix automatically. Disable via
     ``LLM_ADMIN_PROMPT_CACHE_ENABLED=False``.
 
-    ``client`` is a keyword-only test seam (item #2558): an object exposing
-    ``messages.create(**kwargs)``. Default (None) builds the real Anthropic
-    client from the configured API key, byte-identical to before.
+    Every provider request passes the installation safety policy and ledger.
     """
     global _zero_cache_warned
 
@@ -385,28 +392,28 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
         raise ValueError("LLM context identifiers must be scalar")
 
     cache_enabled = settings.get("LLM_ADMIN_PROMPT_CACHE_ENABLED", True, kind="bool")
-    resolved_model = model or get_model("general")
-    if client is not None:
-        from mojo.helpers.llm_providers import get_provider
-        result = get_provider("anthropic", client=client).call(
-            messages=messages, system=system, tools=tools,
-            model=resolved_model, max_tokens=max_tokens,
-            cache_enabled=cache_enabled)
-    else:
-        from mojo.apps.account.services import llm_safety
-        try:
-            result = llm_safety.invoke(
-                messages, system=system, tools=tools, model=model,
-                max_tokens=max_tokens, feature=normalize_feature(feature),
-                operation=operation, context=context)
-        except llm_safety.LLMSafetyError as err:
-            raise ValueError(err.code) from None
-        except Exception:
-            raise ValueError("safety_unavailable") from None
+    resolved_model = model or "policy-route-model"
+    from mojo.apps.account.services import llm_safety
+    try:
+        result = llm_safety.invoke(
+            messages, system=system, tools=tools, model=model,
+            max_tokens=max_tokens, feature=normalize_feature(feature),
+            operation=operation, context=context)
+    except llm_safety.LLMSafetyError as err:
+        raise LLMExecutionError(err.code, retry_after=err.retry_after) from None
+    except Exception:
+        raise LLMExecutionError("safety_unavailable") from None
 
     # Warn once per worker if caching is enabled but produced no cache activity.
     # Typically means the prefix is below the model's minimum cacheable size
     # (1024 tokens for Sonnet, 4096 for Opus).
+    _warn_zero_cache(result, resolved_model, cache_enabled)
+
+    return result
+
+
+def _warn_zero_cache(result, resolved_model, cache_enabled):
+    global _zero_cache_warned
     if cache_enabled and not _zero_cache_warned:
         usage = result.get("usage") or {}
         if usage.get("cache_creation_input_tokens", 0) == 0 and \
@@ -415,10 +422,7 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
             logger.warning(
                 f"Prompt caching enabled but no cache activity on first call "
                 f"(model={resolved_model}). Prefix likely below the model minimum "
-                f"(1024 tokens for Sonnet, 4096 for Opus)."
-            )
-
-    return result
+                f"(1024 tokens for Sonnet, 4096 for Opus).")
 
 
 def ask(prompt, system=None, model=None, max_tokens=4096, *, feature=None,
