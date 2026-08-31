@@ -37,7 +37,7 @@ SAFE_CODES = frozenset({
     "provider_authentication", "provider_billing_exhausted", "provider_failed",
     "provider_rate_limited", "provider_rejected", "provider_timeout",
     "provider_unavailable", "provider_unsupported", "route_missing",
-    "safety_unavailable",
+    "safety_unavailable", "triage_incomplete",
 })
 
 
@@ -200,9 +200,15 @@ def _policy_agreement(policy):
 def _as_bool(value):
     if isinstance(value, bool):
         return value
+    if isinstance(value, int) and not isinstance(value, bool) and value in (0, 1):
+        return bool(value)
     if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    _deny("control_state_unknown")
 
 
 def emergency_stopped():
@@ -647,9 +653,7 @@ def execute_guarded_for_test(messages, *, feature, operation="test", context=Non
         provider_factory=provider_factory, redis=redis, policy_raw=policy_raw)
 
 
-def _fixed_configuration_probe_core(credential, identity, operation,
-                                    provider_factory=None, redis=None,
-                                    policy_raw=None):
+def _fixed_configuration_probe_core(actor, credential, identity, operation):
     """Run the module-owned text-only four-token configuration probe.
 
     This is deliberately not parameterized with messages, tools, system,
@@ -660,7 +664,14 @@ def _fixed_configuration_probe_core(credential, identity, operation,
     from mojo.helpers.llm_providers import get_provider
     from mojo.helpers.llm_providers.base import ProviderError
 
-    policy = parse_policy(policy_raw)
+    recovery_probe = identity == "candidate-installation"
+    if recovery_probe:
+        # Authority is proved before policy, Redis, ledger, or provider work.
+        # Thus even a malformed installation cannot expose the stopped-state
+        # exception to an unauthorised caller.
+        from mojo.apps.account.services import system_settings
+        system_settings.require_system_admin(actor)
+    policy = parse_policy()
     feature = "configuration"
     route = policy["routes"].get(feature)
     limits = policy["features"].get(feature)
@@ -669,17 +680,16 @@ def _fixed_configuration_probe_core(credential, identity, operation,
         if route is None or limits is None:
             _deny("route_missing")
         _policy_agreement(policy)
-        recovery_probe = identity == "candidate-installation"
         if not recovery_probe and emergency_stopped():
             _deny("emergency_stopped")
         if not isinstance(credential, str) or not credential.strip():
             _deny("credential_missing")
         fingerprint = credential_fingerprint(provider, credential)
-        adapter = (provider_factory or get_provider)(provider, api_key=credential)
+        adapter = get_provider(provider, api_key=credential)
         if adapter is None or "text" not in route["capabilities"] \
                 or not adapter.supports("text"):
             _deny("capability_unsupported")
-        redis = redis or get_connection()
+        redis = get_connection()
         shared = dict(policy["shared"])
         feature_limits = dict(limits)
         if recovery_probe:
@@ -754,30 +764,19 @@ def _fixed_configuration_probe_core(credential, identity, operation,
     return True
 
 
-def _fixed_configuration_probe(credential, identity, operation):
-    """Production fixed-probe entry; no provider/policy injection surface."""
-    return _fixed_configuration_probe_core(credential, identity, operation)
-
-
-def execute_fixed_configuration_probe_for_test(
-        credential, identity, operation, *, provider_factory, redis=None,
-        policy_raw):
-    """Explicit test-only injection that retains every fixed-probe guard."""
-    return _fixed_configuration_probe_core(
-        credential, identity, operation, provider_factory=provider_factory,
-        redis=redis, policy_raw=policy_raw)
+def _fixed_configuration_probe(actor, credential, identity, operation):
+    """Fixed probe; candidate recovery re-proves actor authority in the core."""
+    return _fixed_configuration_probe_core(actor, credential, identity, operation)
 
 
 def verify_candidate(actor, candidate):
     """Owner-authorized fixed recovery probe; the only stopped exception."""
-    from mojo.apps.account.services import system_settings
-    system_settings.require_system_admin(actor)
     if not isinstance(candidate, str) or not candidate.strip() \
             or candidate != candidate.strip() or len(candidate) > 4096 \
             or any(char.isspace() for char in candidate):
         _deny("credential_missing")
     return _fixed_configuration_probe(
-        candidate, "candidate-installation", "candidate_key_probe")
+        actor, candidate, "candidate-installation", "candidate_key_probe")
 
 
 def verify_stored_key(target="admin"):
@@ -790,7 +789,7 @@ def verify_stored_key(target="admin"):
         _deny("credential_missing")
     fingerprint = credential_fingerprint("anthropic", credential)
     return _fixed_configuration_probe(
-        credential, fingerprint, f"stored_{target}_key_probe")
+        None, credential, fingerprint, f"stored_{target}_key_probe")
 
 
 def discover_models():

@@ -31,7 +31,7 @@ def test_stored_probe_uses_exact_target_and_candidate_requires_owner(opts):
 
     captured = []
 
-    def fixed(credential, identity, operation, **kwargs):
+    def fixed(actor, credential, identity, operation):
         captured.append((credential, identity, operation))
         return True
 
@@ -88,6 +88,7 @@ def test_stored_probe_uses_exact_target_and_candidate_requires_owner(opts):
 
 @th.django_unit_test()
 def test_fixed_probe_is_text_only_uncached_and_stored_stop_is_enforced(opts):
+    from mojo.apps.account.models import User
     from mojo.apps.account.services import llm_safety
 
     calls = []
@@ -118,13 +119,25 @@ def test_fixed_probe_is_text_only_uncached_and_stored_stop_is_enforced(opts):
                     "server_failures": 2, "open_seconds": 60},
     }
     policy["features"]["configuration"] = dict(policy["shared"])
-    with mock.patch.object(llm_safety, "_policy_agreement", lambda value: None), \
-            mock.patch.object(llm_safety, "emergency_stopped", return_value=False):
-        assert llm_safety.execute_fixed_configuration_probe_for_test(
-            "stored-secret", f"stored-{uuid.uuid4().hex}",
-            "stored_admin_key_probe",
-            provider_factory=lambda name, api_key: Adapter(), policy_raw=policy) is True, \
-            "the fixed text-only configuration probe did not complete"
+    policy = llm_safety.parse_policy(policy)
+    owner = User.objects.create_user(
+        username=f"candidate-owner-{uuid.uuid4().hex}",
+        email=f"candidate-owner-{uuid.uuid4().hex}@test.com",
+        password="Candidate_owner_test_99")
+    owner.is_active = True
+    owner.is_superuser = True
+    owner.save()
+    candidate = f"candidate-{uuid.uuid4().hex}"
+    try:
+        with mock.patch.object(llm_safety, "parse_policy", return_value=policy), \
+                mock.patch.object(llm_safety, "_policy_agreement", lambda value: None), \
+                mock.patch.object(llm_safety, "emergency_stopped", return_value=True), \
+                mock.patch("mojo.helpers.llm_providers.get_provider",
+                           side_effect=lambda name, api_key: Adapter()):
+            assert llm_safety.verify_candidate(owner, candidate) is True, \
+                "the actor-bound fixed candidate probe did not complete while stopped"
+    finally:
+        owner.delete()
     assert len(calls) == 1, f"one probe must equal one adapter call, got {len(calls)}"
     assert calls[0]["messages"] == [{"role": "user", "content": "Reply OK"}] \
         and calls[0]["system"] is None and calls[0]["tools"] is None, \
@@ -133,13 +146,67 @@ def test_fixed_probe_is_text_only_uncached_and_stored_stop_is_enforced(opts):
         and calls[0]["max_tokens"] == 4 and calls[0]["cache_enabled"] is False, \
         f"configuration probe did not bind route model/4 tokens/no cache: {calls[0]}"
 
-    with mock.patch.object(llm_safety, "_policy_agreement", lambda value: None), \
-            mock.patch.object(llm_safety, "emergency_stopped", return_value=True):
+    with mock.patch.object(llm_safety, "parse_policy", return_value=policy), \
+            mock.patch.object(llm_safety, "_policy_agreement", lambda value: None), \
+            mock.patch.object(llm_safety, "emergency_stopped", return_value=True), \
+            mock.patch.object(llm_safety.settings, "get", return_value="stored-secret"), \
+            mock.patch("mojo.helpers.llm_providers.get_provider",
+                       side_effect=lambda name, api_key: Adapter()):
         try:
-            llm_safety.execute_fixed_configuration_probe_for_test(
-                "stored-secret", "stored-identity", "stored_admin_key_probe",
-                provider_factory=lambda name, api_key: Adapter(), policy_raw=policy)
+            llm_safety.verify_stored_key("admin")
             assert False, "the stored probe bypassed the emergency stop"
         except llm_safety.LLMSafetyError as err:
             assert err.code == "emergency_stopped", \
                 f"stored stop denial used wrong code: {err.code}"
+
+
+@th.django_unit_test()
+def test_malformed_emergency_controls_fail_closed_before_provider(opts):
+    from mojo.apps.account.models import Setting
+    from mojo.apps.account.services import llm_safety
+
+    limits = {
+        "requests_minute": 2, "requests_hour": 10, "requests_day": 20,
+        "tokens_minute": 1000, "tokens_hour": 5000, "tokens_day": 10000,
+        "concurrency": 2, "max_input_bytes": 4096, "max_output_tokens": 128,
+        "timeout_seconds": 10, "max_loop_calls": 2,
+    }
+    raw = {
+        "version": 1,
+        "routes": {"assistant": {
+            "provider": "anthropic", "model": "claude-exact",
+            "credential": "admin", "capabilities": ["text"],
+        }},
+        "shared": dict(limits), "features": {"assistant": dict(limits)},
+        "breaker": {"auth_failures": 2, "rate_failures": 2,
+                    "server_failures": 2, "open_seconds": 60},
+    }
+    policy = llm_safety.parse_policy(raw)
+    provider = mock.Mock()
+    with mock.patch.object(llm_safety, "parse_policy", return_value=policy), \
+            mock.patch.object(llm_safety, "_policy_agreement", lambda value: None), \
+            mock.patch.object(llm_safety.settings, "get_static", return_value="maybe"), \
+            mock.patch.object(llm_safety.settings, "get", return_value="admin-secret"), \
+            mock.patch("mojo.helpers.llm_providers.get_provider", provider):
+        state = llm_safety.route_state("assistant")
+    assert state["ready"] is False and state["error"] == "control_state_unknown", \
+        f"malformed static stop did not fail closed: {state}"
+    assert provider.call_count == 0, \
+        "malformed static stop reached a provider adapter"
+
+    Setting.objects.filter(key="LLM_EMERGENCY_STOP", group=None).delete()
+    Setting.objects.bulk_create([
+        Setting(key="LLM_EMERGENCY_STOP", group=None, value="maybe")])
+    try:
+        with mock.patch.object(llm_safety, "parse_policy", return_value=policy), \
+                mock.patch.object(llm_safety, "_policy_agreement", lambda value: None), \
+                mock.patch.object(llm_safety.settings, "get_static", return_value=False), \
+                mock.patch.object(llm_safety.settings, "get", return_value="admin-secret"), \
+                mock.patch("mojo.helpers.llm_providers.get_provider", provider):
+            state = llm_safety.route_state("assistant")
+        assert state["ready"] is False and state["error"] == "control_state_unknown", \
+            f"malformed database stop did not fail closed: {state}"
+        assert provider.call_count == 0, \
+            "malformed database stop reached a provider adapter"
+    finally:
+        Setting.objects.filter(key="LLM_EMERGENCY_STOP", group=None).delete()

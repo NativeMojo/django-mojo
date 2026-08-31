@@ -154,7 +154,7 @@ def _stored_value(key):
 
 
 def _key_state():
-    """Where the effective credential comes from, and its last four characters.
+    """Where the exact admin credential comes from, and its last four characters.
 
     The raw value never leaves this function; only ``configured``, a four
     character hint, and a provenance word do.
@@ -166,10 +166,6 @@ def _key_state():
     if deployed:
         return {"configured": True, "hint": key_hint(deployed),
                 "source": "deployment"}
-    fallback = settings.get(HANDLER_KEY, None)
-    if fallback:
-        return {"configured": True, "hint": key_hint(fallback),
-                "source": "fallback"}
     return {"configured": False, "hint": "", "source": "none"}
 
 
@@ -186,7 +182,7 @@ def _handler_key_state():
     return {"configured": False, "hint": "", "source": "none"}
 
 
-def _model_state(refresh=False):
+def _model_state(refresh=False, route=None):
     pinned = _stored_value(MODEL_KEY)
     if isinstance(pinned, str):
         pinned = pinned.strip()
@@ -195,9 +191,10 @@ def _model_state(refresh=False):
         deployed = settings.get_static(MODEL_KEY, None)
         if isinstance(deployed, str) and deployed.strip():
             pinned, source = deployed.strip(), "deployment"
+    route = route or {}
     return {
         "selected": pinned or "",
-        "effective": llm.get_model("general"),
+        "effective": route.get("model") or "",
         "source": source or "automatic",
         "choices": llm.model_choices(refresh=refresh),
     }
@@ -524,17 +521,21 @@ def state(refresh=False, check=False):
         database_stop = llm_safety.emergency_stop_database()
     except Exception:
         database_stop = True
+    try:
+        static_stop = llm_safety.emergency_stop_static()
+    except Exception:
+        static_stop = True
     route = llm_safety.route_state("assistant")
     return {
         "schema_version": SCHEMA_VERSION,
         "enabled": bool(settings.get(ENABLED_KEY, False, kind="bool")),
         "key": _key_state(),
         "handler_key": _handler_key_state(),
-        "model": _model_state(refresh=refresh),
+        "model": _model_state(refresh=refresh, route=route),
         "verify": read_verify_state(VERIFY_STATE_KEY),
         "handler_verify": read_verify_state(HANDLER_VERIFY_STATE_KEY),
         "emergency_stop": effective_stop,
-        "emergency_stop_static": llm_safety.emergency_stop_static(),
+        "emergency_stop_static": static_stop,
         "emergency_stop_database": database_stop,
         "route": route,
         "autonomous_triage": autonomous_enabled,
@@ -613,17 +614,25 @@ def normalize_target(value):
 
 def verify(actor, api_key=None, target="assistant"):
     """Test a candidate key, or the stored one for ``target`` when none is
-    supplied. ``assistant`` tests what the Assistant effectively resolves (its
-    own key, else the platform key); ``handler`` tests the platform key."""
+    supplied. Each stored probe is exact-target: ``assistant`` tests only the
+    admin credential and ``handler`` tests only the platform credential."""
     system_settings.require_system_admin(actor)
     target = normalize_target(target)
-    candidate = _normalize_api_key(api_key)
+    try:
+        candidate = _normalize_api_key(api_key)
+    except Exception:
+        if api_key is not None:
+            _audit(actor, ["candidate_probe"], "rejected")
+        raise
     tested_stored = not candidate
     if tested_stored:
         candidate = settings.get(
             API_KEY if target == "assistant" else HANDLER_KEY, None)
     result = _verify_candidate(
         actor, candidate, stored_target=target if tested_stored else None)
+    if not tested_stored:
+        _audit(actor, ["candidate_probe"],
+               "accepted" if result["ok"] else "rejected")
     if tested_stored and result["code"] != "not_configured":
         _write_verify_state(result, TARGETS[target][1])
     _audit(actor, [f"verify_{target}"], "verified" if result["ok"] else "unverified")
@@ -743,13 +752,20 @@ def _credential_edit(actor, label, candidate, clear):
     """Validate one credential's replace/clear pair and pre-verify a candidate."""
     if not isinstance(clear, bool):
         raise merrors.ValueException(f"clear_{label} must be true or false")
-    candidate = _normalize_api_key(candidate)
+    try:
+        candidate = _normalize_api_key(candidate)
+    except Exception:
+        if candidate is not None:
+            _audit(actor, [f"candidate_probe_{label}"], "rejected")
+        raise
     if candidate and clear:
         raise merrors.ValueException(
             f"Clearing the {label.replace('_', ' ')} and supplying one are different edits")
     verified = None
     if candidate:
         verified = _verify_candidate(actor, candidate)
+        _audit(actor, [f"candidate_probe_{label}"],
+               "accepted" if verified["ok"] else "rejected")
         if not verified["ok"]:
             # Nothing is stored. An installation must never run a credential
             # nobody proved.
@@ -763,8 +779,8 @@ def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
          emergency_stop=None, autonomous_triage=None):
     """Apply one owner edit atomically, or refuse the whole thing.
 
-    ``api_key`` is the Assistant's own credential; ``handler_api_key`` is the
-    platform credential every LLM feature uses. A newly supplied credential is
+    ``api_key`` is the admin credential; ``handler_api_key`` is the platform
+    credential. Each policy route selects exactly one. A newly supplied credential is
     verified BEFORE the transaction opens: a provider round trip must not be
     made while the installation lock is held, and refusing early means a
     rejected key never reaches the database at all.

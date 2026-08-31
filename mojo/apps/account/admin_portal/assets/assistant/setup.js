@@ -6,10 +6,9 @@
 // the same request, and raises `fresh_auth_required` only when the operator
 // declines -- which runAction renders as nothing at all.
 //
-// Two credentials live here. The PLATFORM key (LLM_HANDLER_API_KEY) is what
-// every LLM feature uses -- incident triage, the LLM agent -- and it is the
-// Assistant's fallback. The ASSISTANT key (LLM_ADMIN_API_KEY) is an optional
-// override for the Assistant alone. Both key fields are WRITE-ONLY and never
+// Two credentials live here. Each guarded feature's policy route selects
+// exactly one of them; there is no runtime credential or model fallback.
+// Both key fields are WRITE-ONLY and never
 // pre-filled. They have no placeholder standing in for a stored value either:
 // a masked placeholder reads as "a value is already here", and these fields
 // always mean "replace it".
@@ -24,7 +23,6 @@ const ENDPOINT = '/api/account/admin/assistant';
 const SOURCE_COPY = {
   admin: 'stored here, in this Admin',
   deployment: 'from the deployment settings file',
-  fallback: 'using the platform key',
   none: 'not configured anywhere',
 };
 
@@ -32,9 +30,11 @@ function readiness(state) {
   if (!state.assistant_installed || !state.realtime_installed) {
     return 'The assistant and realtime applications must both be installed.';
   }
-  if (!state.key.configured) return 'No credential resolves, so the Assistant cannot answer.';
-  if (!state.enabled) return 'A credential is configured, but the Assistant is switched off.';
-  return 'The Assistant is on and a credential resolves.';
+  if (!state.enabled) return 'The Assistant is switched off.';
+  if (!state.route?.ready) {
+    return `The guarded Assistant route is unavailable (${state.route?.error || 'safety_unavailable'}).`;
+  }
+  return `The Assistant is on via ${state.route.provider} · ${state.route.credential} credential · ${state.route.model}.`;
 }
 
 function keyLine(key, absent) {
@@ -286,7 +286,7 @@ export function mountSetup({ctx, panel, onBack}) {
         ? h('p', {class: 'assistant-note', text: 'The deployment-file emergency stop is active. Remove it and redeploy before calls can resume.'})
         : null,
       h('label', {class: 'check-field'}, autonomousTriage,
-        h('span', {text: 'Allow autonomous incident triage for new incidents'})),
+        h('span', {text: 'Allow catch-all autonomous triage for post-activation new incidents'})),
       h('p', {class: 'assistant-note', text: state.autonomous_triage_activated_at
         ? `Autonomous watermark: ${formatDate(state.autonomous_triage_activated_at)}`
         : 'Autonomous triage has no activation watermark.'}),
@@ -303,7 +303,7 @@ export function mountSetup({ctx, panel, onBack}) {
 
       h('h4', {text: 'Platform LLM key'}),
       h('p', {class: 'assistant-note',
-        text: 'Used by every LLM feature (incident triage, the LLM agent) and by the Assistant when it has no key of its own.'}),
+        text: 'Used only by guarded policy routes that explicitly select the handler credential.'}),
       h('div', {class: 'assistant-setup-row'},
         h('div', {}, h('strong', {text: 'Platform key'}),
           h('span', {text: keyLine(state.handler_key, 'No platform key is configured.')})),
@@ -318,9 +318,9 @@ export function mountSetup({ctx, panel, onBack}) {
 
       h('h4', {text: 'Assistant key'}),
       h('p', {class: 'assistant-note',
-        text: 'Optional. When set, the Assistant uses this key instead of the platform key.'}),
+        text: 'Used only when the guarded Assistant policy route selects the admin credential.'}),
       h('div', {class: 'assistant-setup-row'},
-        h('div', {}, h('strong', {text: 'Assistant resolves'}),
+        h('div', {}, h('strong', {text: 'Stored Assistant key'}),
           h('span', {text: keyLine(state.key, 'No API key is configured.')})),
         verifyAssistant),
       h('label', {class: 'field'}, h('span', {text: 'Replace the Assistant key'}), apiKey,
@@ -333,7 +333,7 @@ export function mountSetup({ctx, panel, onBack}) {
 
       h('h4', {text: 'Model'}),
       h('label', {class: 'field'}, h('span', {text: 'Model'}), model, choices,
-        h('small', {text: `Leave blank for automatic. Effective now: ${state.model.effective}`})),
+        h('small', {text: `Legacy picker pin. Guarded route model: ${state.route?.model || 'unavailable'}`})),
       h('div', {class: 'assistant-setup-row'},
         h('div', {}, h('span', {text: 'Re-read the model catalogue from the provider.'})),
         refresh),
@@ -397,7 +397,8 @@ export function mountSetup({ctx, panel, onBack}) {
   async function syncReadiness(state) {
     const current = ctx.features?.assistant?.capabilities;
     if (!current) return;
-    const ready = Boolean(state.enabled && state.key.configured);
+    const ready = Boolean(state.assistant_installed && state.realtime_installed
+      && state.enabled && state.route?.ready);
     const mcp = Boolean(state.assistant_installed && state.mcp?.enabled && state.mcp?.url);
     if (current.ready === ready && current.mcp === mcp) return;
     // Re-read the bootstrap rather than trusting this page's arithmetic: the

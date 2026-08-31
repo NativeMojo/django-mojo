@@ -236,10 +236,11 @@ class Incident(models.Model, MojoModel):
 
         Publishes an async job — the LLM work happens in the background.
         """
-        from mojo.helpers.settings import settings
-
-        if not settings.get("LLM_HANDLER_API_KEY"):
-            return {"status": False, "error": "LLM_HANDLER_API_KEY not configured"}
+        from mojo.apps.account.services import llm_safety
+        route = llm_safety.route_state("incident_analysis")
+        if not route["ready"]:
+            return {"status": False,
+                    "error": route.get("error") or "credential_missing"}
 
         try:
             from mojo.apps.incident.services import llm_dispatch

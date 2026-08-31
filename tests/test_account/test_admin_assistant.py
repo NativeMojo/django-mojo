@@ -313,6 +313,37 @@ def test_llm_safety_actions_match_in_both_admin_bundles(opts):
         f"Assistant setup must advertise state schema v2, got {assistant_setup.SCHEMA_VERSION}"
 
 
+@th.django_unit_test("Assistant readiness and copy are owned by the exact policy route")
+def test_assistant_bundle_uses_exact_route_readiness(opts):
+    source = (ROOT / "mojo/apps/account/admin_portal/assets/assistant/setup.js").read_text()
+    code = _code(source)
+    assert code.count("state.route?.ready") >= 2, \
+        "rendered and synchronized readiness do not both use the exact route"
+    assert "state.enabled && state.key.configured" not in code, \
+        "legacy key presence can still override route readiness"
+    assert "state.model.effective" not in code and "SOURCE_COPY" in code, \
+        "the bundle still renders a legacy effective model"
+    assert "fallback:" not in code, \
+        "the exact credential display still advertises handler fallback"
+    assert "state.route.provider" in code and "state.route.credential" in code \
+        and "state.route.model" in code, \
+        "readiness copy does not identify the safe exact route fields"
+
+
+@th.django_unit_test("Assistant REST realtime and WebSocket admission use the exact route")
+def test_assistant_runtime_admission_uses_exact_route(opts):
+    paths = (
+        ROOT / "mojo/apps/assistant/services/agent.py",
+        ROOT / "mojo/apps/assistant/handler.py",
+    )
+    for path in paths:
+        source = _code(path.read_text())
+        assert 'route_state("assistant")' in source, \
+            f"{path.name} does not gate on the exact Assistant policy route"
+        assert "llm.get_api_key()" not in source, \
+            f"{path.name} still gates on legacy credential fallback"
+
+
 @th.django_unit_test("the Assistant setup body never reaches the generic request logs")
 def test_assistant_request_redaction(opts):
     from unittest import mock

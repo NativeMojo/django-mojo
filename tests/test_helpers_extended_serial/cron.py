@@ -135,17 +135,35 @@ def test_incident_cronjobs_registered(opts):
 
 
 @th.django_unit_test()
-def test_incident_triage_key_alone_is_not_authority(opts):
+def test_incident_triage_gates_use_exact_policy_route(opts):
     from mojo.apps.incident import cronjobs
+    from mojo.apps.incident.models.event import _autonomous_llm_enabled
 
-    def setting_value(key, default=None, **kwargs):
-        if key == "LLM_HANDLER_API_KEY":
-            return "configured-key"
-        return default
+    route = {
+        "ready": True, "error_code": "", "provider": "anthropic",
+        "credential": "admin", "model": "policy-model",
+    }
+    with patch(
+            "mojo.apps.account.services.llm_safety.autonomous_triage_state",
+            return_value=(True, None)), patch(
+                "mojo.apps.account.services.llm_safety.route_state",
+                return_value=route):
+        assert cronjobs._llm_triage_enabled() is True, \
+            "an enabled admin-routed triage feature must not require the handler key"
+        assert _autonomous_llm_enabled() is True, \
+            "event admission must accept the same exact ready route"
 
-    with patch.object(cronjobs.settings, "get", side_effect=setting_value):
+    route["ready"] = False
+    route["error_code"] = "credential_missing"
+    with patch(
+            "mojo.apps.account.services.llm_safety.autonomous_triage_state",
+            return_value=(True, None)), patch(
+                "mojo.apps.account.services.llm_safety.route_state",
+                return_value=route):
         assert cronjobs._llm_triage_enabled() is False, \
-            "a configured credential alone must not enable autonomous triage"
+            "a present legacy key must not admit a policy route that is not ready"
+        assert _autonomous_llm_enabled() is False, \
+            "event admission must fail closed with the policy route"
 
 
 @th.django_unit_test()

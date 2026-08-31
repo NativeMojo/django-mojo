@@ -10,12 +10,9 @@ FIREWALL_SYNC_CHANNEL = "default"
 
 
 def _llm_triage_enabled():
-    # Read at call time, never cached at import: the platform LLM key can be
-    # stored from the built-in Admin (a database row), and a cron that froze
-    # the deployment-file value at startup would ignore it until a restart.
     from mojo.apps.account.services import llm_safety
     enabled, _ = llm_safety.autonomous_triage_state()
-    return bool(enabled and settings.get("LLM_HANDLER_API_KEY", None))
+    return bool(enabled and llm_safety.route_state("incident_triage")["ready"])
 
 _health_defaults_checked = False
 

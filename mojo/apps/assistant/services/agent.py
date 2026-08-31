@@ -1324,9 +1324,11 @@ def run_assistant(
     if not settings.get("LLM_ADMIN_ENABLED", False, kind="bool"):
         return {"error": "Assistant is not enabled", "status_code": 404}
 
-    # Check API key
-    if not llm.get_api_key():
-        return {"error": "LLM API key not configured", "status_code": 503}
+    from mojo.apps.account.services import llm_safety
+    route = llm_safety.route_state("assistant")
+    if not route["ready"]:
+        return {"error": route.get("error") or "credential_missing",
+                "status_code": 503}
 
     # Load or create conversation
     conversation = None
@@ -1594,8 +1596,10 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
     if not settings.get("LLM_ADMIN_ENABLED", False, kind="bool"):
         return {"error": "Assistant is not enabled"}
 
-    if not llm.get_api_key():
-        return {"error": "LLM API key not configured"}
+    from mojo.apps.account.services import llm_safety
+    route = llm_safety.route_state("assistant")
+    if not route["ready"]:
+        return {"error": route.get("error") or "credential_missing"}
 
     try:
         conversation = Conversation.objects.get(pk=conversation_id, user=user)
