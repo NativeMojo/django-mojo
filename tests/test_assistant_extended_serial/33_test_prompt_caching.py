@@ -12,7 +12,7 @@ shared `llm` logger. The process-globalness is the assertion, so there is no
 seam to convert it to.
 
 Covers:
-- llm.call() omits cache_control when the setting is False
+- AnthropicProvider omits cache_control when caching is disabled
 - run_assistant() persists summed usage on the final Message
 - per-turn cache usage is logged to assistant.log
 - a zero-cache-usage first call logs a one-time, once-per-process warning
@@ -100,25 +100,17 @@ class _ListHandler(logging.Handler):
 
 @th.django_unit_test()
 def test_llm_helper_omits_cache_control_when_disabled(opts):
-    """call() should NOT add cache_control when the setting is False."""
-    from mojo.helpers import llm
-    from mojo.helpers.settings import settings as settings_obj
+    """The adapter should omit cache_control when the guard disables it."""
+    from mojo.helpers.llm_providers.anthropic import AnthropicProvider
 
     fake_client, fake_messages = _make_fake_client(_canned_response())
 
-    real_get = settings_obj.get
-    def patched_get(name, *args, **kwargs):
-        if name == "LLM_ADMIN_PROMPT_CACHE_ENABLED":
-            return False
-        return real_get(name, *args, **kwargs)
-
-    with mock.patch.object(settings_obj, "get", side_effect=patched_get):
-        with mock.patch("anthropic.Anthropic", return_value=fake_client):
-            with mock.patch.object(llm, "get_api_key", return_value="sk-test"):
-                llm.call(
-                    messages=[{"role": "user", "content": "hi"}],
-                    model="claude-sonnet-4-test",
-                )
+    AnthropicProvider(client=fake_client).call(
+        messages=[{"role": "user", "content": "hi"}],
+        model="claude-sonnet-4-test",
+        max_tokens=64,
+        cache_enabled=False,
+    )
 
     sent = fake_messages.last_kwargs
     assert_true(sent is not None, "messages.create should have been called")
@@ -133,6 +125,7 @@ def test_assistant_persists_usage_on_final_message(opts):
     """run_assistant() should sum usage across turns and store on the final Message."""
     from mojo.apps.assistant.services import agent
     from mojo.apps.assistant.models import Message
+    from mojo.apps.account.services import llm_safety
     from mojo.helpers.settings import settings as settings_obj
 
     real_get = settings_obj.get
@@ -157,9 +150,12 @@ def test_assistant_persists_usage_on_final_message(opts):
         },
     }
 
-    with mock.patch.object(settings_obj, "get", side_effect=patched_get):
-        with mock.patch.object(agent.llm, "call", return_value=turn_1) as mock_call:
-            result = agent.run_assistant(opts.user, "hello")
+    with mock.patch.object(settings_obj, "get", side_effect=patched_get), \
+            mock.patch.object(
+                llm_safety, "route_state", return_value={"ready": True}), \
+            mock.patch.object(
+                agent.llm, "call", return_value=turn_1) as mock_call:
+        result = agent.run_assistant(opts.user, "hello")
 
     assert_true(mock_call.called, "agent should have called llm.call")
     assert_true("usage" in result, f"result dict should include usage, got keys {list(result.keys())}")
@@ -188,6 +184,7 @@ def test_assistant_persists_usage_on_final_message(opts):
 def test_assistant_logs_per_turn_cache_usage(opts):
     """An INFO log line per turn should report cache_read/cache_write/input/output."""
     from mojo.apps.assistant.services import agent
+    from mojo.apps.account.services import llm_safety
     from mojo.helpers.settings import settings as settings_obj
 
     real_get = settings_obj.get
@@ -216,9 +213,11 @@ def test_assistant_logs_per_turn_cache_usage(opts):
     prev_level = stdlib_logger.level
     stdlib_logger.setLevel(logging.INFO)
     try:
-        with mock.patch.object(settings_obj, "get", side_effect=patched_get):
-            with mock.patch.object(agent.llm, "call", return_value=turn):
-                agent.run_assistant(opts.user, "hi")
+        with mock.patch.object(settings_obj, "get", side_effect=patched_get), \
+                mock.patch.object(
+                    llm_safety, "route_state", return_value={"ready": True}), \
+                mock.patch.object(agent.llm, "call", return_value=turn):
+            agent.run_assistant(opts.user, "hi")
     finally:
         stdlib_logger.removeHandler(handler)
         stdlib_logger.setLevel(prev_level)
