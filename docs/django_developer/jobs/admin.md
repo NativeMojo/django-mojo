@@ -244,3 +244,71 @@ mgr.cancel_job(job_id)
 # Retry a failed job
 mgr.retry_job(job_id, delay=60)
 ```
+
+### Orphaned running rows
+
+A row can sit at `status='running'` in the database with **no member in that
+channel's processing ZSET** — a runner claimed it and then died hard (SIGKILL,
+OOM, instance termination) before it could write a terminal status.
+
+**No automated process recovers this state.** Nothing in the engine or the
+manager will put such a row back on a queue:
+
+- `JobEngine._reaper_loop` sources its candidates *only* from
+  `zrangebyscore(keys.processing(ch), ...)`. A row that is DB-`running` with no
+  processing-ZSET member is invisible to it **at any visibility timeout** —
+  waiting longer never surfaces it. The reaper also iterates only the channels
+  its own engine serves (`self.channels`), so a channel with no live engine
+  gets no pass at all.
+- `clear_stuck_jobs` operates on that same ZSET and never writes `Job.status`.
+  For a row already at `running` its requeue is therefore inert: `execute_job`
+  drops any delivery whose row is not `pending`, so the id it pushes onto the
+  queue is claimed and discarded.
+
+**Detection:** `get_stats()['totals']['running_stale']` — running rows whose
+runner has no live heartbeat. A non-zero value that does not fall on its own is
+this state.
+
+**Manual recovery** is two steps, and both are required:
+
+```python
+from mojo.apps.jobs.models import Job
+from mojo.apps.jobs.manager import get_manager
+
+channel = "default"
+
+# 1. Reset the orphaned rows to pending. NEVER drop the .exclude().
+Job.objects.filter(channel=channel, status='running').exclude(
+    cancel_requested=True
+).update(
+    status='pending',
+    runner_id=None,
+    started_at=None,
+    finished_at=None,
+    attempt=0,
+    last_error='',
+    stack_trace='',
+)
+
+# 2. Republish the channel's pending rows through the live publish mirror.
+result = get_manager().requeue_db_pending(channel)
+# {"status": True, "requeued": 12, "channel": "default"}
+```
+
+Narrow step 1 further whenever you can name the rows — `id__in=[...]`, or
+`started_at__lt=<cutoff>`. A bare `status='running'` filter also resets rows a
+live runner is genuinely working on right now.
+
+**Why `.exclude(cancel_requested=True)` is not optional.** `cancel()` sets
+`cancel_requested=True` and deliberately does **not** change `status` —
+cancellation is cooperative, checked inside the handler itself
+(`job.cancel_requested` / `job.check_cancel_requested()`), and `job_engine.py`
+never reads the flag. So a job that was cancelled while running and whose runner
+then died *is* an orphaned `running` row with the flag set. A reset without the
+exclude re-runs work an operator explicitly cancelled.
+
+**Step 2 is channel-wide.** `requeue_db_pending` sweeps **every** `pending` row
+on the channel, not only the ones you just reset. It is also bounded: a call
+with no `limit` is capped at `JOBS_REQUEUE_MAX` (default 5000), and a truncated
+sweep returns `'truncated': True` plus a `'remaining'` count — run it again
+until nothing remains.
