@@ -1,8 +1,8 @@
 """Owner-only Assistant enablement, credential storage, and verification.
 
-The seven keys this service owns are the ones ``mojo.helpers.llm``, the
-incident LLM handlers and the MCP door already read, so nothing here
-re-implements resolution:
+The protected controls in this owner plane are the ones ``mojo.helpers.llm``,
+the incident LLM handlers and the MCP door already read, so nothing here
+re-implements credential resolution:
 
     LLM_ADMIN_ENABLED          feature flag
     LLM_ADMIN_API_KEY          the Assistant's own credential (optional)
@@ -14,12 +14,18 @@ re-implements resolution:
     LLM_HANDLER_VERIFY_STATE   how the STORED platform credential last verified
     ASSISTANT_MCP_ENABLED      remote agent access (MCP) switch — descriptor
                                owned by the assistant app, written only here
+    LLM_EMERGENCY_STOP        database half of the monotonic emergency stop
+    LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED / _ACTIVATED_AT
+                               catch-all switch and no-history watermark
+
+The sibling ``llm_safety.activate_policy`` owner action writes the protected
+``LLM_SAFETY_POLICY_EXPECTED_HASH`` agreement row.
 
 Both credentials are encrypted secret ``Setting`` rows. ``SettingsHelper.get``
 resolves database rows ahead of ``django.conf``, so an Admin-stored credential
 is live the moment it commits and outranks the deployment file. Resolution
 order is unchanged: the Assistant prefers its own key and falls back to the
-platform key. All seven are
+platform key. All these controls are
 catalog-protected (``admin_settings.is_catalog_protected``), so the generic
 ``/api/settings`` surface and every other ``Setting`` writer refuse them; this
 service is the only writer, and it goes through the ``_protected_writer`` save

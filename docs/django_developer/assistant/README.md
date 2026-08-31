@@ -224,7 +224,7 @@ model from the built-in Admin, without editing a settings file.
 read *and* write — see
 [the API reference](../../web_developer/account/admin_portal/assistant.md)).
 
-### The seven protected keys
+### Protected Assistant and LLM controls
 
 | Key | Owned by | Stored as |
 |---|---|---|
@@ -235,8 +235,12 @@ read *and* write — see
 | `LLM_HANDLER_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row — the **platform** key |
 | `LLM_HANDLER_VERIFY_STATE` | `assistant_setup` | How the STORED platform key last checked |
 | `ASSISTANT_MCP_ENABLED` | descriptor: this app · writer: `assistant_setup` | Plain global row — the remote agent access (MCP) switch, off by default |
+| `LLM_EMERGENCY_STOP` | `assistant_setup` | Plain global row combined monotonically with deployment stop |
+| `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED` | `assistant_setup` | Plain global catch-all switch, off by default |
+| `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT` | `assistant_setup` | Primary-DB no-history watermark |
+| `LLM_SAFETY_POLICY_EXPECTED_HASH` | `llm_safety.activate_policy` | Owner-activated agreement with the deployed static policy |
 
-All seven are **catalog-protected**: `admin_settings.is_catalog_protected()`
+All are **catalog-protected**: `admin_settings.is_catalog_protected()`
 returns true, so `Setting.set()`, the generic `/api/settings` REST surface, a
 shell save and every other writer refuse them. Each has one dedicated escape —
 `row.save(_protected_writer=<key>)` — and the writer must name the exact key

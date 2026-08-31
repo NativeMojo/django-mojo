@@ -502,9 +502,11 @@ The LLM agent provides autonomous security triage. When invoked via the `llm://`
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `LLM_HANDLER_API_KEY` | None | Anthropic API key. **Required** to enable LLM handlers. Settable from the built-in Admin's Assistant setup (stored encrypted; read at call time, no restart needed). |
-| `LLM_HANDLER_MODEL` | (auto-detect) | Model to use for triage. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
+| `LLM_HANDLER_MODEL` | (auto-detect suggestion) | Legacy picker/helper input; guarded calls use the exact model owned by their safety-policy route |
 
-If `LLM_HANDLER_API_KEY` is not set, `llm://` handlers silently skip.
+If the policy-selected credential is absent, the guard returns the safe
+`credential_missing` code. Managed incident attempts retry within their bound
+and then terminalize; they do not remain indefinitely investigating.
 
 Both settings are read at invocation time (not at startup), so changes take effect on the next LLM job without a server restart.
 
