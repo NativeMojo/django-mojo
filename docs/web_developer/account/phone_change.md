@@ -197,7 +197,7 @@ After a successful confirm, `is_phone_verified` is `true` for the new number. Yo
 ## Security Notes
 
 - **`current_password` is optional.** If provided and non-empty it is validated; if omitted the request proceeds. The primary ownership proof is the authenticated session; when `FRESH_AUTH_WINDOW` is enabled, a recent login is required as the step-up gate instead. See [Step-Up Auth](step_up_auth.md).
-- **The OTP is sent only to the new number.** The old number receives no notification. If you want to alert users of changes to their account, send a notification to the old number or email address in your application layer.
+- **The OTP is sent only to the new number.** The old number gets a separate heads-up (not an OTP) once the new-number send is accepted — see Step 1. It is not sent if that send fails, so do not add your own duplicate notification.
 - **The session token proves identity; the OTP proves number ownership.** Both must be correct for the change to commit.
 - **The `session_token` (pc:) is single-use and bound to the user's `auth_key`.** It cannot be replayed, transferred to another user, or used after it has been consumed or cancelled.
 - **Availability is re-checked at confirm time.** Another account may have registered the target number in the 10-minute window. The confirm step will reject the request if this has occurred.
