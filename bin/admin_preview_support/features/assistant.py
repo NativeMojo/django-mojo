@@ -135,30 +135,54 @@ def _state(handler, checked=False):
         handler_key = {"configured": False, "hint": "", "source": "none"}
         verify = dict(unchecked)
         handler_verify = dict(unchecked)
-    elif scenario == "fallback":
-        # Only the platform key is stored; the Assistant resolves through it.
-        key = {"configured": True, "hint": KEY_HINT, "source": "fallback"}
-        verify = dict(unchecked)
     elif scenario == "verify_failed":
         verify = {"ok": False, "code": "invalid_key",
                   "message": "Anthropic rejected this key.",
                   "at": "2026-08-19T11:02:00+00:00"}
+    stopped = scenario == "route_stopped"
+    route_ready = scenario not in ("unset", "route_stopped")
+    route = {
+        "feature": "assistant",
+        "provider": "anthropic" if scenario != "unset" else "",
+        "model": "claude-sonnet-5" if scenario != "unset" else "",
+        "credential": "admin" if scenario != "unset" else "",
+        "credential_configured": scenario != "unset",
+        "ready": route_ready,
+        "error": "emergency_stopped" if stopped else
+                 ("credential_missing" if scenario == "unset" else ""),
+    }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "enabled": scenario != "disabled",
         "key": key,
         "handler_key": handler_key,
         "model": {
             "selected": "" if scenario == "unset" else "claude-sonnet-5",
-            "effective": "claude-sonnet-5",
+            "effective": route["model"],
             "source": "automatic" if scenario == "unset" else "admin",
             "choices": deepcopy(CHOICES),
         },
         "verify": verify,
         "handler_verify": handler_verify,
+        "emergency_stop": stopped,
+        "emergency_stop_static": stopped,
+        "emergency_stop_database": False,
+        "route": route,
+        "autonomous_triage": scenario == "configured",
+        "autonomous_triage_activated_at": (
+            "2026-08-19T10:00:00+00:00" if scenario == "configured" else None),
         "assistant_installed": True,
         "realtime_installed": True,
         "mcp": _mcp_state(handler, checked=checked),
+        "safety": {
+            "hours": 24,
+            "requests": [{
+                "provider": "anthropic", "feature": "assistant",
+                "status": "succeeded", "count": 14,
+                "input_tokens": 4200, "output_tokens": 860,
+            }],
+            "breakers": [],
+        },
     }
 
 
@@ -177,7 +201,7 @@ def post(handler, path, payload):
     action = payload.get("action")
     if action == "verify":
         state = _state(handler)
-        return 200, {"schema_version": 1, "verified": True,
+        return 200, {"schema_version": 2, "verified": True,
                      "result": state["verify"] if state["verify"]["code"]
                      else {"ok": True, "code": "verified",
                            "message": "Anthropic accepted this key."},
@@ -194,7 +218,7 @@ def post(handler, path, payload):
             handler.assistant_mcp_state = "off"
         elif remote is True and handler.assistant_mcp_state == "off":
             handler.assistant_mcp_state = "connected"
-        return 200, {"schema_version": 1, "saved": True, "state": _state(handler)}
+        return 200, {"schema_version": 2, "saved": True, "state": _state(handler)}
     # Both revocations answer a count, never a 404, and the page repaints from
     # the state they return — exactly like the service.
     if action == "revoke_grant":
@@ -203,13 +227,13 @@ def post(handler, path, payload):
             row for row in (getattr(handler, "assistant_grants", None) or [])
             if row["id"] != payload.get("grant_id")]
         state = _state(handler)
-        return 200, {"schema_version": 1,
+        return 200, {"schema_version": 2,
                      "revoked": before - state["mcp"]["grant_count"],
                      "state": state}
     if action == "revoke_all_grants":
         before = _mcp_state(handler)["grant_count"]
         handler.assistant_grants = []
-        return 200, {"schema_version": 1, "revoked": before,
+        return 200, {"schema_version": 2, "revoked": before,
                      "state": _state(handler)}
     return 400, {"error": "action must be verify, save, revoke_grant, "
                           "or revoke_all_grants"}

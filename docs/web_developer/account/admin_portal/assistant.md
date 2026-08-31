@@ -99,11 +99,11 @@ of any kind.
 | `enabled` | The `LLM_ADMIN_ENABLED` flag |
 | `key.configured` | Legacy picker/display resolution only; guarded readiness is `route.credential_configured` |
 | `key.hint` | The last four characters, or `""` when the value is too short to hint at safely |
-| `key.source` | `admin` (stored here) · `deployment` (the settings file) · `fallback` (resolving through the platform key) · `none` |
-| `handler_key` | The **platform** key, `LLM_HANDLER_API_KEY` — used only by policy routes declaring `credential: "handler"`. Legacy picker display may show it as the Assistant fallback, but guarded Assistant readiness never falls back. Same `configured` / `hint` / `source` shape; `source` is `admin` · `deployment` · `none` |
-| `model.selected` | The stored pin, `""` for automatic |
-| `model.effective` | What resolution actually returns right now |
-| `model.source` | `admin` · `deployment` · `automatic` |
+| `key.source` | Exact Admin-target provenance: `admin` (stored here) · `deployment` (the settings file) · `none` |
+| `handler_key` | The **platform** key, `LLM_HANDLER_API_KEY` — available only to policy routes declaring `credential: "handler"`; it never substitutes for an Admin-routed feature. Same `configured` / `hint` / `source` shape; `source` is `admin` · `deployment` · `none` |
+| `model.selected` | The legacy picker pin; `""` means no legacy pin |
+| `model.effective` | The exact guarded Assistant route model |
+| `model.source` | Provenance for the legacy picker pin: `admin` · `deployment` · `automatic` (no pin) |
 | `model.choices` | Picker suggestions only. Never validated against — the list is network-dependent |
 | `verify` | How the **stored** Assistant credential last checked. `ok` is `null` when it never has |
 | `handler_verify` | The same record for the stored platform key |
@@ -198,8 +198,11 @@ checked when no candidate is supplied, and which record (`verify` /
 ```
 
 Checking the **stored** key is recorded and shows up in `verify` on the next
-read. Checking an unsaved candidate is **not** recorded: a draft is not the
-configuration this installation is running.
+read. A candidate does not overwrite that stored-key record, but every
+actor-authorized candidate recovery probe writes a durable
+`llm:candidate_probe` audit with only `requested`, `accepted`, or `rejected`.
+It never records the candidate, a fingerprint, a model, or provider text. If
+the requested audit cannot be written, the provider is not called.
 
 A stored-key check is an ordinary guarded request and is refused while the
 emergency stop is effective. Only a supplied candidate receives the stopped
@@ -222,7 +225,7 @@ sufficient.
 | Field | Rules |
 |---|---|
 | `enabled` | Boolean. Required |
-| `model` | `""` for automatic, otherwise `^[a-z0-9][a-z0-9.\-]{0,80}$`. Required |
+| `model` | Legacy picker pin: `""` clears it; otherwise `^[a-z0-9][a-z0-9.\-]{0,80}$`. Required. The safety-policy route still owns the guarded runtime model |
 | `api_key` | Optional. The Assistant's own key. **Omit it to leave the stored credential alone** — an empty string is not "store nothing", so send nothing |
 | `clear_api_key` | Optional boolean. Removes the stored Assistant key. Cannot be combined with `api_key` |
 | `handler_api_key` | Optional. The **platform** key (`LLM_HANDLER_API_KEY`). Same omit-to-keep rule |
@@ -275,8 +278,8 @@ refuses the whole save — the installation never runs a credential nobody
 proved.
 
 Clearing a key while `enabled` stays true is allowed, and the next read says so
-honestly: `key.source` falls back to `deployment`, `fallback` or `none`, and
-`handler_key.source` to `deployment` or `none`.
+honestly. Each exact target independently reports `deployment` or `none`; an
+Admin route never reports or uses the handler credential as a fallback.
 
 ### `action: "revoke_grant"`
 

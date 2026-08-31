@@ -977,7 +977,7 @@ def test_assistant_preview_states(opts):
         f"the Assistant preview namespace drifted: {assistant!r}"
 
     feature = server.assistant
-    for state in ("configured", "unset", "fallback", "verify_failed", "disabled"):
+    for state in ("configured", "unset", "route_stopped", "verify_failed", "disabled"):
         class Handler:
             pass
 
@@ -993,6 +993,23 @@ def test_assistant_preview_states(opts):
             f"{state}: the Assistant fixture emitted a key value: {report!r}"
         assert report["enabled"] is (state != "disabled"), \
             f"{state}: the enabled flag does not follow the scenario"
+        assert report["schema_version"] == 2, \
+            f"{state}: the Assistant fixture is not schema v2"
+        assert set(report["route"]) == {
+            "feature", "provider", "model", "credential",
+            "credential_configured", "ready", "error"}, \
+            f"{state}: the exact route fixture drifted: {report['route']}"
+        assert set(report["safety"]) == {"hours", "requests", "breakers"}, \
+            f"{state}: the safety aggregate fixture drifted: {report['safety']}"
+        assert report["emergency_stop"] is (
+            report["emergency_stop_static"] or
+            report["emergency_stop_database"]), \
+            f"{state}: effective stop does not match its two authorities"
+        expected_ready = state not in ("unset", "route_stopped")
+        assert report["route"]["ready"] is expected_ready, \
+            f"{state}: route readiness is not scenario-owned: {report['route']}"
+        assert report["key"]["source"] in {"admin", "deployment", "none"}, \
+            f"{state}: fixture advertises a forbidden fallback source"
     assert report["key"]["source"] == "admin", \
         "the disabled scenario lost its stored-credential provenance"
 

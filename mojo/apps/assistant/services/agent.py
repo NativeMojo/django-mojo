@@ -27,6 +27,9 @@ from mojo.helpers import logit, llm
 from mojo.apps.assistant.services import approvals
 
 logger = logit.get_logger(__name__, "assistant.log")
+PROVIDER_AUTH_ERROR = (
+    "The configured LLM route credential was rejected. Check the safety "
+    "policy route and its selected credential.")
 
 
 def _build_request_meta(request):
@@ -1561,7 +1564,7 @@ def run_assistant(
         logger.exception("Assistant agent failed for user %s", user.pk)
         code = getattr(e, "code", "assistant_internal_error")
         if code == "provider_authentication":
-            error = "LLM API key is invalid. Check LLM_ADMIN_API_KEY setting."
+            error = PROVIDER_AUTH_ERROR
         elif code == "provider_rate_limited":
             error = "LLM API rate limit reached. Please wait a moment and try again."
         else:
@@ -1769,7 +1772,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
             f"code={code} user_id={user.pk} conversation_id={conversation.pk}",
             user=user)
         if code == "provider_authentication":
-            return {"error": "LLM API key is invalid. Check LLM_ADMIN_API_KEY setting.",
+            return {"error": PROVIDER_AUTH_ERROR,
                     "pending_actions": pending_actions}
         if code == "provider_rate_limited":
             return {"error": "LLM API rate limit reached. Please wait a moment and try again.",

@@ -342,6 +342,11 @@ def test_assistant_runtime_admission_uses_exact_route(opts):
             f"{path.name} does not gate on the exact Assistant policy route"
         assert "llm.get_api_key()" not in source, \
             f"{path.name} still gates on legacy credential fallback"
+    agent = _code(paths[0].read_text())
+    assert "Check LLM_ADMIN_API_KEY setting" not in agent, \
+        "Assistant provider-auth copy hard-codes the admin credential target"
+    assert "configured LLM route credential" in agent, \
+        "Assistant provider-auth copy does not direct operators to the exact route"
 
 
 @th.django_unit_test("the Assistant setup body never reaches the generic request logs")

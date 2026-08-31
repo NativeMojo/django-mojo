@@ -234,7 +234,7 @@ GET /api/incident/incident/<id>
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `metadata.analysis_in_progress` | `bool` | `true` while the agent is running. Poll until `false`. |
+| `metadata.analysis_in_progress` | `bool` | `true` while an active logical analysis attempt can still run or retry. `false` means completed **or terminal**; inspect `llm_analysis`, history, and the job result before treating it as success. |
 | `metadata.llm_analysis.summary` | `string` | The agent's final summary (up to 3000 chars). Present only after analysis completes. |
 | `metadata.llm_assessment.status` | `string` | Final incident status set by the agent (`resolved`, `ignored`, `investigating`). |
 | `metadata.llm_assessment.note` | `string` | Agent's reasoning for the status change. |

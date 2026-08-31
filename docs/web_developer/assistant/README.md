@@ -145,14 +145,20 @@ download cards and retain their existing URL-bearing response schema.
 }
 ```
 
-**Response** (no API key — HTTP 503):
+**Response** (the exact Assistant policy route is not ready — HTTP 503):
 
 ```json
 {
     "status": false,
-    "error": "LLM API key not configured"
+    "error": "credential_missing"
 }
 ```
+
+Other safe route errors include `emergency_stopped`, `policy_invalid`, and
+`policy_mixed`. If the selected route credential is rejected during a turn,
+REST and WebSocket clients receive route-neutral copy directing the operator
+to the safety-policy route and its selected credential; it never assumes the
+route uses the admin key.
 
 **Response** (invalid `conversation_id` — HTTP 404):
 

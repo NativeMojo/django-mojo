@@ -706,7 +706,10 @@ The call returns immediately. The agent runs in the background and:
 - Proposes a new disabled RuleSet to cover the pattern
 - Stores its summary in `incident.metadata.llm_analysis.summary`
 
-Check progress by polling `metadata.analysis_in_progress` on the incident. When it becomes `false`, the result is ready.
+Check progress by polling `metadata.analysis_in_progress` on the incident. When
+it becomes `false`, the attempt either completed or reached a terminal safe
+failure. Inspect `metadata.llm_analysis`, the incident history, and the job
+result before presenting an analysis as successful.
 
 See [Incident API: Request LLM Analysis](../logging/incidents.md#request-llm-analysis) for full request/response reference.
 

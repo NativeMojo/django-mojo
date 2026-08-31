@@ -231,7 +231,7 @@ read *and* write — see
 |---|---|---|
 | `LLM_ADMIN_ENABLED` | `assistant_setup` | Plain global `Setting` row |
 | `LLM_ADMIN_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row — the Assistant's own key, optional |
-| `LLM_ADMIN_MODEL` | `assistant_setup` | Plain row, absent means automatic |
+| `LLM_ADMIN_MODEL` | `assistant_setup` | Plain legacy picker pin; absent means no pin. The guarded route owns its runtime model |
 | `LLM_ADMIN_VERIFY_STATE` | `assistant_setup` | How the STORED Assistant key last checked |
 | `LLM_HANDLER_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row — the **platform** key |
 | `LLM_HANDLER_VERIFY_STATE` | `assistant_setup` | How the STORED platform key last checked |
