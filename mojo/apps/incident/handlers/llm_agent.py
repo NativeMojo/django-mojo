@@ -1457,13 +1457,18 @@ def _call_claude(messages, system_prompt, tools=None, feature="incident_triage",
         feature=feature, context=context)
 
 
-def _run_agent_loop(messages, system_prompt, max_iterations=15, tools=None):
+def _run_agent_loop(messages, system_prompt, max_iterations=15, tools=None,
+                    feature="incident_triage", context=None):
     """
     Run the agent loop: call Claude, execute tools, feed results back,
     repeat until Claude stops calling tools.
     """
-    for _ in range(max_iterations):
-        result = _call_claude(messages, system_prompt, tools=tools)
+    for loop_index in range(max_iterations):
+        call_context = dict(context or {})
+        call_context["loop_call"] = loop_index + 1
+        result = _call_claude(
+            messages, system_prompt, tools=tools, feature=feature,
+            context=call_context)
         stop_reason = result.get("stop_reason")
 
         # Add assistant response to messages
@@ -1713,7 +1718,9 @@ def execute_llm_handler(job):
     messages = [{"role": "user", "content": user_message}]
 
     try:
-        result = _run_agent_loop(messages, system_prompt)
+        result = _run_agent_loop(
+            messages, system_prompt, feature="incident_triage",
+            context={"job_id": job.pk, "incident_id": incident_id})
         if incident:
             # Extract final text response for the history
             text_parts = []
@@ -1833,7 +1840,10 @@ def execute_llm_analysis(job):
     all_tools = TOOLS + ANALYSIS_TOOLS
 
     try:
-        result = _run_agent_loop(messages, system_prompt, tools=all_tools)
+        result = _run_agent_loop(
+            messages, system_prompt, tools=all_tools,
+            feature="incident_analysis",
+            context={"job_id": job.pk, "incident_id": incident_id})
 
         # Store analysis result
         text_parts = []
@@ -1979,7 +1989,11 @@ def execute_llm_ticket_reply(job):
 
     job.add_log(f"invoking agent: {note_count} notes, {len(reply_tools)} tools available")
     try:
-        result = _run_agent_loop(messages, system_prompt, tools=reply_tools)
+        result = _run_agent_loop(
+            messages, system_prompt, tools=reply_tools,
+            feature="incident_ticket", context={
+                "job_id": job.pk,
+                "incident_id": ticket.incident_id if ticket.incident_id else None})
     except Exception as e:
         msg = f"agent loop raised an exception: {e}"
         job.add_log(msg, kind="error")

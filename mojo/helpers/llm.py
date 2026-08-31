@@ -104,19 +104,18 @@ def verify_api_key(api_key=None):
 
     Returns (True, None) on success or (False, "error message") on failure.
     """
-    import anthropic
-
     key = api_key or get_api_key()
     if not key:
         return False, "No API key configured. Set LLM_ADMIN_API_KEY or LLM_HANDLER_API_KEY."
     try:
-        client = anthropic.Anthropic(api_key=key)
-        client.models.list(limit=1)
+        from mojo.apps.account.services import llm_safety
+        llm_safety.verify_candidate(key)
         return True, None
-    except anthropic.AuthenticationError:
-        return False, "API key is invalid or expired."
-    except Exception as e:
-        return False, f"Could not verify API key: {str(e)[:200]}"
+    except Exception as err:
+        code = getattr(err, "code", "provider_unavailable")
+        if code == "provider_authentication":
+            return False, "API key is invalid or expired."
+        return False, "Could not verify API key."
 
 
 # ---------------------------------------------------------------------------
@@ -125,28 +124,15 @@ def verify_api_key(api_key=None):
 
 def _fetch_models_from_api(api_key=None):
     """Fetch the full model list from Anthropic's /v1/models endpoint."""
-    import anthropic
-
-    key = api_key or get_api_key()
-    if not key:
-        return None
-
     try:
-        client = anthropic.Anthropic(api_key=key)
-        models = []
-        # mode="json" keeps created_at an ISO string instead of a datetime, so
-        # the list stays JSON-serializable for the Redis cache below.
-        page = client.models.list(limit=100)
-        for model in page.data:
-            models.append(model.model_dump(mode="json"))
-        # Paginate if needed
-        while page.has_more:
-            page = client.models.list(limit=100, after_id=page.last_id)
-            for model in page.data:
-                models.append(model.model_dump(mode="json"))
-        return models
-    except Exception as e:
-        logger.warning(f"Failed to fetch models from Anthropic API: {str(e)[:200]}")
+        if api_key is not None:
+            # Explicit-key seam retained for the adapter compatibility test.
+            from mojo.helpers.llm_providers import get_provider
+            return get_provider("anthropic", api_key=api_key).list_models()
+        from mojo.apps.account.services import llm_safety
+        return llm_safety.discover_models()
+    except Exception:
+        logger.warning("LLM model catalogue request failed")
         return None
 
 
@@ -398,32 +384,23 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
                        for value in context.values()):
         raise ValueError("LLM context identifiers must be scalar")
 
-    if client is None:
-        import anthropic
-
-        key = get_api_key()
-        if not key:
-            raise ValueError("No LLM API key configured. Set LLM_ADMIN_API_KEY or LLM_HANDLER_API_KEY.")
-        client = anthropic.Anthropic(api_key=key)
-
-    resolved_model = model or get_model("general")
-
-    kwargs = {
-        "model": resolved_model,
-        "max_tokens": max_tokens,
-        "messages": messages,
-    }
-    if system:
-        kwargs["system"] = system
-    if tools:
-        kwargs["tools"] = tools
-
     cache_enabled = settings.get("LLM_ADMIN_PROMPT_CACHE_ENABLED", True, kind="bool")
-    if cache_enabled:
-        kwargs["cache_control"] = {"type": "ephemeral"}
-
-    response = client.messages.create(**kwargs)
-    result = response.model_dump()
+    resolved_model = model or get_model("general")
+    if client is not None:
+        from mojo.helpers.llm_providers import get_provider
+        result = get_provider("anthropic", client=client).call(
+            messages=messages, system=system, tools=tools,
+            model=resolved_model, max_tokens=max_tokens,
+            cache_enabled=cache_enabled)
+    else:
+        from mojo.apps.account.services import llm_safety
+        try:
+            result = llm_safety.invoke(
+                messages, system=system, tools=tools, model=model,
+                max_tokens=max_tokens, feature=normalize_feature(feature),
+                operation=operation, context=context)
+        except llm_safety.LLMSafetyError as err:
+            raise ValueError(err.code) from None
 
     # Warn once per worker if caching is enabled but produced no cache activity.
     # Typically means the prefix is below the model's minimum cacheable size

@@ -21,3 +21,5 @@ from .login_event import UserLoginEvent
 from .public_message import PublicMessage
 from .webhook_subscription import WebhookSubscription
 from .system_setup_operation import SystemSetupOperation
+from .llm_request import LLMRequest
+from .llm_circuit_breaker import LLMCircuitBreaker
