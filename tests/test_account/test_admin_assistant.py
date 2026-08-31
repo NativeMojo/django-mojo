@@ -252,7 +252,10 @@ def test_assistant_keys_are_catalog_protected(opts):
 
     for key in ("LLM_ADMIN_ENABLED", "LLM_ADMIN_API_KEY", "LLM_ADMIN_MODEL",
                 "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY",
-                "LLM_HANDLER_VERIFY_STATE", "ASSISTANT_MCP_ENABLED"):
+                "LLM_HANDLER_VERIFY_STATE", "ASSISTANT_MCP_ENABLED",
+                "LLM_EMERGENCY_STOP", "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED",
+                "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT",
+                "LLM_SAFETY_POLICY_EXPECTED_HASH"):
         assert admin_settings.is_catalog_protected(key), \
             f"{key} can still be written through the generic settings API"
 
@@ -287,6 +290,20 @@ def test_assistant_keys_are_catalog_protected(opts):
     model = (ROOT / "mojo/apps/account/models/setting.py").read_text()
     assert "protected_writer != self.key" in model, \
         "the protected-writer escape no longer requires the writer to name this row's key"
+
+
+@th.django_unit_test("both Admin bundles expose the exact fresh-owner LLM actions")
+def test_llm_safety_actions_match_in_both_admin_bundles(opts):
+    first = (ROOT / "mojo/apps/account/admin_portal/assets/assistant/setup.js").read_text()
+    second = (ROOT / "mojo/apps/account/admin_portal_v2/assets/assistant/setup.js").read_text()
+    assert first == second, "the two Admin Assistant setup bundles drifted"
+    for action in ("activate_policy", "reset_breaker", "historical_triage"):
+        literal = f"action: '{action}'"
+        assert first.count(literal) == 1, \
+            f"the Admin setup must expose exactly one {action} action, got {first.count(literal)}"
+    from mojo.apps.account.services import assistant_setup
+    assert assistant_setup.SCHEMA_VERSION == 2, \
+        f"Assistant setup must advertise state schema v2, got {assistant_setup.SCHEMA_VERSION}"
 
 
 @th.django_unit_test("the Assistant setup body never reaches the generic request logs")

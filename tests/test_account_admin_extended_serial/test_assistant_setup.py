@@ -32,7 +32,10 @@ AGENT_PASSWORD = "Assistant_setup_Agent_99"
 
 KEYS = ("LLM_ADMIN_ENABLED", "LLM_ADMIN_API_KEY", "LLM_ADMIN_MODEL",
         "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY",
-        "LLM_HANDLER_VERIFY_STATE", "ASSISTANT_MCP_ENABLED")
+        "LLM_HANDLER_VERIFY_STATE", "ASSISTANT_MCP_ENABLED",
+        "LLM_EMERGENCY_STOP", "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED",
+        "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT",
+        "LLM_SAFETY_POLICY_EXPECTED_HASH")
 PLATFORM_KEY = "sk-ant-platform-setup-wxyz5678"
 
 STORED_KEY = "sk-ant-assistant-setup-abcd1234"
@@ -440,7 +443,8 @@ def test_platform_key_is_settable_from_admin(opts):
 
         with _accepts():
             state = assistant_setup.save(
-                _admin(opts), enabled=True, model="", handler_api_key=PLATFORM_KEY)
+                _admin(opts), enabled=True, model="", handler_api_key=PLATFORM_KEY,
+                autonomous_triage=True)
 
         row = Setting.objects.get(key="LLM_HANDLER_API_KEY", group=None)
         assert row.is_secret is True, "the platform key row is not marked secret"
@@ -467,8 +471,8 @@ def test_platform_key_is_settable_from_admin(opts):
             "settings.get does not resolve the stored platform key"
         assert incident_cron._llm_triage_enabled() is True, \
             "incident triage ignores a platform key stored from the Admin"
-        assert incident_event._llm_api_key() == PLATFORM_KEY, \
-            "the default LLM triage path ignores a platform key stored from the Admin"
+        assert incident_event._autonomous_llm_enabled() is True, \
+            "the default LLM triage path ignores the authoritative owner activation"
 
         # Checking the stored platform key records against ITS record, not the
         # Assistant's.

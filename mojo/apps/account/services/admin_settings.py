@@ -49,6 +49,7 @@ ASSISTANT_WRITABLE_KEYS = frozenset({
     "ASSISTANT_MCP_ENABLED", "LLM_EMERGENCY_STOP",
     "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED",
     "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT",
+    "LLM_SAFETY_POLICY_EXPECTED_HASH",
 })
 # Every Assistant key the generic global writers must refuse.  Protection and
 # writability are separate questions: this set is what fails closed, and it may

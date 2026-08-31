@@ -16,8 +16,16 @@ from mojo.apps.account.services import assistant_setup, system_setup
 @md.requires_global_perms("view_security", "security")
 def on_admin_llm_safety(request):
     from mojo.apps.account.services import llm_safety
-    return {"schema_version": 1, "safety": llm_safety.aggregate_state(
-        hours=request.DATA.get("hours", 24))}
+    raw_hours = request.DATA.get("hours", 24)
+    try:
+        hours = int(raw_hours)
+    except (TypeError, ValueError):
+        raise merrors.ValueException("hours must be an integer from 1 through 168")
+    if isinstance(raw_hours, bool):
+        raise merrors.ValueException("hours must be an integer from 1 through 168")
+    return {"schema_version": assistant_setup.SCHEMA_VERSION,
+            "safety": llm_safety.aggregate_state(
+        hours=hours)}
 
 
 @md.GET("account/admin/assistant")
@@ -95,6 +103,13 @@ def on_admin_assistant_mutate(request):
             request.user, provider=request.DATA.get("provider"))
         return {"schema_version": assistant_setup.SCHEMA_VERSION,
                 "reset": reset, "state": assistant_setup.state()}
+    if action == "activate_policy":
+        if keys != {"action"}:
+            raise merrors.ValueException("Activate policy accepts only action")
+        from mojo.apps.account.services import llm_safety
+        activated = llm_safety.activate_policy(request.user)
+        return {"schema_version": assistant_setup.SCHEMA_VERSION,
+                "activated": activated, "state": assistant_setup.state()}
     if action == "historical_triage":
         if keys != {"action", "before", "limit"}:
             raise merrors.ValueException(
@@ -123,5 +138,5 @@ def on_admin_assistant_mutate(request):
         return {"schema_version": assistant_setup.SCHEMA_VERSION,
                 "revoked": revoked, "state": assistant_setup.state()}
     raise merrors.ValueException(
-        "action must be verify, save, reset_breaker, historical_triage, "
+        "action must be verify, save, activate_policy, reset_breaker, historical_triage, "
         "revoke_grant, or revoke_all_grants")

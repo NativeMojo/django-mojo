@@ -127,6 +127,12 @@ export function mountSetup({ctx, panel, onBack}) {
       disabled: state.mcp.grant_count === 0}, 'Disconnect all');
     const resetBreakers = h('button', {class: 'button danger compact', type: 'button'},
       'Reset breakers');
+    const activatePolicy = h('button', {class: 'button danger compact', type: 'button'},
+      'Activate deployed policy');
+    const historicalBefore = h('input', {type: 'datetime-local'});
+    const historicalLimit = h('input', {type: 'number', min: '1', max: '100', value: '20'});
+    const historicalTriage = h('button', {class: 'button ghost compact', type: 'button'},
+      'Queue historical triage');
 
     save.addEventListener('click', (event) => runAction(event.currentTarget, async () => {
       const payload = {
@@ -226,6 +232,38 @@ export function mountSetup({ctx, panel, onBack}) {
         paint(result.state);
       }, {pendingLabel: 'Resetting…'}));
 
+    activatePolicy.addEventListener('click', (event) => runAction(
+      event.currentTarget, async () => {
+        const {confirmed} = await confirmAction({
+          title: 'Activate this deployment policy?',
+          copy: 'Keep the emergency stop on until every node runs the same policy.',
+          confirmLabel: 'Activate policy', danger: true});
+        if (!confirmed) return;
+        const result = await api(ENDPOINT, {method: 'POST',
+          body: JSON.stringify({action: 'activate_policy'})});
+        toast('Deployed LLM policy activated.');
+        paint(result.state);
+      }, {pendingLabel: 'Activating…'}));
+
+    historicalTriage.addEventListener('click', (event) => runAction(
+      event.currentTarget, async () => {
+        const before = historicalBefore.value
+          ? new Date(historicalBefore.value).toISOString() : '';
+        const limit = Number(historicalLimit.value);
+        if (!before || !Number.isInteger(limit) || limit < 1 || limit > 100) {
+          throw new Error('Choose a cutoff and a limit from 1 through 100.');
+        }
+        const {confirmed} = await confirmAction({
+          title: 'Queue historical incident triage?',
+          copy: `Queue up to ${limit} incidents created before ${before}.`,
+          confirmLabel: 'Queue triage', danger: true});
+        if (!confirmed) return;
+        const result = await api(ENDPOINT, {method: 'POST', body: JSON.stringify({
+          action: 'historical_triage', before, limit})});
+        toast(`Queued ${result.queued} incident(s).`);
+        paint(result.state);
+      }, {pendingLabel: 'Queueing…'}));
+
     back.addEventListener('click', () => { onBack?.(); });
 
     const address = state.mcp.url || '<connect address>';
@@ -242,6 +280,9 @@ export function mountSetup({ctx, panel, onBack}) {
       h('h4', {text: 'LLM safety'}),
       h('label', {class: 'check-field'}, emergencyStop,
         h('span', {text: 'Emergency stop all ordinary provider requests'})),
+      state.emergency_stop_static
+        ? h('p', {class: 'assistant-note', text: 'The deployment-file emergency stop is active. Remove it and redeploy before calls can resume.'})
+        : null,
       h('label', {class: 'check-field'}, autonomousTriage,
         h('span', {text: 'Allow autonomous incident triage for new incidents'})),
       h('p', {class: 'assistant-note', text: state.autonomous_triage_activated_at
@@ -251,7 +292,12 @@ export function mountSetup({ctx, panel, onBack}) {
         h('div', {}, h('strong', {text: 'Last 24 hours'}),
           h('span', {text: `${state.safety?.requests?.length || 0} aggregate usage rows · `
             + `${state.safety?.breakers?.length || 0} breaker rows`})),
-        resetBreakers),
+        h('div', {}, activatePolicy, resetBreakers)),
+      h('div', {class: 'assistant-setup-row'},
+        h('label', {class: 'field'}, h('span', {text: 'Historical cutoff'}),
+          historicalBefore),
+        h('label', {class: 'field'}, h('span', {text: 'Maximum incidents'}),
+          historicalLimit), historicalTriage),
 
       h('h4', {text: 'Platform LLM key'}),
       h('p', {class: 'assistant-note',

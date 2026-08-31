@@ -50,7 +50,7 @@ from mojo.apps.account.services import system_settings
 from mojo.apps.account.services.provider_setup import key_hint
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 ENABLED_KEY = "LLM_ADMIN_ENABLED"
 API_KEY = "LLM_ADMIN_API_KEY"
@@ -509,6 +509,11 @@ def state(refresh=False, check=False):
     except Exception:
         safety = {"hours": 24, "requests": [], "breakers": [],
                   "error": "safety_state_unavailable"}
+    autonomous_enabled, autonomous_watermark = llm_safety.autonomous_triage_state()
+    try:
+        effective_stop = llm_safety.emergency_stopped()
+    except Exception:
+        effective_stop = True
     return {
         "schema_version": SCHEMA_VERSION,
         "enabled": bool(settings.get(ENABLED_KEY, False, kind="bool")),
@@ -517,10 +522,10 @@ def state(refresh=False, check=False):
         "model": _model_state(refresh=refresh),
         "verify": read_verify_state(VERIFY_STATE_KEY),
         "handler_verify": read_verify_state(HANDLER_VERIFY_STATE_KEY),
-        "emergency_stop": bool(settings.get(EMERGENCY_STOP_KEY, False, kind="bool")),
-        "autonomous_triage": bool(settings.get(AUTONOMOUS_TRIAGE_KEY, False, kind="bool")),
-        "autonomous_triage_activated_at": settings.get(
-            AUTONOMOUS_TRIAGE_WATERMARK_KEY, None),
+        "emergency_stop": effective_stop,
+        "emergency_stop_static": bool(settings.get_static(EMERGENCY_STOP_KEY, False)),
+        "autonomous_triage": autonomous_enabled,
+        "autonomous_triage_activated_at": autonomous_watermark,
         "assistant_installed": apps.is_installed("mojo.apps.assistant"),
         "realtime_installed": apps.is_installed("mojo.apps.realtime"),
         "mcp": mcp_state(check=check),
@@ -532,13 +537,13 @@ def state(refresh=False, check=False):
 # Verification
 # ---------------------------------------------------------------------------
 
-def _verify_candidate(candidate):
+def _verify_candidate(candidate, stored=False):
     """Test one key and reduce the answer to the fixed vocabulary."""
     if not candidate:
         return {"ok": False, "code": "not_configured",
                 "message": VERIFY_MESSAGES["not_configured"]}
     try:
-        ok, message = llm.verify_api_key(candidate)
+        ok, message = llm.verify_api_key() if stored else llm.verify_api_key(candidate)
     except Exception:
         # A broken client library is an unreachable provider as far as the
         # operator is concerned, and its repr is not theirs to read.
@@ -597,7 +602,7 @@ def verify(actor, api_key=None, target="assistant"):
     if tested_stored:
         candidate = llm.get_api_key() if target == "assistant" \
             else settings.get(HANDLER_KEY, None)
-    result = _verify_candidate(candidate)
+    result = _verify_candidate(candidate, stored=tested_stored)
     if tested_stored and result["code"] != "not_configured":
         _write_verify_state(result, TARGETS[target][1])
     _audit(actor, [f"verify_{target}"], "verified" if result["ok"] else "unverified")
@@ -749,6 +754,7 @@ def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
     send the field cannot switch remote access off on its next ordinary save.
     Any other non-boolean is refused rather than coerced.
     """
+    from mojo.apps.account.services import llm_safety
     system_settings.require_system_admin(actor)
     if not isinstance(enabled, bool):
         raise merrors.ValueException("enabled must be true or false")
@@ -790,7 +796,7 @@ def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
             _write_value(EMERGENCY_STOP_KEY, emergency_stop)
             changed.append(f"emergency_stop:{'on' if emergency_stop else 'off'}")
         if autonomous_triage is not None:
-            was_enabled = bool(settings.get(AUTONOMOUS_TRIAGE_KEY, False, kind="bool"))
+            was_enabled, _ = llm_safety.autonomous_triage_state()
             _write_value(AUTONOMOUS_TRIAGE_KEY, autonomous_triage)
             if autonomous_triage and not was_enabled:
                 _write_value(
