@@ -26,10 +26,13 @@ RULESET_BUNDLE_BY_VALUES = list(range(14))
 
 
 def _get_llm_api_key():
-    return llm.get_api_key()
+    """Legacy test seam; guarded runtime never exposes or checks raw keys."""
+    return None
 
 def _get_llm_model():
-    return llm.get_model("general")
+    """Legacy test seam backed by the exact triage route model."""
+    from mojo.apps.account.services import llm_safety
+    return llm_safety.route_state("incident_triage").get("model")
 
 SYSTEM_PROMPT = """You are a security operations agent responsible for triaging incidents in a web application fleet.
 
@@ -81,7 +84,8 @@ Your goal is to identify the pattern behind this incident, find and merge relate
 a RuleSet that will auto-handle this pattern in the future — so no new open incidents pile up.
 
 ## Your Workflow
-1. Set the target incident to "investigating".
+1. Preserve the target's current status while gathering context; change it only
+   when recording an actual assessment or resolution.
 2. Review the pre-loaded events and related incidents below.
 3. Use query_open_incidents to find all open incidents in this category.
 4. For incidents that clearly represent the same pattern, merge them into the target incident using merge_incidents.
@@ -1736,6 +1740,14 @@ def execute_llm_handler(job):
     user_message = _build_incident_message(event, incident)
 
     messages = [{"role": "user", "content": user_message}]
+    before_assessment = dict((incident.metadata or {}).get("llm_assessment") or {}) \
+        if incident else {}
+    if incident:
+        from mojo.apps.incident.models import Ticket
+        before_ticket_ids = set(Ticket.objects.filter(
+            incident=incident).values_list("pk", flat=True))
+    else:
+        before_ticket_ids = set()
 
     try:
         result = _run_agent_loop(
@@ -1743,7 +1755,19 @@ def execute_llm_handler(job):
             context={"job_id": job.pk, "incident_id": incident_id},
             lease=(payload.get("_llm_attempt_id"), payload.get("_llm_lease_owner")))
         if incident:
-            # Extract final text response for the history
+            from mojo.apps.incident.models import Incident, Ticket
+            current = Incident.objects.filter(pk=incident.pk).values(
+                "status", "metadata").first()
+            if current is not None and current["status"] == "investigating":
+                assessment = dict(
+                    (current["metadata"] or {}).get("llm_assessment") or {})
+                created_ticket = Ticket.objects.filter(incident_id=incident.pk).exclude(
+                    pk__in=before_ticket_ids).exists()
+                if assessment == before_assessment and not created_ticket:
+                    raise llm.LLMExecutionError("triage_incomplete")
+            # Only record completion after the durable outcome check. A plain
+            # end_turn while the incident is still investigating is retryable,
+            # not a successful assessment.
             text_parts = []
             if result and result.get("content"):
                 for block in result["content"]:
@@ -1882,7 +1906,6 @@ def execute_llm_analysis(job):
         incident.metadata["llm_analysis"] = {
             "summary": "\n".join(text_parts)[:3000] if text_parts else "Analysis completed",
         }
-        incident.metadata["analysis_in_progress"] = False
         incident.save(update_fields=["metadata"])
 
         if text_parts:
@@ -1891,12 +1914,7 @@ def execute_llm_analysis(job):
                 note=f"[LLM Agent] Analysis complete: {summary}")
     except Exception:
         logger.exception("LLM analysis failed for incident %s", incident_id)
-        # Clear in-progress flag
         try:
-            if not incident.metadata:
-                incident.metadata = {}
-            incident.metadata["analysis_in_progress"] = False
-            incident.save(update_fields=["metadata"])
             incident.add_history("handler:llm",
                 note="[LLM Agent] Analysis failed due to an error")
         except Exception:

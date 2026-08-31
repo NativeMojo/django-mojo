@@ -183,8 +183,8 @@ def test_execute_attempt_success_and_lease_ownership(opts):
     assert attempt.state == "succeeded", \
         f"a successful managed handler must finish the attempt, got {attempt.state}"
     incident.refresh_from_db()
-    assert incident.status == "new", \
-        f"triage success without an update must restore prior status, got {incident.status}"
+    assert incident.status == "investigating", \
+        f"dispatcher success must preserve the handler's valid triage outcome, got {incident.status}"
     assert seen.get("_llm_attempt_id") == attempt.pk and seen.get("_llm_lease_owner"), \
         f"managed payload must carry the owner-token lease, got {seen}"
 
@@ -223,6 +223,9 @@ def test_retry_after_lease_ceiling_and_transient_reclaim(opts):
     from mojo.apps.incident.services import llm_dispatch
     from mojo.apps.jobs.models import Job
     from mojo.helpers.llm import LLMExecutionError
+
+    assert llm_dispatch._is_transient("triage_incomplete") is True, \
+        "a durable no-op triage must retry and later reclaim instead of starving"
 
     policy = {
         "shared": {"max_loop_calls": 5, "timeout_seconds": 1000},
@@ -284,3 +287,115 @@ def test_manual_analysis_is_fresh_coalesced_and_status_neutral(opts):
         incident, feature="incident_analysis", fresh=True)
     assert second_created is True and second.pk != first.pk, \
         "a later manual request after success must receive a fresh logical attempt"
+
+
+@th.django_unit_test()
+def test_ticket_failure_never_restores_another_workflows_status(opts):
+    from mojo.apps.incident.models import Incident, Ticket
+    from mojo.apps.incident.services import llm_dispatch
+    from mojo.apps.jobs.models import Job
+    from mojo.helpers.llm import LLMExecutionError
+
+    incident = Incident.objects.create(
+        category=f"test:llm-ticket-neutral:{uuid.uuid4().hex}",
+        status="investigating", priority=4, title="Ticket status neutrality")
+    ticket = Ticket.objects.create(title="Managed ticket", incident=incident)
+    attempt, _ = llm_dispatch.claim_ticket(ticket)
+    attempt.max_attempts = 1
+    attempt.prior_status = "open"
+    attempt.save(update_fields=["max_attempts", "prior_status"])
+    job = Job.objects.get(pk=attempt.job_id)
+
+    def fail_ticket(current_job):
+        raise LLMExecutionError("context_invalid")
+
+    llm_dispatch.execute_attempt(job, handler_loader=lambda path: fail_ticket)
+    attempt.refresh_from_db()
+    incident.refresh_from_db()
+    assert attempt.state == "terminal", \
+        f"permanent ticket failure must terminalize, got {attempt.state}"
+    assert incident.status == "investigating", \
+        "ticket failure must not restore status owned by another workflow"
+
+
+@th.django_unit_test()
+def test_incomplete_triage_exhaustion_can_be_reclaimed(opts):
+    from django.utils import timezone
+    from mojo.apps.incident.models import Incident
+    from mojo.apps.incident.services import llm_dispatch
+    from mojo.apps.jobs.models import Job
+    from mojo.helpers.llm import LLMExecutionError
+
+    incident = Incident.objects.create(
+        category=f"test:llm-triage-incomplete:{uuid.uuid4().hex}", status="new",
+        priority=4, title="Incomplete triage reclaim")
+    suffix = uuid.uuid4().hex
+    attempt, _ = llm_dispatch.claim_incident(
+        incident, event_id=5101, logical_suffix=suffix, max_attempts=1)
+
+    def no_outcome(current_job):
+        raise LLMExecutionError("triage_incomplete")
+
+    llm_dispatch.execute_attempt(
+        Job.objects.get(pk=attempt.job_id), handler_loader=lambda path: no_outcome)
+    attempt.refresh_from_db()
+    incident.refresh_from_db()
+    assert attempt.state == "terminal" and attempt.retry_at is not None, \
+        f"exhausted no-op triage must remain reclaimable: {attempt.state}/{attempt.retry_at}"
+    assert incident.status == "new", \
+        f"failed triage must restore only its own investigating state, got {incident.status}"
+
+    attempt.retry_at = timezone.now() - timezone.timedelta(seconds=1)
+    attempt.save(update_fields=["retry_at"])
+    reclaimed, created = llm_dispatch.claim_incident(
+        incident, event_id=5101, logical_suffix=suffix, max_attempts=1)
+    incident.refresh_from_db()
+    assert created is True and reclaimed.pk == attempt.pk and reclaimed.state == "queued", \
+        f"later sweep must re-arm the same incomplete triage: {created}/{reclaimed.state}"
+    assert incident.status == "investigating", \
+        f"reclaimed triage must own investigating again, got {incident.status}"
+
+
+@th.django_unit_test()
+def test_analysis_flag_survives_retry_and_clears_on_final_outcome(opts):
+    from mojo.apps.incident.models import Incident
+    from mojo.apps.incident.services import llm_dispatch
+    from mojo.apps.jobs.models import Job
+    from mojo.helpers.llm import LLMExecutionError
+
+    incident = Incident.objects.create(
+        category=f"test:llm-analysis-flag:{uuid.uuid4().hex}", status="open",
+        priority=4, title="Analysis retry flag",
+        metadata={"analysis_in_progress": True})
+    attempt, _ = llm_dispatch.claim_incident(
+        incident, feature="incident_analysis", fresh=True, max_attempts=2)
+
+    def temporary_failure(current_job):
+        raise LLMExecutionError("provider_timeout")
+
+    llm_dispatch.execute_attempt(
+        Job.objects.get(pk=attempt.job_id),
+        handler_loader=lambda path: temporary_failure)
+    attempt.refresh_from_db()
+    incident.refresh_from_db()
+    assert attempt.state == "queued" and incident.metadata.get("analysis_in_progress") is True, \
+        f"retryable delivery must retain the analysis flag: {attempt.state}/{incident.metadata}"
+
+    llm_dispatch.execute_attempt(
+        Job.objects.get(pk=attempt.job_id), handler_loader=lambda path: lambda job: None)
+    attempt.refresh_from_db()
+    incident.refresh_from_db()
+    assert attempt.state == "succeeded" and incident.metadata.get("analysis_in_progress") is False, \
+        f"success must clear the analysis flag: {attempt.state}/{incident.metadata}"
+
+    incident.metadata = {"analysis_in_progress": True}
+    incident.save(update_fields=["metadata"])
+    terminal, _ = llm_dispatch.claim_incident(
+        incident, feature="incident_analysis", fresh=True, max_attempts=1)
+    llm_dispatch.execute_attempt(
+        Job.objects.get(pk=terminal.job_id),
+        handler_loader=lambda path: temporary_failure)
+    terminal.refresh_from_db()
+    incident.refresh_from_db()
+    assert terminal.state == "terminal" and incident.metadata.get("analysis_in_progress") is False, \
+        f"terminal failure must clear the analysis flag: {terminal.state}/{incident.metadata}"

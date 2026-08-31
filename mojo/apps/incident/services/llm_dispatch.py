@@ -255,10 +255,6 @@ def _finish_locked(attempt, owner, succeeded, error_code, retry_after=None):
         attempt.state = "succeeded"
         attempt.finished_at = timezone.now()
         attempt.error_code = ""
-        if attempt.feature == "incident_triage":
-            Incident.objects.filter(
-                pk=attempt.incident_id, status="investigating").update(
-                    status=attempt.prior_status or "open")
         if attempt.feature == "incident_analysis":
             _clear_analysis_flag(attempt.incident_id)
     elif attempt.attempt_count < attempt.max_attempts:
@@ -280,8 +276,10 @@ def _finish_locked(attempt, owner, succeeded, error_code, retry_after=None):
             attempt.retry_at = timezone.now() + timezone.timedelta(seconds=delay)
         else:
             attempt.retry_at = None
-        Incident.objects.filter(pk=attempt.incident_id, status="investigating").update(
-            status=attempt.prior_status or "open")
+        if attempt.feature == "incident_triage":
+            Incident.objects.filter(
+                pk=attempt.incident_id, status="investigating").update(
+                    status=attempt.prior_status or "open")
         if attempt.feature == "incident_analysis":
             _clear_analysis_flag(attempt.incident_id)
     attempt.lease_owner = ""
