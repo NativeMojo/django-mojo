@@ -607,7 +607,9 @@ Response:
 { "status": true, "data": { "session_token": "<32-hex>", "expires_in": 600 } }
 ```
 
-The server sends a 6-digit code via SMS. Rate-limited per IP. Returns 400 if a user already owns the phone.
+The server sends a 6-digit code via SMS. Rate-limited per IP (5 requests / 300s).
+
+If the transport did not accept the message the call returns **503** with `{"status": false, "code": 503, "error": "Unable to send the text message right now. Please try again in a few minutes."}` (retryable); if the provider rejected the number itself it returns **400** with `{"status": false, "code": 400, "error": "This phone number cannot receive text messages."}` (retrying the same number will not help). Neither returns a `session_token` — restart at step 1. Provider error text and codes never reach the client.
 
 **Step 2 — Verify**
 

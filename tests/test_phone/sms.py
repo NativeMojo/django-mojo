@@ -33,6 +33,19 @@ def _seed_otp(user, code=None):
     return code
 
 
+def _clear_sms_limits():
+    """Reset this IP's /auth/sms/* buckets.
+
+    Each endpoint now owns a named bucket at 10 requests / 60s per IP (they
+    used to share one 60/min bucket by accident). This module posts to
+    /auth/sms/verify seven times in a row from loopback, so it clears its own
+    budget rather than leaning on the shared headroom.
+    """
+    from mojo.decorators.limits import clear_rate_limits
+    for key in ("sms_send", "sms_verify", "sms_login"):
+        clear_rate_limits(ip="127.0.0.1", key=key)
+
+
 @th.django_unit_setup()
 def setup_sms_env(opts):
     from mojo.apps.account.models import User
@@ -74,6 +87,7 @@ def test_sms_login_returns_mfa(opts):
 
 @th.django_unit_test("sms: verify with mfa_token + valid code issues JWT")
 def test_sms_verify_with_mfa_token(opts):
+    _clear_sms_limits()
     assert opts.mfa_token, "No mfa_token from previous test"
 
     # Seed code directly (bypass actual SMS)
@@ -88,6 +102,7 @@ def test_sms_verify_with_mfa_token(opts):
 
 @th.django_unit_test("sms: verify with mfa_token + invalid code is rejected")
 def test_sms_verify_invalid_code(opts):
+    _clear_sms_limits()
     # Get a fresh mfa_token
     resp = opts.client.post("/api/login", {"username": TEST_USER, "password": TEST_PWORD})
     mfa_token = resp.response.data.mfa_token
@@ -99,6 +114,7 @@ def test_sms_verify_invalid_code(opts):
 
 @th.django_unit_test("sms: verify rejects expired code")
 def test_sms_verify_expired_code(opts):
+    _clear_sms_limits()
     resp = opts.client.post("/api/login", {"username": TEST_USER, "password": TEST_PWORD})
     mfa_token = resp.response.data.mfa_token
 
@@ -115,6 +131,7 @@ def test_sms_verify_expired_code(opts):
 @th.tier("core")
 @th.django_unit_test("sms: invalid mfa_token is rejected")
 def test_sms_verify_invalid_token(opts):
+    _clear_sms_limits()
     code = _seed_otp(opts.user)
     resp = opts.client.post("/api/auth/sms/verify", {"mfa_token": "notavalidtoken", "code": code})
     assert resp.status_code in [401, 403], f"Should reject invalid token, got {resp.status_code}"
@@ -127,6 +144,7 @@ def test_sms_verify_invalid_token(opts):
 @th.tier("core")
 @th.django_unit_test("sms: standalone login send returns success without leaking user existence")
 def test_sms_standalone_send(opts):
+    _clear_sms_limits()
     # Known user
     resp = opts.client.post("/api/auth/sms/login", {"username": TEST_USER})
     assert resp.status_code == 200, f"Unexpected status {resp.status_code}"
@@ -139,6 +157,7 @@ def test_sms_standalone_send(opts):
 
 @th.django_unit_test("sms: standalone verify with username + valid code issues JWT")
 def test_sms_standalone_verify(opts):
+    _clear_sms_limits()
     code = _seed_otp(opts.user)
     resp = opts.client.post("/api/auth/sms/verify", {"username": TEST_USER, "code": code})
     assert resp.status_code == 200, f"Unexpected status {resp.status_code}: {resp.response}"
@@ -148,6 +167,7 @@ def test_sms_standalone_verify(opts):
 
 @th.django_unit_test("sms: standalone verify rejects invalid code")
 def test_sms_standalone_invalid_code(opts):
+    _clear_sms_limits()
     _seed_otp(opts.user, code="333333")
     resp = opts.client.post("/api/auth/sms/verify", {"username": TEST_USER, "code": "999999"})
     assert resp.status_code in [401, 403], f"Should reject wrong code, got {resp.status_code}"
@@ -155,6 +175,7 @@ def test_sms_standalone_invalid_code(opts):
 
 @th.django_unit_test("sms: verify requires either mfa_token or username")
 def test_sms_verify_requires_identifier(opts):
+    _clear_sms_limits()
     code = _seed_otp(opts.user)
     resp = opts.client.post("/api/auth/sms/verify", {"code": code})
     assert resp.status_code in [401, 403], f"Should require mfa_token or username, got {resp.status_code}"

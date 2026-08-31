@@ -140,6 +140,8 @@ phonehub.send_sms(user.phone_number, f"Your login token: {token}")
 
 Tokens are single-use and expire after `MAGIC_LOGIN_TOKEN_TTL` seconds (default 3600). The channel is stored encrypted in `mojo_secrets` and cleared on consume.
 
+`POST /api/auth/magic/send`'s SMS branch normalizes the stored number and absorbs every send failure — an un-normalizable number is treated as no number (filing a `magic_login:phone_unusable` incident) and a failed or raising transport files `magic_login:sms_send_failed` — so the single generic response is enumeration-invariant by construction rather than by convention.
+
 See the [Magic Login REST API](../../web_developer/account/magic_login.md) for the full client-facing flow.
 
 ## Cross-Origin Auth Handoff

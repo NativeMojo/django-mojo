@@ -20,6 +20,7 @@ from mojo.apps.account.models import User
 from mojo.apps.account.rest.user import jwt_login
 from mojo.apps.account.services import mfa as mfa_service
 from mojo.apps.account.services import auth_config
+from mojo.apps.account.services import sms_delivery
 from mojo.apps import phonehub
 from mojo.apps.phonehub.services.phonenumbers import normalize as normalize_phone
 from mojo.helpers import crypto, dates, logit
@@ -37,8 +38,18 @@ def _otp_sms_body(code, request=None):
     return f"Your verification code is: {code}"
 
 
-def _send_otp(user, request=None):
-    """Generate a 6-digit code, store it on the user, and send via SMS."""
+def _send_otp(user, request=None, *, send=None):
+    """Generate a 6-digit code, store it on the user, and send via SMS.
+
+    Acceptance is classified by `sms_delivery.was_accepted()`, not by
+    `sms.status == "failed"`: a `None` result (the transport returned nothing)
+    used to raise AttributeError inside the try and get mis-filed as a
+    transport EXCEPTION, and a non-terminal state such as `queued` filed
+    nothing at all — a send that never happened looked clean in the incident
+    trail.
+
+    `send` is a test seam, not part of the wire contract.
+    """
     if not user.phone_number:
         raise merrors.ValueException("No phone number on file for this account")
 
@@ -47,9 +58,10 @@ def _send_otp(user, request=None):
     user.set_secret("sms_otp_ts", int(dates.utcnow().timestamp()))
     user.save()
 
+    sender = send if send is not None else phonehub.send_sms
     try:
-        sms = phonehub.send_sms(user.phone_number, _otp_sms_body(code, request))
-        if sms.status == "failed":
+        sms = sender(user.phone_number, _otp_sms_body(code, request))
+        if not sms_delivery.was_accepted(sms):
             logit.error("account.sms", f"Failed to send SMS OTP to {user.phone_number}")
             user.report_incident("SMS OTP send failed", "sms:send_failed", level=6)
     except Exception as e:
@@ -81,10 +93,17 @@ def _clear_otp(user):
 
 @md.POST("auth/sms/send")
 @md.requires_params("mfa_token")
-@md.strict_rate_limit(10, 60)
+@md.strict_rate_limit("sms_send", ip_limit=10, ip_window=60)
 @md.public_endpoint()
-def on_sms_send(request):
-    """Send an SMS OTP code to the user identified by mfa_token."""
+def on_sms_send(request, *, send=None):
+    """Send an SMS OTP code to the user identified by mfa_token.
+
+    The send outcome is deliberately NOT reported: this endpoint consumes the
+    caller's mfa_token and mints its replacement before sending, so returning a
+    503 here would strand them with the old token already burned. `_send_otp`
+    files the incident.
+
+    `send` is a test seam, not part of the wire contract."""
     token_data = mfa_service.consume_mfa_token(request.DATA.get("mfa_token"))
     if not token_data:
         raise merrors.PermissionDeniedException("Invalid or expired MFA token", 401, 401)
@@ -95,7 +114,7 @@ def on_sms_send(request):
 
     # Re-issue a fresh mfa_token so the user can still verify after this send
     new_token = mfa_service.create_mfa_token(user, token_data.get("methods", ["sms"]))
-    _send_otp(user, request)
+    _send_otp(user, request, send=send)
 
     return JsonResponse({
         "status": True,
@@ -108,7 +127,7 @@ def on_sms_send(request):
 
 @md.POST("auth/sms/verify")
 @md.requires_params("code")
-@md.strict_rate_limit(10, 60)
+@md.strict_rate_limit("sms_verify", ip_limit=10, ip_window=60)
 @md.public_endpoint()
 @md.requires_geofence(scope="auth", after_auth=True)
 def on_sms_verify(request):
@@ -158,11 +177,20 @@ def on_sms_verify(request):
 # -----------------------------------------------------------------
 
 @md.POST("auth/sms/login")
-@md.strict_rate_limit(10, 60)
+@md.strict_rate_limit("sms_login", ip_limit=10, ip_window=60)
 @md.public_endpoint()
 @md.requires_geofence(scope="auth")
-def on_sms_login(request):
-    """Send an SMS OTP to start a passwordless login."""
+def on_sms_login(request, *, send=None):
+    """Send an SMS OTP to start a passwordless login.
+
+    Answers identically for every caller — unknown identifier, a real account
+    with no phone number, a send that failed. The uniform response IS the
+    anti-enumeration guarantee (see
+    docs/django_developer/account/auth_pages.md), so the no-phone case is
+    handled HERE rather than by relaxing `_send_otp`, whose other callers are
+    authenticated and are entitled to a real error.
+
+    `send` is a test seam, not part of the wire contract."""
     # UX-only per-group method gate (no-op without a resolving group_uuid).
     auth_config.assert_login_method(
         "sms", auth_config.resolve_group_from_request(request))
@@ -178,7 +206,16 @@ def on_sms_login(request):
         # Return success to avoid user enumeration
         return JsonResponse({"status": True, "message": "If the account exists, a code was sent."})
 
-    _send_otp(user, request)
+    if not user.phone_number:
+        # A real account with no number used to raise a 400 here while an
+        # unknown identifier got the generic 200 — a trivially usable oracle.
+        # The operator still gets the signal; the caller does not.
+        user.report_incident(
+            "SMS login attempt on an account with no phone number",
+            "sms:login_no_phone", level=6, request=request)
+        return JsonResponse({"status": True, "message": "If the account exists, a code was sent."})
+
+    _send_otp(user, request, send=send)
     return JsonResponse({"status": True, "message": "If the account exists, a code was sent."})
 
 
@@ -193,11 +230,20 @@ def on_sms_login(request):
 @md.strict_rate_limit("phone_register_start", ip_limit=5, ip_window=300)
 @md.requires_geofence(scope="auth")
 @md.requires_params("phone")
-def on_phone_register_start(request):
+def on_phone_register_start(request, *, send=None):
     """Begin pre-register phone verification.
 
     Body: { phone }
     Returns { session_token, expires_in }.
+
+    Answers 503 when the SMS transport did not accept the message and 400 with
+    fixed copy for a sanctioned recipient rejection — telling a caller to wait
+    for a code that was never sent leaves them stuck. This endpoint is
+    user-less and Redis-backed and deliberately omits the account-existence
+    check, so it has NO enumeration surface: the fixed bodies are identical for
+    registered and unregistered numbers.
+
+    `send` is a test seam, not part of the wire contract.
     """
     from mojo.apps.account.services import phone_register
 
@@ -213,12 +259,17 @@ def on_phone_register_start(request):
 
     session_token, code, ttl = phone_register.start(phone, ip=getattr(request, "ip", None))
 
+    sender = send if send is not None else phonehub.send_sms
     try:
-        sms = phonehub.send_sms(phone, _otp_sms_body(code, request))
-        if sms is not None and getattr(sms, "status", None) == "failed":
-            logit.error("account.sms", f"phone_register: failed to send code to {phone}")
+        sms = sender(phone, _otp_sms_body(code, request))
     except Exception as e:
         logit.error("account.sms", f"phone_register: SMS exception for {phone}: {e}")
+        sms = None
+    if sms_delivery.recipient_rejected(sms):
+        return sms_delivery.number_unreachable_response()
+    if not sms_delivery.was_accepted(sms):
+        logit.error("account.sms", f"phone_register: failed to send code to {phone}")
+        return sms_delivery.send_unavailable_response()
 
     return JsonResponse({
         "status": True,

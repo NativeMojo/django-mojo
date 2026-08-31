@@ -10,6 +10,7 @@ from mojo.apps.account.services import extensions as account_extensions
 from mojo.apps.account.services import auth_config
 from mojo.apps.account.services import closure as account_closure
 from mojo.apps.account.services import email_delivery
+from mojo.apps.account.services import sms_delivery
 from mojo.apps.account.services import token_landing
 from mojo.apps.account.utils import tokens
 from mojo.apps.account.utils.webapp_url import build_token_url
@@ -1272,8 +1273,23 @@ def on_user_password_forced(request):
 @md.strict_rate_limit("magic_login_send", ip_limit=5, ip_window=300)
 @md.public_endpoint()
 @md.requires_geofence(scope="auth")
-def on_magic_login_send(request):
-    """Send a magic login link via email (default) or SMS (method=sms)."""
+def on_magic_login_send(request, *, send=None):
+    """Send a magic login link via email (default) or SMS (method=sms).
+
+    The response NEVER varies — not on account existence, not on the send
+    outcome. That uniformity IS the anti-enumeration guarantee, so the SMS
+    branch normalizes the stored number before handing it to the transport and
+    absorbs every send failure. A number `phonehub.normalize()` cannot parse is
+    treated as no usable number: it used to reach `SMS.send()`, which writes
+    the normalized `None` into a NOT NULL column and raises, turning "this
+    account exists and holds an unparseable number" into a 500 that no other
+    caller ever saw.
+
+    `send` is a test seam, not part of the wire contract — the dispatcher never
+    passes it. It exists because the test project's +1555 short-circuit means a
+    send over HTTP is always accepted, so the failure paths are not reachable
+    over the wire.
+    """
     # UX-only per-group method gate (no-op without a resolving group_uuid).
     auth_config.assert_login_method(
         "magic", auth_config.resolve_group_from_request(request))
@@ -1297,9 +1313,31 @@ def on_magic_login_send(request):
         token_url = build_token_url("magic_login", magic_token, request=request, user=user, group=group)
         if channel == "sms":
             from mojo.apps import phonehub
-            if user.phone_number:
+            normalized = phonehub.normalize(user.phone_number) if user.phone_number else None
+            if not normalized:
+                # Permanent and deterministic: this account can never receive a
+                # magic-login text until somebody fixes the stored number. It is
+                # the one branch with no other operator signal, so it files one.
+                logit.warning(
+                    f"magic login SMS skipped for user {user.pk}: stored phone "
+                    f"number has no normalized form")
+                user.report_incident(
+                    "magic login number unusable", "magic_login:phone_unusable", level=6)
+            else:
                 login_url = maybe_shorten_url(token_url, source="magic_login_sms", user=user, expire_hours=1)
-                phonehub.send_sms(user.phone_number, f"Your login link: {login_url}")
+                sender = send if send is not None else phonehub.send_sms
+                # ONE try covers the send AND the incident write: a failing
+                # incident write must not 500 the endpoint either, because that
+                # would restore exactly the differential this closes.
+                try:
+                    sms = sender(normalized, f"Your login link: {login_url}")
+                    if not sms_delivery.was_accepted(sms):
+                        user.report_incident(
+                            "magic login SMS send failed",
+                            "magic_login:sms_send_failed", level=6)
+                except Exception:
+                    logit.exception(
+                        f"magic login SMS transport raised for user {user.pk}")
         else:
             token_url = maybe_shorten_url(token_url, source="magic_login", user=user, expire_hours=1)
             user.send_template_email("magic_login_link", dict(token=magic_token, token_url=token_url))
@@ -2031,18 +2069,46 @@ def on_email_change_cancel(request):
 # Phone number change (self-service, OTP-verify-then-commit)
 # -----------------------------------------------------------------
 
+def _clear_phone_change_state(user):
+    """Clear every trace of a pending phone change in one write.
+
+    Kills the stored target number, the OTP and its timestamp, and the pc:
+    session-token JTI — so an outstanding session_token is dead immediately
+    rather than at TTL. Shared by the request endpoint's failure paths and by
+    the explicit cancel endpoint. `phone_change_ts` is deliberately left alone,
+    exactly as cancel has always left it.
+    """
+    import mojo.apps.account.utils.tokens as tok_module
+
+    user.set_secret("pending_phone", None)
+    user.set_secret("phone_change_otp", None)
+    user.set_secret("phone_change_otp_ts", None)
+    user.set_secret(tok_module._JTI_KEYS[tok_module.KIND_PHONE_CHANGE], None)
+    user.save(update_fields=["mojo_secrets", "modified"])
+
+
 @md.POST("auth/phone/change/request")
 @md.denies_key_backed_session()
 @md.requires_auth()
 @md.requires_fresh_auth()
 @md.strict_rate_limit("phone_change_request", ip_limit=5, ip_window=3600)
 @md.requires_params("phone_number")
-def on_phone_change_request(request):
+def on_phone_change_request(request, *, send=None):
     """
     Begin a self-service phone number change. current_password is optional.
     If provided and non-empty, it is validated; otherwise the password check is skipped.
     Sends a 6-digit OTP to the NEW number via SMS.
     The phone number is NOT changed until the user submits the correct OTP in /confirm.
+
+    Answers 503 with a safe retry message when the SMS transport did not accept
+    the message (misconfiguration, provider refusal or outage) and 400 with
+    fixed copy when the provider rejected the recipient number itself — see
+    `mojo.apps.account.services.sms_delivery`. Every failure path clears the
+    pending change, so the caller restarts cleanly at step 1 and never holds a
+    session_token for a code nobody received.
+
+    `send` is a test seam, not part of the wire contract — the dispatcher never
+    passes it.
     """
     from mojo.apps.account.utils import tokens as tok_utils
     from mojo.apps import phonehub
@@ -2068,21 +2134,27 @@ def on_phone_change_request(request):
     if User.objects.filter(phone_number=normalized).exclude(pk=user.pk).exists():
         raise merrors.ValueException("Phone number already in use")
 
+    sender = send if send is not None else phonehub.send_sms
     session_token, otp = tok_utils.generate_phone_change_token(user, normalized)
 
-    sms = phonehub.send_sms(normalized, f"Your phone change verification code is: {otp}")
-    if sms and sms.status == "failed":
-        # Clear the pending state so the user can retry cleanly
-        user.set_secret("pending_phone", None)
-        user.set_secret("phone_change_otp", None)
-        user.set_secret("phone_change_otp_ts", None)
-        user.save(update_fields=["mojo_secrets", "modified"])
-        raise merrors.ValueException("Failed to send SMS to the new number — check the number and try again")
+    try:
+        sms = sender(normalized, f"Your phone change verification code is: {otp}")
+    except Exception:
+        logit.exception(f"phone change SMS transport raised for user {user.pk}")
+        sms = None
+    if sms_delivery.recipient_rejected(sms):
+        _clear_phone_change_state(user)
+        return sms_delivery.number_unreachable_response()
+    if not sms_delivery.was_accepted(sms):
+        _clear_phone_change_state(user)
+        return sms_delivery.send_unavailable_response()
 
-    # Notify the OLD phone number so the real owner knows a change was requested
+    # Notify the OLD phone number so the real owner knows a change was
+    # requested. Deliberately AFTER the classification returns above: a change
+    # that never started must never alert the previous owner.
     if user.phone_number:
         try:
-            phonehub.send_sms(user.phone_number, "A request was made to change your phone number. If this wasn't you, secure your account immediately.")
+            sender(user.phone_number, "A request was made to change your phone number. If this wasn't you, secure your account immediately.")
         except Exception:
             pass
 
@@ -2155,19 +2227,12 @@ def on_phone_change_cancel(request):
     so the outstanding session token is immediately dead even before the TTL expires.
     Idempotent — returns 200 if there is no pending change.
     """
-    import mojo.apps.account.utils.tokens as tok_module
-
     user = request.user
     pending = user.get_secret("pending_phone")
     if not pending:
         return JsonResponse({"status": True, "message": "No pending phone change to cancel."})
 
-    user.set_secret("pending_phone", None)
-    user.set_secret("phone_change_otp", None)
-    user.set_secret("phone_change_otp_ts", None)
-    # Kill the session token JTI so any outstanding pc: token is immediately invalid
-    user.set_secret(tok_module._JTI_KEYS[tok_module.KIND_PHONE_CHANGE], None)
-    user.save(update_fields=["mojo_secrets", "modified"])
+    _clear_phone_change_state(user)
     user.report_incident(
         f"{user.username} cancelled pending phone change to {pending}",
         "phone_change:cancelled")
