@@ -2,7 +2,10 @@
 
 ## Per-Room Rules
 
-Each room has a `rules` JSONField. The handler enforces these before persisting messages.
+Each room has a `rules` JSONField. [`send_message`](services.md) enforces these
+before persisting, gated by `enforce_room_policy` — the WebSocket handler no
+longer carries its own copy. `chat_edit` still enforces `check_rules` and
+`check_moderation` directly in the handler.
 
 | Rule | Default | Description |
 |------|---------|-------------|
@@ -64,9 +67,18 @@ When `disappearing_ttl > 0`:
 - `mojo.apps.chat.cleanup.run_cleanup()` deletes expired messages and notifies
   the [deletion hook](services.md#deletion-hook) with the ids it removed
 - Flagged messages are exempt (evidence preservation)
-- History endpoint also filters out expired messages as a fallback
+- [`visible_messages`](services.md#read-bounds--join_bounded_messages-vs-visible_messages)
+  filters expired rows out of `GET /api/chat/room/messages` and
+  `GET /api/chat/unread` as a fallback, so a badge and the history agree even
+  before the sweep runs
 
-Call `run_cleanup()` from a periodic task (cron job).
+The TTL is **not** applied when resolving a read or react target — see
+[`read_state`](services.md#read_state--resolving-a-read-acknowledgement) for why
+applying it there would discard the read instead of clamping it.
+
+Call `run_cleanup()` from a periodic task (cron job). Nothing in this repo is
+wired to call it, so a deployment that does not schedule it keeps expired rows
+indefinitely — the read bound is what hides them.
 
 ## Flagging
 

@@ -399,6 +399,33 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
 - `BOUNCER_THRESHOLDS_OVERRIDES`
 - `BOUNCER_TOKEN_TTL`
 
+### CHAT
+
+- `CHAT_KIND_VALIDATORS` — per-kind message payload validators,
+  `{kind: "dotted.path"}`, default `{}`. Contract is
+  `validator(room, user, metadata) -> metadata`. Registering one is what makes
+  a `VALIDATED_KINDS` kind (today only `card`) client-authorable, so `card` is
+  **off until a host opts in**. Resolution **fails closed, per kind**: a kind
+  whose validator is configured but unloadable is refused with
+  `"This message kind is not available"` and the failure is cached by path
+  string; other kinds (`text`, `image`) are unaffected. A non-dict value is
+  logged and ignored. See
+  [Chat Services](../chat/services.md#validator-hook).
+- `CHAT_METADATA_MAX_BYTES` — byte cap on the compact JSON encoding of a chat
+  message's `metadata`, default `4096`. Enforced on **every** send regardless
+  of `client_authored` or `enforce_room_policy`, and re-applied to a
+  validator's returned payload so normalization cannot smuggle past it. See
+  [the metadata contract](../chat/services.md#metadata-contract).
+- `CHAT_MESSAGE_DELETED_HANDLER` — dotted path to
+  `handler(room_id, message_ids)`, default `None`. Ids arrive in chunks of
+  1000; handler exceptions are caught and logged, never propagated. Coverage is
+  bounded: it fires for the disappearing-message TTL sweep
+  (`chat.cleanup.run_cleanup`) and for REST room deletion
+  (`ChatRoom.on_rest_pre_delete`), and **not** for a raw ORM cascade —
+  `ChatRoom.group` is `on_delete=CASCADE` from `account.Group`, so deleting a
+  Group destroys rooms and their messages with no REST layer involved. See
+  [the deletion hook](../chat/services.md#deletion-hook).
+
 ### DEACTIVATE
 
 - `DEACTIVATE_TOKEN_TTL`

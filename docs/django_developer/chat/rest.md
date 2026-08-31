@@ -96,7 +96,34 @@ Paginated, newest first. Excludes flagged messages. Supports cursor pagination.
 | `limit` | Max messages per page (default 50, max 200) |
 | `before` | Cursor — message ID to fetch before |
 
-Response includes `has_more` and `cursor` for pagination.
+The view builds its rows by hand rather than through a graph, so the shape is
+fixed here, not in `ChatMessage.RestMeta.GRAPHS`:
+
+```json
+{
+    "status": true,
+    "data": [
+        {
+            "id": 482, "user_id": 7, "body": "hello", "kind": "text",
+            "edited_at": null, "moderation_decision": "allow",
+            "created": "2026-08-30T12:00:00+00:00",
+            "metadata": {}, "client_key": "01J8Z0K3Q0X"
+        }
+    ],
+    "has_more": true,
+    "cursor": 482
+}
+```
+
+`client_key` carries the stored key only when `msg.user_id == request.user.pk` and is
+`null` on every other row. **This is not a confidentiality boundary** — the live
+`chat_message` broadcast carries the sender's key to every room subscriber by design, and
+`GRAPHS["default"]` includes it, so `/api/chat/room/flagged?graph=default` returns it on
+every flagged row. Treat `client_key` as room-visible. `metadata` is always an object
+(`{}` when empty).
+
+`has_more` is `len(messages) == limit`, and `cursor` is the last row's `pk`
+only when `has_more` — otherwise `null`.
 
 **Join-time history cutoff.** For every room kind **except `channel`**, only
 messages created at or after the caller's `ChatMembership.joined_at` are
@@ -181,7 +208,17 @@ It previously ran a bare `int()` and raised `ValueError` out of the view as a
 
 ### `GET /api/chat/unread` — Unread counts
 
-Returns unread message counts per room for the authenticated user.
+Returns unread message counts per room for the authenticated user, over
+memberships with `status in ("active", "muted")`. Rooms with a zero count are
+omitted.
+
+**Same bound as history.** Each room's count narrows through
+`visible_messages(room, membership)` — unflagged, the join-time cutoff for every
+non-`channel` kind, and the disappearing-message TTL — then excludes the
+caller's own messages. A badge can therefore never exceed what
+`GET /api/chat/room/messages` returns for the same room. `channel` rooms count
+`created__gt=last_read_at` (everything in bound when `last_read_at` is unset);
+every other kind counts messages carrying no `ChatReadReceipt` for the caller.
 
 ```json
 {

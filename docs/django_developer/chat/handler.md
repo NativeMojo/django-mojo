@@ -98,9 +98,19 @@ re-raises the `IntegrityError` unchanged.
 - every error frame from a send **except** the `client_key`-validation error itself,
 - the `chat_message` broadcast payload on the room topic,
 - the generic crash frame from `handle_chat_message`, best-effort,
-- `GET /api/chat/room/messages` rows — **author-scoped**: `client_key` is returned
-  only on the requesting user's own messages and is `null` on everyone else's, since
-  keys are client-chosen and may encode device identity or content equality.
+- `GET /api/chat/room/messages` rows — `client_key` is returned only on the
+  requesting user's own messages and is `null` on everyone else's.
+
+**`client_key` is not confidential, and the history scoping is not a boundary.** The
+`chat_message` broadcast carries the sender's key to every subscriber of the room topic,
+by design — that is what lets an already-connected client reconcile its optimistic bubble
+against whichever frame arrives first. `ChatMessage.RestMeta.GRAPHS["default"]` also
+includes `client_key`, and `on_rest_list` resolves the graph from caller input, so
+`GET /api/chat/room/flagged?graph=default` returns it on every flagged row. That is
+deliberate: the only party who would lose access is a moderator reading evidence on a
+flagged message. The history scoping narrows the durable copy where doing so is free; it
+is not a confidentiality control. A `client_key` must be an opaque per-send identifier
+and nothing more.
 
 `ChatMessage.RestMeta.NO_SAVE_FIELDS` also lists `client_key` so no future model-security
 route can let a client write it directly. (`ChatMessage` has no
@@ -170,11 +180,17 @@ idempotent **ack** is the useful half of the contract; the broadcast is not.
 **Target resolution.** The message must be one the caller was entitled to see —
 unflagged and at or after their `joined_at`, via
 `services.messages.join_bounded_messages`. A nonexistent message, a flagged
-one, one from before the caller joined, **and one in a room the caller is not
-in** all return the same `{"type": "error", "error": "Message not found"}`. The
-frame carries no `room_id`, so a distinguishable "Not a member of this room"
-would be a *global* cross-tenant message-existence oracle for any authenticated
-user. Keep those returns identical.
+one, one from before the caller joined, one in a room the caller is not in,
+**and one in a room the caller is banned from** all return the same
+`{"type": "error", "error": "Message not found"}`. The frame carries no
+`room_id`, so a distinguishable "Not a member of this room" would be a *global*
+cross-tenant message-existence oracle for any authenticated user. Keep those
+returns identical.
+
+The bound is `join_bounded_messages`, **not** `visible_messages`: entitlement,
+not display. A member may react to a message that has since aged out of the
+room's `disappearing_ttl` window — see
+[Read bounds](services.md#read-bounds--join_bounded_messages-vs-visible_messages).
 
 **Test seam.** `_handle_react(user, data, *, publisher=None)` takes an optional
 publisher with the same signature as `publish_topic(topic, payload)`, so a test
@@ -202,10 +218,15 @@ can assert on the broadcast — or its absence — without patching anything.
   marks read, because mute stops sending, not reading (a muted member who
   could not mark read would show as permanently unread to everyone else).
 - `up_to_message_id` is **resolved, not trusted** — see below
-- For `direct`/`group` rooms: bulk-creates `ChatReadReceipt` for unread messages up to the RESOLVED id
-- For `channel` rooms: updates `last_read_at` on ChatMembership
-- Publishes `chat_read` for direct/group rooms, carrying the **resolved** id,
-  and only when something resolved
+- For every kind **except `channel`**: bulk-creates `ChatReadReceipt` for
+  unread messages up to the RESOLVED id. Same exclusion, same reason, as the
+  history bound — an unrecognised kind is treated as invite-based, not
+  channel-like
+- For **every** kind, `channel` included: advances `last_read_at` on
+  ChatMembership to `target.created`. Only the `channel` branch of
+  `GET /api/chat/unread` *reads* it, but `mark_read` always writes it
+- Publishes `chat_read` for `direct`/`group` rooms only, carrying the
+  **resolved** id, and only when something resolved
 - Acks `{"type": "chat_read_ack", "room_id": 5, "up_to_message_id": <resolved or null>}`
 
 #### Target resolution and last_read_at

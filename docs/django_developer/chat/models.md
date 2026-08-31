@@ -100,7 +100,10 @@ Links a user to a room with role and status.
 - `user` — FK to User
 - `role` — `"member"`, `"admin"`, or `"owner"`
 - `status` — `"active"`, `"muted"`, or `"banned"`
-- `last_read_at` — used for channel unread counts
+- `last_read_at` — advanced by `services.read_state.mark_read` on **every** room
+  kind, to the resolved target's `created` and **only forward**. Only the
+  `channel` branch of `GET /api/chat/unread` reads it; the write is
+  unconditional.
 - `joined_at` — timestamp, `auto_now_add`. **This is the read bound for every
   non-`channel` room kind**: message history and unread counts return only
   messages created at or after it (see
@@ -138,7 +141,10 @@ Emoji reaction on a message. Toggle-based (add/remove).
 
 ## ChatReadReceipt
 
-Per-message read receipt for `direct` and `group` rooms only. Created on first read, never updated.
+Per-message read receipt, written for every room kind **except `channel`**.
+Created on first read, never updated. The `channel` exclusion is the same
+fail-closed shape as the history bound — an unrecognised `kind` gets receipts,
+it is not silently treated as channel-like.
 
 **Key fields:**
 - `message` — FK to ChatMessage
@@ -147,4 +153,5 @@ Per-message read receipt for `direct` and `group` rooms only. Created on first r
 
 **Unique constraint:** (message, user) — one receipt per user per message.
 
-For **channels**, `last_read_at` on ChatMembership is used instead (no per-message receipts).
+For **channels**, no per-message receipts are written; `GET /api/chat/unread`
+counts against `last_read_at` on ChatMembership instead.

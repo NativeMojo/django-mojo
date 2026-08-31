@@ -41,9 +41,12 @@ All require JWT authentication via `Authorization: Bearer <token>`.
 Pagination: pass `limit` (max 200) and `before` (message ID cursor).
 
 Each history row is `{id, user_id, body, kind, edited_at, moderation_decision, created,
-metadata, client_key}`. `client_key` is **author-scoped**: it carries the key on your
-own messages and is `null` on everyone else's. `metadata` is an object (`{}` when
-empty) — see [Message metadata](#message-metadata).
+metadata, client_key}`. `client_key` carries the key on your own messages and is `null`
+on everyone else's — but **do not treat that as privacy**: your key is broadcast to every
+room subscriber on the live `chat_message` frame by design. A `client_key` must be an
+opaque per-send identifier (a fresh UUID or ULID) and must never encode anything you would
+not show the room. `metadata` is an object (`{}` when empty) — see
+[Message metadata](#message-metadata).
 
 `/api/chat/room/flagged` now includes `metadata` on each row too, so a moderator
 sees the payload a card or file message carried.
@@ -85,10 +88,29 @@ expiry. A badge therefore never exceeds what opening the room shows.
 you sent.** It is clamped to the newest message at or below your value that you
 are allowed to have seen — an id from another room, one from before you joined,
 a flagged one, or a number that does not exist yet all clamp downward rather
-than being taken at face value. `POST /api/chat/room/read` returns it as
-`data.up_to_message_id` (a new field alongside the existing `data.status`); it
-is `null` when nothing resolved, including for a non-numeric value, which now
-answers cleanly instead of erroring.
+than being taken at face value.
+
+**Read it from `data.up_to_message_id`, not the top level.** The resolved id is
+nested one deep — this response is wrapped, so there is a `status` at both
+levels:
+
+```json
+{
+  "status": true,
+  "code": 200,
+  "data": {"status": true, "up_to_message_id": 480}
+}
+```
+
+`data.up_to_message_id` is a new field; `data.status` is unchanged. It is
+`null` when nothing resolved — including for a non-numeric value, which now
+answers 200 cleanly instead of erroring:
+
+```json
+{"status": true, "code": 200, "data": {"status": true, "up_to_message_id": null}}
+```
+
+Update your local read marker from that value, not from the id you sent.
 
 A message that has since aged out of a disappearing-message room still counts:
 the read happened, so receipts and the `chat_read` event still go out.
@@ -151,9 +173,9 @@ see no `chat_reaction` event when nothing actually changed. Drive your own UI
 from the ack; drive everyone else's from the event.
 
 A message you cannot react to — nonexistent, flagged, sent before you joined,
-or in a room you are not in — returns the same
+in a room you are not in, or in a room you are banned from — returns the same
 `{"type": "error", "error": "Message not found"}` in every case. The error does
-not tell you which.
+not tell you which. Muted members can still react; only banned members cannot.
 
 ### Typing indicator
 ```json
@@ -271,7 +293,7 @@ the send frame.
 
 | Event type | Description |
 |-----------|-------------|
-| `chat_message` | New message `{message_id, room_id, user_id, body, kind, metadata, created, client_key?}` |
+| `chat_message` | New message `{message_id, room_id, user_id, body, kind, metadata, created, client_key?, moderation_decision?}` — `client_key` is present only when the sender supplied one; `moderation_decision` appears only as `"warn"` |
 | `chat_message_edited` | Message edited `{message_id, body, edited_at}` |
 | `chat_message_flagged` | Message flagged (hide it) `{message_id}` |
 | `chat_reaction` | Reaction changed `{message_id, user_id, emoji, action}` — `action` is `added`/`removed`; not sent for a no-op |
