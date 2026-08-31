@@ -205,6 +205,15 @@ def test_execute_attempt_success_and_lease_ownership(opts):
     attempt.refresh_from_db()
     assert attempt.state == "running" and attempt.lease_owner == "current-owner", \
         "repair must not requeue a legitimately active worker"
+    attempt.lease_owner = "replacement-owner"
+    attempt.lease_expires_at = timezone.now() + timezone.timedelta(seconds=60)
+    attempt.save(update_fields=["lease_owner", "lease_expires_at"])
+    assert llm_dispatch._finish(
+        attempt.pk, "current-owner", False, "provider_timeout") is False, \
+        "a stale owner must not fail work after a concurrent renewal/ownership change"
+    attempt.refresh_from_db()
+    assert attempt.state == "running" and attempt.lease_owner == "replacement-owner", \
+        "stale lease completion changed the renewed worker state"
 
 
 @th.django_unit_test()
