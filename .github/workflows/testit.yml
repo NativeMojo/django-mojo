@@ -48,7 +48,7 @@ jobs:
       PGUSER: postgres
       PGPASSWORD: postgres
       # Cold CI hosts run slower than a warm laptop. The core budget (30s) is a
-      # hard gate, so give it headroom; calibrate down after one real run
+      # hard exit-code check, so give it headroom; calibrate down after one real run
       # (maestro #2793 / #2790).
       TESTIT_BUDGET_SCALE: "2"
     steps:
@@ -65,7 +65,7 @@ jobs:
         run: ./bin/create_testproject
       - name: Run the ${{ inputs.tier }} preset
         # Advisory callers (framework-on-PR until #2813) do not fail the job on
-        # a red test; blocking callers (core-on-push) leave advisory=false.
+        # a red test; non-advisory callers (core-on-push) leave advisory=false.
         continue-on-error: ${{ inputs.advisory }}
         run: ./bin/run_tests --agent --tier ${{ inputs.tier }}
       - name: Upload agent report

@@ -97,18 +97,24 @@ never demotes a security-relevant test out of a critical bucket; put exhaustive 
 GitHub Actions runs the tiered suite (`.github/workflows/tests.yml`, which calls
 the reusable `.github/workflows/testit.yml`). The trigger decides the preset:
 
-| Trigger | Preset | Gate |
+| Trigger | Preset | Status |
 |---|---|---|
-| every push | `core` (~9s) | **blocking** — the fast baseline must stay green |
-| pull request | `framework` (~45s) | **advisory** (`advisory: true`) until #2813 removes the shared-state flakes; set `advisory: false` on the framework job to make it blocking |
-| nightly (cron) | `all` | reported, not gating |
+| every push | `core` (~9s) | **non-advisory** — failures make the GitHub check red |
+| pull request | `framework` (~45s) | **advisory** (`advisory: true`) until #2813 removes the shared-state flakes; set `advisory: false` to make failures fail the check |
+
+The repository does not currently require either status through branch
+protection, so a red check reports after a push or pull request but does not
+reject the push or block a merge. Requiring a check is a separate repository
+ruleset decision.
 
 The reusable workflow stands up Postgres (with pgvector) and Redis service
 containers, installs deps with `uv`, runs `bin/create_testproject`, then
 `bin/run_tests --agent --tier <preset>`. The `core` preset's 30s budget is a
 hard exit-code gate; `TESTIT_BUDGET_SCALE` (set to `2` in the workflow) gives a
-cold CI host headroom — calibrate it down after one real run. `--all` also runs
-under `publish.py` before a release.
+cold CI host headroom — calibrate it down after one real run. The `all` preset
+is not scheduled by GitHub Actions and `publish.py` does not run it; invoke
+`bin/run_tests --agent --all` explicitly when the verification policy calls
+for an all-tier run.
 
 Consumers wire their own CI the same way against their chosen `default_preset`;
 scaffold a package with `./bin/run_tests --init <package>` (see

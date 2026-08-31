@@ -36,8 +36,8 @@ any other name is a literal single bucket.
 
 | Preset | Selects | Budget |
 |---|---|---|
-| `core` | `core` | 30s (hard-fail; the blocking CI gate on every push) |
-| `framework` | `core` + `framework` + `bug` | 90s (warn locally; advisory in CI until #2813, then blocking) |
+| `core` | `core` | 30s (hard-fail; non-advisory GitHub status on every push) |
+| `framework` | `core` + `framework` + `bug` | 90s (warn locally; advisory in GitHub CI until #2813) |
 | `all` | every bucket | — |
 
 ```bash
