@@ -434,13 +434,14 @@ def test_real_verify_api_key(opts):
 
 @th.tier("slow")
 @th.django_unit_test()
-def test_real_verify_bad_key(opts):
-    """verify_api_key returns False with an invalid key"""
+def test_verify_api_key_has_no_candidate_credential_input(opts):
+    """Candidate material is accepted only by the owner service boundary."""
+    import inspect
     from mojo.helpers import llm
 
-    ok, error = llm.verify_api_key(api_key="sk-ant-fake-invalid-key")
-    assert ok is False, "Expected False for invalid key"
-    assert error is not None, "Expected error message for invalid key"
+    parameters = inspect.signature(llm.verify_api_key).parameters
+    assert "api_key" not in parameters, \
+        f"the stable helper still accepts candidate credentials: {tuple(parameters)}"
 
 
 @th.tier("slow")

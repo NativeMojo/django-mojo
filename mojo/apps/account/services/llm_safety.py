@@ -206,7 +206,15 @@ def _as_bool(value):
 
 
 def emergency_stopped():
-    static_stop = _as_bool(settings.get_static("LLM_EMERGENCY_STOP", False))
+    return emergency_stop_static() or emergency_stop_database()
+
+
+def emergency_stop_static():
+    return _as_bool(settings.get_static("LLM_EMERGENCY_STOP", False))
+
+
+def emergency_stop_database():
+    """Return only the authoritative database stop half, failing closed."""
     try:
         from mojo.apps.account.models import Setting
         rows = list(Setting.objects.using("default").filter(
@@ -218,7 +226,7 @@ def emergency_stopped():
         raise
     except Exception:
         _deny("control_state_unknown")
-    return static_stop or database_stop
+    return database_stop
 
 
 def autonomous_triage_state():
@@ -243,6 +251,35 @@ def autonomous_triage_state():
         return True, watermark
     except Exception:
         return False, None
+
+
+def route_state(feature):
+    """Safe effective route/readiness data without credential material."""
+    try:
+        policy = parse_policy()
+        route = policy["routes"].get(feature)
+        if route is None:
+            _deny("route_missing")
+        _policy_agreement(policy)
+        configured = bool(_credential(route))
+        stopped = emergency_stopped()
+        return {
+            "feature": feature, "provider": route["provider"],
+            "model": route["model"], "credential": route["credential"],
+            "credential_configured": configured, "ready": configured and not stopped,
+            "error": "emergency_stopped" if stopped else "",
+        }
+    except LLMSafetyError as err:
+        return {
+            "feature": feature, "provider": "", "model": "", "credential": "",
+            "credential_configured": False, "ready": False, "error": err.code,
+        }
+    except Exception:
+        return {
+            "feature": feature, "provider": "", "model": "", "credential": "",
+            "credential_configured": False, "ready": False,
+            "error": "safety_unavailable",
+        }
 
 
 def _credential(route):
@@ -468,14 +505,17 @@ def _required_capabilities(messages, tools, cache_enabled):
     return required
 
 
-def _permit_identity(fingerprint, candidate_probe=False):
-    """Candidate verification shares one installation/provider permit identity."""
-    return "candidate-installation" if candidate_probe else fingerprint
+def _candidate_envelopes(policy):
+    """Return hard single-flight envelopes independent of policy concurrency."""
+    shared = dict(policy["shared"])
+    limits = dict(policy["features"]["configuration"])
+    shared["concurrency"] = 1
+    limits["concurrency"] = 1
+    return shared, limits
 
 
 def _execute(messages, system, tools, model, max_tokens, feature, operation,
-             context, candidate=None, candidate_probe=False, provider_factory=None,
-             redis=None, policy_raw=None):
+             context, provider_factory=None, redis=None, policy_raw=None):
     from mojo.apps.account.models import LLMRequest
     from mojo.helpers.llm_providers import get_provider
     from mojo.helpers.llm_providers.base import ProviderError
@@ -488,13 +528,8 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
     provider_name = route["provider"]
     try:
         _policy_agreement(policy)
-        if emergency_stopped() and not candidate_probe:
+        if emergency_stopped():
             _deny("emergency_stopped")
-        if candidate_probe and (feature != "configuration" or system is not None
-                                or tools is not None or model is not None
-                                or messages != [{"role": "user", "content": "Reply OK"}]
-                                or max_tokens != 4):
-            _deny("context_invalid")
         if model is not None and model != route["model"]:
             _deny("model_mismatch")
         context = context or {}
@@ -510,7 +545,7 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
         if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) \
                 or max_tokens <= 0 or max_tokens > output_cap:
             _deny("output_too_large")
-        credential = candidate if candidate_probe else _credential(route)
+        credential = _credential(route)
         if not credential:
             _deny("credential_missing")
         fingerprint = credential_fingerprint(provider_name, credential)
@@ -521,24 +556,19 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
         cache_enabled = bool(settings.get(
             "LLM_ADMIN_PROMPT_CACHE_ENABLED", True, kind="bool"))
         required = _required_capabilities(messages, tools, cache_enabled)
-        if candidate_probe:
-            required = {"text"}
-            cache_enabled = False
         if not required.issubset(set(route["capabilities"])) \
                 or any(not adapter.supports(item) for item in required):
             _deny("capability_unsupported")
         redis = redis or get_connection()
         operation_id = context.get("operation_id") or secrets.token_hex(16)
-        counter_fingerprint = _permit_identity(
-            fingerprint, candidate_probe=candidate_probe)
         _count_operation(
-            redis, provider_name, counter_fingerprint, feature, operation_id,
+            redis, provider_name, fingerprint, feature, operation_id,
             policy["shared"], limits)
         generation, breaker_owner = _breaker_lease(
             provider_name, fingerprint, policy)
         reserved_tokens = len(serialized) + max_tokens
         permit = acquire_permit(
-            redis, provider_name, counter_fingerprint, feature, policy["shared"],
+            redis, provider_name, fingerprint, feature, policy["shared"],
             limits, reserved_tokens)
         _record_burn(
             provider_name, feature, reserved_tokens, policy["shared"], limits)
@@ -617,19 +647,150 @@ def execute_guarded_for_test(messages, *, feature, operation="test", context=Non
         provider_factory=provider_factory, redis=redis, policy_raw=policy_raw)
 
 
-def verify_candidate(candidate):
-    """Fixed candidate probe: one request, no caller-selected prompt or model."""
-    return bool(_execute(
-        [{"role": "user", "content": "Reply OK"}], None, None, None, 4,
-        "configuration", "candidate_key_probe", {}, candidate=candidate,
-        candidate_probe=True))
+def _fixed_configuration_probe_core(credential, identity, operation,
+                                    provider_factory=None, redis=None,
+                                    policy_raw=None):
+    """Run the module-owned text-only four-token configuration probe.
+
+    This is deliberately not parameterized with messages, tools, system,
+    model, capabilities, or output size. The sole stopped-state exception is
+    selected by the private candidate wrapper below.
+    """
+    from mojo.apps.account.models import LLMRequest
+    from mojo.helpers.llm_providers import get_provider
+    from mojo.helpers.llm_providers.base import ProviderError
+
+    policy = parse_policy(policy_raw)
+    feature = "configuration"
+    route = policy["routes"].get(feature)
+    limits = policy["features"].get(feature)
+    provider = route["provider"] if route else ""
+    try:
+        if route is None or limits is None:
+            _deny("route_missing")
+        _policy_agreement(policy)
+        recovery_probe = identity == "candidate-installation"
+        if not recovery_probe and emergency_stopped():
+            _deny("emergency_stopped")
+        if not isinstance(credential, str) or not credential.strip():
+            _deny("credential_missing")
+        fingerprint = credential_fingerprint(provider, credential)
+        adapter = (provider_factory or get_provider)(provider, api_key=credential)
+        if adapter is None or "text" not in route["capabilities"] \
+                or not adapter.supports("text"):
+            _deny("capability_unsupported")
+        redis = redis or get_connection()
+        shared = dict(policy["shared"])
+        feature_limits = dict(limits)
+        if recovery_probe:
+            # Candidate recovery is a single installation-wide lane even
+            # when the configured shared/feature concurrency is larger.
+            shared, feature_limits = _candidate_envelopes(policy)
+        operation_id = secrets.token_hex(16)
+        _count_operation(redis, provider, identity, feature, operation_id,
+                         shared, feature_limits)
+        generation, breaker_owner = _breaker_lease(provider, fingerprint, policy)
+        prompt = [{"role": "user", "content": "Reply OK"}]
+        serialized = json.dumps(
+            {"messages": prompt, "system": None, "tools": None},
+            separators=(",", ":")).encode("utf-8")
+        if len(serialized) > min(shared["max_input_bytes"],
+                                 feature_limits["max_input_bytes"]):
+            _deny("input_too_large")
+        if 4 > min(shared["max_output_tokens"],
+                   feature_limits["max_output_tokens"]):
+            _deny("output_too_large")
+        reserved_tokens = len(serialized) + 4
+        permit = acquire_permit(
+            redis, provider, identity, feature, shared, feature_limits,
+            reserved_tokens)
+    except LLMSafetyError as err:
+        _blocked(provider, feature, err.code, retry_after=err.retry_after)
+
+    try:
+        ledger = LLMRequest.objects.create(
+            feature=feature, operation=operation, provider=provider,
+            model=route["model"], credential_fingerprint=fingerprint,
+            policy_hash=policy["hash"], reserved_tokens=reserved_tokens)
+    except Exception:
+        release_permit(redis, permit)
+        _blocked(provider, feature, "ledger_unavailable")
+    started = time.monotonic()
+    try:
+        response = adapter.call(
+            messages=prompt, system=None, tools=None, model=route["model"],
+            max_tokens=4, cache_enabled=False,
+            timeout=min(shared["timeout_seconds"],
+                        feature_limits["timeout_seconds"]))
+    except ProviderError as err:
+        _breaker_failure(
+            provider, fingerprint, generation, breaker_owner, err.code, policy)
+        LLMRequest.objects.filter(pk=ledger.pk).update(
+            status="failed", error_code=err.code,
+            provider_request_id=err.request_id[:128], finished_at=timezone.now())
+        release_permit(redis, permit)
+        _deny(err.code, retry_after=getattr(err, "retry_after", None))
+    except Exception:
+        _breaker_failure(
+            provider, fingerprint, generation, breaker_owner,
+            "provider_failed", policy)
+        LLMRequest.objects.filter(pk=ledger.pk).update(
+            status="failed", error_code="provider_failed", finished_at=timezone.now())
+        release_permit(redis, permit)
+        _deny("provider_failed")
+    usage = response.get("usage") or {}
+    actual_tokens = sum(max(0, int(usage.get(key, 0) or 0)) for key in (
+        "input_tokens", "output_tokens", "cache_read_input_tokens",
+        "cache_creation_input_tokens"))
+    release_permit(redis, permit, actual_tokens=actual_tokens)
+    _breaker_success(provider, fingerprint, generation, breaker_owner)
+    updated = LLMRequest.objects.filter(pk=ledger.pk, status="started").update(
+        status="succeeded", finished_at=timezone.now(),
+        duration_ms=int((time.monotonic() - started) * 1000),
+        input_tokens=max(0, int(usage.get("input_tokens", 0) or 0)),
+        output_tokens=max(0, int(usage.get("output_tokens", 0) or 0)))
+    if updated != 1:
+        _blocked(provider, feature, "ledger_persistence_unknown")
+    return True
 
 
-def verify_stored_key():
-    """Stored credentials never receive the stopped-state exception."""
-    return bool(_execute(
-        [{"role": "user", "content": "Reply OK"}], None, None, None, 4,
-        "configuration", "stored_key_probe", {}))
+def _fixed_configuration_probe(credential, identity, operation):
+    """Production fixed-probe entry; no provider/policy injection surface."""
+    return _fixed_configuration_probe_core(credential, identity, operation)
+
+
+def execute_fixed_configuration_probe_for_test(
+        credential, identity, operation, *, provider_factory, redis=None,
+        policy_raw):
+    """Explicit test-only injection that retains every fixed-probe guard."""
+    return _fixed_configuration_probe_core(
+        credential, identity, operation, provider_factory=provider_factory,
+        redis=redis, policy_raw=policy_raw)
+
+
+def verify_candidate(actor, candidate):
+    """Owner-authorized fixed recovery probe; the only stopped exception."""
+    from mojo.apps.account.services import system_settings
+    system_settings.require_system_admin(actor)
+    if not isinstance(candidate, str) or not candidate.strip() \
+            or candidate != candidate.strip() or len(candidate) > 4096 \
+            or any(char.isspace() for char in candidate):
+        _deny("credential_missing")
+    return _fixed_configuration_probe(
+        candidate, "candidate-installation", "candidate_key_probe")
+
+
+def verify_stored_key(target="admin"):
+    """Verify exactly one stored target, never falling back or bypassing stop."""
+    if target not in {"admin", "handler"}:
+        _deny("operation_invalid")
+    key = "LLM_ADMIN_API_KEY" if target == "admin" else "LLM_HANDLER_API_KEY"
+    credential = settings.get(key, None)
+    if not credential:
+        _deny("credential_missing")
+    fingerprint = credential_fingerprint("anthropic", credential)
+    return _fixed_configuration_probe(
+        credential, fingerprint, f"stored_{target}_key_probe")
 
 
 def discover_models():

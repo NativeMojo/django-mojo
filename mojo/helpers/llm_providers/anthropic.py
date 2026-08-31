@@ -13,7 +13,10 @@ class AnthropicProvider(ProviderAdapter):
         if self.client is not None:
             return self.client
         import anthropic
-        self.client = anthropic.Anthropic(api_key=self.api_key)
+        # The safety boundary accounts one adapter call as one provider
+        # request. SDK retries would silently multiply spend and half-open
+        # breaker probes behind that accounting.
+        self.client = anthropic.Anthropic(api_key=self.api_key, max_retries=0)
         return self.client
 
     def _raise_safe(self, err):

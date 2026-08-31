@@ -154,14 +154,19 @@ def _admin(opts):
 
 def _accepts():
     """Patch the provider check so it accepts, without reaching Anthropic."""
-    from mojo.helpers import llm
-    return mock.patch.object(llm, "verify_api_key", lambda key=None: (True, None))
+    from mojo.apps.account.services import assistant_setup
+    return mock.patch.object(
+        assistant_setup, "_verify_candidate",
+        lambda actor, candidate=None, stored_target=None: {
+            "ok": True, "code": "verified", "message": "Anthropic accepted this key."})
 
 
 def _rejects():
-    from mojo.helpers import llm
+    from mojo.apps.account.services import assistant_setup
     return mock.patch.object(
-        llm, "verify_api_key", lambda key=None: (False, "API key is invalid or expired."))
+        assistant_setup, "_verify_candidate",
+        lambda actor, candidate=None, stored_target=None: {
+            "ok": False, "code": "invalid_key", "message": "Anthropic rejected this key."})
 
 
 @th.django_unit_test("the stored credential is encrypted and never returned")
@@ -326,6 +331,29 @@ def test_enable_disable_round_trip(opts):
             "choosing Automatic did not remove the model pin"
         assert state["model"]["source"] == "automatic", \
             f"an unpinned model is not reported as automatic: {state['model']!r}"
+    finally:
+        _wipe()
+
+
+@th.django_unit_test("a static emergency stop is displayed but never persisted by Save")
+def test_static_stop_does_not_flip_database_stop(opts):
+    from mojo.apps.account.models import Setting
+    from mojo.apps.account.services import assistant_setup, llm_safety
+
+    _wipe()
+    try:
+        assistant_setup.save(
+            _admin(opts), enabled=False, model="", emergency_stop=False)
+        with mock.patch.object(llm_safety, "emergency_stop_static", return_value=True):
+            state = assistant_setup.state()
+            assert state["emergency_stop"] is True \
+                and state["emergency_stop_static"] is True \
+                and state["emergency_stop_database"] is False, \
+                f"effective/static/database stop halves were conflated: {state}"
+            assistant_setup.save(_admin(opts), enabled=True, model="")
+        Setting.objects.get(key="LLM_EMERGENCY_STOP", group=None)
+        assert llm_safety.emergency_stop_database() is False, \
+            "an unrelated Save under a static stop persisted database=true"
     finally:
         _wipe()
 

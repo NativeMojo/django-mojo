@@ -154,6 +154,13 @@ def test_admin_assistant_rest_decorators(opts):
     assert "request.POST" not in source and "request.GET" not in source, \
         "the Assistant setup endpoints read input from something other than request.DATA"
 
+    for bundle in ("admin_portal", "admin_portal_v2"):
+        setup_source = (ROOT / f"mojo/apps/account/{bundle}/assets/assistant/setup.js").read_text()
+        assert "checked: state.emergency_stop_database" in setup_source, \
+            f"{bundle} binds its editable checkbox to effective/static stop state"
+        assert "emergency_stop: emergencyStop.checked" in setup_source, \
+            f"{bundle} does not submit the database stop control"
+
 
 # ---------------------------------------------------------------------------
 # Remote agent access (MCP)

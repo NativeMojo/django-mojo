@@ -8,9 +8,8 @@ re-implements credential resolution:
     LLM_ADMIN_API_KEY          the Assistant's own credential (optional)
     LLM_ADMIN_MODEL            explicit model pin, absent means "automatic"
     LLM_ADMIN_VERIFY_STATE     how the STORED Assistant credential last verified
-    LLM_HANDLER_API_KEY        the PLATFORM credential: every LLM feature
-                               (incident triage and agent) and the Assistant's
-                               fallback
+    LLM_HANDLER_API_KEY        the PLATFORM credential for safety-policy
+                               routes that explicitly select ``handler``
     LLM_HANDLER_VERIFY_STATE   how the STORED platform credential last verified
     ASSISTANT_MCP_ENABLED      remote agent access (MCP) switch — descriptor
                                owned by the assistant app, written only here
@@ -24,8 +23,8 @@ The sibling ``llm_safety.activate_policy`` owner action writes the protected
 Both credentials are encrypted secret ``Setting`` rows. ``SettingsHelper.get``
 resolves database rows ahead of ``django.conf``, so an Admin-stored credential
 is live the moment it commits and outranks the deployment file. Resolution
-order is unchanged: the Assistant prefers its own key and falls back to the
-platform key. All these controls are
+order is retained only for legacy picker/display helpers; guarded requests use
+their exact policy-route credential with no fallback. All these controls are
 catalog-protected (``admin_settings.is_catalog_protected``), so the generic
 ``/api/settings`` surface and every other ``Setting`` writer refuse them; this
 service is the only writer, and it goes through the ``_protected_writer`` save
@@ -230,7 +229,8 @@ def is_ready():
     if not settings.get(ENABLED_KEY, False, kind="bool"):
         return False
     try:
-        return bool(llm.get_api_key())
+        from mojo.apps.account.services import llm_safety
+        return llm_safety.route_state("assistant")["ready"]
     except Exception:
         return False
 
@@ -520,6 +520,11 @@ def state(refresh=False, check=False):
         effective_stop = llm_safety.emergency_stopped()
     except Exception:
         effective_stop = True
+    try:
+        database_stop = llm_safety.emergency_stop_database()
+    except Exception:
+        database_stop = True
+    route = llm_safety.route_state("assistant")
     return {
         "schema_version": SCHEMA_VERSION,
         "enabled": bool(settings.get(ENABLED_KEY, False, kind="bool")),
@@ -529,9 +534,12 @@ def state(refresh=False, check=False):
         "verify": read_verify_state(VERIFY_STATE_KEY),
         "handler_verify": read_verify_state(HANDLER_VERIFY_STATE_KEY),
         "emergency_stop": effective_stop,
-        "emergency_stop_static": bool(settings.get_static(EMERGENCY_STOP_KEY, False)),
+        "emergency_stop_static": llm_safety.emergency_stop_static(),
+        "emergency_stop_database": database_stop,
+        "route": route,
         "autonomous_triage": autonomous_enabled,
-        "autonomous_triage_activated_at": autonomous_watermark,
+        "autonomous_triage_activated_at": (
+            autonomous_watermark.isoformat() if autonomous_watermark else None),
         "assistant_installed": apps.is_installed("mojo.apps.assistant"),
         "realtime_installed": apps.is_installed("mojo.apps.realtime"),
         "mcp": mcp_state(check=check),
@@ -543,13 +551,19 @@ def state(refresh=False, check=False):
 # Verification
 # ---------------------------------------------------------------------------
 
-def _verify_candidate(candidate, stored=False):
+def _verify_candidate(actor, candidate=None, stored_target=None):
     """Test one key and reduce the answer to the fixed vocabulary."""
     if not candidate:
         return {"ok": False, "code": "not_configured",
                 "message": VERIFY_MESSAGES["not_configured"]}
     try:
-        ok, message = llm.verify_api_key() if stored else llm.verify_api_key(candidate)
+        if stored_target:
+            llm_target = "admin" if stored_target == "assistant" else "handler"
+            ok, message = llm.verify_api_key(llm_target)
+        else:
+            from mojo.apps.account.services import llm_safety
+            ok = bool(llm_safety.verify_candidate(actor, candidate))
+            message = None
     except Exception:
         # A broken client library is an unreachable provider as far as the
         # operator is concerned, and its repr is not theirs to read.
@@ -606,9 +620,10 @@ def verify(actor, api_key=None, target="assistant"):
     candidate = _normalize_api_key(api_key)
     tested_stored = not candidate
     if tested_stored:
-        candidate = llm.get_api_key() if target == "assistant" \
-            else settings.get(HANDLER_KEY, None)
-    result = _verify_candidate(candidate, stored=tested_stored)
+        candidate = settings.get(
+            API_KEY if target == "assistant" else HANDLER_KEY, None)
+    result = _verify_candidate(
+        actor, candidate, stored_target=target if tested_stored else None)
     if tested_stored and result["code"] != "not_configured":
         _write_verify_state(result, TARGETS[target][1])
     _audit(actor, [f"verify_{target}"], "verified" if result["ok"] else "unverified")
@@ -724,7 +739,7 @@ def _log_switch(actor, enabled):
             "assistant setup: could not write the mcp switch audit line")
 
 
-def _credential_edit(label, candidate, clear):
+def _credential_edit(actor, label, candidate, clear):
     """Validate one credential's replace/clear pair and pre-verify a candidate."""
     if not isinstance(clear, bool):
         raise merrors.ValueException(f"clear_{label} must be true or false")
@@ -734,7 +749,7 @@ def _credential_edit(label, candidate, clear):
             f"Clearing the {label.replace('_', ' ')} and supplying one are different edits")
     verified = None
     if candidate:
-        verified = _verify_candidate(candidate)
+        verified = _verify_candidate(actor, candidate)
         if not verified["ok"]:
             # Nothing is stored. An installation must never run a credential
             # nobody proved.
@@ -771,9 +786,9 @@ def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
     if autonomous_triage is not None and not isinstance(autonomous_triage, bool):
         raise merrors.ValueException("autonomous_triage must be true or false")
     model = normalize_model(model)
-    candidate, verified = _credential_edit("api_key", api_key, clear_api_key)
+    candidate, verified = _credential_edit(actor, "api_key", api_key, clear_api_key)
     handler_candidate, handler_verified = _credential_edit(
-        "handler_api_key", handler_api_key, clear_handler_api_key)
+        actor, "handler_api_key", handler_api_key, clear_handler_api_key)
 
     from mojo.apps.account.models import User
     changed = ["enabled", "model"]

@@ -108,24 +108,20 @@ class LLMExecutionError(Exception):
         super().__init__(code)
 
 
-def verify_api_key(api_key=None):
+def verify_api_key(target="admin"):
     """
-    Verify an Anthropic API key is valid.
+    Verify one exact stored Anthropic credential is valid.
 
     Returns (True, None) on success or (False, "error message") on failure.
     """
-    key = api_key or get_api_key()
-    if not key:
-        return False, "No API key configured. Set LLM_ADMIN_API_KEY or LLM_HANDLER_API_KEY."
     try:
         from mojo.apps.account.services import llm_safety
-        if api_key is None:
-            llm_safety.verify_stored_key()
-        else:
-            llm_safety.verify_candidate(key)
+        llm_safety.verify_stored_key(target)
         return True, None
     except Exception as err:
         code = getattr(err, "code", "provider_unavailable")
+        if code == "credential_missing":
+            return False, "No API key is configured for this target."
         if code == "provider_authentication":
             return False, "API key is invalid or expired."
         return False, "Could not verify API key."

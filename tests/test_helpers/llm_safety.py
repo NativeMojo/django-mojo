@@ -173,12 +173,41 @@ def test_safety_records_have_no_generic_row_rest_surface(opts):
 @th.django_unit_test()
 def test_candidate_permits_are_single_flight_across_fingerprints(opts):
     from mojo.apps.account.services import llm_safety
+    from mojo.helpers.redis import get_connection
 
-    first = llm_safety.credential_fingerprint("anthropic", "candidate-one")
-    second = llm_safety.credential_fingerprint("anthropic", "candidate-two")
-    assert first != second, "the regression needs two distinct candidate fingerprints"
-    assert llm_safety._permit_identity(first, candidate_probe=True) == \
-        llm_safety._permit_identity(second, candidate_probe=True), \
-        "candidate verification must share one installation-wide permit identity"
-    assert llm_safety._permit_identity(first) != llm_safety._permit_identity(second), \
-        "ordinary stored credentials must retain independent accounting identities"
+    policy = _policy()
+    configuration = dict(policy["routes"]["unattributed"])
+    policy["routes"] = {"configuration": configuration}
+    policy["features"] = {"configuration": _limits(concurrency=7)}
+    policy["shared"] = _limits(concurrency=9)
+    shared, limits = llm_safety._candidate_envelopes(policy)
+    assert shared["concurrency"] == limits["concurrency"] == 1, \
+        f"candidate envelopes must hard-cap concurrency at one, got {shared} / {limits}"
+
+    redis = get_connection()
+    identity = f"candidate-installation-{__import__('uuid').uuid4().hex}"
+    first = llm_safety.acquire_permit(
+        redis, "anthropic", identity, "configuration", shared, limits, 4,
+        owner="candidate-one")
+    try:
+        try:
+            llm_safety.acquire_permit(
+                redis, "anthropic", identity, "configuration", shared, limits, 4,
+                owner="candidate-two")
+            assert False, "a second candidate probe permit must be denied while one is active"
+        except llm_safety.LLMSafetyError as err:
+            assert err.code == "concurrency_exhausted", \
+                f"second candidate denial used the wrong safe code: {err.code}"
+    finally:
+        llm_safety.release_permit(redis, first, actual_tokens=4)
+
+
+@th.django_unit_test()
+def test_anthropic_provider_disables_sdk_retries(opts):
+    from unittest import mock
+    from mojo.helpers.llm_providers.anthropic import AnthropicProvider
+
+    with mock.patch("anthropic.Anthropic") as constructor:
+        adapter = AnthropicProvider(api_key="candidate")
+        adapter._client()
+    constructor.assert_called_once_with(api_key="candidate", max_retries=0)

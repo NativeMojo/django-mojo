@@ -102,7 +102,9 @@ export function mountSetup({ctx, panel, onBack}) {
   function paint(state) {
     if (disposed) return;
     const enabled = h('input', {type: 'checkbox', checked: state.enabled});
-    const emergencyStop = h('input', {type: 'checkbox', checked: state.emergency_stop});
+    // This control owns only the database half. A deployment-enforced stop is
+    // displayed separately and must never be persisted by an unrelated save.
+    const emergencyStop = h('input', {type: 'checkbox', checked: state.emergency_stop_database});
     const autonomousTriage = h('input', {type: 'checkbox', checked: state.autonomous_triage});
     const mcpEnabled = h('input', {type: 'checkbox', checked: state.mcp.enabled});
     const handlerKey = h('input', {type: 'password', autocomplete: 'off', spellcheck: 'false'});
