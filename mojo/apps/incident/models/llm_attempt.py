@@ -25,6 +25,7 @@ class IncidentLLMAttempt(models.Model, MojoModel):
     note_id = models.BigIntegerField(null=True, blank=True, default=None)
     job_id = models.CharField(max_length=32, blank=True, default="", db_index=True)
     attempt_count = models.PositiveIntegerField(default=0)
+    delivery_generation = models.PositiveIntegerField(default=0)
     max_attempts = models.PositiveIntegerField(default=3)
     lease_owner = models.CharField(max_length=64, blank=True, default="")
     lease_expires_at = models.DateTimeField(null=True, blank=True, default=None)

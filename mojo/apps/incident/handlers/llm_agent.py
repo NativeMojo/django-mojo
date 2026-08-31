@@ -1465,16 +1465,23 @@ def _run_agent_loop(messages, system_prompt, max_iterations=15, tools=None,
     repeat until Claude stops calling tools.
     """
     operation_id = uuid.uuid4().hex
-    for loop_index in range(max_iterations):
+
+    def require_lease():
         if lease and all(lease):
             from mojo.apps.incident.services import llm_dispatch
             if not llm_dispatch.renew_lease(*lease):
                 raise llm.LLMExecutionError("operation_invalid")
+
+    for loop_index in range(max_iterations):
+        require_lease()
         call_context = dict(context or {})
         call_context["operation_id"] = operation_id
         result = _call_claude(
             messages, system_prompt, tools=tools, feature=feature,
             context=call_context)
+        # A provider round trip may consume most of the lease. Revalidate
+        # ownership before reading tool instructions or mutating anything.
+        require_lease()
         stop_reason = result.get("stop_reason")
 
         # Add assistant response to messages
@@ -1495,11 +1502,13 @@ def _run_agent_loop(messages, system_prompt, max_iterations=15, tools=None,
             tool_id = block["id"]
 
             try:
+                require_lease()
                 handler = TOOL_DISPATCH.get(tool_name)
                 if not handler:
                     tool_result = {"error": f"Unknown tool: {tool_name}"}
                 else:
                     tool_result = handler(tool_input)
+                require_lease()
             except Exception as e:
                 logger.exception("LLM tool %s failed", tool_name)
                 tool_result = {"error": str(e)}
@@ -1511,10 +1520,7 @@ def _run_agent_loop(messages, system_prompt, max_iterations=15, tools=None,
             })
 
         messages.append({"role": "user", "content": tool_results})
-        if lease and all(lease):
-            from mojo.apps.incident.services import llm_dispatch
-            if not llm_dispatch.renew_lease(*lease):
-                raise llm.LLMExecutionError("operation_invalid")
+        require_lease()
 
     logger.warning("LLM agent hit max iterations (%d)", max_iterations)
     raise llm.LLMExecutionError("loop_limit")

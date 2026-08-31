@@ -23,6 +23,7 @@ class Migration(migrations.Migration):
                 ("note_id", models.BigIntegerField(blank=True, default=None, null=True)),
                 ("job_id", models.CharField(blank=True, db_index=True, default="", max_length=32)),
                 ("attempt_count", models.PositiveIntegerField(default=0)),
+                ("delivery_generation", models.PositiveIntegerField(default=0)),
                 ("max_attempts", models.PositiveIntegerField(default=3)),
                 ("lease_owner", models.CharField(blank=True, default="", max_length=64)),
                 ("lease_expires_at", models.DateTimeField(blank=True, default=None, null=True)),

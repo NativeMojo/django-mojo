@@ -63,10 +63,13 @@ def test_analyze_action_publishes_job(opts):
 
     # Verify the job was published
     job = Job.objects.filter(
-        func="mojo.apps.incident.handlers.llm_agent.execute_llm_analysis"
+        func="mojo.apps.incident.services.llm_dispatch.execute_attempt"
     ).order_by("-created").first()
     assert job is not None, "Expected analysis job to be published"
-    assert job.payload["incident_id"] == incident.pk, f"Expected incident_id={incident.pk}, got {job.payload}"
+    from mojo.apps.incident.models import IncidentLLMAttempt
+    attempt = IncidentLLMAttempt.objects.get(pk=job.payload["attempt_id"])
+    assert attempt.incident_id == incident.pk and attempt.feature == "incident_analysis", \
+        f"Expected managed analysis for incident_id={incident.pk}, got {job.payload} / {attempt.feature}"
 
     # Verify in-progress flag was set
     incident.refresh_from_db()
@@ -92,8 +95,8 @@ def test_analyze_action_no_api_key(opts):
     assert "not configured" in result["error"], f"Expected config error, got {result['error']}"
 
 
-@th.django_unit_test("Analyze action: rejects when already in progress")
-def test_analyze_action_already_in_progress(opts):
+@th.django_unit_test("Analyze action: stale metadata cannot suppress fresh work")
+def test_analyze_action_stale_metadata_is_reclaimed(opts):
     from mojo.apps.incident.models import Incident
 
     _cleanup()
@@ -108,8 +111,8 @@ def test_analyze_action_already_in_progress(opts):
     with patch("mojo.helpers.settings.settings.get", side_effect=lambda k, d=None: "test-key" if k == "LLM_HANDLER_API_KEY" else d):
         result = incident.on_action_analyze(None)
 
-    assert result["status"] is False, f"Expected status=False, got {result}"
-    assert "already in progress" in result["error"], f"Expected in-progress error, got {result['error']}"
+    assert result["status"] is True and result["created"] is True, \
+        f"stale metadata must not suppress fresh managed work: {result}"
 
 
 @th.django_unit_test("merge_incidents tool: merges same-category incidents")
@@ -336,6 +339,7 @@ def test_llm_analysis_full_loop(opts):
                 channel="default",
             )
             executed = th.run_pending_jobs(channel="default")
+            executed += th.run_pending_jobs(channel="incident_handlers")
 
     assert executed >= 1, f"Expected at least 1 job executed, got {executed}"
 

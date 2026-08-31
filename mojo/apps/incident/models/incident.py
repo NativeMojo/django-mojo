@@ -241,34 +241,28 @@ class Incident(models.Model, MojoModel):
         if not settings.get("LLM_HANDLER_API_KEY"):
             return {"status": False, "error": "LLM_HANDLER_API_KEY not configured"}
 
-        if (self.metadata or {}).get("analysis_in_progress"):
-            return {"status": False, "error": "Analysis already in progress"}
-
-        # Atomic check-and-set to prevent race conditions on double-click
-        from django.db.models import Q
-        from django.db.models.functions import Coalesce
-        updated = Incident.objects.filter(
-            Q(pk=self.pk),
-            Q(metadata__analysis_in_progress=False) | ~Q(metadata__has_key="analysis_in_progress"),
-        ).update(metadata={**(self.metadata or {}), "analysis_in_progress": True})
-        if not updated:
-            return {"status": False, "error": "Analysis already in progress"}
-        self.refresh_from_db(fields=["metadata"])
-
         try:
             from mojo.apps.incident.services import llm_dispatch
-            llm_dispatch.claim_incident(
+            attempt, created = llm_dispatch.claim_incident(
                 self, feature="incident_analysis",
-                logical_suffix="manual-analysis")
+                logical_suffix="manual-analysis", fresh=True)
         except Exception:
-            # Clear flag on publish failure
-            self.metadata["analysis_in_progress"] = False
-            self.save(update_fields=["metadata"])
             logger.exception("Failed to publish LLM analysis job for incident %s", self.pk)
             return {"status": False, "error": "Failed to publish analysis job"}
 
+        # The DB active-attempt constraint coalesces concurrent clicks. Only
+        # advertise progress after claim/publication actually succeeded or an
+        # existing active worker was found.
+        if attempt.state in llm_dispatch.ACTIVE_STATES:
+            self.refresh_from_db(fields=["metadata"])
+            self.metadata = dict(self.metadata or {})
+            self.metadata["analysis_in_progress"] = True
+            self.save(update_fields=["metadata"])
+        else:
+            return {"status": False, "error": "Failed to publish analysis job"}
+
         self.add_history("handler:llm", note="LLM analysis requested by admin")
-        return {"status": True}
+        return {"status": True, "created": created}
 
     def on_action_merge(self, value):
         """
