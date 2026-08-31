@@ -4,13 +4,16 @@
 ``locate`` is the permanent settings-free endpoint for packaged deployment
 scripts. ``export-scripts`` is an optional debugging/customization aid.
 ``render`` does plain placeholder substitution for cron and systemd files.
-None imports Django or changes privileged host state.
+``app-user`` resolves the node's non-root application account for shell
+callers (update.sh). None imports Django or changes privileged host state.
 """
 
 import argparse
 import os
 import shutil
 import sys
+
+from mojo.deploy import app_user
 
 
 SCRIPT_NAMES = ("update.sh", "post_deploy.sh")
@@ -128,7 +131,32 @@ def cmd_locate(args):
     return 0
 
 
+def cmd_app_user(args):
+    """Print the resolved application account, or fail closed (item #3429).
+
+    The candidate is the caller's $APP_USER value; the resolver ranks the
+    deployed cron entry above it and the checkout owner below it, and never
+    consults $SUDO_USER. An empty answer is exit 1 with nothing on stdout, so
+    a shell caller can `APP_USER="$(...)" || die`.
+    """
+    name = app_user.resolve_app_user(args.root, candidate=args.candidate or None)
+    if not name:
+        print("mojo.deploy app-user: no non-root application account resolves",
+              file=sys.stderr)
+        return 1
+    print(name)
+    return 0
+
+
 def cmd_render(args):
+    # Syntax-only: render legitimately runs on a machine without the target
+    # node's accounts, but stamping root (or an option-shaped string) into
+    # /etc/cron.d would hand the job engine to root on every future tick —
+    # the persistence half of the #3429 poisoning.
+    if not app_user.valid_app_user_name(args.app_user):
+        print("mojo.deploy render: --app-user must be a plain non-root "
+              "account name", file=sys.stderr)
+        return 1
     project = args.project_path.rstrip("/") or "/"
     context = build_context(project, args.app_user, args.web_user, args.workers)
     overrides = read_overrides(project)
@@ -225,11 +253,21 @@ def main(argv):
     render.add_argument("--web-user", default="www")
     render.add_argument("--workers", default="4")
 
+    account = commands.add_parser(
+        "app-user", help="resolve the node's non-root application account")
+    account.add_argument("--root", required=True,
+                         help="the project checkout (its owner is the final "
+                              "rung of the resolution ladder)")
+    account.add_argument("--candidate", default="",
+                         help="the caller's $APP_USER value, if any")
+
     args = parser.parse_args(argv)
     if args.command == "export-scripts":
         return cmd_export_scripts(args)
     if args.command == "locate":
         return cmd_locate(args)
+    if args.command == "app-user":
+        return cmd_app_user(args)
     return cmd_render(args)
 
 

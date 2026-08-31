@@ -467,6 +467,7 @@ def test_code_node_runs_only_common_checkout_and_declared_dependencies(opts):
             "  '-m mojo.deploy locate post_deploy.sh')\n"
             "    if [ \"${FAIL_CANDIDATE_LOCATE:-0}\" = 1 ] && grep -q '^1.17.2$' \"$VERSION_FILE\"; then exit 1; fi\n"
             "    printf '%s\\n' \"$POST_SCRIPT\"; exit 0 ;;\n"
+            "  '-m mojo.deploy app-user '*) exec \"$REAL_PYTHON\" \"$@\" ;;\n"
             "esac\n"
             "exit 64\n")
         _write_executable(os.path.join(stubs, "flock"), "exit 0\n")
@@ -481,6 +482,9 @@ def test_code_node_runs_only_common_checkout_and_declared_dependencies(opts):
             "MOJO_DEPLOY_NO_SYSTEMD": "1",
             "MOJO_DEPLOY_STATE_ROOT": os.path.join(root, "state"),
             "MOJO_DEPLOY_PARENT_STATUS": "1",
+            # Hermetic app-user resolution: no cron rung on this machine, so
+            # the checkout owner (this test's own account) always resolves.
+            "CRON_ETC": os.path.join(root, "cron-empty"),
         })
         os.makedirs(os.path.join(project, "var"), exist_ok=True)
         sentinel = os.path.join(root, "lock-symlink-sentinel")

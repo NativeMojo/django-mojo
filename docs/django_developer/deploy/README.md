@@ -144,13 +144,31 @@ idempotent.
 |---|---|---|
 | `PROJ_PATH` | `/opt/api` | Project checkout |
 | `PROBE_URL` | `https://127.0.0.1/api/version` | API candidate and rollback URL; it must answer exactly HTTP 200 |
-| `APP_USER` | `ec2-user` | Account that owns Git operations; also substituted into rendered cron/systemd templates |
+| `APP_USER` | resolved | Candidate for the application account — see below |
 | `WEB_USER` | `www` | Value substituted into rendered service templates |
 | `ASGI_WORKERS` | `4` | Worker count substituted into rendered service templates |
 
 `NGINX_ETC`, `SYSTEMD_ETC`, and `CRON_ETC` default to their normal `/etc`
 locations and exist as test seams. Production projects should not redirect
 them.
+
+### The application account is resolved, never trusted
+
+The transaction derives the account that owns Git and application state from
+trusted configuration, in this order — first valid, non-root answer wins:
+
+1. the user field of the deployed jobs cron entry
+   (`/etc/cron.d/3_mojo_jobs`) — the fleet's statement of intent;
+2. the caller's `APP_USER` environment value;
+3. the owner of the project checkout.
+
+`SUDO_USER` is never consulted: a root-owned jobs engine invoking the updater
+through `sudo -n` carries `SUDO_USER=root`, and trusting it once ran every Git
+operation as root — no SSH identity, no known-hosts, a failed fetch. `root`,
+empty, unknown, and option- or digit-shaped values are all rejected; if no
+rung yields a real non-root account the transaction refuses before touching
+the checkout. The same resolver is callable directly:
+`python3 -m mojo.deploy app-user --root /opt/api [--candidate NAME]`.
 
 ## Rollback and interrupted runs
 
@@ -368,8 +386,23 @@ deployment itself does not call this tool.
 
 `python3 -m mojo.deploy.jobman` starts, stops, and reports the foreground job
 engine and scheduler. Cron remains the normal start backstop. A successful
-deployment schedules an engine recycle only after the invoking job has
-returned and recorded its result.
+deployment schedules a recycle of both components only after the invoking job
+has returned and recorded its result.
+
+**A root `start` demotes itself.** Invoked as root, `jobman start` resolves
+the application account (same ladder as the update transaction: cron entry →
+`APP_USER` → checkout owner, never `SUDO_USER`), repairs the ownership of its
+own pid/log files, and re-execs through `sudo -H -u` as that account — so the
+engine and scheduler never run as root no matter who started them. If no
+non-root account resolves it refuses loudly and lets cron remain the backstop.
+`stop` and `status` never demote: a root `stop` must be able to kill a
+root-owned engine.
+
+Manual remedies on a node whose job processes ended up root-owned:
+`sudo bin/jobman stop && sudo bin/jobman start` replaces live root components
+with correctly-owned ones; a root engine that already died leaves root-owned
+files that block the cron backstop, and a single `sudo bin/jobman start`
+(which demotes) repairs them and starts fresh.
 
 ### `node_setup`
 

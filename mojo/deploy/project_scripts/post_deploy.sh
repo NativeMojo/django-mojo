@@ -41,6 +41,15 @@ valid_node_type "$NODE_TYPE" || die "invalid node type"
 if [ "$NODE_TYPE" != "api" ] && [ "$MIGRATE" = "1" ]; then
     die "only api nodes may migrate"
 fi
+# The account update.sh resolved (never $SUDO_USER — item #3429). Rendering
+# root into cron/systemd units would hand the job engine to root on every
+# future tick, so refuse it outright. The existence check is root-only: dev
+# and test runs are non-root on boxes that carry no ec2-user account.
+[ -n "$APP_USER" ] && [ "$APP_USER" != "root" ] ||
+    die "application account is invalid"
+if [ "$(id -u)" = "0" ]; then
+    id "$APP_USER" >/dev/null 2>&1 || die "application account does not exist"
+fi
 
 FILES="$STATE/files"
 TOUCHED_UNITS="$STATE/touched_units"

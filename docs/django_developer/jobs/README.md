@@ -250,7 +250,12 @@ looking at.
 | Requires | nothing configured | Redis **and** Postgres, on every command including `status` |
 
 On a deployed node the cron runs `bin/jobman start` every minute, so `jobman` is
-what is actually managing the engine and scheduler there. `jobman stop` will not
+what is actually managing the engine and scheduler there. Both always run as the
+application account: a `jobman start` invoked as root resolves that account from
+trusted configuration and demotes itself before spawning anything (see
+[deploy/README.md](../deploy/README.md#jobman)) — a root engine would run every
+queued job as root and break the account-scoped jobs (firewall brokering, Git
+deployment fetches). `jobman stop` will not
 touch a daemon-mode engine, and the jobs CLI will not see anything jobman
 started. An empty jobs CLI status therefore says exactly which process plane it
 checked and points at `python3 -m mojo.deploy.jobman status`; it does not claim

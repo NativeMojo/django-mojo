@@ -7,7 +7,13 @@ set -Eeuo pipefail
 PROJ_PATH="${PROJ_PATH:-/opt/api}"
 RUNTIME_SECONDS="${MOJO_DEPLOY_RUNTIME_SECONDS:-1800}"
 ROLLBACK_SECONDS="${MOJO_DEPLOY_ROLLBACK_SECONDS:-900}"
-APP_USER="${APP_USER:-${SUDO_USER:-ec2-user}}"
+# The caller's APP_USER is a CANDIDATE, not the answer. $SUDO_USER is never
+# consulted: a root jobs engine invoking this through `sudo -n` carries
+# SUDO_USER=root, and accepting it ran every Git operation as root — no SSH
+# identity, no known-hosts, and a failed fetch (item #3429). The transaction
+# pass resolves the real account below, fail-closed, via
+# `python3 -m mojo.deploy app-user` (cron entry -> candidate -> checkout owner).
+APP_USER_CANDIDATE="${APP_USER:-}"
 RUN_UID="$(id -u)"
 if [ "$RUN_UID" != "0" ] && [ "${MOJO_DEPLOY_NO_SYSTEMD:-0}" != "1" ]; then
     self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
@@ -62,6 +68,8 @@ installed_framework() {
 
 run_as_app() {
     if [ "$RUN_UID" = "0" ]; then
+        [ -n "${APP_USER:-}" ] && [ "$APP_USER" != "root" ] ||
+            die "application account is invalid"
         id "$APP_USER" >/dev/null 2>&1 || die "application account does not exist"
         sudo -H -u "$APP_USER" -- "$@"
     else
@@ -322,7 +330,7 @@ if [ "$TRANSACTION" = "0" ] && [ "${MOJO_DEPLOY_NO_SYSTEMD:-0}" != "1" ]; then
             --setenv="MOJO_DEPLOY_IN_TRANSIENT_UNIT=1" \
             --setenv="MOJO_DEPLOY_PARENT_STATUS=${MOJO_DEPLOY_PARENT_STATUS:-}" \
             --setenv="PROJ_PATH=$PROJ_PATH" \
-            --setenv="APP_USER=$APP_USER" \
+            --setenv="APP_USER=$APP_USER_CANDIDATE" \
             --setenv="PROBE_URL=${PROBE_URL:-https://127.0.0.1/api/version}" \
             --setenv="WEB_USER=${WEB_USER:-www}" \
             --setenv="ASGI_WORKERS=${ASGI_WORKERS:-4}" \
@@ -336,6 +344,16 @@ if [ "$TRANSACTION" = "0" ] && [ "${MOJO_DEPLOY_NO_SYSTEMD:-0}" != "1" ]; then
         --no-pager --quiet --lines=9 2>/dev/null | tail -n 9 >&2 || true
     exit "$status"
 fi
+
+# Resolve the application account before ANY read or mutation of the
+# checkout. Only the transaction pass gets here (the outer pass exits through
+# systemd-run above), so the transient-unit boundary stays untouched. An
+# unresolvable account is a refusal, not a guess — a wrong owner bricks the
+# node's engine and log ownership permanently.
+APP_USER="$(python3 -m mojo.deploy app-user --root "$PROJ_PATH" \
+    --candidate "$APP_USER_CANDIDATE")" ||
+    die "cannot resolve a non-root application account"
+export APP_USER
 
 cd "$PROJ_PATH"
 ensure_state_root

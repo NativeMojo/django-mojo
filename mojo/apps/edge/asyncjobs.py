@@ -452,8 +452,25 @@ def _node_deploy_failed(deployment_id, sha, job, migrate, phase, message,
             deployment_id, "failed", {"phase": phase, "source": "node_report"})
 
 
+def _recycle_command():
+    """The detached shell that replaces this node's job processes.
+
+    Bare `stop`/`start` on purpose — jobman's bare verbs walk engine then
+    scheduler (item #3429): the scheduler must also pick up the release just
+    deployed, and on a node poisoned with root-owned job processes this
+    recycle is the only root-context event, so an engine-scoped recycle would
+    leave a root scheduler running old code forever. A root `stop` can kill
+    root processes; the replacement `start` demotes itself to the application
+    account (see mojo/deploy/jobman.py).
+    """
+    return (
+        'sleep 2; "$1" -m mojo.deploy.jobman stop --root "$2" '
+        '--grace 2; sleep 1; "$1" -m mojo.deploy.jobman start '
+        '--root "$2"')
+
+
 def _recycle_engine_after_return():
-    """Detach the engine recycle so the current job can finish normally."""
+    """Detach the recycle so the current job can finish normally."""
     import os
     import subprocess
     import sys
@@ -466,12 +483,9 @@ def _recycle_engine_after_return():
     if django_settings.DEBUG:
         return
     root = django_settings.PROJECT_ROOT
-    command = (
-        'sleep 2; "$1" -m mojo.deploy.jobman stop engine --root "$2" '
-        '--grace 2; sleep 1; "$1" -m mojo.deploy.jobman start engine '
-        '--root "$2"')
     subprocess.Popen(
-        ["bash", "-c", command, "deploy-recycle", sys.executable, root],
+        ["bash", "-c", _recycle_command(), "deploy-recycle", sys.executable,
+         root],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, start_new_session=True,
         env=os.environ.copy())

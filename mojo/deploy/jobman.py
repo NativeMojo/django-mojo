@@ -85,11 +85,15 @@ See `docs/django_developer/deploy/README.md`.
 import argparse
 import functools
 import os
+import pwd
 import re
+import shutil
 import signal
 import subprocess
 import sys
 import time
+
+from mojo.deploy import app_user
 
 # component -> the name every output line uses. Insertion order IS the order a
 # bare `start`/`stop`/`status` walks them in.
@@ -207,6 +211,82 @@ def ensure_dirs(root):
         except OSError as err:
             problem = err
     return problem
+
+
+# ---------------------------------------------------------------------------
+# root demotion (item #3429)
+# ---------------------------------------------------------------------------
+#
+# A root-invoked `start` NEVER starts the runner as root. Root-started engines
+# are how the #3429 poisoning began: every queued job becomes a root process,
+# the next deployment's nested sudo carries SUDO_USER=root into update.sh, and
+# the pidfile/log files land root-owned so no app-user start can ever write
+# them again (the brick documented above cmd_start's pidfile open).
+#
+# So `start` under euid 0 resolves the application account from trusted
+# configuration (see mojo/deploy/app_user.py — cron entry, $APP_USER
+# candidate, checkout owner; never $SUDO_USER), repairs the ownership of
+# jobman's OWN files, and re-execs itself through the documented
+# `sudo -H -u` form. Unresolvable → refuse loudly; the every-minute cron tick
+# runs as the app account and remains the backstop.
+#
+# `stop` and `status` deliberately do NOT demote: a root `stop` must be able
+# to kill a root engine (the deploy recycle depends on it), and `status`
+# keeps its exit-0/stdout-only contract untouched.
+
+# The files jobman itself owns. Ownership repair touches these and NOTHING
+# else: var/logs is a shared dual-account surface (the asgi service and
+# node_setup own the directory policy), so a broad chown would strip the web
+# account's access to its own logs.
+JOBMAN_OWNED = ("job_engine.pid", "job_scheduler.pid", "job_engine.log",
+                "job_scheduler.log", "jobman.log")
+
+
+def demotion_argv(user, root, component=None, runner=None, verbose=False):
+    """The full re-exec argv for a root `start`, demoted to `user`.
+
+    Built from the parsed arguments rather than sys.argv so the result is
+    deterministic: the root is the resolved absolute root (sudo keeps the
+    cwd, but the child must not depend on it), and stop-only flags cannot
+    leak in because `start` never carries them.
+    """
+    argv = [shutil.which("sudo") or "/usr/bin/sudo", "-H", "-u", user, "--",
+            sys.executable, "-m", "mojo.deploy.jobman", "start"]
+    if component:
+        argv.append(component)
+    argv += ["--root", root]
+    if runner:
+        argv += ["--runner", runner]
+    if verbose:
+        argv.append("--verbose")
+    return argv
+
+
+def repair_ownership(root, user):
+    """Hand jobman's own pid/log files back to `user`, uid only.
+
+    Best-effort by design: gid and mode are preserved (the group is how the
+    web account reads through), directories are untouched, and a file that
+    cannot be repaired fails loudly later at cmd_start's existing open.
+    """
+    try:
+        uid = pwd.getpwnam(user).pw_uid
+    except KeyError:
+        return
+    for directory in (pid_dir(root), log_dir(root)):
+        for name in JOBMAN_OWNED:
+            path = os.path.join(directory, name)
+            try:
+                found = os.lstat(path)
+            except OSError:
+                continue
+            if found.st_uid == uid:
+                continue
+            try:
+                os.lchown(path, uid, found.st_gid)
+            except OSError as err:
+                print("jobman: cannot repair ownership of %s: %s"
+                      % (path, err), file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +617,27 @@ def main(argv):
               "would never match a running process" % (runner_path, root),
               file=sys.stderr)
         return 1
+
+    # BEFORE ensure_dirs: a root ensure_dirs on a fresh box would create
+    # root-owned var directories — the exact brick the demotion exists to
+    # prevent. See "root demotion" above.
+    if args.command == "start" and os.geteuid() == 0:
+        user = app_user.resolve_app_user(
+            root, candidate=os.environ.get("APP_USER"))
+        if not user:
+            print("jobman: refusing to start as root — no non-root "
+                  "application account resolves (cron entry, $APP_USER, "
+                  "checkout owner)", file=sys.stderr)
+            return 1
+        repair_ownership(root, user)
+        demoted = demotion_argv(user, root, component=args.component,
+                                runner=args.runner, verbose=args.verbose)
+        try:
+            os.execv(demoted[0], demoted)
+        except OSError as err:
+            print("jobman: cannot demote to %s via sudo: %s" % (user, err),
+                  file=sys.stderr)
+            return 1
 
     problem = ensure_dirs(root)
     if problem is not None and args.command != "status":

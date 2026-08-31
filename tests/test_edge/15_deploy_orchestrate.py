@@ -185,3 +185,20 @@ def test_node_validates_sha(opts):
     th.assert_eq(row.status, "failed",
                  f"an invalid sha must fail the job, got {row.status}")
     th.assert_eq(ran, [], "the script must never run with an unvalidated sha")
+
+
+@th.django_unit_test("deploy recycle replaces BOTH job components")
+def test_recycle_command_covers_engine_and_scheduler(opts):
+    """Item #3429: the recycle uses jobman's bare verbs, which walk engine
+    then scheduler — an engine-scoped recycle left a root scheduler (and a
+    stale scheduler on every healthy deploy) running forever."""
+    from mojo.apps.edge import asyncjobs
+
+    command = asyncjobs._recycle_command()
+    th.assert_in('-m mojo.deploy.jobman stop --root "$2" --grace 2', command,
+                 "the recycle must stop BOTH components (bare stop verb)")
+    th.assert_in('-m mojo.deploy.jobman start --root "$2"', command,
+                 "the recycle must start BOTH components (bare start verb)")
+    th.assert_true(" stop engine" not in command
+                   and " start engine" not in command,
+                   "an engine-scoped recycle leaves the scheduler behind")
