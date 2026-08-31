@@ -219,8 +219,9 @@ The first deploy that adopts these files can still be started by the previous
 django-mojo job engine. New deploy parents set `MOJO_DEPLOY_PARENT_STATUS=1`
 and record success after the script returns. A predecessor does not set it, so
 the verified candidate performs one legacy `deploy_status` callback and
-detaches an engine recycle. This bridge runs only after nginx and the API have
-passed; a broken candidate never needs Django to initiate rollback.
+detaches a recycle of both the engine and the scheduler. This bridge runs only
+after nginx and the API have passed; a broken candidate never needs Django to
+initiate rollback.
 
 ## Rolling an updater release across existing fleets
 

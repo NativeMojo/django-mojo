@@ -77,11 +77,11 @@ update. The parent process waits beyond both windows instead of killing a
 legitimate rollback.
 
 Current parents record node evidence after the script returns. API nodes then
-detach a short engine recycle so the completed job can be acknowledged before
-the old process exits. `code` nodes receive no generic restart. A custom
-profile owns its service restart; if that restart kills the caller, the
-replacement engine consumes the transaction's bounded outcome and exact local
-identity to finalize the same deployment UUID.
+detach a short recycle of both the job engine and scheduler so the completed
+job can be acknowledged before the old processes exit. `code` nodes receive no
+generic restart. A custom profile owns its service restart; if that restart
+kills the caller, the replacement engine consumes the transaction's bounded
+outcome and exact local identity to finalize the same deployment UUID.
 
 One predecessor-generation callback remains solely for API adoption: when the
 parent does not set `MOJO_DEPLOY_PARENT_STATUS`, the healthy migrating canary

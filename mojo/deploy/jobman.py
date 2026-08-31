@@ -87,8 +87,8 @@ import functools
 import os
 import pwd
 import re
-import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -241,6 +241,23 @@ def ensure_dirs(root):
 JOBMAN_OWNED = ("job_engine.pid", "job_scheduler.pid", "job_engine.log",
                 "job_scheduler.log", "jobman.log")
 
+# Fixed locations only — never $PATH. This argv is exec'd by a root process
+# whose environment (and therefore PATH) came from whoever spawned it.
+SUDO_CANDIDATES = ("/usr/bin/sudo", "/bin/sudo")
+
+
+def sudo_path():
+    """The sudo binary from the fixed candidate list.
+
+    Falls back to the first candidate when neither is executable — the
+    subsequent execv then fails loudly and the caller refuses, which is the
+    fail-closed answer a box with no sudo deserves.
+    """
+    for candidate in SUDO_CANDIDATES:
+        if os.access(candidate, os.X_OK):
+            return candidate
+    return SUDO_CANDIDATES[0]
+
 
 def demotion_argv(user, root, component=None, runner=None, verbose=False):
     """The full re-exec argv for a root `start`, demoted to `user`.
@@ -250,7 +267,7 @@ def demotion_argv(user, root, component=None, runner=None, verbose=False):
     cwd, but the child must not depend on it), and stop-only flags cannot
     leak in because `start` never carries them.
     """
-    argv = [shutil.which("sudo") or "/usr/bin/sudo", "-H", "-u", user, "--",
+    argv = [sudo_path(), "-H", "-u", user, "--",
             sys.executable, "-m", "mojo.deploy.jobman", "start"]
     if component:
         argv.append(component)
@@ -279,6 +296,12 @@ def repair_ownership(root, user):
             try:
                 found = os.lstat(path)
             except OSError:
+                continue
+            # Plain single-link regular files only. lstat already refuses to
+            # follow a symlink; a HARDLINK to a root-owned file would still
+            # be handed over, and these directories are group-writable
+            # (setgid 2775) — so anything link-shaped is left alone.
+            if not stat.S_ISREG(found.st_mode) or found.st_nlink != 1:
                 continue
             if found.st_uid == uid:
                 continue

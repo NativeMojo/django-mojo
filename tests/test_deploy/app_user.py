@@ -14,7 +14,6 @@ the lock (macOS ships no flock(1)); everything else on PATH is real.
 """
 
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -272,6 +271,31 @@ def test_render_refuses_a_root_app_user(opts):
             "a refused render must write nothing")
 
 
+@th.django_unit_test()
+def test_render_refuses_a_root_jobs_tick_from_a_project_overlay(opts):
+    """An override named in node_overrides.conf is copied verbatim — the
+    --app-user flag never sees it, so the PRODUCED 3_mojo_jobs is what must
+    be validated."""
+    with tempfile.TemporaryDirectory() as root:
+        project = os.path.join(root, "proj")
+        os.makedirs(os.path.join(project, "aws", "cron.d"))
+        with open(os.path.join(project, "aws", "cron.d", "3_mojo_jobs"),
+                  "w") as handle:
+            handle.write("* * * * * root /opt/api/bin/jobman start\n")
+        with open(os.path.join(project, "aws", "node_overrides.conf"),
+                  "w") as handle:
+            handle.write("3_mojo_jobs\n")
+        done = subprocess.run(
+            [sys.executable, "-m", "mojo.deploy", "render",
+             "--dest", os.path.join(root, "out"),
+             "--project-path", project, "--app-user", "appu"],
+            capture_output=True, text=True)
+        th.assert_true(done.returncode != 0,
+                       "a root-user jobs tick must refuse even via overlay")
+        th.assert_in("3_mojo_jobs", done.stderr,
+                     "the refusal must name the offending file")
+
+
 # ---------------------------------------------------------------------------
 # jobman demotion
 # ---------------------------------------------------------------------------
@@ -280,7 +304,9 @@ def test_render_refuses_a_root_app_user(opts):
 def test_demotion_argv_is_the_documented_sudo_form(opts):
     from mojo.deploy import jobman
 
-    sudo = shutil.which("sudo") or "/usr/bin/sudo"
+    sudo = jobman.sudo_path()
+    th.assert_in(sudo, jobman.SUDO_CANDIDATES,
+                 "sudo must come from the fixed candidate list, never $PATH")
     th.assert_eq(
         jobman.demotion_argv("appu", "/opt/api", component="engine"),
         [sudo, "-H", "-u", "appu", "--", sys.executable,

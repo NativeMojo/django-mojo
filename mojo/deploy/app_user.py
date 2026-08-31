@@ -115,8 +115,13 @@ def checkout_owner(root):
 def resolve_app_user(root, candidate=None, cron_path=None):
     """The ladder. Returns the account name, or None to fail closed."""
     if cron_path is None:
-        cron_path = os.path.join(
-            os.environ.get("CRON_ETC") or DEFAULT_CRON_DIR, CRON_NAME)
+        # $CRON_ETC is a test seam, and honoring it as root would let ambient
+        # environment steer rung 1 — the exact trust inversion this module
+        # exists to prevent. Root reads the fixed fleet location only.
+        cron_dir = DEFAULT_CRON_DIR
+        if os.geteuid() != 0:
+            cron_dir = os.environ.get("CRON_ETC") or DEFAULT_CRON_DIR
+        cron_path = os.path.join(cron_dir, CRON_NAME)
     for name in (cron_app_user(cron_path), candidate, checkout_owner(root)):
         if name and valid_app_user(name):
             return name

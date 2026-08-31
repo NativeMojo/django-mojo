@@ -228,6 +228,21 @@ def cmd_render(args):
                       % (subdir, name, err), file=sys.stderr)
                 return 1
 
+    # The jobman tick decides who owns the job engine (it is rung 1 of the
+    # app-user resolution ladder), so validate the PRODUCED file — a project
+    # overlay named in node_overrides.conf is copied verbatim and would
+    # otherwise bypass the --app-user check above. Other cron files may
+    # legitimately run as root (certbot); only this one is constrained.
+    for subdir, destination_dir, written in produced:
+        if subdir != "cron.d" or app_user.CRON_NAME not in written:
+            continue
+        entry = app_user.cron_app_user(
+            os.path.join(destination_dir, app_user.CRON_NAME))
+        if not app_user.valid_app_user_name(entry or ""):
+            print("mojo.deploy render: %s names an unusable job account: %r"
+                  % (app_user.CRON_NAME, entry), file=sys.stderr)
+            return 1
+
     print("mojo.deploy render: %d framework template(s) + %d project file(s) -> %s"
           % (rendered, overlaid, args.dest))
     return 0
