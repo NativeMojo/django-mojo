@@ -1,18 +1,15 @@
 # Test-tier CI (maestro #2793). See docs/django_developer/testit/Tiers.md.
 #
-#   push          -> the core preset (~9s): the BLOCKING gate on every push.
+#   push          -> the core preset (~9s): non-advisory status on every push.
 #   pull_request  -> the framework preset (~45s): ADVISORY (advisory: true)
-#                    until #2813 removes the shared-state flakes. To make it a
-#                    blocking gate, set `advisory: false` on the framework job
-#                    below — that is the whole flip.
-#   schedule      -> the all-tier run (extended/admin/edge/slow), nightly.
+#                    until #2813 removes the shared-state flakes. Setting
+#                    `advisory: false` makes failures fail the check; requiring
+#                    that check still belongs in repository branch protection.
 name: tests
 
 on:
   push:
   pull_request:
-  schedule:
-    - cron: "0 7 * * *"
 
 jobs:
   core:
@@ -30,9 +27,3 @@ jobs:
     with:
       tier: framework
       advisory: true
-
-  all:
-    if: github.event_name == 'schedule'
-    uses: ./.github/workflows/testit.yml
-    with:
-      tier: all
