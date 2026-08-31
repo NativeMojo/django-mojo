@@ -198,6 +198,11 @@ def repair_attempts(limit=100):
     return repaired
 
 
+def repair_attempts_job(job):
+    repaired = repair_attempts()
+    job.add_log(f"Repaired {repaired} incident LLM attempt(s)")
+
+
 def start_historical_backlog(before, limit, actor):
     """Owner-only bounded opt-in for incidents older than the activation watermark."""
     from mojo.apps.account.services import system_settings

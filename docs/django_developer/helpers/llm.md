@@ -1,6 +1,8 @@
 # LLM Helper — Django Developer Reference
 
-Centralized helpers for Anthropic Claude API integration: model discovery, API key management, and quick calls.
+Provider-neutral LLM facade with Anthropic as the sole production adapter in
+this release. Production requests use the mandatory
+[LLM safety boundary](../security/llm_safety.md).
 
 ```python
 from mojo.helpers import llm
@@ -60,8 +62,8 @@ models = llm.get_models(force_refresh=True)  # force API call
 ### `ask()` — One-shot question
 
 ```python
-answer = llm.ask("Summarize this text: ...")
-answer = llm.ask("Classify this: ...", model=llm.get_model("fast"))
+answer = llm.ask("Summarize this text: ...", feature="scheduled_task")
+answer = llm.ask("Classify this: ...", feature="file_analysis")
 ```
 
 Returns a string. No tools, no conversation. Good for summarization, classification, text generation.
@@ -75,11 +77,16 @@ response = llm.call(
     tools=[...],           # optional tool definitions
     model="claude-sonnet-5",  # optional, defaults to get_model("general")
     max_tokens=4096,       # optional
+    feature="assistant",  # required for framework callers
+    context={"conversation_id": 42, "loop_call": 1},
 )
 # Returns dict (response.model_dump() from anthropic SDK)
 ```
 
-Raises `ValueError` if no API key is configured. Other API errors propagate from the anthropic SDK.
+Raises `ValueError` with a fixed safe code when policy, controls, budgets, the
+circuit, persistence, or provider denies the request. Raw SDK/provider text does
+not cross the adapter. Omitted `feature` temporarily becomes separately
+budgeted `unattributed`; unknown explicit features are refused.
 
 ## `model_choices()` — picker suggestions
 
@@ -117,5 +124,8 @@ good re-save whenever the cache has lapsed and the API is down.
 | `LLM_HANDLER_API_KEY` | Fallback — the platform key, settable from the built-in Admin's Assistant setup |
 | `LLM_ADMIN_MODEL` | If set, `get_model()` returns this (explicit pin) |
 | `LLM_HANDLER_MODEL` | Second-tier pin |
+| `LLM_SAFETY_POLICY` | Required file-owned provider routes and cost envelopes |
+| `LLM_EMERGENCY_STOP` | Static OR protected database stop; unknown database state denies |
+| `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED` | Protected owner switch, default off |
 
 If no model setting is pinned, `get_model()` auto-detects from the API.

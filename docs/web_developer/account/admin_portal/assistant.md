@@ -199,6 +199,13 @@ configuration this installation is running.
 | `handler_api_key` | Optional. The **platform** key (`LLM_HANDLER_API_KEY`). Same omit-to-keep rule |
 | `clear_handler_api_key` | Optional boolean. Removes the stored platform key and its verification record. Cannot be combined with `handler_api_key` |
 | `mcp_enabled` | Optional boolean — remote agent access. **Omit it or send `null` to leave the switch alone.** Any other non-boolean (`"true"`, `1`) is a `400`, never coerced |
+| `emergency_stop` | Optional boolean. Protected database stop for ordinary provider requests |
+| `autonomous_triage` | Optional boolean. Enables only post-watermark catch-all incident work |
+
+`GET /api/account/admin/llm-safety` is available to globally authorized
+security readers. It returns bounded provider/feature/status aggregates and
+breaker counts, never credential fingerprints. `reset_breaker` and
+`historical_triage` are fresh-auth owner-only actions on this setup endpoint.
 
 Remote agent access is independent of `enabled` and of any API key: a remote
 client brings its own model. Switching it off **pauses** existing connections

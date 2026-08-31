@@ -503,6 +503,12 @@ def mcp_state(check=False):
 def state(refresh=False, check=False):
     """Everything the owner setup view renders. Never carries a credential."""
     from django.apps import apps
+    from mojo.apps.account.services import llm_safety
+    try:
+        safety = llm_safety.aggregate_state(hours=24)
+    except Exception:
+        safety = {"hours": 24, "requests": [], "breakers": [],
+                  "error": "safety_state_unavailable"}
     return {
         "schema_version": SCHEMA_VERSION,
         "enabled": bool(settings.get(ENABLED_KEY, False, kind="bool")),
@@ -518,6 +524,7 @@ def state(refresh=False, check=False):
         "assistant_installed": apps.is_installed("mojo.apps.assistant"),
         "realtime_installed": apps.is_installed("mojo.apps.realtime"),
         "mcp": mcp_state(check=check),
+        "safety": safety,
     }
 
 

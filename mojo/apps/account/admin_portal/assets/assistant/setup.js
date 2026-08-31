@@ -102,6 +102,8 @@ export function mountSetup({ctx, panel, onBack}) {
   function paint(state) {
     if (disposed) return;
     const enabled = h('input', {type: 'checkbox', checked: state.enabled});
+    const emergencyStop = h('input', {type: 'checkbox', checked: state.emergency_stop});
+    const autonomousTriage = h('input', {type: 'checkbox', checked: state.autonomous_triage});
     const mcpEnabled = h('input', {type: 'checkbox', checked: state.mcp.enabled});
     const handlerKey = h('input', {type: 'password', autocomplete: 'off', spellcheck: 'false'});
     const clearHandlerKey = h('input', {type: 'checkbox'});
@@ -123,6 +125,8 @@ export function mountSetup({ctx, panel, onBack}) {
     const checkDiscovery = h('button', {class: 'button ghost compact', type: 'button'}, 'Check now');
     const revokeAll = h('button', {class: 'button danger compact', type: 'button',
       disabled: state.mcp.grant_count === 0}, 'Disconnect all');
+    const resetBreakers = h('button', {class: 'button danger compact', type: 'button'},
+      'Reset breakers');
 
     save.addEventListener('click', (event) => runAction(event.currentTarget, async () => {
       const payload = {
@@ -132,6 +136,8 @@ export function mountSetup({ctx, panel, onBack}) {
         clear_api_key: clearKey.checked,
         clear_handler_api_key: clearHandlerKey.checked,
         mcp_enabled: mcpEnabled.checked,
+        emergency_stop: emergencyStop.checked,
+        autonomous_triage: autonomousTriage.checked,
       };
       // A key field is omitted rather than sent empty: an empty string is not
       // a credential, and "leave it alone" must not read as "store nothing".
@@ -206,6 +212,20 @@ export function mountSetup({ctx, panel, onBack}) {
         paint(result.state);
       }, {pendingLabel: 'Disconnecting…'}));
 
+    resetBreakers.addEventListener('click', (event) => runAction(
+      event.currentTarget, async () => {
+        const {confirmed} = await confirmAction({
+          title: 'Reset every LLM breaker?',
+          copy: 'Only do this after the provider or credential problem is resolved. '
+            + 'The emergency stop is not changed.',
+          confirmLabel: 'Reset breakers', danger: true});
+        if (!confirmed) return;
+        const result = await api(ENDPOINT, {method: 'POST',
+          body: JSON.stringify({action: 'reset_breaker'})});
+        toast(`Reset ${result.reset} breaker(s).`);
+        paint(result.state);
+      }, {pendingLabel: 'Resetting…'}));
+
     back.addEventListener('click', () => { onBack?.(); });
 
     const address = state.mcp.url || '<connect address>';
@@ -218,6 +238,20 @@ export function mountSetup({ctx, panel, onBack}) {
       h('h3', {text: 'Assistant setup'}),
       h('p', {class: 'assistant-note', text: readiness(state)}),
       h('label', {class: 'check-field'}, enabled, h('span', {text: 'Assistant enabled'})),
+
+      h('h4', {text: 'LLM safety'}),
+      h('label', {class: 'check-field'}, emergencyStop,
+        h('span', {text: 'Emergency stop all ordinary provider requests'})),
+      h('label', {class: 'check-field'}, autonomousTriage,
+        h('span', {text: 'Allow autonomous incident triage for new incidents'})),
+      h('p', {class: 'assistant-note', text: state.autonomous_triage_activated_at
+        ? `Autonomous watermark: ${formatDate(state.autonomous_triage_activated_at)}`
+        : 'Autonomous triage has no activation watermark.'}),
+      h('div', {class: 'assistant-setup-row'},
+        h('div', {}, h('strong', {text: 'Last 24 hours'}),
+          h('span', {text: `${state.safety?.requests?.length || 0} aggregate usage rows · `
+            + `${state.safety?.breakers?.length || 0} breaker rows`})),
+        resetBreakers),
 
       h('h4', {text: 'Platform LLM key'}),
       h('p', {class: 'assistant-note',

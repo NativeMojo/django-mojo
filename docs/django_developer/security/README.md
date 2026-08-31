@@ -2,6 +2,11 @@
 
 The security system is a multi-layered defense pipeline that detects, correlates, triages, and enforces security policy across the platform. This document covers the full system end-to-end.
 
+External LLM features use the mandatory provider-neutral
+[LLM safety boundary](llm_safety.md): exact deployment policy, hard budgets,
+durable ledger, credential-scoped breaker, emergency stop, and duplicate-safe
+incident dispatch.
+
 ```
                            ┌─────────────────────────┐
                            │     Event Sources        │

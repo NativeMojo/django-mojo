@@ -11,6 +11,15 @@ from mojo import errors as merrors
 from mojo.apps.account.services import assistant_setup, system_setup
 
 
+@md.GET("account/admin/llm-safety")
+@md.denies_key_backed_session()
+@md.requires_global_perms("view_security", "security")
+def on_admin_llm_safety(request):
+    from mojo.apps.account.services import llm_safety
+    return {"schema_version": 1, "safety": llm_safety.aggregate_state(
+        hours=request.DATA.get("hours", 24))}
+
+
 @md.GET("account/admin/assistant")
 @md.denies_key_backed_session()
 @md.requires_global_perms("manage_settings", "admin")
@@ -77,6 +86,28 @@ def on_admin_assistant_mutate(request):
         # stale page sees the truth on its very next call.
         return {"schema_version": assistant_setup.SCHEMA_VERSION,
                 "saved": True, "state": saved}
+    if action == "reset_breaker":
+        if keys - {"action", "provider"}:
+            raise merrors.ValueException(
+                "Reset breaker accepts only action and provider")
+        from mojo.apps.account.services import llm_safety
+        reset = llm_safety.reset_breakers(
+            request.user, provider=request.DATA.get("provider"))
+        return {"schema_version": assistant_setup.SCHEMA_VERSION,
+                "reset": reset, "state": assistant_setup.state()}
+    if action == "historical_triage":
+        if keys != {"action", "before", "limit"}:
+            raise merrors.ValueException(
+                "Historical triage requires exactly action, before, and limit")
+        from django.utils.dateparse import parse_datetime
+        from mojo.apps.incident.services import llm_dispatch
+        before = parse_datetime(str(request.DATA.get("before") or ""))
+        if before is None:
+            raise merrors.ValueException("before must be an ISO timestamp")
+        queued = llm_dispatch.start_historical_backlog(
+            before, request.DATA.get("limit"), request.user)
+        return {"schema_version": assistant_setup.SCHEMA_VERSION,
+                "queued": queued, "state": assistant_setup.state()}
     if action == "revoke_grant":
         if keys != {"action", "grant_id"}:
             raise merrors.ValueException(
@@ -92,4 +123,5 @@ def on_admin_assistant_mutate(request):
         return {"schema_version": assistant_setup.SCHEMA_VERSION,
                 "revoked": revoked, "state": assistant_setup.state()}
     raise merrors.ValueException(
-        "action must be verify, save, revoke_grant, or revoke_all_grants")
+        "action must be verify, save, reset_breaker, historical_triage, "
+        "revoke_grant, or revoke_all_grants")

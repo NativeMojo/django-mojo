@@ -43,6 +43,16 @@ These are read while URL/module bootstrap happens, so changes require a process 
 
 ## Runtime Keys
 
+### LLM SAFETY
+
+- `LLM_SAFETY_POLICY` — required file-only exact-schema provider routes,
+  installation/per-feature envelopes, and breaker thresholds.
+- `LLM_EMERGENCY_STOP` — monotonic deployment OR protected database stop.
+- `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED` — protected owner switch, default
+  off; enabling stamps `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT`.
+
+See [LLM Safety Boundary](../security/llm_safety.md).
+
 These are read through `mojo.helpers.settings.settings` during normal runtime.
 
 ### ACCOUNT

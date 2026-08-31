@@ -12,6 +12,6 @@ Helpers live in `mojo/helpers/`. Import directly — no registration required.
 - [request](request.md) — Request parsing and client info
 - [safe_fetch](safe_fetch.md) — SSRF-safe outbound fetch for caller-supplied URLs
 - [response](response.md) — JSON response helpers
-- [llm](llm.md) — LLM model discovery, API key management, quick Claude calls
+- [llm](llm.md) — Provider-neutral LLM facade and mandatory safety policy
 - [redis](redis.md) — Redis client and caching
 - [other](other.md) — stats, qrcode, filetypes, domain, geoip, sysinfo, urls

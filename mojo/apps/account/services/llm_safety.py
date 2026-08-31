@@ -5,7 +5,7 @@ import json
 import secrets
 import time
 
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 
 from mojo.helpers.redis import get_connection
@@ -33,6 +33,21 @@ class LLMSafetyError(Exception):
 
 def _deny(code):
     raise LLMSafetyError(code)
+
+
+def _record_metrics(provider, feature, status, tokens=0):
+    """Bounded dimensions only: never fingerprint, model, request id, or error text."""
+    try:
+        from mojo.apps import metrics
+        metrics.record(
+            "llm:requests", account=provider, category=f"{feature}:{status}",
+            min_granularity="minutes")
+        if tokens:
+            metrics.record(
+                "llm:tokens", count=max(0, int(tokens)), account=provider,
+                category=feature, min_granularity="minutes")
+    except Exception:
+        pass
 
 
 def _canonical_hash(value):
@@ -364,6 +379,7 @@ def invoke(messages, system=None, tools=None, model=None, max_tokens=4096, *,
             provider_request_id=err.request_id[:128], duration_ms=elapsed,
             finished_at=timezone.now())
         release_permit(redis, permit)
+        _record_metrics(provider_name, feature, "failed")
         _deny(err.code)
     usage = response.get("usage") or {}
     actual_tokens = sum(max(0, int(usage.get(key, 0) or 0)) for key in (
@@ -382,6 +398,7 @@ def invoke(messages, system=None, tools=None, model=None, max_tokens=4096, *,
             0, int(usage.get("cache_creation_input_tokens", 0) or 0)))
     if updated != 1:
         _deny("ledger_persistence_unknown")
+    _record_metrics(provider_name, feature, "succeeded", actual_tokens)
     return response
 
 
@@ -451,6 +468,11 @@ def repair_started(max_age_seconds=300, limit=100):
             finished_at=timezone.now())
 
 
+def repair_started_job(job):
+    repaired = repair_started()
+    job.add_log(f"Marked {repaired} uncertain LLM request(s) for inspection")
+
+
 def aggregate_state(hours=24):
     from django.db.models import Count, Sum
     from mojo.apps.account.models import LLMCircuitBreaker, LLMRequest
@@ -465,3 +487,25 @@ def aggregate_state(hours=24):
             "provider", "state", "error_code")[:100])
     return {"hours": min(max(int(hours), 1), 168), "requests": requests,
             "breakers": breakers}
+
+
+def reset_breakers(actor, provider=None):
+    from mojo.apps.account.models import LLMCircuitBreaker
+    from mojo.apps.account.services import system_settings
+    system_settings.require_system_admin(actor)
+    rows = LLMCircuitBreaker.objects.all()
+    if provider is not None:
+        if provider not in {"anthropic"}:
+            raise ValueError("Unsupported provider")
+        rows = rows.filter(provider=provider)
+    count = rows.update(
+        state="closed", failure_count=0, error_code="", opened_until=None,
+        half_open_owner="", half_open_expires_at=None,
+        generation=models.F("generation") + 1)
+    try:
+        actor.log(
+            f"LLM circuit reset provider={provider or 'all'} count={count}",
+            "llm:circuit_reset")
+    except Exception:
+        pass
+    return count

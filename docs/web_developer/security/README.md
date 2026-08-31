@@ -647,7 +647,9 @@ Handlers resolve notification targets via:
 
 ## LLM Agent
 
-When configured (`LLM_HANDLER_API_KEY` setting), the LLM agent acts as an automated first responder:
+The LLM agent acts as an automated first responder only when a credential, a
+valid `LLM_SAFETY_POLICY`, and the protected autonomous-triage switch all
+permit it. Credential presence alone never enables catch-all work.
 
 1. Triages every `status=new` incident
 2. Queries context (events, IP history, related incidents, metrics)
@@ -655,7 +657,9 @@ When configured (`LLM_HANDLER_API_KEY` setting), the LLM agent acts as an automa
 4. Learns over time by creating new rules and storing pattern knowledge
 5. Communicates with humans through ticket notes
 
-High-level events that don't match any rule are automatically sent to the LLM if configured. This ensures nothing falls through the cracks.
+High-level events that do not match a rule are eligible only after the owner's
+activation watermark. The sweep runs at 09:00 and 18:00, oldest-first and
+bounded; duplicate scheduler delivery converges on one attempt/job.
 
 The LLM creates rules in a **disabled** state and opens a ticket for human approval. Respond to the ticket to approve, modify, or reject the proposed rule.
 
@@ -740,6 +744,9 @@ See [Incident API: Request LLM Analysis](../logging/incidents.md#request-llm-ana
 | `MOJOSEC_LEARNING_EVALUATION_RETENTION_DAYS` | `90` | Offline replay/shadow summary retention; clamped to 30–3,650 days |
 | `LLM_HANDLER_API_KEY` | `None` | Claude API key (enables LLM agent). An owner can also store it from the built-in Admin's Assistant setup |
 | `LLM_HANDLER_MODEL` | (auto-detect) | Claude model for LLM agent. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
+| `LLM_SAFETY_POLICY` | required | File-owned provider routes, budgets, and breaker thresholds; absence denies calls |
+| `LLM_EMERGENCY_STOP` | `False` | Deployment OR protected database stop; database uncertainty denies |
+| `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED` | `False` | Owner-only catch-all switch; enabling stamps a no-history watermark |
 | `ASSISTANT_MCP_ENABLED` | `False` | Remote agent access (MCP door); switched from the Admin, never from `/api/settings` |
 | `INCIDENT_EMAIL_FROM` | `None` | SES mailbox for incident emails |
 | `ADMIN_PORTAL_URL` | `None` | URL for deep links in notifications |

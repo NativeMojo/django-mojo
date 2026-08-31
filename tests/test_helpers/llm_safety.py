@@ -48,6 +48,18 @@ def test_policy_is_exact_and_provider_explicit(opts):
 
 
 @th.django_unit_test()
+def test_missing_policy_denies_before_route_or_provider(opts):
+    from mojo.apps.account.services import llm_safety
+
+    try:
+        llm_safety.parse_policy(None)
+        assert False, "missing deployment policy must deny external LLM work"
+    except llm_safety.LLMSafetyError as err:
+        assert err.code == "policy_invalid", \
+            f"missing policy must fail with policy_invalid, got {err.code}"
+
+
+@th.django_unit_test()
 def test_policy_rejects_window_and_feature_mistakes(opts):
     from mojo.apps.account.services import llm_safety
 

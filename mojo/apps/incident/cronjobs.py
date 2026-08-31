@@ -177,6 +177,21 @@ def triage_new_incidents(force=False, verbose=False, now=None):
         idempotency_key=f"incident-triage-sweep:{scheduled_at:%Y%m%d%H%M}")
 
 
+@schedule(minutes="*/5")
+def repair_llm_work(force=False, verbose=False, now=None):
+    from django.utils import timezone
+    scheduled_at = now or timezone.localtime()
+    minute = f"{scheduled_at:%Y%m%d%H%M}"
+    jobs.publish(
+        func="mojo.apps.incident.services.llm_dispatch.repair_attempts_job",
+        channel="incident_handlers", payload={},
+        idempotency_key=f"incident-llm-repair:{minute}")
+    jobs.publish(
+        func="mojo.apps.account.services.llm_safety.repair_started_job",
+        channel="cleanup", payload={},
+        idempotency_key=f"llm-ledger-repair:{minute}")
+
+
 # Every 5 minutes — detect traffic concentration by one authenticated
 # identity (DM-042). Reads the accounting counters the API throttle maintains;
 # zero request-path cost.

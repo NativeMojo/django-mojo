@@ -401,6 +401,8 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
                 operation=operation, context=context)
         except llm_safety.LLMSafetyError as err:
             raise ValueError(err.code) from None
+        except Exception:
+            raise ValueError("safety_unavailable") from None
 
     # Warn once per worker if caching is enabled but produced no cache activity.
     # Typically means the prefix is below the model's minimum cacheable size

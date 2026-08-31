@@ -134,6 +134,36 @@ def test_incident_cronjobs_registered(opts):
     sys.modules.pop("mojo.apps.incident.cronjobs", None)
 
 
+@th.django_unit_test()
+def test_incident_triage_key_alone_is_not_authority(opts):
+    from mojo.apps.incident import cronjobs
+
+    def setting_value(key, default=None, **kwargs):
+        if key == "LLM_HANDLER_API_KEY":
+            return "configured-key"
+        return default
+
+    with patch.object(cronjobs.settings, "get", side_effect=setting_value):
+        assert cronjobs._llm_triage_enabled() is False, \
+            "a configured credential alone must not enable autonomous triage"
+
+
+@th.django_unit_test()
+def test_incident_triage_sweep_publish_is_minute_idempotent(opts):
+    from mojo.apps.incident import cronjobs
+
+    scheduled_at = datetime.datetime(2026, 8, 31, 9, 0)
+    with patch.object(cronjobs, "_llm_triage_enabled", return_value=True), \
+            patch.object(cronjobs.jobs, "publish", return_value="job") as publish:
+        cronjobs.triage_new_incidents(now=scheduled_at)
+        cronjobs.triage_new_incidents(now=scheduled_at)
+
+    keys = [call.kwargs.get("idempotency_key") for call in publish.call_args_list]
+    assert len(keys) == 2, f"duplicate delivery should make two idempotent attempts, got {keys}"
+    assert keys[0] == keys[1], \
+        f"the same scheduled minute must use the same idempotency key, got {keys}"
+
+
 # ---------------------------------------------------------------------------
 # Scheduler execution tests moved from tests/test_helpers/cron.py
 # (maestro item #2558): they patch mojo.helpers.cron module attributes and
