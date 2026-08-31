@@ -13,7 +13,9 @@ def _llm_triage_enabled():
     # Read at call time, never cached at import: the platform LLM key can be
     # stored from the built-in Admin (a database row), and a cron that froze
     # the deployment-file value at startup would ignore it until a restart.
-    return bool(settings.get("LLM_HANDLER_API_KEY", None))
+    return bool(
+        settings.get("LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED", False, kind="bool")
+        and settings.get("LLM_HANDLER_API_KEY", None))
 
 _health_defaults_checked = False
 
@@ -163,13 +165,16 @@ def recheck_active_threats(force=False, verbose=False, now=None):
 
 
 # Twice a day — triage any new incidents that haven't been LLM-assessed yet
-@schedule(hours="9,18")
+@schedule(minutes="0", hours="9,18")
 def triage_new_incidents(force=False, verbose=False, now=None):
     if not _llm_triage_enabled():
         return
+    from django.utils import timezone
+    scheduled_at = now or timezone.localtime()
     jobs.publish(
         func="mojo.apps.incident.asyncjobs.triage_new_incidents",
-        channel="incident_handlers", payload={})
+        channel="incident_handlers", payload={},
+        idempotency_key=f"incident-triage-sweep:{scheduled_at:%Y%m%d%H%M}")
 
 
 # Every 5 minutes — detect traffic concentration by one authenticated

@@ -1449,9 +1449,12 @@ TOOL_DISPATCH = {
 # Agent execution
 # ---------------------------------------------------------------------------
 
-def _call_claude(messages, system_prompt, tools=None):
+def _call_claude(messages, system_prompt, tools=None, feature="incident_triage",
+                 context=None):
     """Call Claude API with tool use. Returns the response as a dict."""
-    return llm.call(messages, system=system_prompt, tools=tools or TOOLS)
+    return llm.call(
+        messages, system=system_prompt, tools=tools or TOOLS,
+        feature=feature, context=context)
 
 
 def _run_agent_loop(messages, system_prompt, max_iterations=15, tools=None):

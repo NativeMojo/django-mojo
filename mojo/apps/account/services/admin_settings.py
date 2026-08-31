@@ -46,7 +46,9 @@ FLEET_PROVIDER_KEYS = frozenset({
 ASSISTANT_WRITABLE_KEYS = frozenset({
     "LLM_ADMIN_ENABLED", "LLM_ADMIN_API_KEY", "LLM_ADMIN_MODEL",
     "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY", "LLM_HANDLER_VERIFY_STATE",
-    "ASSISTANT_MCP_ENABLED",
+    "ASSISTANT_MCP_ENABLED", "LLM_EMERGENCY_STOP",
+    "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED",
+    "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT",
 })
 # Every Assistant key the generic global writers must refuse.  Protection and
 # writability are separate questions: this set is what fails closed, and it may

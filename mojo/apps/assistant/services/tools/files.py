@@ -177,7 +177,9 @@ def _tool_analyze_image(params, user, llm_call=None):
     ]
 
     try:
-        response = (llm_call or llm.call)(messages, max_tokens=2048)
+        response = (llm_call or llm.call)(
+            messages, max_tokens=2048, feature="file_analysis",
+            context={"file_id": file_id})
         parts = []
         for block in response.get("content", []):
             if block.get("type") == "text":

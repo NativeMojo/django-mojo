@@ -28,6 +28,7 @@ Settings used:
 
 import json
 import time
+import warnings
 
 from mojo.helpers import logit
 from mojo.helpers.settings import settings
@@ -40,6 +41,28 @@ _mem_cache = {"models": None, "fetched_at": 0}
 # Process-level guard so the "caching enabled but prefix too short" warning
 # fires once per worker instead of on every call.
 _zero_cache_warned = False
+_unattributed_warned = False
+
+FEATURES = frozenset({
+    "assistant", "incident_triage", "incident_analysis", "incident_ticket",
+    "scheduled_task", "memory", "file_analysis", "configuration",
+    "model_discovery", "unattributed",
+})
+
+
+def normalize_feature(feature):
+    """Return one fixed feature name; omission is transitional, not anonymous."""
+    global _unattributed_warned
+    if feature is None:
+        if not _unattributed_warned:
+            _unattributed_warned = True
+            warnings.warn(
+                "LLM calls without feature= are deprecated; attributed calls are required",
+                DeprecationWarning, stacklevel=3)
+        return "unattributed"
+    if feature not in FEATURES:
+        raise ValueError("Unknown LLM feature")
+    return feature
 
 CACHE_KEY = "mojo:llm:models"
 CACHE_TTL = 86400  # 24 hours
@@ -351,7 +374,7 @@ def get_model(use="general"):
 # ---------------------------------------------------------------------------
 
 def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
-         client=None):
+         client=None, feature=None, operation="call", context=None):
     """
     Call the Anthropic messages API.
 
@@ -367,6 +390,13 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
     client from the configured API key, byte-identical to before.
     """
     global _zero_cache_warned
+
+    normalize_feature(feature)
+    if context is not None and not isinstance(context, dict):
+        raise ValueError("LLM context must be a dictionary of scalar identifiers")
+    if context and any(isinstance(value, (dict, list, tuple, set))
+                       for value in context.values()):
+        raise ValueError("LLM context identifiers must be scalar")
 
     if client is None:
         import anthropic
@@ -412,7 +442,8 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
     return result
 
 
-def ask(prompt, system=None, model=None, max_tokens=4096):
+def ask(prompt, system=None, model=None, max_tokens=4096, *, feature=None,
+        operation="ask", context=None):
     """
     One-shot LLM question — send a prompt, get a string back.
 
@@ -420,7 +451,9 @@ def ask(prompt, system=None, model=None, max_tokens=4096):
     No tools, no conversation history.
     """
     messages = [{"role": "user", "content": prompt}]
-    response = call(messages, system=system, model=model, max_tokens=max_tokens)
+    response = call(
+        messages, system=system, model=model, max_tokens=max_tokens,
+        feature=feature, operation=operation, context=context)
     # Extract text from response content blocks
     parts = []
     for block in response.get("content", []):

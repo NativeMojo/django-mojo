@@ -13,10 +13,12 @@ INCIDENT_LEVEL_THRESHOLD = settings.get_static('INCIDENT_LEVEL_THRESHOLD', 7)
 INCIDENT_METRICS_MIN_GRANULARITY = settings.get_static("INCIDENT_METRICS_MIN_GRANULARITY", "hours")
 
 
-def _llm_api_key():
+def _autonomous_llm_enabled():
     # Call-time read: the platform LLM key may be stored from the built-in
     # Admin as a database row, which a value frozen at import would never see.
-    return settings.get("LLM_HANDLER_API_KEY", None)
+    return bool(
+        settings.get("LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED", False, kind="bool")
+        and settings.get("LLM_HANDLER_API_KEY", None))
 
 # Event categories that should bump the aggregate ``auth:failures`` counter.
 # Used by the portal Security Dashboard so a single fetch replaces the
@@ -391,7 +393,7 @@ class Event(models.Model, MojoModel):
                                     rule_set.run_handler(self, incident)
                         except Exception:
                             logger.exception("Error during re-trigger check (incident=%s)", incident.pk)
-                elif created and allow_default_llm and _llm_api_key():
+                elif created and allow_default_llm and _autonomous_llm_enabled():
                     # No rule matched but level exceeded threshold — default to LLM triage
                     try:
                         from mojo.apps import jobs

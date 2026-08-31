@@ -127,6 +127,17 @@ class AppConfig(BaseAppConfig):
             owner="Assistant setup", change_behavior="immediate",
             storage="database"))
         register_descriptor(Descriptor(
+            "LLM_EMERGENCY_STOP", "LLM emergency stop", "Security & operations",
+            "Stops every ordinary external LLM request immediately.", "boolean",
+            False, resolver="dynamic", writable="assistant_setup",
+            owner="Assistant setup", change_behavior="immediate", storage="database"))
+        register_descriptor(Descriptor(
+            "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED", "Autonomous incident triage",
+            "Security & operations",
+            "Allows catch-all triage only for incidents created after activation.",
+            "boolean", False, resolver="dynamic", writable="assistant_setup",
+            owner="Assistant setup", change_behavior="immediate", storage="database"))
+        register_descriptor(Descriptor(
             "ASSISTANT_MCP_PATH", "MCP endpoint path", "Security & operations",
             "Request path of the Assistant's MCP endpoint; also the registered "
             "OAuth resource path.",

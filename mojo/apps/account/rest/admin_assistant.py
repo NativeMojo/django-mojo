@@ -53,10 +53,12 @@ def on_admin_assistant_mutate(request):
                 "state": assistant_setup.state()}
     if action == "save":
         if keys - {"action", "enabled", "model", "api_key", "clear_api_key",
-                   "handler_api_key", "clear_handler_api_key", "mcp_enabled"}:
+                   "handler_api_key", "clear_handler_api_key", "mcp_enabled",
+                   "emergency_stop", "autonomous_triage"}:
             raise merrors.ValueException(
                 "Save accepts only action, enabled, model, api_key, clear_api_key, "
-                "handler_api_key, clear_handler_api_key, and mcp_enabled")
+                "handler_api_key, clear_handler_api_key, mcp_enabled, "
+                "emergency_stop, and autonomous_triage")
         saved = assistant_setup.save(
             request.user,
             enabled=request.DATA.get("enabled") is True,
@@ -68,7 +70,9 @@ def on_admin_assistant_mutate(request):
             # Raw, never coerced: a JSON `null` arrives as None and means
             # "leave the switch alone"; the service refuses every other
             # non-boolean rather than reading it as an intent.
-            mcp_enabled=request.DATA.get("mcp_enabled"))
+            mcp_enabled=request.DATA.get("mcp_enabled"),
+            emergency_stop=request.DATA.get("emergency_stop"),
+            autonomous_triage=request.DATA.get("autonomous_triage"))
         # Both actions answer with the fresh state, so a second editor holding a
         # stale page sees the truth on its very next call.
         return {"schema_version": assistant_setup.SCHEMA_VERSION,

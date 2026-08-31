@@ -701,7 +701,9 @@ def dream_tier(tier, redis_key, tier_label=None):
     )
 
     try:
-        response = llm.ask(prompt, system="You are a memory management assistant. Return only valid JSON.")
+        response = llm.ask(
+            prompt, system="You are a memory management assistant. Return only valid JSON.",
+            feature="memory")
     except Exception:
         logger.exception("dream_tier: LLM call failed for %s", redis_key)
         return None

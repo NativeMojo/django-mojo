@@ -1396,7 +1396,9 @@ def run_assistant(
 
     try:
         for turn_idx in range(max_turns):
-            result = llm.call(messages, system=system_prompt, tools=tools)
+            result = llm.call(
+                messages, system=system_prompt, tools=tools,
+                feature="assistant", context={"conversation_id": conversation.pk})
             stop_reason = result.get("stop_reason")
 
             turn_usage = result.get("usage") or {}
@@ -1639,7 +1641,9 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
 
     try:
         for turn_idx in range(max_turns):
-            result = llm.call(messages, system=system_prompt, tools=tools)
+            result = llm.call(
+                messages, system=system_prompt, tools=tools,
+                feature="assistant", context={"conversation_id": conversation.pk})
             stop_reason = result.get("stop_reason")
 
             turn_usage = result.get("usage") or {}

@@ -618,7 +618,11 @@ def triage_new_incidents(job):
     from mojo.apps.incident.models import Incident
     from mojo.apps import jobs
 
-    if not settings.get("LLM_HANDLER_API_KEY"):
+    if not settings.get(
+            "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED", False, kind="bool"):
+        return
+    watermark = settings.get("LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT", None)
+    if not watermark or not settings.get("LLM_HANDLER_API_KEY"):
         return
 
     BATCH_SIZE = 20
@@ -626,9 +630,9 @@ def triage_new_incidents(job):
     # Incidents still "new" with no LLM assessment recorded yet
     incidents = list(
         Incident.objects
-        .filter(status="new")
+        .filter(status="new", created__gte=watermark)
         .exclude(metadata__has_key="llm_assessment")
-        .order_by("-priority", "created")[:BATCH_SIZE]
+        .order_by("created", "pk")[:BATCH_SIZE]
     )
 
     if not incidents:

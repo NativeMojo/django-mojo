@@ -59,6 +59,9 @@ VERIFY_STATE_KEY = "LLM_ADMIN_VERIFY_STATE"
 HANDLER_KEY = "LLM_HANDLER_API_KEY"
 HANDLER_VERIFY_STATE_KEY = "LLM_HANDLER_VERIFY_STATE"
 FALLBACK_KEY = HANDLER_KEY
+EMERGENCY_STOP_KEY = "LLM_EMERGENCY_STOP"
+AUTONOMOUS_TRIAGE_KEY = "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED"
+AUTONOMOUS_TRIAGE_WATERMARK_KEY = "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT"
 
 # --- remote agent access (MCP) ---------------------------------------------
 MCP_ENABLED_KEY = "ASSISTANT_MCP_ENABLED"
@@ -508,6 +511,10 @@ def state(refresh=False, check=False):
         "model": _model_state(refresh=refresh),
         "verify": read_verify_state(VERIFY_STATE_KEY),
         "handler_verify": read_verify_state(HANDLER_VERIFY_STATE_KEY),
+        "emergency_stop": bool(settings.get(EMERGENCY_STOP_KEY, False, kind="bool")),
+        "autonomous_triage": bool(settings.get(AUTONOMOUS_TRIAGE_KEY, False, kind="bool")),
+        "autonomous_triage_activated_at": settings.get(
+            AUTONOMOUS_TRIAGE_WATERMARK_KEY, None),
         "assistant_installed": apps.is_installed("mojo.apps.assistant"),
         "realtime_installed": apps.is_installed("mojo.apps.realtime"),
         "mcp": mcp_state(check=check),
@@ -719,7 +726,8 @@ def _credential_edit(label, candidate, clear):
 
 
 def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
-         handler_api_key=None, clear_handler_api_key=False, mcp_enabled=None):
+         handler_api_key=None, clear_handler_api_key=False, mcp_enabled=None,
+         emergency_stop=None, autonomous_triage=None):
     """Apply one owner edit atomically, or refuse the whole thing.
 
     ``api_key`` is the Assistant's own credential; ``handler_api_key`` is the
@@ -739,6 +747,10 @@ def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
         raise merrors.ValueException("enabled must be true or false")
     if mcp_enabled is not None and not isinstance(mcp_enabled, bool):
         raise merrors.ValueException("mcp_enabled must be true or false")
+    if emergency_stop is not None and not isinstance(emergency_stop, bool):
+        raise merrors.ValueException("emergency_stop must be true or false")
+    if autonomous_triage is not None and not isinstance(autonomous_triage, bool):
+        raise merrors.ValueException("autonomous_triage must be true or false")
     model = normalize_model(model)
     candidate, verified = _credential_edit("api_key", api_key, clear_api_key)
     handler_candidate, handler_verified = _credential_edit(
@@ -767,6 +779,18 @@ def save(actor, *, enabled, model, api_key=None, clear_api_key=False,
             _write_secret(HANDLER_KEY, handler_candidate)
             changed.append("handler_api_key")
         _write_value(ENABLED_KEY, bool(enabled))
+        if emergency_stop is not None:
+            _write_value(EMERGENCY_STOP_KEY, emergency_stop)
+            changed.append(f"emergency_stop:{'on' if emergency_stop else 'off'}")
+        if autonomous_triage is not None:
+            was_enabled = bool(settings.get(AUTONOMOUS_TRIAGE_KEY, False, kind="bool"))
+            _write_value(AUTONOMOUS_TRIAGE_KEY, autonomous_triage)
+            if autonomous_triage and not was_enabled:
+                _write_value(
+                    AUTONOMOUS_TRIAGE_WATERMARK_KEY,
+                    timezone.now().isoformat())
+            changed.append(
+                f"autonomous_triage:{'on' if autonomous_triage else 'off'}")
         if mcp_enabled is not None:
             _write_value(MCP_ENABLED_KEY, mcp_enabled)
             # The DIRECTION is part of the key, not just the message: a bare

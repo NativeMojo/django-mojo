@@ -116,6 +116,16 @@ def test_incident_cronjobs_registered(opts):
     assert refresh_spec['weekdays'] == '0', \
         f"refresh_ipsets should run on weekday 0 (weekdays='0'), got {refresh_spec['weekdays']!r}"
 
+    triage_spec = next(
+        (s for s in schedule.scheduled_functions if s['func'].__name__ == "triage_new_incidents"),
+        None
+    )
+    assert triage_spec is not None, "triage_new_incidents spec not found"
+    assert triage_spec['minutes'] == '0', \
+        f"triage_new_incidents must run only at minute zero, got {triage_spec['minutes']!r}"
+    assert triage_spec['hours'] == '9,18', \
+        f"triage_new_incidents must run only at 09:00 and 18:00, got {triage_spec['hours']!r}"
+
     # Restore scheduled_functions and pop the freshly-imported module from
     # sys.modules so that subsequent tests that import it will trigger fresh
     # decorator registration, keeping sys.modules and scheduled_functions consistent.

@@ -97,7 +97,9 @@ def _run_llm_task(task):
     if not user_prompt:
         raise ValueError("LLM task requires a user_prompt in job_config")
 
-    return llm.ask(user_prompt, system=system_prompt or None)
+    return llm.ask(
+        user_prompt, system=system_prompt or None, feature="scheduled_task",
+        context={"job_id": task.pk})
 
 
 def _run_webhook_task(task):
