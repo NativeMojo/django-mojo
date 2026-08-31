@@ -177,11 +177,11 @@ Triggers deep LLM analysis on the incident. The agent runs asynchronously — th
 
 | Condition | Response |
 |-----------|----------|
-| `LLM_HANDLER_API_KEY` not configured | `{"status": false, "error": "LLM_HANDLER_API_KEY not configured"}` |
-| Analysis already running | `{"status": false, "error": "Analysis already in progress"}` |
+| Exact `incident_analysis` route is stopped/unready/missing its selected credential | `{"status": false, "error": "<stable_safe_code>"}` |
+| Analysis already running | The active attempt is reused; the response reports `created: false` |
 
 **What the agent does:**
-1. Sets incident to `investigating`
+1. Preserves the incident status while gathering context; only a real assessment changes it
 2. Reviews all events on the incident and related open incidents in the same category
 3. Merges incidents that clearly represent the same underlying pattern
 4. Proposes a new (disabled) RuleSet to auto-handle this pattern in the future
@@ -195,7 +195,9 @@ Poll `metadata.analysis_in_progress`:
 GET /api/incident/incident/<id>
 ```
 
-When `metadata.analysis_in_progress` is `false` and `metadata.llm_analysis` is present, the analysis is complete.
+The flag remains `true` across retryable delivery failures. It becomes `false`
+only after success or terminal failure; inspect `metadata.llm_analysis` and the
+incident history for the result.
 
 **Reading the result:**
 
