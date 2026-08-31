@@ -47,6 +47,8 @@ These are read while URL/module bootstrap happens, so changes require a process 
 
 - `LLM_SAFETY_POLICY` — required file-only exact-schema provider routes,
   installation/per-feature envelopes, and breaker thresholds.
+- `LLM_SAFETY_POLICY_EXPECTED_HASH` — protected primary-database policy
+  agreement written only by the fresh-auth owner activation action.
 - `LLM_EMERGENCY_STOP` — monotonic deployment OR protected database stop.
 - `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED` — protected owner switch, default
   off; enabling stamps `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT`.

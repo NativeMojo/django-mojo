@@ -31,7 +31,7 @@ of any kind.
 200 {
   "status": true,
   "data": {
-    "schema_version": 1,
+    "schema_version": 2,
     "enabled": true,
     "key": {"configured": true, "hint": "4d1a", "source": "admin"},
     "handler_key": {"configured": true, "hint": "9c2e", "source": "admin"},
@@ -45,6 +45,11 @@ of any kind.
                "message": "Anthropic accepted this key.",
                "at": "2026-08-19T11:02:00+00:00"},
     "handler_verify": {"ok": null, "code": "", "message": "", "at": ""},
+    "emergency_stop": true,
+    "emergency_stop_static": true,
+    "autonomous_triage": false,
+    "autonomous_triage_activated_at": null,
+    "safety": {"hours": 24, "requests": [], "breakers": []},
     "assistant_installed": true,
     "realtime_installed": true,
     "mcp": {
@@ -95,6 +100,11 @@ of any kind.
 | `model.choices` | Picker suggestions only. Never validated against — the list is network-dependent |
 | `verify` | How the **stored** Assistant credential last checked. `ok` is `null` when it never has |
 | `handler_verify` | The same record for the stored platform key |
+| `emergency_stop` | Effective deployment OR authoritative database stop |
+| `emergency_stop_static` | Whether deployment configuration is holding the stop on; it requires removal and redeploy |
+| `autonomous_triage` | Authoritative primary-DB catch-all switch; fail-closed on ambiguity |
+| `autonomous_triage_activated_at` | Primary-DB no-history watermark, or `null` |
+| `safety` | Bounded aggregate usage and breaker rows; no per-row records or fingerprints |
 | `mcp` | Remote agent access — see below |
 
 `verify.code` is one of `verified`, `invalid_key`, `unreachable`,
@@ -152,7 +162,7 @@ Everything the `GET` requires, **plus** recent authentication (600 seconds) and
 a same-Origin request. A stale session answers `440` with
 `{"error": "reauth_required"}`; step up and re-submit the identical body.
 
-Both actions answer with the fresh `state()`, so a second editor holding a stale
+Every action answers with the fresh `state()`, so a second editor holding a stale
 page sees the truth on its very next call.
 
 ### `action: "verify"`
@@ -170,7 +180,7 @@ checked when no candidate is supplied, and which record (`verify` /
 
 ```json
 200 {"status": true, "data": {
-  "schema_version": 1, "verified": true,
+  "schema_version": 2, "verified": true,
   "result": {"ok": false, "code": "invalid_key",
              "message": "Anthropic rejected this key."},
   "state": { … }
@@ -180,6 +190,12 @@ checked when no candidate is supplied, and which record (`verify` /
 Checking the **stored** key is recorded and shows up in `verify` on the next
 read. Checking an unsaved candidate is **not** recorded: a draft is not the
 configuration this installation is running.
+
+A stored-key check is an ordinary guarded request and is refused while the
+emergency stop is effective. Only a supplied candidate receives the stopped
+exception: one installation-wide single-flight, fixed `Reply OK` request on
+the configuration route with no tools, images, cache, caller model, context,
+or pagination.
 
 ### `action: "save"`
 
@@ -203,9 +219,37 @@ configuration this installation is running.
 | `autonomous_triage` | Optional boolean. Enables only post-watermark catch-all incident work |
 
 `GET /api/account/admin/llm-safety` is available to globally authorized
-security readers. It returns bounded provider/feature/status aggregates and
-breaker counts, never credential fingerprints. `reset_breaker` and
-`historical_triage` are fresh-auth owner-only actions on this setup endpoint.
+security readers. `hours` is clamped to 1–168. It returns schema version 2 and
+bounded provider/feature/status aggregates and breaker counts, never per-row
+ledger/circuit/attempt records or credential fingerprints.
+
+### LLM safety actions
+
+All three use the same recent-auth literal-owner boundary as save:
+
+```json
+{"action": "activate_policy"}
+```
+
+Activates the exact hash of the currently deployed static policy. Keep the
+deployment emergency stop on until every node has the same policy.
+
+```json
+{"action": "reset_breaker", "provider": "anthropic"}
+```
+
+`provider` may be omitted to reset all breakers. The action increments breaker
+generations and does not clear either emergency stop.
+
+```json
+{"action": "historical_triage",
+ "before": "2026-08-31T00:00:00Z", "limit": 20}
+```
+
+`before` is an ISO timestamp and `limit` is an integer from 1 through 100.
+This is the bounded explicit opt-in for pre-watermark incidents. The
+autonomous switch gates catch-all pickup only; manual analysis and linked
+ticket work remain explicit but still obey the complete guard.
 
 Remote agent access is independent of `enabled` and of any API key: a remote
 client brings its own model. Switching it off **pauses** existing connections
@@ -234,7 +278,7 @@ be a positive integer (`"41"`, `0`, `true` and floats are all a `400`).
 
 ```json
 200 {"status": true, "data": {
-  "schema_version": 1, "revoked": 1, "state": { … }
+  "schema_version": 2, "revoked": 1, "state": { … }
 }}
 ```
 

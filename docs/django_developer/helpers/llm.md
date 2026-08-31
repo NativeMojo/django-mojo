@@ -16,7 +16,7 @@ key = llm.get_api_key()
 
 ok, error = llm.verify_api_key()
 # Returns (True, None) or (False, "error message")
-# Optionally pass api_key= to verify a specific key
+# Optionally pass api_key= for the fixed candidate-only configuration probe
 ```
 
 ## Model Selection
@@ -27,7 +27,8 @@ model = llm.get_model("powerful")  # latest Opus (max intelligence)
 model = llm.get_model("fast")      # latest Haiku (quick/cheap)
 ```
 
-Resolution order:
+This resolution order supplies picker suggestions and legacy non-guarded
+configuration reads:
 1. Explicit setting pin (`LLM_ADMIN_MODEL` or `LLM_HANDLER_MODEL`) — if set, returned as-is
 2. Auto-detect from Anthropic `/v1/models` endpoint (cached 24h in Redis, in-memory fallback)
 3. Hardcoded fallback if API is unreachable
@@ -40,7 +41,9 @@ Resolution order:
 | `"general"` | Sonnet |
 | `"fast"` | Haiku |
 
-These three families are the only ones a use case can resolve to. To reach any other model, pass `model=` explicitly or pin `LLM_ADMIN_MODEL`. An unrecognized use case logs a warning and resolves as `"general"`.
+Guarded calls use the model owned by their policy route. `model=` may only
+repeat that exact model; it cannot select a different route model. The tier
+helpers do not override policy.
 
 ### How auto-detect ranks models
 
@@ -50,7 +53,11 @@ ID length is deliberately not part of the ranking. Every alias within a generati
 
 ### Cache
 
-Model lists are cached in Redis (`mojo:llm:models`, 24h TTL) and shared across workers. If Redis is unavailable, a per-process in-memory cache is used instead. Call `get_models(force_refresh=True)` to bypass the cache.
+Model lists are cached in Redis (`mojo:llm:models`, 24h TTL) and shared across
+workers. If Redis is unavailable, a per-process in-memory cache is used
+instead. A refresh performs one guarded, timed page of at most 100 models—no
+unaccounted pagination. Call `get_models(force_refresh=True)` to bypass the
+cache.
 
 ```python
 models = llm.get_models()               # cached model list (list of dicts)
@@ -75,18 +82,20 @@ response = llm.call(
     messages=[{"role": "user", "content": "Hello"}],
     system="You are a helpful assistant.",
     tools=[...],           # optional tool definitions
-    model="claude-sonnet-5",  # optional, defaults to get_model("general")
+    model="claude-sonnet-5",  # optional; must exactly match the policy route
     max_tokens=4096,       # optional
     feature="assistant",  # required for framework callers
-    context={"conversation_id": 42, "loop_call": 1},
+    context={"conversation_id": 42, "operation_id": "stable-loop-uuid"},
 )
 # Returns dict (response.model_dump() from anthropic SDK)
 ```
 
-Raises `ValueError` with a fixed safe code when policy, controls, budgets, the
-circuit, persistence, or provider denies the request. Raw SDK/provider text does
-not cross the adapter. Omitted `feature` temporarily becomes separately
-budgeted `unattributed`; unknown explicit features are refused.
+Raises `LLMExecutionError(code, retry_after=None)` when policy, controls,
+budgets, the circuit, persistence, or provider denies the request. Raw
+SDK/provider text does not cross the adapter. Multi-call loops must reuse one
+unguessable `operation_id`; the guard increments it atomically. Omitted
+`feature` temporarily becomes separately budgeted `unattributed`; unknown
+explicit features are refused.
 
 ## `model_choices()` — picker suggestions
 
@@ -125,6 +134,7 @@ good re-save whenever the cache has lapsed and the API is down.
 | `LLM_ADMIN_MODEL` | If set, `get_model()` returns this (explicit pin) |
 | `LLM_HANDLER_MODEL` | Second-tier pin |
 | `LLM_SAFETY_POLICY` | Required file-owned provider routes and cost envelopes |
+| `LLM_SAFETY_POLICY_EXPECTED_HASH` | Protected owner-activated DB agreement; never edit directly |
 | `LLM_EMERGENCY_STOP` | Static OR protected database stop; unknown database state denies |
 | `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED` | Protected owner switch, default off |
 

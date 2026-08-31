@@ -155,12 +155,18 @@ which is not installed for every operator.
 
 ## The setup surface
 
-`services/assistant_setup.py` is the only writer for the seven Assistant keys —
-the Assistant's own flag, model and key, the platform key every LLM feature
-uses, and the remote agent access switch —
+`services/assistant_setup.py` is the only writer for the protected Assistant
+controls: flags, credentials, model, emergency stop, autonomous watermark,
+policy agreement, and remote agent access —
 and `rest/admin_assistant.py` is its only boundary. See
 [the assistant application docs](../../assistant/README.md#admin-setup-surface)
 for the keys, the protection, and the resolution precedence.
+
+The setup state schema is version 2. Both Admin asset bundles expose the same
+fresh-auth owner actions: exact save/verify payloads, policy activation,
+breaker reset, bounded historical triage, and grant revocation. The effective
+emergency stop is deployment OR authoritative database state; a deployment
+true is shown explicitly and cannot be cleared from the browser.
 
 Four capabilities ride in the Admin bootstrap:
 
