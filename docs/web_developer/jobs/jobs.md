@@ -835,7 +835,7 @@ Returns a system-wide snapshot of queue sizes and database counts.
 | `inflight` | Jobs currently claimed by a runner in Redis |
 | `running` | Jobs with `status=running` in the database |
 | `running_active` | Running jobs whose runner is still alive |
-| `running_stale` | Running jobs whose runner has gone away (potential stuck jobs) |
+| `running_stale` | Running jobs whose runner has gone away (potential stuck jobs). **There is no REST endpoint that remediates this counter** — no control endpoint resets these rows, and `clear-stuck` does not touch `status`. Recovery is a manual two-step database + requeue recipe run by a backend operator; see "Orphaned running rows" in `docs/django_developer/jobs/admin.md`. |
 | `completed` | All-time completed job count in the database |
 | `failed` | All-time failed job count in the database |
 | `scheduled` | Jobs in the scheduled queue across all channels |

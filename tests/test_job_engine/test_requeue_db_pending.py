@@ -26,6 +26,8 @@ TEST_FUNC = "tests.test_job_engine.test_requeue_db_pending.noop_job"
 CHANNEL_IMMEDIATE = "t3367_immediate"
 CHANNEL_SCHED = "t3367_sched"
 CHANNEL_BROADCAST = "t3367_broadcast"
+CHANNEL_ORPHANED = "t3390_orphaned"
+CHANNEL_CANCELED = "t3390_canceled"
 
 
 def noop_job(job):
@@ -47,7 +49,8 @@ def setup_requeue_db_pending_tests(opts):
     opts.keys = JobKeys()
 
     client = opts.redis.get_client()
-    for channel in (CHANNEL_IMMEDIATE, CHANNEL_SCHED, CHANNEL_BROADCAST):
+    for channel in (CHANNEL_IMMEDIATE, CHANNEL_SCHED, CHANNEL_BROADCAST,
+                    CHANNEL_ORPHANED, CHANNEL_CANCELED):
         for key in (
             opts.keys.queue(channel),
             opts.keys.sched(channel),
@@ -185,3 +188,125 @@ def test_broadcast_pending_row_lands_on_channel_queue(opts):
     assert not opts.redis.exists(opts.keys.stream_broadcast(CHANNEL_BROADCAST)), \
         ("Requeue must not write the legacy broadcast stream key nothing "
          "consumes")
+
+
+def create_orphaned_running_job(channel, cancel_requested=False):
+    """A row a dead runner left at status='running' with no ZSET member.
+
+    Same shape as ``create_stranded_job`` but in the state documented under
+    "Orphaned running rows" in ``docs/django_developer/jobs/admin.md``: the
+    runner claimed the row, wrote status='running', and died before writing a
+    terminal status — so nothing remains in the processing ZSET to reap.
+    """
+    from mojo.apps.jobs.models import Job
+
+    return Job.objects.create(
+        id=uuid.uuid4().hex,
+        channel=channel,
+        func=TEST_FUNC,
+        payload={"probe": "3390"},
+        status='running',
+        attempt=2,
+        runner_id=f"dead-runner-{uuid.uuid4().hex[:8]}",
+        started_at=timezone.now() - timedelta(hours=1),
+        last_error="runner vanished",
+        stack_trace="stale trace",
+        cancel_requested=cancel_requested,
+    )
+
+
+def apply_documented_reset(channel):
+    """The exact filtered update the admin doc's recovery recipe prescribes."""
+    from mojo.apps.jobs.models import Job
+
+    return Job.objects.filter(channel=channel, status='running').exclude(
+        cancel_requested=True
+    ).update(
+        status='pending',
+        runner_id=None,
+        started_at=None,
+        finished_at=None,
+        attempt=0,
+        last_error='',
+        stack_trace='',
+    )
+
+
+@th.django_unit_test()
+def test_documented_recovery_recipe_requeues_orphaned_running_row(opts):
+    """The documented two-step recipe must make an orphaned row runnable."""
+    from mojo.apps.jobs.manager import get_manager
+
+    job = create_orphaned_running_job(CHANNEL_ORPHANED)
+
+    assert opts.redis.zscore(opts.keys.processing(CHANNEL_ORPHANED), job.id) is None, \
+        ("The orphaned state means no processing-ZSET member exists — that is "
+         "why the engine reaper can never see this row")
+    assert job.id not in queued_ids(opts, CHANNEL_ORPHANED), \
+        "An orphaned running row must not already be on the channel queue"
+
+    reset = apply_documented_reset(CHANNEL_ORPHANED)
+    assert reset == 1, \
+        f"The documented update must reset exactly the orphaned row, got {reset!r}"
+
+    result = get_manager().requeue_db_pending(CHANNEL_ORPHANED)
+    assert result['status'] is True, \
+        f"requeue_db_pending must report success, got {result!r}"
+    assert result['requeued'] == 1, \
+        f"The reset row must be requeued, got {result!r}"
+
+    assert job.id in queued_ids(opts, CHANNEL_ORPHANED), \
+        (f"After the documented recipe, job {job.id} must be on the live queue "
+         f"list the engine BRPOPs, got {queued_ids(opts, CHANNEL_ORPHANED)!r}")
+
+    job.refresh_from_db()
+    assert job.status == 'pending', \
+        (f"The recovered row must be pending — execute_job drops any delivery "
+         f"whose row is not pending, got {job.status!r}")
+    assert job.attempt == 0, \
+        f"The recipe must clear the attempt counter, got {job.attempt!r}"
+    assert job.runner_id is None, \
+        f"The dead runner must be cleared off the row, got {job.runner_id!r}"
+
+
+@th.django_unit_test()
+def test_documented_recovery_recipe_skips_cancelled_rows(opts):
+    """.exclude(cancel_requested=True) must keep cancelled work cancelled.
+
+    cancel() sets cancel_requested=True and deliberately leaves status alone,
+    so a job cancelled while running whose runner then died is itself an
+    orphaned 'running' row. Resetting it would re-run work an operator
+    explicitly cancelled.
+    """
+    from mojo.apps.jobs.manager import get_manager
+
+    recoverable = create_orphaned_running_job(CHANNEL_CANCELED)
+    cancelled = create_orphaned_running_job(CHANNEL_CANCELED, cancel_requested=True)
+
+    reset = apply_documented_reset(CHANNEL_CANCELED)
+    assert reset == 1, \
+        (f"Only the non-cancelled orphan may be reset — the exclude must skip "
+         f"the cancelled row, got {reset!r} rows updated")
+
+    result = get_manager().requeue_db_pending(CHANNEL_CANCELED)
+    assert result['status'] is True, \
+        f"requeue_db_pending must report success, got {result!r}"
+
+    queued = queued_ids(opts, CHANNEL_CANCELED)
+
+    recoverable.refresh_from_db()
+    assert recoverable.status == 'pending', \
+        (f"The non-cancelled orphan must be recovered by the recipe, got "
+         f"{recoverable.status!r}")
+    assert recoverable.id in queued, \
+        f"The non-cancelled orphan must be back on the queue, got {queued!r}"
+
+    cancelled.refresh_from_db()
+    assert cancelled.status == 'running', \
+        (f"A cancelled row must not be reset to pending by the recipe, got "
+         f"{cancelled.status!r}")
+    assert cancelled.cancel_requested is True, \
+        "The cancel flag must survive the recovery recipe untouched"
+    assert cancelled.id not in queued, \
+        (f"Requeueing must never put an operator-cancelled job back on the "
+         f"queue, got {queued!r}")
