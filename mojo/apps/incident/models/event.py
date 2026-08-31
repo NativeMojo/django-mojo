@@ -13,10 +13,10 @@ INCIDENT_LEVEL_THRESHOLD = settings.get_static('INCIDENT_LEVEL_THRESHOLD', 7)
 INCIDENT_METRICS_MIN_GRANULARITY = settings.get_static("INCIDENT_METRICS_MIN_GRANULARITY", "hours")
 
 
-def _llm_api_key():
-    # Call-time read: the platform LLM key may be stored from the built-in
-    # Admin as a database row, which a value frozen at import would never see.
-    return settings.get("LLM_HANDLER_API_KEY", None)
+def _autonomous_llm_enabled():
+    from mojo.apps.account.services import llm_safety
+    enabled, _ = llm_safety.autonomous_triage_state()
+    return bool(enabled and llm_safety.route_state("incident_triage")["ready"])
 
 # Event categories that should bump the aggregate ``auth:failures`` counter.
 # Used by the portal Security Dashboard so a single fetch replaces the
@@ -391,19 +391,12 @@ class Event(models.Model, MojoModel):
                                     rule_set.run_handler(self, incident)
                         except Exception:
                             logger.exception("Error during re-trigger check (incident=%s)", incident.pk)
-                elif created and allow_default_llm and _llm_api_key():
+                elif created and allow_default_llm and _autonomous_llm_enabled():
                     # No rule matched but level exceeded threshold — default to LLM triage
                     try:
-                        from mojo.apps import jobs
-                        jobs.publish(
-                            "mojo.apps.incident.handlers.llm_agent.execute_llm_handler",
-                            {
-                                "event_id": self.pk,
-                                "incident_id": incident.pk,
-                                "ruleset_id": None,
-                            },
-                            channel="incident_handlers",
-                        )
+                        from mojo.apps.incident.services import llm_dispatch
+                        llm_dispatch.claim_incident(
+                            incident, event_id=self.pk, ruleset_id=None)
                     except Exception:
                         pass
 

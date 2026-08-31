@@ -155,19 +155,28 @@ which is not installed for every operator.
 
 ## The setup surface
 
-`services/assistant_setup.py` is the only writer for the seven Assistant keys —
-the Assistant's own flag, model and key, the platform key every LLM feature
-uses, and the remote agent access switch —
+`services/assistant_setup.py` is the only writer for the protected Assistant
+controls: flags, credentials, model, emergency stop, autonomous watermark,
+policy agreement, and remote agent access —
 and `rest/admin_assistant.py` is its only boundary. See
 [the assistant application docs](../../assistant/README.md#admin-setup-surface)
 for the keys, the protection, and the resolution precedence.
+
+The setup state schema is version 2. Both Admin asset bundles expose the same
+fresh-auth owner actions: exact save/verify payloads, policy activation,
+breaker reset, bounded historical triage, and grant revocation. The effective
+emergency stop is deployment OR authoritative database state. State reports
+static, database, and effective values separately; the editable checkbox owns
+only the database value, so an unrelated save under static=true cannot persist
+database=true. Static true is shown explicitly and calls resume only after it
+is removed from deployment configuration and every node is redeployed.
 
 Four capabilities ride in the Admin bootstrap:
 
 | Capability | Source |
 |---|---|
 | `assistant` | `view_admin` **alone** — the WebSocket handler admits nothing else |
-| `assistant_ready` | `assistant_setup.is_ready()` — the feature is on and a credential resolves |
+| `assistant_ready` | `assistant_setup.is_ready()` — the feature is on and its exact policy-route credential/model/control state is ready |
 | `assistant_setup` | `request.user.is_superuser` — the writer's own predicate |
 | `assistant_mcp` | `assistant_setup.mcp_ready()` — remote agent access is on, the assistant app is installed, and a public address resolves |
 
@@ -348,10 +357,13 @@ re-litigate them:
 
 ## Previewing it
 
-`bin/admin_preview --assistant-state <configured|unset|fallback|verify_failed|disabled>`
+`bin/admin_preview --assistant-state <configured|unset|route_stopped|verify_failed|disabled>`
 `--assistant-mcp-state <off|reachable|unreachable|connected>`
 serves deterministic fixtures for the setup view. The preview has no WebSocket
 bridge, so the chat body renders in its "cannot reach the realtime service"
-state — itself a state worth being able to look at. Fixture key hints are
+state — itself a state worth being able to look at. `route_stopped` shows a
+configured exact route held by the deployment emergency stop. Every fixture is
+schema v2 and includes exact route readiness, separate static/database/effective
+stop state, autonomous activation state, and safety aggregates. Fixture key hints are
 exactly four characters and fixture grants carry no jti, hash or token, so a
 real leak can never ship looking correct.

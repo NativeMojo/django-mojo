@@ -210,7 +210,8 @@ The assistant is disabled by default. Add to your Django settings:
 
 ```python
 LLM_ADMIN_ENABLED = True
-LLM_ADMIN_API_KEY = "sk-ant-..."  # or falls back to LLM_HANDLER_API_KEY
+LLM_ADMIN_API_KEY = "sk-ant-..."
+# LLM_SAFETY_POLICY must route `assistant` to credential `admin` and a model.
 ```
 
 Add `"mojo.apps.assistant"` to `INSTALLED_APPS` and run migrations.
@@ -224,27 +225,32 @@ model from the built-in Admin, without editing a settings file.
 read *and* write — see
 [the API reference](../../web_developer/account/admin_portal/assistant.md)).
 
-### The seven protected keys
+### Protected Assistant and LLM controls
 
 | Key | Owned by | Stored as |
 |---|---|---|
 | `LLM_ADMIN_ENABLED` | `assistant_setup` | Plain global `Setting` row |
 | `LLM_ADMIN_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row — the Assistant's own key, optional |
-| `LLM_ADMIN_MODEL` | `assistant_setup` | Plain row, absent means automatic |
+| `LLM_ADMIN_MODEL` | `assistant_setup` | Plain legacy picker pin; absent means no pin. The guarded route owns its runtime model |
 | `LLM_ADMIN_VERIFY_STATE` | `assistant_setup` | How the STORED Assistant key last checked |
 | `LLM_HANDLER_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row — the **platform** key |
 | `LLM_HANDLER_VERIFY_STATE` | `assistant_setup` | How the STORED platform key last checked |
 | `ASSISTANT_MCP_ENABLED` | descriptor: this app · writer: `assistant_setup` | Plain global row — the remote agent access (MCP) switch, off by default |
+| `LLM_EMERGENCY_STOP` | `assistant_setup` | Plain global row combined monotonically with deployment stop |
+| `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED` | `assistant_setup` | Plain global catch-all switch, off by default |
+| `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT` | `assistant_setup` | Primary-DB no-history watermark |
+| `LLM_SAFETY_POLICY_EXPECTED_HASH` | `llm_safety.activate_policy` | Owner-activated agreement with the deployed static policy |
 
-All seven are **catalog-protected**: `admin_settings.is_catalog_protected()`
+All are **catalog-protected**: `admin_settings.is_catalog_protected()`
 returns true, so `Setting.set()`, the generic `/api/settings` REST surface, a
 shell save and every other writer refuse them. Each has one dedicated escape —
 `row.save(_protected_writer=<key>)` — and the writer must name the exact key
 the row carries, so no writer can smuggle a different protected key past the
 guard.
 
-`LLM_HANDLER_API_KEY` is the **platform** credential: incident triage and the
-LLM agent read it, and it is the Assistant's fallback. It is settable from the
+`LLM_HANDLER_API_KEY` is the **platform** credential for guarded routes that
+explicitly select `credential: "handler"`; it is never an Assistant-route
+fallback. It is settable from the
 same owner editor as the Assistant key (`handler_api_key` /
 `clear_handler_api_key` on `save`, `target: "handler"` on `verify`). A value in
 the deployment file still applies when no row is stored, and `state()` reports
@@ -284,24 +290,28 @@ on first read anyway. This is pre-existing framework behaviour, identical to
 database" rather than "stored encrypted" — treat Redis as holding a live
 credential and protect it accordingly.
 
-### Resolution precedence
+### Exact guarded route selection
 
 ```
-LLM_ADMIN_API_KEY (Admin row)  ->  LLM_ADMIN_API_KEY (deployment file)
-                               ->  LLM_HANDLER_API_KEY (Admin row)
-                               ->  LLM_HANDLER_API_KEY (deployment file)
+assistant route credential: admin   -> LLM_ADMIN_API_KEY (Admin row, then deployment file)
+incident route credential: handler -> LLM_HANDLER_API_KEY (Admin row, then deployment file)
 ```
 
-This is existing behaviour, not new code: `llm.get_api_key()` already prefers
-`LLM_ADMIN_API_KEY`, and a database row already outranks the file. `state()`
-reports which one is live as `key.source` (`admin` / `deployment` / `fallback` /
-`none`) with a four-character hint, and never the value; `fallback` means the
-Assistant is resolving through the platform key.
+The safety-policy route owns both credential target and model. A caller may
+omit `model=` or supply the exact route model; it cannot select another model.
+`state()` reports `key` and `handler_key` independently as `admin`,
+`deployment`, or `none`, with a four-character hint and never the value.
+The stable low-level `llm.get_api_key()` helper retains its legacy resolution
+order for compatibility, but it is not admission/readiness authority and every
+guarded provider call resolves the exact route target.
 
 ### Verification
 
-`verify(actor, api_key=None)` checks a candidate, or the stored credential when
-none is given, through `llm.verify_api_key()`. The outcome is reduced to a fixed
+`verify(actor, api_key=None, target="assistant")` checks an owner-supplied
+candidate, or exactly the stored `assistant`/`handler` credential when none is
+given. Candidate recovery proves system-admin authority in the safety core;
+the REST action additionally requires recent interactive authentication. The
+outcome is reduced to a fixed
 vocabulary — `verified`, `invalid_key`, `unreachable`, `not_configured` — so no
 provider response body, exception repr or key fragment can reach an
 operator-visible string.
@@ -318,8 +328,8 @@ credential nobody proved.
 | Setting | Default | Description |
 |---|---|---|
 | `LLM_ADMIN_ENABLED` | `False` | Feature flag — must be True for the assistant to work |
-| `LLM_ADMIN_API_KEY` | `None` | Anthropic API key. Falls back to `LLM_HANDLER_API_KEY` |
-| `LLM_ADMIN_MODEL` | (auto-detect) | Claude model to use. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
+| `LLM_ADMIN_API_KEY` | `None` | Admin credential used only by policy routes declaring `credential: "admin"` |
+| `LLM_ADMIN_MODEL` | (unset) | Legacy picker pin; guarded calls use the exact safety-policy route model |
 | `LLM_ADMIN_MAX_TURNS` | `25` | Max tool-calling turns per request |
 | `LLM_ADMIN_MAX_HISTORY` | `50` | Max messages loaded as conversation context |
 | `LLM_ADMIN_MAX_PARALLEL_TOOLS` | `4` | Max concurrent threads for parallel tool execution |

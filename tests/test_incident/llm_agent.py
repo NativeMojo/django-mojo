@@ -98,6 +98,7 @@ def test_llm_agent_investigate_and_ignore(opts):
                 channel="default",
             )
             executed = th.run_pending_jobs(channel="default")
+            executed += th.run_pending_jobs(channel="incident_handlers")
 
     assert executed >= 1, f"Expected at least 1 job executed, got {executed}"
 
@@ -175,6 +176,7 @@ def test_llm_agent_investigate_and_block(opts):
                 channel="default",
             )
             executed = th.run_pending_jobs(channel="default")
+            executed += th.run_pending_jobs(channel="incident_handlers")
 
     assert executed >= 1, f"Expected at least 1 job executed, got {executed}"
 
@@ -251,6 +253,7 @@ def test_llm_agent_create_ticket(opts):
                 channel="default",
             )
             executed = th.run_pending_jobs(channel="default")
+            executed += th.run_pending_jobs(channel="incident_handlers")
 
     assert executed >= 1, f"Expected at least 1 job executed, got {executed}"
 
@@ -331,6 +334,7 @@ def test_llm_ticket_reply(opts):
                 channel="default",
             )
             executed = th.run_pending_jobs(channel="default")
+            executed += th.run_pending_jobs(channel="incident_handlers")
 
     assert executed >= 1, f"Expected at least 1 job executed, got {executed}"
 
@@ -411,6 +415,7 @@ def test_llm_agent_create_ticket_deduplicates(opts):
                 channel="default",
             )
             executed = th.run_pending_jobs(channel="default")
+            executed += th.run_pending_jobs(channel="incident_handlers")
 
     assert executed >= 1, f"Expected at least 1 job executed, got {executed}"
 
@@ -494,6 +499,7 @@ def test_llm_agent_create_rule_deduplicates_pending(opts):
                 channel="default",
             )
             executed = th.run_pending_jobs(channel="default")
+            executed += th.run_pending_jobs(channel="incident_handlers")
 
     assert executed >= 1, f"Expected at least 1 job executed, got {executed}"
 
@@ -607,6 +613,7 @@ def test_llm_agent_create_rule_deduplicates_active(opts):
                 channel="default",
             )
             executed = th.run_pending_jobs(channel="default")
+            executed += th.run_pending_jobs(channel="incident_handlers")
 
     assert executed >= 1, f"Expected at least 1 job executed, got {executed}"
 
@@ -689,6 +696,7 @@ def test_llm_agent_create_rule_deduplicates_variant(opts):
                 channel="default",
             )
             executed = th.run_pending_jobs(channel="default")
+            executed += th.run_pending_jobs(channel="incident_handlers")
 
     assert executed >= 1, f"First triage job should execute, got {executed}"
     rulesets_after_first = RuleSet.objects.filter(
@@ -741,6 +749,7 @@ def test_llm_agent_create_rule_deduplicates_variant(opts):
                 channel="default",
             )
             executed = th.run_pending_jobs(channel="default")
+            executed += th.run_pending_jobs(channel="incident_handlers")
 
     assert executed >= 1, f"Second triage job should execute, got {executed}"
 
@@ -929,6 +938,7 @@ def test_llm_ticket_non_approval_still_invokes_llm(opts):
                 channel="default",
             )
             executed = th.run_pending_jobs(channel="default")
+            executed += th.run_pending_jobs(channel="incident_handlers")
 
         # The LLM SHOULD have been called for non-approval replies
         assert mock_claude.call_count >= 1, \

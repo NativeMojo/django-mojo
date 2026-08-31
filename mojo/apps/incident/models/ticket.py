@@ -126,12 +126,8 @@ class Ticket(models.Model, MojoModel):
         self.metadata["llm_enabled"] = True
         self.save(update_fields=["metadata"])
         try:
-            from mojo.apps import jobs
-            jobs.publish(
-                "mojo.apps.incident.handlers.llm_agent.execute_llm_ticket_reply",
-                {"ticket_id": self.pk, "note_id": None},
-                channel="incident_handlers",
-            )
+            from mojo.apps.incident.services import llm_dispatch
+            llm_dispatch.claim_ticket(self)
         except Exception:
             logger.exception("Failed to invoke LLM on enable for ticket %s", self.pk)
 
@@ -216,12 +212,8 @@ class TicketNote(models.Model, MojoModel):
         # LLM re-invocation for non-action notes on LLM-enabled tickets
         if self.parent.is_llm_enabled() and not self._is_llm_note():
             try:
-                from mojo.apps import jobs
-                jobs.publish(
-                    "mojo.apps.incident.handlers.llm_agent.execute_llm_ticket_reply",
-                    {"ticket_id": self.parent_id, "note_id": self.pk},
-                    channel="incident_handlers",
-                )
+                from mojo.apps.incident.services import llm_dispatch
+                llm_dispatch.claim_ticket(self.parent, note_id=self.pk)
             except Exception:
                 logger.exception("Failed to re-invoke LLM for ticket %s", self.parent_id)
 

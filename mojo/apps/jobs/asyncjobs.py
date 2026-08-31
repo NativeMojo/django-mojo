@@ -53,9 +53,10 @@ def run_scheduled_task(job):
             error = f"Unknown task_type: {task.task_type}"
             status = "error"
     except Exception as exc:
-        error = str(exc)[:2000]
+        error = getattr(exc, "code", "llm_operation_failed") \
+            if task.task_type == "llm" else str(exc)[:2000]
         status = "error"
-        logit.error("run_scheduled_task: task %s failed: %s", task_id, exc)
+        logit.error("run_scheduled_task: task %s failed: %s", task_id, error)
 
     # Store result
     TaskResult.objects.create(
@@ -97,7 +98,9 @@ def _run_llm_task(task):
     if not user_prompt:
         raise ValueError("LLM task requires a user_prompt in job_config")
 
-    return llm.ask(user_prompt, system=system_prompt or None)
+    return llm.ask(
+        user_prompt, system=system_prompt or None, feature="scheduled_task",
+        context={"job_id": task.pk})
 
 
 def _run_webhook_task(task):

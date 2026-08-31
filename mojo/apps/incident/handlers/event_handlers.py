@@ -621,27 +621,26 @@ class LLMHandler:
 
     def run(self, event):
         try:
-            from mojo.apps import jobs
-            payload = {
-                "event_id": event.pk,
-                "incident_id": event.incident_id,
-                "ruleset_id": None,
-            }
+            if not event.incident_id:
+                return False
+            from mojo.apps.incident.services import llm_dispatch
+            ruleset_id = None
+            incident = None
             # Try to get ruleset_id from the incident
             if event.incident_id:
                 try:
                     from mojo.apps.incident.models import Incident
                     incident = Incident.objects.get(pk=event.incident_id)
                     if incident.rule_set_id:
-                        payload["ruleset_id"] = incident.rule_set_id
+                        ruleset_id = incident.rule_set_id
                 except Exception:
                     pass
 
-            jobs.publish(
-                "mojo.apps.incident.handlers.llm_agent.execute_llm_handler",
-                payload,
-                channel="incident_handlers",
-            )
+            if incident is None:
+                return False
+
+            llm_dispatch.claim_incident(
+                incident, event_id=event.pk, ruleset_id=ruleset_id)
             return True
         except Exception:
             logger.exception("LLMHandler failed for event %s", event.pk)

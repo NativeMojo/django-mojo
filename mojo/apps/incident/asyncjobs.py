@@ -616,9 +616,12 @@ def triage_new_incidents(job):
     before publishing the job. The LLM agent takes over from there.
     """
     from mojo.apps.incident.models import Incident
-    from mojo.apps import jobs
+    from mojo.apps.incident.services import llm_dispatch
 
-    if not settings.get("LLM_HANDLER_API_KEY"):
+    from mojo.apps.account.services import llm_safety
+    enabled, watermark = llm_safety.autonomous_triage_state()
+    if not enabled or watermark is None \
+            or not llm_safety.route_state("incident_triage")["ready"]:
         return
 
     BATCH_SIZE = 20
@@ -626,9 +629,9 @@ def triage_new_incidents(job):
     # Incidents still "new" with no LLM assessment recorded yet
     incidents = list(
         Incident.objects
-        .filter(status="new")
+        .filter(status="new", created__gte=watermark)
         .exclude(metadata__has_key="llm_assessment")
-        .order_by("-priority", "created")[:BATCH_SIZE]
+        .order_by("created", "pk")[:BATCH_SIZE]
     )
 
     if not incidents:
@@ -640,21 +643,12 @@ def triage_new_incidents(job):
         if not event:
             continue
 
-        # Mark investigating now so concurrent sweeps don't double-queue
-        incident.status = "investigating"
-        incident.save(update_fields=["status"])
-        incident.add_history("handler:llm", note="[LLM Agent] Queued for automated triage")
-
-        jobs.publish(
-            "mojo.apps.incident.handlers.llm_agent.execute_llm_handler",
-            {
-                "event_id": event.pk,
-                "incident_id": incident.pk,
-                "ruleset_id": incident.rule_set_id,
-            },
-            channel="incident_handlers",
-        )
-        queued += 1
+        _, created = llm_dispatch.claim_incident(
+            incident, event_id=event.pk, ruleset_id=incident.rule_set_id)
+        if created:
+            incident.add_history(
+                "handler:llm", note="[LLM Agent] Queued for automated triage")
+            queued += 1
 
     job.add_log(f"Queued {queued}/{len(incidents)} incidents for LLM triage")
 

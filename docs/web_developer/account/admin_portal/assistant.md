@@ -1,6 +1,8 @@
 # Admin Assistant setup API
 
-Two endpoints, both **owner-only for read and write**. The coarse readiness
+Three endpoints expose this control plane. The Assistant GET and POST are
+**literal-owner-only**; the aggregate LLM-safety GET is for global security
+readers. The coarse readiness
 every operator needs rides in the Admin bootstrap (`features.assistant`);
 nothing below a literal superuser has a reason to read a key hint or a
 verification outcome.
@@ -31,7 +33,7 @@ of any kind.
 200 {
   "status": true,
   "data": {
-    "schema_version": 1,
+    "schema_version": 2,
     "enabled": true,
     "key": {"configured": true, "hint": "4d1a", "source": "admin"},
     "handler_key": {"configured": true, "hint": "9c2e", "source": "admin"},
@@ -45,6 +47,16 @@ of any kind.
                "message": "Anthropic accepted this key.",
                "at": "2026-08-19T11:02:00+00:00"},
     "handler_verify": {"ok": null, "code": "", "message": "", "at": ""},
+    "emergency_stop": true,
+    "emergency_stop_static": true,
+    "emergency_stop_database": false,
+    "route": {"feature": "assistant", "provider": "anthropic",
+              "model": "claude-sonnet-5", "credential": "admin",
+              "credential_configured": true, "ready": false,
+              "error": "emergency_stopped"},
+    "autonomous_triage": false,
+    "autonomous_triage_activated_at": null,
+    "safety": {"hours": 24, "requests": [], "breakers": []},
     "assistant_installed": true,
     "realtime_installed": true,
     "mcp": {
@@ -85,16 +97,23 @@ of any kind.
 | Field | Meaning |
 |---|---|
 | `enabled` | The `LLM_ADMIN_ENABLED` flag |
-| `key.configured` | Whether **any** credential resolves |
+| `key.configured` | Legacy picker/display resolution only; guarded readiness is `route.credential_configured` |
 | `key.hint` | The last four characters, or `""` when the value is too short to hint at safely |
-| `key.source` | `admin` (stored here) · `deployment` (the settings file) · `fallback` (resolving through the platform key) · `none` |
-| `handler_key` | The **platform** key, `LLM_HANDLER_API_KEY` — used by every LLM feature (incident triage, the LLM agent) and as the Assistant's fallback. Same `configured` / `hint` / `source` shape; `source` is `admin` · `deployment` · `none` |
-| `model.selected` | The stored pin, `""` for automatic |
-| `model.effective` | What resolution actually returns right now |
-| `model.source` | `admin` · `deployment` · `automatic` |
+| `key.source` | Exact Admin-target provenance: `admin` (stored here) · `deployment` (the settings file) · `none` |
+| `handler_key` | The **platform** key, `LLM_HANDLER_API_KEY` — available only to policy routes declaring `credential: "handler"`; it never substitutes for an Admin-routed feature. Same `configured` / `hint` / `source` shape; `source` is `admin` · `deployment` · `none` |
+| `model.selected` | The legacy picker pin; `""` means no legacy pin |
+| `model.effective` | The exact guarded Assistant route model |
+| `model.source` | Provenance for the legacy picker pin: `admin` · `deployment` · `automatic` (no pin) |
 | `model.choices` | Picker suggestions only. Never validated against — the list is network-dependent |
 | `verify` | How the **stored** Assistant credential last checked. `ok` is `null` when it never has |
 | `handler_verify` | The same record for the stored platform key |
+| `emergency_stop` | Effective deployment OR authoritative database stop |
+| `emergency_stop_static` | Whether deployment configuration is holding the stop on; it requires removal and redeploy |
+| `emergency_stop_database` | The editable authoritative database half; both Admin checkboxes bind and submit only this value |
+| `route` | Exact guarded Assistant provider, model and credential name plus safe readiness; never a key or fingerprint |
+| `autonomous_triage` | Authoritative primary-DB catch-all switch; fail-closed on ambiguity |
+| `autonomous_triage_activated_at` | Primary-DB no-history watermark, or `null` |
+| `safety` | Bounded aggregate usage and breaker rows; no per-row records or fingerprints |
 | `mcp` | Remote agent access — see below |
 
 `verify.code` is one of `verified`, `invalid_key`, `unreachable`,
@@ -152,25 +171,26 @@ Everything the `GET` requires, **plus** recent authentication (600 seconds) and
 a same-Origin request. A stale session answers `440` with
 `{"error": "reauth_required"}`; step up and re-submit the identical body.
 
-Both actions answer with the fresh `state()`, so a second editor holding a stale
+Every action answers with the fresh `state()`, so a second editor holding a stale
 page sees the truth on its very next call.
 
 ### `action: "verify"`
 
 ```json
-{"action": "verify"}                                  // check what the Assistant resolves
+{"action": "verify"}                                  // check the exact stored admin key
 {"action": "verify", "target": "handler"}             // check the stored platform key
 {"action": "verify", "api_key": "sk-…"}               // check a candidate before saving
 {"action": "verify", "api_key": "sk-…", "target": "handler"}
 ```
 
-`target` is `assistant` (default) or `handler`. It chooses which stored key is
+`target` is `assistant` (default, exact `LLM_ADMIN_API_KEY`) or `handler`
+(exact `LLM_HANDLER_API_KEY`). There is no fallback. It chooses which stored key is
 checked when no candidate is supplied, and which record (`verify` /
 `handler_verify`) a stored-key check is written to.
 
 ```json
 200 {"status": true, "data": {
-  "schema_version": 1, "verified": true,
+  "schema_version": 2, "verified": true,
   "result": {"ok": false, "code": "invalid_key",
              "message": "Anthropic rejected this key."},
   "state": { … }
@@ -178,8 +198,20 @@ checked when no candidate is supplied, and which record (`verify` /
 ```
 
 Checking the **stored** key is recorded and shows up in `verify` on the next
-read. Checking an unsaved candidate is **not** recorded: a draft is not the
-configuration this installation is running.
+read. A candidate does not overwrite that stored-key record, but every
+actor-authorized candidate recovery probe writes a durable
+`llm:candidate_probe` audit with only `requested`, `accepted`, or `rejected`.
+It never records the candidate, a fingerprint, a model, or provider text. If
+the requested audit cannot be written, the provider is not called.
+
+A stored-key check is an ordinary guarded request and is refused while the
+emergency stop is effective. Only a supplied candidate receives the stopped
+exception: one installation-wide single-flight, fixed `Reply OK` request on
+the configuration route/model with no tools, images, cache, caller model,
+context, or pagination. Candidate input must be a non-empty string and the
+service re-proves active literal-owner authority; REST also requires fresh
+authentication. A configuration route with capabilities `["text"]` is
+sufficient.
 
 ### `action: "save"`
 
@@ -193,12 +225,47 @@ configuration this installation is running.
 | Field | Rules |
 |---|---|
 | `enabled` | Boolean. Required |
-| `model` | `""` for automatic, otherwise `^[a-z0-9][a-z0-9.\-]{0,80}$`. Required |
+| `model` | Legacy picker pin: `""` clears it; otherwise `^[a-z0-9][a-z0-9.\-]{0,80}$`. Required. The safety-policy route still owns the guarded runtime model |
 | `api_key` | Optional. The Assistant's own key. **Omit it to leave the stored credential alone** — an empty string is not "store nothing", so send nothing |
 | `clear_api_key` | Optional boolean. Removes the stored Assistant key. Cannot be combined with `api_key` |
 | `handler_api_key` | Optional. The **platform** key (`LLM_HANDLER_API_KEY`). Same omit-to-keep rule |
 | `clear_handler_api_key` | Optional boolean. Removes the stored platform key and its verification record. Cannot be combined with `handler_api_key` |
 | `mcp_enabled` | Optional boolean — remote agent access. **Omit it or send `null` to leave the switch alone.** Any other non-boolean (`"true"`, `1`) is a `400`, never coerced |
+| `emergency_stop` | Optional boolean. Protected database stop for ordinary provider requests |
+| `autonomous_triage` | Optional boolean. Enables only post-watermark catch-all incident work |
+
+`GET /api/account/admin/llm-safety?hours=24` is available to globally
+authorized security readers. `hours` is clamped to 1–168. It returns schema version 2 and
+bounded provider/feature/status aggregates and breaker counts, never per-row
+ledger/circuit/attempt records or credential fingerprints.
+
+### LLM safety actions
+
+All three use the same recent-auth literal-owner boundary as save:
+
+```json
+{"action": "activate_policy"}
+```
+
+Activates the exact hash of the currently deployed static policy. Keep the
+deployment emergency stop on until every node has the same policy.
+
+```json
+{"action": "reset_breaker", "provider": "anthropic"}
+```
+
+`provider` may be omitted to reset all breakers. The action increments breaker
+generations and does not clear either emergency stop.
+
+```json
+{"action": "historical_triage",
+ "before": "2026-08-31T00:00:00Z", "limit": 20}
+```
+
+`before` is an ISO timestamp and `limit` is an integer from 1 through 100.
+This is the bounded explicit opt-in for pre-watermark incidents. The
+autonomous switch gates catch-all pickup only; manual analysis and linked
+ticket work remain explicit but still obey the complete guard.
 
 Remote agent access is independent of `enabled` and of any API key: a remote
 client brings its own model. Switching it off **pauses** existing connections
@@ -211,8 +278,8 @@ refuses the whole save — the installation never runs a credential nobody
 proved.
 
 Clearing a key while `enabled` stays true is allowed, and the next read says so
-honestly: `key.source` falls back to `deployment`, `fallback` or `none`, and
-`handler_key.source` to `deployment` or `none`.
+honestly. Each exact target independently reports `deployment` or `none`; an
+Admin route never reports or uses the handler credential as a fallback.
 
 ### `action: "revoke_grant"`
 
@@ -227,7 +294,7 @@ be a positive integer (`"41"`, `0`, `true` and floats are all a `400`).
 
 ```json
 200 {"status": true, "data": {
-  "schema_version": 1, "revoked": 1, "state": { … }
+  "schema_version": 2, "revoked": 1, "state": { … }
 }}
 ```
 
@@ -263,7 +330,7 @@ scoped operation.
 
 | Status | When |
 |---|---|
-| `400` | Unknown action, an unexpected field, a malformed model, an API key over 4096 characters, a non-boolean `mcp_enabled`, or a `grant_id` that is not a positive integer |
+| `400` | Unknown action, unexpected field, malformed/empty candidate, malformed model, API key over 4096 characters, non-boolean switches, invalid `hours`, invalid reset provider, invalid historical timestamp/limit, or a non-positive `grant_id` |
 | `403` | Not a superuser, not an interactive bearer session, or the Origin does not match |
 | `440` | The session is not recent enough. Step up and retry |
 

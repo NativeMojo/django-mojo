@@ -2,6 +2,11 @@
 
 The security system is a multi-layered defense pipeline that detects, correlates, triages, and enforces security policy across the platform. This document covers the full system end-to-end.
 
+External LLM features use the mandatory provider-neutral
+[LLM safety boundary](llm_safety.md): exact deployment policy, hard budgets,
+durable ledger, credential-scoped breaker, emergency stop, and duplicate-safe
+incident dispatch.
+
 ```
                            ┌─────────────────────────┐
                            │     Event Sources        │
@@ -349,13 +354,19 @@ sms://oncall
 
 #### `llm://`
 
-Invokes the LLM security agent for autonomous triage. No parameters — the agent receives the event and incident context and decides what to do.
+Invokes the LLM security agent for explicit RuleSet-driven triage. No
+parameters — the agent receives the event and incident context and decides
+what to do.
 
 ```
 llm://
 ```
 
-**Requires:** `LLM_HANDLER_API_KEY` setting and the `anthropic` Python package (`anthropic>=0.52.0`).
+**Requires:** a valid safety-policy route, that route's exact configured
+credential, a clear emergency stop, and the `anthropic` Python package.
+The autonomous catch-all switch is **not** required for an explicit `llm://`
+RuleSet handler; it gates only event catch-all pickup and scheduled sweeps.
+Credential presence alone does not authorize work.
 
 #### `job://<module.function>?<params>`
 
@@ -440,9 +451,15 @@ incident.on_action_analyze(None)
 ```
 
 **Guard behavior:**
-- Returns `{"status": False, "error": "..."}` if `LLM_HANDLER_API_KEY` is not configured.
-- Returns `{"status": False, "error": "Analysis already in progress"}` if `metadata.analysis_in_progress` is `True`.
-- Sets `metadata.analysis_in_progress = True` before dispatching the job; clears it when the job finishes (success or failure).
+- Returns `{"status": False, "error": "<safe_code>"}` when the exact
+  `incident_analysis` policy route is not ready (including stop, policy, or
+  exact credential failure).
+- Coalesces concurrent clicks onto one active durable attempt. A later click
+  after success/terminal state creates a fresh logical attempt.
+- Does not change incident status merely because analysis was requested.
+  `metadata.analysis_in_progress` becomes true only after active work exists,
+  remains true across retryable deliveries, and clears on success or terminal
+  failure.
 
 **Result storage:** When analysis completes, the agent's final summary is stored in `incident.metadata["llm_analysis"]["summary"]` (truncated to 3000 characters) and a `handler:llm` entry is added to `IncidentHistory`.
 
@@ -496,10 +513,12 @@ The LLM agent provides autonomous security triage. When invoked via the `llm://`
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `LLM_HANDLER_API_KEY` | None | Anthropic API key. **Required** to enable LLM handlers. Settable from the built-in Admin's Assistant setup (stored encrypted; read at call time, no restart needed). |
-| `LLM_HANDLER_MODEL` | (auto-detect) | Model to use for triage. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
+| `LLM_HANDLER_API_KEY` | None | Platform credential used only by routes declaring `credential: "handler"`; never fallback for an admin route. Settable from the built-in Admin's Assistant setup. |
+| `LLM_HANDLER_MODEL` | (auto-detect suggestion) | Legacy picker/helper input; guarded calls use the exact model owned by their safety-policy route |
 
-If `LLM_HANDLER_API_KEY` is not set, `llm://` handlers silently skip.
+If the policy-selected credential is absent, the guard returns the safe
+`credential_missing` code. Managed incident attempts retry within their bound
+and then terminalize; they do not remain indefinitely investigating.
 
 Both settings are read at invocation time (not at startup), so changes take effect on the next LLM job without a server restart.
 
@@ -636,14 +655,14 @@ In addition to the real-time triage agent, there is a separate **analysis job** 
 
 | Aspect | `execute_llm_handler` (triage) | `execute_llm_analysis` (analysis) |
 |--------|-------------------------------|-----------------------------------|
-| Trigger | Automatic — `llm://` handler on rule match | Manual — admin POST `{"analyze": 1}` |
+| Trigger | Explicit `llm://` handler on rule match or catch-all/sweep | Manual — admin POST `{"analyze": 1}` |
 | Prompt | `TRIAGE_PROMPT` — classify, triage, act fast | `ANALYSIS_PROMPT` — deep pattern analysis |
 | Tools | 16 base tools | 18 tools (includes `merge_incidents`, `query_open_incidents`) |
 | Pre-loaded context | Event + incident metadata | Full event list (up to 50) + related open incidents (up to 20) |
 | Result | Ticket + history note | `incident.metadata["llm_analysis"]["summary"]` + history note |
 
 **ANALYSIS_PROMPT workflow:** The agent is instructed to follow this sequence:
-1. Set the incident to `investigating`
+1. Preserve the current status while gathering context; change it only for a real assessment
 2. Review pre-loaded events and related open incidents
 3. Use `query_open_incidents` to find all open incidents in the same category
 4. Merge clearly related incidents using `merge_incidents`
@@ -931,8 +950,8 @@ Single-server job functions follow the engine's calling convention: `func(job)` 
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `LLM_HANDLER_API_KEY` | None | Anthropic API key. Required for `llm://` handlers. Also settable from the built-in Admin's Assistant setup. |
-| `LLM_HANDLER_MODEL` | (auto-detect) | Claude model for triage. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
+| `LLM_HANDLER_API_KEY` | None | Platform credential used only when the feature's exact safety route declares `credential: "handler"` |
+| `LLM_HANDLER_MODEL` | (legacy picker pin) | Does not choose the guarded triage model; the safety-policy route owns it |
 
 ### OSSEC Settings
 

@@ -647,7 +647,13 @@ Handlers resolve notification targets via:
 
 ## LLM Agent
 
-When configured (`LLM_HANDLER_API_KEY` setting), the LLM agent acts as an automated first responder:
+The LLM agent acts as an automated first responder only when a credential, a
+valid `LLM_SAFETY_POLICY`, and the protected autonomous-triage switch all
+permit it. Credential presence alone never enables catch-all work.
+
+That switch gates only catch-all event pickup and scheduled sweeps. Explicit
+admin analysis and LLM-linked ticket replies remain opt-in independently, but
+still pass the emergency stop and the complete safety guard.
 
 1. Triages every `status=new` incident
 2. Queries context (events, IP history, related incidents, metrics)
@@ -655,7 +661,9 @@ When configured (`LLM_HANDLER_API_KEY` setting), the LLM agent acts as an automa
 4. Learns over time by creating new rules and storing pattern knowledge
 5. Communicates with humans through ticket notes
 
-High-level events that don't match any rule are automatically sent to the LLM if configured. This ensures nothing falls through the cracks.
+High-level events that do not match a rule are eligible only after the owner's
+activation watermark. The sweep runs at 09:00 and 18:00, oldest-first and
+bounded; duplicate scheduler delivery converges on one attempt/job.
 
 The LLM creates rules in a **disabled** state and opens a ticket for human approval. Respond to the ticket to approve, modify, or reject the proposed rule.
 
@@ -698,7 +706,10 @@ The call returns immediately. The agent runs in the background and:
 - Proposes a new disabled RuleSet to cover the pattern
 - Stores its summary in `incident.metadata.llm_analysis.summary`
 
-Check progress by polling `metadata.analysis_in_progress` on the incident. When it becomes `false`, the result is ready.
+Check progress by polling `metadata.analysis_in_progress` on the incident. When
+it becomes `false`, the attempt either completed or reached a terminal safe
+failure. Inspect `metadata.llm_analysis`, the incident history, and the job
+result before presenting an analysis as successful.
 
 See [Incident API: Request LLM Analysis](../logging/incidents.md#request-llm-analysis) for full request/response reference.
 
@@ -738,13 +749,23 @@ See [Incident API: Request LLM Analysis](../logging/incidents.md#request-llm-ana
 | `MOJOSEC_HANDLER_MAX_ATTEMPTS` | `100` | Handler dispatch attempts before a MojoSec receipt is dead-lettered |
 | `MOJOSEC_HANDLER_QUEUED_STALE_SECONDS` | `1800` | Age after which a queued MojoSec receipt's vanished dispatch job is recovered |
 | `MOJOSEC_LEARNING_EVALUATION_RETENTION_DAYS` | `90` | Offline replay/shadow summary retention; clamped to 30–3,650 days |
-| `LLM_HANDLER_API_KEY` | `None` | Claude API key (enables LLM agent). An owner can also store it from the built-in Admin's Assistant setup |
-| `LLM_HANDLER_MODEL` | (auto-detect) | Claude model for LLM agent. If unset, auto-detects latest Sonnet via `mojo.helpers.llm.get_model()` |
+| `LLM_HANDLER_API_KEY` | `None` | Platform credential selectable by an exact policy route; it never substitutes for a missing `credential: "admin"` route |
+| `LLM_HANDLER_MODEL` | (legacy picker pin) | Does not select a guarded model; every guarded request uses its exact policy-route model |
+| `LLM_SAFETY_POLICY` | required | File-owned provider routes, budgets, and breaker thresholds; absence denies calls |
+| `LLM_SAFETY_POLICY_EXPECTED_HASH` | required DB agreement | Owner-activated hash of the policy deployed identically on every node |
+| `LLM_EMERGENCY_STOP` | `False` | Deployment OR protected database stop; database uncertainty denies |
+| `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED` | `False` | Owner-only catch-all switch; enabling stamps a no-history watermark |
 | `ASSISTANT_MCP_ENABLED` | `False` | Remote agent access (MCP door); switched from the Admin, never from `/api/settings` |
 | `INCIDENT_EMAIL_FROM` | `None` | SES mailbox for incident emails |
 | `ADMIN_PORTAL_URL` | `None` | URL for deep links in notifications |
 
-`ASSISTANT_MCP_ENABLED` is the only one of these an operator flips from a UI: it lives in the built-in Admin's Assistant setup view, alongside the connect address, a discovery self-check and the list of connected agents — see [the Assistant setup API](../account/admin_portal/assistant.md). Remote clients authenticate with OAuth grants rather than API keys, and any of them can be disconnected from that same view; [Connecting an AI client over MCP](../assistant/mcp.md) is the operator's runbook.
+The built-in Admin's Assistant setup owns the MCP switch, Assistant and
+platform credentials, the database emergency stop, autonomous-triage switch,
+policy activation, breaker reset, and bounded historical triage. See
+[the Assistant setup API](../account/admin_portal/assistant.md). Remote clients
+authenticate with OAuth grants rather than API keys, and any of them can be
+disconnected from that same view; [Connecting an AI client over MCP](../assistant/mcp.md)
+is the operator's runbook.
 
 A connection is one of two kinds, shown in the **Access** column: tool-door access (`mcp`), where every change still waits for an approval in the Admin, or **full API access** (`api`), which equals that person's own session token in reach — the same permissions, nothing more — with no approval step on direct API calls. Both are revoked from the same place; a credential a full-API connection mints in turn (an API key, for instance) has its own lifetime and is revoked separately, exactly as one minted from a browser session would be.
 

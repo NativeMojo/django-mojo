@@ -27,6 +27,9 @@ from mojo.helpers import logit, llm
 from mojo.apps.assistant.services import approvals
 
 logger = logit.get_logger(__name__, "assistant.log")
+PROVIDER_AUTH_ERROR = (
+    "The configured LLM route credential was rejected. Check the safety "
+    "policy route and its selected credential.")
 
 
 def _build_request_meta(request):
@@ -1324,9 +1327,11 @@ def run_assistant(
     if not settings.get("LLM_ADMIN_ENABLED", False, kind="bool"):
         return {"error": "Assistant is not enabled", "status_code": 404}
 
-    # Check API key
-    if not llm.get_api_key():
-        return {"error": "LLM API key not configured", "status_code": 503}
+    from mojo.apps.account.services import llm_safety
+    route = llm_safety.route_state("assistant")
+    if not route["ready"]:
+        return {"error": route.get("error") or "credential_missing",
+                "status_code": 503}
 
     # Load or create conversation
     conversation = None
@@ -1393,10 +1398,14 @@ def run_assistant(
     usage_totals = {}
     request_meta = _build_request_meta(request)
     t_start = time.time()
+    operation_id = uuid.uuid4().hex
 
     try:
         for turn_idx in range(max_turns):
-            result = llm.call(messages, system=system_prompt, tools=tools)
+            result = llm.call(
+                messages, system=system_prompt, tools=tools,
+                feature="assistant", context={
+                    "conversation_id": conversation.pk, "operation_id": operation_id})
             stop_reason = result.get("stop_reason")
 
             turn_usage = result.get("usage") or {}
@@ -1553,28 +1562,17 @@ def run_assistant(
 
     except Exception as e:
         logger.exception("Assistant agent failed for user %s", user.pk)
-        err_str = str(e)
-        if "not_found_error" in err_str or "404" in err_str:
-            error = f"LLM model not found. Check LLM_ADMIN_MODEL setting. ({err_str[:200]})"
-            _report_event("assistant:error:api", 7, "LLM model not found", err_str[:500], user=user)
-        elif "authentication_error" in err_str or "401" in err_str:
-            error = "LLM API key is invalid. Check LLM_ADMIN_API_KEY setting."
-            _report_event("assistant:error:api", 7, "LLM API auth failure", err_str[:500], user=user)
-        elif "rate_limit" in err_str.lower() or "429" in err_str:
+        code = getattr(e, "code", "assistant_internal_error")
+        if code == "provider_authentication":
+            error = PROVIDER_AUTH_ERROR
+        elif code == "provider_rate_limited":
             error = "LLM API rate limit reached. Please wait a moment and try again."
-            _report_event("assistant:error:api", 5, "LLM API rate limit", err_str[:500], user=user)
         else:
-            error = f"Assistant error: {err_str[:200]}"
-            _report_event(
-                "assistant:error:unhandled", 8,
-                "Agent loop unhandled exception",
-                (
-                    f"Agent crashed for user {user.email} (id={user.pk}). "
-                    f"conv={conversation.pk}. Error: {err_str[:500]}\n"
-                    f"{traceback.format_exc()[:2000]}"
-                ),
-                user=user,
-            )
+            error = f"Assistant request failed safely ({code})."
+        _report_event(
+            "assistant:error:api", 7, "Assistant LLM request failed",
+            f"code={code} user_id={user.pk} conversation_id={conversation.pk}",
+            user=user)
         return {
             "error": error,
             "conversation_id": conversation.pk,
@@ -1601,8 +1599,10 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
     if not settings.get("LLM_ADMIN_ENABLED", False, kind="bool"):
         return {"error": "Assistant is not enabled"}
 
-    if not llm.get_api_key():
-        return {"error": "LLM API key not configured"}
+    from mojo.apps.account.services import llm_safety
+    route = llm_safety.route_state("assistant")
+    if not route["ready"]:
+        return {"error": route.get("error") or "credential_missing"}
 
     try:
         conversation = Conversation.objects.get(pk=conversation_id, user=user)
@@ -1636,10 +1636,14 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
     pending_actions = []
     usage_totals = {}
     t_start = time.time()
+    operation_id = uuid.uuid4().hex
 
     try:
         for turn_idx in range(max_turns):
-            result = llm.call(messages, system=system_prompt, tools=tools)
+            result = llm.call(
+                messages, system=system_prompt, tools=tools,
+                feature="assistant", context={
+                    "conversation_id": conversation.pk, "operation_id": operation_id})
             stop_reason = result.get("stop_reason")
 
             turn_usage = result.get("usage") or {}
@@ -1762,28 +1766,16 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
 
     except Exception as e:
         logger.exception("Assistant WS agent failed for user %s", user.pk)
-        err_str = str(e)
-        if "not_found_error" in err_str or "404" in err_str:
-            _report_event("assistant:error:api", 7, "LLM model not found", err_str[:500], user=user)
-            return {"error": f"LLM model not found. Check LLM_ADMIN_MODEL setting. ({err_str[:200]})",
+        code = getattr(e, "code", "assistant_internal_error")
+        _report_event(
+            "assistant:error:api", 7, "Assistant WS LLM request failed",
+            f"code={code} user_id={user.pk} conversation_id={conversation.pk}",
+            user=user)
+        if code == "provider_authentication":
+            return {"error": PROVIDER_AUTH_ERROR,
                     "pending_actions": pending_actions}
-        if "authentication_error" in err_str or "401" in err_str:
-            _report_event("assistant:error:api", 7, "LLM API auth failure", err_str[:500], user=user)
-            return {"error": "LLM API key is invalid. Check LLM_ADMIN_API_KEY setting.",
-                    "pending_actions": pending_actions}
-        if "rate_limit" in err_str.lower() or "429" in err_str:
-            _report_event("assistant:error:api", 5, "LLM API rate limit", err_str[:500], user=user)
+        if code == "provider_rate_limited":
             return {"error": "LLM API rate limit reached. Please wait a moment and try again.",
                     "pending_actions": pending_actions}
-        _report_event(
-            "assistant:error:unhandled", 8,
-            "WS agent loop unhandled exception",
-            (
-                f"WS agent crashed for user {user.email} (id={user.pk}). "
-                f"conv={conversation.pk}. Error: {err_str[:500]}\n"
-                f"{traceback.format_exc()[:2000]}"
-            ),
-            user=user,
-        )
-        return {"error": f"Assistant error: {err_str[:200]}",
+        return {"error": f"Assistant request failed safely ({code}).",
                 "pending_actions": pending_actions}

@@ -89,30 +89,32 @@ class AppConfig(BaseAppConfig):
             storage="database"))
         register_descriptor(Descriptor(
             "LLM_ADMIN_MODEL", "Assistant model", "Security & operations",
-            "Model the Assistant is pinned to.", "string",
+            "Legacy model-picker pin; guarded runtime uses the exact model "
+            "declared by the Assistant safety-policy route.", "string",
             resolver="dynamic", writable="assistant_setup",
             owner="Assistant setup", change_behavior="immediate",
             storage="database",
-            unset_meaning="the newest Sonnet is selected automatically"))
+            unset_meaning="no legacy picker pin; the guarded route still owns its model"))
         register_descriptor(Descriptor(
             "LLM_ADMIN_API_KEY", "Assistant API key", "Security & operations",
-            "Encrypted Anthropic credential used by the Assistant.", "configured",
+            "Encrypted Anthropic credential available to safety-policy routes "
+            "that explicitly select admin.", "configured",
             resolver="dynamic", sensitivity="configured_only",
             writable="assistant_setup", owner="Assistant setup",
             change_behavior="immediate", storage="database"))
-        # The PLATFORM credential: incident triage, the LLM agent, and the
-        # Assistant's fallback all read it. Settable from the same owner editor
-        # as the Assistant key; a deployment-file value still applies when no
+        # The platform credential is available only to exact safety-policy
+        # routes declaring credential="handler". It never substitutes for an
+        # admin-routed feature. A deployment-file value still applies when no
         # row is stored.
         register_descriptor(Descriptor(
             "LLM_HANDLER_API_KEY", "Platform LLM API key",
             "Security & operations",
-            "Encrypted Anthropic credential used by every LLM feature and as "
-            "the Assistant's fallback.",
+            "Encrypted Anthropic credential available to safety-policy routes "
+            "that explicitly select handler.",
             "configured", resolver="dynamic", sensitivity="configured_only",
             writable="assistant_setup", owner="Assistant setup",
             change_behavior="immediate", storage="database",
-            unset_meaning="LLM features are off and the Assistant has no fallback"))
+            unset_meaning="handler-routed LLM features are not ready"))
         # The MCP door. Off by default and read on every request, so the switch
         # is immediate in both directions. Catalog-protected
         # (admin_settings.ASSISTANT_KEYS) from the moment it exists: a global
@@ -126,6 +128,17 @@ class AppConfig(BaseAppConfig):
             "boolean", False, resolver="dynamic", writable="assistant_setup",
             owner="Assistant setup", change_behavior="immediate",
             storage="database"))
+        register_descriptor(Descriptor(
+            "LLM_EMERGENCY_STOP", "LLM emergency stop", "Security & operations",
+            "Stops every ordinary external LLM request immediately.", "boolean",
+            False, resolver="dynamic", writable="assistant_setup",
+            owner="Assistant setup", change_behavior="immediate", storage="database"))
+        register_descriptor(Descriptor(
+            "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED", "Autonomous incident triage",
+            "Security & operations",
+            "Allows catch-all triage only for incidents created after activation.",
+            "boolean", False, resolver="dynamic", writable="assistant_setup",
+            owner="Assistant setup", change_behavior="immediate", storage="database"))
         register_descriptor(Descriptor(
             "ASSISTANT_MCP_PATH", "MCP endpoint path", "Security & operations",
             "Request path of the Assistant's MCP endpoint; also the registered "

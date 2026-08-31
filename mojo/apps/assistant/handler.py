@@ -251,14 +251,17 @@ def _handle_message(user, data, request_id=None, _reporter=None):
         content=message,
     )
 
-    # Pre-flight check: API key configured?
-    from mojo.helpers import llm
-    if not llm.get_api_key():
-        logger.error("assistant: no API key configured")
+    # Pre-flight uses the exact guarded route; legacy key fallback is not
+    # authority to admit a turn.
+    from mojo.apps.account.services import llm_safety
+    route = llm_safety.route_state("assistant")
+    if not route["ready"]:
+        code = route.get("error") or "credential_missing"
+        logger.error("assistant: guarded route unavailable code=%s", code)
         return _response_with_request_id({
             "type": "assistant_error",
             "conversation_id": conversation.pk,
-            "error": "LLM API key is not configured. Set LLM_ADMIN_API_KEY or LLM_HANDLER_API_KEY.",
+            "error": code,
         }, request_id)
 
     # Run the agent in a background thread — no job engine dependency.

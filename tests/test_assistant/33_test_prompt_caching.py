@@ -12,9 +12,8 @@ usage persistence, per-turn usage logging) moved to
 tests/test_assistant_extended_serial/33_test_prompt_caching.py (maestro item
 #1839).
 
-The remaining llm.call() tests inject the fake Anthropic client through the
-keyword-only client= seam on llm.call (item #2558) — no mock.patch of the
-shared mojo.helpers.llm module or the anthropic package.
+The provider-format tests exercise the extracted Anthropic adapter directly;
+the public llm.call boundary has no client seam that could bypass its guard.
 """
 from unittest import mock
 from testit import helpers as th
@@ -92,7 +91,7 @@ def _canned_response(content_text="hello", usage=None):
 @th.django_unit_test()
 def test_llm_helper_sets_cache_control_when_enabled(opts):
     """call() should add cache_control={'type':'ephemeral'} when the setting is True."""
-    from mojo.helpers import llm
+    from mojo.helpers.llm_providers.anthropic import AnthropicProvider
 
     fake_client, fake_messages = _make_fake_client(
         _canned_response(usage={
@@ -101,11 +100,11 @@ def test_llm_helper_sets_cache_control_when_enabled(opts):
         }),
     )
 
-    llm.call(
+    AnthropicProvider(client=fake_client).call(
         messages=[{"role": "user", "content": "hi"}],
         system="sys",
         model="claude-sonnet-4-test",
-        client=fake_client,
+        max_tokens=64,
     )
 
     sent = fake_messages.last_kwargs
@@ -128,7 +127,7 @@ def test_llm_helper_sets_cache_control_when_enabled(opts):
 @th.django_unit_test()
 def test_llm_helper_returns_usage(opts):
     """call() result should include a usage dict surfaced from response.model_dump()."""
-    from mojo.helpers import llm
+    from mojo.helpers.llm_providers.anthropic import AnthropicProvider
 
     expected_usage = {
         "input_tokens": 42, "output_tokens": 7,
@@ -136,10 +135,10 @@ def test_llm_helper_returns_usage(opts):
     }
     fake_client, _ = _make_fake_client(_canned_response(usage=expected_usage))
 
-    result = llm.call(
+    result = AnthropicProvider(client=fake_client).call(
         messages=[{"role": "user", "content": "hi"}],
         model="claude-sonnet-4-test",
-        client=fake_client,
+        max_tokens=64,
     )
 
     assert_true("usage" in result, f"result should include usage, got keys {list(result.keys())}")

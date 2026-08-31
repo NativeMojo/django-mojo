@@ -991,7 +991,7 @@ def main():
     # sub-pages needed to be QA'd against each one.
     parser.add_argument("--sms-state", choices=("configured", "unset", "test_mode", "verify_failed", "not_installed"), default="configured")
     parser.add_argument("--email-state", choices=("configured", "unset", "conflict"), default="configured")
-    parser.add_argument("--assistant-state", choices=("configured", "unset", "fallback", "verify_failed", "disabled"), default="configured")
+    parser.add_argument("--assistant-state", choices=("configured", "unset", "route_stopped", "verify_failed", "disabled"), default="configured")
     parser.add_argument("--assistant-mcp-state", choices=("off", "reachable", "unreachable", "connected"), default="connected")
     parser.add_argument("--infrastructure-mode", choices=("managed", "external"), default="managed")
     parser.add_argument("--upstream", help="Public HTTPS django-mojo origin for live QA")

@@ -10,10 +10,11 @@ Usage:
     model = llm.get_model("fast")      # latest Haiku
 
     # Quick one-shot question
-    answer = llm.ask("Summarize this text: ...")
+    answer = llm.ask("Summarize this text: ...", feature="scheduled_task")
 
     # Full messages API call (tool use, multi-turn, etc.)
-    response = llm.call(messages, system="You are...", tools=[...])
+    response = llm.call(
+        messages, system="You are...", tools=[...], feature="assistant")
 
     # API key helpers
     key = llm.get_api_key()
@@ -28,6 +29,7 @@ Settings used:
 
 import json
 import time
+import warnings
 
 from mojo.helpers import logit
 from mojo.helpers.settings import settings
@@ -40,6 +42,28 @@ _mem_cache = {"models": None, "fetched_at": 0}
 # Process-level guard so the "caching enabled but prefix too short" warning
 # fires once per worker instead of on every call.
 _zero_cache_warned = False
+_unattributed_warned = False
+
+FEATURES = frozenset({
+    "assistant", "incident_triage", "incident_analysis", "incident_ticket",
+    "scheduled_task", "memory", "file_analysis", "configuration",
+    "model_discovery", "unattributed",
+})
+
+
+def normalize_feature(feature):
+    """Return one fixed feature name; omission is transitional, not anonymous."""
+    global _unattributed_warned
+    if feature is None:
+        if not _unattributed_warned:
+            _unattributed_warned = True
+            warnings.warn(
+                "LLM calls without feature= are deprecated; attributed calls are required",
+                DeprecationWarning, stacklevel=3)
+        return "unattributed"
+    if feature not in FEATURES:
+        raise ValueError("Unknown LLM feature")
+    return feature
 
 CACHE_KEY = "mojo:llm:models"
 CACHE_TTL = 86400  # 24 hours
@@ -75,55 +99,45 @@ def get_api_key():
     return key
 
 
-def verify_api_key(api_key=None):
+class LLMExecutionError(Exception):
+    """Stable safe-code boundary; provider exception text never crosses it."""
+
+    def __init__(self, code, retry_after=None):
+        self.code = code
+        self.retry_after = retry_after
+        super().__init__(code)
+
+
+def verify_api_key(target="admin"):
     """
-    Verify an Anthropic API key is valid.
+    Verify one exact stored Anthropic credential is valid.
 
     Returns (True, None) on success or (False, "error message") on failure.
     """
-    import anthropic
-
-    key = api_key or get_api_key()
-    if not key:
-        return False, "No API key configured. Set LLM_ADMIN_API_KEY or LLM_HANDLER_API_KEY."
     try:
-        client = anthropic.Anthropic(api_key=key)
-        client.models.list(limit=1)
+        from mojo.apps.account.services import llm_safety
+        llm_safety.verify_stored_key(target)
         return True, None
-    except anthropic.AuthenticationError:
-        return False, "API key is invalid or expired."
-    except Exception as e:
-        return False, f"Could not verify API key: {str(e)[:200]}"
+    except Exception as err:
+        code = getattr(err, "code", "provider_unavailable")
+        if code == "credential_missing":
+            return False, "No API key is configured for this target."
+        if code == "provider_authentication":
+            return False, "API key is invalid or expired."
+        return False, "Could not verify API key."
 
 
 # ---------------------------------------------------------------------------
 # Model discovery
 # ---------------------------------------------------------------------------
 
-def _fetch_models_from_api(api_key=None):
+def _fetch_models_from_api():
     """Fetch the full model list from Anthropic's /v1/models endpoint."""
-    import anthropic
-
-    key = api_key or get_api_key()
-    if not key:
-        return None
-
     try:
-        client = anthropic.Anthropic(api_key=key)
-        models = []
-        # mode="json" keeps created_at an ISO string instead of a datetime, so
-        # the list stays JSON-serializable for the Redis cache below.
-        page = client.models.list(limit=100)
-        for model in page.data:
-            models.append(model.model_dump(mode="json"))
-        # Paginate if needed
-        while page.has_more:
-            page = client.models.list(limit=100, after_id=page.last_id)
-            for model in page.data:
-                models.append(model.model_dump(mode="json"))
-        return models
-    except Exception as e:
-        logger.warning(f"Failed to fetch models from Anthropic API: {str(e)[:200]}")
+        from mojo.apps.account.services import llm_safety
+        return llm_safety.discover_models()
+    except Exception:
+        logger.warning("LLM model catalogue request failed")
         return None
 
 
@@ -351,7 +365,7 @@ def get_model(use="general"):
 # ---------------------------------------------------------------------------
 
 def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
-         client=None):
+         feature=None, operation="call", context=None):
     """
     Call the Anthropic messages API.
 
@@ -362,42 +376,40 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
     top level so Anthropic caches the prefix automatically. Disable via
     ``LLM_ADMIN_PROMPT_CACHE_ENABLED=False``.
 
-    ``client`` is a keyword-only test seam (item #2558): an object exposing
-    ``messages.create(**kwargs)``. Default (None) builds the real Anthropic
-    client from the configured API key, byte-identical to before.
+    Every provider request passes the installation safety policy and ledger.
     """
     global _zero_cache_warned
 
-    if client is None:
-        import anthropic
-
-        key = get_api_key()
-        if not key:
-            raise ValueError("No LLM API key configured. Set LLM_ADMIN_API_KEY or LLM_HANDLER_API_KEY.")
-        client = anthropic.Anthropic(api_key=key)
-
-    resolved_model = model or get_model("general")
-
-    kwargs = {
-        "model": resolved_model,
-        "max_tokens": max_tokens,
-        "messages": messages,
-    }
-    if system:
-        kwargs["system"] = system
-    if tools:
-        kwargs["tools"] = tools
+    normalize_feature(feature)
+    if context is not None and not isinstance(context, dict):
+        raise ValueError("LLM context must be a dictionary of scalar identifiers")
+    if context and any(isinstance(value, (dict, list, tuple, set))
+                       for value in context.values()):
+        raise ValueError("LLM context identifiers must be scalar")
 
     cache_enabled = settings.get("LLM_ADMIN_PROMPT_CACHE_ENABLED", True, kind="bool")
-    if cache_enabled:
-        kwargs["cache_control"] = {"type": "ephemeral"}
-
-    response = client.messages.create(**kwargs)
-    result = response.model_dump()
+    resolved_model = model or "policy-route-model"
+    from mojo.apps.account.services import llm_safety
+    try:
+        result = llm_safety.invoke(
+            messages, system=system, tools=tools, model=model,
+            max_tokens=max_tokens, feature=normalize_feature(feature),
+            operation=operation, context=context)
+    except llm_safety.LLMSafetyError as err:
+        raise LLMExecutionError(err.code, retry_after=err.retry_after) from None
+    except Exception:
+        raise LLMExecutionError("safety_unavailable") from None
 
     # Warn once per worker if caching is enabled but produced no cache activity.
     # Typically means the prefix is below the model's minimum cacheable size
     # (1024 tokens for Sonnet, 4096 for Opus).
+    _warn_zero_cache(result, resolved_model, cache_enabled)
+
+    return result
+
+
+def _warn_zero_cache(result, resolved_model, cache_enabled):
+    global _zero_cache_warned
     if cache_enabled and not _zero_cache_warned:
         usage = result.get("usage") or {}
         if usage.get("cache_creation_input_tokens", 0) == 0 and \
@@ -406,13 +418,11 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
             logger.warning(
                 f"Prompt caching enabled but no cache activity on first call "
                 f"(model={resolved_model}). Prefix likely below the model minimum "
-                f"(1024 tokens for Sonnet, 4096 for Opus)."
-            )
-
-    return result
+                f"(1024 tokens for Sonnet, 4096 for Opus).")
 
 
-def ask(prompt, system=None, model=None, max_tokens=4096):
+def ask(prompt, system=None, model=None, max_tokens=4096, *, feature=None,
+        operation="ask", context=None):
     """
     One-shot LLM question — send a prompt, get a string back.
 
@@ -420,7 +430,9 @@ def ask(prompt, system=None, model=None, max_tokens=4096):
     No tools, no conversation history.
     """
     messages = [{"role": "user", "content": prompt}]
-    response = call(messages, system=system, model=model, max_tokens=max_tokens)
+    response = call(
+        messages, system=system, model=model, max_tokens=max_tokens,
+        feature=feature, operation=operation, context=context)
     # Extract text from response content blocks
     parts = []
     for block in response.get("content", []):

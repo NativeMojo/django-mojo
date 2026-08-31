@@ -236,41 +236,29 @@ class Incident(models.Model, MojoModel):
 
         Publishes an async job — the LLM work happens in the background.
         """
-        from mojo.helpers.settings import settings
-
-        if not settings.get("LLM_HANDLER_API_KEY"):
-            return {"status": False, "error": "LLM_HANDLER_API_KEY not configured"}
-
-        if (self.metadata or {}).get("analysis_in_progress"):
-            return {"status": False, "error": "Analysis already in progress"}
-
-        # Atomic check-and-set to prevent race conditions on double-click
-        from django.db.models import Q
-        from django.db.models.functions import Coalesce
-        updated = Incident.objects.filter(
-            Q(pk=self.pk),
-            Q(metadata__analysis_in_progress=False) | ~Q(metadata__has_key="analysis_in_progress"),
-        ).update(metadata={**(self.metadata or {}), "analysis_in_progress": True})
-        if not updated:
-            return {"status": False, "error": "Analysis already in progress"}
-        self.refresh_from_db(fields=["metadata"])
+        from mojo.apps.account.services import llm_safety
+        route = llm_safety.route_state("incident_analysis")
+        if not route["ready"]:
+            return {"status": False,
+                    "error": route.get("error") or "credential_missing"}
 
         try:
-            from mojo.apps import jobs
-            jobs.publish(
-                "mojo.apps.incident.handlers.llm_agent.execute_llm_analysis",
-                {"incident_id": self.pk},
-                channel="incident_handlers",
-            )
+            from mojo.apps.incident.services import llm_dispatch
+            attempt, created = llm_dispatch.claim_incident(
+                self, feature="incident_analysis",
+                logical_suffix="manual-analysis", fresh=True)
         except Exception:
-            # Clear flag on publish failure
-            self.metadata["analysis_in_progress"] = False
-            self.save(update_fields=["metadata"])
             logger.exception("Failed to publish LLM analysis job for incident %s", self.pk)
             return {"status": False, "error": "Failed to publish analysis job"}
 
+        # claim_incident writes the progress flag under the same Incident row
+        # lock and transaction as the attempt and Job outbox. A worker cannot
+        # finish and clear it before this request commits.
+        if attempt.state not in llm_dispatch.ACTIVE_STATES:
+            return {"status": False, "error": "Failed to publish analysis job"}
+
         self.add_history("handler:llm", note="LLM analysis requested by admin")
-        return {"status": True}
+        return {"status": True, "created": created}
 
     def on_action_merge(self, value):
         """

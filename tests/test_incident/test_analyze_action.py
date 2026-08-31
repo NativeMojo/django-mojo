@@ -1,7 +1,7 @@
 """
 Tests for the LLM incident analysis feature:
 - on_action_analyze publishes the correct job
-- Rejects when LLM_HANDLER_API_KEY not set
+- Rejects when the exact policy route is not ready
 - Rejects when analysis already in progress
 - merge_incidents tool
 - query_open_incidents tool
@@ -32,6 +32,13 @@ def _text_block(text):
     return {"type": "text", "text": text}
 
 
+def _route_state(ready, code=""):
+    return {
+        "ready": ready, "error": code,
+        "provider": "anthropic", "credential": "admin", "model": "test-model",
+    }
+
+
 def _cleanup():
     """Clean up test data before each test."""
     from mojo.apps.incident.models import Event, Incident, RuleSet
@@ -40,6 +47,144 @@ def _cleanup():
     Incident.objects.filter(category__startswith="analyze_test").delete()
     RuleSet.objects.filter(category__startswith="analyze_test").delete()
     Job.objects.filter(channel="default").delete()
+
+
+class _ManagedTriageJob:
+    def __init__(self, event, incident, attempt_id=None):
+        self.pk = f"triage-test-{incident.pk}"
+        self.payload = {
+            "_llm_attempt_adopted": True,
+            "_llm_attempt_id": attempt_id,
+            "_llm_lease_owner": None,
+            "event_id": event.pk,
+            "incident_id": incident.pk,
+            "ruleset_id": None,
+        }
+
+
+@th.django_unit_test("Triage requires a durable outcome before success")
+def test_triage_noop_retries_but_ticket_and_assessment_succeed(opts):
+    from mojo.apps.incident.handlers import llm_agent
+    from mojo.apps.incident.models import Event, Incident, Ticket
+    from mojo.helpers.llm import LLMExecutionError
+
+    _cleanup()
+
+    def make_incident(label):
+        incident = Incident.objects.create(
+            priority=7, state=0, status="investigating",
+            category=f"analyze_test_triage_{label}", scope="global",
+            title=f"Triage {label}")
+        event = Event.objects.create(
+            category=incident.category, level=7, title=incident.title,
+            incident=incident)
+        return incident, event
+
+    no_op, no_op_event = make_incident("noop")
+    with patch.object(llm_agent, "_run_agent_loop", return_value={
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "No durable action"}],
+    }):
+        try:
+            llm_agent.execute_llm_handler(_ManagedTriageJob(no_op_event, no_op))
+            assert False, "a no-op end_turn must not become a successful triage"
+        except LLMExecutionError as err:
+            assert err.code == "triage_incomplete", \
+                f"no-op triage must use the stable transient code, got {err.code}"
+
+    ticketed, ticketed_event = make_incident("ticket")
+
+    def create_ticket(*args, **kwargs):
+        Ticket.objects.create(title="Durable follow-up", incident=ticketed)
+        return {"stop_reason": "end_turn", "content": []}
+
+    with patch.object(llm_agent, "_run_agent_loop", side_effect=create_ticket):
+        llm_agent.execute_llm_handler(_ManagedTriageJob(ticketed_event, ticketed))
+    ticketed.refresh_from_db()
+    assert ticketed.status == "investigating", \
+        "a triage-created ticket is a valid outcome that may remain investigating"
+
+    assessed, assessed_event = make_incident("assessed")
+
+    def resolve_incident(*args, **kwargs):
+        Incident.objects.filter(pk=assessed.pk).update(status="resolved")
+        return {"stop_reason": "end_turn", "content": []}
+
+    with patch.object(llm_agent, "_run_agent_loop", side_effect=resolve_incident):
+        llm_agent.execute_llm_handler(_ManagedTriageJob(assessed_event, assessed))
+    assessed.refresh_from_db()
+    assert assessed.status == "resolved", \
+        f"an assessed triage outcome must succeed, got {assessed.status}"
+
+
+@th.django_unit_test("Triage outcome provenance spans the logical attempt")
+def test_triage_attempt_provenance_survives_redelivery(opts):
+    from mojo.apps.incident.handlers import llm_agent
+    from mojo.apps.incident.models import Event, Incident, Ticket
+    from mojo.apps.incident.services import llm_dispatch
+    from mojo.helpers.llm import LLMExecutionError
+
+    _cleanup()
+
+    def make_attempt(label, metadata=None, preexisting_ticket=False):
+        incident = Incident.objects.create(
+            priority=7, state=0, status="new",
+            category=f"analyze_test_attempt_{label}", scope="global",
+            title=f"Attempt {label}", metadata=metadata or {})
+        event = Event.objects.create(
+            category=incident.category, level=7, title=incident.title,
+            incident=incident)
+        if preexisting_ticket:
+            Ticket.objects.create(title="Old ticket", incident=incident)
+        attempt, _ = llm_dispatch.claim_incident(
+            incident, event_id=event.pk, logical_suffix=label)
+        incident.refresh_from_db()
+        return incident, event, attempt
+
+    ticketed, ticketed_event, ticketed_attempt = make_attempt("ticket")
+
+    def ticket_then_fail(*args, **kwargs):
+        Ticket.objects.create(title="Attempt ticket", incident=ticketed)
+        raise LLMExecutionError("provider_timeout")
+
+    with patch.object(llm_agent, "_run_agent_loop", side_effect=ticket_then_fail):
+        try:
+            llm_agent.execute_llm_handler(_ManagedTriageJob(
+                ticketed_event, ticketed, ticketed_attempt.pk))
+            assert False, "the scripted first delivery did not fail"
+        except LLMExecutionError as err:
+            assert err.code == "provider_timeout", \
+                f"first delivery lost its safe failure: {err.code}"
+    with patch.object(llm_agent, "_run_agent_loop", return_value={
+            "stop_reason": "end_turn", "content": []}):
+        llm_agent.execute_llm_handler(_ManagedTriageJob(
+            ticketed_event, ticketed, ticketed_attempt.pk))
+    ticketed.refresh_from_db()
+    assert ticketed.status == "investigating", \
+        "a ticket from delivery one did not validate delivery two"
+
+    assessed, assessed_event, assessed_attempt = make_attempt("assessment")
+    llm_agent._tool_update_incident({
+        "incident_id": assessed.pk, "status": "investigating",
+        "note": "Durable assessment from delivery one"})
+    with patch.object(llm_agent, "_run_agent_loop", return_value={
+            "stop_reason": "end_turn", "content": []}):
+        llm_agent.execute_llm_handler(_ManagedTriageJob(
+            assessed_event, assessed, assessed_attempt.pk))
+
+    stale, stale_event, stale_attempt = make_attempt(
+        "stale", metadata={"llm_assessment": {
+            "status": "investigating", "note": "Legacy assessment"}},
+        preexisting_ticket=True)
+    with patch.object(llm_agent, "_run_agent_loop", return_value={
+            "stop_reason": "end_turn", "content": []}):
+        try:
+            llm_agent.execute_llm_handler(_ManagedTriageJob(
+                stale_event, stale, stale_attempt.pk))
+            assert False, "preexisting ticket/assessment falsely completed triage"
+        except LLMExecutionError as err:
+            assert err.code == "triage_incomplete", \
+                f"stale provenance used the wrong safe code: {err.code}"
 
 
 @th.django_unit_test("Analyze action: publishes job with correct payload")
@@ -56,25 +201,30 @@ def test_analyze_action_publishes_job(opts):
         source_ip="10.0.0.50",
     )
 
-    with patch("mojo.helpers.settings.settings.get", side_effect=lambda k, d=None: "test-key" if k == "LLM_HANDLER_API_KEY" else d):
+    with patch(
+            "mojo.apps.account.services.llm_safety.route_state",
+            return_value=_route_state(True)):
         result = incident.on_action_analyze(None)
 
     assert result["status"] is True, f"Expected status=True, got {result}"
 
     # Verify the job was published
     job = Job.objects.filter(
-        func="mojo.apps.incident.handlers.llm_agent.execute_llm_analysis"
+        func="mojo.apps.incident.services.llm_dispatch.execute_attempt"
     ).order_by("-created").first()
     assert job is not None, "Expected analysis job to be published"
-    assert job.payload["incident_id"] == incident.pk, f"Expected incident_id={incident.pk}, got {job.payload}"
+    from mojo.apps.incident.models import IncidentLLMAttempt
+    attempt = IncidentLLMAttempt.objects.get(pk=job.payload["attempt_id"])
+    assert attempt.incident_id == incident.pk and attempt.feature == "incident_analysis", \
+        f"Expected managed analysis for incident_id={incident.pk}, got {job.payload} / {attempt.feature}"
 
     # Verify in-progress flag was set
     incident.refresh_from_db()
     assert incident.metadata.get("analysis_in_progress") is True, "Expected analysis_in_progress=True in metadata"
 
 
-@th.django_unit_test("Analyze action: rejects when no API key")
-def test_analyze_action_no_api_key(opts):
+@th.django_unit_test("Analyze action: rejects when exact route is not ready")
+def test_analyze_action_route_not_ready(opts):
     from mojo.apps.incident.models import Incident
 
     _cleanup()
@@ -85,15 +235,18 @@ def test_analyze_action_no_api_key(opts):
         title="No API key test",
     )
 
-    with patch("mojo.helpers.settings.settings.get", side_effect=lambda k, d=None: None if k == "LLM_HANDLER_API_KEY" else d):
+    with patch(
+            "mojo.apps.account.services.llm_safety.route_state",
+            return_value=_route_state(False, "credential_missing")):
         result = incident.on_action_analyze(None)
 
     assert result["status"] is False, f"Expected status=False, got {result}"
-    assert "not configured" in result["error"], f"Expected config error, got {result['error']}"
+    assert result["error"] == "credential_missing", \
+        f"Expected stable exact-route error, got {result['error']}"
 
 
-@th.django_unit_test("Analyze action: rejects when already in progress")
-def test_analyze_action_already_in_progress(opts):
+@th.django_unit_test("Analyze action: stale metadata cannot suppress fresh work")
+def test_analyze_action_stale_metadata_is_reclaimed(opts):
     from mojo.apps.incident.models import Incident
 
     _cleanup()
@@ -105,11 +258,13 @@ def test_analyze_action_already_in_progress(opts):
         metadata={"analysis_in_progress": True},
     )
 
-    with patch("mojo.helpers.settings.settings.get", side_effect=lambda k, d=None: "test-key" if k == "LLM_HANDLER_API_KEY" else d):
+    with patch(
+            "mojo.apps.account.services.llm_safety.route_state",
+            return_value=_route_state(True)):
         result = incident.on_action_analyze(None)
 
-    assert result["status"] is False, f"Expected status=False, got {result}"
-    assert "already in progress" in result["error"], f"Expected in-progress error, got {result['error']}"
+    assert result["status"] is True and result["created"] is True, \
+        f"stale metadata must not suppress fresh managed work: {result}"
 
 
 @th.django_unit_test("merge_incidents tool: merges same-category incidents")
@@ -336,6 +491,8 @@ def test_llm_analysis_full_loop(opts):
                 channel="default",
             )
             executed = th.run_pending_jobs(channel="default")
+            executed += th.run_pending_jobs(channel="incident_handlers")
+            executed += th.run_pending_jobs(channel="incident_handlers")
 
     assert executed >= 1, f"Expected at least 1 job executed, got {executed}"
 

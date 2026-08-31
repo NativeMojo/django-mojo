@@ -2,6 +2,10 @@
 
 User-defined recurring or one-off tasks that run at specific times of day on specific days of the week. The system dispatches tasks via the existing job engine — no separate process required.
 
+LLM tasks execute as the fixed `scheduled_task` feature through the mandatory
+LLM safety policy. Results store only fixed safe guard/provider error codes;
+billing, authentication, budget, or breaker failures never fail over.
+
 ## Models
 
 ```python

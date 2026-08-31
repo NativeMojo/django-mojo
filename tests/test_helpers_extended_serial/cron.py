@@ -116,12 +116,70 @@ def test_incident_cronjobs_registered(opts):
     assert refresh_spec['weekdays'] == '0', \
         f"refresh_ipsets should run on weekday 0 (weekdays='0'), got {refresh_spec['weekdays']!r}"
 
+    triage_spec = next(
+        (s for s in schedule.scheduled_functions if s['func'].__name__ == "triage_new_incidents"),
+        None
+    )
+    assert triage_spec is not None, "triage_new_incidents spec not found"
+    assert triage_spec['minutes'] == '0', \
+        f"triage_new_incidents must run only at minute zero, got {triage_spec['minutes']!r}"
+    assert triage_spec['hours'] == '9,18', \
+        f"triage_new_incidents must run only at 09:00 and 18:00, got {triage_spec['hours']!r}"
+
     # Restore scheduled_functions and pop the freshly-imported module from
     # sys.modules so that subsequent tests that import it will trigger fresh
     # decorator registration, keeping sys.modules and scheduled_functions consistent.
     if hasattr(schedule, 'scheduled_functions'):
         schedule.scheduled_functions[:] = existing
     sys.modules.pop("mojo.apps.incident.cronjobs", None)
+
+
+@th.django_unit_test()
+def test_incident_triage_gates_use_exact_policy_route(opts):
+    from mojo.apps.incident import cronjobs
+    from mojo.apps.incident.models.event import _autonomous_llm_enabled
+
+    route = {
+        "ready": True, "error_code": "", "provider": "anthropic",
+        "credential": "admin", "model": "policy-model",
+    }
+    with patch(
+            "mojo.apps.account.services.llm_safety.autonomous_triage_state",
+            return_value=(True, None)), patch(
+                "mojo.apps.account.services.llm_safety.route_state",
+                return_value=route):
+        assert cronjobs._llm_triage_enabled() is True, \
+            "an enabled admin-routed triage feature must not require the handler key"
+        assert _autonomous_llm_enabled() is True, \
+            "event admission must accept the same exact ready route"
+
+    route["ready"] = False
+    route["error_code"] = "credential_missing"
+    with patch(
+            "mojo.apps.account.services.llm_safety.autonomous_triage_state",
+            return_value=(True, None)), patch(
+                "mojo.apps.account.services.llm_safety.route_state",
+                return_value=route):
+        assert cronjobs._llm_triage_enabled() is False, \
+            "a present legacy key must not admit a policy route that is not ready"
+        assert _autonomous_llm_enabled() is False, \
+            "event admission must fail closed with the policy route"
+
+
+@th.django_unit_test()
+def test_incident_triage_sweep_publish_is_minute_idempotent(opts):
+    from mojo.apps.incident import cronjobs
+
+    scheduled_at = datetime.datetime(2026, 8, 31, 9, 0)
+    with patch.object(cronjobs, "_llm_triage_enabled", return_value=True), \
+            patch.object(cronjobs.jobs, "publish", return_value="job") as publish:
+        cronjobs.triage_new_incidents(now=scheduled_at)
+        cronjobs.triage_new_incidents(now=scheduled_at)
+
+    keys = [call.kwargs.get("idempotency_key") for call in publish.call_args_list]
+    assert len(keys) == 2, f"duplicate delivery should make two idempotent attempts, got {keys}"
+    assert keys[0] == keys[1], \
+        f"the same scheduled minute must use the same idempotency key, got {keys}"
 
 
 # ---------------------------------------------------------------------------

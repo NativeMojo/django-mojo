@@ -10,6 +10,7 @@ All functions degrade gracefully when Redis is unavailable.
 """
 import re
 import time
+import uuid
 import ujson
 from mojo.helpers import logit
 from mojo.helpers.settings import settings
@@ -701,7 +702,10 @@ def dream_tier(tier, redis_key, tier_label=None):
     )
 
     try:
-        response = llm.ask(prompt, system="You are a memory management assistant. Return only valid JSON.")
+        response = llm.ask(
+            prompt, system="You are a memory management assistant. Return only valid JSON.",
+            feature="memory", operation="memory_dream",
+            context={"operation_id": uuid.uuid4().hex})
     except Exception:
         logger.exception("dream_tier: LLM call failed for %s", redis_key)
         return None

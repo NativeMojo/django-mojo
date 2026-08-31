@@ -35,18 +35,24 @@ FLEET_PROVIDER_KEYS = frozenset({
     "GEOIP_MOJO_SYNC_ENABLED", "GEOIP_API_KEY_MOJO",
     "ADMIN_PROVIDER_SETUP_REVISION", "ADMIN_PROVIDER_VERIFY_STATE",
 })
-# The Assistant keys.  All seven are owned by ``services/assistant_setup`` and
-# reached only through the owner-tier endpoint: the Assistant's own credential,
-# model and flag, the PLATFORM credential ``LLM_HANDLER_API_KEY`` (every LLM
-# feature, and the Assistant's fallback), and ``ASSISTANT_MCP_ENABLED``, the
-# remote agent access (MCP) switch whose descriptor is registered by the
-# assistant app.  A global database row outranks the deployment file
-# (``helpers/settings/helper.py``), which is exactly why the generic settings
-# surface must refuse them and only the owner editor may write.
+# The eleven protected LLM/Assistant controls. Ten are owned by
+# ``services.assistant_setup`` and reached only through its owner-tier endpoint;
+# ``LLM_SAFETY_POLICY_EXPECTED_HASH`` is written only by
+# ``llm_safety.activate_policy``. The safety-policy route for each guarded
+# feature owns its exact credential target and model: ``LLM_ADMIN_API_KEY`` and
+# ``LLM_HANDLER_API_KEY`` are independent targets, never fallbacks for one
+# another. ``ASSISTANT_MCP_ENABLED`` is the remote-agent switch whose descriptor
+# is registered by the assistant app. A global database row outranks the
+# deployment file (``helpers/settings/helper.py``), which is exactly why the
+# generic settings surface must refuse all eleven and only their dedicated
+# owner writers may save them.
 ASSISTANT_WRITABLE_KEYS = frozenset({
     "LLM_ADMIN_ENABLED", "LLM_ADMIN_API_KEY", "LLM_ADMIN_MODEL",
     "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY", "LLM_HANDLER_VERIFY_STATE",
-    "ASSISTANT_MCP_ENABLED",
+    "ASSISTANT_MCP_ENABLED", "LLM_EMERGENCY_STOP",
+    "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED",
+    "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT",
+    "LLM_SAFETY_POLICY_EXPECTED_HASH",
 })
 # Every Assistant key the generic global writers must refuse.  Protection and
 # writability are separate questions: this set is what fails closed, and it may
@@ -541,6 +547,11 @@ def register_core_descriptors():
                    "Secure redirect, cookie, and HSTS deployment controls.", "object",
                    resolver="posture", writable="none", owner="Deployment settings",
                    change_behavior="deploy"),
+        Descriptor("LLM_SAFETY_POLICY", "LLM safety policy", "Security & operations",
+                   "Required provider routes and installation budget envelope.", "object",
+                   resolver="static", writable="none", owner="Deployment settings",
+                   change_behavior="restart", storage="deployment",
+                   unset_meaning="all external LLM requests are denied"),
         Descriptor("KMS_KEY_ID", "KMS encryption", "Security & operations",
                    "Encryption key configuration state.", "configured", resolver="static",
                    sensitivity="configured_only", writable="none", owner="Deployment settings",

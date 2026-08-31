@@ -154,6 +154,13 @@ def test_admin_assistant_rest_decorators(opts):
     assert "request.POST" not in source and "request.GET" not in source, \
         "the Assistant setup endpoints read input from something other than request.DATA"
 
+    for bundle in ("admin_portal", "admin_portal_v2"):
+        setup_source = (ROOT / f"mojo/apps/account/{bundle}/assets/assistant/setup.js").read_text()
+        assert "checked: state.emergency_stop_database" in setup_source, \
+            f"{bundle} binds its editable checkbox to effective/static stop state"
+        assert "emergency_stop: emergencyStop.checked" in setup_source, \
+            f"{bundle} does not submit the database stop control"
+
 
 # ---------------------------------------------------------------------------
 # Remote agent access (MCP)
@@ -252,7 +259,10 @@ def test_assistant_keys_are_catalog_protected(opts):
 
     for key in ("LLM_ADMIN_ENABLED", "LLM_ADMIN_API_KEY", "LLM_ADMIN_MODEL",
                 "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY",
-                "LLM_HANDLER_VERIFY_STATE", "ASSISTANT_MCP_ENABLED"):
+                "LLM_HANDLER_VERIFY_STATE", "ASSISTANT_MCP_ENABLED",
+                "LLM_EMERGENCY_STOP", "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED",
+                "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT",
+                "LLM_SAFETY_POLICY_EXPECTED_HASH"):
         assert admin_settings.is_catalog_protected(key), \
             f"{key} can still be written through the generic settings API"
 
@@ -287,6 +297,56 @@ def test_assistant_keys_are_catalog_protected(opts):
     model = (ROOT / "mojo/apps/account/models/setting.py").read_text()
     assert "protected_writer != self.key" in model, \
         "the protected-writer escape no longer requires the writer to name this row's key"
+
+
+@th.django_unit_test("both Admin bundles expose the exact fresh-owner LLM actions")
+def test_llm_safety_actions_match_in_both_admin_bundles(opts):
+    first = (ROOT / "mojo/apps/account/admin_portal/assets/assistant/setup.js").read_text()
+    second = (ROOT / "mojo/apps/account/admin_portal_v2/assets/assistant/setup.js").read_text()
+    assert first == second, "the two Admin Assistant setup bundles drifted"
+    for action in ("activate_policy", "reset_breaker", "historical_triage"):
+        literal = f"action: '{action}'"
+        assert first.count(literal) == 1, \
+            f"the Admin setup must expose exactly one {action} action, got {first.count(literal)}"
+    from mojo.apps.account.services import assistant_setup
+    assert assistant_setup.SCHEMA_VERSION == 2, \
+        f"Assistant setup must advertise state schema v2, got {assistant_setup.SCHEMA_VERSION}"
+
+
+@th.django_unit_test("Assistant readiness and copy are owned by the exact policy route")
+def test_assistant_bundle_uses_exact_route_readiness(opts):
+    source = (ROOT / "mojo/apps/account/admin_portal/assets/assistant/setup.js").read_text()
+    code = _code(source)
+    assert code.count("state.route?.ready") >= 2, \
+        "rendered and synchronized readiness do not both use the exact route"
+    assert "state.enabled && state.key.configured" not in code, \
+        "legacy key presence can still override route readiness"
+    assert "state.model.effective" not in code and "SOURCE_COPY" in code, \
+        "the bundle still renders a legacy effective model"
+    assert "fallback:" not in code, \
+        "the exact credential display still advertises handler fallback"
+    assert "state.route.provider" in code and "state.route.credential" in code \
+        and "state.route.model" in code, \
+        "readiness copy does not identify the safe exact route fields"
+
+
+@th.django_unit_test("Assistant REST realtime and WebSocket admission use the exact route")
+def test_assistant_runtime_admission_uses_exact_route(opts):
+    paths = (
+        ROOT / "mojo/apps/assistant/services/agent.py",
+        ROOT / "mojo/apps/assistant/handler.py",
+    )
+    for path in paths:
+        source = _code(path.read_text())
+        assert 'route_state("assistant")' in source, \
+            f"{path.name} does not gate on the exact Assistant policy route"
+        assert "llm.get_api_key()" not in source, \
+            f"{path.name} still gates on legacy credential fallback"
+    agent = _code(paths[0].read_text())
+    assert "Check LLM_ADMIN_API_KEY setting" not in agent, \
+        "Assistant provider-auth copy hard-codes the admin credential target"
+    assert "configured LLM route credential" in agent, \
+        "Assistant provider-auth copy does not direct operators to the exact route"
 
 
 @th.django_unit_test("the Assistant setup body never reaches the generic request logs")

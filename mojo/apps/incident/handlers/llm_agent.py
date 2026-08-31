@@ -15,6 +15,7 @@ Prompt hierarchy:
     3. RuleSet.metadata.agent_memory — LLM's own learnings for this rule type
     4. Event/incident context — structured data in the user message
 """
+import uuid
 import ujson
 from mojo.helpers.settings import settings
 from mojo.helpers import logit, llm
@@ -25,10 +26,13 @@ RULESET_BUNDLE_BY_VALUES = list(range(14))
 
 
 def _get_llm_api_key():
-    return llm.get_api_key()
+    """Legacy test seam; guarded runtime never exposes or checks raw keys."""
+    return None
 
 def _get_llm_model():
-    return llm.get_model("general")
+    """Legacy test seam backed by the exact triage route model."""
+    from mojo.apps.account.services import llm_safety
+    return llm_safety.route_state("incident_triage").get("model")
 
 SYSTEM_PROMPT = """You are a security operations agent responsible for triaging incidents in a web application fleet.
 
@@ -80,7 +84,8 @@ Your goal is to identify the pattern behind this incident, find and merge relate
 a RuleSet that will auto-handle this pattern in the future — so no new open incidents pile up.
 
 ## Your Workflow
-1. Set the target incident to "investigating".
+1. Preserve the target's current status while gathering context; change it only
+   when recording an actual assessment or resolution.
 2. Review the pre-loaded events and related incidents below.
 3. Use query_open_incidents to find all open incidents in this category.
 4. For incidents that clearly represent the same pattern, merge them into the target incident using merge_incidents.
@@ -594,6 +599,7 @@ def _tool_query_incident_events(params):
 
 def _tool_update_incident(params):
     from mojo.apps.incident.models import Incident
+    from django.utils import timezone
 
     incident = Incident.objects.get(pk=params["incident_id"])
     old_status = incident.status
@@ -608,6 +614,7 @@ def _tool_update_incident(params):
     incident.metadata["llm_assessment"] = {
         "status": params["status"],
         "note": params["note"],
+        "assessed_at": timezone.now().isoformat(),
     }
     if params.get("do_not_delete"):
         incident.metadata["do_not_delete"] = True
@@ -1449,18 +1456,38 @@ TOOL_DISPATCH = {
 # Agent execution
 # ---------------------------------------------------------------------------
 
-def _call_claude(messages, system_prompt, tools=None):
+def _call_claude(messages, system_prompt, tools=None, feature="incident_triage",
+                 context=None):
     """Call Claude API with tool use. Returns the response as a dict."""
-    return llm.call(messages, system=system_prompt, tools=tools or TOOLS)
+    return llm.call(
+        messages, system=system_prompt, tools=tools or TOOLS,
+        feature=feature, context=context)
 
 
-def _run_agent_loop(messages, system_prompt, max_iterations=15, tools=None):
+def _run_agent_loop(messages, system_prompt, max_iterations=15, tools=None,
+                    feature="incident_triage", context=None, lease=None):
     """
     Run the agent loop: call Claude, execute tools, feed results back,
     repeat until Claude stops calling tools.
     """
-    for _ in range(max_iterations):
-        result = _call_claude(messages, system_prompt, tools=tools)
+    operation_id = uuid.uuid4().hex
+
+    def require_lease():
+        if lease and all(lease):
+            from mojo.apps.incident.services import llm_dispatch
+            if not llm_dispatch.renew_lease(*lease):
+                raise llm.LLMExecutionError("operation_invalid")
+
+    for loop_index in range(max_iterations):
+        require_lease()
+        call_context = dict(context or {})
+        call_context["operation_id"] = operation_id
+        result = _call_claude(
+            messages, system_prompt, tools=tools, feature=feature,
+            context=call_context)
+        # A provider round trip may consume most of the lease. Revalidate
+        # ownership before reading tool instructions or mutating anything.
+        require_lease()
         stop_reason = result.get("stop_reason")
 
         # Add assistant response to messages
@@ -1481,11 +1508,13 @@ def _run_agent_loop(messages, system_prompt, max_iterations=15, tools=None):
             tool_id = block["id"]
 
             try:
+                require_lease()
                 handler = TOOL_DISPATCH.get(tool_name)
                 if not handler:
                     tool_result = {"error": f"Unknown tool: {tool_name}"}
                 else:
                     tool_result = handler(tool_input)
+                require_lease()
             except Exception as e:
                 logger.exception("LLM tool %s failed", tool_name)
                 tool_result = {"error": str(e)}
@@ -1497,9 +1526,10 @@ def _run_agent_loop(messages, system_prompt, max_iterations=15, tools=None):
             })
 
         messages.append({"role": "user", "content": tool_results})
+        require_lease()
 
     logger.warning("LLM agent hit max iterations (%d)", max_iterations)
-    return None
+    raise llm.LLMExecutionError("loop_limit")
 
 
 def _build_system_prompt(ruleset=None):
@@ -1668,10 +1698,14 @@ def execute_llm_handler(job):
         incident_id: ID of the Incident
         ruleset_id: ID of the RuleSet that triggered this (optional)
     """
-    if not _get_llm_api_key():
-        logger.warning("LLM handler called but LLM_HANDLER_API_KEY not configured")
+    if not job.payload.get("_llm_attempt_adopted"):
+        from mojo.apps.incident.services import llm_dispatch
+        payload = job.payload
+        if payload.get("incident_id"):
+            llm_dispatch.adopt_legacy_job(
+                job, "incident_triage", payload["incident_id"],
+                event_id=payload.get("event_id"), ruleset_id=payload.get("ruleset_id"))
         return
-
     payload = job.payload
     event_id = payload.get("event_id")
     incident_id = payload.get("incident_id")
@@ -1683,7 +1717,7 @@ def execute_llm_handler(job):
         event = Event.objects.get(pk=event_id)
     except Exception:
         logger.exception("LLM handler: failed to load event %s", event_id)
-        return
+        raise llm.LLMExecutionError("context_invalid") from None
 
     # Load incident
     incident = None
@@ -1692,7 +1726,7 @@ def execute_llm_handler(job):
             from mojo.apps.incident.models import Incident
             incident = Incident.objects.get(pk=incident_id)
         except Exception:
-            logger.warning("LLM handler: incident %s not found", incident_id)
+            raise llm.LLMExecutionError("context_invalid") from None
 
     # Load ruleset for custom prompt
     ruleset = None
@@ -1708,11 +1742,57 @@ def execute_llm_handler(job):
     user_message = _build_incident_message(event, incident)
 
     messages = [{"role": "user", "content": user_message}]
+    before_assessment = dict((incident.metadata or {}).get("llm_assessment") or {}) \
+        if incident else {}
+    attempt_started = None
+    if payload.get("_llm_attempt_id"):
+        from mojo.apps.incident.models import IncidentLLMAttempt
+        attempt_started = IncidentLLMAttempt.objects.filter(
+            pk=payload["_llm_attempt_id"]).values_list(
+                "created", flat=True).first()
+    if incident:
+        from mojo.apps.incident.models import Ticket
+        before_ticket_ids = set(Ticket.objects.filter(
+            incident=incident).values_list("pk", flat=True))
+    else:
+        before_ticket_ids = set()
 
     try:
-        result = _run_agent_loop(messages, system_prompt)
+        result = _run_agent_loop(
+            messages, system_prompt, feature="incident_triage",
+            context={"job_id": job.pk, "incident_id": incident_id},
+            lease=(payload.get("_llm_attempt_id"), payload.get("_llm_lease_owner")))
         if incident:
-            # Extract final text response for the history
+            from mojo.apps.incident.models import Incident, Ticket
+            current = Incident.objects.filter(pk=incident.pk).values(
+                "status", "metadata").first()
+            if current is not None and current["status"] == "investigating":
+                assessment = dict(
+                    (current["metadata"] or {}).get("llm_assessment") or {})
+                if attempt_started is not None:
+                    from django.utils import timezone
+                    from django.utils.dateparse import parse_datetime
+                    assessed_at = parse_datetime(
+                        str(assessment.get("assessed_at") or ""))
+                    durable_assessment = bool(
+                        assessed_at and not timezone.is_naive(assessed_at)
+                        and assessed_at >= attempt_started)
+                    created_ticket = Ticket.objects.filter(
+                        incident_id=incident.pk,
+                        created__gte=attempt_started).exists()
+                else:
+                    # Safe compatibility for direct/legacy calls without an
+                    # adopted attempt. Managed retries always use the durable
+                    # logical-attempt provenance above.
+                    durable_assessment = assessment != before_assessment
+                    created_ticket = Ticket.objects.filter(
+                        incident_id=incident.pk).exclude(
+                            pk__in=before_ticket_ids).exists()
+                if not durable_assessment and not created_ticket:
+                    raise llm.LLMExecutionError("triage_incomplete")
+            # Only record completion after the durable outcome check. A plain
+            # end_turn while the incident is still investigating is retryable,
+            # not a successful assessment.
             text_parts = []
             if result and result.get("content"):
                 for block in result["content"]:
@@ -1727,6 +1807,7 @@ def execute_llm_handler(job):
         if incident:
             incident.add_history("handler:llm",
                 note="[LLM Agent] Triage failed due to an error")
+        raise
 
 
 def _build_analysis_message(incident):
@@ -1789,10 +1870,12 @@ def execute_llm_analysis(job):
     job.payload keys:
         incident_id: ID of the Incident to analyze
     """
-    if not _get_llm_api_key():
-        logger.warning("LLM analysis called but LLM_HANDLER_API_KEY not configured")
+    if not job.payload.get("_llm_attempt_adopted"):
+        from mojo.apps.incident.services import llm_dispatch
+        if job.payload.get("incident_id"):
+            llm_dispatch.adopt_legacy_job(
+                job, "incident_analysis", job.payload["incident_id"])
         return
-
     payload = job.payload
     incident_id = payload.get("incident_id")
 
@@ -1801,7 +1884,7 @@ def execute_llm_analysis(job):
         incident = Incident.objects.get(pk=incident_id)
     except Exception:
         logger.exception("LLM analysis: failed to load incident %s", incident_id)
-        return
+        raise llm.LLMExecutionError("context_invalid") from None
 
     # Load ruleset for custom prompt context
     ruleset = None
@@ -1830,7 +1913,11 @@ def execute_llm_analysis(job):
     all_tools = TOOLS + ANALYSIS_TOOLS
 
     try:
-        result = _run_agent_loop(messages, system_prompt, tools=all_tools)
+        result = _run_agent_loop(
+            messages, system_prompt, tools=all_tools,
+            feature="incident_analysis",
+            context={"job_id": job.pk, "incident_id": incident_id},
+            lease=(payload.get("_llm_attempt_id"), payload.get("_llm_lease_owner")))
 
         # Store analysis result
         text_parts = []
@@ -1844,7 +1931,6 @@ def execute_llm_analysis(job):
         incident.metadata["llm_analysis"] = {
             "summary": "\n".join(text_parts)[:3000] if text_parts else "Analysis completed",
         }
-        incident.metadata["analysis_in_progress"] = False
         incident.save(update_fields=["metadata"])
 
         if text_parts:
@@ -1853,16 +1939,12 @@ def execute_llm_analysis(job):
                 note=f"[LLM Agent] Analysis complete: {summary}")
     except Exception:
         logger.exception("LLM analysis failed for incident %s", incident_id)
-        # Clear in-progress flag
         try:
-            if not incident.metadata:
-                incident.metadata = {}
-            incident.metadata["analysis_in_progress"] = False
-            incident.save(update_fields=["metadata"])
             incident.add_history("handler:llm",
                 note="[LLM Agent] Analysis failed due to an error")
         except Exception:
             pass
+        raise
 
 
 
@@ -1876,17 +1958,20 @@ def execute_llm_ticket_reply(job):
         ticket_id: ID of the Ticket
         note_id: ID of the new TicketNote that triggered this
     """
-    if not _get_llm_api_key():
-        job.add_log("no API key configured — skipping", kind="warn")
+    if not job.payload.get("_llm_attempt_adopted"):
+        from mojo.apps.incident.models import Ticket
+        from mojo.apps.incident.services import llm_dispatch
+        ticket = Ticket.objects.filter(pk=job.payload.get("ticket_id")).first()
+        if ticket:
+            llm_dispatch.claim_ticket(ticket, note_id=job.payload.get("note_id"))
         return
-
     payload = job.payload
     ticket_id = payload.get("ticket_id")
     note_id = payload.get("note_id")
 
     if not ticket_id:
         job.add_log("missing ticket_id in payload", kind="error")
-        return
+        raise llm.LLMExecutionError("context_invalid")
 
     # Load ticket
     try:
@@ -1894,14 +1979,14 @@ def execute_llm_ticket_reply(job):
         ticket = Ticket.objects.get(pk=ticket_id)
     except Ticket.DoesNotExist:
         job.add_log(f"ticket #{ticket_id} not found", kind="error")
-        return
-    except Exception as e:
-        job.add_log(f"failed to load ticket #{ticket_id}: {e}", kind="error")
-        return
+        raise llm.LLMExecutionError("context_invalid") from None
+    except Exception:
+        job.add_log("failed to load ticket", kind="error")
+        raise llm.LLMExecutionError("provider_failed") from None
 
     if not ticket.is_llm_enabled():
         job.add_log(f"ticket #{ticket_id} has LLM disabled — skipping", kind="info")
-        return
+        raise llm.LLMExecutionError("context_invalid")
 
     job.add_log(f"ticket #{ticket_id}: {ticket.title!r} note={note_id}")
 
@@ -1976,26 +2061,21 @@ def execute_llm_ticket_reply(job):
 
     job.add_log(f"invoking agent: {note_count} notes, {len(reply_tools)} tools available")
     try:
-        result = _run_agent_loop(messages, system_prompt, tools=reply_tools)
-    except Exception as e:
-        msg = f"agent loop raised an exception: {e}"
-        job.add_log(msg, kind="error")
+        result = _run_agent_loop(
+            messages, system_prompt, tools=reply_tools,
+            feature="incident_ticket", context={
+                "job_id": job.pk,
+                "incident_id": ticket.incident_id if ticket.incident_id else None},
+            lease=(payload.get("_llm_attempt_id"), payload.get("_llm_lease_owner")))
+    except Exception as err:
+        code = getattr(err, "code", "provider_failed")
+        job.add_log(f"agent loop failed: {code}", kind="error")
         _append_ticket_note(
             ticket,
-            "I encountered an error while processing your message and could not respond. "
-            f"The job log has details. Error: {e}",
+            "I encountered a temporary error while processing your message and "
+            "could not respond. The request may be retried safely.",
         )
-        return
-
-    if result is None:
-        job.add_log("agent hit max iterations without completing", kind="warn")
-        _append_ticket_note(
-            ticket,
-            "I was unable to complete my analysis — the investigation exceeded the "
-            "maximum number of reasoning steps. Try rephrasing your question or "
-            "breaking it into smaller requests.",
-        )
-        return
+        raise
 
     # ------------------------------------------------------------------
     # Post the final text response as a ticket note — but only if the

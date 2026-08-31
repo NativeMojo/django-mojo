@@ -32,7 +32,10 @@ AGENT_PASSWORD = "Assistant_setup_Agent_99"
 
 KEYS = ("LLM_ADMIN_ENABLED", "LLM_ADMIN_API_KEY", "LLM_ADMIN_MODEL",
         "LLM_ADMIN_VERIFY_STATE", "LLM_HANDLER_API_KEY",
-        "LLM_HANDLER_VERIFY_STATE", "ASSISTANT_MCP_ENABLED")
+        "LLM_HANDLER_VERIFY_STATE", "ASSISTANT_MCP_ENABLED",
+        "LLM_EMERGENCY_STOP", "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED",
+        "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT",
+        "LLM_SAFETY_POLICY_EXPECTED_HASH")
 PLATFORM_KEY = "sk-ant-platform-setup-wxyz5678"
 
 STORED_KEY = "sk-ant-assistant-setup-abcd1234"
@@ -151,14 +154,19 @@ def _admin(opts):
 
 def _accepts():
     """Patch the provider check so it accepts, without reaching Anthropic."""
-    from mojo.helpers import llm
-    return mock.patch.object(llm, "verify_api_key", lambda key=None: (True, None))
+    from mojo.apps.account.services import assistant_setup
+    return mock.patch.object(
+        assistant_setup, "_verify_candidate",
+        lambda actor, candidate=None, stored_target=None: {
+            "ok": True, "code": "verified", "message": "Anthropic accepted this key."})
 
 
 def _rejects():
-    from mojo.helpers import llm
+    from mojo.apps.account.services import assistant_setup
     return mock.patch.object(
-        llm, "verify_api_key", lambda key=None: (False, "API key is invalid or expired."))
+        assistant_setup, "_verify_candidate",
+        lambda actor, candidate=None, stored_target=None: {
+            "ok": False, "code": "invalid_key", "message": "Anthropic rejected this key."})
 
 
 @th.django_unit_test("the stored credential is encrypted and never returned")
@@ -198,7 +206,7 @@ def test_saved_key_is_encrypted_and_write_only(opts):
         _wipe()
 
 
-@th.django_unit_test("Admin storage outranks the deployment fallback, and says so")
+@th.django_unit_test("Admin state reports exact credentials without fallback")
 def test_key_precedence_and_provenance(opts):
     from mojo.apps.account.models import Setting
     from mojo.apps.account.services import assistant_setup
@@ -206,21 +214,21 @@ def test_key_precedence_and_provenance(opts):
 
     _wipe()
     try:
-        # A pre-existing fallback row, created the only way a protected key can
-        # be: through the queryset, bypassing the guarded save path.
+        # A handler credential is a different exact target. It must not make
+        # the Assistant/admin credential appear configured.
         Setting.objects.bulk_create([
             Setting(key="LLM_HANDLER_API_KEY", group=None, value="sk-fallback-999988887777")])
         state = assistant_setup.state()
-        assert state["key"]["source"] == "fallback", \
-            f"a deployment-fallback-only installation reported {state['key']!r}"
-        assert state["key"]["hint"] == "7777", \
-            f"the fallback hint is not its last four characters: {state['key']!r}"
+        assert state["key"]["source"] == "none" and not state["key"]["configured"], \
+            f"the handler credential leaked into exact Assistant state: {state['key']!r}"
+        assert state["handler_key"]["source"] == "admin", \
+            f"the exact handler credential was not reported: {state['handler_key']!r}"
 
         with _accepts():
             assistant_setup.save(_admin(opts), enabled=True, model="", api_key=STORED_KEY)
         state = assistant_setup.state()
         assert state["key"]["source"] == "admin", \
-            f"a stored Admin credential did not outrank the fallback: {state['key']!r}"
+            f"a stored Admin credential was not reported exactly: {state['key']!r}"
         assert llm.get_api_key() == STORED_KEY, \
             "resolution still prefers the fallback over the Admin credential"
 
@@ -229,8 +237,8 @@ def test_key_precedence_and_provenance(opts):
         with _accepts():
             assistant_setup.save(_admin(opts), enabled=True, model="", clear_api_key=True)
         state = assistant_setup.state()
-        assert state["key"]["source"] == "fallback", \
-            f"clearing the Admin key did not fall back honestly: {state['key']!r}"
+        assert state["key"]["source"] == "none", \
+            f"clearing the Admin key retained a fallback display: {state['key']!r}"
     finally:
         _wipe()
 
@@ -253,6 +261,69 @@ def test_save_refuses_an_unverified_key(opts):
             "a refused save still flipped the feature flag"
     finally:
         _wipe()
+
+
+@th.django_unit_test("Assistant does not duplicate candidate-boundary audits")
+def test_rejected_save_candidate_has_no_setup_duplicate_audit(opts):
+    from mojo import errors as merrors
+    from mojo.apps.account.services import assistant_setup
+
+    outcomes = []
+    _wipe()
+    try:
+        with _rejects(), mock.patch.object(
+                assistant_setup, "_audit",
+                side_effect=lambda actor, fields, outcome, **kwargs:
+                outcomes.append((tuple(fields), outcome))):
+            with th.assert_raises(merrors.ValueException):
+                assistant_setup.save(
+                    _admin(opts), enabled=True, model="",
+                    api_key="sk-rejected-candidate")
+        assert outcomes == [], \
+            f"Assistant duplicated the llm_safety candidate audit: {outcomes}"
+    finally:
+        _wipe()
+
+
+@th.django_unit_test("ordinary Assistant state reads never discover models")
+def test_state_read_uses_route_and_cached_picker_only(opts):
+    from mojo.apps.account.services import assistant_setup
+    from mojo.helpers import llm
+
+    with mock.patch.object(llm, "get_models") as discovery:
+        state = assistant_setup.state(refresh=False)
+    assert discovery.call_count == 0, \
+        f"ordinary setup state triggered provider model discovery {discovery.call_count} time(s)"
+    assert state["model"]["effective"] == state["route"]["model"], \
+        f"state model is not owned by the guarded route: {state['model']} / {state['route']}"
+
+
+@th.django_unit_test("Assistant readiness follows the exact route in both directions")
+def test_readiness_uses_exact_route_not_legacy_key_presence(opts):
+    from mojo.apps.account.services import assistant_setup, llm_safety
+
+    with mock.patch.object(
+            assistant_setup.settings, "get",
+            side_effect=lambda key, default=None, **kwargs:
+            True if key == "LLM_ADMIN_ENABLED" else default), \
+            mock.patch.object(llm_safety, "route_state", return_value={
+                "ready": True, "error": "", "provider": "anthropic",
+                "credential": "admin", "model": "policy-model",
+            }):
+        assert assistant_setup.is_ready() is True, \
+            "a ready admin-routed Assistant was rejected for lacking a handler key"
+
+    with mock.patch.object(
+            assistant_setup.settings, "get",
+            side_effect=lambda key, default=None, **kwargs:
+            True if key == "LLM_ADMIN_ENABLED" else
+            ("legacy-handler" if key == "LLM_HANDLER_API_KEY" else default)), \
+            mock.patch.object(llm_safety, "route_state", return_value={
+                "ready": False, "error": "credential_missing", "provider": "anthropic",
+                "credential": "admin", "model": "policy-model",
+            }):
+        assert assistant_setup.is_ready() is False, \
+            "a legacy handler key admitted an unready admin-routed Assistant"
 
 
 @th.django_unit_test("only a check of the STORED key is recorded")
@@ -323,6 +394,29 @@ def test_enable_disable_round_trip(opts):
             "choosing Automatic did not remove the model pin"
         assert state["model"]["source"] == "automatic", \
             f"an unpinned model is not reported as automatic: {state['model']!r}"
+    finally:
+        _wipe()
+
+
+@th.django_unit_test("a static emergency stop is displayed but never persisted by Save")
+def test_static_stop_does_not_flip_database_stop(opts):
+    from mojo.apps.account.models import Setting
+    from mojo.apps.account.services import assistant_setup, llm_safety
+
+    _wipe()
+    try:
+        assistant_setup.save(
+            _admin(opts), enabled=False, model="", emergency_stop=False)
+        with mock.patch.object(llm_safety, "emergency_stop_static", return_value=True):
+            state = assistant_setup.state()
+            assert state["emergency_stop"] is True \
+                and state["emergency_stop_static"] is True \
+                and state["emergency_stop_database"] is False, \
+                f"effective/static/database stop halves were conflated: {state}"
+            assistant_setup.save(_admin(opts), enabled=True, model="")
+        Setting.objects.get(key="LLM_EMERGENCY_STOP", group=None)
+        assert llm_safety.emergency_stop_database() is False, \
+            "an unrelated Save under a static stop persisted database=true"
     finally:
         _wipe()
 
@@ -421,7 +515,7 @@ def test_endpoint_refuses_below_owner(opts):
         _wipe()
 
 
-@th.django_unit_test("the platform LLM key is settable, encrypted, honoured by every reader, and clearable")
+@th.django_unit_test("the platform LLM key is encrypted, exact-route gated, and clearable")
 def test_platform_key_is_settable_from_admin(opts):
     from mojo.apps.account.models import Setting
     from mojo.apps.account.services import assistant_setup
@@ -440,7 +534,8 @@ def test_platform_key_is_settable_from_admin(opts):
 
         with _accepts():
             state = assistant_setup.save(
-                _admin(opts), enabled=True, model="", handler_api_key=PLATFORM_KEY)
+                _admin(opts), enabled=True, model="", handler_api_key=PLATFORM_KEY,
+                autonomous_triage=True)
 
         row = Setting.objects.get(key="LLM_HANDLER_API_KEY", group=None)
         assert row.is_secret is True, "the platform key row is not marked secret"
@@ -451,24 +546,22 @@ def test_platform_key_is_settable_from_admin(opts):
         assert state["handler_key"]["source"] == "admin" and \
             state["handler_key"]["hint"] == PLATFORM_KEY[-4:], \
             f"a stored platform key is not reported as Admin-owned: {state['handler_key']!r}"
-        # With no Assistant key of its own, the Assistant resolves through the
-        # platform key — and says so.
-        assert state["key"]["source"] == "fallback" and state["key"]["hint"] == PLATFORM_KEY[-4:], \
-            f"the Assistant does not resolve through the stored platform key: {state['key']!r}"
+        assert state["key"]["source"] == "none" and not state["key"]["configured"], \
+            f"the platform key leaked into the exact admin credential display: {state['key']!r}"
         assert PLATFORM_KEY not in ujson.dumps(state), \
             "the platform key appears somewhere in the setup state payload"
         assert state["handler_verify"]["ok"] is True, \
             f"storing a verified platform key did not record its verification: {state['handler_verify']!r}"
 
-        # Every reader that used to freeze the deployment-file value at import
-        # now sees the Admin-stored row.
+        # Legacy helpers still resolve the stable facade, but credential
+        # presence alone is not route readiness or autonomous authority.
         assert llm.get_api_key() == PLATFORM_KEY, "the LLM helper does not resolve the stored platform key"
         assert settings.get("LLM_HANDLER_API_KEY") == PLATFORM_KEY, \
             "settings.get does not resolve the stored platform key"
-        assert incident_cron._llm_triage_enabled() is True, \
-            "incident triage ignores a platform key stored from the Admin"
-        assert incident_event._llm_api_key() == PLATFORM_KEY, \
-            "the default LLM triage path ignores a platform key stored from the Admin"
+        assert incident_cron._llm_triage_enabled() is False, \
+            "a stored platform key bypassed exact policy-route readiness"
+        assert incident_event._autonomous_llm_enabled() is False, \
+            "a stored platform key bypassed event admission route readiness"
 
         # Checking the stored platform key records against ITS record, not the
         # Assistant's.
