@@ -83,12 +83,13 @@ _META_TOOLS = frozenset(agent.META_TOOLS) | frozenset({
     "list_tools", "add_context",
 })
 
-# 2. Reads that SPEND the platform LLM credential. `analyze_image` sends an
-#    image plus a client-chosen prompt to `helpers.llm` on
-#    `LLM_HANDLER_API_KEY`, and read-only tools carry no approval gate — so
-#    over MCP it is an unmetered spend of the installation's own credential,
-#    driven by a remote client, with a free-text prompt. The rule is general:
-#    a read tool whose handler calls the platform LLM is not exposed over MCP.
+# 2. Reads that SPEND an installation-owned LLM credential. `analyze_image`
+#    sends an image plus a client-chosen prompt through the exact
+#    `file_analysis` safety-policy route; that route owns both credential and
+#    model. Read-only tools carry no approval gate, so over MCP this would be
+#    remotely driven installation spend with a free-text prompt. The rule is
+#    general: a read tool whose handler calls a guarded LLM route is not
+#    exposed over MCP.
 _LLM_SPENDING_READS = frozenset({
     "analyze_image",
 })
