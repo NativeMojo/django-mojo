@@ -19,3 +19,4 @@ from .mojosec_recommendation_target import MojoSecRecommendationTarget
 from .mojosec_recommendation_transition import MojoSecRecommendationTransition
 from .mojosec_execution_attempt import MojoSecExecutionAttempt
 from .mojosec_deployment import MojoSecDeployment
+from .llm_attempt import IncidentLLMAttempt

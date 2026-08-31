@@ -1676,6 +1676,14 @@ def execute_llm_handler(job):
         incident_id: ID of the Incident
         ruleset_id: ID of the RuleSet that triggered this (optional)
     """
+    if not job.payload.get("_llm_attempt_adopted"):
+        from mojo.apps.incident.services import llm_dispatch
+        payload = job.payload
+        if payload.get("incident_id"):
+            llm_dispatch.adopt_legacy_job(
+                job, "incident_triage", payload["incident_id"],
+                event_id=payload.get("event_id"), ruleset_id=payload.get("ruleset_id"))
+        return
     if not _get_llm_api_key():
         logger.warning("LLM handler called but LLM_HANDLER_API_KEY not configured")
         return
@@ -1799,6 +1807,12 @@ def execute_llm_analysis(job):
     job.payload keys:
         incident_id: ID of the Incident to analyze
     """
+    if not job.payload.get("_llm_attempt_adopted"):
+        from mojo.apps.incident.services import llm_dispatch
+        if job.payload.get("incident_id"):
+            llm_dispatch.adopt_legacy_job(
+                job, "incident_analysis", job.payload["incident_id"])
+        return
     if not _get_llm_api_key():
         logger.warning("LLM analysis called but LLM_HANDLER_API_KEY not configured")
         return
@@ -1889,6 +1903,13 @@ def execute_llm_ticket_reply(job):
         ticket_id: ID of the Ticket
         note_id: ID of the new TicketNote that triggered this
     """
+    if not job.payload.get("_llm_attempt_adopted"):
+        from mojo.apps.incident.models import Ticket
+        from mojo.apps.incident.services import llm_dispatch
+        ticket = Ticket.objects.filter(pk=job.payload.get("ticket_id")).first()
+        if ticket:
+            llm_dispatch.claim_ticket(ticket, note_id=job.payload.get("note_id"))
+        return
     if not _get_llm_api_key():
         job.add_log("no API key configured — skipping", kind="warn")
         return

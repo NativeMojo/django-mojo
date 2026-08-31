@@ -396,16 +396,9 @@ class Event(models.Model, MojoModel):
                 elif created and allow_default_llm and _autonomous_llm_enabled():
                     # No rule matched but level exceeded threshold — default to LLM triage
                     try:
-                        from mojo.apps import jobs
-                        jobs.publish(
-                            "mojo.apps.incident.handlers.llm_agent.execute_llm_handler",
-                            {
-                                "event_id": self.pk,
-                                "incident_id": incident.pk,
-                                "ruleset_id": None,
-                            },
-                            channel="incident_handlers",
-                        )
+                        from mojo.apps.incident.services import llm_dispatch
+                        llm_dispatch.claim_incident(
+                            incident, event_id=self.pk, ruleset_id=None)
                     except Exception:
                         pass
 

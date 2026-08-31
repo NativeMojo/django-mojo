@@ -616,7 +616,7 @@ def triage_new_incidents(job):
     before publishing the job. The LLM agent takes over from there.
     """
     from mojo.apps.incident.models import Incident
-    from mojo.apps import jobs
+    from mojo.apps.incident.services import llm_dispatch
 
     if not settings.get(
             "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED", False, kind="bool"):
@@ -644,21 +644,12 @@ def triage_new_incidents(job):
         if not event:
             continue
 
-        # Mark investigating now so concurrent sweeps don't double-queue
-        incident.status = "investigating"
-        incident.save(update_fields=["status"])
-        incident.add_history("handler:llm", note="[LLM Agent] Queued for automated triage")
-
-        jobs.publish(
-            "mojo.apps.incident.handlers.llm_agent.execute_llm_handler",
-            {
-                "event_id": event.pk,
-                "incident_id": incident.pk,
-                "ruleset_id": incident.rule_set_id,
-            },
-            channel="incident_handlers",
-        )
-        queued += 1
+        _, created = llm_dispatch.claim_incident(
+            incident, event_id=event.pk, ruleset_id=incident.rule_set_id)
+        if created:
+            incident.add_history(
+                "handler:llm", note="[LLM Agent] Queued for automated triage")
+            queued += 1
 
     job.add_log(f"Queued {queued}/{len(incidents)} incidents for LLM triage")
 

@@ -256,12 +256,10 @@ class Incident(models.Model, MojoModel):
         self.refresh_from_db(fields=["metadata"])
 
         try:
-            from mojo.apps import jobs
-            jobs.publish(
-                "mojo.apps.incident.handlers.llm_agent.execute_llm_analysis",
-                {"incident_id": self.pk},
-                channel="incident_handlers",
-            )
+            from mojo.apps.incident.services import llm_dispatch
+            llm_dispatch.claim_incident(
+                self, feature="incident_analysis",
+                logical_suffix="manual-analysis")
         except Exception:
             # Clear flag on publish failure
             self.metadata["analysis_in_progress"] = False
