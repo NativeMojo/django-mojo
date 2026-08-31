@@ -143,8 +143,11 @@ def test_render_collision_policy(opts):
     root = tempfile.mkdtemp(prefix="testit_render.")
     try:
         proj = os.path.join(root, "proj")
+        # A non-root user: a declared override may fork the file, but the
+        # produced jobs tick must still name a usable application account
+        # (item #3429) — that refusal has its own test in app_user.py.
         _write(os.path.join(proj, "aws", "cron.d", "3_mojo_jobs"),
-               "* * * * * root /custom/fork.sh\n")
+               "* * * * * appu /custom/fork.sh\n")
         _write(os.path.join(proj, "aws", "cron.d", "9_extra"),
                f"* * * * * root {proj}/bin/extra.sh\n")
 
