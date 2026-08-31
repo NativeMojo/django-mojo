@@ -16,6 +16,19 @@ ACTIVE_STATES = ("claimed", "queued", "running", "retryable")
 LEASE_SECONDS = 180
 
 
+def _lease_seconds(feature):
+    """Cover the largest policy-permitted loop, with heartbeats as defense."""
+    try:
+        from mojo.apps.account.services import llm_safety
+        policy = llm_safety.parse_policy()
+        limits = policy["features"][feature]
+        calls = min(policy["shared"]["max_loop_calls"], limits["max_loop_calls"])
+        timeout = min(policy["shared"]["timeout_seconds"], limits["timeout_seconds"])
+        return max(LEASE_SECONDS, min(3600, calls * timeout + 60))
+    except Exception:
+        return LEASE_SECONDS
+
+
 def _logical_key(incident_id, feature, event_id=None, ticket_id=None, suffix=""):
     value = f"{incident_id}:{feature}:{event_id or ''}:{ticket_id or ''}:{suffix}"
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
@@ -70,11 +83,12 @@ def claim_incident(incident, *, feature="incident_triage", event_id=None,
 
 
 def claim_ticket(ticket, note_id=None):
-    from mojo.apps.incident.models import IncidentLLMAttempt
+    from mojo.apps.incident.models import IncidentLLMAttempt, Ticket
     logical_key = _logical_key(
         ticket.incident_id or 0, "incident_ticket", ticket_id=ticket.pk,
         suffix=str(note_id or "initial"))
     with transaction.atomic():
+        locked = Ticket.objects.select_for_update().get(pk=ticket.pk)
         existing = IncidentLLMAttempt.objects.filter(logical_key=logical_key).first()
         if existing:
             return existing, False
@@ -83,26 +97,36 @@ def claim_ticket(ticket, note_id=None):
             state__in=ACTIVE_STATES).first()
         if active:
             return active, False
-        attempt = IncidentLLMAttempt.objects.create(
-            incident_id=ticket.incident_id, feature="incident_ticket",
-            logical_key=logical_key, ticket_id=ticket.pk, note_id=note_id)
+        try:
+            with transaction.atomic():
+                attempt = IncidentLLMAttempt.objects.create(
+                    incident_id=locked.incident_id, feature="incident_ticket",
+                    logical_key=logical_key, ticket_id=locked.pk, note_id=note_id)
+        except IntegrityError:
+            attempt = IncidentLLMAttempt.objects.filter(
+                ticket_id=locked.pk, feature="incident_ticket",
+                state__in=ACTIVE_STATES).first()
+            if attempt is None:
+                attempt = IncidentLLMAttempt.objects.get(logical_key=logical_key)
+            return attempt, False
         _queue_locked(attempt)
         return attempt, True
 
 
-def _payload(attempt):
+def _payload(attempt, owner):
+    lease = {"_llm_attempt_adopted": True, "_llm_attempt_id": attempt.pk,
+             "_llm_lease_owner": owner}
     if attempt.feature == "incident_triage":
-        return {
+        return dict(lease, **{
             "event_id": attempt.event_id, "incident_id": attempt.incident_id,
-            "ruleset_id": attempt.ruleset_id, "_llm_attempt_adopted": True,
-        }
+            "ruleset_id": attempt.ruleset_id,
+        })
     if attempt.feature == "incident_analysis":
-        return {"incident_id": attempt.incident_id, "_llm_attempt_adopted": True}
-    return {"ticket_id": attempt.ticket_id, "note_id": attempt.note_id,
-            "_llm_attempt_adopted": True}
+        return dict(lease, incident_id=attempt.incident_id)
+    return dict(lease, ticket_id=attempt.ticket_id, note_id=attempt.note_id)
 
 
-def execute_attempt(job):
+def execute_attempt(job, handler_loader=None):
     from mojo.apps.incident.models import IncidentLLMAttempt
     from mojo.apps.jobs.job_engine import load_job_function
 
@@ -115,13 +139,14 @@ def execute_attempt(job):
         attempt.state = "running"
         attempt.attempt_count += 1
         attempt.lease_owner = owner
-        attempt.lease_expires_at = timezone.now() + timezone.timedelta(seconds=LEASE_SECONDS)
+        attempt.lease_expires_at = timezone.now() + timezone.timedelta(
+            seconds=_lease_seconds(attempt.feature))
         attempt.save(update_fields=[
             "state", "attempt_count", "lease_owner", "lease_expires_at", "modified"])
     original_payload = job.payload
-    job.payload = _payload(attempt)
+    job.payload = _payload(attempt, owner)
     try:
-        handler = load_job_function(FEATURE_HANDLERS[attempt.feature])
+        handler = (handler_loader or load_job_function)(FEATURE_HANDLERS[attempt.feature])
         handler(job)
     except Exception as err:
         code = getattr(err, "code", "llm_operation_failed")
@@ -130,6 +155,20 @@ def execute_attempt(job):
     finally:
         job.payload = original_payload
     _finish(attempt.pk, owner, True, "")
+
+
+def renew_lease(attempt_id, owner):
+    """Heartbeat only the running attempt owned by this exact worker token."""
+    from mojo.apps.incident.models import IncidentLLMAttempt
+    attempt = IncidentLLMAttempt.objects.filter(
+        pk=attempt_id, state="running", lease_owner=owner).first()
+    if attempt is None:
+        return False
+    expires = timezone.now() + timezone.timedelta(
+        seconds=_lease_seconds(attempt.feature))
+    return IncidentLLMAttempt.objects.filter(
+        pk=attempt_id, state="running", lease_owner=owner).update(
+            lease_expires_at=expires, modified=timezone.now()) == 1
 
 
 def _finish(attempt_id, owner, succeeded, error_code):
@@ -182,19 +221,22 @@ def repair_attempts(limit=100):
     rows = list(IncidentLLMAttempt.objects.filter(
         state__in=ACTIVE_STATES).order_by("created")[:max(1, min(int(limit), 500))])
     for row in rows:
+        expired_owner = None
         with transaction.atomic():
             attempt = IncidentLLMAttempt.objects.select_for_update().get(pk=row.pk)
-            if attempt.state == "running" and attempt.lease_expires_at \
-                    and attempt.lease_expires_at <= now:
-                _finish(attempt.pk, attempt.lease_owner, False, "worker_lease_expired")
-                repaired += 1
-                continue
-            job = Job.objects.filter(pk=attempt.job_id).first() if attempt.job_id else None
-            if attempt.state in ("claimed", "queued", "retryable") and (
-                    job is None or job.status in ("failed", "canceled", "expired")):
-                attempt.attempt_count += 1
-                _queue_locked(attempt)
-                repaired += 1
+            if attempt.state == "running":
+                if attempt.lease_expires_at and attempt.lease_expires_at <= now:
+                    expired_owner = attempt.lease_owner
+            else:
+                job = Job.objects.filter(pk=attempt.job_id).first() \
+                    if attempt.job_id else None
+                if attempt.state in ("claimed", "queued", "retryable") and (
+                        job is None or job.status in ("failed", "canceled", "expired")):
+                    _queue_locked(attempt)
+                    repaired += 1
+        if expired_owner and _finish(
+                row.pk, expired_owner, False, "worker_lease_expired"):
+            repaired += 1
     return repaired
 
 

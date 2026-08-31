@@ -15,6 +15,7 @@ Prompt hierarchy:
     3. RuleSet.metadata.agent_memory — LLM's own learnings for this rule type
     4. Event/incident context — structured data in the user message
 """
+import uuid
 import ujson
 from mojo.helpers.settings import settings
 from mojo.helpers import logit, llm
@@ -1458,14 +1459,19 @@ def _call_claude(messages, system_prompt, tools=None, feature="incident_triage",
 
 
 def _run_agent_loop(messages, system_prompt, max_iterations=15, tools=None,
-                    feature="incident_triage", context=None):
+                    feature="incident_triage", context=None, lease=None):
     """
     Run the agent loop: call Claude, execute tools, feed results back,
     repeat until Claude stops calling tools.
     """
+    operation_id = uuid.uuid4().hex
     for loop_index in range(max_iterations):
+        if lease and all(lease):
+            from mojo.apps.incident.services import llm_dispatch
+            if not llm_dispatch.renew_lease(*lease):
+                raise llm.LLMExecutionError("operation_invalid")
         call_context = dict(context or {})
-        call_context["loop_call"] = loop_index + 1
+        call_context["operation_id"] = operation_id
         result = _call_claude(
             messages, system_prompt, tools=tools, feature=feature,
             context=call_context)
@@ -1505,9 +1511,13 @@ def _run_agent_loop(messages, system_prompt, max_iterations=15, tools=None,
             })
 
         messages.append({"role": "user", "content": tool_results})
+        if lease and all(lease):
+            from mojo.apps.incident.services import llm_dispatch
+            if not llm_dispatch.renew_lease(*lease):
+                raise llm.LLMExecutionError("operation_invalid")
 
     logger.warning("LLM agent hit max iterations (%d)", max_iterations)
-    return None
+    raise llm.LLMExecutionError("loop_limit")
 
 
 def _build_system_prompt(ruleset=None):
@@ -1684,10 +1694,6 @@ def execute_llm_handler(job):
                 job, "incident_triage", payload["incident_id"],
                 event_id=payload.get("event_id"), ruleset_id=payload.get("ruleset_id"))
         return
-    if not _get_llm_api_key():
-        logger.warning("LLM handler called but LLM_HANDLER_API_KEY not configured")
-        return
-
     payload = job.payload
     event_id = payload.get("event_id")
     incident_id = payload.get("incident_id")
@@ -1699,7 +1705,7 @@ def execute_llm_handler(job):
         event = Event.objects.get(pk=event_id)
     except Exception:
         logger.exception("LLM handler: failed to load event %s", event_id)
-        return
+        raise llm.LLMExecutionError("context_invalid") from None
 
     # Load incident
     incident = None
@@ -1708,7 +1714,7 @@ def execute_llm_handler(job):
             from mojo.apps.incident.models import Incident
             incident = Incident.objects.get(pk=incident_id)
         except Exception:
-            logger.warning("LLM handler: incident %s not found", incident_id)
+            raise llm.LLMExecutionError("context_invalid") from None
 
     # Load ruleset for custom prompt
     ruleset = None
@@ -1728,7 +1734,8 @@ def execute_llm_handler(job):
     try:
         result = _run_agent_loop(
             messages, system_prompt, feature="incident_triage",
-            context={"job_id": job.pk, "incident_id": incident_id})
+            context={"job_id": job.pk, "incident_id": incident_id},
+            lease=(payload.get("_llm_attempt_id"), payload.get("_llm_lease_owner")))
         if incident:
             # Extract final text response for the history
             text_parts = []
@@ -1745,6 +1752,7 @@ def execute_llm_handler(job):
         if incident:
             incident.add_history("handler:llm",
                 note="[LLM Agent] Triage failed due to an error")
+        raise
 
 
 def _build_analysis_message(incident):
@@ -1813,10 +1821,6 @@ def execute_llm_analysis(job):
             llm_dispatch.adopt_legacy_job(
                 job, "incident_analysis", job.payload["incident_id"])
         return
-    if not _get_llm_api_key():
-        logger.warning("LLM analysis called but LLM_HANDLER_API_KEY not configured")
-        return
-
     payload = job.payload
     incident_id = payload.get("incident_id")
 
@@ -1825,7 +1829,7 @@ def execute_llm_analysis(job):
         incident = Incident.objects.get(pk=incident_id)
     except Exception:
         logger.exception("LLM analysis: failed to load incident %s", incident_id)
-        return
+        raise llm.LLMExecutionError("context_invalid") from None
 
     # Load ruleset for custom prompt context
     ruleset = None
@@ -1857,7 +1861,8 @@ def execute_llm_analysis(job):
         result = _run_agent_loop(
             messages, system_prompt, tools=all_tools,
             feature="incident_analysis",
-            context={"job_id": job.pk, "incident_id": incident_id})
+            context={"job_id": job.pk, "incident_id": incident_id},
+            lease=(payload.get("_llm_attempt_id"), payload.get("_llm_lease_owner")))
 
         # Store analysis result
         text_parts = []
@@ -1890,6 +1895,7 @@ def execute_llm_analysis(job):
                 note="[LLM Agent] Analysis failed due to an error")
         except Exception:
             pass
+        raise
 
 
 
@@ -1910,17 +1916,13 @@ def execute_llm_ticket_reply(job):
         if ticket:
             llm_dispatch.claim_ticket(ticket, note_id=job.payload.get("note_id"))
         return
-    if not _get_llm_api_key():
-        job.add_log("no API key configured — skipping", kind="warn")
-        return
-
     payload = job.payload
     ticket_id = payload.get("ticket_id")
     note_id = payload.get("note_id")
 
     if not ticket_id:
         job.add_log("missing ticket_id in payload", kind="error")
-        return
+        raise llm.LLMExecutionError("context_invalid")
 
     # Load ticket
     try:
@@ -1928,14 +1930,14 @@ def execute_llm_ticket_reply(job):
         ticket = Ticket.objects.get(pk=ticket_id)
     except Ticket.DoesNotExist:
         job.add_log(f"ticket #{ticket_id} not found", kind="error")
-        return
-    except Exception as e:
-        job.add_log(f"failed to load ticket #{ticket_id}: {e}", kind="error")
-        return
+        raise llm.LLMExecutionError("context_invalid") from None
+    except Exception:
+        job.add_log("failed to load ticket", kind="error")
+        raise llm.LLMExecutionError("provider_failed") from None
 
     if not ticket.is_llm_enabled():
         job.add_log(f"ticket #{ticket_id} has LLM disabled — skipping", kind="info")
-        return
+        raise llm.LLMExecutionError("context_invalid")
 
     job.add_log(f"ticket #{ticket_id}: {ticket.title!r} note={note_id}")
 
@@ -2014,26 +2016,17 @@ def execute_llm_ticket_reply(job):
             messages, system_prompt, tools=reply_tools,
             feature="incident_ticket", context={
                 "job_id": job.pk,
-                "incident_id": ticket.incident_id if ticket.incident_id else None})
-    except Exception as e:
-        msg = f"agent loop raised an exception: {e}"
-        job.add_log(msg, kind="error")
+                "incident_id": ticket.incident_id if ticket.incident_id else None},
+            lease=(payload.get("_llm_attempt_id"), payload.get("_llm_lease_owner")))
+    except Exception as err:
+        code = getattr(err, "code", "provider_failed")
+        job.add_log(f"agent loop failed: {code}", kind="error")
         _append_ticket_note(
             ticket,
-            "I encountered an error while processing your message and could not respond. "
-            f"The job log has details. Error: {e}",
+            "I encountered a temporary error while processing your message and "
+            "could not respond. The request may be retried safely.",
         )
-        return
-
-    if result is None:
-        job.add_log("agent hit max iterations without completing", kind="warn")
-        _append_ticket_note(
-            ticket,
-            "I was unable to complete my analysis — the investigation exceeded the "
-            "maximum number of reasoning steps. Try rephrasing your question or "
-            "breaking it into smaller requests.",
-        )
-        return
+        raise
 
     # ------------------------------------------------------------------
     # Post the final text response as a ticket note — but only if the

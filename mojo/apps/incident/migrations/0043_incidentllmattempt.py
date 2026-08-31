@@ -38,6 +38,10 @@ class Migration(migrations.Migration):
             model_name="incidentllmattempt",
             constraint=models.UniqueConstraint(condition=models.Q(("state__in", ("claimed", "queued", "running", "retryable"))), fields=("incident", "feature"), name="incident_one_active_llm_attempt"),
         ),
+        migrations.AddConstraint(
+            model_name="incidentllmattempt",
+            constraint=models.UniqueConstraint(condition=models.Q(("state__in", ("claimed", "queued", "running", "retryable")), ("ticket_id__isnull", False)), fields=("ticket_id", "feature"), name="incident_one_active_ticket_llm_attempt"),
+        ),
         migrations.AddIndex(model_name="incidentllmattempt", index=models.Index(fields=["state", "retry_at"], name="incident_llma_retry_idx")),
         migrations.AddIndex(model_name="incidentllmattempt", index=models.Index(fields=["incident", "created"], name="incident_llma_inc_idx")),
     ]

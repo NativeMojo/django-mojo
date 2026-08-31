@@ -16,9 +16,9 @@ INCIDENT_METRICS_MIN_GRANULARITY = settings.get_static("INCIDENT_METRICS_MIN_GRA
 def _autonomous_llm_enabled():
     # Call-time read: the platform LLM key may be stored from the built-in
     # Admin as a database row, which a value frozen at import would never see.
-    return bool(
-        settings.get("LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED", False, kind="bool")
-        and settings.get("LLM_HANDLER_API_KEY", None))
+    from mojo.apps.account.services import llm_safety
+    enabled, _ = llm_safety.autonomous_triage_state()
+    return bool(enabled and settings.get("LLM_HANDLER_API_KEY", None))
 
 # Event categories that should bump the aggregate ``auth:failures`` counter.
 # Used by the portal Security Dashboard so a single fetch replaces the

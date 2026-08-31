@@ -39,22 +39,14 @@ class IncidentLLMAttempt(models.Model, MojoModel):
                 fields=("incident", "feature"),
                 condition=Q(state__in=("claimed", "queued", "running", "retryable")),
                 name="incident_one_active_llm_attempt"),
+            models.UniqueConstraint(
+                fields=("ticket_id", "feature"),
+                condition=Q(
+                    ticket_id__isnull=False,
+                    state__in=("claimed", "queued", "running", "retryable")),
+                name="incident_one_active_ticket_llm_attempt"),
         ]
         indexes = [
             models.Index(fields=("state", "retry_at"), name="incident_llma_retry_idx"),
             models.Index(fields=("incident", "created"), name="incident_llma_inc_idx"),
         ]
-
-    class RestMeta:
-        VIEW_PERMS = ["view_security", "manage_security", "security"]
-        SAVE_PERMS = ["manage_security", "security"]
-        CAN_CREATE = False
-        CAN_UPDATE = False
-        CAN_DELETE = False
-        DENY_AI = True
-        SENSITIVE_FIELDS = ["logical_key", "lease_owner"]
-        GRAPHS = {"default": {"fields": [
-            "id", "created", "modified", "feature", "state", "prior_status",
-            "event_id", "ruleset_id", "ticket_id", "note_id", "job_id", "attempt_count",
-            "max_attempts", "retry_at", "finished_at", "error_code",
-        ], "extra": ["incident_id"]}}

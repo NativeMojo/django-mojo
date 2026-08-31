@@ -618,11 +618,9 @@ def triage_new_incidents(job):
     from mojo.apps.incident.models import Incident
     from mojo.apps.incident.services import llm_dispatch
 
-    if not settings.get(
-            "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED", False, kind="bool"):
-        return
-    watermark = settings.get("LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT", None)
-    if not watermark or not settings.get("LLM_HANDLER_API_KEY"):
+    from mojo.apps.account.services import llm_safety
+    enabled, watermark = llm_safety.autonomous_triage_state()
+    if not enabled or watermark is None or not settings.get("LLM_HANDLER_API_KEY"):
         return
 
     BATCH_SIZE = 20
