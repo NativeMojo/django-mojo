@@ -1321,8 +1321,15 @@ def on_magic_login_send(request, *, send=None):
                 logit.warning(
                     f"magic login SMS skipped for user {user.pk}: stored phone "
                     f"number has no normalized form")
-                user.report_incident(
-                    "magic login number unusable", "magic_login:phone_unusable", level=6)
+                # Wrapped for the same reason the send branch below is: a
+                # failing incident write must not 500 this branch, or the
+                # differential comes straight back for an existing account.
+                try:
+                    user.report_incident(
+                        "magic login number unusable", "magic_login:phone_unusable", level=6)
+                except Exception:
+                    logit.exception(
+                        f"magic login unusable-number incident failed for user {user.pk}")
             else:
                 login_url = maybe_shorten_url(token_url, source="magic_login_sms", user=user, expire_hours=1)
                 sender = send if send is not None else phonehub.send_sms
