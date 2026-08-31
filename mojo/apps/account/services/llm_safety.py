@@ -468,6 +468,11 @@ def _required_capabilities(messages, tools, cache_enabled):
     return required
 
 
+def _permit_identity(fingerprint, candidate_probe=False):
+    """Candidate verification shares one installation/provider permit identity."""
+    return "candidate-installation" if candidate_probe else fingerprint
+
+
 def _execute(messages, system, tools, model, max_tokens, feature, operation,
              context, candidate=None, candidate_probe=False, provider_factory=None,
              redis=None, policy_raw=None):
@@ -524,7 +529,8 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
             _deny("capability_unsupported")
         redis = redis or get_connection()
         operation_id = context.get("operation_id") or secrets.token_hex(16)
-        counter_fingerprint = "candidate" if candidate_probe else fingerprint
+        counter_fingerprint = _permit_identity(
+            fingerprint, candidate_probe=candidate_probe)
         _count_operation(
             redis, provider_name, counter_fingerprint, feature, operation_id,
             policy["shared"], limits)

@@ -168,3 +168,17 @@ def test_safety_records_have_no_generic_row_rest_surface(opts):
     for model in (LLMRequest, LLMCircuitBreaker, IncidentLLMAttempt):
         assert not hasattr(model, "RestMeta"), \
             f"{model.__name__} must be visible only through aggregate services"
+
+
+@th.django_unit_test()
+def test_candidate_permits_are_single_flight_across_fingerprints(opts):
+    from mojo.apps.account.services import llm_safety
+
+    first = llm_safety.credential_fingerprint("anthropic", "candidate-one")
+    second = llm_safety.credential_fingerprint("anthropic", "candidate-two")
+    assert first != second, "the regression needs two distinct candidate fingerprints"
+    assert llm_safety._permit_identity(first, candidate_probe=True) == \
+        llm_safety._permit_identity(second, candidate_probe=True), \
+        "candidate verification must share one installation-wide permit identity"
+    assert llm_safety._permit_identity(first) != llm_safety._permit_identity(second), \
+        "ordinary stored credentials must retain independent accounting identities"
