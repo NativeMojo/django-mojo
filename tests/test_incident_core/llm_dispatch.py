@@ -290,6 +290,38 @@ def test_manual_analysis_is_fresh_coalesced_and_status_neutral(opts):
 
 
 @th.django_unit_test()
+def test_analysis_claim_commits_progress_with_attempt_and_outbox(opts):
+    from mojo.apps.incident.models import Incident
+    from mojo.apps.incident.services import llm_dispatch
+    from mojo.apps.jobs.models import Job
+
+    incident = Incident.objects.create(
+        category=f"test:llm-analysis-atomic:{uuid.uuid4().hex}", status="open",
+        priority=4, title="Atomic analysis progress")
+    attempt, created = llm_dispatch.claim_incident(
+        incident, feature="incident_analysis", fresh=True)
+    incident.refresh_from_db()
+    assert created is True and attempt.state == "queued", \
+        f"analysis claim did not create queued work: {created}/{attempt.state}"
+    assert incident.metadata.get("analysis_in_progress") is True, \
+        f"claim returned before its progress flag existed: {incident.metadata}"
+    assert Job.objects.filter(pk=attempt.job_id, status="pending").count() == 1, \
+        f"progress flag has no matching committed outbox: {attempt.job_id}"
+
+    # An active-attempt coalescence repairs a missing/stale display flag under
+    # the same Incident lock instead of relying on a post-claim caller write.
+    incident.metadata = {"analysis_in_progress": False}
+    incident.save(update_fields=["metadata"])
+    duplicate, duplicate_created = llm_dispatch.claim_incident(
+        incident, feature="incident_analysis", fresh=True)
+    incident.refresh_from_db()
+    assert duplicate_created is False and duplicate.pk == attempt.pk, \
+        "concurrent analysis did not coalesce on the active attempt"
+    assert incident.metadata.get("analysis_in_progress") is True, \
+        "active-attempt coalescence did not atomically repair progress state"
+
+
+@th.django_unit_test()
 def test_ticket_failure_never_restores_another_workflows_status(opts):
     from mojo.apps.incident.models import Incident, Ticket
     from mojo.apps.incident.services import llm_dispatch

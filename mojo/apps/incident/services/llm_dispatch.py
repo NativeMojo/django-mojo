@@ -34,6 +34,15 @@ def _logical_key(incident_id, feature, event_id=None, ticket_id=None, suffix="")
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _mark_analysis_started(incident):
+    metadata = dict(incident.metadata or {})
+    if metadata.get("analysis_in_progress") is True:
+        return
+    metadata["analysis_in_progress"] = True
+    incident.metadata = metadata
+    incident.save(update_fields=["metadata"])
+
+
 def _queue_locked(attempt, delay=None):
     from mojo.apps import jobs
     payload = {"attempt_id": attempt.pk}
@@ -64,6 +73,8 @@ def claim_incident(incident, *, feature="incident_triage", event_id=None,
         active = IncidentLLMAttempt.objects.filter(
             incident=locked, feature=feature, state__in=ACTIVE_STATES).first()
         if active:
+            if feature == "incident_analysis":
+                _mark_analysis_started(locked)
             return active, False
         suffix = secrets.token_hex(16) if fresh else logical_suffix
         logical_key = _logical_key(
@@ -85,20 +96,28 @@ def claim_incident(incident, *, feature="incident_triage", event_id=None,
                     existing.save(update_fields=["prior_status", "modified"])
                     locked.status = "investigating"
                     locked.save(update_fields=["status"])
+                if feature == "incident_analysis":
+                    _mark_analysis_started(locked)
                 _queue_locked(existing)
                 return existing, True
             return existing, False
         try:
-            attempt = IncidentLLMAttempt.objects.create(
-                incident=locked, feature=feature, logical_key=logical_key,
-                prior_status=locked.status, event_id=event_id,
-                ruleset_id=ruleset_id, ticket_id=ticket_id,
-                max_attempts=max(1, min(int(max_attempts), 10)))
+            with transaction.atomic():
+                attempt = IncidentLLMAttempt.objects.create(
+                    incident=locked, feature=feature, logical_key=logical_key,
+                    prior_status=locked.status, event_id=event_id,
+                    ruleset_id=ruleset_id, ticket_id=ticket_id,
+                    max_attempts=max(1, min(int(max_attempts), 10)))
         except IntegrityError:
-            return IncidentLLMAttempt.objects.get(logical_key=logical_key), False
+            existing = IncidentLLMAttempt.objects.get(logical_key=logical_key)
+            if feature == "incident_analysis" and existing.state in ACTIVE_STATES:
+                _mark_analysis_started(locked)
+            return existing, False
         if feature == "incident_triage":
             locked.status = "investigating"
             locked.save(update_fields=["status"])
+        if feature == "incident_analysis":
+            _mark_analysis_started(locked)
         _queue_locked(attempt)
         return attempt, True
 

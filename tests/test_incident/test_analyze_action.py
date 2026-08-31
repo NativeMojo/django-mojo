@@ -50,11 +50,11 @@ def _cleanup():
 
 
 class _ManagedTriageJob:
-    def __init__(self, event, incident):
+    def __init__(self, event, incident, attempt_id=None):
         self.pk = f"triage-test-{incident.pk}"
         self.payload = {
             "_llm_attempt_adopted": True,
-            "_llm_attempt_id": None,
+            "_llm_attempt_id": attempt_id,
             "_llm_lease_owner": None,
             "event_id": event.pk,
             "incident_id": incident.pk,
@@ -115,6 +115,76 @@ def test_triage_noop_retries_but_ticket_and_assessment_succeed(opts):
     assessed.refresh_from_db()
     assert assessed.status == "resolved", \
         f"an assessed triage outcome must succeed, got {assessed.status}"
+
+
+@th.django_unit_test("Triage outcome provenance spans the logical attempt")
+def test_triage_attempt_provenance_survives_redelivery(opts):
+    from mojo.apps.incident.handlers import llm_agent
+    from mojo.apps.incident.models import Event, Incident, Ticket
+    from mojo.apps.incident.services import llm_dispatch
+    from mojo.helpers.llm import LLMExecutionError
+
+    _cleanup()
+
+    def make_attempt(label, metadata=None, preexisting_ticket=False):
+        incident = Incident.objects.create(
+            priority=7, state=0, status="new",
+            category=f"analyze_test_attempt_{label}", scope="global",
+            title=f"Attempt {label}", metadata=metadata or {})
+        event = Event.objects.create(
+            category=incident.category, level=7, title=incident.title,
+            incident=incident)
+        if preexisting_ticket:
+            Ticket.objects.create(title="Old ticket", incident=incident)
+        attempt, _ = llm_dispatch.claim_incident(
+            incident, event_id=event.pk, logical_suffix=label)
+        incident.refresh_from_db()
+        return incident, event, attempt
+
+    ticketed, ticketed_event, ticketed_attempt = make_attempt("ticket")
+
+    def ticket_then_fail(*args, **kwargs):
+        Ticket.objects.create(title="Attempt ticket", incident=ticketed)
+        raise LLMExecutionError("provider_timeout")
+
+    with patch.object(llm_agent, "_run_agent_loop", side_effect=ticket_then_fail):
+        try:
+            llm_agent.execute_llm_handler(_ManagedTriageJob(
+                ticketed_event, ticketed, ticketed_attempt.pk))
+            assert False, "the scripted first delivery did not fail"
+        except LLMExecutionError as err:
+            assert err.code == "provider_timeout", \
+                f"first delivery lost its safe failure: {err.code}"
+    with patch.object(llm_agent, "_run_agent_loop", return_value={
+            "stop_reason": "end_turn", "content": []}):
+        llm_agent.execute_llm_handler(_ManagedTriageJob(
+            ticketed_event, ticketed, ticketed_attempt.pk))
+    ticketed.refresh_from_db()
+    assert ticketed.status == "investigating", \
+        "a ticket from delivery one did not validate delivery two"
+
+    assessed, assessed_event, assessed_attempt = make_attempt("assessment")
+    llm_agent._tool_update_incident({
+        "incident_id": assessed.pk, "status": "investigating",
+        "note": "Durable assessment from delivery one"})
+    with patch.object(llm_agent, "_run_agent_loop", return_value={
+            "stop_reason": "end_turn", "content": []}):
+        llm_agent.execute_llm_handler(_ManagedTriageJob(
+            assessed_event, assessed, assessed_attempt.pk))
+
+    stale, stale_event, stale_attempt = make_attempt(
+        "stale", metadata={"llm_assessment": {
+            "status": "investigating", "note": "Legacy assessment"}},
+        preexisting_ticket=True)
+    with patch.object(llm_agent, "_run_agent_loop", return_value={
+            "stop_reason": "end_turn", "content": []}):
+        try:
+            llm_agent.execute_llm_handler(_ManagedTriageJob(
+                stale_event, stale, stale_attempt.pk))
+            assert False, "preexisting ticket/assessment falsely completed triage"
+        except LLMExecutionError as err:
+            assert err.code == "triage_incomplete", \
+                f"stale provenance used the wrong safe code: {err.code}"
 
 
 @th.django_unit_test("Analyze action: publishes job with correct payload")

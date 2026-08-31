@@ -251,15 +251,10 @@ class Incident(models.Model, MojoModel):
             logger.exception("Failed to publish LLM analysis job for incident %s", self.pk)
             return {"status": False, "error": "Failed to publish analysis job"}
 
-        # The DB active-attempt constraint coalesces concurrent clicks. Only
-        # advertise progress after claim/publication actually succeeded or an
-        # existing active worker was found.
-        if attempt.state in llm_dispatch.ACTIVE_STATES:
-            self.refresh_from_db(fields=["metadata"])
-            self.metadata = dict(self.metadata or {})
-            self.metadata["analysis_in_progress"] = True
-            self.save(update_fields=["metadata"])
-        else:
+        # claim_incident writes the progress flag under the same Incident row
+        # lock and transaction as the attempt and Job outbox. A worker cannot
+        # finish and clear it before this request commits.
+        if attempt.state not in llm_dispatch.ACTIVE_STATES:
             return {"status": False, "error": "Failed to publish analysis job"}
 
         self.add_history("handler:llm", note="LLM analysis requested by admin")

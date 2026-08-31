@@ -599,6 +599,7 @@ def _tool_query_incident_events(params):
 
 def _tool_update_incident(params):
     from mojo.apps.incident.models import Incident
+    from django.utils import timezone
 
     incident = Incident.objects.get(pk=params["incident_id"])
     old_status = incident.status
@@ -613,6 +614,7 @@ def _tool_update_incident(params):
     incident.metadata["llm_assessment"] = {
         "status": params["status"],
         "note": params["note"],
+        "assessed_at": timezone.now().isoformat(),
     }
     if params.get("do_not_delete"):
         incident.metadata["do_not_delete"] = True
@@ -1742,6 +1744,12 @@ def execute_llm_handler(job):
     messages = [{"role": "user", "content": user_message}]
     before_assessment = dict((incident.metadata or {}).get("llm_assessment") or {}) \
         if incident else {}
+    attempt_started = None
+    if payload.get("_llm_attempt_id"):
+        from mojo.apps.incident.models import IncidentLLMAttempt
+        attempt_started = IncidentLLMAttempt.objects.filter(
+            pk=payload["_llm_attempt_id"]).values_list(
+                "created", flat=True).first()
     if incident:
         from mojo.apps.incident.models import Ticket
         before_ticket_ids = set(Ticket.objects.filter(
@@ -1761,9 +1769,26 @@ def execute_llm_handler(job):
             if current is not None and current["status"] == "investigating":
                 assessment = dict(
                     (current["metadata"] or {}).get("llm_assessment") or {})
-                created_ticket = Ticket.objects.filter(incident_id=incident.pk).exclude(
-                    pk__in=before_ticket_ids).exists()
-                if assessment == before_assessment and not created_ticket:
+                if attempt_started is not None:
+                    from django.utils import timezone
+                    from django.utils.dateparse import parse_datetime
+                    assessed_at = parse_datetime(
+                        str(assessment.get("assessed_at") or ""))
+                    durable_assessment = bool(
+                        assessed_at and not timezone.is_naive(assessed_at)
+                        and assessed_at >= attempt_started)
+                    created_ticket = Ticket.objects.filter(
+                        incident_id=incident.pk,
+                        created__gte=attempt_started).exists()
+                else:
+                    # Safe compatibility for direct/legacy calls without an
+                    # adopted attempt. Managed retries always use the durable
+                    # logical-attempt provenance above.
+                    durable_assessment = assessment != before_assessment
+                    created_ticket = Ticket.objects.filter(
+                        incident_id=incident.pk).exclude(
+                            pk__in=before_ticket_ids).exists()
+                if not durable_assessment and not created_ticket:
                     raise llm.LLMExecutionError("triage_incomplete")
             # Only record completion after the durable outcome check. A plain
             # end_turn while the incident is still investigating is retryable,
