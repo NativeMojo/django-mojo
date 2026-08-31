@@ -87,6 +87,71 @@ def test_stored_probe_uses_exact_target_and_candidate_requires_owner(opts):
 
 
 @th.django_unit_test()
+def test_candidate_boundary_audits_outcomes_and_fails_before_provider(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import llm_safety
+    from mojo.apps.logit.models import Log
+
+    owner = User.objects.create_user(
+        username=f"candidate-audit-{uuid.uuid4().hex}",
+        email=f"candidate-audit-{uuid.uuid4().hex}@test.com",
+        password="Candidate_audit_test_99")
+    owner.is_active = True
+    owner.is_superuser = True
+    owner.save()
+    Log.objects.filter(
+        kind="llm:candidate_probe", model_name="account.User",
+        model_id=owner.pk).delete()
+    try:
+        with mock.patch.object(
+                llm_safety, "_fixed_configuration_probe", return_value=True):
+            assert llm_safety.verify_candidate(owner, "accepted-candidate") is True, \
+                "an accepted direct candidate probe did not return success"
+        accepted = Log.objects.filter(
+            kind="llm:candidate_probe", model_name="account.User",
+            model_id=owner.pk).order_by("created").last()
+        assert accepted and accepted.log == \
+            "LLM candidate recovery probe outcome=accepted", \
+            f"accepted direct probe lacks its bounded actor audit: {accepted}"
+
+        with mock.patch.object(
+                llm_safety, "_fixed_configuration_probe",
+                side_effect=llm_safety.LLMSafetyError(
+                    "provider_authentication")):
+            try:
+                llm_safety.verify_candidate(owner, "rejected-candidate")
+                assert False, "a provider-rejected candidate returned success"
+            except llm_safety.LLMSafetyError as err:
+                assert err.code == "provider_authentication", \
+                    f"provider rejection lost its safe code: {err.code}"
+        rejected = Log.objects.filter(
+            kind="llm:candidate_probe", model_name="account.User",
+            model_id=owner.pk).order_by("created").last()
+        assert rejected and rejected.log == \
+            "LLM candidate recovery probe outcome=rejected", \
+            f"rejected direct probe lacks its bounded actor audit: {rejected}"
+
+        provider = mock.Mock()
+        with mock.patch.object(
+                User, "log", side_effect=RuntimeError("audit unavailable")), \
+                mock.patch.object(
+                    llm_safety, "_fixed_configuration_probe", provider):
+            try:
+                llm_safety.verify_candidate(owner, "audit-failed-candidate")
+                assert False, "an unaudited candidate probe was allowed"
+            except llm_safety.LLMSafetyError as err:
+                assert err.code == "safety_unavailable", \
+                    f"audit failure used the wrong safe code: {err.code}"
+        assert provider.call_count == 0, \
+            f"audit failure reached the provider path {provider.call_count} time(s)"
+    finally:
+        Log.objects.filter(
+            kind="llm:candidate_probe", model_name="account.User",
+            model_id=owner.pk).delete()
+        owner.delete()
+
+
+@th.django_unit_test()
 def test_fixed_probe_is_text_only_uncached_and_stored_stop_is_enforced(opts):
     from mojo.apps.account.models import User
     from mojo.apps.account.services import llm_safety

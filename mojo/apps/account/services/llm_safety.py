@@ -769,14 +769,48 @@ def _fixed_configuration_probe(actor, credential, identity, operation):
     return _fixed_configuration_probe_core(actor, credential, identity, operation)
 
 
+def _candidate_audit_requested(actor):
+    """Durably record authority before the stopped-state exception can spend."""
+    try:
+        row = actor.log(
+            "LLM candidate recovery probe outcome=requested",
+            "llm:candidate_probe")
+    except Exception:
+        _deny("safety_unavailable")
+    if row is None or not getattr(row, "pk", None):
+        _deny("safety_unavailable")
+    return row
+
+
+def _candidate_audit_outcome(row, outcome):
+    """Finish the one actor-linked audit row with a bounded safe outcome."""
+    outcome = "accepted" if outcome == "accepted" else "rejected"
+    try:
+        updated = type(row).objects.filter(pk=row.pk).update(
+            log=f"LLM candidate recovery probe outcome={outcome}")
+    except Exception:
+        _deny("safety_unavailable")
+    if updated != 1:
+        _deny("safety_unavailable")
+
+
 def verify_candidate(actor, candidate):
     """Owner-authorized fixed recovery probe; the only stopped exception."""
+    from mojo.apps.account.services import system_settings
+    system_settings.require_system_admin(actor)
     if not isinstance(candidate, str) or not candidate.strip() \
             or candidate != candidate.strip() or len(candidate) > 4096 \
             or any(char.isspace() for char in candidate):
         _deny("credential_missing")
-    return _fixed_configuration_probe(
-        actor, candidate, "candidate-installation", "candidate_key_probe")
+    audit = _candidate_audit_requested(actor)
+    try:
+        result = _fixed_configuration_probe(
+            actor, candidate, "candidate-installation", "candidate_key_probe")
+    except Exception:
+        _candidate_audit_outcome(audit, "rejected")
+        raise
+    _candidate_audit_outcome(audit, "accepted")
+    return result
 
 
 def verify_stored_key(target="admin"):

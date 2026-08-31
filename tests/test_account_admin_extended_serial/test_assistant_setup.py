@@ -263,8 +263,8 @@ def test_save_refuses_an_unverified_key(opts):
         _wipe()
 
 
-@th.django_unit_test("every rejected Save candidate probe is audited before refusal")
-def test_rejected_save_candidate_is_audited(opts):
+@th.django_unit_test("Assistant does not duplicate candidate-boundary audits")
+def test_rejected_save_candidate_has_no_setup_duplicate_audit(opts):
     from mojo import errors as merrors
     from mojo.apps.account.services import assistant_setup
 
@@ -279,8 +279,8 @@ def test_rejected_save_candidate_is_audited(opts):
                 assistant_setup.save(
                     _admin(opts), enabled=True, model="",
                     api_key="sk-rejected-candidate")
-        assert outcomes == [(('candidate_probe_api_key',), 'rejected')], \
-            f"rejected candidate probe was not independently audited: {outcomes}"
+        assert outcomes == [], \
+            f"Assistant duplicated the llm_safety candidate audit: {outcomes}"
     finally:
         _wipe()
 

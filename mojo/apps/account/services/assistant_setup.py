@@ -6,7 +6,7 @@ re-implements credential resolution:
 
     LLM_ADMIN_ENABLED          feature flag
     LLM_ADMIN_API_KEY          the Assistant's own credential (optional)
-    LLM_ADMIN_MODEL            explicit model pin, absent means "automatic"
+    LLM_ADMIN_MODEL            legacy picker pin; guarded route owns runtime model
     LLM_ADMIN_VERIFY_STATE     how the STORED Assistant credential last verified
     LLM_HANDLER_API_KEY        the PLATFORM credential for safety-policy
                                routes that explicitly select ``handler``
@@ -618,21 +618,13 @@ def verify(actor, api_key=None, target="assistant"):
     admin credential and ``handler`` tests only the platform credential."""
     system_settings.require_system_admin(actor)
     target = normalize_target(target)
-    try:
-        candidate = _normalize_api_key(api_key)
-    except Exception:
-        if api_key is not None:
-            _audit(actor, ["candidate_probe"], "rejected")
-        raise
+    candidate = _normalize_api_key(api_key)
     tested_stored = not candidate
     if tested_stored:
         candidate = settings.get(
             API_KEY if target == "assistant" else HANDLER_KEY, None)
     result = _verify_candidate(
         actor, candidate, stored_target=target if tested_stored else None)
-    if not tested_stored:
-        _audit(actor, ["candidate_probe"],
-               "accepted" if result["ok"] else "rejected")
     if tested_stored and result["code"] != "not_configured":
         _write_verify_state(result, TARGETS[target][1])
     _audit(actor, [f"verify_{target}"], "verified" if result["ok"] else "unverified")
@@ -752,20 +744,13 @@ def _credential_edit(actor, label, candidate, clear):
     """Validate one credential's replace/clear pair and pre-verify a candidate."""
     if not isinstance(clear, bool):
         raise merrors.ValueException(f"clear_{label} must be true or false")
-    try:
-        candidate = _normalize_api_key(candidate)
-    except Exception:
-        if candidate is not None:
-            _audit(actor, [f"candidate_probe_{label}"], "rejected")
-        raise
+    candidate = _normalize_api_key(candidate)
     if candidate and clear:
         raise merrors.ValueException(
             f"Clearing the {label.replace('_', ' ')} and supplying one are different edits")
     verified = None
     if candidate:
         verified = _verify_candidate(actor, candidate)
-        _audit(actor, [f"candidate_probe_{label}"],
-               "accepted" if verified["ok"] else "rejected")
         if not verified["ok"]:
             # Nothing is stored. An installation must never run a credential
             # nobody proved.
