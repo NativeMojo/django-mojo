@@ -587,7 +587,22 @@ Creates a new user account. No authentication required. Rate-limited to 5 reques
 
 Additional keys may be included in the payload. The server silently drops any key not allowlisted (the global `REGISTRATION_EXTRA_FIELDS` setting, plus any names the group declares in `registration.extra_fields`), so it's safe to forward extra fields without causing errors. `MojoAuth.register()` forwards the full payload as-is.
 
-**Extra registration fields (promo / referral / tracking).** A group can configure extra fields via `registration.extra_fields` (see the backend Auth Pages doc). On the bouncer-hosted register page these are captured automatically: a matching URL query param (e.g. `/register?promo=WELCOME100`) is captured silently; otherwise the page asks for the value as a plain text input. SPAs implementing their own form just include the key in the register payload. Captured values are stored on the new user under `metadata.registration` (a `name → value` map) and passed to the server's registration handler.
+**Extra registration fields (promo / referral / tracking).** A group can
+configure extra fields via `registration.extra_fields` (see the Auth Config
+[reference](auth_config.md)). On the bouncer-hosted register page these are captured
+automatically: a matching non-empty URL query param (for example,
+`/register?promo=WELCOME100`) is captured silently; otherwise a normal field is
+shown with an explicit label and optional accessible help text. A field with
+`capture_only: true` never renders an editable input and is included only when
+the URL supplies its value. SPAs implementing their own form should mirror
+that presentation and include the declared key in the register payload.
+Captured values are stored on the new user under `metadata.registration` (a
+`name → value` map) and passed to the server's registration handler.
+
+`capture_only` is not a security or integrity check. The endpoint accepts any
+allowlisted extra-field value a client submits, whether or not that client
+rendered an input. Validate referral/promo values in the server-side
+registration handler before granting credit or rewards.
 
 ### Phone-Based Registration (verify-then-register)
 

@@ -105,9 +105,21 @@ artwork is visible in `branded-panel` and `editorial`, not `minimal` or
 
 `registration.extra_fields` is the list of non-canonical fields the group has
 configured (promo codes, referral tokens, etc.). An empty list means no extra
-fields. SPAs building a custom registration form should include any declared
-extra-field names in their register payload — the server captures values for
-allowlisted names and silently drops the rest.
+fields. Entries may be legacy name strings or objects with `name`, optional
+`label`, optional `required`, optional `capture_only`, and optional `help_text`.
+The public response preserves that configured wire shape. For object entries,
+`capture_only` and `required` are booleans and `help_text` is a string; a
+capture-only field is never required.
+
+SPAs building a custom registration form should include declared extra-field
+names in their register payload — the server captures values for allowlisted
+names and silently drops the rest. Render visible fields with an explicit
+label and connect `help_text` to the control accessibly. Do not render an
+editable control for `capture_only: true`; instead, if the page URL contains a
+matching non-empty query value, forward it in the registration payload.
+`capture_only` is presentation policy, not an integrity or security boundary:
+clients can still submit the allowlisted key, so the server-side registration
+handler must validate it before granting a referral or promotional benefit.
 
 `registration.fields: null` means the deployment default (email + password) is
 in effect. A non-null `fields` list may omit `password` — when it does,

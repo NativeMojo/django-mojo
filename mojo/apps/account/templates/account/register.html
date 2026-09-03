@@ -146,10 +146,10 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
     var REG_FIELDS = JSON.parse(document.getElementById("reg-fields-data").textContent || "[]");
     var STEPPED = {% if register_step2_active %}true{% else %}false{% endif %};
 
-    // Extra (non-canonical) fields: {name, label, required}. Each renders a
-    // hidden text input (#reg-extra-{name}). When a matching URL query param is
-    // present we capture it silently (input stays hidden, value pre-set);
-    // otherwise we reveal the input and ask for the value.
+    // Extra (non-canonical) fields include presentation policy. Visible fields
+    // render a hidden text input (#reg-extra-{name}) that is revealed when no
+    // query value exists. Capture-only fields render no input; their matching
+    // non-empty query value is still collected directly below.
     var REG_EXTRA_FIELDS = JSON.parse(document.getElementById("reg-extra-fields-data").textContent || "[]");
     var URL_PARAMS = new URLSearchParams(window.location.search);
     for (var _x = 0; _x < REG_EXTRA_FIELDS.length; _x++) {
@@ -165,8 +165,9 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
     }
 
     // Add extra-field values to a register payload. URL param wins over the
-    // (hidden) input. Returns false (after a message) if a required extra is
-    // missing — required is a client-side UX hint; the server stays lenient.
+    // optional input. Returns false (after a message) if a required visible
+    // extra is missing — required is a client-side UX hint; the server stays
+    // lenient.
     function collectExtras(payload) {
         for (var i = 0; i < REG_EXTRA_FIELDS.length; i++) {
             var ef = REG_EXTRA_FIELDS[i];

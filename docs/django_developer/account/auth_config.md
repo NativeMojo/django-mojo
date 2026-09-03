@@ -62,7 +62,7 @@ rather than appending to it.
 |-----|------|---------|-------------|
 | `enabled` | bool | `true` | Whether the registration page is shown |
 | `fields` | list\|null | `null` | Field schema (null → default email form) — see register_schema |
-| `extra_fields` | list | `[]` | Per-group non-canonical fields (promo/ref/tracking). Each entry: `{"name", "label"?, "required"?}`. Names colliding with canonical fields are rejected. Default empty — no extra inputs, no behavior change for other tenants. |
+| `extra_fields` | list | `[]` | Per-group non-canonical fields (promo/ref/tracking). An entry may be a name string or `{"name", "label"?, "required"?, "capture_only"?, "help_text"?}`. `capture_only` defaults to `false`; `help_text` defaults to `""`. Names colliding with canonical fields are rejected. Default empty — no extra inputs, no behavior change for other tenants. |
 | `identity_field` | string | `""` | `"email"` or `"phone"` (empty → auto-pick) |
 | `min_age` | int\|null | `null` | Minimum age gate (years) applied when `dob` is a field |
 | `methods` | list | `["password","google","apple","github"]` | Offered signup methods |
@@ -155,7 +155,7 @@ time. Validated constraints:
 - `registration.methods` must be a list of valid tokens
 - `registration.passkey_prompt` must be `"off"`, `"optional"`, or `"required"`
 - `registration.fields` is validated via `register_schema.validate_fields_config` — a schema that omits `password` is accepted only when it also includes a `phone` field with `verify: "sms"` (see Passwordless Registration below)
-- `registration.extra_fields` is validated via `register_schema.validate_extra_fields_config` — each entry must have a non-empty `name` string; `label` (if present) must be a string; `required` (if present) must be a boolean; names colliding with canonical fields are rejected
+- `registration.extra_fields` is validated via `register_schema.validate_extra_fields_config` — each entry must have a non-empty `name` string; `label` and `help_text` (if present) must be strings; `required` and `capture_only` (if present) must be booleans; a capture-only field cannot also be required; names colliding with canonical fields are rejected
 
 ---
 
@@ -182,6 +182,14 @@ auth_config.assert_login_method("sms", group)  # no-op if group is None
 # Validate a raw dict before saving
 auth_config.validate_auth_config(raw_dict)   # raises ValueException on bad config
 ```
+
+`public_auth_config()` preserves `registration.extra_fields` in its configured
+wire shape, including legacy string shorthand. Custom clients should normalize
+string entries to a field name and apply object-form presentation properties
+themselves. `capture_only` is presentation policy, not an integrity or security
+boundary: the register endpoint still accepts an allowlisted value supplied by
+any client, so referral and promo validation belongs in the registration
+handler.
 
 The `request` parameter on `resolve_auth_config` enables the
 `X-Mojo-Test-Auth-Config` header override in test mode (loopback + test flag

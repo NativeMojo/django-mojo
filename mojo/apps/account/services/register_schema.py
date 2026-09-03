@@ -181,9 +181,14 @@ def validate_fields_config(raw):
 # ---------------------------------------------------------------------------
 
 def _normalize_extra_entry(entry):
-    """Coerce one extra-field config entry into `{name, label, required}`, or
+    """Coerce one extra-field config entry into its presentation schema, or
     None to drop it. Names that collide with a canonical field are dropped —
-    canonical fields belong in `registration.fields`."""
+    canonical fields belong in `registration.fields`.
+
+    Validation normally rejects capture-only fields marked required. This
+    normalizer is also used on deployment-wide and legacy persisted config,
+    so it fails that contradictory state safe by making the field optional.
+    """
     if isinstance(entry, str):
         entry = {"name": entry}
     if not isinstance(entry, dict):
@@ -199,13 +204,30 @@ def _normalize_extra_entry(entry):
         label = name.replace("_", " ").title()
     else:
         label = label.strip()
-    return {"name": name, "label": label, "required": bool(entry.get("required", False))}
+    capture_only = entry.get("capture_only") is True
+    help_text = entry.get("help_text")
+    if not isinstance(help_text, str):
+        help_text = ""
+    else:
+        help_text = help_text.strip()
+    required = bool(entry.get("required", False))
+    if capture_only:
+        required = False
+    return {
+        "name": name,
+        "label": label,
+        "required": required,
+        "capture_only": capture_only,
+        "help_text": help_text,
+    }
 
 
 def _normalize_extra_field_list(raw):
-    """Normalize a raw extra-fields config list into `{name, label, required}`
-    dicts. Drops unknown/duplicate/canonical-colliding entries. Returns `[]`
-    when `raw` is empty or unusable (the default — no extra fields)."""
+    """Normalize raw extra fields into presentation-schema dictionaries.
+
+    Drops unknown/duplicate/canonical-colliding entries. Returns `[]` when
+    `raw` is empty or unusable (the default — no extra fields).
+    """
     if not raw or not isinstance(raw, (list, tuple)):
         return []
     out = []
@@ -282,6 +304,17 @@ def validate_extra_fields_config(raw):
             if "required" in entry and not isinstance(entry.get("required"), bool):
                 raise merrors.ValueException(
                     "registration.extra_fields 'required' must be a boolean")
+            if "capture_only" in entry \
+                    and not isinstance(entry.get("capture_only"), bool):
+                raise merrors.ValueException(
+                    "registration.extra_fields 'capture_only' must be a boolean")
+            if "help_text" in entry and not isinstance(entry.get("help_text"), str):
+                raise merrors.ValueException(
+                    "registration.extra_fields 'help_text' must be a string")
+            if entry.get("capture_only") is True and entry.get("required") is True:
+                raise merrors.ValueException(
+                    "registration.extra_fields entries with 'capture_only' cannot "
+                    "also be 'required'")
     return _normalize_extra_field_list(raw)
 
 

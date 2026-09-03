@@ -445,6 +445,12 @@ body {
     letter-spacing: 0.5px;
     margin-bottom: 0.3rem;
 }
+.mat-field-help {
+    margin-top: 0.35rem;
+    color: var(--mat-muted);
+    font-size: 0.75rem;
+    line-height: 1.4;
+}
 .mat-input-wrap {
     position: relative;
     display: flex;
