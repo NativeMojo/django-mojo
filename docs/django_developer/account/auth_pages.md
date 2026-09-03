@@ -670,21 +670,43 @@ behavior change for other tenants):
 AUTH_CONFIG = {
     "registration": {
         "extra_fields": [
-            {"name": "promo", "label": "Promo code"},        # required defaults False
-            {"name": "ref",   "label": "Referral",  "required": True},
+            {
+                "name": "promo",
+                "label": "Promo code",
+                "help_text": "Use the code from your invitation.",
+            },
+            {"name": "ref", "capture_only": True},
         ],
     }
 }
 ```
 
-Each entry is `{"name", "label"?, "required"?}`. Names that collide with a
-canonical field are rejected at config-write time. Like `registration.fields`,
-this resolves per-group down the parent chain.
+Each entry may use legacy string shorthand (`"ref"`) or object form:
+`{"name", "label"?, "required"?, "capture_only"?, "help_text"?}`. The two
+new presentation properties are strict: `capture_only` is a boolean and
+`help_text` is a string. Runtime normalization defaults `required` and
+`capture_only` to `false`, `help_text` to empty, and a missing label to the
+title-cased name. Config validation rejects a capture-only field marked
+required. If unvalidated deployment or legacy persisted config contains that
+contradiction, the runtime fails safe by treating it as optional. Names that
+collide with a canonical field are rejected at config-write time. Like
+`registration.fields`, this resolves per-group down the parent chain.
 
-**Render behavior** (hosted register page): for each declared extra field, if a
-matching URL query param is present (e.g. `/register?promo=WELCOME100`) the value
-is captured **silently** (no visible input); otherwise the page renders a plain
-text input asking for it. `required` is a client-side UX hint only.
+**Render behavior** (hosted register page): a visible field renders an explicit
+label and, when configured, escaped help text connected to its input with
+`aria-describedby`. If its matching URL query param is present (for example,
+`/register?promo=WELCOME100`), the value is captured silently and the row stays
+hidden; otherwise the page reveals the input. A `capture_only` field never
+emits a row or editable input, even when its query value is absent. The hosted
+collector reads a matching non-empty query value directly and includes it in
+the registration payload. `required` remains a client-side UX hint only.
+
+Template overrides must keep capture-only fields out of editable DOM while
+retaining them in the collector schema. A custom client may choose its own
+presentation, but should forward a matching query value when it wants the same
+deep-link behavior. `capture_only` is not an integrity or security boundary:
+any client can submit an allowlisted key, so the registration handler must
+validate promo/referral values before granting benefits.
 
 **Capture + storage** (`on_register`): the capture allowlist is the union of the
 group's declared `extra_fields` names and the legacy global
