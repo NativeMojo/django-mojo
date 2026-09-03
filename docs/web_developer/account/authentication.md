@@ -594,8 +594,11 @@ automatically: a matching non-empty URL query param (for example,
 `/register?promo=WELCOME100`) is captured silently; otherwise a normal field is
 shown with an explicit label and optional accessible help text. A field with
 `capture_only: true` never renders an editable input and is included only when
-the URL supplies its value. SPAs implementing their own form should mirror
-that presentation and include the declared key in the register payload.
+the URL supplies its value. Missing `required` and `capture_only` values default
+to `false`; missing help text defaults to empty. If raw legacy config combines
+`capture_only: true` with `required: true`, treat the field as optional. SPAs
+implementing their own form should mirror that presentation and include the
+declared key in the register payload.
 Captured values are stored on the new user under `metadata.registration` (a
 `name → value` map) and passed to the server's registration handler.
 

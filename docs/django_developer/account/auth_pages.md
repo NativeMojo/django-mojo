@@ -683,11 +683,14 @@ AUTH_CONFIG = {
 
 Each entry may use legacy string shorthand (`"ref"`) or object form:
 `{"name", "label"?, "required"?, "capture_only"?, "help_text"?}`. The two
-new presentation properties are strict: `capture_only` is a boolean that
-defaults to `false`, and `help_text` is a string that defaults to empty. A
-capture-only field cannot be required. Names that collide with a canonical
-field are rejected at config-write time. Like `registration.fields`, this
-resolves per-group down the parent chain.
+new presentation properties are strict: `capture_only` is a boolean and
+`help_text` is a string. Runtime normalization defaults `required` and
+`capture_only` to `false`, `help_text` to empty, and a missing label to the
+title-cased name. Config validation rejects a capture-only field marked
+required. If unvalidated deployment or legacy persisted config contains that
+contradiction, the runtime fails safe by treating it as optional. Names that
+collide with a canonical field are rejected at config-write time. Like
+`registration.fields`, this resolves per-group down the parent chain.
 
 **Render behavior** (hosted register page): a visible field renders an explicit
 label and, when configured, escaped help text connected to its input with

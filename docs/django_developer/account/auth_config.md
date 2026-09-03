@@ -62,7 +62,7 @@ rather than appending to it.
 |-----|------|---------|-------------|
 | `enabled` | bool | `true` | Whether the registration page is shown |
 | `fields` | list\|null | `null` | Field schema (null → default email form) — see register_schema |
-| `extra_fields` | list | `[]` | Per-group non-canonical fields (promo/ref/tracking). An entry may be a name string or `{"name", "label"?, "required"?, "capture_only"?, "help_text"?}`. `capture_only` defaults to `false`; `help_text` defaults to `""`. Names colliding with canonical fields are rejected. Default empty — no extra inputs, no behavior change for other tenants. |
+| `extra_fields` | list | `[]` | Per-group non-canonical fields (promo/ref/tracking). An entry may be a name string or `{"name", "label"?, "required"?, "capture_only"?, "help_text"?}`. Hosted-page normalization defaults `required` and `capture_only` to `false`, `help_text` to `""`, and a missing label to the title-cased name. Names colliding with canonical fields are rejected. Default empty — no extra inputs, no behavior change for other tenants. |
 | `identity_field` | string | `""` | `"email"` or `"phone"` (empty → auto-pick) |
 | `min_age` | int\|null | `null` | Minimum age gate (years) applied when `dob` is a field |
 | `methods` | list | `["password","google","apple","github"]` | Offered signup methods |
@@ -185,11 +185,14 @@ auth_config.validate_auth_config(raw_dict)   # raises ValueException on bad conf
 
 `public_auth_config()` preserves `registration.extra_fields` in its configured
 wire shape, including legacy string shorthand. Custom clients should normalize
-string entries to a field name and apply object-form presentation properties
-themselves. `capture_only` is presentation policy, not an integrity or security
-boundary: the register endpoint still accepts an allowlisted value supplied by
-any client, so referral and promo validation belongs in the registration
-handler.
+string entries to a field name and apply the defaults above themselves. New
+config writes reject `capture_only: true` combined with `required: true`; as a
+runtime safeguard for unvalidated deployment or legacy persisted config, the
+hosted schema treats `capture_only` as authoritative and normalizes `required`
+to `false`. That normalization does not rewrite the public raw response.
+`capture_only` is presentation policy, not an integrity or security boundary:
+the register endpoint still accepts an allowlisted value supplied by any
+client, so referral and promo validation belongs in the registration handler.
 
 The `request` parameter on `resolve_auth_config` enables the
 `X-Mojo-Test-Auth-Config` header override in test mode (loopback + test flag

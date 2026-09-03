@@ -108,8 +108,13 @@ configured (promo codes, referral tokens, etc.). An empty list means no extra
 fields. Entries may be legacy name strings or objects with `name`, optional
 `label`, optional `required`, optional `capture_only`, and optional `help_text`.
 The public response preserves that configured wire shape. For object entries,
-`capture_only` and `required` are booleans and `help_text` is a string; a
-capture-only field is never required.
+`capture_only` and `required` are booleans and `help_text` is a string. Apply
+the hosted-page defaults when properties are absent: `required: false`,
+`capture_only: false`, empty help text, and a title-cased field name as the
+label. New config writes reject `capture_only: true` with `required: true`.
+For unvalidated legacy or deployment config, treat `capture_only` as
+authoritative and the field as optional; the raw public response itself is not
+rewritten.
 
 SPAs building a custom registration form should include declared extra-field
 names in their register payload — the server captures values for allowlisted
