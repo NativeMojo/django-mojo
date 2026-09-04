@@ -9,6 +9,7 @@ import hashlib
 import ipaddress
 import json
 import re
+import time
 import uuid
 
 
@@ -111,13 +112,26 @@ class DesiredStateLease:
         self.token = token
 
 
-def acquire_desired_state(timeout=180.0):
-    """Serialize desired snapshot, dispatch, and global finalization."""
-    redis, token = _lease(DESIRED_STATE_LOCK, max(180.0, float(timeout)))
-    if token is None:
+def acquire_desired_state(timeout=1.0):
+    """Acquire the short desired-state critical section with bounded retries."""
+    try:
+        wait = max(0.0, min(2.0, float(timeout)))
+        redis = _redis_client()
+        token = uuid.uuid4().hex
+        deadline = time.monotonic() + wait
+        while True:
+            if redis.set(DESIRED_STATE_LOCK, token, nx=True, ex=30):
+                return DesiredStateLease(redis, token)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.025, remaining))
+    except Exception as err:
         raise FirewallTruthError(
-            "desired_state_busy", "firewall desired state is being reconciled")
-    return DesiredStateLease(redis, token)
+            "desired_state_unavailable",
+            "firewall desired-state lease is unavailable") from err
+    raise FirewallTruthError(
+        "desired_state_busy", "firewall desired state is being reconciled; retry")
 
 
 def release_desired_state(lease):
@@ -133,18 +147,6 @@ def desired_state_is_current(lease):
     if isinstance(value, bytes):
         value = value.decode("utf-8", "strict")
     return value == lease.token
-
-
-def renew_desired_state(lease, ttl=600):
-    if lease is None:
-        return False
-    return bool(lease.redis.eval("""
-if redis.call('get', KEYS[1]) == ARGV[1] then
-  return redis.call('expire', KEYS[1], ARGV[2])
-end
-return 0
-""", 1, DESIRED_STATE_LOCK, lease.token,
-        str(max(30, min(600, int(ttl))))))
 
 
 def fence_key(kind, identity):
@@ -176,18 +178,28 @@ def read_fences(redis, targets):
 
 def advance_fences(lease, targets):
     """Atomically advance each distinct desired-state generation."""
+    if lease is None:
+        raise FirewallTruthError(
+            "desired_state_busy", "firewall desired-state lease is missing")
     unique = list(dict.fromkeys(targets))
     if not unique:
         return {}
     keys = [fence_key(kind, identity) for kind, identity in unique]
     script = """
+if redis.call('get', KEYS[1]) ~= ARGV[1] then
+  return false
+end
 local values = {}
-for index, key in ipairs(KEYS) do
-  values[index] = redis.call('incr', key)
+for index = 2, #KEYS do
+  values[index - 1] = redis.call('incr', KEYS[index])
 end
 return values
 """
-    values = lease.redis.eval(script, len(keys), *keys)
+    values = lease.redis.eval(
+        script, len(keys) + 1, DESIRED_STATE_LOCK, *keys, lease.token)
+    if values is None or values is False:
+        raise FirewallTruthError(
+            "desired_state_busy", "firewall desired-state lease expired")
     if not isinstance(values, (list, tuple)) or len(values) != len(unique):
         raise FirewallTruthError("fence_unavailable", "firewall fence advance failed")
     return {target: _parse_fence(value)
@@ -314,17 +326,40 @@ def observation_key(kind, identity, fence, host):
     return f"{OBSERVATION_PREFIX}:{kind}:{identity}:{fence}:{host}"
 
 
-def record_host_observation(kind, identity, fence, fingerprint, desired):
+def current_host_incarnation():
+    from mojo.apps.jobs.execution_context import current_runner_incarnation
     from mojo.apps.jobs.job_engine import host_channel
+
+    incarnation = current_runner_incarnation()
+    if (not isinstance(incarnation, dict) or
+            not isinstance(incarnation.get("started"), str) or
+            not 1 <= len(incarnation["started"]) <= 96):
+        raise FirewallTruthError(
+            "runner_incarnation_unavailable",
+            "current runner heartbeat incarnation is unavailable")
+    return {"host": host_channel(), "started": incarnation["started"]}
+
+
+def record_host_observation(kind, identity, fence, fingerprint, desired,
+                            incarnation=None):
     if not isinstance(fingerprint, str) or not re.fullmatch(
             r"[0-9a-f]{64}", fingerprint):
         raise FirewallTruthError(
             "invalid_observation", "firewall fingerprint is invalid")
-    host = host_channel()
+    incarnation = incarnation or current_host_incarnation()
+    if (not isinstance(incarnation, dict) or
+            set(incarnation) != {"host", "started"} or
+            not isinstance(incarnation.get("host"), str) or
+            not isinstance(incarnation.get("started"), str) or
+            not 1 <= len(incarnation["started"]) <= 96):
+        raise FirewallTruthError(
+            "invalid_observation", "runner incarnation is invalid")
+    host = incarnation["host"]
     value = {
         "schema": FIREWALL_SEMANTIC_SCHEMA, "version": FIREWALL_SEMANTIC_VERSION,
         "kind": kind, "identity": identity, "fence": int(fence),
-        "fingerprint": fingerprint, "host": host, "desired": desired,
+        "fingerprint": fingerprint, "host": host,
+        "started": incarnation["started"], "desired": desired,
     }
     payload = json.dumps(value, sort_keys=True, separators=(",", ":"),
                          allow_nan=False)
@@ -338,7 +373,7 @@ def record_host_observation(kind, identity, fence, fingerprint, desired):
     return value
 
 
-def exact_compatible_hosts(channel="default"):
+def exact_compatible_roster(channel="default"):
     from mojo.apps import jobs
     try:
         manager = jobs.get_manager()
@@ -353,20 +388,38 @@ def exact_compatible_hosts(channel="default"):
     if incompatible or set(selected) != set(expected):
         raise FirewallTruthError(
             "runner_roster_incompatible", "runner roster is not fully compatible")
-    return expected
+    return [{"host": host, "started": selected[host]["started"]}
+            for host in expected]
+
+
+def exact_compatible_hosts(channel="default"):
+    """Compatibility projection for callers that only display host names."""
+    return [row["host"] for row in exact_compatible_roster(channel)]
 
 
 def aggregate_observations(kind, identity, fence, fingerprint, desired,
-                           channel="default", hosts=None):
+                           channel="default", roster=None):
     try:
-        verify_current_roster = hosts is None
-        hosts = list(hosts) if hosts is not None else exact_compatible_hosts(channel)
-        if not hosts or len(hosts) != len(set(hosts)):
+        verify_current_roster = roster is None
+        roster = ([dict(row) for row in roster] if roster is not None
+                  else exact_compatible_roster(channel))
+        if (not roster or any(
+                not isinstance(row, dict) or
+                set(row) != {"host", "started"} or
+                not isinstance(row.get("host"), str) or
+                not isinstance(row.get("started"), str) or
+                not 1 <= len(row["started"]) <= 96
+                for row in roster)):
+            raise FirewallTruthError(
+                "runner_roster_invalid", "runner roster is invalid")
+        hosts = [row["host"] for row in roster]
+        if hosts != sorted(hosts) or len(hosts) != len(set(hosts)):
             raise FirewallTruthError(
                 "runner_roster_invalid", "runner roster is invalid")
         redis = _redis_client()
         rows = []
-        for host in hosts:
+        for expected in roster:
+            host = expected["host"]
             raw = redis.get(observation_key(kind, identity, fence, host))
             if not isinstance(raw, (bytes, str)):
                 raise FirewallTruthError(
@@ -386,15 +439,18 @@ def aggregate_observations(kind, identity, fence, fingerprint, desired,
                     "version": FIREWALL_SEMANTIC_VERSION,
                     "kind": kind, "identity": identity, "fence": int(fence),
                     "fingerprint": fingerprint, "host": host,
+                    "started": expected["started"],
                     "desired": desired}:
                 raise FirewallTruthError(
                     "host_observation_mismatch", "host observation is stale")
             rows.append(row)
-        if verify_current_roster and exact_compatible_hosts(channel) != hosts:
+        if (verify_current_roster and
+                exact_compatible_roster(channel) != roster):
             raise FirewallTruthError(
                 "runner_roster_changed", "runner roster changed during aggregation")
         return {"status": "verified", "ok": True,
-                "expected_hosts": hosts, "observations": rows}
+                "expected_hosts": hosts, "expected_roster": roster,
+                "observations": rows}
     except (FirewallTruthError, UnicodeError, ValueError, TypeError) as err:
         code = err.code if isinstance(err, FirewallTruthError) else "observation_invalid"
         return _failure(code, err)
@@ -409,7 +465,7 @@ def _unique_object(pairs):
     return value
 
 
-def current_ipset_enforcement(row, channel="default", hosts=None):
+def current_ipset_enforcement(row, channel="default", roster=None):
     """Return fleet aggregate truth for the row's exact current generation."""
     try:
         snapshot = ipset_snapshot(row.name)
@@ -420,7 +476,7 @@ def current_ipset_enforcement(row, channel="default", hosts=None):
                 "generation_unobserved", "IPSet generation has no fence")
         result = aggregate_observations(
             "set", row.name, fence, snapshot["fingerprint"],
-            snapshot["desired"], channel, hosts=hosts)
+            snapshot["desired"], channel, roster=roster)
         result.update(desired=snapshot["desired"], fence=fence,
                       fingerprint=snapshot["fingerprint"])
         return result
@@ -465,6 +521,7 @@ def _verified_checked(checked, kind, desired):
             "fleet_unverified", "the compatible host snapshot was not verified",
             checked if isinstance(checked, dict) else None)
     expected = checked.get("expected_hosts")
+    roster = checked.get("expected_roster")
     responded = checked.get("responded_hosts")
     succeeded = checked.get("succeeded_hosts")
     failed = checked.get("failed_hosts")
@@ -475,20 +532,38 @@ def _verified_checked(checked, kind, desired):
             any(not isinstance(host, str) for host in expected) or
             responded != expected or succeeded != expected or
             failed != [] or missing != [] or raw_anomalies != [] or
+            not isinstance(roster, list) or len(roster) != len(expected) or
+            any(not isinstance(row, dict) or
+                set(row) != {"host", "started"} or
+                not isinstance(row.get("host"), str) or
+                not isinstance(row.get("started"), str) or
+                not 1 <= len(row["started"]) <= 96 for row in roster) or
+            [row.get("host") for row in roster
+             if isinstance(row, dict)] != expected or
             not isinstance(results, list) or len(results) != len(expected)):
         return _failure(
             "checked_evidence_invalid", "checked host evidence is incomplete",
             checked)
     anomalies = []
     result_hosts = []
+    incarnations = {
+        row["host"]: row.get("started") for row in roster
+        if isinstance(row, dict) and set(row) == {"host", "started"}
+    }
+    if len(incarnations) != len(expected):
+        return _failure(
+            "checked_evidence_invalid", "checked host incarnation is incomplete",
+            checked)
     for row in results:
         host = row.get("host", "unknown") if isinstance(row, dict) else "unknown"
         result_hosts.append(host)
         result = row.get("result") if isinstance(row, dict) else None
+        result_started = row.get("started") if isinstance(row, dict) else None
         if (not isinstance(result, dict) or
                 result.get("schema") != FIREWALL_SEMANTIC_SCHEMA or
                 result.get("version") != FIREWALL_SEMANTIC_VERSION or
                 result.get("kind") != kind or result.get("ok") is not True or
+                result_started != incarnations.get(host) or
                 result.get("desired") != desired or
                 result.get("observed") != desired):
             anomalies.append(f"semantic_mismatch:{host}")
@@ -502,6 +577,17 @@ def _verified_checked(checked, kind, desired):
             "semantic_mismatch", "one or more hosts did not prove desired state",
             value)
     return {"status": "verified", "ok": True, "checked": checked}
+
+
+def _checked_current_roster(checked, channel):
+    """Bind final observation reads to the exact dispatched incarnations."""
+    expected = checked.get("expected_roster")
+    current = exact_compatible_roster(channel)
+    if current != expected:
+        raise FirewallTruthError(
+            "runner_roster_changed",
+            "runner roster changed during checked reconciliation")
+    return current
 
 
 def _lease(key, timeout):
@@ -535,39 +621,53 @@ def reconcile_ip(ip, present, channel="default", timeout=10.0,
     desired = {"ip": canonical, "present": present}
     from mojo.apps import jobs
     lease = None
+    checked = None
     try:
-        lease = acquire_desired_state(timeout)
+        lease = acquire_desired_state()
         fences = advance_fences(lease, [("ip", canonical)])
         fence = fences[("ip", canonical)]
         fingerprint = state_fingerprint(desired)
+    except FirewallTruthError as err:
+        return _failure(err.code, err)
+    finally:
+        release_desired_state(lease)
+        lease = None
+    try:
         checked = jobs.broadcast_execute_checked(
             "mojo.apps.incident.asyncjobs.broadcast_reconcile_firewall_ip",
-            {**desired, "fence": fence, "fingerprint": fingerprint,
-             "lease_token": lease.token},
+            {**desired, "fence": fence, "fingerprint": fingerprint},
             timeout=timeout, channel=channel, correlation_id=correlation_id)
-        if (not desired_state_is_current(lease) or
-                read_fences(lease.redis, [("ip", canonical)])[
-                    ("ip", canonical)] != fence or
+        lease = acquire_desired_state()
+        if (read_fences(lease.redis, [("ip", canonical)])[
+                ("ip", canonical)] != fence or
                 state_fingerprint(desired) != fingerprint):
             return {**_failure(
                 "generation_superseded", "IP desired state changed", checked),
                 "desired": desired}
         result = _verified_checked(checked, "ip", desired)
         if result.get("ok") is True:
+            roster = _checked_current_roster(checked, channel)
             result = aggregate_observations(
-                "ip", canonical, fence, fingerprint, desired, channel)
+                "ip", canonical, fence, fingerprint, desired, channel,
+                roster=roster)
+            if exact_compatible_roster(channel) != roster:
+                raise FirewallTruthError(
+                    "runner_roster_changed",
+                    "runner roster changed during checked finalization")
             result["checked"] = checked
         result["desired"] = desired
         return result
     except FirewallTruthError as err:
-        return _failure(err.code, err)
+        result = _failure(err.code, err, checked)
+        result["desired"] = desired
+        return result
     finally:
         release_desired_state(lease)
+        lease = None
 
 
 def reconcile_set(name, cidrs, present=True, channel="default", timeout=135.0,
-                  correlation_id=None, lease=None):
-    owned_lease = lease is None
+                  correlation_id=None):
     try:
         name = canonical_set_name(name)
         canonical = canonical_ipv4_networks(cidrs)
@@ -584,9 +684,10 @@ def reconcile_set(name, cidrs, present=True, channel="default", timeout=135.0,
         "count": len(canonical) if present else 0,
         "digest": network_digest(canonical if present else []),
     }
+    lease = None
+    checked = None
     try:
-        if owned_lease:
-            lease = acquire_desired_state(timeout)
+        lease = acquire_desired_state()
         snapshot = ipset_snapshot(name)
         if snapshot["desired"] != desired:
             raise FirewallTruthError(
@@ -595,18 +696,31 @@ def reconcile_set(name, cidrs, present=True, channel="default", timeout=135.0,
         fence = fences[("set", name)]
         if fence == 0:
             fence = advance_fences(lease, [("set", name)])[("set", name)]
+        if not desired_state_is_current(lease):
+            raise FirewallTruthError(
+                "desired_state_busy", "IPSet desired-state lease expired")
+    except Exception as err:
+        if not isinstance(err, FirewallTruthError):
+            err = FirewallTruthError(
+                "desired_state_unavailable", "IPSet desired state is unavailable")
+        result = _failure(err.code, err)
+        result["desired"] = desired
+        return result
+    finally:
+        release_desired_state(lease)
+        lease = None
+    try:
         from mojo.apps import jobs
         checked = jobs.broadcast_execute_checked(
             "mojo.apps.incident.asyncjobs.broadcast_reconcile_firewall_set",
             {"name": name, "cidrs": canonical, "present": present,
-             "fence": fence, "fingerprint": snapshot["fingerprint"],
-             "lease_token": lease.token},
+             "fence": fence, "fingerprint": snapshot["fingerprint"]},
             timeout=timeout, channel=channel, correlation_id=correlation_id)
+        lease = acquire_desired_state()
         current = ipset_snapshot(name)
         current_fence = read_fences(
             lease.redis, [("set", name)])[("set", name)]
-        if (not desired_state_is_current(lease) or
-                current["fingerprint"] != snapshot["fingerprint"] or
+        if (current["fingerprint"] != snapshot["fingerprint"] or
                 current_fence != fence):
             type(current["row"]).objects.filter(pk=current["row"].pk).update(
                 sync_error="generation_superseded: IPSet desired state changed")
@@ -615,8 +729,14 @@ def reconcile_set(name, cidrs, present=True, channel="default", timeout=135.0,
                 "desired": desired}
         result = _verified_checked(checked, "set", desired)
         if result.get("ok") is True:
+            roster = _checked_current_roster(checked, channel)
             result = aggregate_observations(
-                "set", name, fence, snapshot["fingerprint"], desired, channel)
+                "set", name, fence, snapshot["fingerprint"], desired, channel,
+                roster=roster)
+            if exact_compatible_roster(channel) != roster:
+                raise FirewallTruthError(
+                    "runner_roster_changed",
+                    "runner roster changed during checked finalization")
             result["checked"] = checked
         result["desired"] = desired
         result["fence"] = fence
@@ -626,19 +746,17 @@ def reconcile_set(name, cidrs, present=True, channel="default", timeout=135.0,
         if not isinstance(err, FirewallTruthError):
             err = FirewallTruthError(
                 "desired_state_unavailable", "IPSet desired state is unavailable")
-        result = _failure(err.code, err)
+        result = _failure(err.code, err, checked)
         result["desired"] = desired
         return result
     finally:
-        if owned_lease:
-            release_desired_state(lease)
+        release_desired_state(lease)
 
 
 def reconcile_geolocated_ip(ip, permanent_ips, temporary_present,
                             channel="default", timeout=135.0,
-                            correlation_id=None, lease=None):
+                            correlation_id=None):
     """Reconcile one row and the permanent aggregate in one host snapshot."""
-    owned_lease = lease is None
     try:
         canonical = canonical_ipv4_address(ip)
         permanent = canonical_ipv4_networks(permanent_ips)
@@ -654,9 +772,10 @@ def reconcile_geolocated_ip(ip, permanent_ips, temporary_present,
     }
     ip_desired = {"ip": canonical, "present": temporary_present}
     desired = {"ip": ip_desired, "permanent": permanent_desired}
+    lease = None
+    checked = None
     try:
-        if owned_lease:
-            lease = acquire_desired_state(timeout)
+        lease = acquire_desired_state()
         snapshot = geolocated_snapshot(canonical)
         if snapshot["desired"] != desired:
             raise FirewallTruthError(
@@ -668,6 +787,20 @@ def reconcile_geolocated_ip(ip, permanent_ips, temporary_present,
             fences.update(advance_fences(lease, missing))
         ip_fence = fences[("ip", canonical)]
         aggregate_fence = fences[("permanent", set_name)]
+        if not desired_state_is_current(lease):
+            raise FirewallTruthError(
+                "desired_state_busy", "firewall desired-state lease expired")
+    except Exception as err:
+        if not isinstance(err, FirewallTruthError):
+            err = FirewallTruthError(
+                "desired_state_unavailable", "firewall desired state is unavailable")
+        result = _failure(err.code, err)
+        result["desired"] = desired
+        return result
+    finally:
+        release_desired_state(lease)
+        lease = None
+    try:
         from mojo.apps import jobs
         checked = jobs.broadcast_execute_checked(
             "mojo.apps.incident.asyncjobs.broadcast_reconcile_geolocated_ip",
@@ -677,13 +810,12 @@ def reconcile_geolocated_ip(ip, permanent_ips, temporary_present,
              "ip_fence": ip_fence,
              "aggregate_fence": aggregate_fence,
              "fingerprint": snapshot["fingerprint"],
-             "aggregate_fingerprint": snapshot["permanent"]["fingerprint"],
-             "lease_token": lease.token},
+             "aggregate_fingerprint": snapshot["permanent"]["fingerprint"]},
             timeout=timeout, channel=channel, correlation_id=correlation_id)
+        lease = acquire_desired_state()
         current = geolocated_snapshot(canonical)
         current_fences = read_fences(lease.redis, targets)
-        if (not desired_state_is_current(lease) or
-                current["fingerprint"] != snapshot["fingerprint"] or
+        if (current["fingerprint"] != snapshot["fingerprint"] or
                 current["permanent"]["fingerprint"] !=
                 snapshot["permanent"]["fingerprint"] or
                 current_fences != fences):
@@ -700,13 +832,18 @@ def reconcile_geolocated_ip(ip, permanent_ips, temporary_present,
                 "desired": desired}
         result = _verified_checked(checked, "geolocated_ip", desired)
         if result.get("ok") is True:
+            roster = _checked_current_roster(checked, channel)
             geo_result = aggregate_observations(
                 "geo", canonical, ip_fence, snapshot["fingerprint"],
-                desired, channel)
+                desired, channel, roster=roster)
             permanent_result = aggregate_observations(
                 "permanent", set_name, aggregate_fence,
                 snapshot["permanent"]["fingerprint"], permanent_desired,
-                channel)
+                channel, roster=roster)
+            if exact_compatible_roster(channel) != roster:
+                raise FirewallTruthError(
+                    "runner_roster_changed",
+                    "runner roster changed during checked finalization")
             result = geo_result if geo_result.get("ok") is not True \
                 else permanent_result
             result["checked"] = checked
@@ -714,17 +851,17 @@ def reconcile_geolocated_ip(ip, permanent_ips, temporary_present,
         result["fence"] = ip_fence
         result["aggregate_fence"] = aggregate_fence
         result["fingerprint"] = snapshot["fingerprint"]
+        result["aggregate_fingerprint"] = snapshot["permanent"]["fingerprint"]
         return result
     except Exception as err:
         if not isinstance(err, FirewallTruthError):
             err = FirewallTruthError(
                 "desired_state_unavailable", "firewall desired state is unavailable")
-        result = _failure(err.code, err)
+        result = _failure(err.code, err, checked)
         result["desired"] = desired
         return result
     finally:
-        if owned_lease:
-            release_desired_state(lease)
+        release_desired_state(lease)
 
 
 def bounded_error(result):

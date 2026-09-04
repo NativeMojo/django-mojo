@@ -34,6 +34,8 @@ from mojo.apps.incident.services.firewall_truth import (
 
 BROKER_PATH = "/usr/local/sbin/mojo-firewall-broker"
 SUDOERS_PATH = "/etc/sudoers.d/70-mojo-firewall-broker"
+CONFIG_PATH = "/etc/mojo-firewall-broker.json"
+DEFAULT_PERMANENT_SET_NAME = "mojo_blocked"
 IPTABLES = "/sbin/iptables"
 IPTABLES_SAVE = "/sbin/iptables-save"
 IPSET = "/sbin/ipset"
@@ -46,6 +48,7 @@ SCALAR_TIMEOUT_SECONDS = 15
 BULK_TIMEOUT_SECONDS = 120
 ADDRESS_SPACE_BYTES = 256 * 1024 * 1024
 MAX_SET_NAME = 31
+MAX_CONFIG_BYTES = 4096
 _SET_NAME = re.compile(r"^[A-Za-z0-9_-]{1,31}$")
 _FUNCTION = re.compile(r"^mojo\.apps\.incident\.asyncjobs\.[A-Za-z0-9_]{1,96}$")
 _CONTEXT_TOKEN = re.compile(r"^[A-Za-z0-9_.:@/+\-]{1,160}$")
@@ -57,19 +60,20 @@ _OP_FIELDS = {
     "rules.contains": {"source"},
     "rule.insert": {"chain", "source"},
     "rule.delete": {"chain", "source"},
-    "set.add": {"set_name", "source", "reserved_set_name"},
-    "set.delete": {"set_name", "source", "reserved_set_name"},
-    "set.replace": {"set_name", "cidrs", "reserved_set_name"},
-    "set.remove": {"set_name", "reserved_set_name"},
-    "set.rule_ensure": {"set_name", "reserved_set_name"},
+    "permanent.add": {"source", "expected_permanent_set"},
+    "permanent.delete": {"source", "expected_permanent_set"},
+    "permanent.rule_ensure": {"expected_permanent_set"},
+    "permanent.normalize": {"cidrs", "expected_permanent_set"},
+    "set.replace": {"set_name", "cidrs", "expected_permanent_set"},
+    "set.remove": {"set_name", "expected_permanent_set"},
+    "set.rule_ensure": {"set_name", "expected_permanent_set"},
     "ip.status": {"source"},
     "ip.normalize": {"source", "present"},
-    "set.status": {"set_name", "reserved_set_name"},
+    "set.status": {"set_name", "expected_permanent_set"},
     "set.normalize": {
-        "set_name", "cidrs", "present", "reserved_set_name"},
+        "set_name", "cidrs", "present", "expected_permanent_set"},
     "geolocated.normalize": {
-        "source", "set_name", "cidrs", "temporary_present",
-        "reserved_set_name"},
+        "source", "cidrs", "temporary_present", "expected_permanent_set"},
 }
 _FUNCTION_OPERATIONS = {
     "mojo.apps.incident.asyncjobs.broadcast_block_ip": {
@@ -77,11 +81,11 @@ _FUNCTION_OPERATIONS = {
     "mojo.apps.incident.asyncjobs.broadcast_unblock_ip": {
         "rules.contains", "rule.delete", "ip.status", "ip.normalize"},
     "mojo.apps.incident.asyncjobs.broadcast_ipset_add_blocked": {
-        "set.add", "set.rule_ensure"},
-    "mojo.apps.incident.asyncjobs.broadcast_ipset_del_blocked": {"set.delete"},
+        "permanent.add", "permanent.rule_ensure"},
+    "mojo.apps.incident.asyncjobs.broadcast_ipset_del_blocked": {
+        "permanent.delete"},
     "mojo.apps.incident.asyncjobs.sync_firewall": {
-        "set.replace", "set.rule_ensure", "set.status", "set.normalize",
-        "ip.status", "ip.normalize"},
+        "permanent.normalize", "set.normalize", "ip.normalize"},
     "mojo.apps.incident.asyncjobs.broadcast_sync_ipset": {
         "set.replace", "set.rule_ensure", "set.status", "set.normalize"},
     "mojo.apps.incident.asyncjobs.broadcast_remove_ipset": {
@@ -160,24 +164,60 @@ def _set_name(value, temporary=False):
     return value
 
 
-def _govern_set_target(function, name, reserved_name):
-    """Keep the configured aggregate distinct from operator-owned sets."""
-    aggregate = _set_name(reserved_name, temporary=True)
-    aggregate_only = {
-        "mojo.apps.incident.asyncjobs.broadcast_ipset_add_blocked",
-        "mojo.apps.incident.asyncjobs.broadcast_ipset_del_blocked",
-        "mojo.apps.incident.asyncjobs.broadcast_reconcile_geolocated_ip",
-    }
-    operator_only = {
-        "mojo.apps.incident.asyncjobs.broadcast_sync_ipset",
-        "mojo.apps.incident.asyncjobs.broadcast_remove_ipset",
-        "mojo.apps.incident.asyncjobs.broadcast_reconcile_firewall_set",
-    }
-    if function in aggregate_only and name != aggregate:
+def _root_permanent_set_name(path=CONFIG_PATH):
+    """Read the root-owned broker namespace, or the secure legacy default."""
+    descriptor = None
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        return DEFAULT_PERMANENT_SET_NAME
+    try:
+        info = os.fstat(descriptor)
+        if (info.st_uid != 0 or not stat.S_ISREG(info.st_mode) or
+                info.st_mode & 0o077):
+            raise BrokerError(
+                "firewall broker config metadata is unsafe",
+                code="broker_config_unsafe")
+        payload = os.read(descriptor, MAX_CONFIG_BYTES + 1)
+        if not payload or len(payload) > MAX_CONFIG_BYTES:
+            raise BrokerError(
+                "firewall broker config size is invalid",
+                code="broker_config_invalid")
+        value = json.loads(
+            payload.decode("utf-8"), object_pairs_hook=_strict_object,
+            parse_constant=lambda unused: (_ for _ in ()).throw(
+                BrokerError("constant")))
+        if not isinstance(value, dict) or set(value) != {"permanent_set_name"}:
+            raise BrokerError(
+                "firewall broker config is invalid",
+                code="broker_config_invalid")
+        return _set_name(value["permanent_set_name"], temporary=True)
+    except (UnicodeError, json.JSONDecodeError) as err:
         raise BrokerError(
-            "operation does not target the configured permanent set",
-            code="reserved_set_name")
-    if function in operator_only and name == aggregate:
+            "firewall broker config is invalid",
+            code="broker_config_invalid") from err
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _permanent_authority(request):
+    """Return root authority only when application configuration agrees."""
+    actual = _root_permanent_set_name()
+    expected = _set_name(request.get("expected_permanent_set"), temporary=True)
+    if expected != actual:
+        raise BrokerError(
+            "application and root firewall set configuration differ",
+            code="permanent_set_config_mismatch")
+    return actual
+
+
+def _operator_set_target(request, temporary=False):
+    aggregate = _permanent_authority(request)
+    name = _set_name(request.get("set_name"), temporary=temporary)
+    if name == aggregate:
         raise BrokerError(
             "configured permanent set is reserved", code="reserved_set_name")
     return name
@@ -232,19 +272,15 @@ def build_operation(request, function=None):
         argv = [IPTABLES, action, chain, "-s", source, "-j", "DROP"]
         built.update(chain=chain, source=source, argv=argv,
                      semantic=f"{action} {chain} source DROP")
-    elif operation in ("set.add", "set.delete"):
-        name = _govern_set_target(
-            function, _set_name(request.get("set_name")),
-            request.get("reserved_set_name"))
+    elif operation in ("permanent.add", "permanent.delete"):
+        name = _permanent_authority(request)
         source = _network(request.get("source"))
-        verb = "add" if operation == "set.add" else "del"
+        verb = "add" if operation == "permanent.add" else "del"
         argv = [IPSET, verb, name, source, "-exist"]
         built.update(set_name=name, source=source, argv=argv,
                      semantic=f"set {verb} network")
     elif operation == "set.replace":
-        name = _govern_set_target(
-            function, _set_name(request.get("set_name"), temporary=True),
-            request.get("reserved_set_name"))
+        name = _operator_set_target(request, temporary=True)
         cidrs = request.get("cidrs")
         if (not isinstance(cidrs, list) or len(cidrs) > MAX_CIDRS or
                 any(not isinstance(item, str) for item in cidrs)):
@@ -262,15 +298,13 @@ def build_operation(request, function=None):
         built.update(set_name=name, cidrs=normalized, argv=argv, stdin=stdin,
                      semantic="replace hash:net atomically")
     elif operation == "set.remove":
-        name = _govern_set_target(
-            function, _set_name(request.get("set_name")),
-            request.get("reserved_set_name"))
+        name = _operator_set_target(request)
         argv = [IPSET, "destroy", name]
         built.update(set_name=name, argv=argv, semantic="destroy hash:net")
-    elif operation == "set.rule_ensure":
-        name = _govern_set_target(
-            function, _set_name(request.get("set_name")),
-            request.get("reserved_set_name"))
+    elif operation in ("set.rule_ensure", "permanent.rule_ensure"):
+        name = (_permanent_authority(request)
+                if operation == "permanent.rule_ensure"
+                else _operator_set_target(request))
         argv = [IPTABLES, "-C", "INPUT", "-m", "set", "--match-set", name,
                 "src", "-j", "DROP"]
         built.update(set_name=name, argv=argv, semantic="ensure INPUT set DROP")
@@ -281,16 +315,16 @@ def build_operation(request, function=None):
         built.update(
             source=source, present=request.get("present", False),
             argv=[IPTABLES_SAVE], semantic="normalize exact IPv4 DROP rules")
-    elif operation in ("set.status", "set.normalize"):
-        name = _govern_set_target(
-            function, _set_name(
-                request.get("set_name"), temporary=(
-                operation == "set.normalize" and
-                request.get("present") is True)),
-            request.get("reserved_set_name"))
-        present = request.get("present", False)
+    elif operation in ("set.status", "set.normalize", "permanent.normalize"):
+        present = (True if operation == "permanent.normalize"
+                   else request.get("present", False))
         if not isinstance(present, bool):
             raise BrokerError("present must be a boolean")
+        name = (_permanent_authority(request)
+                if operation == "permanent.normalize"
+                else _operator_set_target(
+                    request, temporary=(
+                        operation == "set.normalize" and present)))
         cidrs = request.get("cidrs", [])
         try:
             cidrs = canonical_ipv4_networks(cidrs, limit=MAX_CIDRS)
@@ -301,9 +335,7 @@ def build_operation(request, function=None):
             argv=[IPSET], semantic="normalize exact IPv4 hash:net set and rules")
     else:
         source = _network(request.get("source"))
-        name = _govern_set_target(
-            function, _set_name(request.get("set_name"), temporary=True),
-            request.get("reserved_set_name"))
+        name = _permanent_authority(request)
         temporary_present = request.get("temporary_present")
         if not isinstance(temporary_present, bool):
             raise BrokerError("temporary_present must be a boolean")
@@ -716,7 +748,7 @@ def execute(request):
         elif built["operation"] == "set.status":
             children, observed = _set_status(built["set_name"])
             result = {"ok": True, "observed": observed}
-        elif built["operation"] == "set.normalize":
+        elif built["operation"] in ("set.normalize", "permanent.normalize"):
             children, observed, ok = _normalize_set(
                 built["set_name"], built["cidrs"], built["present"])
             result = {"ok": ok, "observed": observed}
@@ -728,7 +760,7 @@ def execute(request):
             children = ip_children + set_children
             observed = {"ip": ip_observed, "permanent": set_observed}
             result = {"ok": bool(ip_ok and set_ok), "observed": observed}
-        elif built["operation"] == "set.add":
+        elif built["operation"] == "permanent.add":
             child, unused_stdout, unused_stderr = _run_child(
                 [IPSET, "create", built["set_name"], "hash:net", "-exist"])
             children.append(child)
@@ -754,7 +786,7 @@ def execute(request):
                 raise BrokerError("cannot flush set")
         if built["operation"] not in (
                 "ip.status", "ip.normalize", "set.status", "set.normalize",
-                "geolocated.normalize"):
+                "permanent.normalize", "geolocated.normalize"):
             stdout_limit = (MAX_RULES_OUTPUT_BYTES if built["operation"] == "rules.contains"
                             else MAX_OUTPUT_BYTES)
             child, stdout, stderr = _run_child(
@@ -768,7 +800,9 @@ def execute(request):
                     raise BrokerError("cannot read firewall rules")
                 result = {"ok": True, "present": _rules_contain_source(
                     stdout, built["source"])}
-            elif built["operation"] == "set.rule_ensure" and child["returncode"] == 1:
+            elif built["operation"] in (
+                    "set.rule_ensure", "permanent.rule_ensure") and \
+                    child["returncode"] == 1:
                 child["ok"] = True
                 insert = [IPTABLES, "-I", "INPUT", "-m", "set", "--match-set",
                           built["set_name"], "src", "-j", "DROP"]

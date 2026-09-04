@@ -23,7 +23,7 @@ def test_restore_construction(opts):
 
     built = build_operation({
         "operation": "set.replace", "set_name": "blocked",
-        "reserved_set_name": "mojo_blocked",
+        "expected_permanent_set": "mojo_blocked",
         "cidrs": ["192.0.2.1/24", "192.0.2.9/24"],
     }, function="mojo.apps.incident.asyncjobs.broadcast_sync_ipset")
     th.assert_eq(built["cidrs"], ["192.0.2.0/24"],
@@ -53,8 +53,7 @@ def test_compound_geolocated_build(opts):
 
     built = build_operation({
         "operation": "geolocated.normalize", "source": "192.0.2.8",
-        "set_name": "mojo_blocked",
-        "reserved_set_name": "mojo_blocked",
+        "expected_permanent_set": "mojo_blocked",
         "cidrs": ["192.0.2.8", "198.51.100.9/32"],
         "temporary_present": False,
     }, function=(
@@ -189,11 +188,16 @@ def test_host_lock_busy_is_typed(opts):
 
 @th.unit_test("broker function-operation matrix is closed")
 def test_function_matrix(opts):
-    from mojo.deploy.firewall_broker import BrokerError, build_operation
+    from mojo.deploy import firewall_broker as broker
+    from mojo.mojosec.store import _BROKER_FUNCTION_OPERATIONS
 
-    with th.assert_raises(BrokerError):
-        build_operation({"operation": "rule.insert", "chain": "INPUT",
-                         "source": "192.0.2.8"}, function="evil.module.call")
+    with th.assert_raises(broker.BrokerError):
+        broker.build_operation({"operation": "rule.insert", "chain": "INPUT",
+                                "source": "192.0.2.8"},
+                               function="evil.module.call")
+    th.assert_eq(
+        _BROKER_FUNCTION_OPERATIONS, broker._FUNCTION_OPERATIONS,
+        "MojoSec governance drifted from the broker's closed authority matrix")
 
 
 @th.unit_test("broker refuses configured aggregate collision for operator sets")
@@ -202,15 +206,55 @@ def test_dynamic_reserved_set_collision(opts):
 
     request = {
         "operation": "set.replace", "set_name": "configured_reserved",
-        "reserved_set_name": "configured_reserved",
+        "expected_permanent_set": "configured_reserved",
         "cidrs": ["192.0.2.0/24"],
     }
-    with th.assert_raises(broker.BrokerError) as raised:
+    with mock.patch.object(
+            broker, "_root_permanent_set_name",
+            return_value="configured_reserved"), \
+            th.assert_raises(broker.BrokerError) as raised:
         broker.build_operation(
             request,
             function="mojo.apps.incident.asyncjobs.broadcast_sync_ipset")
     th.assert_eq(raised.exception.code, "reserved_set_name",
                  "operator lifecycle could overwrite the configured aggregate")
+
+
+@th.unit_test("caller fields cannot redefine the root permanent namespace")
+def test_forged_permanent_namespace_is_refused(opts):
+    from mojo.deploy import firewall_broker as broker
+
+    request = {
+        "operation": "permanent.normalize",
+        "expected_permanent_set": "attacker_chosen",
+        "cidrs": ["192.0.2.0/24"],
+    }
+    with mock.patch.object(
+            broker, "_root_permanent_set_name", return_value="mojo_blocked"), \
+            th.assert_raises(broker.BrokerError) as raised:
+        broker.build_operation(
+            request, function="mojo.apps.incident.asyncjobs.sync_firewall")
+    th.assert_eq(raised.exception.code, "permanent_set_config_mismatch",
+                 "a caller-controlled field redefined the root-owned set")
+
+
+@th.unit_test("configured and default broker namespaces fail closed on mismatch")
+def test_root_and_application_namespace_mismatch_is_refused(opts):
+    from mojo.deploy import firewall_broker as broker
+
+    request = {
+        "operation": "set.normalize", "set_name": "operator_set",
+        "expected_permanent_set": "mojo_blocked", "cidrs": [],
+        "present": False,
+    }
+    with mock.patch.object(
+            broker, "_root_permanent_set_name",
+            return_value="configured_root_set"), \
+            th.assert_raises(broker.BrokerError) as raised:
+        broker.build_operation(
+            request, function="mojo.apps.incident.asyncjobs.sync_firewall")
+    th.assert_eq(raised.exception.code, "permanent_set_config_mismatch",
+                 "an app/default mismatch reached an operator mutation")
 
 
 @th.unit_test("firewall backend uses exact noninteractive empty-argv broker command")
@@ -228,6 +272,29 @@ def test_firewall_invocation(opts):
     th.assert_eq(run.call_args.args[0], ["/usr/bin/sudo", "-n", "--",
                                         "/usr/local/sbin/mojo-firewall-broker"],
                  "application sudo must execute only the empty-argv broker command")
+
+
+@th.unit_test("aggregate client declares config but cannot choose root target")
+def test_permanent_client_request_has_no_target_field(opts):
+    import json
+    from mojo.apps.incident import firewall
+    from mojo.apps.jobs.execution_context import execution
+
+    completed = mock.Mock(
+        returncode=0, stdout='{"ok":true,"observed":{}}\n', stderr="")
+    with execution(
+            "job-1", "mojo.apps.incident.asyncjobs.sync_firewall", 1,
+            "default", "runner-1"), \
+            mock.patch.object(firewall, "_check_user", return_value=True), \
+            mock.patch.object(
+                firewall.subprocess, "run", return_value=completed) as run:
+        firewall.normalize_permanent_ipset([])
+    payload = json.loads(run.call_args.kwargs["input"])
+    th.assert_eq(payload["operation"], "permanent.normalize")
+    th.assert_true("set_name" not in payload and "reserved_set_name" not in payload,
+                   "unprivileged aggregate caller still selected root identity")
+    th.assert_eq(payload["expected_permanent_set"], "mojo_blocked",
+                 "application configuration assertion was not carried")
 
 
 @th.unit_test("broker production limits and empty-argv sudoers are exact")
@@ -281,8 +348,8 @@ def test_multistep_child_receipts(opts):
         "attempt": 1, "channel": "default", "runner": "runner-1",
         "broadcast": False,
     }
-    request = {"operation": "set.rule_ensure", "set_name": "mojo_blocked",
-               "reserved_set_name": "mojo_blocked",
+    request = {"operation": "permanent.rule_ensure",
+               "expected_permanent_set": "mojo_blocked",
                "context": context}
     children = [
         ({"pid": 101, "start_ticks": 1001, "exe": broker.IPTABLES,

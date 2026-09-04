@@ -108,7 +108,7 @@ class IPSet(models.Model, MojoModel):
         owns_lease = lease is None
         try:
             if owns_lease:
-                lease = firewall_truth.acquire_desired_state(180)
+                lease = firewall_truth.acquire_desired_state()
             self.name = canonical_set_name(self.name)
             aggregate_name = firewall_truth.permanent_set_name()
             if self.name == aggregate_name:
@@ -245,7 +245,7 @@ class IPSet(models.Model, MojoModel):
         from mojo.apps.incident.services import firewall_truth
         lease = None
         try:
-            lease = firewall_truth.acquire_desired_state(180)
+            lease = firewall_truth.acquire_desired_state()
             self._desired_lease = lease
             current = type(self).objects.filter(pk=self.pk).values(
                 "modified").first()
@@ -258,7 +258,10 @@ class IPSet(models.Model, MojoModel):
                     },
                 }
             self.set_enabled_desired(enabled)
-            return self._sync_locked(lease)
+            firewall_truth.release_desired_state(lease)
+            lease = None
+            self._desired_lease = None
+            return self._sync_locked()
         except firewall_truth.FirewallTruthError as err:
             return {"status": "unknown", "ok": False,
                     "error": {"code": err.code, "message": str(err)}}
@@ -282,19 +285,10 @@ class IPSet(models.Model, MojoModel):
 
     def sync(self):
         """Dispatch desired state and persist only checked host truth."""
-        from mojo.apps.incident.services import firewall_truth
-        lease = None
-        try:
-            lease = firewall_truth.acquire_desired_state(180)
-            return self._sync_locked(lease)
-        except firewall_truth.FirewallTruthError as err:
-            return {"status": "unknown", "ok": False,
-                    "error": {"code": err.code, "message": str(err)}}
-        finally:
-            firewall_truth.release_desired_state(lease)
+        return self._sync_locked()
 
-    def _sync_locked(self, lease):
-        """Reconcile while the global desired-state generation is stable."""
+    def _sync_locked(self):
+        """Claim this revision, then use the two-phase checked reconciler."""
         # Hard circuit breaker: the cache-only threat lists must never reach
         # the kernel firewall, even if is_enabled was force-set via a generic
         # field save (the enable action also rejects them with a 400).
@@ -304,13 +298,22 @@ class IPSet(models.Model, MojoModel):
         from mojo.apps.incident.services import firewall_truth
         dispatched_at = dates.utcnow()
         pending = "pending checked firewall reconciliation"
-        # Refuse stale model instances before dispatch. The direct update is a
-        # revision claim, not a lifecycle bypass: it changes no desired field.
-        claimed = type(self).objects.filter(
-            pk=self.pk, modified=self.modified,
-            is_enabled=self.is_enabled).update(
-                last_synced=dispatched_at, sync_error=pending,
-                modified=dispatched_at)
+        # Refuse stale model instances inside the short desired-state phase.
+        # The direct update is a revision claim, not a lifecycle bypass: it
+        # changes no desired field and the network wait starts after release.
+        lease = None
+        try:
+            lease = firewall_truth.acquire_desired_state()
+            claimed = type(self).objects.filter(
+                pk=self.pk, modified=self.modified,
+                is_enabled=self.is_enabled).update(
+                    last_synced=dispatched_at, sync_error=pending,
+                    modified=dispatched_at)
+        except firewall_truth.FirewallTruthError as err:
+            return {"status": "unknown", "ok": False,
+                    "error": {"code": err.code, "message": str(err)}}
+        finally:
+            firewall_truth.release_desired_state(lease)
         if not claimed:
             return {
                 "status": "partial", "ok": False,
@@ -324,7 +327,7 @@ class IPSet(models.Model, MojoModel):
         self.modified = dispatched_at
         generation = dispatched_at
         result = firewall_truth.reconcile_set(
-            self.name, self.cidrs, present=self.is_enabled, lease=lease)
+            self.name, self.cidrs, present=self.is_enabled)
         if result.get("status") == "verified" and result.get("ok") is True:
             self.sync_error = None
         else:

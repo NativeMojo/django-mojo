@@ -499,7 +499,8 @@ class JobEngine:
                         with execution(
                                 broadcast_job_id, func_path, 1,
                                 str(message.get("channel") or "broadcast"),
-                                self.runner_id, broadcast=True):
+                                self.runner_id, broadcast=True,
+                                runner_started=self.start_time.isoformat()):
                             result = func(message.get('data', {}))
                         logger.info(f"Executed broadcast function {func_path}: {result}")
 
@@ -586,7 +587,7 @@ class JobEngine:
             logger.exception(f"Failed to handle control message: {e}")
 
     def _handle_checked_execute(self, message, source_channel=None):
-        """Execute the identity-correlated v1 checked command.
+        """Execute the identity-correlated v2 checked command.
 
         The command is accepted only on this runner's direct control channel.
         The outer dispatcher gives legacy engines a safe unknown-command path,
@@ -618,6 +619,11 @@ class JobEngine:
             isinstance(message.get("channel"), str) and
             message.get("channel") in self.channels and
             isinstance(message.get("data", {}), dict) and
+            message.get("target") == {
+                "runner_id": self.runner_id,
+                "hostname": host_channel(),
+                "started": self.start_time.isoformat(),
+            } and
             payload_size <= CHECKED_EXECUTE_MAX_PAYLOAD_BYTES)
         if not valid:
             return
@@ -627,6 +633,7 @@ class JobEngine:
             "correlation_id": correlation_id,
             "runner_id": self.runner_id,
             "hostname": host_channel(),
+            "started": self.start_time.isoformat(),
             "func": func_path,
         }
         try:
@@ -637,7 +644,8 @@ class JobEngine:
             try:
                 with execution(
                         correlation_id, func_path, 1,
-                        message["channel"], self.runner_id, broadcast=True):
+                        message["channel"], self.runner_id, broadcast=True,
+                        runner_started=self.start_time.isoformat()):
                     result = func(message.get("data", {}))
                 if not isinstance(result, dict):
                     raise TypeError("checked result must be an object")
@@ -837,7 +845,8 @@ class JobEngine:
             func = load_job_function(job.func)
             with execution(
                     job.id, job.func, job.attempt, job.channel,
-                    self.runner_id, broadcast=bool(job.broadcast)):
+                    self.runner_id, broadcast=bool(job.broadcast),
+                    runner_started=self.start_time.isoformat()):
                 func(job)
             if JOBS_DEBUG:
                 logger.info(f"Completed job {job_id} from channel {channel}")

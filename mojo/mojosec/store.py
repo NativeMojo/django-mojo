@@ -57,15 +57,26 @@ ANNOTATION_MAX_CORRELATION_SECONDS = MAX_TIER_CORRELATION_SECONDS
 LOCAL_ONLY_RECONCILE_LIMIT = 256
 SATURATING_COUNTER_MAX = 2 ** 63 - 1
 _BROKER_FUNCTION_OPERATIONS = {
-    "mojo.apps.incident.asyncjobs.broadcast_block_ip": {"rules.contains", "rule.insert"},
-    "mojo.apps.incident.asyncjobs.broadcast_unblock_ip": {"rules.contains", "rule.delete"},
+    "mojo.apps.incident.asyncjobs.broadcast_block_ip": {
+        "rules.contains", "rule.insert", "ip.status", "ip.normalize"},
+    "mojo.apps.incident.asyncjobs.broadcast_unblock_ip": {
+        "rules.contains", "rule.delete", "ip.status", "ip.normalize"},
     "mojo.apps.incident.asyncjobs.broadcast_ipset_add_blocked": {
-        "set.add", "set.rule_ensure"},
-    "mojo.apps.incident.asyncjobs.broadcast_ipset_del_blocked": {"set.delete"},
-    "mojo.apps.incident.asyncjobs.sync_firewall": {"set.replace", "set.rule_ensure"},
+        "permanent.add", "permanent.rule_ensure"},
+    "mojo.apps.incident.asyncjobs.broadcast_ipset_del_blocked": {
+        "permanent.delete"},
+    "mojo.apps.incident.asyncjobs.sync_firewall": {
+        "permanent.normalize", "set.normalize", "ip.normalize"},
     "mojo.apps.incident.asyncjobs.broadcast_sync_ipset": {
-        "set.replace", "set.rule_ensure"},
-    "mojo.apps.incident.asyncjobs.broadcast_remove_ipset": {"set.remove"},
+        "set.replace", "set.rule_ensure", "set.status", "set.normalize"},
+    "mojo.apps.incident.asyncjobs.broadcast_remove_ipset": {
+        "set.remove", "set.status", "set.normalize"},
+    "mojo.apps.incident.asyncjobs.broadcast_reconcile_firewall_ip": {
+        "ip.status", "ip.normalize"},
+    "mojo.apps.incident.asyncjobs.broadcast_reconcile_firewall_set": {
+        "set.status", "set.normalize"},
+    "mojo.apps.incident.asyncjobs.broadcast_reconcile_geolocated_ip": {
+        "geolocated.normalize"},
 }
 
 
@@ -1020,7 +1031,7 @@ class Store:
             result["target_start_ticks"] > 0 and
             begin.get("children") == [] and
             isinstance(result.get("children"), list) and
-            1 <= len(result["children"]) <= 8 and
+            1 <= len(result["children"]) <= 64 and
             all(child.get("ok") is True for child in result["children"]))
 
     @staticmethod

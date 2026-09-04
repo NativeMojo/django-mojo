@@ -19,7 +19,7 @@ from .adapters import get_adapter
 from .models import Job, JobEvent
 
 
-CHECKED_EXECUTE_PROTOCOL = 1
+CHECKED_EXECUTE_PROTOCOL = 2
 CHECKED_EXECUTE_MAX_HOSTS = 128
 CHECKED_EXECUTE_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
 CHECKED_EXECUTE_MAX_REPLY_BYTES = 65536
@@ -28,6 +28,7 @@ CHECKED_EXECUTE_MAX_ANOMALIES = 64
 _HOSTNAME_RE = __import__("re").compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9.\-]{0,251}[A-Za-z0-9])?$")
 _CHANNEL_RE = __import__("re").compile(r"^[A-Za-z0-9_.\-]{1,100}$")
+_STARTED_RE = __import__("re").compile(r"^[0-9T:.+\-Z]{1,96}$")
 
 
 def valid_checked_correlation(value):
@@ -763,11 +764,17 @@ class JobManager:
                 "data": payload,
                 "reply_channel": reply_channel,
             }
-            encoded = json.dumps(
-                message, sort_keys=True, separators=(",", ":"),
-                allow_nan=False)
             for host in expected:
                 runner = selected[host]
+                targeted = dict(message)
+                targeted["target"] = {
+                    "runner_id": runner["runner_id"],
+                    "hostname": host,
+                    "started": runner["started"],
+                }
+                encoded = json.dumps(
+                    targeted, sort_keys=True, separators=(",", ":"),
+                    allow_nan=False)
                 self.redis.publish(
                     self.keys.runner_ctl(runner["runner_id"]), encoded)
                 dispatched += 1
@@ -813,13 +820,16 @@ class JobManager:
         semantic = [{
             "host": host,
             "runner_id": replies[host]["runner_id"],
+            "started": replies[host]["started"],
             "status": replies[host]["status"],
             "result": replies[host].get("result"),
             "error": replies[host].get("error"),
         } for host in responded]
+        roster = [{"host": host, "started": selected[host]["started"]}
+                  for host in expected]
         return self._checked_result(
             status, correlation_id, channel, expected, responded, succeeded,
-            failed, missing, anomalies, semantic, started)
+            failed, missing, anomalies, semantic, started, roster=roster)
 
     @staticmethod
     def _checked_host_roster(rows, channel):
@@ -832,11 +842,14 @@ class JobManager:
                 raise ValueError("runner_roster_invalid")
             runner_id = row.get("runner_id")
             hostname = row.get("hostname")
+            started = row.get("started")
             channels = row.get("channels")
             if (not isinstance(runner_id, str) or not runner_id or
                     len(runner_id) > 128 or
                     not isinstance(hostname, str) or
                     not _HOSTNAME_RE.fullmatch(hostname) or
+                    not isinstance(started, str) or
+                    not _STARTED_RE.fullmatch(started) or
                     not isinstance(channels, list) or len(channels) > 128 or
                     not all(isinstance(item, str) and
                             _CHANNEL_RE.fullmatch(item) for item in channels) or
@@ -883,6 +896,7 @@ class JobManager:
                 row.get("correlation_id") != correlation_id or
                 row.get("func") != func_path or expected is None or
                 row.get("runner_id") != expected.get("runner_id") or
+                row.get("started") != expected.get("started") or
                 row.get("status") not in ("success", "error")):
             return None, "identity_mismatch"
         if row["status"] == "success":
@@ -898,7 +912,8 @@ class JobManager:
 
     @staticmethod
     def _checked_result(status, correlation_id, channel, expected, responded,
-                        succeeded, failed, missing, anomalies, results, started):
+                        succeeded, failed, missing, anomalies, results, started,
+                        roster=None):
         return {
             "schema": "mojo.jobs.execute-checked",
             "version": CHECKED_EXECUTE_PROTOCOL,
@@ -906,6 +921,7 @@ class JobManager:
             "correlation_id": correlation_id or "",
             "channel": channel if isinstance(channel, str) else "",
             "expected_hosts": list(expected)[:CHECKED_EXECUTE_MAX_HOSTS],
+            "expected_roster": list(roster or ())[:CHECKED_EXECUTE_MAX_HOSTS],
             "responded_hosts": list(responded)[:CHECKED_EXECUTE_MAX_HOSTS],
             "succeeded_hosts": list(succeeded)[:CHECKED_EXECUTE_MAX_HOSTS],
             "failed_hosts": list(failed)[:CHECKED_EXECUTE_MAX_HOSTS],

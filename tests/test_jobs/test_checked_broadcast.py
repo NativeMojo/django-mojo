@@ -1,6 +1,7 @@
 """Capability-negotiated checked execution protocol (Security #2685)."""
 
 import json
+from unittest import mock
 
 from testit import helpers as th
 
@@ -49,25 +50,28 @@ def _manager(rows, replies=()):
     return manager
 
 
-def _runner(runner_id, host, compatible=True):
+def _runner(runner_id, host, compatible=True, started="2026-09-04T12:00:00+00:00"):
     row = {
         "runner_id": runner_id,
         "hostname": host,
         "channels": ["default"],
         "alive": True,
+        "started": started,
     }
     if compatible:
-        row["capabilities"] = {"execute_checked": 1}
+        row["capabilities"] = {"execute_checked": 2}
     return row
 
 
-def _reply(correlation, runner_id, host, result=None, status="success"):
+def _reply(correlation, runner_id, host, result=None, status="success",
+           started="2026-09-04T12:00:00+00:00"):
     row = {
         "schema": "mojo.jobs.execute-checked-reply",
-        "version": 1,
+        "version": 2,
         "correlation_id": correlation,
         "runner_id": runner_id,
         "hostname": host,
+        "started": started,
         "func": "example.checked",
         "status": status,
     }
@@ -104,6 +108,68 @@ def test_checked_selects_one_runner_per_host(opts):
         manager.keys.runner_ctl("a-runner"),
         manager.keys.runner_ctl("b-runner"),
     ], f"checked execution targeted the wrong runner set: {targets!r}"
+    payloads = [payload for unused, payload in manager.redis.published]
+    assert [payload["target"] for payload in payloads] == [
+        {"runner_id": "a-runner", "hostname": "web-1",
+         "started": "2026-09-04T12:00:00+00:00"},
+        {"runner_id": "b-runner", "hostname": "web-2",
+         "started": "2026-09-04T12:00:00+00:00"},
+    ], "checked dispatch was not bound to the heartbeat incarnation"
+    assert result["expected_roster"] == [
+        {"host": "web-1", "started": "2026-09-04T12:00:00+00:00"},
+        {"host": "web-2", "started": "2026-09-04T12:00:00+00:00"},
+    ]
+
+
+@th.django_unit_test("a reply from a restarted selected runner is rejected")
+def test_checked_reply_requires_selected_incarnation(opts):
+    correlation = "0fedcba987654321" * 2
+    manager = _manager(
+        [_runner("runner-1", "web-1", started="2026-09-04T12:00:00+00:00")],
+        [_reply(correlation, "runner-1", "web-1",
+                started="2026-09-04T12:01:00+00:00")])
+
+    result = manager.broadcast_execute_checked(
+        "example.checked", {}, timeout=0.02, channel="default",
+        correlation_id=correlation)
+
+    assert result["status"] == "partial", result
+    assert result["missing_hosts"] == ["web-1"], result
+    assert result["anomalies"] == ["identity_mismatch"], result
+
+
+@th.django_unit_test("a restarted engine ignores commands for its prior incarnation")
+def test_checked_engine_requires_current_target_incarnation(opts):
+    from mojo.apps.jobs.job_engine import JobEngine
+    from mojo.apps.jobs.keys import JobKeys
+
+    engine = JobEngine.__new__(JobEngine)
+    engine.runner_id = "runner-1"
+    engine.channels = ["default"]
+    engine.keys = JobKeys(pubsub_prefix="")
+    engine.redis = _Redis()
+    engine.start_time = mock.Mock()
+    engine.start_time.isoformat.return_value = "2026-09-04T12:01:00+00:00"
+    message = {
+        "protocol": 2,
+        "correlation_id": "abcdef0123456789" * 2,
+        "reply_channel": engine.keys.reply_channel("abcdef0123456789" * 2),
+        "func": "example.checked",
+        "channel": "default",
+        "data": {},
+        "target": {
+            "runner_id": "runner-1", "hostname": "web-1",
+            "started": "2026-09-04T12:00:00+00:00",
+        },
+    }
+    with mock.patch(
+            "mojo.apps.jobs.job_engine.host_channel", return_value="web-1"), \
+            mock.patch("mojo.apps.jobs.job_engine.load_job_function") as load:
+        engine._handle_checked_execute(
+            message, engine.keys.runner_ctl(engine.runner_id))
+    load.assert_not_called()
+    assert engine.redis.published == [], \
+        "a pre-restart command executed or replied from the new incarnation"
 
 
 @th.django_unit_test("an incompatible host refuses before mutation")

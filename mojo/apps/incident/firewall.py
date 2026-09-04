@@ -100,9 +100,10 @@ def _broker_request(operation, timeout=20, **values):
     if context is None:
         logit.error("firewall operation rejected outside JobEngine execution context")
         return None
-    if operation.startswith("set.") or operation == "geolocated.normalize":
+    if (operation.startswith("set.") or operation.startswith("permanent.") or
+            operation == "geolocated.normalize"):
         try:
-            values["reserved_set_name"] = permanent_set_name()
+            values["expected_permanent_set"] = permanent_set_name()
         except FirewallTruthError as err:
             logit.error("firewall reservation refused: %s", err.code)
             return None
@@ -171,7 +172,18 @@ def normalize_ipset(name, cidrs, present=True):
     return _broker_request(
         "set.normalize", timeout=125, set_name=name, cidrs=canonical,
         present=bool(present)) or {
-        "ok": False, "error": {"code": "broker_unavailable"}}
+            "ok": False, "error": {"code": "broker_unavailable"}}
+
+
+def normalize_permanent_ipset(cidrs):
+    """Normalize the root-owned aggregate without caller target authority."""
+    try:
+        canonical = canonical_ipv4_networks(cidrs)
+    except FirewallTruthError as err:
+        return {"ok": False, "error": {"code": err.code}}
+    return _broker_request(
+        "permanent.normalize", timeout=125, cidrs=canonical) or {
+            "ok": False, "error": {"code": "broker_unavailable"}}
 
 
 def normalize_geolocated_ip(ip, permanent_set_name, permanent_cidrs,
@@ -186,7 +198,7 @@ def normalize_geolocated_ip(ip, permanent_set_name, permanent_cidrs,
     except FirewallTruthError as err:
         return {"ok": False, "error": {"code": err.code}}
     return _broker_request(
-        "geolocated.normalize", timeout=125, source=ip, set_name=name,
+        "geolocated.normalize", timeout=125, source=ip,
         cidrs=canonical, temporary_present=bool(temporary_present)) or {
             "ok": False, "error": {"code": "broker_unavailable"}}
 
@@ -256,12 +268,15 @@ def ipset_add(name, ip):
     ip = _validate_ip(ip)
     if not name or not ip:
         return False
+    if name != permanent_set_name():
+        logit.error("permanent set add refused for operator-owned set %s", name)
+        return False
 
-    result = _broker_request("set.add", set_name=name, source=ip)
+    result = _broker_request("permanent.add", source=ip)
     if not result or not result["ok"]:
         logit.error(f"firewall broker failed set add for {name}/{ip}")
         return False
-    ensured = _broker_request("set.rule_ensure", set_name=name)
+    ensured = _broker_request("permanent.rule_ensure")
     return bool(ensured and ensured["ok"])
 
 
@@ -276,8 +291,11 @@ def ipset_del(name, ip):
     ip = _validate_ip(ip)
     if not name or not ip:
         return False
+    if name != permanent_set_name():
+        logit.error("permanent set delete refused for operator-owned set %s", name)
+        return False
 
-    result = _broker_request("set.delete", set_name=name, source=ip)
+    result = _broker_request("permanent.delete", source=ip)
     return bool(result and result["ok"])
 
 

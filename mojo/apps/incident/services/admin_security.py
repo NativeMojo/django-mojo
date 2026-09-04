@@ -234,17 +234,17 @@ def _ipsets(cutoff, window, limit):
     from mojo.apps.incident.services import firewall_truth
     rows = list(IPSet.objects.order_by("name", "id")[:limit + 1])
     try:
-        hosts = firewall_truth.exact_compatible_hosts()
+        roster = firewall_truth.exact_compatible_roster()
     except firewall_truth.FirewallTruthError:
-        hosts = []
+        roster = []
     data = []
     for row in rows[:limit]:
-        value = _safe_ipset(row, hosts=hosts)
+        value = _safe_ipset(row, roster=roster)
         value.update(created=_iso(row.created), source=row.source)
         data.append(value)
     try:
-        roster_stable = bool(hosts) and (
-            firewall_truth.exact_compatible_hosts() == hosts)
+        roster_stable = bool(roster) and (
+            firewall_truth.exact_compatible_roster() == roster)
     except firewall_truth.FirewallTruthError:
         roster_stable = False
     if not roster_stable:
@@ -426,10 +426,10 @@ _ACTION_FIELDS = {
 }
 
 
-def _safe_ipset(row, result=None, hosts=None):
+def _safe_ipset(row, result=None, roster=None):
     if result is None:
         from mojo.apps.incident.services import firewall_truth
-        result = firewall_truth.current_ipset_enforcement(row, hosts=hosts)
+        result = firewall_truth.current_ipset_enforcement(row, roster=roster)
     value = {
         "id": row.pk, "modified": _iso(row.modified), "name": row.name,
         "kind": row.kind, "description": row.description,

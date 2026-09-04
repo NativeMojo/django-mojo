@@ -574,7 +574,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         from mojo.apps.incident.services import firewall_truth
         lease = None
         try:
-            lease = firewall_truth.acquire_desired_state(180)
+            lease = firewall_truth.acquire_desired_state()
             return self._block_checked_locked(
                 reason, ttl, broadcast, from_sync, sync_config, lease)
         except firewall_truth.FirewallTruthError as err:
@@ -650,9 +650,9 @@ class GeoLocatedIP(models.Model, MojoModel):
             return {"status": "unknown", "ok": False,
                     "outcome": "desired_only", "generation": generation,
                     "error": {"code": "broadcast_disabled"}}
+        firewall_truth.release_desired_state(lease)
         result = firewall_truth.reconcile_geolocated_ip(
-            canonical, self._permanent_firewall_ips(), temporary,
-            lease=lease)
+            canonical, self._permanent_firewall_ips(), temporary)
         result["outcome"] = "pre_existing" if active else "applied"
         result["prior_reason"] = prior_reason
         result["prior_until"] = prior_until
@@ -682,7 +682,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         from mojo.apps.incident.services import firewall_truth
         lease = None
         try:
-            lease = firewall_truth.acquire_desired_state(180)
+            lease = firewall_truth.acquire_desired_state()
             return self._unblock_checked_locked(
                 reason, broadcast, expected_reason_prefix, lease)
         except firewall_truth.FirewallTruthError as err:
@@ -731,8 +731,9 @@ class GeoLocatedIP(models.Model, MojoModel):
             return {"status": "unknown", "ok": False,
                     "outcome": "desired_only", "generation": generation,
                     "error": {"code": "broadcast_disabled"}}
+        firewall_truth.release_desired_state(lease)
         result = firewall_truth.reconcile_geolocated_ip(
-            canonical, self._permanent_firewall_ips(), False, lease=lease)
+            canonical, self._permanent_firewall_ips(), False)
         result["outcome"] = "unblocked"
         result = self._finish_firewall_reconcile(generation, result)
         if result.get("status") == "verified" and result.get("ok") is True:
@@ -755,7 +756,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         from mojo.apps.incident.services import firewall_truth
         lease = None
         try:
-            lease = firewall_truth.acquire_desired_state(180)
+            lease = firewall_truth.acquire_desired_state()
             return self._whitelist_locked(reason, ttl, until, lease)
         except firewall_truth.FirewallTruthError as err:
             from mojo import errors as merrors
@@ -807,8 +808,9 @@ class GeoLocatedIP(models.Model, MojoModel):
         self._on_whitelist_changed("whitelist", reason=reason, old=prior)
         # Whitelisting is itself an absence guarantee. Reconcile even when DB
         # truth said unblocked: stale host rules must not become fake success.
+        firewall_truth.release_desired_state(lease)
         result = firewall_truth.reconcile_geolocated_ip(
-            canonical, self._permanent_firewall_ips(), False, lease=lease)
+            canonical, self._permanent_firewall_ips(), False)
         result["outcome"] = "whitelisted"
         result = self._finish_firewall_reconcile(generation, result)
         if result.get("status") == "verified" and result.get("ok") is True:
@@ -831,7 +833,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         from mojo.apps.incident.services import firewall_truth
         lease = None
         try:
-            lease = firewall_truth.acquire_desired_state(180)
+            lease = firewall_truth.acquire_desired_state()
             canonical = firewall_truth.canonical_ipv4_address(self.ip_address)
             self._prospective_permanent_firewall_ips(canonical, present=False)
             firewall_truth.advance_fences(
@@ -851,8 +853,10 @@ class GeoLocatedIP(models.Model, MojoModel):
                     "firewall_sync_error", "modified"])
                 generation = row.firewall_generation
             self.refresh_from_db()
+            firewall_truth.release_desired_state(lease)
+            lease = None
             result = firewall_truth.reconcile_geolocated_ip(
-                canonical, self._permanent_firewall_ips(), False, lease=lease)
+                canonical, self._permanent_firewall_ips(), False)
             result["outcome"] = "whitelisted"
             return self._finish_firewall_reconcile(generation, result)
         except firewall_truth.FirewallTruthError as err:
@@ -867,7 +871,7 @@ class GeoLocatedIP(models.Model, MojoModel):
         from mojo import errors as merrors
         lease = None
         try:
-            lease = firewall_truth.acquire_desired_state(180)
+            lease = firewall_truth.acquire_desired_state()
             canonical = firewall_truth.canonical_ipv4_address(self.ip_address)
             current = type(self).objects.get(pk=self.pk)
             permanent_present = bool(
@@ -898,9 +902,10 @@ class GeoLocatedIP(models.Model, MojoModel):
             self.refresh_from_db()
             temporary = bool(
                 self.block_active and self.blocked_until is not None)
+            firewall_truth.release_desired_state(lease)
+            lease = None
             result = firewall_truth.reconcile_geolocated_ip(
-                canonical, self._permanent_firewall_ips(), temporary,
-                lease=lease)
+                canonical, self._permanent_firewall_ips(), temporary)
             result = self._finish_firewall_reconcile(generation, result)
             if result.get("status") == "verified" and result.get("ok") is True:
                 self.log(
