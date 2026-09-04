@@ -474,7 +474,11 @@ def reverse(recommendation, actor, note=""):
                 outcome="applied"):
             started = dates.utcnow()
             target.attempts += 1
-            geo = GeoLocatedIP.objects.filter(ip_address=target.ip).first()
+            # The ownership proof and unblock are one critical section. A
+            # concurrent manual/rule block must not be overwritten after we
+            # inspect the recommendation-owned reason.
+            geo = GeoLocatedIP.objects.select_for_update().filter(
+                ip_address=target.ip).first()
             try:
                 if geo is not None and geo.block_active:
                     owner = f"mojosec:rec:{locked.pk}|case:"

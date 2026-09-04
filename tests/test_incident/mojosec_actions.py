@@ -323,8 +323,15 @@ def test_ttl_expiry_and_operator_reversal(opts):
         rec2 = MojoSecRecommendation.objects.get(case=case2)
         target2 = rec2.targets.get()
         th.assert_eq(target2.outcome, "applied", "reversal fixture must apply")
-        reversed_rec = mojosec_actions.reverse(
-            rec2, opts.action_approver, note="false positive")
+        manager = GeoLocatedIP.objects
+        with mock.patch.object(
+                manager, "select_for_update",
+                wraps=manager.select_for_update) as geo_lock:
+            reversed_rec = mojosec_actions.reverse(
+                rec2, opts.action_approver, note="false positive")
+        th.assert_true(
+            geo_lock.called,
+            "reversal must lock GeoLocatedIP before ownership proof and unblock")
         th.assert_eq(reversed_rec.state, "reversed",
                      "operator reversal must land the reversed state")
         geo = GeoLocatedIP.objects.get(ip_address=REVERSE_IP)
