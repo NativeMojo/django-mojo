@@ -67,7 +67,7 @@ Detection → Event → Rules → Incident → Handlers → Enforcement
 | IPSet | `/api/incident/ipset` | Bulk CIDR blocking: countries, datacenters, abuse lists |
 | Maestro Item Links | `/api/incident/maestro/item-link` | Remote Maestro items linked to local Tickets or Incidents |
 | Admin Security | `/api/incident/admin/security` | Versioned, bounded and redacted operational sections plus the typed policy schema |
-| Admin Security Actions | `/api/incident/admin/security/action` | Fresh-auth, version-bound RuleSet and recommendation actions |
+| Admin Security Actions | `/api/incident/admin/security/action` | Fresh-auth, version-bound RuleSet, recommendation, and IPSet actions |
 | IPSet Actions | `/api/incident/ipset/action` | Fresh-auth, revision-bound enable/disable/sync actions with checked fleet results |
 
 See individual API docs for full details:
@@ -223,7 +223,7 @@ Success returns the action and its safe object projection:
   "status": true,
   "code": 200,
   "data": {
-    "schema_version": 1,
+    "schema_version": 2,
     "action": "ruleset.create",
     "data": {
       "id": 42,
@@ -240,13 +240,19 @@ Success returns the action and its safe object projection:
 }
 ```
 
-| HTTP/body `code` | Meaning |
-|---|---|
-| 400 | Unknown action/field, invalid typed policy, bad ID/note, or missing typed confirmation |
-| 403 | The caller lacks a qualifying global human grant or is key-backed |
-| 404 | The named RuleSet, recommendation, or IPSet does not exist |
-| 409 | Stale revision, invalid recommendation state/scope, or a legacy RuleSet that must be replaced before activation |
-| 440 | Reauthentication is required; refreshing the token does not update its authentication time |
+Use the HTTP status for the client state machine. The error body's `code` is
+separate typed detail: governed-action errors use stable strings such as
+`confirmation_required`, `not_found`, `stale_revision`, `invalid_state`, and
+`scope_unavailable`; authentication decorators retain their numeric codes.
+
+| HTTP status | Body `code` examples | Meaning |
+|---|---|---|
+| 400 | `invalid_action`, `confirmation_required`, `catch_all_confirmation_required`, or a validator code | Unknown action/field, invalid typed policy, bad ID/note, or missing typed confirmation |
+| 401 | `401` | The interactive session is invalid or expired. A packaged client may refresh and replay a GET/HEAD once; it must never replay this POST. |
+| 403 | `403` | The caller lacks a qualifying global human grant or is key-backed |
+| 404 | `not_found` | The named RuleSet, recommendation, or IPSet does not exist |
+| 409 | `stale_revision`, `invalid_state`, `scope_unavailable`, or a validation code | Reload authoritative state and require review plus confirmation again; never replay automatically |
+| 440 | `440` | The server refused the action before execution because recent authentication is required. Reauthenticate and retry at most once. Refreshing a token does not update its authentication time. |
 
 The older RuleSet/Rule URLs are read-only compatibility surfaces. IPSet
 metadata/CIDR writes remain on the generic model URL; lifecycle changes and

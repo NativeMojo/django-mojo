@@ -13,7 +13,8 @@ If Security is unavailable or unreadable, those links fail closed to Home.
 The ordinary Admin source-session gate still requires global Admin access and
 denies key-backed sessions. After that gate, the `security` bootstrap provider
 is enabled only when `mojo.apps.incident` is installed and the caller has a
-global `view_security`, `manage_security`, `security`, or `admin` grant. Its
+global `view_security`, `manage_security`, or `security` grant. A literal
+`admin` grant admits the portal but is not a fine-grained Security wildcard. Its
 capabilities are independent:
 
 ```json
@@ -56,3 +57,17 @@ MOJO_ADMIN_CHROME=/exact/path/to/chrome \
 It creates isolated preview/CDP ports and a temporary browser profile, applies
 hard deadlines, terminates both processes, and treats console/runtime errors
 as failures. It never reaches a live firewall or public target.
+
+For non-destructive acceptance against a real installation, bridge the local
+packaged source to that installation and open Admin v2:
+
+```bash
+bin/admin_preview --port 8766 --upstream https://api.example.com
+# open http://localhost:8766/admin/v2/#/security-operations
+```
+
+Prefer an operator with global `view_admin` and `view_security` but no
+`manage_security`. Verify admission, all six tabs, schema-v2 status/cutoff
+rendering, redaction, legacy Activity links, and session recovery using reads
+only. Do not submit any RuleSet, recommendation, or IPSet confirmation: those
+requests target the real installation and may change policy or fleet state.
