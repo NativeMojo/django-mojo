@@ -144,6 +144,130 @@ def _has_interactive_authority(note, handler_name):
     return actor
 
 
+def _dispatch_key(proposal_note_id, proposal_digest, requested_action):
+    material = (
+        f"{ACTION_SCHEMA}:{ACTION_SCHEMA_VERSION}:{proposal_note_id}:"
+        f"{proposal_digest}:{requested_action}")
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _stored_contract(action_note, handler_name, proposal_digest):
+    metadata = deepcopy(action_note.metadata or {})
+    stored_action = metadata.get("action")
+    if not isinstance(stored_action, dict):
+        raise ValueError("proposal action is missing")
+    if (stored_action.get("schema") != ACTION_SCHEMA or
+            stored_action.get("schema_version") != ACTION_SCHEMA_VERSION or
+            stored_action.get("proposal_note_id") != action_note.pk or
+            stored_action.get("handler") != handler_name):
+        raise ValueError("proposal identity is stale or malformed")
+    context = stored_action.get("context")
+    review = _review_payload(context) if isinstance(context, dict) else None
+    if (review is None or stored_action.get("review") != review or
+            stored_action.get("proposal_digest") != _review_digest(review) or
+            proposal_digest != stored_action.get("proposal_digest")):
+        raise ValueError("proposal review contract is malformed")
+    return metadata, stored_action, context
+
+
+def _claim_dispatch(ticket_id, proposal_note_id, proposal_digest,
+                    handler_name, requested_action, response_note_id, actor_id):
+    """Durably claim exactly one proposal before any handler side effect."""
+    from mojo.apps.incident.models import Ticket, TicketNote
+
+    dispatch_key = _dispatch_key(
+        proposal_note_id, proposal_digest, requested_action)
+    # durable=True refuses accidental nesting. The claim must be committed,
+    # not merely released from a savepoint, before dispatch begins.
+    with transaction.atomic(durable=True):
+        ticket = Ticket.objects.select_for_update().get(pk=ticket_id)
+        action_note = TicketNote.objects.select_for_update().filter(
+            pk=proposal_note_id, parent_id=ticket.pk).first()
+        if action_note is None:
+            return {"status": "rejected"}
+        try:
+            metadata, stored_action, context = _stored_contract(
+                action_note, handler_name, proposal_digest)
+        except ValueError:
+            logger.warning("Proposal note %s is stale or malformed", proposal_note_id)
+            return {"status": "rejected"}
+
+        resolution = stored_action.get("resolution")
+        if stored_action.get("resolved"):
+            if (isinstance(resolution, dict) and
+                    resolution.get("dispatch_key") == dispatch_key):
+                return {"status": "resolved", "dispatch_key": dispatch_key}
+            return {"status": "rejected"}
+
+        state = stored_action.get("state")
+        claim = stored_action.get("claim")
+        if state in ("claimed", "unknown"):
+            if (isinstance(claim, dict) and
+                    claim.get("dispatch_key") == dispatch_key):
+                return {"status": state, "dispatch_key": dispatch_key}
+            return {"status": "rejected"}
+        if state != "pending" or ticket.status in ("closed", "resolved"):
+            return {"status": "rejected"}
+
+        stored_action["state"] = "claimed"
+        stored_action["claim"] = {
+            "dispatch_key": dispatch_key,
+            "proposal_note_id": proposal_note_id,
+            "proposal_digest": proposal_digest,
+            "handler": handler_name,
+            "action": requested_action,
+            "response_note_id": response_note_id,
+            "actor_id": actor_id,
+        }
+        action_note.metadata = metadata
+        action_note.save(update_fields=["metadata"])
+        return {
+            "status": "execute",
+            "dispatch_key": dispatch_key,
+            "context": deepcopy(context),
+        }
+
+
+def _finalize_dispatch(proposal_note_id, dispatch_key, succeeded,
+                       failure_code=None):
+    """Record a known result separately; uncertainty never reopens a claim."""
+    from mojo.apps.incident.models import TicketNote
+
+    with transaction.atomic(durable=True):
+        action_note = TicketNote.objects.select_for_update().get(
+            pk=proposal_note_id)
+        metadata = deepcopy(action_note.metadata or {})
+        stored_action = metadata.get("action")
+        claim = stored_action.get("claim") if isinstance(stored_action, dict) else None
+        if (not isinstance(claim, dict) or
+                claim.get("dispatch_key") != dispatch_key):
+            return False
+        if succeeded:
+            stored_action["state"] = "resolved"
+            stored_action["resolved"] = True
+            stored_action["resolution"] = {
+                "dispatch_key": dispatch_key,
+                "handler": claim["handler"],
+                "action": claim["action"],
+                "response_note_id": claim["response_note_id"],
+                "actor_id": claim["actor_id"],
+            }
+            stored_action.pop("execution", None)
+        else:
+            # The handler may have crossed an external side-effect boundary
+            # before it failed. Preserve a durable unknown claim for operator
+            # reconciliation; never make it runnable again automatically.
+            stored_action["state"] = "unknown"
+            stored_action["execution"] = {
+                "status": "unknown",
+                "dispatch_key": dispatch_key,
+                "failure_code": failure_code or "ambiguous_execution",
+            }
+        action_note.metadata = metadata
+        action_note.save(update_fields=["metadata"])
+        return True
+
+
 def dispatch_action(ticket, note, response_meta):
     """Dispatch an action response to the appropriate handler.
 
@@ -186,83 +310,55 @@ def dispatch_action(ticket, note, response_meta):
         return False
 
     try:
-        from mojo.apps.incident.models import Ticket, TicketNote
-        with transaction.atomic():
-            locked_ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
-            action_note = TicketNote.objects.select_for_update().filter(
-                pk=proposal_note_id, parent_id=locked_ticket.pk).first()
-            if action_note is None:
-                logger.warning(
-                    "Proposal note %s does not belong to ticket %s",
-                    proposal_note_id, ticket.pk)
-                return False
-            metadata = deepcopy(action_note.metadata or {})
-            stored_action = metadata.get("action")
-            if not isinstance(stored_action, dict):
-                return False
-            if (stored_action.get("schema") != ACTION_SCHEMA or
-                    stored_action.get("schema_version") != ACTION_SCHEMA_VERSION or
-                    stored_action.get("proposal_note_id") != action_note.pk or
-                    stored_action.get("handler") != handler_name):
-                logger.warning("Proposal note %s is stale or malformed", action_note.pk)
-                return False
-            context = stored_action.get("context")
-            review = _review_payload(context) if isinstance(context, dict) else None
-            if (review is None or stored_action.get("review") != review or
-                    stored_action.get("proposal_digest") != _review_digest(review) or
-                    proposal_digest != stored_action.get("proposal_digest")):
-                logger.warning("Proposal note %s review contract is malformed", action_note.pk)
-                return False
+        claim = _claim_dispatch(
+            ticket.pk, proposal_note_id, proposal_digest, handler_name,
+            requested_action, note.pk, actor.pk)
+    except Exception:
+        logger.exception("Ticket action %s could not be durably claimed", handler_name)
+        return False
+    if claim["status"] == "resolved":
+        return True
+    if claim["status"] == "claimed":
+        # Another same-choice request owns execution. Never invoke the handler
+        # again or report an outcome that is not known yet.
+        return False
+    if claim["status"] == "unknown":
+        return False
+    if claim["status"] != "execute":
+        return False
 
-            resolution = stored_action.get("resolution")
-            if stored_action.get("resolved"):
-                # A same-choice concurrent response or retry observes success
-                # without dispatching the mutation twice. A conflicting choice
-                # never rewrites the committed decision.
-                return bool(
-                    isinstance(resolution, dict) and
-                    resolution.get("action") == requested_action and
-                    resolution.get("handler") == handler_name)
-            if locked_ticket.status in ("closed", "resolved"):
-                logger.info(
-                    "Ticket %s already %s — skipping unresolved action",
-                    locked_ticket.pk, locked_ticket.status)
-                return False
-            if stored_action.get("state") != "pending":
-                logger.warning("Proposal note %s is not pending", action_note.pk)
-                return False
-
-            stored_action["state"] = "claimed"
-            stored_action["claim"] = {
-                "response_note_id": note.pk,
-                "actor_id": actor.pk,
-            }
-            action_note.metadata = metadata
-            action_note.save(update_fields=["metadata"])
-
-            completed = handler(
-                locked_ticket, note, requested_action, deepcopy(context))
-            if completed is False:
-                stored_action["state"] = "pending"
-                stored_action.pop("claim", None)
-                action_note.metadata = metadata
-                action_note.save(update_fields=["metadata"])
-                return False
-
-            stored_action["state"] = "resolved"
-            stored_action["resolved"] = True
-            stored_action["resolution"] = {
-                "handler": handler_name,
-                "action": requested_action,
-                "response_note_id": note.pk,
-                "actor_id": actor.pk,
-            }
-            stored_action.pop("claim", None)
-            action_note.metadata = metadata
-            action_note.save(update_fields=["metadata"])
-            return True
+    dispatch_key = claim["dispatch_key"]
+    try:
+        # Deliberately outside the durable claim/finalize transactions. Any
+        # crash after an external effect leaves the proposal claimed, never
+        # pending and eligible for an unsafe automatic retry.
+        from mojo.apps.incident.models import Ticket
+        execution_ticket = Ticket.objects.get(pk=ticket.pk)
+        completed = handler(
+            execution_ticket, note, requested_action, claim["context"])
     except Exception:
         logger.exception("Action handler %s failed for ticket %s", handler_name, ticket.pk)
+        try:
+            _finalize_dispatch(
+                proposal_note_id, dispatch_key, False,
+                failure_code="handler_exception")
+        except Exception:
+            logger.exception("Ticket action %s remains durably claimed", handler_name)
+        return False
+
+    if completed is False:
+        try:
+            _finalize_dispatch(
+                proposal_note_id, dispatch_key, False,
+                failure_code="handler_refused")
+        except Exception:
+            logger.exception("Ticket action %s remains durably claimed", handler_name)
+        return False
+    try:
+        return _finalize_dispatch(
+            proposal_note_id, dispatch_key, True)
+    except Exception:
+        logger.exception("Ticket action %s succeeded but remains claimed", handler_name)
         return False
 
 

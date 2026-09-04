@@ -1194,6 +1194,103 @@ def test_ticket_action_double_approval(opts):
     assert ruleset.is_active, "RuleSet should still be active after second approval attempt"
 
 
+@th.django_unit_test(
+    "Action system: durable claims isolate ambiguous handler execution")
+def test_ticket_action_ambiguous_execution_stays_claimed(opts):
+    from django.contrib.auth import get_user_model
+    from django.db import connection
+    from mojo.apps.incident.handlers import ticket_actions
+    from mojo.apps.incident.models import Ticket, TicketNote
+
+    User = get_user_model()
+    Ticket.objects.filter(category="action_claim_test").delete()
+    user = User.objects.filter(is_superuser=True, is_active=True).first()
+    if not user:
+        user = User.objects.create_user(
+            username="action_claim_admin", email="action_claim@test.com",
+            password="testpass123", is_superuser=True, is_active=True,
+        )
+
+    ticket = Ticket.objects.create(
+        title="[Escalation] Durable claim test", status="open", priority=3,
+        category="action_claim_test",
+    )
+    action_note = TicketNote.objects.create(
+        parent=ticket, user=user, note="[LLM Agent] Escalation proposal",
+        metadata={
+            "action": {
+                "type": "approval",
+                "handler": "incident.escalate",
+                "label": "Escalate?",
+                "context": {
+                    "targets": ["manage_security"],
+                    "message": "Investigate the durable approval claim",
+                    "channel": "email",
+                },
+            }
+        },
+    )
+    _bind_action_note(action_note)
+    response_meta = _action_response(action_note, "approve")
+    response_note = TicketNote.objects.create(
+        parent=ticket, user=user, note="Approved",
+        metadata={"action_response": response_meta},
+    )
+
+    observations = []
+
+    def ambiguous_handler(*args):
+        action_note.refresh_from_db()
+        action = action_note.metadata["action"]
+        observations.append({
+            "in_atomic_block": connection.in_atomic_block,
+            "state": action["state"],
+            "dispatch_key": action["claim"]["dispatch_key"],
+        })
+        raise RuntimeError("ambiguous failure after a possible external effect")
+
+    with patch.dict(
+            ticket_actions.ACTION_HANDLERS,
+            {"incident.escalate": ambiguous_handler}):
+        result = _dispatch_as(
+            user, ticket_actions.dispatch_action, ticket, response_note,
+            response_meta)
+
+    assert result is False, "ambiguous execution must not report success"
+    assert len(observations) == 1, "the claimed proposal should execute once"
+    assert observations[0]["in_atomic_block"] is False, (
+        "handler side effects must run outside the durable claim transaction")
+    assert observations[0]["state"] == "claimed", (
+        "the executing handler must observe a committed claim")
+    assert observations[0]["dispatch_key"] == ticket_actions._dispatch_key(
+        action_note.pk, response_meta["proposal_digest"], "approve"), (
+        "the claim must use the exact proposal/digest/choice dispatch key")
+
+    action_note.refresh_from_db()
+    action = action_note.metadata["action"]
+    assert action["state"] == "unknown", (
+        "an ambiguous handler result must never restore pending state")
+    assert action["execution"] == {
+        "status": "unknown",
+        "dispatch_key": observations[0]["dispatch_key"],
+        "failure_code": "handler_exception",
+    }
+
+    retry_note = TicketNote.objects.create(
+        parent=ticket, user=user, note="Approved retry",
+        metadata={"action_response": response_meta},
+    )
+    with patch.dict(
+            ticket_actions.ACTION_HANDLERS,
+            {"incident.escalate": ambiguous_handler}):
+        retry = _dispatch_as(
+            user, ticket_actions.dispatch_action, ticket, retry_note,
+            response_meta)
+    assert retry is False, "unknown execution must require reconciliation"
+    assert len(observations) == 1, (
+        "a retry must not repeat a possibly completed external side effect")
+
+
 @th.django_unit_test("LLM tool: suggest_rule_update creates ticket with action note")
 def test_suggest_rule_update_creates_ticket(opts):
     from mojo.apps.incident.models import RuleSet, Rule, Ticket, TicketNote
