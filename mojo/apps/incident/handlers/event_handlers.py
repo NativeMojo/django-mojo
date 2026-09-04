@@ -388,7 +388,9 @@ class BlockHandler:
 
             from mojo.apps.account.models import GeoLocatedIP
             geo = GeoLocatedIP.geolocate(ip, auto_refresh=False)
-            result = geo.block(reason=reason, ttl=ttl)
+            checked = geo.block_checked(reason=reason, ttl=ttl)
+            result = (checked.get("status") == "verified" and
+                      checked.get("ok") is True)
 
             # Record action on incident and resolve it
             if result and event.incident_id:

@@ -3,9 +3,9 @@
 Proposals derive from correlated cases only; targets only ever come from a
 case's server-derived ``observed_sources``. Validation fails closed, automatic
 execution is a default-off single-IP capability, and every state change and
-per-target try is recorded append-only. ``block()`` itself is never modified —
-the applied/pre-existing/whitelisted distinction comes from deciding under a
-row lock on the GeoLocatedIP row.
+per-target try is recorded append-only. The applied/pre-existing/whitelisted
+distinction comes from checked reconciliation around a locked GeoLocatedIP
+desired-state decision.
 """
 
 import datetime
@@ -119,6 +119,8 @@ def validate_target(ip):
     except ValueError:
         return None, "invalid", "not_an_ip_address"
     canonical = str(address)
+    if address.version != 4:
+        return canonical, "invalid", "unsupported_family"
     if (address.is_private or address.is_loopback or address.is_link_local or
             address.is_multicast or address.is_reserved or
             address.is_unspecified or not address.is_global):
@@ -249,7 +251,8 @@ def _queue_execution(recommendation):
     recommendation.refresh_from_db()
     jobs.publish(
         "mojo.apps.incident.services.mojosec_actions.execute_recommendation",
-        {"recommendation_id": recommendation.pk},
+        {"recommendation_id": recommendation.pk,
+         "generation": recommendation.execution_rounds},
         channel="incident_handlers", max_retries=5, expires_in=86400,
         idempotency_key=(
             f"mojosec-rec:{recommendation.pk}:"
@@ -334,99 +337,137 @@ def _maybe_auto_approve(recommendation):
 
 
 def _apply_block(ip, reason, ttl):
-    """Decide applied/pre-existing/whitelisted under the GeoLocatedIP lock.
-
-    ``block()`` is untouched — its bare-bool return stays load-bearing for
-    legacy callers; the lock is what makes this attribution truthful when a
-    legacy handler or a second recommendation races on the same IP.
-    """
+    """Apply desired state and require checked presence outside DB locks."""
     from mojo.apps.account.models import GeoLocatedIP
+    geo = GeoLocatedIP.objects.filter(ip_address=ip).first()
+    if geo is None:
+        GeoLocatedIP.geolocate(ip, auto_refresh=False)
+        geo = GeoLocatedIP.objects.get(ip_address=ip)
+    if geo.whitelist_active:
+        return {"status": "verified", "ok": True, "outcome": "whitelisted",
+                "prior_until": geo.whitelisted_until,
+                "prior_reason": geo.whitelisted_reason or ""}
+    result = geo.block_checked(reason=reason, ttl=ttl)
+    error = result.get("error") or {}
+    if (result.get("outcome") == "refused" and
+            error.get("code") == "whitelisted"):
+        return {"status": "verified", "ok": True, "outcome": "whitelisted",
+                "prior_until": geo.whitelisted_until,
+                "prior_reason": geo.whitelisted_reason or ""}
+    if result.get("status") != "verified" or result.get("ok") is not True:
+        return {"status": result.get("status", "unknown"), "ok": False,
+                "outcome": "failed", "prior_until": result.get("prior_until"),
+                "prior_reason": result.get("prior_reason", ""),
+                "error": error or {"code": "fleet_unverified"}}
+    prior_reason = result.get("prior_reason", "")
+    if result.get("outcome") == "pre_existing" and prior_reason != reason:
+        result["outcome"] = "pre_existing"
+    else:
+        result["outcome"] = "applied"
+    return result
+
+
+def _execute(recommendation_id, generation=None):
+    """Generation-fenced execution with waits outside transactions."""
+    from mojo.apps.incident.models import (
+        MojoSecRecommendation, MojoSecRecommendationTarget)
 
     with transaction.atomic():
-        geo = GeoLocatedIP.objects.select_for_update().filter(
-            ip_address=ip).first()
-        if geo is None:
-            GeoLocatedIP.geolocate(ip, auto_refresh=False)
-            geo = GeoLocatedIP.objects.select_for_update().get(ip_address=ip)
-        if geo.whitelist_active:
-            return {"outcome": "whitelisted",
-                    "prior_until": geo.whitelisted_until,
-                    "prior_reason": geo.whitelisted_reason or ""}
-        if geo.block_active:
-            return {"outcome": "pre_existing",
-                    "prior_until": geo.blocked_until,
-                    "prior_reason": geo.blocked_reason or ""}
-        applied = geo.block(reason=reason, ttl=ttl)
-        if not applied:
-            return {"outcome": "whitelisted",
-                    "prior_until": geo.whitelisted_until,
-                    "prior_reason": geo.whitelisted_reason or ""}
-        return {"outcome": "applied", "prior_until": None, "prior_reason": ""}
-
-
-def _execute(recommendation_id):
-    from mojo.apps.incident.models import MojoSecRecommendation
-
-    with transaction.atomic():
-        recommendation = (
-            MojoSecRecommendation.objects.select_for_update()
-            .get(pk=recommendation_id))
-        if recommendation.state not in _EXEC_STATES:
+        recommendation = MojoSecRecommendation.objects.select_for_update().get(
+            pk=recommendation_id)
+        if generation is None:
+            generation = recommendation.execution_rounds
+        if (generation != recommendation.execution_rounds or
+                recommendation.state not in _EXEC_STATES):
             return recommendation
         if recommendation.state != MojoSecRecommendation.STATE_EXECUTING:
             from_state = recommendation.state
             recommendation.state = MojoSecRecommendation.STATE_EXECUTING
             recommendation.save(update_fields=["state", "modified"])
-            _transition(
-                recommendation, "executing", "execution_started", from_state)
-        targets = list(recommendation.targets.select_for_update().filter(
-            validation_state="validated",
-            outcome__in=("pending", "failed"),
-            attempts__lt=max_attempts()))
+            _transition(recommendation, "executing", "execution_started", from_state)
+        target_ids = list(recommendation.targets.filter(
+            validation_state="validated", outcome__in=("pending", "failed"),
+            attempts__lt=max_attempts()).order_by("pk").values_list(
+                "pk", flat=True)[:max_targets()])
         ttl = recommendation.requested_ttl_seconds
-        for target in targets:
-            started = dates.utcnow()
+        case_id = recommendation.case_id
+        reason_code = recommendation.reason_code
+
+    for target_id in target_ids:
+        started = dates.utcnow()
+        with transaction.atomic():
+            recommendation = MojoSecRecommendation.objects.select_for_update().get(
+                pk=recommendation_id)
+            target = MojoSecRecommendationTarget.objects.select_for_update().get(
+                pk=target_id, recommendation_id=recommendation_id)
+            if (recommendation.execution_rounds != generation or
+                    recommendation.state != MojoSecRecommendation.STATE_EXECUTING or
+                    target.outcome not in ("pending", "failed") or
+                    target.attempts >= max_attempts()):
+                continue
             target.attempts += 1
-            canonical, state, reason = validate_target(target.ip)
-            if state != "validated":
-                target.validation_state = state
-                target.validation_reason = reason
-                target.outcome = (
-                    "whitelisted" if reason == "whitelisted" else "failed")
-                target.last_error = f"revalidation: {reason}"[:256]
-                target.save()
-                _attempt(recommendation, target, target.outcome,
-                         target.last_error, started)
-                continue
+            marker = f"inflight:{generation}:{target.attempts}"
+            target.last_error = marker
+            target.save(update_fields=["attempts", "last_error", "modified"])
+            attempt_number = target.attempts
+            target_ip = target.ip
+
+        canonical, state, why = validate_target(target_ip)
+        if state == "validated":
             reason_text = (
-                f"mojosec:rec:{recommendation.pk}|case:"
-                f"{recommendation.case_id}|{recommendation.reason_code}")[:255]
+                f"mojosec:rec:{recommendation_id}|case:{case_id}|{reason_code}")[:255]
             try:
-                result = _apply_block(target.ip, reason_text, ttl)
-            except Exception as err:
-                logger.exception(
-                    "MojoSec block execution failed for %s", target.ip)
-                target.outcome = "failed"
-                target.last_error = str(err)[:256]
-                target.save()
-                _attempt(recommendation, target, "failed",
-                         target.last_error, started)
-                _record_metric("targets_failed")
+                result = _apply_block(canonical, reason_text, ttl)
+            except Exception:
+                logger.exception("MojoSec checked block execution failed")
+                result = {"status": "unknown", "ok": False,
+                          "outcome": "failed",
+                          "error": {"code": "execution_error"}}
+        else:
+            result = {"status": "verified", "ok": True,
+                      "outcome": "whitelisted" if why == "whitelisted" else "failed",
+                      "prior_until": None, "prior_reason": why,
+                      "error": None if why == "whitelisted" else {"code": why}}
+
+        with transaction.atomic():
+            recommendation = MojoSecRecommendation.objects.select_for_update().get(
+                pk=recommendation_id)
+            target = MojoSecRecommendationTarget.objects.select_for_update().get(
+                pk=target_id)
+            if (recommendation.execution_rounds != generation or
+                    recommendation.state != MojoSecRecommendation.STATE_EXECUTING or
+                    target.attempts != attempt_number or target.last_error != marker):
                 continue
-            target.outcome = result["outcome"]
+            verified = result.get("status") == "verified" and result.get("ok") is True
+            outcome = result.get("outcome") if verified else "failed"
+            target.outcome = outcome
             target.last_error = ""
-            if result["outcome"] == "applied":
+            if not verified:
+                error = result.get("error") or {}
+                target.last_error = str(error.get("code") or "fleet_unverified")[:256]
+            elif outcome == "applied":
                 target.applied_at = dates.utcnow()
-                target.expires_at = target.applied_at + datetime.timedelta(
-                    seconds=ttl)
-                _record_metric("targets_applied")
-            else:
-                target.prior_blocked_until = result["prior_until"]
-                target.prior_reason = (result["prior_reason"] or "")[:255]
-                _record_metric(f"targets_{result['outcome']}")
+                target.expires_at = target.applied_at + datetime.timedelta(seconds=ttl)
+            elif outcome == "pre_existing":
+                target.prior_blocked_until = result.get("prior_until")
+                target.prior_reason = str(result.get("prior_reason") or "")[:255]
+            elif outcome == "failed":
+                target.last_error = str(
+                    (result.get("error") or {}).get("code") or "revalidation_failed")[:256]
+                target.validation_state = state
+                target.validation_reason = why
             target.save()
-            _attempt(recommendation, target, result["outcome"],
-                     result["prior_reason"] or "", started)
+            _attempt(recommendation, target, outcome,
+                     target.last_error or str(result.get("prior_reason") or ""),
+                     started)
+        _record_metric(f"targets_{outcome}")
+
+    with transaction.atomic():
+        recommendation = MojoSecRecommendation.objects.select_for_update().get(
+            pk=recommendation_id)
+        if (recommendation.execution_rounds != generation or
+                recommendation.state != MojoSecRecommendation.STATE_EXECUTING):
+            return recommendation
         _refresh_counts(recommendation)
         remaining = recommendation.targets.filter(
             validation_state="validated", outcome__in=("pending", "failed"),
@@ -435,18 +476,14 @@ def _execute(recommendation_id):
             terminal_ok = recommendation.targets.filter(
                 outcome__in=("applied", "pre_existing", "whitelisted")).exists()
             from_state = recommendation.state
-            recommendation.state = (
-                MojoSecRecommendation.STATE_EXECUTED if terminal_ok
-                else MojoSecRecommendation.STATE_FAILED)
-            reason = "executed"
-            if (recommendation.state == MojoSecRecommendation.STATE_EXECUTED
-                    and recommendation.failed_count):
+            recommendation.state = (MojoSecRecommendation.STATE_EXECUTED
+                                    if terminal_ok else MojoSecRecommendation.STATE_FAILED)
+            reason = "executed" if terminal_ok else "all_targets_failed"
+            if terminal_ok and recommendation.failed_count:
                 reason = "partial"
-            elif recommendation.state == MojoSecRecommendation.STATE_FAILED:
-                reason = "all_targets_failed"
             recommendation.save()
             _transition(recommendation, recommendation.state, reason, from_state)
-            if recommendation.state == MojoSecRecommendation.STATE_EXECUTED:
+            if terminal_ok:
                 _record_metric("recommendations_executed")
         else:
             recommendation.save()
@@ -454,48 +491,101 @@ def _execute(recommendation_id):
 
 
 def execute_recommendation(job):
-    return _execute(job.payload["recommendation_id"]) is not None
+    generation = job.payload.get("generation")
+    # Every queued delivery is fenced to the execution round that published
+    # it. A legacy or malformed delivery must not silently adopt the current
+    # generation and execute newer desired state.
+    if isinstance(generation, bool) or not isinstance(generation, int) or generation <= 0:
+        return False
+    return _execute(job.payload["recommendation_id"], generation) is not None
 
 
-def reverse(recommendation, actor, note=""):
+def reverse(recommendation, actor, note="", expected_modified=None):
     """Operator rollback, remaining retryable until every target succeeds."""
-    from mojo.apps.incident.models import MojoSecRecommendation
+    from mojo.apps.incident.models import (
+        MojoSecRecommendation, MojoSecRecommendationTarget)
+    from mojo.apps.account.models import GeoLocatedIP
 
     with transaction.atomic():
         locked = MojoSecRecommendation.objects.select_for_update().get(
             pk=recommendation.pk)
+        if (expected_modified is not None and
+                locked.modified.isoformat() != expected_modified):
+            raise ValueError("recommendation changed before reversal claim")
         if locked.state not in (
                 MojoSecRecommendation.STATE_EXECUTED,
                 MojoSecRecommendation.STATE_EXPIRED):
             raise ValueError(f"recommendation is {locked.state}; cannot reverse")
-        from mojo.apps.account.models import GeoLocatedIP
+        locked.execution_rounds += 1
+        locked.save(update_fields=["execution_rounds", "modified"])
+        generation = locked.execution_rounds
+        target_ids = list(locked.targets.filter(outcome="applied").order_by(
+            "pk").values_list("pk", flat=True)[:max_targets()])
 
-        for target in locked.targets.select_for_update().filter(
-                outcome="applied"):
-            started = dates.utcnow()
+    for target_id in target_ids:
+        started = dates.utcnow()
+        with transaction.atomic():
+            locked = MojoSecRecommendation.objects.select_for_update().get(
+                pk=recommendation.pk)
+            target = MojoSecRecommendationTarget.objects.select_for_update().get(
+                pk=target_id)
+            if (locked.execution_rounds != generation or
+                    target.outcome != "applied"):
+                continue
             target.attempts += 1
-            # The ownership proof and unblock are one critical section. A
-            # concurrent manual/rule block must not be overwritten after we
-            # inspect the recommendation-owned reason.
+            marker = f"reverse_inflight:{generation}:{target.attempts}"
+            target.last_error = marker
+            target.save(update_fields=["attempts", "last_error", "modified"])
+            attempt_number = target.attempts
             geo = GeoLocatedIP.objects.select_for_update().filter(
                 ip_address=target.ip).first()
+            owner = f"mojosec:rec:{locked.pk}|case:"
+            ownership_ok = bool(
+                geo is None or not geo.block_active or
+                (geo.blocked_reason or "").startswith(owner))
+        if not ownership_ok:
+            result = {"status": "unknown", "ok": False,
+                      "error": {"code": "ownership_changed"}}
+        elif geo is None:
+            result = {"status": "unknown", "ok": False,
+                      "error": {"code": "target_missing"}}
+        else:
             try:
-                if geo is not None and geo.block_active:
-                    owner = f"mojosec:rec:{locked.pk}|case:"
-                    if not (geo.blocked_reason or "").startswith(owner):
-                        raise ValueError("block ownership changed")
-                    geo.unblock(reason=f"mojosec:rec:{locked.pk}:reversed")
+                result = geo.unblock_checked(
+                    reason=f"mojosec:rec:{recommendation.pk}:reversed",
+                    expected_reason_prefix=owner)
+            except Exception:
+                logger.exception("MojoSec checked reversal failed")
+                result = {"status": "unknown", "ok": False,
+                          "error": {"code": "execution_error"}}
+        with transaction.atomic():
+            locked = MojoSecRecommendation.objects.select_for_update().get(
+                pk=recommendation.pk)
+            target = MojoSecRecommendationTarget.objects.select_for_update().get(
+                pk=target_id)
+            if (locked.execution_rounds != generation or
+                    target.attempts != attempt_number or
+                    target.last_error != marker):
+                continue
+            verified = result.get("status") == "verified" and result.get("ok") is True
+            if verified:
                 target.outcome = "reversed"
                 target.reversed_at = dates.utcnow()
-                target.save()
-                _attempt(locked, target, "reverse_applied", note, started)
-            except Exception as err:
-                logger.exception(
-                    "MojoSec block reversal failed for %s", target.ip)
-                target.last_error = str(err)[:256]
-                target.save()
-                _attempt(locked, target, "reverse_failed",
-                         target.last_error, started)
+                target.last_error = ""
+                outcome = "reverse_applied"
+            else:
+                target.last_error = str(
+                    (result.get("error") or {}).get("code") or
+                    "fleet_unverified")[:256]
+                outcome = "reverse_failed"
+            target.save()
+            _attempt(locked, target, outcome, target.last_error or note, started)
+
+    with transaction.atomic():
+        locked = MojoSecRecommendation.objects.select_for_update().get(
+            pk=recommendation.pk)
+        if locked.execution_rounds != generation:
+            return locked
         locked.approval_note = note[:256] or locked.approval_note
         _refresh_counts(locked)
         remaining = locked.targets.filter(outcome="applied").exists()
@@ -684,12 +774,51 @@ def action_sweep(job=None, now=None, limit=100, lookback_seconds=900):
                     locked_target.expires_at is None or
                     locked_target.expires_at > now):
                 continue
-            locked_target.outcome = "expired"
-            locked_target.save(update_fields=["outcome", "modified"])
-            _attempt(locked_target.recommendation, locked_target,
-                     "expire_confirmed",
-                     "ttl elapsed; central sweep owns the unblock", now)
-        expired_targets += 1
+            locked_target.attempts += 1
+            marker = f"expire_inflight:{locked_target.attempts}"
+            locked_target.last_error = marker
+            locked_target.save(update_fields=["attempts", "last_error", "modified"])
+            attempt_number = locked_target.attempts
+            recommendation_id = locked_target.recommendation_id
+            target_ip = locked_target.ip
+        from mojo.apps.account.models import GeoLocatedIP
+        geo = GeoLocatedIP.objects.filter(ip_address=target_ip).first()
+        owner = f"mojosec:rec:{recommendation_id}|case:"
+        if geo is None:
+            result = {"status": "unknown", "ok": False,
+                      "error": {"code": "target_missing"}}
+        else:
+            try:
+                result = geo.unblock_checked(
+                    reason=f"mojosec:rec:{recommendation_id}:expired",
+                    expected_reason_prefix=owner)
+            except Exception:
+                logger.exception("MojoSec checked expiry removal failed")
+                result = {"status": "unknown", "ok": False,
+                          "error": {"code": "execution_error"}}
+        with transaction.atomic():
+            locked_target = (
+                MojoSecRecommendationTarget.objects.select_for_update()
+                .get(pk=target.pk))
+            if (locked_target.outcome != "applied" or
+                    locked_target.attempts != attempt_number or
+                    locked_target.last_error != marker):
+                continue
+            if result.get("status") == "verified" and result.get("ok") is True:
+                locked_target.outcome = "expired"
+                locked_target.last_error = ""
+                locked_target.save(update_fields=[
+                    "outcome", "last_error", "modified"])
+                _attempt(locked_target.recommendation, locked_target,
+                         "expire_confirmed", "checked firewall absence", now)
+                expired_targets += 1
+            else:
+                locked_target.last_error = str(
+                    (result.get("error") or {}).get("code") or
+                    "fleet_unverified")[:256]
+                locked_target.save(update_fields=["last_error", "modified"])
+                _attempt(locked_target.recommendation, locked_target,
+                         "expire_unverified", locked_target.last_error, now)
     # Recommendations whose applied targets have all expired settle to
     # expired themselves.
     for recommendation in MojoSecRecommendation.objects.filter(

@@ -1,6 +1,7 @@
 """MojoSec recommendation lifecycle, single action owner, ticket path (#2105)."""
 
 import datetime
+import contextlib
 import uuid
 from unittest import mock
 
@@ -46,13 +47,18 @@ def _settings(opts, mode="authoritative", auto=False, include_host=True,
     return get_static
 
 
+@contextlib.contextmanager
 def _inline_execution():
     """Run queued executions synchronously — jobs stay out of unit tests."""
     from mojo.apps.incident.services import mojosec_actions
 
-    return mock.patch.object(
-        mojosec_actions, "_queue_execution",
-        side_effect=lambda rec: mojosec_actions._execute(rec.pk))
+    with mock.patch(
+            "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
+            return_value={"status": "verified", "ok": True}), \
+            mock.patch.object(
+                mojosec_actions, "_queue_execution",
+                side_effect=lambda rec: mojosec_actions._execute(rec.pk)):
+        yield
 
 
 def _case(opts, sensor_kind="web", family="wordpress", urgency="warning",
@@ -460,8 +466,10 @@ def test_failed_reversal_remains_nonterminal_and_retryable(opts):
     recommendation.state = "executed"
     recommendation.executed_count = 1
     recommendation.save(update_fields=["state", "executed_count", "modified"])
-    with mock.patch.object(GeoLocatedIP, "unblock",
-                           side_effect=RuntimeError("fixture failure")):
+    with mock.patch.object(
+            GeoLocatedIP, "unblock_checked",
+            return_value={"status": "partial", "ok": False,
+                          "error": {"code": "fixture_failure"}}):
         result = mojosec_actions.reverse(
             recommendation, opts.action_approver, note="retry me")
     th.assert_eq(result.state, "executed",
@@ -469,6 +477,63 @@ def test_failed_reversal_remains_nonterminal_and_retryable(opts):
     th.assert_eq(result.transitions.order_by("-id").first().transition,
                  "reversal_incomplete",
                  "partial reversal needs an explicit retryable transition")
+
+
+@th.django_unit_test("stale execution generation is a no-op")
+def test_stale_generation_cannot_execute(opts):
+    from mojo.apps.incident.models import MojoSecRecommendation
+    from mojo.apps.incident.services import mojosec_actions
+
+    case = _case(opts, sources=[SECOND_IP], key_suffix="stale-generation")
+    recommendation, unused = mojosec_actions.propose(
+        case, MojoSecRecommendation.ACTION_BLOCK_IP,
+        "repeated_impossible_paths", "stale", "high", [SECOND_IP])
+    MojoSecRecommendation.objects.filter(pk=recommendation.pk).update(
+        state="approved", execution_rounds=2)
+    with mock.patch.object(mojosec_actions, "_apply_block") as apply_block:
+        mojosec_actions._execute(recommendation.pk, generation=1)
+    apply_block.assert_not_called()
+    assert recommendation.targets.get().attempts == 0, \
+        "stale delivery claimed a target attempt"
+
+
+@th.django_unit_test("queued execution requires an explicit generation fence")
+def test_legacy_delivery_without_generation_is_refused(opts):
+    from mojo.apps.incident.services import mojosec_actions
+
+    job = type("Job", (), {"payload": {"recommendation_id": 1}})()
+    with mock.patch.object(mojosec_actions, "_execute") as execute:
+        assert mojosec_actions.execute_recommendation(job) is False
+    execute.assert_not_called()
+
+
+@th.django_unit_test("network wait is outside transactions and finalization is fenced")
+def test_execution_wait_outside_transaction_and_cas(opts):
+    from django.db import connection
+    from mojo.apps.incident.models import MojoSecRecommendation
+    from mojo.apps.incident.services import mojosec_actions
+
+    case = _case(opts, sources=[RACE_IP], key_suffix="wait-fence")
+    recommendation, unused = mojosec_actions.propose(
+        case, MojoSecRecommendation.ACTION_BLOCK_IP,
+        "repeated_impossible_paths", "fence", "high", [RACE_IP])
+    MojoSecRecommendation.objects.filter(pk=recommendation.pk).update(
+        state="approved", execution_rounds=1)
+
+    def supersede(ip, reason, ttl):
+        assert not connection.in_atomic_block, \
+            "checked network wait held a database transaction"
+        MojoSecRecommendation.objects.filter(pk=recommendation.pk).update(
+            execution_rounds=2)
+        return {"status": "verified", "ok": True, "outcome": "applied",
+                "prior_until": None, "prior_reason": ""}
+
+    with mock.patch.object(mojosec_actions, "_apply_block",
+                           side_effect=supersede):
+        mojosec_actions._execute(recommendation.pk, generation=1)
+    target = recommendation.targets.get()
+    assert target.outcome == "pending", \
+        "stale worker finalized over a newer execution generation"
 
 
 @th.django_unit_test()
@@ -510,7 +575,10 @@ def test_block_handler_suppression_is_scoped_to_routed_categories(opts):
     with mock.patch.object(
             mojosec_correlation.settings, "get_static",
             side_effect=_settings(opts, include_host=False)), \
-            mock.patch.object(mojosec_actions, "_record_metric"):
+            mock.patch.object(mojosec_actions, "_record_metric"), \
+            mock.patch(
+                "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
+                return_value={"status": "verified", "ok": True}):
         handler = BlockHandler()
         th.assert_eq(handler.run(routed), False,
                      "block:// on a routed category must be suppressed")
@@ -653,8 +721,11 @@ def test_ticket_approve_block_regression(opts):
     # The regression: on the old code this reported success and resolved
     # the ticket while IPSet.block_ip raised and no block ever applied.
     ticket, note = make_ticket()
-    _handler_block_confirm(ticket, note, "approve",
-                           {"ip": TICKET_IP, "reason": "scanner"})
+    with mock.patch(
+            "mojo.apps.incident.services.firewall_truth.reconcile_geolocated_ip",
+            return_value={"status": "verified", "ok": True}):
+        _handler_block_confirm(ticket, note, "approve",
+                               {"ip": TICKET_IP, "reason": "scanner"})
     ticket.refresh_from_db()
     geo = GeoLocatedIP.objects.get(ip_address=TICKET_IP)
     th.assert_true(geo.block_active,
