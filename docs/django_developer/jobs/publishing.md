@@ -355,6 +355,46 @@ Empty list if no runners respond.
 - Config reload
 - Collecting system info (`jobs.get_sysinfo()` uses this internally)
 
+`broadcast_execute()` is a compatibility API: its reply list is not a fleet
+snapshot and must not authorize security success or any other high-integrity
+decision.
+
+## broadcast_execute_checked()
+
+Use the checked companion when the caller must know whether every machine in
+one concrete channel reached and observed the requested state:
+
+```python
+result = jobs.broadcast_execute_checked(
+    "myapp.services.security.reconcile",
+    data={"resource_id": 42, "present": True},
+    channel="default",
+    timeout=30,
+)
+```
+
+The v1 protocol is capability-negotiated and intentionally distinct from the
+legacy `execute` command. It reads one exact live runner roster, groups runners
+by hostname, deterministically selects one compatible runner per hostname, and
+refuses before publication if any host has no compatible runner. Multiple
+engines on one host therefore represent one machine-local state, not multiple
+independent targets.
+
+The result status is one of:
+
+| Status | Meaning |
+|---|---|
+| `verified` | Exactly one identity-correlated success reply was accepted from every expected host, with no anomaly. The application must still validate each returned semantic result. |
+| `partial` | At least one mutation was dispatched, but a host was missing, failed, duplicated, malformed, or returned mismatched semantic evidence. Never report success. |
+| `unknown` | No mutation was dispatched because the roster, channel, correlation identity, payload, timeout, or protocol compatibility could not be proven. |
+
+Calls require an explicit channel. Payloads, host rosters, replies, anomalies,
+timeouts, correlation IDs, and returned semantic results are bounded. The
+engine accepts checked work only on its direct control channel and only when
+the reply channel is derived from the same strong correlation ID. New
+high-integrity call sites should use this API; ordinary cache invalidation and
+best-effort fan-out can continue to use `broadcast_execute()`.
+
 ## Channels
 
 A channel is a named queue. **A declared channel gets the job exactly as

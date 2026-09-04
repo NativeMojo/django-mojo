@@ -321,13 +321,18 @@ SSH-compromise blocks always take a human. `requested_scope` accepts
 `installation`/`group` only — `region`/`fleet` are refused until Maestro item
 1636 lands the authoritative identity contract.
 
-Execution locks the `GeoLocatedIP` row and decides honestly under the lock:
+Execution claims each target and generation in a short transaction, waits for
+checked fleet truth outside database transactions, then finalizes only through
+an ownership/generation CAS. Stale deliveries and workers cannot overwrite a
+newer retry, reversal, or desired firewall generation. Outcomes are:
 **`applied`** (block placed with the requested TTL — automation never places
 a permanent block; central `sweep_expired_blocks` still owns the actual
 unblock at expiry), **`pre_existing`** (an active block already covered the
 IP; its prior reason/expiry are snapshotted and the requested TTL/reason were
 NOT applied — this never counts as execution success), or **`whitelisted`**
-(whitelist always wins). Failed targets retry bounded
+(whitelist always wins). `partial` and `unknown` checked results are failed,
+retryable attempts and never emit success transitions, metrics, ticket
+resolution, or incident history. Failed targets retry bounded
 (`MOJOSEC_ACTION_MAX_ATTEMPTS`, default 5); partial failure is visible in the
 counters and a `partial` transition. Unapproved proposals expire after
 `MOJOSEC_ACTION_PROPOSAL_TTL_SECONDS` (default 3 days); applied targets
@@ -429,9 +434,13 @@ that compatibility; a one-character change is refused, and a governed/user
 write cannot claim the exception. Any other malformed legacy policy remains
 readable, deactivatable and deletable, but cannot match, dispatch, or
 reactivate; replace its complete inactive tree first.
-Generic RuleSet/Rule URLs remain bounded reads but reject mutation. Generic
-IPSet administration intentionally remains available until its governed
-replacement ships.
+Generic RuleSet/Rule URLs remain bounded reads but reject mutation. IPSet
+lifecycle uses the same authority through `ipset.enable`, `ipset.disable`, and
+`ipset.sync`. The writer requires `expected_modified` and exact confirmation,
+claims desired state under a short row lock, then waits for checked fleet truth
+outside the transaction. Generic writes cannot change `is_enabled`, names are
+immutable, deletion is retired in favor of disable tombstones, and source keys
+are excluded from generic output.
 ---
 
 ## Fleet-Wide IP Blocking
@@ -442,31 +451,34 @@ The incident system is the **sole authority** for IP blocking decisions. OSSEC a
 
 1. **OSSEC detects, the incident engine decides.** OSSEC active response (local blocking) is disabled. OSSEC only reports events via webhook.
 2. **GeoLocatedIP is the source of truth.** All block state lives in the `GeoLocatedIP` model — `is_blocked`, `blocked_until`, `blocked_reason`, `is_whitelisted`.
-3. **Broadcast, not polling.** When a block decision is made, it broadcasts instantly to all instances via `jobs.broadcast_execute()`. No 60-second polling window.
+3. **Checked exact-host convergence.** A block decision uses the distinct
+   `execute_checked` protocol: one compatible runner represents each hostname,
+   and only a complete identity-correlated semantic receipt set verifies.
 4. **Whitelist overrides everything.** A whitelisted IP is never blocked, even by auto-escalation rules.
 5. **Admin controls via CRUD + POST_SAVE_ACTIONS.** No dedicated REST endpoints for blocking — use the standard `GeoLocatedIP` REST interface with actions (`block`, `unblock`, `whitelist`, `unwhitelist`).
 
 ### How a block flows
 
-Permanent blocks (`ttl=None`) and TTL blocks (`ttl > 0`) are enforced differently:
+Permanent blocks (`ttl=None`) and TTL blocks (`ttl > 0`) have different kernel
+representations but one durable checked transition:
 
 **Permanent block (ttl=None):**
 
 ```
 GeoLocatedIP.block(reason, ttl=None)
-  → DB updated (is_blocked=True, blocked_until=None, blocked_reason)
-  → jobs.broadcast_execute("mojo.apps.incident.asyncjobs.broadcast_ipset_add_blocked", {ip})
-  → Every instance adds the IP to the mojo_blocked ipset (O(1) kernel lookup)
-  → firewall.ipset_add("mojo_blocked", ip) creates the set if absent and ensures iptables rule
+  → DB desired state + incremented firewall_generation + pending tombstone
+  → broadcast_execute_checked(...broadcast_reconcile_geolocated_ip...)
+  → each exact host atomically normalizes direct-rule absence and the COMPLETE mojo_blocked set
+  → generation-CAS clears pending only when every host proves the desired digest/rule counts
 ```
 
 **TTL block (ttl > 0):**
 
 ```
 GeoLocatedIP.block(reason, ttl=600)
-  → DB updated (is_blocked=True, blocked_until=<now+ttl>, blocked_reason)
-  → jobs.broadcast_execute("mojo.apps.incident.asyncjobs.broadcast_block_ip", {ips, ttl})
-  → Every instance adds an individual iptables DROP rule via firewall.block(ip)
+  → DB desired state + incremented firewall_generation + pending tombstone
+  → the same checked compound request normalizes direct-rule presence
+  → the complete permanent aggregate is re-observed in the same host broker transaction
 ```
 
 ### How an unblock flows
@@ -476,15 +488,15 @@ GeoLocatedIP.block(reason, ttl=600)
 ```
 sweep_expired_blocks
   → Finds GeoLocatedIP where is_blocked=True AND blocked_until <= now
-  → Bulk DB update: is_blocked=False
-  → jobs.broadcast_execute("mojo.apps.incident.asyncjobs.broadcast_unblock_ip", {ips})
-  → Every instance removes the individual iptables rule
+  → writes one durable absence generation per row
+  → checked compound reconciliation proves direct absence + permanent aggregate
+  → counts success only after complete fleet verification
 ```
 
-**Admin unblock (`unblock` action on GeoLocatedIP):**
-
-- If the block was permanent (`blocked_until` was `None`): broadcasts `broadcast_ipset_del_blocked` to remove the IP from the `mojo_blocked` ipset.
-- If the block had a TTL: broadcasts `broadcast_unblock_ip` to remove the individual iptables rule.
+**Admin unblock (`unblock` action on GeoLocatedIP):** uses the same
+`unblock_checked()` absence tombstone and compound reconciliation. The public
+`block()`/`unblock()` signatures remain compatible; callers that decide
+success use their detailed checked companions.
 
 ### Startup recovery and fleet reconciliation
 
@@ -494,12 +506,13 @@ sweep_expired_blocks
 sync_firewall (hourly, minute 0) — BROADCAST on "default"
   → fans out one job per live runner
   → each runner, for its own kernel:
-      → take the per-host lock (mojo:sync_firewall:lock:<host>)
-      → Query all GeoLocatedIP where is_blocked=True AND blocked_until IS NULL
-      → firewall.ipset_load("mojo_blocked", permanent_ips)   — if changed
-      → Query all IPSet where is_enabled=True
-      → For each changed set: firewall.ipset_load(ipset.name, ipset.cidrs)
-      → advance mojo:sync_firewall:last_sync:<host> ONLY if nothing failed
+      → take and renew the token-owned per-host lock
+      → bound/canonicalize the whole desired snapshot before any kernel write
+      → observe/repair/re-observe complete mojo_blocked membership, including empty
+      → reconcile every IPSet row (enabled presence; disabled/cache absence tombstone)
+      → reconcile active TTL presence and pending direct-rule absence
+      → compare the desired generation again and CAS per-object truth
+      → advance mojo:sync_firewall:last_sync:<host> ONLY if every proof and CAS succeeds
 
 on_engine_start (this node's engine just started) — box-direct, forced
   → set mojo:sync_firewall:force:<host>
@@ -509,14 +522,19 @@ on_engine_start (this node's engine just started) — box-direct, forced
 This:
 
 - **Restores a rebooted node's blocks within seconds**, via the startup hook. The hourly marker lives in shared Redis and survives the reboot, so an unforced reconcile would skip; the force flag is what makes recovery converge even if the queued job never runs.
-- Catches any blocks missed by failed broadcasts.
+- Catches any blocks/removals left pending by partial checked operations.
 - Catches drift on instances that joined after a block was issued.
 
 Up to one hour of exposure remains acceptable for a *newly issued* permanent block whose live broadcast a node missed — those target sustained threats, not short-lived TTL blocks that expire on their own. A node that **restarted** no longer waits that hour.
 
 ### firewall.py — iptables enforcement
 
-`mojo.apps.incident.firewall` is the low-level iptables interface. It is only ever called by the job agent (running as `ec2-user` with passwordless sudo). It refuses to run as any other user.
+`mojo.apps.incident.firewall` is the application-side semantic adapter. It is
+only called in a JobEngine execution context as `ec2-user`; sudo authorizes
+exactly the root-owned broker with an empty argument vector. The broker accepts
+strict bounded JSON, owns all argv/restore construction, serializes operations
+with a fixed host lock, and returns typed status/normalization observations
+without raw argv, stdout, stderr, environment, or restore text.
 
 | Function | Description |
 |---|---|
@@ -527,8 +545,12 @@ Up to one hour of exposure remains acceptable for a *newly issued* permanent blo
 | `ipset_del(name, ip)` | Removes a single IP from a named ipset. Idempotent. Returns True/False. |
 | `ipset_load(name, cidrs)` | Creates/replaces a kernel ipset with the given CIDRs and adds an iptables DROP rule for it |
 | `ipset_remove(name)` | Removes a kernel ipset and its associated iptables rule |
+| `normalize_ip(ip, present)` | Observe, repair, and re-observe exact direct-rule multiplicity |
+| `normalize_ipset(name, cidrs, present)` | Observe, atomically replace/remove, and re-observe exact type/family/membership digest/rule counts |
+| `normalize_geolocated_ip(...)` | Normalize direct and permanent-set truth while one broker host lock is held |
 
-All IPs are validated against a strict regex before touching iptables. Commands run via `sudo /sbin/iptables`.
+Firewall targets are canonical IPv4 only. IPv6 is refused with
+`unsupported_family` before desired-state writes.
 
 ### Async jobs
 
@@ -539,7 +561,7 @@ All IPs are validated against a strict regex before touching iptables. Commands 
 | `broadcast_ipset_add_blocked` | Broadcast | Adds a single IP to the `mojo_blocked` ipset on the local instance (permanent blocks). Receives plain dict: `{"ip": "1.2.3.4"}` |
 | `broadcast_ipset_del_blocked` | Broadcast | Removes a single IP from the `mojo_blocked` ipset on the local instance. Receives plain dict: `{"ip": "1.2.3.4"}` |
 | `sweep_expired_blocks` | Cron (every 5 minutes) | Finds expired blocks in DB, updates DB, broadcasts fleet-wide unblock |
-| `sync_firewall` | Cron (hourly, minute 0), **broadcast** | Each runner rebuilds its OWN node's ipsets from DB truth. Skips sets unchanged since that host's last sync; the marker advances only on a clean run. Also published box-direct with `{"force": True}` by `on_engine_start`. |
+| `sync_firewall` | Cron (hourly, minute 0), **broadcast** | Each runner exactly observes/repairs/re-observes its host's complete bounded IPv4 desired generation, including absence tombstones. The marker advances only on a clean generation. Also published box-direct by `on_engine_start`. |
 | `on_engine_start` | Job-engine startup hook | Sets this host's force flag and queues a forced `sync_firewall` on its own runner, so a rebooted node recovers without waiting for the hourly broadcast. Publishes rather than touching the firewall directly — the broker refuses outside a JobEngine execution context. |
 | `prune_events` | Cron (daily 9:45) | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` with level < 6 |
 | `prune_incidents` | Cron | Deletes resolved/closed/ignored incidents older than `INCIDENT_PRUNE_DAYS`. Skips incidents with `metadata.do_not_delete = True`. |
@@ -571,30 +593,31 @@ The `IPSet` model manages ipset-based bulk IP blocking for entire countries, dat
 | `data` | TextField containing the CIDR list (one per line) |
 | `is_enabled` | Whether this ipset is active in iptables |
 | `cidr_count` | Number of CIDRs currently loaded |
-| `last_synced` | Timestamp of last successful sync to fleet |
-| `sync_error` | Last error message if sync failed |
+| `last_synced` | Timestamp of the latest checked dispatch attempt |
+| `sync_error` | Empty only after exact fleet verification; otherwise a bounded pending/error code |
 
-### POST_SAVE_ACTIONS
+### Governed lifecycle actions
 
 | Action | Description |
 |---|---|
-| `sync` | Broadcast the ipset data to all instances (loads into ipset + iptables) |
-| `enable` | Enable the ipset and sync fleet-wide |
-| `disable` | Disable the ipset and remove from fleet-wide iptables |
-| `refresh_source` | Re-fetch data from the source URL, update `data` field, and sync |
+| `ipset.sync` | Reconcile the row's exact desired state on the compatible host snapshot |
+| `ipset.enable` | Persist enabled desired state, then prove exact set/rule presence |
+| `ipset.disable` | Persist a durable absence tombstone, then prove set/rule absence |
 
 ### How it works
 
-1. CIDR data is stored directly in the database as a TextField (one CIDR per line).
-2. When synced, the data is broadcast to all instances via `jobs.broadcast_execute()`.
-3. Each instance creates a kernel ipset (`ipset create <name> hash:net`), loads the CIDRs, and adds an iptables DROP rule referencing the set.
+1. CIDR data is stored as canonical, sorted, deduplicated IPv4 networks (one per line); invalid/IPv6 input refuses the whole update.
+2. A checked sync selects one compatible runner per hostname and refuses before publication if the exact roster cannot be proven compatible.
+3. Each host observes, atomically normalizes, and re-observes the `hash:net` family, full membership count/digest, and exact INPUT/FORWARD rule multiplicity.
 4. Lookups are O(1) regardless of set size, making it practical to block entire countries or large abuse lists.
+5. Names are immutable/reserved, new rows start disabled, generic enable/delete paths are closed, and disabled/cache rows remain reconciliation tombstones.
 
 ### REST Endpoint
 
 | Endpoint | Auth | Description |
 |---|---|---|
-| `/api/incident/ipset` | `view_security` / `security` (read), `manage_security` / `security` (write) | Standard CRUD + POST_SAVE_ACTIONS for IPSet management |
+| `/api/incident/ipset` | `view_security` / `security` (read), `manage_security` / `security` (metadata/CIDR write) | Bounded model surface; lifecycle fields and deletion are closed |
+| `/api/incident/ipset/action` | global `manage_security` / `security`; fresh human session; no API key | `{action, ipset_id, expected_modified, confirm}` governed lifecycle writer |
 
 ### Setup Examples
 
@@ -636,8 +659,9 @@ pushed into the fleet-wide firewall.
 
 | Job | Type | Description |
 |---|---|---|
-| `broadcast_sync_ipset` | Broadcast | Loads ipset data on the local instance (creates ipset, loads CIDRs, adds iptables rule). Receives plain dict: `{"name": ..., "cidrs": [...]}` |
-| `broadcast_remove_ipset` | Broadcast | Removes an ipset and its iptables rule from the local instance. Receives plain dict: `{"name": ...}` |
+| `broadcast_reconcile_firewall_set` | Checked exact-host | Normalizes and returns bounded semantic set truth |
+| `broadcast_sync_ipset` | Legacy broadcast | Compatibility handler; governed callers use checked reconciliation |
+| `broadcast_remove_ipset` | Legacy broadcast | Compatibility handler; governed disable uses a checked absence tombstone |
 | `refresh_ipsets` | Cron (weekly, Sunday 3:00 AM) | Re-fetches source data for all enabled IPSets and syncs fleet-wide |
 | `refresh_threat_lists` | Cron (every 6 hours) | `refresh_from_source()` only, for the cache-only `tor_exits`/`blocklist_de` IPSet rows — never syncs to the firewall |
 

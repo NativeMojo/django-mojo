@@ -124,8 +124,14 @@ visible for deactivation/deletion but evaluate as no-match and cannot dispatch.
 Recommendation approve/reject/cancel/reverse operations use the same action
 writer and bind to the recommendation's `modified` value and exact proposal
 scope. `cancel` is an audited transition to the existing `rejected` state.
-Partial reversal is nonterminal and retryable; the sweep also requeues stranded
-approved/auto-approved work idempotently.
+Execution is also fenced by the exposed `execution_generation`: each target is
+claimed in a short transaction, the checked firewall wait occurs outside the
+transaction, and only a still-owned generation/attempt can finalize. Partial or
+unknown compatible-host proof remains failed/retryable and never appears as a
+successful target, recommendation, approval card, ticket, or incident action.
+Partial reversal is nonterminal and retryable; the sweep requeues stranded
+approved/auto-approved work idempotently. Targets are canonical IPv4 only;
+IPv6 receives `unsupported_family` before desired firewall state is written.
 
 Raw bounded request targets, referrers, and user agents are retained in the
 protected `MojoSecReceipt.replay_features` audit record (`DENY_AI`, excluded
@@ -304,7 +310,7 @@ rejected and group/member grants never authorize this platform-wide surface.
 | `GET` | `/api/incident/mojosec/case/<id>` | global `view_security` or `security` | One case with at most 8 samples and 50 transitions |
 | `GET` | `/api/incident/mojosec/case-metrics` | global `view_security` or `security` | Bounded aggregate case metrics |
 | `GET` | `/api/incident/mojosec/recommendation` | global `view_security`, `manage_security` or `security` | Paginated recommendation list (`state`, `action`, `urgency`, `confidence`, `case_id` filters) |
-| `GET` | `/api/incident/mojosec/recommendation/<id>` | global `view_security`, `manage_security` or `security` | One recommendation with per-target validation/outcome rows, last 50 transitions and attempts |
+| `GET` | `/api/incident/mojosec/recommendation/<id>` | global `view_security`, `manage_security` or `security` | One recommendation with `execution_generation`, at most 512 ordered target rows plus `targets_truncated`, and the last 50 transitions/attempts |
 | `POST` | `/api/incident/mojosec/recommendation-action` | global `manage_security` or `security` | Fresh human session only; `{recommendation_id, action: approve\|reject\|cancel\|reverse, expected_modified, confirm, note}` delegates to the governed authority and cannot add targets or widen scope |
 | `GET` | `/api/incident/mojosec/deployment` | global `view_security`, `manage_security` or `security` | Driver-side deployment registrations (optional `installation_key_id` filter) |
 | `POST` | `/api/incident/mojosec/deployment` | global `manage_security` or `security` | Pre-register `{installation_key_id, deployment_id, ttl_seconds, note}` before a deploy |
@@ -316,7 +322,9 @@ whose targets are always server-derived case sources with per-target
 `validated`/`protected`/`invalid` validation and honest
 `applied`/`pre_existing`/`whitelisted`/`failed`/`expired`/`reversed` outcomes
 (`pre_existing` means an active block already covered the IP and the requested
-TTL/reason were **not** applied). In shadow mode the authoritative
+TTL/reason were **not** applied). `applied`, `reversed`, and `expired` require
+checked exact-host presence/absence; partial/unknown evidence stays retryable.
+In shadow mode the authoritative
 Event/Incident feed continues unchanged; on an installation cut to
 authoritative mode, digest-tier web/FIM evidence stops projecting per-receipt
 Events and the case list **is** the operator surface — expected deployment
