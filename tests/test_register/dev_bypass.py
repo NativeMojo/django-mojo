@@ -32,7 +32,7 @@ def test_endpoint_accepts_bypass_via_header(opts):
     _clear_register_limits()
     start = opts.client.post(
         "/api/auth/phone/register/start",
-        {"phone": "+14155557101"})
+        {"phone": "+15550007101"})
     assert start.status_code == 200, \
         f"phone-register start must succeed, got {start.status_code}: {opts.client.last_response.body}"
     session_token = start.response.data.session_token
@@ -53,7 +53,7 @@ def test_endpoint_rejects_bypass_without_header(opts):
     _clear_register_limits()
     start = opts.client.post(
         "/api/auth/phone/register/start",
-        {"phone": "+14155557102"})
+        {"phone": "+15550007102"})
     assert start.status_code == 200, \
         f"phone-register start must succeed, got {start.status_code}"
     session_token = start.response.data.session_token
@@ -75,7 +75,7 @@ def test_real_code_still_works_with_header(opts):
     _clear_register_limits()
     start = opts.client.post(
         "/api/auth/phone/register/start",
-        {"phone": "+14155557103"})
+        {"phone": "+15550007103"})
     assert start.status_code == 200, \
         f"start must succeed, got {start.status_code}"
     session_token = start.response.data.session_token
@@ -98,7 +98,7 @@ def test_wrong_code_rejected_with_header(opts):
     _clear_register_limits()
     start = opts.client.post(
         "/api/auth/phone/register/start",
-        {"phone": "+14155557104"})
+        {"phone": "+15550007104"})
     assert start.status_code == 200
     session_token = start.response.data.session_token
 
@@ -116,7 +116,7 @@ def test_empty_bypass_header_is_unset(opts):
     _clear_register_limits()
     start = opts.client.post(
         "/api/auth/phone/register/start",
-        {"phone": "+14155557105"})
+        {"phone": "+15550007105"})
     assert start.status_code == 200
     session_token = start.response.data.session_token
 
@@ -135,7 +135,7 @@ def test_bypass_code_binds_to_session_phone(opts):
     bound to the phone the session was started with — bypass doesn't
     let an attacker arbitrarily-mint a verified token for any phone."""
     _clear_register_limits()
-    target_phone = "+14155557106"
+    target_phone = "+15550007106"
     start = opts.client.post(
         "/api/auth/phone/register/start",
         {"phone": target_phone})

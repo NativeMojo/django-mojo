@@ -13,12 +13,11 @@ def _clear_register_limits():
 
 
 def _mock_sms():
-    """Mock phonehub.send_sms in the test-server process via a fake handler."""
+    """Document why endpoint fixtures use PhoneHub's reserved +1555 range."""
     # The test server runs in a separate process, so unittest.mock.patch in the
-    # test process is ineffective for the actual SMS send. The existing SMS
-    # tests work because phonehub is configured to no-op in test settings.
-    # Here we just confirm the endpoint returns 200; the SMS dispatch itself
-    # is best-effort and won't fail the endpoint.
+    # test process cannot control its SMS transport. Reserved +1555 recipients
+    # take PhoneHub's accepted test-send path regardless of provider state left
+    # by other full-suite modules.
     return None
 
 
@@ -27,7 +26,7 @@ def test_start_happy_path(opts):
     _clear_register_limits()
     resp = opts.client.post(
         "/api/auth/phone/register/start",
-        {"phone": "+14155557001"})
+        {"phone": "+15550007001"})
     assert resp.status_code == 200, \
         f"phone register start must succeed, got {resp.status_code}: {opts.client.last_response.body}"
     data = resp.response.data
@@ -45,7 +44,7 @@ def test_start_accepts_existing_phone(opts):
     # Pre-create a user with this phone. Registering with an already-registered
     # phone is now a valid flow — `on_register` turns it into a login for the
     # proven owner — so `start` must NOT reject it up front.
-    phone = "+14155557002"
+    phone = "+15550007002"
     User.objects.filter(phone_number=phone).delete()
     u = User.objects.create_user(username="phone_existing", email="phone_existing@test.com", password="Abcd1234!")
     u.phone_number = phone
@@ -108,7 +107,7 @@ def test_full_phone_register_flow(opts):
     _clear_register_limits()
     start = opts.client.post(
         "/api/auth/phone/register/start",
-        {"phone": "+14155557003"})
+        {"phone": "+15550007003"})
     assert start.status_code == 200, \
         f"start must succeed, got {start.status_code}: {opts.client.last_response.body}"
     session_token = start.response.data.session_token
@@ -143,7 +142,7 @@ def test_verify_wrong_then_correct_same_session(opts):
     _clear_register_limits()
     start = opts.client.post(
         "/api/auth/phone/register/start",
-        {"phone": "+14155557006"})
+        {"phone": "+15550007006"})
     assert start.status_code == 200, \
         f"start must succeed, got {start.status_code}: {opts.client.last_response.body}"
     session_token = start.response.data.session_token
