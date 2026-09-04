@@ -348,8 +348,11 @@ def test_merged_browser_secret_and_route_contract(opts):
     th.assert_true(
         "[dashboard, webapps, advanced, people, activity, platform, settings, sms, email]" in registry,
         "feature order does not match the approved product navigation")
-    th.assert_true(
-        "[home, apps, infrastructure, domains, access, security, settings]" in v2_registry,
+    descriptor_block = v2_registry.split(
+        "const DESCRIPTORS = Object.freeze([", 1)[1].split("]);", 1)[0]
+    th.assert_eq(
+        [name.strip() for name in descriptor_block.split(",") if name.strip()],
+        ["home", "apps", "infrastructure", "domains", "access", "security", "settings"],
         "Admin v2 does not package the exact seven-feature order")
     th.assert_true(
         "/api/incident/admin/security" in v2_security
