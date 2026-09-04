@@ -16,6 +16,7 @@ from mojo.apps.incident.services.firewall_truth import (
     canonical_ipv4,
     canonical_ipv4_networks,
     canonical_set_name,
+    permanent_set_name,
 )
 
 ALLOWED_USER = "ec2-user"
@@ -99,6 +100,12 @@ def _broker_request(operation, timeout=20, **values):
     if context is None:
         logit.error("firewall operation rejected outside JobEngine execution context")
         return None
+    if operation.startswith("set.") or operation == "geolocated.normalize":
+        try:
+            values["reserved_set_name"] = permanent_set_name()
+        except FirewallTruthError as err:
+            logit.error("firewall reservation refused: %s", err.code)
+            return None
     payload = json.dumps(
         {"operation": operation, "context": context, **values},
         sort_keys=True, separators=(",", ":"))

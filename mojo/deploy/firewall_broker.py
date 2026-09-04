@@ -57,17 +57,19 @@ _OP_FIELDS = {
     "rules.contains": {"source"},
     "rule.insert": {"chain", "source"},
     "rule.delete": {"chain", "source"},
-    "set.add": {"set_name", "source"},
-    "set.delete": {"set_name", "source"},
-    "set.replace": {"set_name", "cidrs"},
-    "set.remove": {"set_name"},
-    "set.rule_ensure": {"set_name"},
+    "set.add": {"set_name", "source", "reserved_set_name"},
+    "set.delete": {"set_name", "source", "reserved_set_name"},
+    "set.replace": {"set_name", "cidrs", "reserved_set_name"},
+    "set.remove": {"set_name", "reserved_set_name"},
+    "set.rule_ensure": {"set_name", "reserved_set_name"},
     "ip.status": {"source"},
     "ip.normalize": {"source", "present"},
-    "set.status": {"set_name"},
-    "set.normalize": {"set_name", "cidrs", "present"},
+    "set.status": {"set_name", "reserved_set_name"},
+    "set.normalize": {
+        "set_name", "cidrs", "present", "reserved_set_name"},
     "geolocated.normalize": {
-        "source", "set_name", "cidrs", "temporary_present"},
+        "source", "set_name", "cidrs", "temporary_present",
+        "reserved_set_name"},
 }
 _FUNCTION_OPERATIONS = {
     "mojo.apps.incident.asyncjobs.broadcast_block_ip": {
@@ -158,6 +160,29 @@ def _set_name(value, temporary=False):
     return value
 
 
+def _govern_set_target(function, name, reserved_name):
+    """Keep the configured aggregate distinct from operator-owned sets."""
+    aggregate = _set_name(reserved_name, temporary=True)
+    aggregate_only = {
+        "mojo.apps.incident.asyncjobs.broadcast_ipset_add_blocked",
+        "mojo.apps.incident.asyncjobs.broadcast_ipset_del_blocked",
+        "mojo.apps.incident.asyncjobs.broadcast_reconcile_geolocated_ip",
+    }
+    operator_only = {
+        "mojo.apps.incident.asyncjobs.broadcast_sync_ipset",
+        "mojo.apps.incident.asyncjobs.broadcast_remove_ipset",
+        "mojo.apps.incident.asyncjobs.broadcast_reconcile_firewall_set",
+    }
+    if function in aggregate_only and name != aggregate:
+        raise BrokerError(
+            "operation does not target the configured permanent set",
+            code="reserved_set_name")
+    if function in operator_only and name == aggregate:
+        raise BrokerError(
+            "configured permanent set is reserved", code="reserved_set_name")
+    return name
+
+
 def _context(value, function=None):
     if function is not None:
         found = str(function or "")
@@ -208,14 +233,18 @@ def build_operation(request, function=None):
         built.update(chain=chain, source=source, argv=argv,
                      semantic=f"{action} {chain} source DROP")
     elif operation in ("set.add", "set.delete"):
-        name = _set_name(request.get("set_name"))
+        name = _govern_set_target(
+            function, _set_name(request.get("set_name")),
+            request.get("reserved_set_name"))
         source = _network(request.get("source"))
         verb = "add" if operation == "set.add" else "del"
         argv = [IPSET, verb, name, source, "-exist"]
         built.update(set_name=name, source=source, argv=argv,
                      semantic=f"set {verb} network")
     elif operation == "set.replace":
-        name = _set_name(request.get("set_name"), temporary=True)
+        name = _govern_set_target(
+            function, _set_name(request.get("set_name"), temporary=True),
+            request.get("reserved_set_name"))
         cidrs = request.get("cidrs")
         if (not isinstance(cidrs, list) or len(cidrs) > MAX_CIDRS or
                 any(not isinstance(item, str) for item in cidrs)):
@@ -233,11 +262,15 @@ def build_operation(request, function=None):
         built.update(set_name=name, cidrs=normalized, argv=argv, stdin=stdin,
                      semantic="replace hash:net atomically")
     elif operation == "set.remove":
-        name = _set_name(request.get("set_name"))
+        name = _govern_set_target(
+            function, _set_name(request.get("set_name")),
+            request.get("reserved_set_name"))
         argv = [IPSET, "destroy", name]
         built.update(set_name=name, argv=argv, semantic="destroy hash:net")
     elif operation == "set.rule_ensure":
-        name = _set_name(request.get("set_name"))
+        name = _govern_set_target(
+            function, _set_name(request.get("set_name")),
+            request.get("reserved_set_name"))
         argv = [IPTABLES, "-C", "INPUT", "-m", "set", "--match-set", name,
                 "src", "-j", "DROP"]
         built.update(set_name=name, argv=argv, semantic="ensure INPUT set DROP")
@@ -249,10 +282,12 @@ def build_operation(request, function=None):
             source=source, present=request.get("present", False),
             argv=[IPTABLES_SAVE], semantic="normalize exact IPv4 DROP rules")
     elif operation in ("set.status", "set.normalize"):
-        name = _set_name(
-            request.get("set_name"), temporary=(
+        name = _govern_set_target(
+            function, _set_name(
+                request.get("set_name"), temporary=(
                 operation == "set.normalize" and
-                request.get("present") is True))
+                request.get("present") is True)),
+            request.get("reserved_set_name"))
         present = request.get("present", False)
         if not isinstance(present, bool):
             raise BrokerError("present must be a boolean")
@@ -266,7 +301,9 @@ def build_operation(request, function=None):
             argv=[IPSET], semantic="normalize exact IPv4 hash:net set and rules")
     else:
         source = _network(request.get("source"))
-        name = _set_name(request.get("set_name"), temporary=True)
+        name = _govern_set_target(
+            function, _set_name(request.get("set_name"), temporary=True),
+            request.get("reserved_set_name"))
         temporary_present = request.get("temporary_present")
         if not isinstance(temporary_present, bool):
             raise BrokerError("temporary_present must be a boolean")

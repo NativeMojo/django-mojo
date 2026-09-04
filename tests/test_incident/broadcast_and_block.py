@@ -15,6 +15,44 @@ TEST_USER = "incident_bb_user"
 TEST_PWORD = "incident##mojo99"
 
 
+class _CheckedRedis:
+    def __init__(self):
+        self.store = {}
+
+    def get(self, key):
+        return self.store.get(key)
+
+    def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.store:
+            return False
+        self.store[key] = value
+        return True
+
+    def eval(self, script, count, *args):
+        keys, argv = args[:count], args[count:]
+        if "redis.call('incr'" in script:
+            values = []
+            for key in keys:
+                self.store[key] = int(self.store.get(key, 0)) + 1
+                values.append(self.store[key])
+            return values
+        if not argv or self.store.get(keys[0]) != argv[0]:
+            return 0
+        if "expire" in script:
+            return 1
+        self.store.pop(keys[0], None)
+        return 1
+
+
+def _checked_state(kind, identity, desired, fence=1):
+    from mojo.apps.incident.services import firewall_truth
+    redis = _CheckedRedis()
+    token = "a" * 32
+    redis.store[firewall_truth.DESIRED_STATE_LOCK] = token
+    redis.store[firewall_truth.fence_key(kind, identity)] = fence
+    return redis, token, firewall_truth.state_fingerprint(desired)
+
+
 # =============================================================================
 # Broadcast functions accept dict
 # =============================================================================
@@ -94,10 +132,17 @@ def test_checked_ip_reconcile_receipt(opts):
         "input_count": 1, "forward_count": 0,
         "forwarding_required": False,
     }}
-    with mock.patch("mojo.apps.incident.firewall.normalize_ip",
-                    return_value=broker):
-        result = broadcast_reconcile_firewall_ip(
-            {"ip": "192.0.2.8", "present": True})
+    desired = {"ip": "192.0.2.8", "present": True}
+    redis, token, fingerprint = _checked_state("ip", "192.0.2.8", desired)
+    with mock.patch("mojo.apps.incident.asyncjobs._raw_redis",
+                    return_value=redis), \
+            mock.patch("mojo.apps.incident.firewall.normalize_ip",
+                       return_value=broker), \
+            mock.patch(
+                "mojo.apps.incident.services.firewall_truth.record_host_observation"):
+        result = broadcast_reconcile_firewall_ip({
+            **desired, "fence": 1, "fingerprint": fingerprint,
+            "lease_token": token})
     assert result["ok"] is True, f"exact observation should verify: {result!r}"
     assert result["observed"] == {"ip": "192.0.2.8", "present": True}, \
         f"raw broker details escaped the checked projection: {result!r}"
@@ -109,7 +154,8 @@ def test_checked_ip_reconcile_refuses_ipv6(opts):
 
     with mock.patch("mojo.apps.incident.firewall.normalize_ip") as normalize:
         result = broadcast_reconcile_firewall_ip(
-            {"ip": "2001:db8::8", "present": True})
+            {"ip": "2001:db8::8", "present": True, "fence": 1,
+             "fingerprint": "0" * 64, "lease_token": "a" * 32})
     assert result["ok"] is False, f"IPv6 unexpectedly verified: {result!r}"
     normalize.assert_not_called()
 
@@ -131,13 +177,38 @@ def test_checked_geolocated_reconcile_is_compound(opts):
     from mojo.apps.incident.services.firewall_truth import network_digest
     broker["observed"]["permanent"]["digest"] = network_digest(
         ["192.0.2.8"])
+    desired = {
+        "ip": {"ip": "192.0.2.8", "present": False},
+        "permanent": broker["observed"]["permanent"],
+    }
+    from mojo.apps.incident.services import firewall_truth
+    redis = _CheckedRedis()
+    token = "b" * 32
+    redis.store[firewall_truth.DESIRED_STATE_LOCK] = token
+    redis.store[firewall_truth.fence_key("ip", "192.0.2.8")] = 2
+    redis.store[firewall_truth.fence_key("permanent", "mojo_blocked")] = 3
+    snapshot = {
+        "desired": desired, "fingerprint": "c" * 64,
+        "permanent": {"fingerprint": "d" * 64},
+    }
     with mock.patch(
+            "mojo.apps.incident.asyncjobs._raw_redis", return_value=redis), \
+            mock.patch(
+                "mojo.apps.incident.services.firewall_truth.geolocated_snapshot",
+                return_value=snapshot), \
+            mock.patch(
+                "mojo.apps.incident.services.firewall_truth.record_host_observation"), \
+            mock.patch(
             "mojo.apps.incident.firewall.normalize_geolocated_ip",
             return_value=broker) as normalize:
         result = broadcast_reconcile_geolocated_ip({
             "ip": "192.0.2.8", "permanent_set_name": "mojo_blocked",
             "permanent_ips": ["192.0.2.8"],
             "temporary_present": False,
+            "ip_fence": 2, "aggregate_fence": 3,
+            "fingerprint": "c" * 64,
+            "aggregate_fingerprint": "d" * 64,
+            "lease_token": token,
         })
     assert result["ok"] is True, result
     normalize.assert_called_once_with(
@@ -153,12 +224,43 @@ def test_firewall_truth_requires_exact_nonempty_evidence(opts):
         "succeeded_hosts": [], "failed_hosts": [], "missing_hosts": [],
         "anomalies": [], "results": [],
     }
+    redis = _CheckedRedis()
     with mock.patch(
+            "mojo.apps.incident.services.firewall_truth._redis_client",
+            return_value=redis), \
+            mock.patch(
             "mojo.apps.jobs.broadcast_execute_checked",
             return_value=malformed):
         result = firewall_truth.reconcile_ip("192.0.2.8", True)
     assert result["status"] == "partial" and result["ok"] is False, result
     assert result["error"]["code"] == "checked_evidence_invalid", result
+
+
+@th.django_unit_test("delayed checked command refuses a stale fence before mutation")
+def test_delayed_checked_command_is_fenced(opts):
+    from mojo.apps.incident.asyncjobs import broadcast_reconcile_firewall_set
+    from mojo.apps.incident.services import firewall_truth
+
+    desired = {
+        "name": "stale_checked", "present": True, "count": 1,
+        "digest": firewall_truth.network_digest(["192.0.2.0/24"]),
+    }
+    redis, token, unused = _checked_state(
+        "set", "stale_checked", desired, fence=2)
+    with mock.patch("mojo.apps.incident.asyncjobs._raw_redis",
+                    return_value=redis), \
+            mock.patch("mojo.apps.incident.firewall.normalize_ipset") as mutate, \
+            mock.patch(
+                "mojo.apps.incident.services.firewall_truth.mark_superseded_pending") \
+                    as pending:
+        result = broadcast_reconcile_firewall_set({
+            "name": "stale_checked", "cidrs": ["192.0.2.0/24"],
+            "present": True, "fence": 1, "fingerprint": "e" * 64,
+            "lease_token": token,
+        })
+    assert result["ok"] is False and result["error"] == "generation_superseded"
+    mutate.assert_not_called()
+    pending.assert_called_once_with("set", "stale_checked")
 
 
 # =============================================================================

@@ -7,7 +7,56 @@ from mojo.helpers import logit
 # Default: check once an hour at minute 0 (can be overridden in settings)
 INCIDENT_EVENT_PRUNE_DAYS = settings.get_static("INCIDENT_EVENT_PRUNE_DAYS", 30)
 INCIDENT_PRUNE_DAYS = settings.get_static("INCIDENT_PRUNE_DAYS", 90)
-FIREWALL_BLOCKED_IPSET_NAME = settings.get_static("FIREWALL_BLOCKED_IPSET_NAME", "mojo_blocked")
+
+
+def _raw_redis():
+    from mojo.apps.jobs.adapters import get_adapter
+    adapter = get_adapter()
+    return adapter.get_client() if hasattr(adapter, "get_client") else adapter
+
+
+def _redis_text(value):
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "strict")
+    return value
+
+
+def _checked_host_lock(redis_client):
+    import uuid
+    unused_last, unused_force, key = _sync_firewall_keys()
+    token = uuid.uuid4().hex
+    if not redis_client.set(
+            key, token, nx=True, ex=SYNC_FIREWALL_LOCK_TTL):
+        return key, None
+    return key, token
+
+
+def _release_checked_host_lock(redis_client, key, token):
+    if token is not None:
+        redis_client.eval(_LOCK_RELEASE_LUA, 1, key, token)
+
+
+def _valid_checked_generation(data, redis_client, targets):
+    """Validate the dispatch lease and each monotonic object fence."""
+    from mojo.apps.incident.services import firewall_truth
+    lease_token = data.get("lease_token")
+    if (not isinstance(lease_token, str) or len(lease_token) != 32 or
+            any(char not in "0123456789abcdef" for char in lease_token) or
+            _redis_text(redis_client.get(
+                firewall_truth.DESIRED_STATE_LOCK)) != lease_token):
+        raise firewall_truth.FirewallTruthError(
+            "generation_superseded", "desired-state lease is no longer current")
+    expected = {}
+    for field, kind, identity in targets:
+        value = data.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise firewall_truth.FirewallTruthError(
+                "invalid_fence", "firewall fence is invalid")
+        expected[(kind, identity)] = value
+    if firewall_truth.read_fences(redis_client, expected) != expected:
+        raise firewall_truth.FirewallTruthError(
+            "generation_superseded", "firewall fence is stale")
+    return expected
 
 
 def _semantic(kind, desired, broker_result):
@@ -48,7 +97,8 @@ def broadcast_reconcile_firewall_ip(data):
     from mojo.apps.incident import firewall
     from mojo.apps.incident.services import firewall_truth
 
-    if not isinstance(data, dict) or set(data) != {"ip", "present"} or \
+    if not isinstance(data, dict) or set(data) != {
+            "ip", "present", "fence", "fingerprint", "lease_token"} or \
             not isinstance(data.get("present"), bool):
         return _semantic("ip", {}, {"ok": False,
                                     "error": {"code": "invalid_request"}})
@@ -58,7 +108,29 @@ def broadcast_reconcile_firewall_ip(data):
         return _semantic("ip", {}, {"ok": False,
                                     "error": {"code": err.code}})
     desired = {"ip": ip, "present": data["present"]}
-    return _semantic("ip", desired, firewall.normalize_ip(ip, data["present"]))
+    if data.get("fingerprint") != firewall_truth.state_fingerprint(desired):
+        return _semantic("ip", desired, {
+            "ok": False, "error": {"code": "fingerprint_mismatch"}})
+    redis_client = _raw_redis()
+    lock_key, lock_token = _checked_host_lock(redis_client)
+    if lock_token is None:
+        return _semantic("ip", desired, {
+            "ok": False, "error": {"code": "host_busy"}})
+    try:
+        targets = [("fence", "ip", ip)]
+        _valid_checked_generation(data, redis_client, targets)
+        broker_result = firewall.normalize_ip(ip, data["present"])
+        _valid_checked_generation(data, redis_client, targets)
+        result = _semantic("ip", desired, broker_result)
+        if result["ok"]:
+            firewall_truth.record_host_observation(
+                "ip", ip, data["fence"], data["fingerprint"], desired)
+        return result
+    except firewall_truth.FirewallTruthError as err:
+        return _semantic("ip", desired, {
+            "ok": False, "error": {"code": err.code}})
+    finally:
+        _release_checked_host_lock(redis_client, lock_key, lock_token)
 
 
 def broadcast_reconcile_firewall_set(data):
@@ -66,12 +138,17 @@ def broadcast_reconcile_firewall_set(data):
     from mojo.apps.incident import firewall
     from mojo.apps.incident.services import firewall_truth
 
-    if not isinstance(data, dict) or set(data) != {"name", "cidrs", "present"} \
+    if not isinstance(data, dict) or set(data) != {
+            "name", "cidrs", "present", "fence", "fingerprint",
+            "lease_token"} \
             or not isinstance(data.get("present"), bool):
         return _semantic("set", {}, {"ok": False,
                                      "error": {"code": "invalid_request"}})
     try:
         name = firewall_truth.canonical_set_name(data["name"])
+        if name == firewall_truth.permanent_set_name():
+            raise firewall_truth.FirewallTruthError(
+                "reserved_set_name", "configured permanent set name is reserved")
         cidrs = firewall_truth.canonical_ipv4_networks(data["cidrs"])
     except firewall_truth.FirewallTruthError as err:
         return _semantic("set", {}, {"ok": False,
@@ -81,9 +158,38 @@ def broadcast_reconcile_firewall_set(data):
         "count": len(cidrs) if data["present"] else 0,
         "digest": firewall_truth.network_digest(cidrs if data["present"] else []),
     }
-    return _semantic(
-        "set", desired,
-        firewall.normalize_ipset(name, cidrs, data["present"]))
+    redis_client = _raw_redis()
+    lock_key, lock_token = _checked_host_lock(redis_client)
+    if lock_token is None:
+        return _semantic("set", desired, {
+            "ok": False, "error": {"code": "host_busy"}})
+    try:
+        targets = [("fence", "set", name)]
+        _valid_checked_generation(data, redis_client, targets)
+        snapshot = firewall_truth.ipset_snapshot(name)
+        if (snapshot["fingerprint"] != data.get("fingerprint") or
+                snapshot["desired"] != desired):
+            raise firewall_truth.FirewallTruthError(
+                "generation_superseded", "IPSet desired state is stale")
+        broker_result = firewall.normalize_ipset(name, cidrs, data["present"])
+        _valid_checked_generation(data, redis_client, targets)
+        current = firewall_truth.ipset_snapshot(name)
+        if (current["fingerprint"] != data["fingerprint"] or
+                current["desired"] != desired):
+            raise firewall_truth.FirewallTruthError(
+                "generation_superseded", "IPSet desired state changed")
+        result = _semantic("set", desired, broker_result)
+        if result["ok"]:
+            firewall_truth.record_host_observation(
+                "set", name, data["fence"], data["fingerprint"], desired)
+        return result
+    except firewall_truth.FirewallTruthError as err:
+        if err.code == "generation_superseded":
+            firewall_truth.mark_superseded_pending("set", name)
+        return _semantic("set", desired, {
+            "ok": False, "error": {"code": err.code}})
+    finally:
+        _release_checked_host_lock(redis_client, lock_key, lock_token)
 
 
 def broadcast_reconcile_geolocated_ip(data):
@@ -92,13 +198,17 @@ def broadcast_reconcile_geolocated_ip(data):
     from mojo.apps.incident.services import firewall_truth
     if not isinstance(data, dict) or set(data) != {
             "ip", "permanent_set_name", "permanent_ips",
-            "temporary_present"}:
+            "temporary_present", "ip_fence", "aggregate_fence",
+            "fingerprint", "aggregate_fingerprint", "lease_token"}:
         return _semantic("geolocated_ip", {}, {
             "ok": False, "error": {"code": "invalid_payload"}})
     try:
         ip = firewall_truth.canonical_ipv4_address(data["ip"])
         set_name = firewall_truth.canonical_set_name(
             data["permanent_set_name"])
+        if set_name != firewall_truth.permanent_set_name():
+            raise firewall_truth.FirewallTruthError(
+                "reserved_set_name", "permanent set name does not match configuration")
         if len(set_name) + 4 > 31:
             raise firewall_truth.FirewallTruthError(
                 "invalid_set_name", "permanent set name is too long")
@@ -117,37 +227,74 @@ def broadcast_reconcile_geolocated_ip(data):
         "digest": firewall_truth.network_digest(permanent),
     }
     desired = {"ip": ip_desired, "permanent": set_desired}
-    broker_result = firewall.normalize_geolocated_ip(
-        ip, set_name, permanent,
-        data["temporary_present"])
-    combined = (broker_result.get("observed")
-                if isinstance(broker_result, dict) else None)
-    direct_observed = (combined.get("ip")
-                       if isinstance(combined, dict) else None)
-    set_observed = (combined.get("permanent")
-                    if isinstance(combined, dict) else None)
-    observed = {
-        "ip": ({"ip": direct_observed.get("ip"),
-                "present": direct_observed.get("present") is True}
-               if isinstance(direct_observed, dict) else None),
-        "permanent": ({
-            "name": set_observed.get("name"),
-            "present": set_observed.get("present") is True,
-            "count": set_observed.get("count"),
-            "digest": set_observed.get("digest"),
-        } if isinstance(set_observed, dict) else None),
-    }
-    ok = (isinstance(broker_result, dict) and
-          broker_result.get("ok") is True and
-          observed == desired)
-    return {
-        "schema": firewall_truth.FIREWALL_SEMANTIC_SCHEMA,
-        "version": firewall_truth.FIREWALL_SEMANTIC_VERSION,
-        "kind": "geolocated_ip",
-        "ok": ok,
-        "desired": desired, "observed": observed,
-        "error": None if ok else {"code": "state_mismatch"},
-    }
+    redis_client = _raw_redis()
+    lock_key, lock_token = _checked_host_lock(redis_client)
+    if lock_token is None:
+        return _semantic("geolocated_ip", desired, {
+            "ok": False, "error": {"code": "host_busy"}})
+    try:
+        targets = [
+            ("ip_fence", "ip", ip),
+            ("aggregate_fence", "permanent", set_name),
+        ]
+        _valid_checked_generation(data, redis_client, targets)
+        snapshot = firewall_truth.geolocated_snapshot(ip)
+        if (snapshot["fingerprint"] != data.get("fingerprint") or
+                snapshot["permanent"]["fingerprint"] !=
+                data.get("aggregate_fingerprint") or
+                snapshot["desired"] != desired):
+            raise firewall_truth.FirewallTruthError(
+                "generation_superseded", "GeoLocatedIP desired state is stale")
+        broker_result = firewall.normalize_geolocated_ip(
+            ip, set_name, permanent, data["temporary_present"])
+        _valid_checked_generation(data, redis_client, targets)
+        current = firewall_truth.geolocated_snapshot(ip)
+        if (current["fingerprint"] != data["fingerprint"] or
+                current["permanent"]["fingerprint"] !=
+                data["aggregate_fingerprint"] or
+                current["desired"] != desired):
+            raise firewall_truth.FirewallTruthError(
+                "generation_superseded", "GeoLocatedIP desired state changed")
+        combined = (broker_result.get("observed")
+                    if isinstance(broker_result, dict) else None)
+        direct_observed = (combined.get("ip")
+                           if isinstance(combined, dict) else None)
+        set_observed = (combined.get("permanent")
+                        if isinstance(combined, dict) else None)
+        observed = {
+            "ip": ({"ip": direct_observed.get("ip"),
+                    "present": direct_observed.get("present") is True}
+                   if isinstance(direct_observed, dict) else None),
+            "permanent": ({
+                "name": set_observed.get("name"),
+                "present": set_observed.get("present") is True,
+                "count": set_observed.get("count"),
+                "digest": set_observed.get("digest"),
+            } if isinstance(set_observed, dict) else None),
+        }
+        ok = (isinstance(broker_result, dict) and
+              broker_result.get("ok") is True and observed == desired)
+        result = {
+            "schema": firewall_truth.FIREWALL_SEMANTIC_SCHEMA,
+            "version": firewall_truth.FIREWALL_SEMANTIC_VERSION,
+            "kind": "geolocated_ip", "ok": ok,
+            "desired": desired, "observed": observed,
+            "error": None if ok else {"code": "state_mismatch"},
+        }
+        if ok:
+            firewall_truth.record_host_observation(
+                "geo", ip, data["ip_fence"], data["fingerprint"], desired)
+            firewall_truth.record_host_observation(
+                "permanent", set_name, data["aggregate_fence"],
+                data["aggregate_fingerprint"], set_desired)
+        return result
+    except firewall_truth.FirewallTruthError as err:
+        if err.code == "generation_superseded":
+            firewall_truth.mark_superseded_pending("geo", ip)
+        return _semantic("geolocated_ip", desired, {
+            "ok": False, "error": {"code": err.code}})
+    finally:
+        _release_checked_host_lock(redis_client, lock_key, lock_token)
 
 
 def prune_events(job):
@@ -246,13 +393,15 @@ def broadcast_ipset_add_blocked(data):
         ip: IP address string to add
     """
     from mojo.apps.incident import firewall
+    from mojo.apps.incident.services import firewall_truth
 
     ip = data.get("ip")
     if not ip:
         return
 
-    if firewall.ipset_add(FIREWALL_BLOCKED_IPSET_NAME, ip):
-        logit.info("broadcast_ipset_add_blocked: added %s to %s", ip, FIREWALL_BLOCKED_IPSET_NAME)
+    set_name = firewall_truth.permanent_set_name()
+    if firewall.ipset_add(set_name, ip):
+        logit.info("broadcast_ipset_add_blocked: added %s to %s", ip, set_name)
 
 
 def broadcast_ipset_del_blocked(data):
@@ -262,13 +411,15 @@ def broadcast_ipset_del_blocked(data):
         ip: IP address string to remove
     """
     from mojo.apps.incident import firewall
+    from mojo.apps.incident.services import firewall_truth
 
     ip = data.get("ip")
     if not ip:
         return
 
-    if firewall.ipset_del(FIREWALL_BLOCKED_IPSET_NAME, ip):
-        logit.info("broadcast_ipset_del_blocked: removed %s from %s", ip, FIREWALL_BLOCKED_IPSET_NAME)
+    set_name = firewall_truth.permanent_set_name()
+    if firewall.ipset_del(set_name, ip):
+        logit.info("broadcast_ipset_del_blocked: removed %s from %s", ip, set_name)
 
 
 SYNC_FIREWALL_REDIS_PREFIX = "mojo:sync_firewall"
@@ -316,199 +467,175 @@ def _sync_firewall_keys(host=None):
 
 
 def sync_firewall(job):
-    """Observe, normalize and re-observe every bounded desired object."""
+    """Write only this host's bounded observations for exact desired fences."""
     import uuid
-
-    from mojo.apps.incident import firewall
-    from mojo.apps.account.models import GeoLocatedIP
-    from mojo.apps.incident.models import IPSet
-    from mojo.apps.jobs.adapters import get_adapter
-    from mojo.helpers import dates
-    from mojo.apps.incident.services import firewall_truth
     from django.db.models import Q
+    from mojo.apps import jobs
+    from mojo.apps.account.models import GeoLocatedIP
+    from mojo.apps.incident import firewall
+    from mojo.apps.incident.models import IPSet
+    from mojo.apps.incident.services import firewall_truth
+    from mojo.helpers import dates
 
-    redis_client = get_adapter()
+    redis_client = _raw_redis()
     last_sync_key, force_key, lock_key = _sync_firewall_keys()
-
-    # One reconcile at a time per host. The broker builds its temp set name as
-    # "<name>_tmp" with no per-invocation suffix, so two concurrent
-    # set.replace calls for one set interleave and can swap in a live set that
-    # is missing entries. Skipping is safe because the force flag lives in
-    # Redis, not in this job: a forced run that loses the lock leaves the flag
-    # set and the next reconcile on this host rebuilds the full snapshot.
-    token = uuid.uuid4().hex
-    if not redis_client.set(lock_key, token, nx=True, ex=SYNC_FIREWALL_LOCK_TTL):
-        job.add_log("sync_firewall: another reconcile is in flight on this host, skipped")
-        return False
-
+    lease = None
+    token = None
     try:
+        # All snapshot reads, local mutations and observation publication share
+        # one global desired-state generation. Checked handlers prove the same
+        # lease token; the hourly local path owns it directly.
+        lease = firewall_truth.acquire_desired_state(SYNC_FIREWALL_LOCK_TTL)
+        token = uuid.uuid4().hex
+        if not redis_client.set(
+                lock_key, token, nx=True, ex=SYNC_FIREWALL_LOCK_TTL):
+            job.add_log(
+                "sync_firewall: another reconcile is in flight on this host, skipped")
+            return False
         force_value = redis_client.get(force_key)
-        # Bound the entire snapshot before the first desired-state write.
-        ipsets = list(IPSet.objects.order_by("pk")[:SYNC_FIREWALL_MAX_OBJECTS + 1])
+        ipsets = list(IPSet.objects.order_by("pk")[
+            :SYNC_FIREWALL_MAX_OBJECTS + 1])
         geos = list(GeoLocatedIP.objects.filter(
-            Q(is_blocked=True) | Q(firewall_pending=True)
-        ).order_by("pk")[:SYNC_FIREWALL_MAX_OBJECTS + 1])
+            Q(is_blocked=True) | Q(firewall_pending=True) |
+            Q(is_whitelisted=True)).order_by("pk")[
+                :SYNC_FIREWALL_MAX_OBJECTS + 1])
         if (len(ipsets) > SYNC_FIREWALL_MAX_OBJECTS or
                 len(geos) > SYNC_FIREWALL_MAX_OBJECTS):
             job.add_log("sync_firewall: desired object bound exceeded; no writes")
             return False
-        ipset_generation = [
-            (row.pk, row.modified, row.name, row.is_enabled)
-            for row in ipsets]
-        geo_generation = [
-            (row.pk, row.firewall_generation, row.is_blocked,
-             row.blocked_until, row.is_whitelisted, row.whitelisted_until)
-            for row in geos]
-        try:
-            aggregate_name = firewall_truth.permanent_set_name()
-            geo_plans = [
-                (row, firewall_truth.canonical_ipv4_address(row.ip_address))
-                for row in geos]
-            permanent = firewall_truth.canonical_ipv4_networks([
-                canonical for row, canonical in geo_plans
-                if row.is_blocked and row.blocked_until is None and
-                not row.whitelist_active])
-        except firewall_truth.FirewallTruthError as err:
-            job.add_log(f"sync_firewall: desired state refused ({err.code}); no writes")
-            return False
-        set_plans = []
-        try:
-            for row in ipsets:
-                name = firewall_truth.canonical_set_name(row.name)
-                present = bool(row.is_enabled and not row.is_cache_only)
-                if present and len(name) + 4 > 31:
-                    raise firewall_truth.FirewallTruthError(
-                        "invalid_set_name", "set name is too long for atomic replacement")
-                cidrs = firewall_truth.canonical_ipv4_networks(
-                    row.cidrs if present else [])
-                set_plans.append((
-                    row, name, present, cidrs,
-                    firewall_truth.network_digest(cidrs)))
-        except firewall_truth.FirewallTruthError as err:
-            job.add_log(f"sync_firewall: desired state refused ({err.code}); no writes")
-            return False
 
         failures = 0
+        quarantined = 0
 
         def renew():
             return bool(redis_client.eval(
                 _LOCK_RENEW_LUA, 1, lock_key, token,
-                str(SYNC_FIREWALL_LOCK_TTL)))
+                str(SYNC_FIREWALL_LOCK_TTL)) and
+                firewall_truth.renew_desired_state(lease))
+
+        try:
+            permanent = firewall_truth.permanent_snapshot()
+            aggregate_name = permanent["name"]
+            aggregate_target = ("permanent", aggregate_name)
+            aggregate_fence = firewall_truth.read_fences(
+                redis_client, [aggregate_target])[aggregate_target]
+            if aggregate_fence == 0:
+                aggregate_fence = firewall_truth.advance_fences(
+                    lease, [aggregate_target])[aggregate_target]
+        except firewall_truth.FirewallTruthError as err:
+            job.add_log(
+                f"sync_firewall: permanent desired state refused ({err.code})")
+            return False
+
+        set_plans = []
+        for row in ipsets:
+            try:
+                snapshot = firewall_truth.ipset_snapshot(row.name)
+                target = ("set", snapshot["desired"]["name"])
+                fence = firewall_truth.read_fences(
+                    redis_client, [target])[target]
+                if fence == 0:
+                    fence = firewall_truth.advance_fences(
+                        lease, [target])[target]
+                set_plans.append((snapshot, fence))
+            except firewall_truth.FirewallTruthError as err:
+                quarantined += 1
+                job.add_log(
+                    f"sync_firewall: IPSet {row.pk} quarantined ({err.code})")
+
+        geo_plans = []
+        for row in geos:
+            try:
+                snapshot = firewall_truth.geolocated_snapshot(
+                    row.ip_address, permanent=permanent)
+                target = ("ip", snapshot["canonical"])
+                fence = firewall_truth.read_fences(
+                    redis_client, [target])[target]
+                if fence == 0:
+                    fence = firewall_truth.advance_fences(
+                        lease, [target])[target]
+                geo_plans.append((snapshot, fence))
+            except firewall_truth.FirewallTruthError as err:
+                quarantined += 1
+                job.add_log(
+                    f"sync_firewall: GeoLocatedIP {row.pk} quarantined ({err.code})")
 
         if not renew():
-            job.add_log("sync_firewall: host lock ownership lost before writes")
+            job.add_log("sync_firewall: lock ownership lost before writes")
             return False
+        set_desired = permanent["desired"] if "desired" in permanent else {
+            "name": aggregate_name, "present": True,
+            "count": len(permanent["cidrs"]),
+            "digest": firewall_truth.network_digest(permanent["cidrs"]),
+        }
         result = firewall.normalize_ipset(
-            aggregate_name, permanent, True)
-        desired = {"name": aggregate_name, "present": True,
-                   "exists": True, "type": "hash:net", "family": "inet",
-                   "count": len(permanent),
-                   "digest": firewall_truth.network_digest(permanent)}
-        observed = result.get("observed") if isinstance(result, dict) else None
+            aggregate_name, permanent["cidrs"], True)
+        semantic = _semantic("set", set_desired, result)
+        current_permanent = firewall_truth.permanent_snapshot()
+        current_aggregate_fence = firewall_truth.read_fences(
+            redis_client, [aggregate_target])[aggregate_target]
         aggregate_ok = bool(
-            result and result.get("ok") is True and isinstance(observed, dict) and
-            all(observed.get(key) == value for key, value in desired.items()))
-        if not aggregate_ok:
+            semantic["ok"] and
+            current_permanent["fingerprint"] == permanent["fingerprint"] and
+            current_aggregate_fence == aggregate_fence and
+            firewall_truth.desired_state_is_current(lease))
+        if aggregate_ok:
+            firewall_truth.record_host_observation(
+                "permanent", aggregate_name, aggregate_fence,
+                permanent["fingerprint"], set_desired)
+        else:
             failures += 1
 
-        for row, name, present, cidrs, digest in set_plans:
+        for snapshot, fence in set_plans:
             if not renew():
                 failures += 1
                 break
-            dispatched_at = dates.utcnow()
-            claimed = IPSet.objects.filter(
-                pk=row.pk, modified=row.modified).update(
-                    last_synced=dispatched_at)
-            if not claimed:
-                failures += 1
-                continue
-            result = firewall.normalize_ipset(name, cidrs, present)
-            observed = result.get("observed") if isinstance(result, dict) else None
-            expected = {
-                "name": name, "present": present, "exists": present,
-                "count": len(cidrs) if present else 0,
-                "digest": digest,
-            }
-            ok = bool(result and result.get("ok") is True and
-                      isinstance(observed, dict) and
-                      all(observed.get(key) == value for key, value in expected.items()))
-            if ok:
-                finalized = IPSet.objects.filter(
-                    pk=row.pk, modified=row.modified,
-                    last_synced=dispatched_at).update(sync_error=None)
+            desired = snapshot["desired"]
+            result = firewall.normalize_ipset(
+                desired["name"], snapshot["cidrs"], desired["present"])
+            current = firewall_truth.ipset_snapshot(desired["name"])
+            target = ("set", desired["name"])
+            current_fence = firewall_truth.read_fences(
+                redis_client, [target])[target]
+            if (_semantic("set", desired, result)["ok"] and
+                    current["fingerprint"] == snapshot["fingerprint"] and
+                    current_fence == fence and
+                    firewall_truth.desired_state_is_current(lease)):
+                firewall_truth.record_host_observation(
+                    "set", desired["name"], fence,
+                    snapshot["fingerprint"], desired)
             else:
                 failures += 1
-                finalized = IPSet.objects.filter(
-                    pk=row.pk, modified=row.modified,
-                    last_synced=dispatched_at).update(
-                        sync_error="fleet_unverified: local host state mismatch")
-            if not finalized:
-                failures += 1
 
-        now = dates.utcnow()
-        for row, canonical in geo_plans:
+        for snapshot, fence in geo_plans:
             if not renew():
                 failures += 1
                 break
-            temporary = bool(
-                row.is_blocked and row.blocked_until is not None and
-                row.blocked_until > now and not row.whitelist_active)
-            result = firewall.normalize_ip(canonical, temporary)
-            observed = result.get("observed") if isinstance(result, dict) else None
-            expected = {"ip": canonical, "present": temporary}
-            ok = bool(result and result.get("ok") is True and
-                      isinstance(observed, dict) and
-                      observed.get("ip") == expected["ip"] and
-                      observed.get("present") is expected["present"])
-            values = {}
-            if ok and aggregate_ok:
-                values.update(firewall_pending=False, firewall_sync_error="",
-                              firewall_observed_at=dates.utcnow())
+            desired = snapshot["desired"]
+            ip_desired = desired["ip"]
+            result = firewall.normalize_ip(
+                ip_desired["ip"], ip_desired["present"])
+            current = firewall_truth.geolocated_snapshot(
+                ip_desired["ip"], permanent=permanent)
+            target = ("ip", ip_desired["ip"])
+            current_fence = firewall_truth.read_fences(
+                redis_client, [target])[target]
+            if (_semantic("ip", ip_desired, result)["ok"] and aggregate_ok and
+                    current["fingerprint"] == snapshot["fingerprint"] and
+                    current_fence == fence and
+                    firewall_truth.desired_state_is_current(lease)):
+                firewall_truth.record_host_observation(
+                    "geo", ip_desired["ip"], fence,
+                    snapshot["fingerprint"], desired)
             else:
                 failures += 1
-                values["firewall_sync_error"] = (
-                    "fleet_unverified: local host state mismatch")
-            finalized = GeoLocatedIP.objects.filter(
-                pk=row.pk, firewall_generation=row.firewall_generation
-            ).update(**values)
-            if not finalized:
-                failures += 1
 
-        # Desired state can change while root operations are in flight. The
-        # per-host lock serializes kernel writers, while this exact generation
-        # comparison prevents a stale database snapshot from advancing the
-        # success marker after it has repaired an obsolete generation.
-        current_ipsets = list(
-            IPSet.objects.order_by("pk")[:SYNC_FIREWALL_MAX_OBJECTS + 1])
-        geo_ids = [row.pk for row in geos]
-        current_geos = list(GeoLocatedIP.objects.filter(
-            pk__in=geo_ids).order_by("pk")[:SYNC_FIREWALL_MAX_OBJECTS + 1])
-        new_relevant_geo_ids = list(GeoLocatedIP.objects.filter(
-            Q(is_blocked=True) | Q(firewall_pending=True)).exclude(
-                pk__in=geo_ids).order_by("pk").values_list(
-                    "pk", flat=True)[:SYNC_FIREWALL_MAX_OBJECTS + 1])
-        current_ipset_generation = [
-            (row.pk, row.modified, row.name, row.is_enabled)
-            for row in current_ipsets]
-        current_geo_generation = [
-            (row.pk, row.firewall_generation, row.is_blocked,
-             row.blocked_until, row.is_whitelisted, row.whitelisted_until)
-            for row in current_geos]
-        if (len(current_ipsets) > SYNC_FIREWALL_MAX_OBJECTS or
-                len(current_geos) != len(geos) or new_relevant_geo_ids or
-                current_ipset_generation != ipset_generation or
-                current_geo_generation != geo_generation):
-            failures += 1
-            GeoLocatedIP.objects.filter(
-                pk__in=(geo_ids + new_relevant_geo_ids[
-                    :SYNC_FIREWALL_MAX_OBJECTS])).update(
-                    firewall_pending=True,
-                    firewall_sync_error=(
-                        "generation_superseded: desired state changed during "
-                        "host reconciliation"))
-            job.add_log(
-                "sync_firewall: desired generation changed during reconcile")
-
+        # Publish even after an object-local failure: the fleet aggregator can
+        # finalize fully observed siblings while keeping the failed object
+        # pending. Only the whole-host success marker remains all-or-nothing.
+        jobs.publish(
+            func="mojo.apps.incident.asyncjobs.aggregate_firewall_truth",
+            payload={}, channel="default")
         if failures:
             job.add_log(
                 f"sync_firewall: {failures} object(s) unverified; marker not advanced")
@@ -518,14 +645,140 @@ def sync_firewall(job):
         if force_value:
             redis_client.eval(_DELETE_VALUE_LUA, 1, force_key, force_value)
         job.add_log(
-            f"sync_firewall: verified {len(ipsets)} set tombstone(s) and "
-            f"{len(geos)} IP desired state(s)")
+            f"sync_firewall: observed {len(set_plans)} set tombstone(s) and "
+            f"{len(geo_plans)} IP desired state(s) on this host; "
+            f"quarantined={quarantined}")
         return True
+    except firewall_truth.FirewallTruthError as err:
+        job.add_log(f"sync_firewall: refused ({err.code})")
+        return False
     finally:
         try:
-            redis_client.eval(_LOCK_RELEASE_LUA, 1, lock_key, token)
+            if token is not None:
+                redis_client.eval(_LOCK_RELEASE_LUA, 1, lock_key, token)
         except Exception:
             logit.exception("sync_firewall: failed to release owned host lock")
+        firewall_truth.release_desired_state(lease)
+
+
+def aggregate_firewall_truth(job):
+    """Finalize shared truth only from one exact current compatible roster."""
+    from django.db.models import Q
+    from mojo.apps.account.models import GeoLocatedIP
+    from mojo.apps.incident.models import IPSet
+    from mojo.apps.incident.services import firewall_truth
+    from mojo.helpers import dates
+
+    lease = None
+    try:
+        lease = firewall_truth.acquire_desired_state(180)
+        hosts = firewall_truth.exact_compatible_hosts()
+        redis_client = lease.redis
+        permanent = firewall_truth.permanent_snapshot()
+        aggregate_target = ("permanent", permanent["name"])
+        aggregate_fence = firewall_truth.read_fences(
+            redis_client, [aggregate_target])[aggregate_target]
+        permanent_desired = {
+            "name": permanent["name"], "present": True,
+            "count": len(permanent["cidrs"]),
+            "digest": firewall_truth.network_digest(permanent["cidrs"]),
+        }
+        aggregate = firewall_truth.aggregate_observations(
+            "permanent", permanent["name"], aggregate_fence,
+            permanent["fingerprint"], permanent_desired, hosts=hosts)
+
+        ipsets = list(IPSet.objects.order_by("pk")[
+            :SYNC_FIREWALL_MAX_OBJECTS + 1])
+        geos = list(GeoLocatedIP.objects.filter(
+            Q(is_blocked=True) | Q(firewall_pending=True) |
+            Q(is_whitelisted=True)).order_by("pk")[
+                :SYNC_FIREWALL_MAX_OBJECTS + 1])
+        if (len(ipsets) > SYNC_FIREWALL_MAX_OBJECTS or
+                len(geos) > SYNC_FIREWALL_MAX_OBJECTS):
+            job.add_log("aggregate_firewall_truth: desired object bound exceeded")
+            return False
+
+        failures = 0
+        ipset_updates = []
+        for row in ipsets:
+            try:
+                snapshot = firewall_truth.ipset_snapshot(row.name)
+                target = ("set", snapshot["desired"]["name"])
+                fence = firewall_truth.read_fences(
+                    redis_client, [target])[target]
+                result = firewall_truth.aggregate_observations(
+                    "set", row.name, fence, snapshot["fingerprint"],
+                    snapshot["desired"], hosts=hosts)
+                if result.get("ok") is True:
+                    values = {"last_synced": dates.utcnow(), "sync_error": None}
+                else:
+                    code, message = firewall_truth.bounded_error(result)
+                    values = {"last_synced": None,
+                              "sync_error": f"{code}: {message}"[:512]}
+                    failures += 1
+                ipset_updates.append((row, values))
+            except firewall_truth.FirewallTruthError as err:
+                failures += 1
+                ipset_updates.append((row, {
+                    "last_synced": None,
+                    "sync_error": f"quarantined: {err.code}"[:512],
+                }))
+
+        aggregate_ok = aggregate.get("ok") is True
+        geo_updates = []
+        for row in geos:
+            try:
+                snapshot = firewall_truth.geolocated_snapshot(
+                    row.ip_address, permanent=permanent)
+                target = ("ip", snapshot["canonical"])
+                fence = firewall_truth.read_fences(
+                    redis_client, [target])[target]
+                result = firewall_truth.aggregate_observations(
+                    "geo", snapshot["canonical"], fence,
+                    snapshot["fingerprint"], snapshot["desired"], hosts=hosts)
+                verified = aggregate_ok and result.get("ok") is True
+                if verified:
+                    values = {
+                        "firewall_pending": False, "firewall_sync_error": "",
+                        "firewall_observed_at": dates.utcnow(),
+                    }
+                else:
+                    source = aggregate if not aggregate_ok else result
+                    code, message = firewall_truth.bounded_error(source)
+                    values = {
+                        "firewall_pending": True,
+                        "firewall_sync_error": f"{code}: {message}"[:512],
+                    }
+                    failures += 1
+                geo_updates.append((row, values))
+            except firewall_truth.FirewallTruthError as err:
+                failures += 1
+                geo_updates.append((row, {
+                    "firewall_pending": True,
+                    "firewall_sync_error": f"quarantined: {err.code}"[:512],
+                }))
+
+        # A join/leave during observation reads changes the required proof set.
+        # Refuse before any shared marker changes, then retry with the new
+        # exact roster rather than accepting a mixed membership generation.
+        if firewall_truth.exact_compatible_hosts() != hosts:
+            job.add_log("aggregate_firewall_truth: runner roster changed")
+            return False
+        for row, values in ipset_updates:
+            IPSet.objects.filter(
+                pk=row.pk, modified=row.modified).update(**values)
+        for row, values in geo_updates:
+            GeoLocatedIP.objects.filter(
+                pk=row.pk,
+                firewall_generation=row.firewall_generation).update(**values)
+        job.add_log(
+            f"aggregate_firewall_truth: roster={len(hosts)} failures={failures}")
+        return failures == 0
+    except firewall_truth.FirewallTruthError as err:
+        job.add_log(f"aggregate_firewall_truth: refused ({err.code})")
+        return False
+    finally:
+        firewall_truth.release_desired_state(lease)
 
 
 def on_engine_start(engine):
@@ -668,6 +921,7 @@ def broadcast_sync_ipset(data):
         cidrs: list of CIDR strings
     """
     from mojo.apps.incident import firewall
+    from mojo.apps.incident.services import firewall_truth
 
     name = data.get("name")
     cidrs = data.get("cidrs", [])
@@ -675,7 +929,15 @@ def broadcast_sync_ipset(data):
     if not name:
         logit.warning("broadcast_sync_ipset called with no name")
         return
-
+    try:
+        name = firewall_truth.canonical_set_name(name)
+        if name == firewall_truth.permanent_set_name():
+            raise firewall_truth.FirewallTruthError(
+                "reserved_set_name", "configured permanent set is reserved")
+        cidrs = firewall_truth.canonical_ipv4_networks(cidrs)
+    except firewall_truth.FirewallTruthError as err:
+        logit.warning("broadcast_sync_ipset refused: %s", err.code)
+        return
     ok, loaded = firewall.ipset_load(name, cidrs)
     logit.info("broadcast_sync_ipset: ipset %s loaded %d CIDRs, success=%s", name, loaded, ok)
 
@@ -689,12 +951,20 @@ def broadcast_remove_ipset(data):
         name: ipset name to remove
     """
     from mojo.apps.incident import firewall
+    from mojo.apps.incident.services import firewall_truth
 
     name = data.get("name")
 
     if not name:
         return
-
+    try:
+        name = firewall_truth.canonical_set_name(name)
+        if name == firewall_truth.permanent_set_name():
+            raise firewall_truth.FirewallTruthError(
+                "reserved_set_name", "configured permanent set is reserved")
+    except firewall_truth.FirewallTruthError as err:
+        logit.warning("broadcast_remove_ipset refused: %s", err.code)
+        return
     firewall.ipset_remove(name)
     logit.info("broadcast_remove_ipset: ipset %s removed", name)
 

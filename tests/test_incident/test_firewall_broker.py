@@ -23,6 +23,7 @@ def test_restore_construction(opts):
 
     built = build_operation({
         "operation": "set.replace", "set_name": "blocked",
+        "reserved_set_name": "mojo_blocked",
         "cidrs": ["192.0.2.1/24", "192.0.2.9/24"],
     }, function="mojo.apps.incident.asyncjobs.broadcast_sync_ipset")
     th.assert_eq(built["cidrs"], ["192.0.2.0/24"],
@@ -53,6 +54,7 @@ def test_compound_geolocated_build(opts):
     built = build_operation({
         "operation": "geolocated.normalize", "source": "192.0.2.8",
         "set_name": "mojo_blocked",
+        "reserved_set_name": "mojo_blocked",
         "cidrs": ["192.0.2.8", "198.51.100.9/32"],
         "temporary_present": False,
     }, function=(
@@ -194,6 +196,23 @@ def test_function_matrix(opts):
                          "source": "192.0.2.8"}, function="evil.module.call")
 
 
+@th.unit_test("broker refuses configured aggregate collision for operator sets")
+def test_dynamic_reserved_set_collision(opts):
+    from mojo.deploy import firewall_broker as broker
+
+    request = {
+        "operation": "set.replace", "set_name": "configured_reserved",
+        "reserved_set_name": "configured_reserved",
+        "cidrs": ["192.0.2.0/24"],
+    }
+    with th.assert_raises(broker.BrokerError) as raised:
+        broker.build_operation(
+            request,
+            function="mojo.apps.incident.asyncjobs.broadcast_sync_ipset")
+    th.assert_eq(raised.exception.code, "reserved_set_name",
+                 "operator lifecycle could overwrite the configured aggregate")
+
+
 @th.unit_test("firewall backend uses exact noninteractive empty-argv broker command")
 def test_firewall_invocation(opts):
     from mojo.apps.incident import firewall
@@ -262,7 +281,8 @@ def test_multistep_child_receipts(opts):
         "attempt": 1, "channel": "default", "runner": "runner-1",
         "broadcast": False,
     }
-    request = {"operation": "set.rule_ensure", "set_name": "blocked",
+    request = {"operation": "set.rule_ensure", "set_name": "mojo_blocked",
+               "reserved_set_name": "mojo_blocked",
                "context": context}
     children = [
         ({"pid": 101, "start_ticks": 1001, "exe": broker.IPTABLES,
