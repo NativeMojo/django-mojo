@@ -140,23 +140,24 @@ def test_delete_model_instance_no_can_delete(opts):
 def test_delete_model_instance_permission_denied(opts):
     """delete_model_instance should reject users without DELETE_PERMS."""
     from mojo.apps.assistant.services.tools.models import _tool_delete_model_instance
-    from mojo.apps.incident.models import RuleSet
+    from mojo.apps.incident.models import Ticket
 
-    # Create a throwaway ruleset
-    rs = RuleSet.objects.create(name="deltest_perm_check", category="deltest_perm")
+    # Ticket is an ordinary security model; governed RuleSets are deliberately
+    # unavailable to this generic tool before its permission branch.
+    ticket = Ticket.objects.create(title="deltest_perm_check", category="deltest_perm")
 
     # nopriv has view_admin but not manage_security
     result = _tool_delete_model_instance({
-        "app_name": "incident", "model_name": "RuleSet", "pk": rs.pk,
+        "app_name": "incident", "model_name": "Ticket", "pk": ticket.pk,
     }, opts.nopriv)
     assert "error" in result, "Should return error for insufficient permissions"
     assert "Permission denied" in result["error"], f"Error should mention permission denied: {result['error']}"
 
     # Verify NOT deleted
-    assert RuleSet.objects.filter(pk=rs.pk).exists(), "Instance should still exist after permission denial"
+    assert Ticket.objects.filter(pk=ticket.pk).exists(), "Instance should still exist after permission denial"
 
     # Clean up
-    rs.delete()
+    ticket.delete()
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +170,7 @@ def test_delete_model_instance_not_found(opts):
     from mojo.apps.assistant.services.tools.models import _tool_delete_model_instance
 
     result = _tool_delete_model_instance({
-        "app_name": "incident", "model_name": "RuleSet", "pk": 999999,
+        "app_name": "incident", "model_name": "Ticket", "pk": 999999,
     }, opts.admin)
     assert "error" in result, "Should return error for missing instance"
     assert "not found" in result["error"], f"Error should say not found: {result['error']}"
@@ -281,4 +282,3 @@ def test_delete_model_instance_owner_can_delete_own(opts):
     }, opts.admin)
     assert result.get("ok") is True, f"Owner should be able to delete own conversation, got {result}"
     assert not Conversation.objects.filter(pk=conv_pk).exists(), "Conversation should be deleted"
-

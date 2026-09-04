@@ -90,7 +90,9 @@ def _assistant_enabled(result=None):
         return real_get(name, *args, **kwargs)
 
     with mock.patch.object(agent.settings, "get", side_effect=enabled_get):
-        with mock.patch.object(agent.llm, "get_api_key", return_value="sk-a1486"):
+        with mock.patch(
+                "mojo.apps.account.services.llm_safety.route_state",
+                return_value={"ready": True}):
             with mock.patch.object(
                     agent.llm, "call", return_value=result or _llm_result()) as llm_call:
                 yield llm_call
@@ -237,7 +239,9 @@ def test_attachment_validation_ordering(opts):
               "the enabled preflight must run before attachment parsing")
 
     with mock.patch.object(agent.settings, "get", return_value=True):
-        with mock.patch.object(agent.llm, "get_api_key", return_value=None):
+        with mock.patch(
+                "mojo.apps.account.services.llm_safety.route_state",
+                return_value={"ready": False, "error": "credential_missing"}):
             no_key = agent.run_assistant(
                 owner, "a1486 ordering", request=_request(owner),
                 attachments=[True], attachments_supplied=True)

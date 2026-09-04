@@ -11,12 +11,12 @@ TEST_NOPRIV_EMAIL = "savetool_nopriv@test.com"
 @th.requires_app("mojo.apps.assistant")
 def setup_save_tools(opts):
     from mojo.apps.account.models import User
-    from mojo.apps.incident.models import RuleSet
+    from mojo.apps.incident.models import Ticket
     from mojo.apps.assistant.models import Conversation
 
     # Clean up prior test data
     User.objects.filter(email__in=[TEST_ADMIN_EMAIL, TEST_NOPRIV_EMAIL]).delete()
-    RuleSet.objects.filter(name__startswith="savetest_").delete()
+    Ticket.objects.filter(title__startswith="savetest_").delete()
 
     # Admin with full perms
     opts.admin = User.objects.create_user(
@@ -67,30 +67,30 @@ def test_save_model_instance_registered(opts):
 def test_create_with_perms_succeeds(opts):
     """Create succeeds when user has CREATE_PERMS; row exists; audit written."""
     from mojo.apps.assistant.services.tools.models import _tool_save_model_instance
-    from mojo.apps.incident.models import RuleSet
+    from mojo.apps.incident.models import Ticket
     from mojo.apps.logit.models import Log
 
     name = "savetest_create_ok"
     result = _tool_save_model_instance({
-        "app_name": "incident", "model_name": "RuleSet",
-        "data": {"name": name, "category": "savetest_cat"},
+        "app_name": "incident", "model_name": "Ticket",
+        "data": {"title": name, "category": "savetest_cat"},
     }, opts.admin, conversation=opts.conversation)
     assert result.get("ok") is True, f"Should succeed, got {result}"
     assert result["created"] is True, f"Should be created, got {result}"
-    assert result["model"] == "incident.RuleSet", f"Wrong model label: {result['model']}"
+    assert result["model"] == "incident.Ticket", f"Wrong model label: {result['model']}"
     assert isinstance(result["pk"], int), f"pk should be int, got {result['pk']!r}"
 
-    rs = RuleSet.objects.filter(pk=result["pk"]).first()
-    assert rs is not None, f"RuleSet pk={result['pk']} should exist after create"
-    assert rs.name == name, f"name not persisted: {rs.name!r}"
+    ticket = Ticket.objects.filter(pk=result["pk"]).first()
+    assert ticket is not None, f"Ticket pk={result['pk']} should exist after create"
+    assert ticket.title == name, f"title not persisted: {ticket.title!r}"
 
     # Audit log entry was written under the right kind
     audit = Log.objects.filter(kind="assistant:model:created", uid=opts.admin.pk).order_by("-pk").first()
     assert audit is not None, "Should have an assistant:model:created audit log entry"
-    assert "incident.RuleSet" in audit.log, f"Audit message missing model label: {audit.log}"
+    assert "incident.Ticket" in audit.log, f"Audit message missing model label: {audit.log}"
 
     # Cleanup
-    rs.delete()
+    ticket.delete()
 
 
 @th.django_unit_test()
@@ -116,8 +116,8 @@ def test_create_without_create_perms_denied(opts):
 
     before = Event.objects.filter(category="assistant_permission_denied").count()
     result = _tool_save_model_instance({
-        "app_name": "incident", "model_name": "RuleSet",
-        "data": {"name": "savetest_denied", "category": "savetest_denied"},
+        "app_name": "incident", "model_name": "Ticket",
+        "data": {"title": "savetest_denied", "category": "savetest_denied"},
     }, opts.nopriv)
     after = Event.objects.filter(category="assistant_permission_denied").count()
 
@@ -135,47 +135,47 @@ def test_create_without_create_perms_denied(opts):
 def test_update_with_save_perms_succeeds(opts):
     """Update persists field changes; audit captures field NAMES."""
     from mojo.apps.assistant.services.tools.models import _tool_save_model_instance
-    from mojo.apps.incident.models import RuleSet
+    from mojo.apps.incident.models import Ticket
     from mojo.apps.logit.models import Log
 
-    rs = RuleSet.objects.create(name="savetest_update_target", category="savetest_upd")
+    ticket = Ticket.objects.create(title="savetest_update_target", category="savetest_upd")
 
     new_category = "savetest_upd_changed"
     result = _tool_save_model_instance({
-        "app_name": "incident", "model_name": "RuleSet", "pk": rs.pk,
+        "app_name": "incident", "model_name": "Ticket", "pk": ticket.pk,
         "data": {"category": new_category},
     }, opts.admin, conversation=opts.conversation)
     assert result.get("ok") is True, f"Should succeed, got {result}"
     assert result["created"] is False, f"Should not be created, got {result}"
-    assert result["pk"] == rs.pk, f"pk mismatch: {result['pk']} vs {rs.pk}"
+    assert result["pk"] == ticket.pk, f"pk mismatch: {result['pk']} vs {ticket.pk}"
 
-    rs.refresh_from_db()
-    assert rs.category == new_category, f"category not persisted: {rs.category!r}"
+    ticket.refresh_from_db()
+    assert ticket.category == new_category, f"category not persisted: {ticket.category!r}"
 
     # Audit log records field name only — NOT the value
     audit = Log.objects.filter(
-        kind="assistant:model:updated", uid=opts.admin.pk, model_id=rs.pk,
+        kind="assistant:model:updated", uid=opts.admin.pk, model_id=ticket.pk,
     ).order_by("-pk").first()
     assert audit is not None, "Should have an assistant:model:updated audit log entry"
     assert "category" in audit.log, f"Audit message should list field name 'category', got {audit.log}"
     assert new_category not in audit.log, \
         f"Audit must NOT include field value (got {audit.log!r})"
 
-    rs.delete()
+    ticket.delete()
 
 
 @th.django_unit_test()
 def test_update_without_save_perms_denied(opts):
     """Update without SAVE_PERMS reports incident event, no mutation occurs."""
     from mojo.apps.assistant.services.tools.models import _tool_save_model_instance
-    from mojo.apps.incident.models import RuleSet, Event
+    from mojo.apps.incident.models import Ticket, Event
 
-    rs = RuleSet.objects.create(name="savetest_upd_perm", category="savetest_upd_perm")
-    original_category = rs.category
+    ticket = Ticket.objects.create(title="savetest_upd_perm", category="savetest_upd_perm")
+    original_category = ticket.category
 
     before = Event.objects.filter(category="assistant_permission_denied").count()
     result = _tool_save_model_instance({
-        "app_name": "incident", "model_name": "RuleSet", "pk": rs.pk,
+        "app_name": "incident", "model_name": "Ticket", "pk": ticket.pk,
         "data": {"category": "should_not_apply"},
     }, opts.nopriv)
     after = Event.objects.filter(category="assistant_permission_denied").count()
@@ -183,11 +183,11 @@ def test_update_without_save_perms_denied(opts):
     assert "error" in result, f"Should be denied, got {result}"
     assert after > before, "Should record security event for denied update"
 
-    rs.refresh_from_db()
-    assert rs.category == original_category, \
-        f"category should not have changed, got {rs.category!r}"
+    ticket.refresh_from_db()
+    assert ticket.category == original_category, \
+        f"category should not have changed, got {ticket.category!r}"
 
-    rs.delete()
+    ticket.delete()
 
 
 @th.django_unit_test()
@@ -196,7 +196,7 @@ def test_update_pk_not_found(opts):
     from mojo.apps.assistant.services.tools.models import _tool_save_model_instance
 
     result = _tool_save_model_instance({
-        "app_name": "incident", "model_name": "RuleSet", "pk": 999999,
+        "app_name": "incident", "model_name": "Ticket", "pk": 999999,
         "data": {"category": "x"},
     }, opts.admin)
     assert "error" in result, f"Should error, got {result}"
@@ -212,16 +212,16 @@ def test_missing_required_params(opts):
     """Missing app_name/model_name/data should error cleanly."""
     from mojo.apps.assistant.services.tools.models import _tool_save_model_instance
 
-    r1 = _tool_save_model_instance({"model_name": "RuleSet", "data": {}}, opts.admin)
+    r1 = _tool_save_model_instance({"model_name": "Ticket", "data": {}}, opts.admin)
     assert "error" in r1, "Should error when app_name missing"
 
     r2 = _tool_save_model_instance(
-        {"app_name": "incident", "model_name": "RuleSet"}, opts.admin,
+        {"app_name": "incident", "model_name": "Ticket"}, opts.admin,
     )
     assert "error" in r2, "Should error when data missing"
 
     r3 = _tool_save_model_instance({
-        "app_name": "incident", "model_name": "RuleSet", "data": "not a dict",
+        "app_name": "incident", "model_name": "Ticket", "data": "not a dict",
     }, opts.admin)
     assert "error" in r3, "Should error when data is not a dict"
 
@@ -260,15 +260,11 @@ def test_failed_save_writes_save_failed_audit(opts):
     from mojo.apps.assistant.services.tools.models import _tool_save_model_instance
     from mojo.apps.logit.models import Log
 
-    # Force a failure by creating with a duplicate handler URL constraint or
-    # an invalid category type. RuleSet has no strict validators; instead use
-    # an invalid bundle_by value (negative) — saved as int but unique constraints
-    # are easier. We use a duplicate name to violate uniqueness via setting an
-    # absurdly long category string (charfield max_length=124).
-    long_category = "x" * 500  # exceeds CharField(max_length=124)
+    # Force a database failure with an overlong Ticket title.
+    long_title = "x" * 500  # exceeds CharField(max_length=255)
     result = _tool_save_model_instance({
-        "app_name": "incident", "model_name": "RuleSet",
-        "data": {"name": "savetest_fail", "category": long_category},
+        "app_name": "incident", "model_name": "Ticket",
+        "data": {"title": long_title, "category": "savetest_fail"},
     }, opts.admin, conversation=opts.conversation)
 
     assert "error" in result, f"Should error, got {result}"
@@ -294,8 +290,8 @@ def test_request_meta_threads_real_ip(opts):
         ip="203.0.113.42", user_agent="test-agent/1.0", path="/api/assistant", method="POST",
     )
     _tool_save_model_instance({
-        "app_name": "incident", "model_name": "RuleSet",
-        "data": {"name": "savetest_meta_ip", "category": "savetest_meta"},
+        "app_name": "incident", "model_name": "Ticket",
+        "data": {"title": "savetest_meta_ip", "category": "savetest_meta"},
     }, opts.nopriv, request_meta=request_meta)
 
     ev = Event.objects.filter(category="assistant_permission_denied").order_by("-pk").first()
@@ -308,17 +304,17 @@ def test_request_meta_threads_real_ip(opts):
 def test_conversation_id_in_audit_metadata(opts):
     """Audit log entry records conversation_id when conversation is provided."""
     from mojo.apps.assistant.services.tools.models import _tool_save_model_instance
-    from mojo.apps.incident.models import RuleSet
+    from mojo.apps.incident.models import Ticket
     from mojo.apps.logit.models import Log
 
-    rs = RuleSet.objects.create(name="savetest_conv_corr", category="savetest_corr")
+    ticket = Ticket.objects.create(title="savetest_conv_corr", category="savetest_corr")
     _tool_save_model_instance({
-        "app_name": "incident", "model_name": "RuleSet", "pk": rs.pk,
+        "app_name": "incident", "model_name": "Ticket", "pk": ticket.pk,
         "data": {"category": "savetest_corr_changed"},
     }, opts.admin, conversation=opts.conversation)
 
     audit = Log.objects.filter(
-        kind="assistant:model:updated", uid=opts.admin.pk, model_id=rs.pk,
+        kind="assistant:model:updated", uid=opts.admin.pk, model_id=ticket.pk,
     ).order_by("-pk").first()
     assert audit is not None, "Should have audit entry"
     import ujson
@@ -326,7 +322,7 @@ def test_conversation_id_in_audit_metadata(opts):
     assert payload.get("conversation_id") == opts.conversation.pk, \
         f"Audit should carry conversation_id={opts.conversation.pk}, got {payload}"
 
-    rs.delete()
+    ticket.delete()
 
 
 # ---------------------------------------------------------------------------
@@ -373,18 +369,18 @@ def test_dispatcher_passes_kwargs_only_when_handler_accepts(opts):
 def test_delete_writes_audit_log(opts):
     """delete_model_instance now writes assistant:model:deleted audit entry."""
     from mojo.apps.assistant.services.tools.models import _tool_delete_model_instance
-    from mojo.apps.incident.models import RuleSet
+    from mojo.apps.incident.models import Ticket
     from mojo.apps.logit.models import Log
 
-    rs = RuleSet.objects.create(name="savetest_del_audit", category="savetest_del_audit")
-    rs_pk = rs.pk
+    ticket = Ticket.objects.create(title="savetest_del_audit", category="savetest_del_audit")
+    ticket_pk = ticket.pk
     result = _tool_delete_model_instance({
-        "app_name": "incident", "model_name": "RuleSet", "pk": rs_pk,
+        "app_name": "incident", "model_name": "Ticket", "pk": ticket_pk,
     }, opts.admin, conversation=opts.conversation)
     assert result.get("ok") is True, f"Delete should succeed, got {result}"
 
     audit = Log.objects.filter(
-        kind="assistant:model:deleted", uid=opts.admin.pk, model_id=rs_pk,
+        kind="assistant:model:deleted", uid=opts.admin.pk, model_id=ticket_pk,
     ).order_by("-pk").first()
     assert audit is not None, "Delete should write assistant:model:deleted audit entry"
     import ujson

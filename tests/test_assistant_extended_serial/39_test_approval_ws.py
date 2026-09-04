@@ -131,7 +131,9 @@ def _send(opts, data):
         return original_get(name, *args, **kwargs)
 
     with mock.patch.object(settings, "get", side_effect=settings_get):
-        with mock.patch("mojo.helpers.llm.get_api_key", return_value="sk-test"):
+        with mock.patch(
+                "mojo.apps.account.services.llm_safety.route_state",
+                return_value={"ready": True}):
             with mock.patch("threading.Thread", ImmediateThread):
                 with mock.patch(
                     "mojo.apps.realtime.manager.send_event_to_user",

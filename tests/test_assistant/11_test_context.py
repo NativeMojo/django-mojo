@@ -309,18 +309,19 @@ def test_context_deny_ai_models_fail_before_conversation_mutation(opts):
 @th.django_unit_test()
 def test_context_generic_model(opts):
     """A model without a rich builder still gets generic context."""
-    from mojo.apps.incident.models import RuleSet
+    from mojo.apps.assistant.models import Skill
 
-    rs = RuleSet.objects.create(
-        name="[CTX-TEST] Test Rule",
-        category="test",
-        is_active=False,
+    skill = Skill.objects.create(
+        user=opts.admin,
+        tier="user",
+        name="[CTX-TEST] Generic Skill",
+        steps=[],
     )
 
     opts.client.login(TEST_EMAIL_ADMIN, TEST_PASSWORD)
     resp = opts.client.post(
         "/api/assistant/context",
-        {"model": "incident.RuleSet", "pk": rs.pk, "group": opts.context_group.pk},
+        {"model": "assistant.Skill", "pk": skill.pk, "group": opts.context_group.pk},
     )
     assert_eq(resp.status_code, 200, f"Expected 200, got {resp.status_code}: {resp.json}")
     assert_true(resp.json.status, f"Expected success, got: {resp.json}")
@@ -328,7 +329,7 @@ def test_context_generic_model(opts):
 
     from mojo.apps.assistant.models import Conversation, Message
     conv = Conversation.objects.get(pk=conv_id)
-    assert_true("RuleSet" in conv.title, f"Title should contain 'RuleSet', got: {conv.title}")
+    assert_true("Skill" in conv.title, f"Title should contain 'Skill', got: {conv.title}")
     assert_eq(conv.group_id, opts.context_group.pk,
               "an allowed model must preserve the existing request.group stamp")
 
@@ -336,4 +337,4 @@ def test_context_generic_model(opts):
     assert_true(msg.content, "Context message should have content")
 
     # Cleanup
-    rs.delete()
+    skill.delete()

@@ -52,7 +52,7 @@ def test_rule_check(opts):
         name="IP Address Pattern Check",
         comparator="regex",
         field_name="source_ip",
-        value=r"192\.168\.\d+\.\d+",
+        value=r"192[.]168[.]1[.]10",
         value_type="str"
     )
     assert rule.check_rule(event) is True, "Regex comparison failed"

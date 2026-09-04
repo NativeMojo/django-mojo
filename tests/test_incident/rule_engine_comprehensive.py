@@ -459,8 +459,8 @@ def test_all_comparator_types(opts):
     assert not Rule(field_name="text", comparator="contains", value="goodbye", value_type="str").check_rule(event)
 
     # Regex
-    assert Rule(field_name="ip", comparator="regex", value=r"192\.168\.\d+\.\d+", value_type="str").check_rule(event)
-    assert not Rule(field_name="ip", comparator="regex", value=r"10\.0\.\d+\.\d+", value_type="str").check_rule(event)
+    assert Rule(field_name="ip", comparator="regex", value=r"192[.]168[.]1[.]100", value_type="str").check_rule(event)
+    assert not Rule(field_name="ip", comparator="regex", value=r"10[.]0[.]1[.]100", value_type="str").check_rule(event)
 
 
 @th.django_unit_test()

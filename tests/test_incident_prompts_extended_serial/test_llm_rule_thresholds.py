@@ -104,9 +104,15 @@ def test_llm_rule_thresholds(opts):
         "handler": "incident.rule_approval",
         "action": "approve",
     }
+    response_note = TicketNote.objects.create(
+        parent=ticket,
+        user=operator,
+        note="Approved",
+        metadata={"action_response": response_meta},
+    )
     th.assert_true(
         _dispatch_as(
-            operator, dispatch_action, ticket, action_note, response_meta),
+            operator, dispatch_action, ticket, response_note, response_meta),
         "The proposal approval action should activate the persisted RuleSet")
     ruleset.refresh_from_db()
     th.assert_true(ruleset.is_active, "Approved LLM proposal should be active")
