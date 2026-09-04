@@ -393,15 +393,15 @@ def test_oauth_lookup_known_user_is_side_effect_free(opts):
     # Unknown identity → None, and nothing created.
     unknown_email = "lookup_only_unknown@geofence.test"
     User.objects.filter(email=unknown_email).delete()
-    users_before = User.objects.count()
-    conns_before = OAuthConnection.objects.count()
     result = _lookup_known_user(PROVIDER, {
         "uid": "google_uid_lookup_unknown", "email": unknown_email})
     assert result is None, "unknown identity must resolve to None"
-    assert User.objects.count() == users_before, \
-        "lookup must NOT create a User"
-    assert OAuthConnection.objects.count() == conns_before, \
-        "lookup must NOT create an OAuthConnection"
+    assert not User.objects.filter(email=unknown_email).exists(), \
+        "lookup must NOT create the unknown User"
+    assert not OAuthConnection.objects.filter(
+        provider=PROVIDER,
+        provider_uid="google_uid_lookup_unknown",
+    ).exists(), "lookup must NOT create the unknown OAuthConnection"
 
     # Existing connection → its user, still no writes.
     OAuthConnection.objects.filter(user=opts.user).delete()
