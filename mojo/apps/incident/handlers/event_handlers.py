@@ -671,19 +671,29 @@ def execute_handler(job):
     The job engine calls func(job) where job is a Job model instance.
     The actual data is in job.payload with keys:
         handler_spec: The full handler URL string (e.g. "email://perm@manage_security?template=critical")
+        handler_schema: Current governed-handler durable-job schema marker
+        handler_schema_version: Current governed-handler schema version
         event_id: ID of the Event that triggered this handler
         incident_id: ID of the associated Incident (optional)
     """
     from urllib.parse import urlparse, parse_qs
 
     payload = job.payload
-    spec = payload.get("handler_spec")
+    try:
+        from mojo.apps.incident.services import rule_validation
+        spec = rule_validation.normalize_queued_handler(
+            payload.get("handler_spec"), payload.get("handler_schema"),
+            payload.get("handler_schema_version"))
+    except (AttributeError, rule_validation.RuleValidationError):
+        logger.warning(
+            "execute_handler: refusing unversioned, stale, or unsafe handler job")
+        return False
     event_id = payload.get("event_id")
     incident_id = payload.get("incident_id")
 
     if not spec or not event_id:
         logger.error("execute_handler: missing handler_spec or event_id in payload")
-        return
+        return False
 
     # Load the event
     try:
@@ -691,7 +701,7 @@ def execute_handler(job):
         event = Event.objects.get(pk=event_id)
     except Exception:
         logger.exception("execute_handler: failed to load event %s", event_id)
-        return
+        return False
 
     # Load the incident (optional)
     incident = None
@@ -711,7 +721,7 @@ def execute_handler(job):
         handler_cls = HANDLER_MAP.get(handler_type)
         if not handler_cls:
             logger.warning("execute_handler: unknown handler type %s", handler_type)
-            return
+            return False
 
         if handler_type in ("job", "block", "ticket", "maestro"):
             handler = handler_cls(handler_url.netloc or None, **params)
@@ -725,9 +735,11 @@ def execute_handler(job):
             status_text = "succeeded" if result else "failed"
             incident.add_history(f"handler:{handler_type}",
                 note=f"Handler {spec} {status_text}")
+        return bool(result)
 
     except Exception:
         logger.exception("execute_handler: failed to run handler %s for event %s", spec, event_id)
         if incident:
             incident.add_history(f"handler:{handler_type}",
                 note=f"Handler {spec} failed (exception)")
+        return False

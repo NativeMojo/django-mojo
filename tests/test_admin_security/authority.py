@@ -88,11 +88,82 @@ def test_policy_validation(opts):
         "value_type": "str"}])
     with th.assert_raises(rule_validation.RuleValidationError):
         rule_validation.normalize_ruleset(bad_regex)
+    for pattern in (
+            "a*a*a*a*a*b", "[ab]*[ab]*c", r"\d+\d+z",
+            "(a*)(a*)(a*)b"):
+        adjacent = _policy(rules=[{
+            "field": "details", "operator": "regex", "value": pattern,
+            "value_type": "str"}])
+        with th.assert_raises(rule_validation.RuleValidationError):
+            rule_validation.normalize_ruleset(adjacent)
+    assert rule_validation.validate_regex("a+b+").pattern == "a+b+", (
+        "adjacent repetitions with disjoint literal domains should remain safe")
+    for fleet_wide in (False, 0, 1, "true"):
+        unsafe_scope = _policy(handlers=[{
+            "type": "block", "ttl_seconds": 600,
+            "fleet_wide": fleet_wide}])
+        with th.assert_raises(rule_validation.RuleValidationError):
+            rule_validation.normalize_ruleset(unsafe_scope)
+    assert rule_validation.parse_handlers(
+        "block://?ttl=600&fleet_wide=0") is None, (
+        "stored block handlers may not claim a runtime-ignored local scope")
     refused = _tool_create_rule({
         "name": "raw", "category": f"{PREFIX}:raw-handler",
         "handler": "job://os.system", "reasoning": "must fail",
     })
     assert refused["error_code"] == "raw_handler_not_allowed"
+
+
+@th.django_unit_test("public policy schema describes the complete governed aggregate")
+def test_public_policy_schema(opts):
+    from mojo.apps.incident.services import rule_validation
+
+    schema = rule_validation.public_schema()
+    aggregate = schema["aggregate"]
+    properties = aggregate["properties"]
+    assert aggregate["additional_properties"] is False, (
+        "the aggregate schema must fail closed on unknown properties")
+    assert {"name", "category", "priority", "bundle_minutes", "bundle_by",
+            "bundle_by_rule_set", "match_by", "trigger_count",
+            "trigger_window", "retrigger_every", "handlers", "rules",
+            "delete_on_resolution", "is_active"} <= set(properties), (
+        "schema-driven clients need every accepted aggregate property")
+    assert aggregate["rejected_properties"]["description"], (
+        "the unsupported description alias must be explicitly discoverable")
+    assert aggregate["rejected_properties"]["match_type"], (
+        "the rejected match_type alias must point clients to match_by")
+    handlers = {row["type"]: row["arguments"] for row in schema["handlers"]}
+    assert {"category", "maestro"} <= set(handlers["ticket"]), (
+        "ticket category and maestro selection must be publicly discoverable")
+    assert "note" in handlers["resolve"], (
+        "the bounded resolve note must be publicly discoverable")
+    assert schema["governance"]["revision_input"] == "expected_modified", (
+        "clients need the optimistic-lock input name")
+    assert properties["is_active"]["governed_write_value"] is False, (
+        "create and replacement payloads must advertise inactive-only writes")
+    for rejected_name in ("description", "match_type", "handler"):
+        payload = _policy()
+        payload[rejected_name] = "not canonical"
+        with th.assert_raises(rule_validation.RuleValidationError):
+            rule_validation.normalize_ruleset(payload)
+
+
+@th.django_unit_test("durable handlers require the current governed job schema")
+def test_durable_handler_schema(opts):
+    from mojo.apps.incident.services import rule_validation
+
+    safe = "notify://perm@manage_security"
+    with th.assert_raises(rule_validation.RuleValidationError):
+        rule_validation.normalize_queued_handler(safe, None, None)
+    with th.assert_raises(rule_validation.RuleValidationError):
+        rule_validation.normalize_queued_handler(
+            "job://unsafe.callable", rule_validation.HANDLER_JOB_SCHEMA,
+            rule_validation.HANDLER_JOB_SCHEMA_VERSION)
+    canonical = rule_validation.normalize_queued_handler(
+        safe, rule_validation.HANDLER_JOB_SCHEMA,
+        rule_validation.HANDLER_JOB_SCHEMA_VERSION)
+    assert canonical == safe, (
+        "a current safe durable handler should canonicalize without widening")
 
 
 @th.django_unit_test("malformed legacy rules no-match and cannot dispatch")

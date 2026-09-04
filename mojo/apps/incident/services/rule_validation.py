@@ -13,6 +13,8 @@ from mojo.apps.incident.models.rule import BundleBy, MatchBy
 
 
 SCHEMA_VERSION = 1
+HANDLER_JOB_SCHEMA = "incident.governed_handler"
+HANDLER_JOB_SCHEMA_VERSION = 1
 MAX_RULES = 32
 MAX_HANDLERS = 8
 MAX_NAME = 160
@@ -78,8 +80,16 @@ HANDLER_SCHEMAS = {
     "ticket": {
         "priority": [1, 10], "status": ("open", "new"),
         "board_id": [1, 2147483647],
+        "category": {
+            "type": "string", "max_length": 80,
+            "pattern": r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+        },
+        "maestro": {"type": "boolean"},
     },
-    "resolve": {"status": ("resolved", "closed")},
+    "resolve": {
+        "status": ("resolved", "closed"),
+        "note": {"type": "string", "max_length": 160},
+    },
     "ignore": {},
 }
 
@@ -96,8 +106,69 @@ def public_schema():
     handlers = []
     for name, arguments in HANDLER_SCHEMAS.items():
         handlers.append({"type": name, "arguments": arguments})
+    aggregate = {
+        "type": "object",
+        "additional_properties": False,
+        "required": ["name", "category"],
+        "rejected_properties": {
+            "description": "RuleSet has no separately persisted description; use name",
+            "match_type": "use the canonical match_by integer choice",
+            "handler": "raw handler strings are never accepted; use handlers",
+        },
+        "properties": {
+            "name": {"type": "string", "min_length": 1,
+                     "max_length": MAX_NAME},
+            "category": {"type": "string", "min_length": 1,
+                         "max_length": MAX_CATEGORY,
+                         "pattern": _CATEGORY_RE.pattern},
+            "priority": {"type": "integer", "minimum": 0,
+                         "maximum": 10000, "default": 50},
+            "bundle_minutes": {"type": ["integer", "null"],
+                               "minimum": 0, "maximum": 10080,
+                               "default": 30},
+            "bundle_by": {"type": "integer",
+                          "enum": [value for value, _label in BundleBy.CHOICES],
+                          "default": BundleBy.SOURCE_IP},
+            "bundle_by_rule_set": {"type": "boolean", "default": True},
+            "match_by": {"type": "integer",
+                         "enum": [value for value, _label in MatchBy.CHOICES],
+                         "default": MatchBy.ALL},
+            "trigger_count": {"type": ["integer", "null"],
+                              "minimum": 1, "maximum": 1000000,
+                              "default": None},
+            "trigger_window": {"type": ["integer", "null"],
+                               "minimum": 1, "maximum": 10080,
+                               "default": None,
+                               "requires": "trigger_count"},
+            "retrigger_every": {"type": ["integer", "null"],
+                                "minimum": 1, "maximum": 1000000,
+                                "default": None},
+            "handlers": {"type": "array", "max_items": MAX_HANDLERS,
+                         "items_from": "handlers", "default": []},
+            "rules": {"type": "array", "max_items": MAX_RULES,
+                      "items": {
+                          "type": "object", "additional_properties": False,
+                          "required": ["field", "operator", "value"],
+                          "properties": {
+                              "name": {"type": "string", "max_length": MAX_NAME},
+                              "field": {"type": "string", "enum_from": "fields"},
+                              "operator": {"type": "string",
+                                           "enum_from": "field.operators"},
+                              "value": {"max_length": MAX_VALUE},
+                              "value_type": {"type": "string",
+                                             "enum_from": "value_types"},
+                              "is_required": {"type": "boolean", "default": False},
+                          },
+                      }, "default": []},
+            "delete_on_resolution": {"type": "boolean", "default": False},
+            "is_active": {"type": "boolean", "governed_write_value": False,
+                          "activation_action": "ruleset.activate",
+                          "default": False},
+        },
+    }
     return {
         "schema_version": SCHEMA_VERSION,
+        "aggregate": aggregate,
         "fields": fields,
         "value_types": list(OPERATORS),
         "operators": {key: list(value) for key, value in OPERATORS.items()},
@@ -110,6 +181,15 @@ def public_schema():
             for value, label in MatchBy.CHOICES
         ],
         "handlers": handlers,
+        "governance": {
+            "revision_source": "modified",
+            "revision_input": "expected_modified",
+            "create_confirmation": "CREATE RULESET",
+            "action_confirmation": "{ACTION} RULESET {id}",
+            "catch_all_activation_confirmation": (
+                "ACTIVATE CATCH-ALL RULESET {id}"),
+            "replacement_requires_inactive": True,
+        },
         "limits": {
             "rules": MAX_RULES,
             "handlers": MAX_HANDLERS,
@@ -147,6 +227,35 @@ def _text(value, name, maximum, required=False):
     return value
 
 
+def _repeat_atom_domain(parsed):
+    """Return a conservative character domain for one repeated atom."""
+    try:
+        from re import _constants
+    except Exception:
+        return None
+    if len(parsed) != 1:
+        return None
+    operation, argument = parsed[0]
+    if operation == _constants.LITERAL:
+        return frozenset({chr(argument).casefold()})
+    if operation != _constants.IN:
+        return None
+    domain = set()
+    for child_operation, child_argument in argument:
+        if child_operation == _constants.LITERAL:
+            domain.add(chr(child_argument).casefold())
+        elif child_operation == _constants.RANGE:
+            start, end = child_argument
+            if end - start > 256:
+                return None
+            domain.update(chr(value).casefold() for value in range(start, end + 1))
+        else:
+            # Categories, negation and Unicode classes may overlap any
+            # following atom. Treat them as unknown and reject conservatively.
+            return None
+    return frozenset(domain)
+
+
 def _contains_repeat(parsed, inside_repeat=False):
     """Reject nested repetition and assertion/backreference regex features."""
     try:
@@ -168,6 +277,7 @@ def _contains_repeat(parsed, inside_repeat=False):
         in_class = _constants.IN
     except Exception:
         return True
+    previous_repeat_domain = False
     for operation, argument in parsed:
         if operation in forbidden:
             return True
@@ -182,15 +292,32 @@ def _contains_repeat(parsed, inside_repeat=False):
                 return True
             if _contains_repeat(argument[-1], inside_repeat=True):
                 return True
+            domain = _repeat_atom_domain(argument[-1])
+            if (previous_repeat_domain is not False and
+                    (previous_repeat_domain is None or domain is None or
+                     previous_repeat_domain & domain)):
+                # Adjacent repetitions over an overlapping alphabet create a
+                # large family of partitions (`a*a*a*a*a*b`) even without a
+                # nested quantifier. Refuse unknown domains too.
+                return True
+            previous_repeat_domain = domain
         elif operation == subpattern:
-            if _contains_repeat(argument[-1], inside_repeat=inside_repeat):
+            previous_repeat_domain = False
+            # Capturing parentheses must not hide a repeated atom from the
+            # adjacency guard (`(a*)(a*)b`). Groups with no quantifier remain
+            # available for ordinary capture/alternation.
+            if _contains_repeat(argument[-1], inside_repeat=True):
                 return True
         elif operation == branch:
+            previous_repeat_domain = False
             for child in argument[1]:
                 if _contains_repeat(child, inside_repeat=inside_repeat):
                     return True
         elif operation == in_class:
+            previous_repeat_domain = False
             continue
+        else:
+            previous_repeat_domain = False
     return False
 
 
@@ -338,10 +465,10 @@ def normalize_handlers(rows):
                 _error("block handler contains unknown arguments", path=path)
             ttl = _integer(row.get("ttl_seconds"), f"{path}.ttl_seconds", 300, 604800)
             fleet_wide = row.get("fleet_wide", True)
-            if not isinstance(fleet_wide, bool):
-                _error("fleet_wide must be a boolean", path=f"{path}.fleet_wide")
+            if fleet_wide is not True:
+                _error("fleet_wide must be literal true", path=f"{path}.fleet_wide")
             specs.append("block://?" + _handler_query((
-                ("ttl", ttl), ("fleet_wide", 1 if fleet_wide else 0))))
+                ("ttl", ttl), ("fleet_wide", 1))))
             continue
         if kind == "ticket":
             if set(row) - {
@@ -409,12 +536,12 @@ def parse_handlers(raw):
             elif kind == "block":
                 if (parsed.netloc or parsed.path or
                         set(query) - {"ttl", "fleet_wide"} or
-                        query.get("fleet_wide", ["1"])[0] not in ("0", "1")):
+                        query.get("fleet_wide", ["1"])[0] != "1"):
                     return None
                 row = {
                     "type": kind,
                     "ttl_seconds": int(query.get("ttl", [""])[0]),
-                    "fleet_wide": query.get("fleet_wide", ["1"])[0] == "1",
+                    "fleet_wide": True,
                 }
             elif kind == "ticket":
                 if (parsed.netloc or parsed.path or
@@ -448,6 +575,19 @@ def parse_handlers(raw):
         return rows
     except (RuleValidationError, TypeError, ValueError, OverflowError):
         return None
+
+
+def normalize_queued_handler(handler_spec, schema, schema_version):
+    """Revalidate one durable handler job against the current safe schema."""
+    if (schema != HANDLER_JOB_SCHEMA or
+            schema_version != HANDLER_JOB_SCHEMA_VERSION):
+        _error("handler job schema is missing or stale",
+               code="stale_handler_job", path="handler_schema")
+    rows = parse_handlers(handler_spec)
+    if rows is None or len(rows) != 1 or rows[0].get("type") == "ignore":
+        _error("queued handler is outside the governed schema",
+               code="handler_not_allowed", path="handler_spec")
+    return normalize_handlers(rows)
 
 
 def normalize_ruleset(payload):

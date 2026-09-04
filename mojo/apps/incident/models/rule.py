@@ -198,6 +198,9 @@ class RuleSet(models.Model, MojoModel):
 
                 payload = {
                     "handler_spec": spec,
+                    "handler_schema": rule_validation.HANDLER_JOB_SCHEMA,
+                    "handler_schema_version": (
+                        rule_validation.HANDLER_JOB_SCHEMA_VERSION),
                     "event_id": event.pk,
                     "incident_id": incident.pk if incident else None,
                 }
