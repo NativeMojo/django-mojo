@@ -891,7 +891,7 @@ def _recommendation_action(action, payload, actor):
     return _safe_recommendation(row, detail=True)
 
 
-def apply_action(payload, actor):
+def apply_action(payload, actor, *, reconcile_ipset=None):
     """Apply one typed action under a locked, auditable transaction.
 
     HTTP/Assistant/ticket callers own identity and fresh-auth verification;
@@ -913,11 +913,11 @@ def apply_action(payload, actor):
         row = _claim_ipset_action(action, payload)
         # Fleet waits must never hold the row lock or a database transaction.
         if action == "ipset.enable":
-            result = row.enable()
+            result = row.enable(reconciler=reconcile_ipset)
         elif action == "ipset.disable":
-            result = row.disable()
+            result = row.disable(reconciler=reconcile_ipset)
         else:
-            result = row.sync()
+            result = row.sync(reconciler=reconcile_ipset)
         row.refresh_from_db()
         with transaction.atomic():
             _audit(actor, action, "ipset", row.pk)

@@ -234,18 +234,18 @@ class IPSet(models.Model, MojoModel):
         finally:
             self._lifecycle_write = False
 
-    def enable(self):
+    def enable(self, *, reconciler=None):
         if self.is_cache_only:
             from mojo import errors as merrors
             raise merrors.ValueException(
                 f"'{self.name}' is a cache-only threat list for geoip "
                 "detection and cannot be enabled")
-        return self._change_and_sync(True)
+        return self._change_and_sync(True, reconciler=reconciler)
 
-    def disable(self):
-        return self._change_and_sync(False)
+    def disable(self, *, reconciler=None):
+        return self._change_and_sync(False, reconciler=reconciler)
 
-    def _change_and_sync(self, enabled):
+    def _change_and_sync(self, enabled, *, reconciler=None):
         from mojo.apps.incident.services import firewall_truth
         lease = None
         try:
@@ -265,7 +265,7 @@ class IPSet(models.Model, MojoModel):
             firewall_truth.release_desired_state(lease)
             lease = None
             self._desired_lease = None
-            return self._sync_locked()
+            return self._sync_locked(reconciler=reconciler)
         except firewall_truth.FirewallTruthError as err:
             return {"status": "unknown", "ok": False,
                     "error": {"code": err.code, "message": str(err)}}
@@ -287,11 +287,11 @@ class IPSet(models.Model, MojoModel):
                            else "pending checked firewall removal")
         self._save_lifecycle(["is_enabled", "sync_error", "modified"])
 
-    def sync(self):
+    def sync(self, *, reconciler=None):
         """Dispatch desired state and persist only checked host truth."""
-        return self._sync_locked()
+        return self._sync_locked(reconciler=reconciler)
 
-    def _sync_locked(self):
+    def _sync_locked(self, *, reconciler=None):
         """Claim this revision, then use the two-phase checked reconciler."""
         # Hard circuit breaker: the cache-only threat lists must never reach
         # the kernel firewall, even if is_enabled was force-set via a generic
@@ -330,7 +330,9 @@ class IPSet(models.Model, MojoModel):
         self.sync_error = pending
         self.modified = dispatched_at
         generation = dispatched_at
-        result = firewall_truth.reconcile_set(
+        if reconciler is None:
+            reconciler = firewall_truth.reconcile_set
+        result = reconciler(
             self.name, self.cidrs, present=self.is_enabled)
         if result.get("status") == "verified" and result.get("ok") is True:
             self.sync_error = None

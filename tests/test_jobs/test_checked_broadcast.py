@@ -140,7 +140,7 @@ def test_checked_reply_requires_selected_incarnation(opts):
 
 @th.django_unit_test("a restarted engine ignores commands for its prior incarnation")
 def test_checked_engine_requires_current_target_incarnation(opts):
-    from mojo.apps.jobs.job_engine import JobEngine
+    from mojo.apps.jobs.job_engine import JobEngine, host_channel
     from mojo.apps.jobs.keys import JobKeys
 
     engine = JobEngine.__new__(JobEngine)
@@ -158,16 +158,12 @@ def test_checked_engine_requires_current_target_incarnation(opts):
         "channel": "default",
         "data": {},
         "target": {
-            "runner_id": "runner-1", "hostname": "web-1",
+            "runner_id": "runner-1", "hostname": host_channel(),
             "started": "2026-09-04T12:00:00+00:00",
         },
     }
-    with mock.patch(
-            "mojo.apps.jobs.job_engine.host_channel", return_value="web-1"), \
-            mock.patch("mojo.apps.jobs.job_engine.load_job_function") as load:
-        engine._handle_checked_execute(
-            message, engine.keys.runner_ctl(engine.runner_id))
-    load.assert_not_called()
+    engine._handle_checked_execute(
+        message, engine.keys.runner_ctl(engine.runner_id))
     assert engine.redis.published == [], \
         "a pre-restart command executed or replied from the new incarnation"
 

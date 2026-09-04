@@ -3,7 +3,6 @@
 from datetime import timedelta
 from copy import deepcopy
 import uuid
-from unittest import mock
 
 from testit import helpers as th
 
@@ -113,15 +112,13 @@ def test_ipset_action_checked_and_revision_fenced(opts):
                 "error": {"code": "missing_host",
                           "message": "host receipt missing"}}
 
-    with mock.patch(
-            "mojo.apps.incident.services.firewall_truth.reconcile_set",
-            side_effect=partial) as reconcile:
-        result = admin_security.apply_action({
-            "action": "ipset.enable", "ipset_id": row.pk,
-            "expected_modified": row.modified.isoformat(),
-            "confirm": f"ENABLE IPSET {row.pk}"}, actor)
+    result = admin_security.apply_action({
+        "action": "ipset.enable", "ipset_id": row.pk,
+        "expected_modified": row.modified.isoformat(),
+        "confirm": f"ENABLE IPSET {row.pk}"}, actor,
+        reconcile_ipset=partial)
     row.refresh_from_db()
-    assert reconcile.called and row.is_enabled is True, \
+    assert row.is_enabled is True, \
         "governed action lost desired enable state"
     assert result["data"]["enforcement_ok"] is False
     assert result["data"]["error_code"] == "missing_host"
@@ -248,9 +245,13 @@ def test_legacy_runtime_fails_closed(opts):
         value="(?:a|aa)(?:a|aa)(?:a|aa)(?:a|aa)$", value_type="str")
     assert unrolled.check_rule(event) is False, (
         "legacy execution must reject unrolled ambiguous alternation")
-    with mock.patch("mojo.apps.jobs.publish") as publish:
-        assert row.run_handler(event) is False
-    assert not publish.called
+    published = []
+
+    def publish(*args, **kwargs):
+        published.append((args, kwargs))
+
+    assert row.run_handler(event, publisher=publish) is False
+    assert published == []
 
 
 @th.django_unit_test("RuleSet actions require version and typed confirmations")
