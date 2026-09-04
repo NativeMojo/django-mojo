@@ -513,11 +513,12 @@ success use their detailed checked companions.
 `sync_firewall` rebuilds ipsets from DB truth on **the node that runs it**. Because that work is node-local, it is reached two ways:
 
 ```
-sync_firewall (hourly, minute 0) — BROADCAST on "default"
-  → fans out one job per live runner
+sync_firewall (hourly, minute 0) — checked roster on "default"
+  → selects the same one compatible runner per hostname as checked execution
   → one per-host lock winner, for that host's shared kernel:
-      → briefly lease and capture the bounded desired snapshot/fence state
-      → bound the whole desired-row roster and quarantine invalid objects per row
+      → briefly lease and capture the constant-size desired generation
+      → outside the lease, bound/snapshot rows and quarantine invalid objects
+      → briefly revalidate the generation and batch-read/allocate fences
       → release the global lease before broker I/O
       → observe/repair/re-observe complete mojo_blocked membership, including empty
       → reconcile every valid IPSet row (enabled presence; disabled/cache absence tombstone)
@@ -529,12 +530,15 @@ sync_firewall (hourly, minute 0) — BROADCAST on "default"
 
 on_engine_start (this node's engine just started) — box-direct, forced
   → set mojo:sync_firewall:force:<host>
-  → publish sync_firewall to this runner's own channel with {"force": True}
+  → publish sync_firewall to this runner's own channel with its exact
+    {host, runner_id, started} target
 ```
 
 This:
 
-- **Restores a rebooted node's blocks within seconds**, via the startup hook. The hourly marker lives in shared Redis and survives the reboot, so an unforced reconcile would skip; the force flag is what makes recovery converge even if the queued job never runs.
+- **Restores a rebooted node's blocks within seconds**, via the startup hook.
+  The force token durably records the startup repair request and is cleared only
+  after that exact incarnation completes verified local repair.
 - Catches any blocks/removals left pending by partial checked operations.
 - Catches drift on instances that joined after a block was issued.
 
@@ -579,7 +583,7 @@ Firewall targets are canonical IPv4 only. IPv6 is refused with
 | `broadcast_block_ip` / `broadcast_unblock_ip` | Legacy broadcast | Compatibility handlers retained for old publishers; authoritative callers use checked compound reconciliation |
 | `broadcast_ipset_add_blocked` / `broadcast_ipset_del_blocked` | Legacy broadcast | Compatibility handlers retained for old publishers; permanent membership is now reconciled as a complete checked set |
 | `sweep_expired_blocks` | Cron (every 5 minutes) | Writes one checked absence generation per expired row and counts only fleet-verified removals |
-| `sync_firewall` | Cron (hourly, minute 0), **broadcast** | One per-host lock winner observes/repairs/re-observes that host's bounded valid IPv4 desired generation, including absence tombstones, then writes incarnation-bound fenced TTL observations. Invalid siblings stay quarantined; the host marker advances only without operational failures. Also published box-direct by `on_engine_start`. |
+| `sync_firewall` | Cron (hourly, minute 0), selected per host | The checked roster's one deterministic runner per hostname observes/repairs/re-observes that host's bounded valid IPv4 desired generation, including absence tombstones, then writes incarnation-bound fenced TTL observations. Busy, expired, oversized, or unverified work raises into durable jittered job retry. Invalid siblings stay quarantined; the host marker advances only without operational failures. Also published box-direct by `on_engine_start`. |
 | `aggregate_firewall_truth` | Follow-up job | Re-reads the exact current compatible-host roster and finalizes shared Geo/IPSet truth only from matching fresh fence/fingerprint observations for every host |
 | `on_engine_start` | Job-engine startup hook | Sets this host's force flag and queues a forced `sync_firewall` on its own runner, so a rebooted node recovers without waiting for the hourly broadcast. Publishes rather than touching the firewall directly — the broker refuses outside a JobEngine execution context. |
 | `prune_events` | Cron (daily 9:45) | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` with level < 6 |

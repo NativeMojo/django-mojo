@@ -717,12 +717,20 @@ absence tombstone so kernel drift is removed; it never loads the cached CIDRs.
 
 It is reached two ways:
 
-- **Hourly, as a broadcast.** The cron dispatcher publishes `broadcast=True` on the `default` channel, which fans out one job per live runner. This is drift reconciliation.
+- **Hourly, once per hostname.** The cron reads the compatible `default`
+  roster and directly queues its deterministic selected runner for each host.
+  This is the same selection checked execution uses, so a second runner sharing
+  that kernel cannot win the host lock and publish the wrong incarnation.
 - **At engine start, box-direct.** `asyncjobs.on_engine_start` (registered by the incident `AppConfig`) sets a force flag and publishes a forced reconcile to its own runner's channel. This is boot recovery, and it is what makes a rebooted node recover in seconds rather than up to an hour.
 
 The hook publishes rather than reconciling inline because every firewall write goes through the root-owned broker, which refuses outside a JobEngine execution context — and a startup hook has none.
 
-**Propagation boundary — state it plainly:** a node reconciles hourly only if it runs a jobs runner consuming `default`, and recovers at boot only if that engine consumes its own box-direct channel. With `JOBS_HOSTNAME_CHANNEL = False` no engine consumes its box-direct channel, so the fan-out would strand every job; the hourly path detects this and degrades to the pre-existing single-runner reconcile, and boot recovery is disabled with a warning.
+**Propagation boundary — state it plainly:** a node reconciles hourly only if it
+runs a compatible jobs runner consuming `default`, and recovers at boot only if
+that engine consumes its own box-direct channel. With
+`JOBS_HOSTNAME_CHANNEL = False` direct addressing is unavailable, so both paths
+fail closed with a warning; a single arbitrary runner is not treated as fleet
+repair.
 
 **Exact reconciliation:** every run bounds the complete desired-row roster and
 builds canonical plans before its first firewall write. Unsupported rows are
@@ -739,14 +747,16 @@ one process per CIDR. Lists are sorted/deduplicated canonical IPv4 networks and
 bounded to 250,000 entries. Empty desired sets are actively normalized.
 
 **Two-phase desired generations.** A token-owned global Redis lease serializes
-only short desired snapshots, fence advances, revalidation, observation
-publication, and finalization. It is released before checked transport and
-root-broker I/O. Full reconciliation retains the per-host lock around the local
-kernel operation, then reacquires the global lease briefly to reject a stale
-fence before publishing. Contention is retryable and never successful repair:
-a checked caller reports `unknown` before dispatch or `partial` after dispatch,
-while the hourly host run returns false without advancing its marker. Every
-release is compare-and-delete.
+only constant-size generation reads and batched fence allocation/revalidation.
+The bounded DB row scan, per-object canonicalization, checked transport, and
+root-broker I/O all occur outside that lease. Full reconciliation retains the
+per-host lock around local kernel operations, then briefly reacquires the global
+lease to reject stale truth before publishing. Contention, lease expiry,
+oversized plans, and unverified observations raise into JobEngine's durable
+exponential retry with jitter; none is a successful completion. Every release
+is compare-and-delete. Fleet aggregation likewise brackets its per-row CAS
+writes with short batched generation checks; superseded publication
+pessimistically re-marks the plan pending before retry.
 
 **Redis keys are per HOST, not per runner** — two engines on one box share one kernel firewall:
 
@@ -756,6 +766,7 @@ release is compare-and-delete.
 | `mojo:sync_firewall:force:<host>` | Pending forced reconcile, set by the startup hook |
 | `mojo:sync_firewall:lock:<host>` | The reconcile lock above |
 | `mojo:firewall:desired-state-lock` | Short global lease for desired snapshot/fence and post-I/O revalidation/finalization; never held across broker I/O |
+| `mojo:firewall:desired-state-generation` | Monotonic fleet generation advanced atomically with every desired fence write |
 | `mojo:firewall:fence:<kind>:<identity>` | Monotonic desired-state fence for an IP, IPSet, or permanent aggregate |
 | `mojo:firewall:observation:<kind>:<identity>:<fence>:<host>` | Host-scoped matching observation including heartbeat `started`, TTL 7200s |
 
@@ -794,8 +805,8 @@ checked action) when an operator needs a retained exact fleet result.
 
 Preflight legacy desired data before this upgrade. Firewall state accepts only
 canonical IPv4. Migration/reconciliation quarantines an invalid or IPv6 Geo
-row or an IPSet with an invalid/reserved name, an enabled name without suffix
-room, malformed or IPv6 CIDRs, or more than 250,000 networks while valid rows
+row or an IPSet with an invalid/reserved name, any name without atomic-swap
+suffix room, malformed or IPv6 CIDRs, or more than 250,000 networks while valid rows
 continue.
 Migration also forces a quarantined legacy IPSet disabled. Quarantined objects
 remain pending/error and cannot verify until repaired;
@@ -806,6 +817,8 @@ The privileged broker derives that identity from root-owned
 `/etc/mojo-firewall-broker.json`; when the file is absent it securely defaults
 to `mojo_blocked`. The application setting is only an equality assertion, so a
 mismatch refuses before mutation and cannot redefine the broker namespace.
+Operator IPSet operations also reject the entire framework-reserved `mojo_*`
+namespace independently in the broker, including absence/removal operations.
 Resolve legacy collisions before relying on the immutable-name and no-delete
 lifecycle.
 
@@ -949,7 +962,7 @@ Default health rules are auto-created on first health check run. They send notif
 | `sweep_mojosec_actions` | Every 5 minutes | Proposes MojoSec block recommendations from correlated cases, auto-approves within bounds, executes/retries validated targets, and expires stale proposals and applied-target TTLs |
 | `prune_events` | Daily 9:45 AM | Deletes events older than `INCIDENT_EVENT_PRUNE_DAYS` days with level < 6 |
 | `sweep_expired_blocks` | Every 5 minutes | Unblocks IPs where `blocked_until` has passed |
-| `sync_firewall` | Hourly (broadcast — every runner) | Each node observes/repairs/re-observes the bounded valid IPv4 desired generation and writes fenced host observations; invalid rows stay quarantined without poisoning valid siblings. Boot recovery is the separate `on_engine_start` hook |
+| `sync_firewall` | Hourly (one selected runner per hostname) | Each node observes/repairs/re-observes the bounded valid IPv4 desired generation and writes fenced host observations; invalid rows stay quarantined without poisoning valid siblings, and incomplete work durably retries. Boot recovery is the separate `on_engine_start` hook |
 | `refresh_ipsets` | Weekly (Sunday 3 AM) | Re-fetches IPSet source URLs and syncs CIDRs to fleet |
 | `refresh_threat_lists` | Every 6 hours | Refreshes the cache-only `tor_exits`/`blocklist_de` IPSet rows (`refresh_from_source()` only — never synced to the firewall); see [account/geoip.md](../account/geoip.md#threat-list-caches-tor-exit-list-blocklistde) |
 | `recheck_active_threats` | Daily 4:20 AM | Re-scores up to `GEOLOCATION_RECHECK_THREATS_MAX` (500) recently-active `GeoLocatedIP` rows so a stale `threat_level` can **decay** — everything else only ratchets up. Skips `provider='mojo'` records and external blocklist lookups; see [account/geoip.md](../account/geoip.md#decay) |
